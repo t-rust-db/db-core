@@ -5,6 +5,7 @@ members = [
     "sql-expr",
     "sql-parser",
     "sql-join",
+    "sql-vm",
 ]
 
 [workspace.package]

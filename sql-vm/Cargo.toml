@@ -1,0 +1,11 @@
+[package]
+name = "sql-vm"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared query execution engines for t-rust-db: batch (implemented), row and stream (not yet)"
+
+[dependencies]
+sql-expr = { path = "../sql-expr" }
+rayon = "1"
