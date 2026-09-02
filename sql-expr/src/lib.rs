@@ -59,14 +59,28 @@ pub enum Expr {
         expr: Box<Expr>,
         subquery: Box<Query>,
     },
+    /// `NOT expr`.
+    Not(Box<Expr>),
+    /// `expr IS [NOT] NULL`.
+    IsNull {
+        expr: Box<Expr>,
+        negated: bool,
+    },
 }
 
-/// One item in the `SELECT` list: a bare column, an aggregate call like
-/// `SUM(amount)` (`*` inside `COUNT(*)` is represented as `None`), or a
-/// window function.
+/// One item in the `SELECT` list: a bare column, `*` (all columns -- see
+/// `SelectItem::Star` docs), an aggregate call like `SUM(amount)` (`*`
+/// inside `COUNT(*)` is represented as `None`), or a window function.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SelectItem {
     Column(String),
+    /// Bare `*` in the `SELECT` list. `sql-parser` has no access to a
+    /// table's schema (it never reads Parquet footers -- that's
+    /// `column-rs`'s job), so this can't be expanded to a concrete column
+    /// list at parse time. It's carried through as this AST-level marker
+    /// and left for the caller/executor -- which does have the schema --
+    /// to expand when it compiles the query.
+    Star,
     Agg(AggFunc, Option<String>),
     Window(WindowSpec),
 }
@@ -102,10 +116,27 @@ pub struct OrderBy {
     pub descending: bool,
 }
 
+/// Converging toward sqlite-rs's 5-variant `JoinOp`
+/// (`~/wc/sqlite-rs/src/parser/ast.rs`) rather than diverging from it --
+/// `NATURAL`/`USING` aren't represented here since `Join` below carries
+/// only an `ON`-style equi-join condition, unlike sqlite-rs's
+/// `JoinConstraint`. Table aliases (`sql-parser`'s `FROM orders o`) are a
+/// parse-time-only rewrite of qualified column names back to real table
+/// names -- they never reach this AST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinKind {
     Inner,
     Left,
+    /// `RIGHT [OUTER] JOIN`.
+    Right,
+    /// `FULL [OUTER] JOIN`.
+    Full,
+    /// `CROSS JOIN` -- an unconditional cross product. The parser requires
+    /// a `LIMIT` to be present alongside a `CROSS JOIN` (DO-178C bounded-
+    /// execution principle: an unbounded cross product over two large
+    /// tables has no natural row cap the way an equi-join's selectivity
+    /// gives it).
+    Cross,
 }
 
 /// An equi-join against another table: `[INNER|LEFT] JOIN table ON
