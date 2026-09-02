@@ -17,7 +17,9 @@
 
 use std::fmt;
 
-use sql_expr::{AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec};
+use sql_expr::{
+    AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
+};
 use sql_types::Literal;
 
 #[derive(Debug, PartialEq)]
@@ -91,14 +93,17 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
                     j += 1;
                 }
                 if j >= chars.len() {
-                    return Err(ParseError::Unexpected("unterminated string literal".to_string()));
+                    return Err(ParseError::Unexpected(
+                        "unterminated string literal".to_string(),
+                    ));
                 }
                 tokens.push(Token::Str(chars[start..j].iter().collect()));
                 i = j + 1;
             }
             '=' | '<' | '>' | '!' | '+' | '-' | '/' => {
                 let mut op = String::from(c);
-                if i + 1 < chars.len() && chars[i + 1] == '=' && matches!(c, '<' | '>' | '!' | '=') {
+                if i + 1 < chars.len() && chars[i + 1] == '=' && matches!(c, '<' | '>' | '!' | '=')
+                {
                     op.push('=');
                     i += 2;
                 } else {
@@ -129,7 +134,11 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
                 }
                 tokens.push(Token::Ident(chars[start..i].iter().collect()));
             }
-            other => return Err(ParseError::Unexpected(format!("unexpected character '{other}'"))),
+            other => {
+                return Err(ParseError::Unexpected(format!(
+                    "unexpected character '{other}'"
+                )))
+            }
         }
     }
     Ok(tokens)
@@ -149,7 +158,11 @@ impl Parser {
     }
 
     fn next(&mut self) -> Result<Token> {
-        let tok = self.tokens.get(self.pos).cloned().ok_or(ParseError::UnexpectedEof)?;
+        let tok = self
+            .tokens
+            .get(self.pos)
+            .cloned()
+            .ok_or(ParseError::UnexpectedEof)?;
         self.pos += 1;
         Ok(tok)
     }
@@ -157,7 +170,9 @@ impl Parser {
     fn expect_keyword(&mut self, keyword: &str) -> Result<()> {
         match self.next()? {
             Token::Ident(word) if word.eq_ignore_ascii_case(keyword) => Ok(()),
-            other => Err(ParseError::Unexpected(format!("{other:?}, expected {keyword}"))),
+            other => Err(ParseError::Unexpected(format!(
+                "{other:?}, expected {keyword}"
+            ))),
         }
     }
 
@@ -169,7 +184,11 @@ impl Parser {
     fn ident(&mut self) -> Result<String> {
         let mut name = match self.next()? {
             Token::Ident(name) => name,
-            other => return Err(ParseError::Unexpected(format!("{other:?}, expected identifier"))),
+            other => {
+                return Err(ParseError::Unexpected(format!(
+                    "{other:?}, expected identifier"
+                )))
+            }
         };
         while matches!(self.peek(), Some(Token::Dot)) {
             self.next()?;
@@ -178,7 +197,11 @@ impl Parser {
                     name.push('.');
                     name.push_str(&part);
                 }
-                other => return Err(ParseError::Unexpected(format!("{other:?}, expected identifier after '.'"))),
+                other => {
+                    return Err(ParseError::Unexpected(format!(
+                        "{other:?}, expected identifier after '.'"
+                    )))
+                }
             }
         }
         Ok(name)
@@ -214,10 +237,19 @@ impl Parser {
             let left_col = self.ident()?;
             match self.next()? {
                 Token::Op(op) if op == "=" => {}
-                other => return Err(ParseError::Unexpected(format!("{other:?}, expected = in ON clause"))),
+                other => {
+                    return Err(ParseError::Unexpected(format!(
+                        "{other:?}, expected = in ON clause"
+                    )))
+                }
             }
             let right_col = self.ident()?;
-            joins.push(Join { kind, table, left_col, right_col });
+            joins.push(Join {
+                kind,
+                table,
+                left_col,
+                right_col,
+            });
         }
 
         let where_clause = if self.peek_keyword("WHERE") {
@@ -257,13 +289,25 @@ impl Parser {
             self.next()?;
             match self.next()? {
                 Token::Int(n) if n >= 0 => Some(n as usize),
-                other => return Err(ParseError::Unexpected(format!("{other:?}, expected LIMIT count"))),
+                other => {
+                    return Err(ParseError::Unexpected(format!(
+                        "{other:?}, expected LIMIT count"
+                    )))
+                }
             }
         } else {
             None
         };
 
-        Ok(Query { columns, from, joins, where_clause, group_by, order_by, limit })
+        Ok(Query {
+            columns,
+            from,
+            joins,
+            where_clause,
+            group_by,
+            order_by,
+            limit,
+        })
     }
 
     /// Top-level entry point: parses a full query and rejects trailing
@@ -273,7 +317,10 @@ impl Parser {
     fn parse_top_level_query(&mut self) -> Result<Query> {
         let query = self.parse_query()?;
         if self.pos != self.tokens.len() {
-            return Err(ParseError::Unexpected(format!("trailing tokens: {:?}", &self.tokens[self.pos..])));
+            return Err(ParseError::Unexpected(format!(
+                "trailing tokens: {:?}",
+                &self.tokens[self.pos..]
+            )));
         }
         Ok(query)
     }
@@ -314,7 +361,13 @@ impl Parser {
                     "RANK" => WindowFunc::Rank,
                     _ => WindowFunc::DenseRank,
                 };
-                Ok(SelectItem::Window(WindowSpec { func, arg: None, offset: None, partition_by, order_by }))
+                Ok(SelectItem::Window(WindowSpec {
+                    func,
+                    arg: None,
+                    offset: None,
+                    partition_by,
+                    order_by,
+                }))
             }
             "LAG" | "LEAD" => {
                 let arg = self.ident()?;
@@ -322,7 +375,11 @@ impl Parser {
                     self.next()?;
                     match self.next()? {
                         Token::Int(n) => Some(n),
-                        other => return Err(ParseError::Unexpected(format!("{other:?}, expected integer offset"))),
+                        other => {
+                            return Err(ParseError::Unexpected(format!(
+                                "{other:?}, expected integer offset"
+                            )))
+                        }
                     }
                 } else {
                     None
@@ -330,16 +387,36 @@ impl Parser {
                 self.expect_rparen()?;
                 self.expect_keyword("OVER")?;
                 let (partition_by, order_by) = self.parse_over_clause()?;
-                let func = if upper == "LAG" { WindowFunc::Lag } else { WindowFunc::Lead };
-                Ok(SelectItem::Window(WindowSpec { func, arg: Some(arg), offset, partition_by, order_by }))
+                let func = if upper == "LAG" {
+                    WindowFunc::Lag
+                } else {
+                    WindowFunc::Lead
+                };
+                Ok(SelectItem::Window(WindowSpec {
+                    func,
+                    arg: Some(arg),
+                    offset,
+                    partition_by,
+                    order_by,
+                }))
             }
             "FIRST_VALUE" | "LAST_VALUE" => {
                 let arg = self.ident()?;
                 self.expect_rparen()?;
                 self.expect_keyword("OVER")?;
                 let (partition_by, order_by) = self.parse_over_clause()?;
-                let func = if upper == "FIRST_VALUE" { WindowFunc::FirstValue } else { WindowFunc::LastValue };
-                Ok(SelectItem::Window(WindowSpec { func, arg: Some(arg), offset: None, partition_by, order_by }))
+                let func = if upper == "FIRST_VALUE" {
+                    WindowFunc::FirstValue
+                } else {
+                    WindowFunc::LastValue
+                };
+                Ok(SelectItem::Window(WindowSpec {
+                    func,
+                    arg: Some(arg),
+                    offset: None,
+                    partition_by,
+                    order_by,
+                }))
             }
             _ => {
                 let arg = if matches!(self.peek(), Some(Token::Star)) {
@@ -356,11 +433,23 @@ impl Parser {
                         "SUM" => WindowFunc::Sum,
                         "AVG" => WindowFunc::Avg,
                         "COUNT" => WindowFunc::Count,
-                        _ => return Err(ParseError::Unexpected(format!("{name} OVER (...) is not a supported window function"))),
+                        _ => {
+                            return Err(ParseError::Unexpected(format!(
+                                "{name} OVER (...) is not a supported window function"
+                            )))
+                        }
                     };
-                    Ok(SelectItem::Window(WindowSpec { func, arg, offset: None, partition_by, order_by }))
+                    Ok(SelectItem::Window(WindowSpec {
+                        func,
+                        arg,
+                        offset: None,
+                        partition_by,
+                        order_by,
+                    }))
                 } else {
-                    let agg = AggFunc::from_name(&name).ok_or_else(|| ParseError::Unexpected(format!("unknown function {name}")))?;
+                    let agg = AggFunc::from_name(&name).ok_or_else(|| {
+                        ParseError::Unexpected(format!("unknown function {name}"))
+                    })?;
                     Ok(SelectItem::Agg(agg, arg))
                 }
             }
@@ -378,7 +467,11 @@ impl Parser {
     fn parse_over_clause(&mut self) -> Result<OverClause> {
         match self.next()? {
             Token::LParen => {}
-            other => return Err(ParseError::Unexpected(format!("{other:?}, expected ( after OVER"))),
+            other => {
+                return Err(ParseError::Unexpected(format!(
+                    "{other:?}, expected ( after OVER"
+                )))
+            }
         }
         let partition_by = if self.peek_keyword("PARTITION") {
             self.next()?;
@@ -448,14 +541,25 @@ impl Parser {
             self.next()?;
             match self.next()? {
                 Token::LParen => {}
-                other => return Err(ParseError::Unexpected(format!("{other:?}, expected ( after IN"))),
+                other => {
+                    return Err(ParseError::Unexpected(format!(
+                        "{other:?}, expected ( after IN"
+                    )))
+                }
             }
             let subquery = self.parse_query()?;
             match self.next()? {
                 Token::RParen => {}
-                other => return Err(ParseError::Unexpected(format!("{other:?}, expected ) closing IN subquery"))),
+                other => {
+                    return Err(ParseError::Unexpected(format!(
+                        "{other:?}, expected ) closing IN subquery"
+                    )))
+                }
             }
-            return Ok(Expr::InSubquery { expr: Box::new(lhs), subquery: Box::new(subquery) });
+            return Ok(Expr::InSubquery {
+                expr: Box::new(lhs),
+                subquery: Box::new(subquery),
+            });
         }
 
         let op = match self.peek() {
@@ -527,7 +631,11 @@ impl Parser {
                             name.push('.');
                             name.push_str(&part);
                         }
-                        other => return Err(ParseError::Unexpected(format!("{other:?}, expected identifier after '.'"))),
+                        other => {
+                            return Err(ParseError::Unexpected(format!(
+                                "{other:?}, expected identifier after '.'"
+                            )))
+                        }
                     }
                 }
                 Ok(Expr::Column(name))
@@ -542,7 +650,9 @@ impl Parser {
                     other => Err(ParseError::Unexpected(format!("{other:?}, expected )"))),
                 }
             }
-            other => Err(ParseError::Unexpected(format!("{other:?}, expected expression"))),
+            other => Err(ParseError::Unexpected(format!(
+                "{other:?}, expected expression"
+            ))),
         }
     }
 }
@@ -580,7 +690,13 @@ mod tests {
     #[test]
     fn parses_columns_and_where() {
         let q = parse("SELECT id, amount FROM orders WHERE amount > 10").unwrap();
-        assert_eq!(q.columns, vec![SelectItem::Column("id".into()), SelectItem::Column("amount".into())]);
+        assert_eq!(
+            q.columns,
+            vec![
+                SelectItem::Column("id".into()),
+                SelectItem::Column("amount".into())
+            ]
+        );
         assert_eq!(
             q.where_clause,
             Some(Expr::BinaryOp(
@@ -594,14 +710,26 @@ mod tests {
     #[test]
     fn parses_group_by_aggregate() {
         let q = parse("SELECT region, SUM(amount) FROM t WHERE x > 10 GROUP BY region").unwrap();
-        assert_eq!(q.columns, vec![SelectItem::Column("region".into()), SelectItem::Agg(AggFunc::Sum, Some("amount".into()))]);
+        assert_eq!(
+            q.columns,
+            vec![
+                SelectItem::Column("region".into()),
+                SelectItem::Agg(AggFunc::Sum, Some("amount".into()))
+            ]
+        );
         assert_eq!(q.group_by, vec!["region".to_string()]);
     }
 
     #[test]
     fn parses_order_by_and_limit() {
         let q = parse("SELECT id FROM t ORDER BY id DESC LIMIT 5").unwrap();
-        assert_eq!(q.order_by, Some(OrderBy { column: "id".into(), descending: true }));
+        assert_eq!(
+            q.order_by,
+            Some(OrderBy {
+                column: "id".into(),
+                descending: true
+            })
+        );
         assert_eq!(q.limit, Some(5));
     }
 
@@ -621,23 +749,45 @@ mod tests {
     fn parses_inner_join() {
         let q = parse("SELECT orders.id, customers.name FROM orders JOIN customers ON orders.cust_id = customers.id").unwrap();
         assert_eq!(q.from, "orders");
-        assert_eq!(q.columns, vec![SelectItem::Column("orders.id".into()), SelectItem::Column("customers.name".into())]);
+        assert_eq!(
+            q.columns,
+            vec![
+                SelectItem::Column("orders.id".into()),
+                SelectItem::Column("customers.name".into())
+            ]
+        );
         assert_eq!(
             q.joins,
-            vec![Join { kind: JoinKind::Inner, table: "customers".into(), left_col: "orders.cust_id".into(), right_col: "customers.id".into() }]
+            vec![Join {
+                kind: JoinKind::Inner,
+                table: "customers".into(),
+                left_col: "orders.cust_id".into(),
+                right_col: "customers.id".into()
+            }]
         );
     }
 
     #[test]
     fn parses_left_join() {
         let q = parse("SELECT id FROM t LEFT JOIN u ON t.k = u.k").unwrap();
-        assert_eq!(q.joins, vec![Join { kind: JoinKind::Left, table: "u".into(), left_col: "t.k".into(), right_col: "u.k".into() }]);
+        assert_eq!(
+            q.joins,
+            vec![Join {
+                kind: JoinKind::Left,
+                table: "u".into(),
+                left_col: "t.k".into(),
+                right_col: "u.k".into()
+            }]
+        );
     }
 
     #[test]
     fn parses_in_subquery() {
-        let q = parse("SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions)").unwrap();
-        let Some(Expr::InSubquery { expr, subquery }) = q.where_clause else { panic!("expected InSubquery") };
+        let q =
+            parse("SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions)").unwrap();
+        let Some(Expr::InSubquery { expr, subquery }) = q.where_clause else {
+            panic!("expected InSubquery")
+        };
         assert_eq!(*expr, Expr::Column("region_key".into()));
         assert_eq!(subquery.from, "regions");
         assert_eq!(subquery.columns, vec![SelectItem::Column("key".into())]);
@@ -645,7 +795,8 @@ mod tests {
 
     #[test]
     fn parses_row_number_window() {
-        let q = parse("SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY id DESC) FROM t").unwrap();
+        let q = parse("SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY id DESC) FROM t")
+            .unwrap();
         assert_eq!(
             q.columns,
             vec![SelectItem::Window(WindowSpec {
@@ -660,7 +811,8 @@ mod tests {
 
     #[test]
     fn parses_lag_with_offset() {
-        let q = parse("SELECT LAG(amount, 2) OVER (PARTITION BY region ORDER BY id) FROM t").unwrap();
+        let q =
+            parse("SELECT LAG(amount, 2) OVER (PARTITION BY region ORDER BY id) FROM t").unwrap();
         assert_eq!(
             q.columns,
             vec![SelectItem::Window(WindowSpec {
@@ -676,6 +828,9 @@ mod tests {
     #[test]
     fn sum_without_over_is_still_a_plain_aggregate() {
         let q = parse("SELECT SUM(amount) FROM t").unwrap();
-        assert_eq!(q.columns, vec![SelectItem::Agg(AggFunc::Sum, Some("amount".into()))]);
+        assert_eq!(
+            q.columns,
+            vec![SelectItem::Agg(AggFunc::Sum, Some("amount".into()))]
+        );
     }
 }

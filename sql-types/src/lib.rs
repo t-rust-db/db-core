@@ -39,6 +39,9 @@ mod tests {
     #[test]
     fn literal_converts_to_value() {
         assert_eq!(Value::from(Literal::Int(5)), Value::Int(5));
-        assert_eq!(Value::from(Literal::Str("x".into())), Value::Str("x".into()));
+        assert_eq!(
+            Value::from(Literal::Str("x".into())),
+            Value::Str("x".into())
+        );
     }
 }
