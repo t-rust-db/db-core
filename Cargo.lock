@@ -10,6 +10,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sql-join"
+version = "0.1.0"
+
+[[package]]
 name = "sql-parser"
 version = "0.1.0"
 dependencies = [
