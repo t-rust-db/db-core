@@ -15,12 +15,23 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::fmt;
 
 use sql_expr::{
     AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
 };
 use sql_types::Literal;
+
+/// Keywords that can follow a table reference (`FROM table [alias]`,
+/// `JOIN table [alias] ON ...`) -- an identifier here is never taken as an
+/// alias, since these are the only tokens legally allowed in that
+/// position. Keeps `orders WHERE ...` from being misparsed as an alias
+/// named `WHERE`.
+const TABLE_REF_FOLLOW_KEYWORDS: &[&str] = &[
+    "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "OUTER", "ON", "WHERE", "GROUP", "ORDER",
+    "LIMIT",
+];
 
 #[derive(Debug, PartialEq)]
 pub enum ParseError {
@@ -147,6 +158,61 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
 /// `(partition_by_columns, order_by_columns_with_direction)`.
 type OverClause = (Vec<String>, Vec<(String, bool)>);
 
+/// Rewrite `alias.col` to `real_table.col` in place, for every qualified
+/// column name `resolve_query_aliases` touches. Unqualified names and
+/// names already qualified by a real table name pass through unchanged.
+fn resolve_ident(name: &mut String, aliases: &HashMap<String, String>) {
+    if let Some((prefix, col)) = name.split_once('.') {
+        if let Some(real) = aliases.get(prefix) {
+            *name = format!("{real}.{col}");
+        }
+    }
+}
+
+fn resolve_expr_aliases(expr: &mut Expr, aliases: &HashMap<String, String>) {
+    match expr {
+        Expr::Column(name) => resolve_ident(name, aliases),
+        Expr::Literal(_) => {}
+        Expr::BinaryOp(lhs, _, rhs) => {
+            resolve_expr_aliases(lhs, aliases);
+            resolve_expr_aliases(rhs, aliases);
+        }
+        Expr::Not(inner) => resolve_expr_aliases(inner, aliases),
+        Expr::IsNull { expr, .. } => resolve_expr_aliases(expr, aliases),
+        // A subquery has its own FROM/alias scope -- its column refs are
+        // resolved when *it* is parsed, not against the outer query's
+        // aliases.
+        Expr::InSubquery { expr, .. } => resolve_expr_aliases(expr, aliases),
+    }
+}
+
+/// Rewrite every qualified column reference in `query` (SELECT list, JOIN
+/// ON, WHERE, GROUP BY, ORDER BY) from an alias-qualified name to the real
+/// table name, per `aliases` (alias -> real table name). Table aliases are
+/// a parse-time-only convenience this way: `sql_expr::Query`/`Join` never
+/// see or store an alias, so `column-rs` (an existing consumer) doesn't
+/// need any change to keep working with aliased queries.
+fn resolve_query_aliases(query: &mut Query, aliases: &HashMap<String, String>) {
+    for item in &mut query.columns {
+        if let SelectItem::Column(name) = item {
+            resolve_ident(name, aliases);
+        }
+    }
+    for join in &mut query.joins {
+        resolve_ident(&mut join.left_col, aliases);
+        resolve_ident(&mut join.right_col, aliases);
+    }
+    if let Some(expr) = &mut query.where_clause {
+        resolve_expr_aliases(expr, aliases);
+    }
+    for name in &mut query.group_by {
+        resolve_ident(name, aliases);
+    }
+    if let Some(order_by) = &mut query.order_by {
+        resolve_ident(&mut order_by.column, aliases);
+    }
+}
+
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
@@ -207,11 +273,44 @@ impl Parser {
         Ok(name)
     }
 
+    /// An optional bare-word alias following a table reference (`FROM
+    /// orders o`, `JOIN customers c ON ...`) -- anything that isn't one of
+    /// [`TABLE_REF_FOLLOW_KEYWORDS`] is taken as an alias. No `AS` keyword
+    /// support (not in `column-rs.ebnf`'s grammar); this is the minimal
+    /// bare form.
+    fn parse_optional_alias(&mut self) -> Result<Option<String>> {
+        match self.peek() {
+            Some(Token::Ident(word))
+                if !TABLE_REF_FOLLOW_KEYWORDS
+                    .iter()
+                    .any(|kw| word.eq_ignore_ascii_case(kw)) =>
+            {
+                let Token::Ident(alias) = self.next()? else {
+                    unreachable!()
+                };
+                Ok(Some(alias))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn parse_query(&mut self) -> Result<Query> {
         self.expect_keyword("SELECT")?;
         let columns = self.parse_select_list()?;
         self.expect_keyword("FROM")?;
         let from = self.ident()?;
+        let from_alias = self.parse_optional_alias()?;
+
+        // alias -> real table name, used to rewrite every qualified column
+        // reference below (SELECT list, ON, WHERE, GROUP BY, ORDER BY) back
+        // to the real table name. `sql_expr::Query`/`Join` keep their
+        // existing shape (real table names only) -- aliases are a purely
+        // parse-time convenience, not a new AST concept a downstream
+        // consumer (column-rs) would need to learn about.
+        let mut aliases: HashMap<String, String> = HashMap::new();
+        if let Some(alias) = &from_alias {
+            aliases.insert(alias.clone(), from.clone());
+        }
 
         let mut joins = Vec::new();
         loop {
@@ -229,21 +328,55 @@ impl Parser {
                 }
                 self.expect_keyword("JOIN")?;
                 JoinKind::Left
+            } else if self.peek_keyword("RIGHT") {
+                self.next()?;
+                if self.peek_keyword("OUTER") {
+                    self.next()?;
+                }
+                self.expect_keyword("JOIN")?;
+                JoinKind::Right
+            } else if self.peek_keyword("FULL") {
+                self.next()?;
+                if self.peek_keyword("OUTER") {
+                    self.next()?;
+                }
+                self.expect_keyword("JOIN")?;
+                JoinKind::Full
+            } else if self.peek_keyword("CROSS") {
+                self.next()?;
+                self.expect_keyword("JOIN")?;
+                JoinKind::Cross
             } else {
                 break;
             };
             let table = self.ident()?;
-            self.expect_keyword("ON")?;
-            let left_col = self.ident()?;
-            match self.next()? {
-                Token::Op(op) if op == "=" => {}
-                other => {
-                    return Err(ParseError::Unexpected(format!(
-                        "{other:?}, expected = in ON clause"
-                    )))
-                }
+            let alias = self.parse_optional_alias()?;
+            if let Some(alias) = &alias {
+                aliases.insert(alias.clone(), table.clone());
             }
-            let right_col = self.ident()?;
+
+            let (left_col, right_col) = if kind == JoinKind::Cross {
+                // CROSS JOIN is an unconditional cross product -- no `ON`.
+                // Empty strings are a placeholder never read: the executor
+                // rejects `JoinKind::Cross` before touching these fields
+                // (see column-rs's `execute_joined`). If CROSS JOIN
+                // execution is ever implemented, `Join`'s condition fields
+                // should become `Option<(String, String)>` at that point.
+                (String::new(), String::new())
+            } else {
+                self.expect_keyword("ON")?;
+                let left_col = self.ident()?;
+                match self.next()? {
+                    Token::Op(op) if op == "=" => {}
+                    other => {
+                        return Err(ParseError::Unexpected(format!(
+                            "{other:?}, expected = in ON clause"
+                        )))
+                    }
+                }
+                let right_col = self.ident()?;
+                (left_col, right_col)
+            };
             joins.push(Join {
                 kind,
                 table,
@@ -299,7 +432,15 @@ impl Parser {
             None
         };
 
-        Ok(Query {
+        if joins.iter().any(|j| j.kind == JoinKind::Cross) && limit.is_none() {
+            return Err(ParseError::Unexpected(
+                "CROSS JOIN requires a LIMIT (bounded-execution rule -- an unconditional cross \
+                 product has no natural row cap)"
+                    .to_string(),
+            ));
+        }
+
+        let mut query = Query {
             columns,
             from,
             joins,
@@ -307,7 +448,11 @@ impl Parser {
             group_by,
             order_by,
             limit,
-        })
+        };
+        if !aliases.is_empty() {
+            resolve_query_aliases(&mut query, &aliases);
+        }
+        Ok(query)
     }
 
     /// Top-level entry point: parses a full query and rejects trailing
@@ -344,6 +489,10 @@ impl Parser {
     }
 
     fn parse_select_item(&mut self) -> Result<SelectItem> {
+        if matches!(self.peek(), Some(Token::Star)) {
+            self.next()?;
+            return Ok(SelectItem::Star);
+        }
         let name = self.ident()?;
         if !matches!(self.peek(), Some(Token::LParen)) {
             return Ok(SelectItem::Column(name));
@@ -525,17 +674,43 @@ impl Parser {
     }
 
     fn parse_and(&mut self) -> Result<Expr> {
-        let mut lhs = self.parse_comparison()?;
+        let mut lhs = self.parse_not()?;
         while self.peek_keyword("AND") {
             self.next()?;
-            let rhs = self.parse_comparison()?;
+            let rhs = self.parse_not()?;
             lhs = Expr::BinaryOp(Box::new(lhs), BinOp::And, Box::new(rhs));
         }
         Ok(lhs)
     }
 
+    /// `NOT` binds tighter than `AND`/`OR` but looser than comparison --
+    /// `NOT a = b AND c` parses as `(NOT (a = b)) AND c`.
+    fn parse_not(&mut self) -> Result<Expr> {
+        if self.peek_keyword("NOT") {
+            self.next()?;
+            let inner = self.parse_not()?;
+            return Ok(Expr::Not(Box::new(inner)));
+        }
+        self.parse_comparison()
+    }
+
     fn parse_comparison(&mut self) -> Result<Expr> {
         let lhs = self.parse_additive()?;
+
+        if self.peek_keyword("IS") {
+            self.next()?;
+            let negated = if self.peek_keyword("NOT") {
+                self.next()?;
+                true
+            } else {
+                false
+            };
+            self.expect_keyword("NULL")?;
+            return Ok(Expr::IsNull {
+                expr: Box::new(lhs),
+                negated,
+            });
+        }
 
         if self.peek_keyword("IN") {
             self.next()?;
@@ -741,7 +916,10 @@ mod tests {
 
     #[test]
     fn rejects_trailing_garbage() {
-        let err = parse("SELECT id FROM t GARBAGE").unwrap_err();
+        // A single trailing identifier is now a valid bare table alias
+        // (`FROM t GARBAGE` == `FROM t AS GARBAGE`) -- two is unambiguous
+        // garbage, since only one alias is allowed.
+        let err = parse("SELECT id FROM t GARBAGE EXTRA").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected(_)));
     }
 
@@ -831,6 +1009,158 @@ mod tests {
         assert_eq!(
             q.columns,
             vec![SelectItem::Agg(AggFunc::Sum, Some("amount".into()))]
+        );
+    }
+
+    #[test]
+    fn parses_select_star() {
+        let q = parse("SELECT * FROM t").unwrap();
+        assert_eq!(q.columns, vec![SelectItem::Star]);
+    }
+
+    #[test]
+    fn parses_select_star_alongside_columns() {
+        let q = parse("SELECT id, * FROM t").unwrap();
+        assert_eq!(
+            q.columns,
+            vec![SelectItem::Column("id".into()), SelectItem::Star]
+        );
+    }
+
+    #[test]
+    fn parses_table_alias_and_rewrites_qualified_select_column() {
+        let q = parse("SELECT o.id FROM orders o").unwrap();
+        assert_eq!(q.from, "orders");
+        assert_eq!(q.columns, vec![SelectItem::Column("orders.id".into())]);
+    }
+
+    #[test]
+    fn parses_join_aliases_and_rewrites_on_clause_and_where() {
+        let q = parse(
+            "SELECT o.id, c.name FROM orders o JOIN customers c ON o.cust_id = c.id WHERE c.id > 1",
+        )
+        .unwrap();
+        assert_eq!(
+            q.columns,
+            vec![
+                SelectItem::Column("orders.id".into()),
+                SelectItem::Column("customers.name".into())
+            ]
+        );
+        assert_eq!(
+            q.joins,
+            vec![Join {
+                kind: JoinKind::Inner,
+                table: "customers".into(),
+                left_col: "orders.cust_id".into(),
+                right_col: "customers.id".into(),
+            }]
+        );
+        assert_eq!(
+            q.where_clause,
+            Some(Expr::BinaryOp(
+                Box::new(Expr::Column("customers.id".into())),
+                BinOp::Gt,
+                Box::new(Expr::Literal(Literal::Int(1)))
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_cross_join_with_limit() {
+        let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();
+        assert_eq!(
+            q.joins,
+            vec![Join {
+                kind: JoinKind::Cross,
+                table: "b".into(),
+                left_col: String::new(),
+                right_col: String::new(),
+            }]
+        );
+        assert_eq!(q.limit, Some(10));
+    }
+
+    #[test]
+    fn cross_join_without_limit_is_rejected() {
+        let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected(_)));
+    }
+
+    #[test]
+    fn parses_right_join() {
+        let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
+        assert_eq!(
+            q.joins,
+            vec![Join {
+                kind: JoinKind::Right,
+                table: "u".into(),
+                left_col: "t.k".into(),
+                right_col: "u.k".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_right_outer_join() {
+        let q = parse("SELECT id FROM t RIGHT OUTER JOIN u ON t.k = u.k").unwrap();
+        assert_eq!(q.joins[0].kind, JoinKind::Right);
+    }
+
+    #[test]
+    fn parses_full_join() {
+        let q = parse("SELECT id FROM t FULL JOIN u ON t.k = u.k").unwrap();
+        assert_eq!(
+            q.joins,
+            vec![Join {
+                kind: JoinKind::Full,
+                table: "u".into(),
+                left_col: "t.k".into(),
+                right_col: "u.k".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_full_outer_join() {
+        let q = parse("SELECT id FROM t FULL OUTER JOIN u ON t.k = u.k").unwrap();
+        assert_eq!(q.joins[0].kind, JoinKind::Full);
+    }
+
+    #[test]
+    fn parses_not() {
+        let q = parse("SELECT id FROM t WHERE NOT amount > 10").unwrap();
+        assert_eq!(
+            q.where_clause,
+            Some(Expr::Not(Box::new(Expr::BinaryOp(
+                Box::new(Expr::Column("amount".into())),
+                BinOp::Gt,
+                Box::new(Expr::Literal(Literal::Int(10)))
+            ))))
+        );
+    }
+
+    #[test]
+    fn parses_is_null() {
+        let q = parse("SELECT id FROM t WHERE amount IS NULL").unwrap();
+        assert_eq!(
+            q.where_clause,
+            Some(Expr::IsNull {
+                expr: Box::new(Expr::Column("amount".into())),
+                negated: false,
+            })
+        );
+    }
+
+    #[test]
+    fn parses_is_not_null() {
+        let q = parse("SELECT id FROM t WHERE amount IS NOT NULL").unwrap();
+        assert_eq!(
+            q.where_clause,
+            Some(Expr::IsNull {
+                expr: Box::new(Expr::Column("amount".into())),
+                negated: true,
+            })
         );
     }
 }
