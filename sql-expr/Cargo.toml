@@ -1,0 +1,10 @@
+[package]
+name = "sql-expr"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SQL expression and query AST types (no evaluation, no parsing)"
+
+[dependencies]
+sql-types = { path = "../sql-types" }
