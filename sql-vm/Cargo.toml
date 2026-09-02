@@ -8,4 +8,22 @@ description = "Shared query execution engines for t-rust-db: batch (implemented)
 
 [dependencies]
 sql-expr = { path = "../sql-expr" }
-rayon = "1"
+rayon = { version = "1", optional = true }
+
+[features]
+# `batch` on by default -- it's the only real executor today, and plain
+# `cargo test --workspace` (what CI/the Makefile runs, with no per-crate
+# feature flags) needs to exercise it. Consumers that want to be explicit
+# about depending on exactly one executor (column-rs does) set
+# `default-features = false, features = ["batch"]` regardless of this
+# default -- see column-rs's own Cargo.toml.
+default = ["batch"]
+# Each executor is a separate feature so a consumer compiles only the
+# one(s) it actually uses -- not the others' modules or their
+# dependencies. `batch` is the only one with a real dependency today
+# (rayon); `row`/`stream` are stubs with no deps yet, gated the same way
+# on principle so adding a real dependency to either later doesn't force
+# every existing `batch`-only consumer to start pulling it in too.
+batch = ["dep:rayon"]
+row = []
+stream = []

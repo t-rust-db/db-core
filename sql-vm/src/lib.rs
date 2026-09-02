@@ -21,9 +21,19 @@
 //! Each executor has its own opcode set (`batch::Opcode` and a future
 //! `row::Opcode` are NOT the same type, and are not expected to become
 //! one) -- see each module's own docs.
+//!
+//! Each is gated behind its own Cargo feature (`batch`/`row`/`stream`, all
+//! off by default) -- a consumer enables only the one(s) it uses, so e.g.
+//! column-rs (which only ever needs `batch`) doesn't compile `row`/`stream`
+//! or pull in dependencies only one of them needs (`batch` needs `rayon`
+//! today; `row`/`stream` may grow their own deps later without forcing a
+//! `batch`-only consumer to rebuild with something new).
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "batch")]
 pub mod batch;
+#[cfg(feature = "row")]
 pub mod row;
+#[cfg(feature = "stream")]
 pub mod stream;
