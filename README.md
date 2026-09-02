@@ -24,8 +24,15 @@ expression AST vs. value types) can evolve independently.
   public API (`parse`, `parse_explain`) turns SQL text into a
   `sql_expr::Query`; it owns no AST types itself, only `ParseError` and
   the parsing machinery.
+- **`sql-join`** — shared join infrastructure for t-rust-db engines.
+  Starts with `JoinHashTable`, a flat open-addressing multimap — the
+  hash table representation, not join semantics or a cost model, is the
+  fix column-rs's join benchmark needs. `JoinKind`/NULL-safe semantics
+  and a build-side cost model are follow-up additions once an engine
+  actually needs them, not built speculatively here.
 
-Dependency direction: `sql-parser` → `sql-expr` → `sql-types`.
+Dependency direction: `sql-parser` → `sql-expr` → `sql-types`. `sql-join`
+depends on none of the others today.
 
 ## Roadmap
 
@@ -33,7 +40,6 @@ This is phase 1: enough structure to house the SQL parser cleanly. More
 crates will be added as functionality grows beyond what a single row- or
 column-oriented executor needs today, for example:
 
-- `sql-join` — join planning/execution shared across executors
 - `sql-string` — string function implementations
 - (others as the row and columnar executors converge on shared needs)
 
