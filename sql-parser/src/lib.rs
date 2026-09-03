@@ -12,12 +12,18 @@
 //!
 //! Produces `sql_expr::Query` -- the AST types themselves live in
 //! `sql-expr`, not here.
+//!
+//! Errors carry a [`sql_error::Span`] (see `ADR 0001` in `db-core`'s
+//! `.openspec/adr/`), matching sqlite-rs's own `ParseFail`/`ParseOutcome`
+//! convention: a consumer (REPL, IDE) can point at *where* parsing failed,
+//! not just read a message.
 
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
 use std::fmt;
 
+use sql_error::Span;
 use sql_expr::{
     AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
 };
@@ -35,15 +41,36 @@ const TABLE_REF_FOLLOW_KEYWORDS: &[&str] = &[
 
 #[derive(Debug, PartialEq)]
 pub enum ParseError {
-    UnexpectedEof,
-    Unexpected(String),
+    UnexpectedEof { span: Span },
+    Unexpected { message: String, span: Span },
+}
+
+impl ParseError {
+    /// The location this error points at.
+    pub fn span(&self) -> Span {
+        match self {
+            ParseError::UnexpectedEof { span } | ParseError::Unexpected { span, .. } => *span,
+        }
+    }
 }
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ParseError::UnexpectedEof => write!(f, "unexpected end of query"),
-            ParseError::Unexpected(tok) => write!(f, "unexpected token: {tok}"),
+            ParseError::UnexpectedEof { span } => {
+                write!(
+                    f,
+                    "unexpected end of query at {}:{}",
+                    span.line, span.column
+                )
+            }
+            ParseError::Unexpected { message, span } => {
+                write!(
+                    f,
+                    "unexpected token at {}:{}: {message}",
+                    span.line, span.column
+                )
+            }
         }
     }
 }
@@ -66,8 +93,42 @@ enum Token {
     Op(String),
 }
 
-fn tokenize(input: &str) -> Result<Vec<Token>> {
+/// Per-char-index `(line, column, byte_offset)`, 1-based line/column,
+/// computed once so every token's [`Span`] is a slice of this table rather
+/// than re-scanning the input. One extra trailing entry (index
+/// `chars.len()`) gives end-of-input a real position for
+/// [`ParseError::UnexpectedEof`], instead of leaving it spanless.
+fn char_positions(chars: &[char]) -> Vec<(u32, u32, u32)> {
+    let mut positions = Vec::with_capacity(chars.len() + 1);
+    let (mut line, mut col, mut byte) = (1u32, 1u32, 0u32);
+    for c in chars {
+        positions.push((line, col, byte));
+        byte += c.len_utf8() as u32;
+        if *c == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    positions.push((line, col, byte));
+    positions
+}
+
+fn span_of(positions: &[(u32, u32, u32)], start: usize, end: usize) -> Span {
+    let (line, column, offset) = positions[start];
+    let len = positions[end].2 - offset;
+    Span {
+        line,
+        column,
+        offset,
+        len,
+    }
+}
+
+fn tokenize(input: &str) -> Result<Vec<(Token, Span)>> {
     let chars: Vec<char> = input.chars().collect();
+    let positions = char_positions(&chars);
     let mut i = 0;
     let mut tokens = Vec::new();
     while i < chars.len() {
@@ -76,39 +137,44 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
             i += 1;
             continue;
         }
+        let start = i;
         match c {
             '*' => {
-                tokens.push(Token::Star);
+                tokens.push((Token::Star, span_of(&positions, start, start + 1)));
                 i += 1;
             }
             ',' => {
-                tokens.push(Token::Comma);
+                tokens.push((Token::Comma, span_of(&positions, start, start + 1)));
                 i += 1;
             }
             '.' => {
-                tokens.push(Token::Dot);
+                tokens.push((Token::Dot, span_of(&positions, start, start + 1)));
                 i += 1;
             }
             '(' => {
-                tokens.push(Token::LParen);
+                tokens.push((Token::LParen, span_of(&positions, start, start + 1)));
                 i += 1;
             }
             ')' => {
-                tokens.push(Token::RParen);
+                tokens.push((Token::RParen, span_of(&positions, start, start + 1)));
                 i += 1;
             }
             '\'' => {
-                let start = i + 1;
-                let mut j = start;
+                let str_start = i + 1;
+                let mut j = str_start;
                 while j < chars.len() && chars[j] != '\'' {
                     j += 1;
                 }
                 if j >= chars.len() {
-                    return Err(ParseError::Unexpected(
-                        "unterminated string literal".to_string(),
-                    ));
+                    return Err(ParseError::Unexpected {
+                        message: "unterminated string literal".to_string(),
+                        span: span_of(&positions, start, chars.len()),
+                    });
                 }
-                tokens.push(Token::Str(chars[start..j].iter().collect()));
+                tokens.push((
+                    Token::Str(chars[str_start..j].iter().collect()),
+                    span_of(&positions, start, j + 1),
+                ));
                 i = j + 1;
             }
             '=' | '<' | '>' | '!' | '+' | '-' | '/' => {
@@ -120,10 +186,9 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
                 } else {
                     i += 1;
                 }
-                tokens.push(Token::Op(op));
+                tokens.push((Token::Op(op), span_of(&positions, start, i)));
             }
             _ if c.is_ascii_digit() => {
-                let start = i;
                 let mut is_float = false;
                 while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
                     if chars[i] == '.' {
@@ -132,23 +197,27 @@ fn tokenize(input: &str) -> Result<Vec<Token>> {
                     i += 1;
                 }
                 let text: String = chars[start..i].iter().collect();
+                let span = span_of(&positions, start, i);
                 if is_float {
-                    tokens.push(Token::Float(text.parse().unwrap()));
+                    tokens.push((Token::Float(text.parse().unwrap()), span));
                 } else {
-                    tokens.push(Token::Int(text.parse().unwrap()));
+                    tokens.push((Token::Int(text.parse().unwrap()), span));
                 }
             }
             _ if c.is_alphabetic() || c == '_' => {
-                let start = i;
                 while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
                     i += 1;
                 }
-                tokens.push(Token::Ident(chars[start..i].iter().collect()));
+                tokens.push((
+                    Token::Ident(chars[start..i].iter().collect()),
+                    span_of(&positions, start, i),
+                ));
             }
             other => {
-                return Err(ParseError::Unexpected(format!(
-                    "unexpected character '{other}'"
-                )))
+                return Err(ParseError::Unexpected {
+                    message: format!("unexpected character '{other}'"),
+                    span: span_of(&positions, start, start + 1),
+                })
             }
         }
     }
@@ -214,31 +283,49 @@ fn resolve_query_aliases(query: &mut Query, aliases: &HashMap<String, String>) {
 }
 
 struct Parser {
-    tokens: Vec<Token>,
+    tokens: Vec<(Token, Span)>,
     pos: usize,
+    /// Span of the last token actually consumed by [`Self::next`] -- used
+    /// to locate an error raised just after consuming a token that turned
+    /// out not to match what was expected. Starts at [`Span::UNKNOWN`]
+    /// (never actually read: the first parser call is always `next()`,
+    /// which sets this before any error path can read it).
+    last_span: Span,
+    /// Position one past the last character of the input -- the location
+    /// [`ParseError::UnexpectedEof`] points at when there's no last token
+    /// to blame (e.g. an empty query).
+    eof_span: Span,
 }
 
 impl Parser {
     fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.pos)
+        self.tokens.get(self.pos).map(|(t, _)| t)
     }
 
     fn next(&mut self) -> Result<Token> {
-        let tok = self
+        let (tok, span) = self
             .tokens
             .get(self.pos)
             .cloned()
-            .ok_or(ParseError::UnexpectedEof)?;
+            .ok_or(ParseError::UnexpectedEof {
+                span: self.eof_span,
+            })?;
         self.pos += 1;
+        self.last_span = span;
         Ok(tok)
+    }
+
+    fn unexpected(&self, message: String) -> ParseError {
+        ParseError::Unexpected {
+            message,
+            span: self.last_span,
+        }
     }
 
     fn expect_keyword(&mut self, keyword: &str) -> Result<()> {
         match self.next()? {
             Token::Ident(word) if word.eq_ignore_ascii_case(keyword) => Ok(()),
-            other => Err(ParseError::Unexpected(format!(
-                "{other:?}, expected {keyword}"
-            ))),
+            other => Err(self.unexpected(format!("{other:?}, expected {keyword}"))),
         }
     }
 
@@ -250,11 +337,7 @@ impl Parser {
     fn ident(&mut self) -> Result<String> {
         let mut name = match self.next()? {
             Token::Ident(name) => name,
-            other => {
-                return Err(ParseError::Unexpected(format!(
-                    "{other:?}, expected identifier"
-                )))
-            }
+            other => return Err(self.unexpected(format!("{other:?}, expected identifier"))),
         };
         while matches!(self.peek(), Some(Token::Dot)) {
             self.next()?;
@@ -264,9 +347,7 @@ impl Parser {
                     name.push_str(&part);
                 }
                 other => {
-                    return Err(ParseError::Unexpected(format!(
-                        "{other:?}, expected identifier after '.'"
-                    )))
+                    return Err(self.unexpected(format!("{other:?}, expected identifier after '.'")))
                 }
             }
         }
@@ -369,9 +450,7 @@ impl Parser {
                 match self.next()? {
                     Token::Op(op) if op == "=" => {}
                     other => {
-                        return Err(ParseError::Unexpected(format!(
-                            "{other:?}, expected = in ON clause"
-                        )))
+                        return Err(self.unexpected(format!("{other:?}, expected = in ON clause")))
                     }
                 }
                 let right_col = self.ident()?;
@@ -422,18 +501,14 @@ impl Parser {
             self.next()?;
             match self.next()? {
                 Token::Int(n) if n >= 0 => Some(n as usize),
-                other => {
-                    return Err(ParseError::Unexpected(format!(
-                        "{other:?}, expected LIMIT count"
-                    )))
-                }
+                other => return Err(self.unexpected(format!("{other:?}, expected LIMIT count"))),
             }
         } else {
             None
         };
 
         if joins.iter().any(|j| j.kind == JoinKind::Cross) && limit.is_none() {
-            return Err(ParseError::Unexpected(
+            return Err(self.unexpected(
                 "CROSS JOIN requires a LIMIT (bounded-execution rule -- an unconditional cross \
                  product has no natural row cap)"
                     .to_string(),
@@ -462,10 +537,17 @@ impl Parser {
     fn parse_top_level_query(&mut self) -> Result<Query> {
         let query = self.parse_query()?;
         if self.pos != self.tokens.len() {
-            return Err(ParseError::Unexpected(format!(
-                "trailing tokens: {:?}",
-                &self.tokens[self.pos..]
-            )));
+            let trailing_span = self.tokens[self.pos].1;
+            return Err(ParseError::Unexpected {
+                message: format!(
+                    "trailing tokens: {:?}",
+                    self.tokens[self.pos..]
+                        .iter()
+                        .map(|(t, _)| t.clone())
+                        .collect::<Vec<_>>()
+                ),
+                span: trailing_span,
+            });
         }
         Ok(query)
     }
@@ -525,9 +607,9 @@ impl Parser {
                     match self.next()? {
                         Token::Int(n) => Some(n),
                         other => {
-                            return Err(ParseError::Unexpected(format!(
-                                "{other:?}, expected integer offset"
-                            )))
+                            return Err(
+                                self.unexpected(format!("{other:?}, expected integer offset"))
+                            )
                         }
                     }
                 } else {
@@ -583,7 +665,7 @@ impl Parser {
                         "AVG" => WindowFunc::Avg,
                         "COUNT" => WindowFunc::Count,
                         _ => {
-                            return Err(ParseError::Unexpected(format!(
+                            return Err(self.unexpected(format!(
                                 "{name} OVER (...) is not a supported window function"
                             )))
                         }
@@ -596,9 +678,8 @@ impl Parser {
                         order_by,
                     }))
                 } else {
-                    let agg = AggFunc::from_name(&name).ok_or_else(|| {
-                        ParseError::Unexpected(format!("unknown function {name}"))
-                    })?;
+                    let agg = AggFunc::from_name(&name)
+                        .ok_or_else(|| self.unexpected(format!("unknown function {name}")))?;
                     Ok(SelectItem::Agg(agg, arg))
                 }
             }
@@ -608,7 +689,7 @@ impl Parser {
     fn expect_rparen(&mut self) -> Result<()> {
         match self.next()? {
             Token::RParen => Ok(()),
-            other => Err(ParseError::Unexpected(format!("{other:?}, expected )"))),
+            other => Err(self.unexpected(format!("{other:?}, expected )"))),
         }
     }
 
@@ -616,11 +697,7 @@ impl Parser {
     fn parse_over_clause(&mut self) -> Result<OverClause> {
         match self.next()? {
             Token::LParen => {}
-            other => {
-                return Err(ParseError::Unexpected(format!(
-                    "{other:?}, expected ( after OVER"
-                )))
-            }
+            other => return Err(self.unexpected(format!("{other:?}, expected ( after OVER"))),
         }
         let partition_by = if self.peek_keyword("PARTITION") {
             self.next()?;
@@ -716,19 +793,15 @@ impl Parser {
             self.next()?;
             match self.next()? {
                 Token::LParen => {}
-                other => {
-                    return Err(ParseError::Unexpected(format!(
-                        "{other:?}, expected ( after IN"
-                    )))
-                }
+                other => return Err(self.unexpected(format!("{other:?}, expected ( after IN"))),
             }
             let subquery = self.parse_query()?;
             match self.next()? {
                 Token::RParen => {}
                 other => {
-                    return Err(ParseError::Unexpected(format!(
-                        "{other:?}, expected ) closing IN subquery"
-                    )))
+                    return Err(
+                        self.unexpected(format!("{other:?}, expected ) closing IN subquery"))
+                    )
                 }
             }
             return Ok(Expr::InSubquery {
@@ -807,9 +880,8 @@ impl Parser {
                             name.push_str(&part);
                         }
                         other => {
-                            return Err(ParseError::Unexpected(format!(
-                                "{other:?}, expected identifier after '.'"
-                            )))
+                            return Err(self
+                                .unexpected(format!("{other:?}, expected identifier after '.'")))
                         }
                     }
                 }
@@ -822,27 +894,43 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 match self.next()? {
                     Token::RParen => Ok(expr),
-                    other => Err(ParseError::Unexpected(format!("{other:?}, expected )"))),
+                    other => Err(self.unexpected(format!("{other:?}, expected )"))),
                 }
             }
-            other => Err(ParseError::Unexpected(format!(
-                "{other:?}, expected expression"
-            ))),
+            other => Err(self.unexpected(format!("{other:?}, expected expression"))),
         }
     }
 }
 
-pub fn parse(input: &str) -> Result<Query> {
+fn make_parser(input: &str) -> Result<Parser> {
     let tokens = tokenize(input)?;
-    let mut parser = Parser { tokens, pos: 0 };
-    parser.parse_top_level_query()
+    let chars: Vec<char> = input.chars().collect();
+    let positions = char_positions(&chars);
+    let eof_span = {
+        let (line, column, offset) = positions[chars.len()];
+        Span {
+            line,
+            column,
+            offset,
+            len: 0,
+        }
+    };
+    Ok(Parser {
+        tokens,
+        pos: 0,
+        last_span: Span::UNKNOWN,
+        eof_span,
+    })
+}
+
+pub fn parse(input: &str) -> Result<Query> {
+    make_parser(input)?.parse_top_level_query()
 }
 
 /// Parses `EXPLAIN [QUERY PLAN] <select>`, returning whether the `EXPLAIN`
 /// prefix was present along with the parsed query.
 pub fn parse_explain(input: &str) -> Result<(bool, Query)> {
-    let tokens = tokenize(input)?;
-    let mut parser = Parser { tokens, pos: 0 };
+    let mut parser = make_parser(input)?;
     let explain = if parser.peek_keyword("EXPLAIN") {
         parser.next()?;
         if parser.peek_keyword("QUERY") {
@@ -920,7 +1008,7 @@ mod tests {
         // (`FROM t GARBAGE` == `FROM t AS GARBAGE`) -- two is unambiguous
         // garbage, since only one alias is allowed.
         let err = parse("SELECT id FROM t GARBAGE EXTRA").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected(_)));
+        assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
     #[test]
@@ -1075,7 +1163,7 @@ mod tests {
                 kind: JoinKind::Cross,
                 table: "b".into(),
                 left_col: String::new(),
-                right_col: String::new(),
+                right_col: String::new()
             }]
         );
         assert_eq!(q.limit, Some(10));
@@ -1084,7 +1172,7 @@ mod tests {
     #[test]
     fn cross_join_without_limit_is_rejected() {
         let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected(_)));
+        assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
     #[test]
@@ -1096,7 +1184,7 @@ mod tests {
                 kind: JoinKind::Right,
                 table: "u".into(),
                 left_col: "t.k".into(),
-                right_col: "u.k".into(),
+                right_col: "u.k".into()
             }]
         );
     }
@@ -1116,7 +1204,7 @@ mod tests {
                 kind: JoinKind::Full,
                 table: "u".into(),
                 left_col: "t.k".into(),
-                right_col: "u.k".into(),
+                right_col: "u.k".into()
             }]
         );
     }
@@ -1147,7 +1235,7 @@ mod tests {
             q.where_clause,
             Some(Expr::IsNull {
                 expr: Box::new(Expr::Column("amount".into())),
-                negated: false,
+                negated: false
             })
         );
     }
@@ -1159,8 +1247,45 @@ mod tests {
             q.where_clause,
             Some(Expr::IsNull {
                 expr: Box::new(Expr::Column("amount".into())),
-                negated: true,
+                negated: true
             })
         );
+    }
+
+    // --- Span tests: the actual point of this migration ---
+
+    #[test]
+    fn error_span_points_at_the_offending_token() {
+        // "GARBAGE" is consumed as the table alias (parse_optional_alias),
+        // so "EXTRA" -- not "GARBAGE" -- is the actual trailing token the
+        // error points at: line 1, column 26 (1-based), byte offset 25.
+        let err = parse("SELECT id FROM t GARBAGE EXTRA").unwrap_err();
+        let span = err.span();
+        assert_eq!(span.line, 1);
+        assert_eq!(span.column, 26);
+        assert_eq!(span.offset, 25);
+    }
+
+    #[test]
+    fn error_span_tracks_line_number_across_newlines() {
+        let err = parse("SELECT id\nFROM t\nGARBAGE EXTRA").unwrap_err();
+        assert_eq!(err.span().line, 3);
+    }
+
+    #[test]
+    fn eof_error_has_a_real_span_not_unknown() {
+        let err = parse("SELECT id FROM").unwrap_err();
+        match err {
+            ParseError::UnexpectedEof { span } => assert!(!span.is_unknown()),
+            other => panic!("expected UnexpectedEof, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multibyte_characters_advance_byte_offset_correctly() {
+        // "é" is 2 UTF-8 bytes; the following identifier's offset must
+        // account for that, not just count chars.
+        let q = parse("SELECT id FROM t WHERE name = 'café'").unwrap();
+        assert!(q.where_clause.is_some());
     }
 }

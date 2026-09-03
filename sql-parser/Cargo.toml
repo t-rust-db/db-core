@@ -9,3 +9,4 @@ description = "Tokenizer and recursive-descent parser producing sql-expr::Query"
 [dependencies]
 sql-types = { path = "../sql-types" }
 sql-expr = { path = "../sql-expr" }
+sql-error = { path = "../sql-error" }
