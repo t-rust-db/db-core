@@ -235,6 +235,7 @@ impl Opcode {
             Opcode::GroupReduce { .. } => "GroupReduce",
             Opcode::HashBuild { .. } => "HashBuild",
             Opcode::HashProbe { .. } => "HashProbe",
+            Opcode::Window { .. } => "Window",
             Opcode::Scan => "Scan",
             Opcode::Emit { .. } => "Emit",
             Opcode::NextSegment { .. } => "NextSegment",
@@ -866,14 +867,14 @@ impl Vm {
             } => {
                 let partition_cols: Vec<&[Value]> = partition_by
                     .iter()
-                    .map(|r| self.register(*r))
+                    .map(|r| self.reg(*r, opcode))
                     .collect::<Result<_>>()?;
                 let order_cols: Vec<(&[Value], bool)> = order_by
                     .iter()
-                    .map(|(r, desc)| self.register(*r).map(|c| (c, *desc)))
+                    .map(|(r, desc)| self.reg(*r, opcode).map(|c| (c, *desc)))
                     .collect::<Result<_>>()?;
                 let arg_col: Option<&[Value]> = match arg {
-                    Some(r) => Some(self.register(*r)?),
+                    Some(r) => Some(self.reg(*r, opcode)?),
                     None => None,
                 };
 
