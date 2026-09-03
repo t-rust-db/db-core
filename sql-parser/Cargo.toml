@@ -9,3 +9,16 @@ description = "Tokenizer and recursive-descent parser producing sql-expr::Query"
 [dependencies]
 sql-types = { path = "../sql-types" }
 sql-expr = { path = "../sql-expr" }
+
+[features]
+# `column` on by default -- it's the only real section today, and plain
+# `cargo test --workspace` (what CI/the Makefile runs, with no per-crate
+# feature flags) needs to exercise it. column-rs sets
+# `default-features = false, features = ["column"]` to be explicit about
+# depending on exactly one section, mirroring `sql-vm`'s `batch` feature.
+default = ["column"]
+# Each grammar section is a separate feature so a consumer compiles only
+# the one(s) it actually uses -- exactly `sql-vm`'s `batch`/`row`/`stream`
+# pattern (ADR 0001), applied here to the parser layer (ADR 0002).
+column = []
+row = []
