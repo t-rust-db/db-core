@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** all workspace crates (`sql-types`, `sql-expr`, `sql-parser`, `sql-error`, `sql-join`, `sql-vm`) version together, one tag per release.
 
+## [0.3.0] - 2026-09-03
+
+### Added
+
+- `sql-vm`: `VmError` now carries `opcode: &'static str` naming the instruction that failed (execution-time error context, matching sqlite-rs's `ExecError` pattern).
+- `sql-vm`: `MAX_STEPS` bounded-execution guard (10M instructions), preventing pathological/buggy compiled programs from running indefinitely. `Vm::execute`/`Vm::run` fail with `VmError::StepLimitExceeded` once the limit is exceeded.
+- `sql-vm`: `Opcode::name()` method returning each variant's runtime name, used as context in `VmError` messages.
+
+### Changed
+
+- `sql-vm`: `VmError` variants now struct-shaped to carry `opcode` and other context fields, improving error diagnostics.
+
 ## [0.2.0] - 2026-09-03
 
 ### Added
