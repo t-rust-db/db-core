@@ -2,7 +2,13 @@
 
 All notable changes to db-core. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
-**Versioning policy:** all workspace crates (`sql-types`, `sql-expr`, `sql-parser`, `sql-error`, `sql-join`, `sql-vm`) version together, one tag per release.
+**Versioning policy:** all workspace crates (`sql-types`, `sql-expr`, `sql-parser`, `sql-join`, `sql-vm`) version together, one tag per release.
+
+## [0.4.1] - 2026-09-03
+
+### Changed
+
+- `sql-error` folded into `sql-parser` as a module (`sql_parser::span`, re-exported as `sql_parser::Span`); the crate had exactly one consumer, so its own `Cargo.toml`/workspace member was premature modularization (#8). No behavior change.
 
 ## [0.4.0] - 2026-09-03
 

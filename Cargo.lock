@@ -54,36 +54,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "sql-error"
-version = "0.4.0"
-
-[[package]]
 name = "sql-expr"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "sql-types",
 ]
 
 [[package]]
 name = "sql-join"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "sql-parser"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
- "sql-error",
  "sql-expr",
  "sql-types",
 ]
 
 [[package]]
 name = "sql-types"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "sql-vm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "rayon",
  "sql-expr",

@@ -13,7 +13,7 @@
 //! Produces `sql_expr::Query` -- the AST types themselves live in
 //! `sql-expr`, not here.
 //!
-//! Errors carry a [`sql_error::Span`] (see `ADR 0001` in `db-core`'s
+//! Errors carry a [`Span`] (see `ADR 0001` in `db-core`'s
 //! `.openspec/adr/`), matching sqlite-rs's own `ParseFail`/`ParseOutcome`
 //! convention: a consumer (REPL, IDE) can point at *where* parsing failed,
 //! not just read a message.
@@ -23,11 +23,13 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use sql_error::Span;
 use sql_expr::{
     AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
 };
 use sql_types::Literal;
+
+mod span;
+pub use span::Span;
 
 /// Keywords that can follow a table reference (`FROM table [alias]`,
 /// `JOIN table [alias] ON ...`) -- an identifier here is never taken as an
