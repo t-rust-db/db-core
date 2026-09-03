@@ -109,6 +109,23 @@ pub enum MapOp {
     IsNotNull,
 }
 
+/// Window functions supported by [`Opcode::Window`] -- `Sum`/`Avg`/`Count`
+/// here are the running/whole-partition `OVER` forms, distinct from
+/// [`AggFunc`]'s flat/`GROUP BY` reductions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowFunc {
+    RowNumber,
+    Rank,
+    DenseRank,
+    Lag,
+    Lead,
+    FirstValue,
+    LastValue,
+    Sum,
+    Avg,
+    Count,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Opcode {
     /// Load a named column from the current batch into a register.
@@ -169,6 +186,26 @@ pub enum Opcode {
         payload_dst: Cow<'static, [usize]>,
         kind: JoinKind,
     },
+    /// `func(...) OVER (PARTITION BY ... ORDER BY ...)`: partitions the
+    /// current live rows by `partition_by` (empty = one partition), sorts
+    /// each partition by `order_by`, computes `func` per row within its
+    /// partition, and writes one value per row (in original row order, not
+    /// partition/sort order) into `dst`. `arg` is the value column for
+    /// `Lag`/`Lead`/`FirstValue`/`LastValue`/`Sum`/`Avg` (unused, `None`,
+    /// for `RowNumber`/`Rank`/`DenseRank`, and optional for `Count`, which
+    /// counts rows when `arg` is `None`). `offset` is `Lag`/`Lead`'s shift
+    /// (default 1). `Sum`/`Avg`/`Count` run as a cumulative aggregate over
+    /// `order_by`'s order when `order_by` is non-empty, or once over the
+    /// whole partition (broadcast to every row in it) when empty --
+    /// matching SQL's default frame for each case.
+    Window {
+        func: WindowFunc,
+        arg: Option<usize>,
+        offset: Option<i64>,
+        partition_by: Cow<'static, [usize]>,
+        order_by: Cow<'static, [(usize, bool)]>,
+        dst: usize,
+    },
     /// Marks the top of the per-segment loop; a no-op on its own (the
     /// current batch is already loaded by [`Vm::run`]).
     Scan,
@@ -198,6 +235,7 @@ impl Opcode {
             Opcode::GroupReduce { .. } => "GroupReduce",
             Opcode::HashBuild { .. } => "HashBuild",
             Opcode::HashProbe { .. } => "HashProbe",
+            Opcode::Window { .. } => "Window",
             Opcode::Scan => "Scan",
             Opcode::Emit { .. } => "Emit",
             Opcode::NextSegment { .. } => "NextSegment",
@@ -819,6 +857,47 @@ impl Vm {
                     self.registers.insert(*dst, col);
                 }
             }
+            Opcode::Window {
+                func,
+                arg,
+                offset,
+                partition_by,
+                order_by,
+                dst,
+            } => {
+                let partition_cols: Vec<&[Value]> = partition_by
+                    .iter()
+                    .map(|r| self.reg(*r, opcode))
+                    .collect::<Result<_>>()?;
+                let order_cols: Vec<(&[Value], bool)> = order_by
+                    .iter()
+                    .map(|(r, desc)| self.reg(*r, opcode).map(|c| (c, *desc)))
+                    .collect::<Result<_>>()?;
+                let arg_col: Option<&[Value]> = match arg {
+                    Some(r) => Some(self.reg(*r, opcode)?),
+                    None => None,
+                };
+
+                let num_rows = partition_cols.first().map_or_else(
+                    || {
+                        order_cols.first().map_or_else(
+                            || arg_col.map_or(batch.num_rows, <[Value]>::len),
+                            |(c, _)| c.len(),
+                        )
+                    },
+                    |c| c.len(),
+                );
+
+                let result = compute_window(
+                    *func,
+                    *offset,
+                    &partition_cols,
+                    &order_cols,
+                    arg_col,
+                    num_rows,
+                );
+                self.registers.insert(*dst, result);
+            }
             Opcode::Emit { registers } => {
                 // #110: borrow each register instead of `.to_vec()`-ing it
                 // first -- the transpose loop below already clones every
@@ -841,6 +920,187 @@ impl Vm {
             Opcode::Scan | Opcode::NextSegment { .. } | Opcode::Halt => {}
         }
         Ok(())
+    }
+}
+
+/// Ported 1:1 from column-rs's private `compute_window` (its only prior
+/// implementation) -- partitions `0..num_rows` by `partition_cols`' tuple
+/// (stringified, same non-NULL-safe convention as [`Opcode::GroupReduce`]'s
+/// grouping), sorts each partition by `order_cols` via [`compare_for_order`],
+/// then computes `func` per row within its partition.
+fn compute_window(
+    func: WindowFunc,
+    offset: Option<i64>,
+    partition_cols: &[&[Value]],
+    order_cols: &[(&[Value], bool)],
+    arg_col: Option<&[Value]>,
+    num_rows: usize,
+) -> Vec<Value> {
+    let mut partitions: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut partition_order: Vec<String> = Vec::new();
+    for row in 0..num_rows {
+        let key = partition_cols
+            .iter()
+            .map(|c| c[row].to_string())
+            .collect::<Vec<_>>()
+            .join("\u{0}");
+        if !partitions.contains_key(&key) {
+            partition_order.push(key.clone());
+        }
+        partitions.entry(key).or_default().push(row);
+    }
+
+    let mut output = vec![Value::Null; num_rows];
+    for key in &partition_order {
+        let mut indices = partitions[key].clone();
+        indices.sort_by(|&a, &b| {
+            for (col, descending) in order_cols {
+                let ord = compare_for_order(&col[a], &col[b], *descending);
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+
+        match func {
+            WindowFunc::RowNumber => {
+                for (pos, &row) in indices.iter().enumerate() {
+                    output[row] = Value::Int((pos + 1) as i64);
+                }
+            }
+            WindowFunc::Rank | WindowFunc::DenseRank => {
+                let mut rank = 0i64;
+                let mut dense = 0i64;
+                let mut prev: Option<usize> = None;
+                for (pos, &row) in indices.iter().enumerate() {
+                    let is_new = match prev {
+                        None => true,
+                        Some(prev_row) => order_cols
+                            .iter()
+                            .any(|(col, _)| col[row].to_string() != col[prev_row].to_string()),
+                    };
+                    if is_new {
+                        rank = (pos + 1) as i64;
+                        dense += 1;
+                    }
+                    output[row] = Value::Int(if func == WindowFunc::Rank {
+                        rank
+                    } else {
+                        dense
+                    });
+                    prev = Some(row);
+                }
+            }
+            WindowFunc::Lag | WindowFunc::Lead => {
+                let offset = offset.unwrap_or(1);
+                let arg = arg_col.expect("Lag/Lead always have an argument column");
+                let n = indices.len() as i64;
+                for (pos, &row) in indices.iter().enumerate() {
+                    let target = if func == WindowFunc::Lag {
+                        pos as i64 - offset
+                    } else {
+                        pos as i64 + offset
+                    };
+                    output[row] = if target >= 0 && target < n {
+                        arg[indices[target as usize]].clone()
+                    } else {
+                        Value::Null
+                    };
+                }
+            }
+            WindowFunc::FirstValue => {
+                let arg = arg_col.expect("FirstValue always has an argument column");
+                if let Some(&first) = indices.first() {
+                    let v = arg[first].clone();
+                    for &row in &indices {
+                        output[row] = v.clone();
+                    }
+                }
+            }
+            WindowFunc::LastValue => {
+                let arg = arg_col.expect("LastValue always has an argument column");
+                for &row in &indices {
+                    output[row] = arg[row].clone();
+                }
+            }
+            WindowFunc::Sum | WindowFunc::Avg | WindowFunc::Count => {
+                if order_cols.is_empty() {
+                    let agg = whole_partition_aggregate(func, arg_col, &indices);
+                    for &row in &indices {
+                        output[row] = agg.clone();
+                    }
+                } else {
+                    let mut running_sum = 0.0;
+                    let mut running_count = 0i64;
+                    for &row in &indices {
+                        let counted = match arg_col {
+                            Some(a) => !matches!(a[row], Value::Null),
+                            None => true,
+                        };
+                        if counted {
+                            running_count += 1;
+                            if let Some(a) = arg_col {
+                                if let Some(v) = a[row].as_f64() {
+                                    running_sum += v;
+                                }
+                            }
+                        }
+                        output[row] = match func {
+                            WindowFunc::Count => Value::Int(running_count),
+                            WindowFunc::Sum => {
+                                if running_count > 0 {
+                                    Value::Float(running_sum)
+                                } else {
+                                    Value::Null
+                                }
+                            }
+                            WindowFunc::Avg => {
+                                if running_count > 0 {
+                                    Value::Float(running_sum / running_count as f64)
+                                } else {
+                                    Value::Null
+                                }
+                            }
+                            _ => unreachable!(),
+                        };
+                    }
+                }
+            }
+        }
+    }
+    output
+}
+
+/// `SUM`/`AVG`/`COUNT OVER (PARTITION BY ...)` with no `ORDER BY`: the
+/// default frame is the whole partition, so every row in it gets the same
+/// aggregate value.
+fn whole_partition_aggregate(
+    func: WindowFunc,
+    arg_col: Option<&[Value]>,
+    indices: &[usize],
+) -> Value {
+    if func == WindowFunc::Count {
+        let count = match arg_col {
+            Some(a) => indices
+                .iter()
+                .filter(|&&row| !matches!(a[row], Value::Null))
+                .count(),
+            None => indices.len(),
+        };
+        return Value::Int(count as i64);
+    }
+    let values: Vec<f64> = indices
+        .iter()
+        .filter_map(|&row| arg_col.and_then(|a| a[row].as_f64()))
+        .collect();
+    if values.is_empty() {
+        return Value::Null;
+    }
+    match func {
+        WindowFunc::Sum => Value::Float(values.iter().sum()),
+        WindowFunc::Avg => Value::Float(values.iter().sum::<f64>() / values.len() as f64),
+        _ => unreachable!(),
     }
 }
 
@@ -1512,6 +1772,289 @@ mod tests {
                 limit: MAX_STEPS
             }
         );
+    }
+
+    fn run_window(batch: &Batch, op: Opcode) -> Vec<Value> {
+        let mut vm = Vm::new();
+        for name in batch.columns.keys() {
+            vm.step(
+                batch,
+                &Opcode::LoadColumn {
+                    reg: name_to_reg(name),
+                    column: name.clone().into(),
+                },
+            )
+            .unwrap();
+        }
+        vm.step(batch, &op).unwrap();
+        let Opcode::Window { dst, .. } = op else {
+            panic!("expected Opcode::Window")
+        };
+        vm.register(dst).unwrap().to_vec()
+    }
+
+    // Deterministic per-name register numbers so `run_window`'s test
+    // harness doesn't need the caller to hand-assign one per column.
+    fn name_to_reg(name: &str) -> usize {
+        match name {
+            "part" => 0,
+            "ord" => 1,
+            "val" => 2,
+            other => panic!("unexpected test column: {other}"),
+        }
+    }
+
+    #[test]
+    fn window_row_number_restarts_per_partition() {
+        let batch = Batch::new(4)
+            .with_column(
+                "part",
+                vec![
+                    Value::Str("a".into()),
+                    Value::Str("a".into()),
+                    Value::Str("b".into()),
+                    Value::Str("b".into()),
+                ],
+            )
+            .with_column(
+                "ord",
+                vec![Value::Int(1), Value::Int(2), Value::Int(1), Value::Int(2)],
+            );
+        let rows = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::RowNumber,
+                arg: None,
+                offset: None,
+                partition_by: vec![0].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(
+            rows,
+            vec![Value::Int(1), Value::Int(2), Value::Int(1), Value::Int(2)]
+        );
+    }
+
+    #[test]
+    fn window_rank_and_dense_rank_handle_ties() {
+        let batch = Batch::new(4).with_column(
+            "ord",
+            vec![
+                Value::Int(10),
+                Value::Int(10),
+                Value::Int(20),
+                Value::Int(30),
+            ],
+        );
+        let rank = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::Rank,
+                arg: None,
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(
+            rank,
+            vec![Value::Int(1), Value::Int(1), Value::Int(3), Value::Int(4)]
+        );
+
+        let dense = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::DenseRank,
+                arg: None,
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(
+            dense,
+            vec![Value::Int(1), Value::Int(1), Value::Int(2), Value::Int(3)]
+        );
+    }
+
+    #[test]
+    fn window_lag_and_lead_default_offset_one() {
+        let batch = Batch::new(3)
+            .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+            .with_column(
+                "val",
+                vec![
+                    Value::Str("x".into()),
+                    Value::Str("y".into()),
+                    Value::Str("z".into()),
+                ],
+            );
+        let lag = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::Lag,
+                arg: Some(2),
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(
+            lag,
+            vec![Value::Null, Value::Str("x".into()), Value::Str("y".into())]
+        );
+
+        let lead = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::Lead,
+                arg: Some(2),
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(
+            lead,
+            vec![Value::Str("y".into()), Value::Str("z".into()), Value::Null]
+        );
+    }
+
+    #[test]
+    fn window_first_value_and_last_value() {
+        let batch = Batch::new(3)
+            .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+            .with_column(
+                "val",
+                vec![
+                    Value::Str("x".into()),
+                    Value::Str("y".into()),
+                    Value::Str("z".into()),
+                ],
+            );
+        let first = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::FirstValue,
+                arg: Some(2),
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(
+            first,
+            vec![
+                Value::Str("x".into()),
+                Value::Str("x".into()),
+                Value::Str("x".into())
+            ]
+        );
+
+        let last = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::LastValue,
+                arg: Some(2),
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(
+            last,
+            vec![
+                Value::Str("x".into()),
+                Value::Str("y".into()),
+                Value::Str("z".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn window_sum_over_whole_partition_without_order_by_broadcasts() {
+        let batch =
+            Batch::new(3).with_column("val", vec![Value::Int(10), Value::Int(20), Value::Null]);
+        let sums = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::Sum,
+                arg: Some(2),
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(
+            sums,
+            vec![Value::Float(30.0), Value::Float(30.0), Value::Float(30.0)]
+        );
+    }
+
+    #[test]
+    fn window_sum_with_order_by_is_a_running_total() {
+        let batch = Batch::new(3)
+            .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+            .with_column("val", vec![Value::Int(10), Value::Int(20), Value::Int(30)]);
+        let running = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::Sum,
+                arg: Some(2),
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(
+            running,
+            vec![Value::Float(10.0), Value::Float(30.0), Value::Float(60.0)]
+        );
+    }
+
+    #[test]
+    fn window_count_with_no_arg_counts_rows() {
+        let batch =
+            Batch::new(3).with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let counts = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::Count,
+                arg: None,
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(counts, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+    }
+
+    #[test]
+    fn window_avg_of_all_nulls_is_null() {
+        let batch = Batch::new(2).with_column("val", vec![Value::Null, Value::Null]);
+        let avgs = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::Avg,
+                arg: Some(2),
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(avgs, vec![Value::Null, Value::Null]);
     }
 
     struct VecSource(std::vec::IntoIter<Batch>);
