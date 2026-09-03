@@ -14,9 +14,12 @@
 //! once rather than row-by-row.
 
 use sql_expr::AggFunc;
+pub use sql_join::JoinKind;
+use sql_join::{should_emit, JoinHashTable};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// Rows per batch that opcodes operate on at once.
 pub const BATCH_SIZE: usize = 1024;
@@ -142,6 +145,29 @@ pub enum Opcode {
         group_by: Cow<'static, [usize]>,
         aggs: Cow<'static, [(AggFunc, Option<usize>)]>,
         agg_dst: Cow<'static, [usize]>,
+    },
+    /// Build a hash table for an equi-join from the current live registers:
+    /// `key_cols` (compound key, NULL-safe -- see [`JoinKey`]) and
+    /// `payload_cols` (columns carried through to the probe side), keyed by
+    /// `table` so a later [`Opcode::HashProbe`] can find it.
+    HashBuild {
+        key_cols: Cow<'static, [usize]>,
+        payload_cols: Cow<'static, [usize]>,
+        table: usize,
+    },
+    /// Probe the hash table built by the [`Opcode::HashBuild`] that wrote
+    /// `table`, keyed by `key_cols` from the current live registers.
+    /// Reshapes every currently-live register to the joined row cardinality
+    /// (like [`Opcode::Filter`]) and writes the build side's payload columns
+    /// into `payload_dst` (NULL-filled for unmatched rows), per `kind`'s
+    /// [`should_emit`] rule. `Semi` emits at most one row per probe-side row
+    /// regardless of how many build-side rows match, with `payload_dst`
+    /// left NULL (semi-joins never surface the build side's columns).
+    HashProbe {
+        key_cols: Cow<'static, [usize]>,
+        table: usize,
+        payload_dst: Cow<'static, [usize]>,
+        kind: JoinKind,
     },
     /// Marks the top of the per-segment loop; a no-op on its own (the
     /// current batch is already loaded by [`Vm::run`]).
@@ -324,6 +350,7 @@ pub enum VmError {
     UnknownColumn(String),
     UnknownRegister(usize),
     RegisterLengthMismatch,
+    UnknownJoinTable(usize),
 }
 
 impl fmt::Display for VmError {
@@ -332,6 +359,7 @@ impl fmt::Display for VmError {
             VmError::UnknownColumn(name) => write!(f, "unknown column: {name}"),
             VmError::UnknownRegister(r) => write!(f, "unknown register: {r}"),
             VmError::RegisterLengthMismatch => write!(f, "register length mismatch"),
+            VmError::UnknownJoinTable(t) => write!(f, "unknown join table: {t}"),
         }
     }
 }
@@ -340,11 +368,71 @@ impl std::error::Error for VmError {}
 
 pub type Result<T> = std::result::Result<T, VmError>;
 
+/// A compound join key built from a probe/build row's key columns.
+///
+/// NULL-safe by construction: [`PartialEq`] treats any key containing a
+/// [`Value::Null`] component as unequal to everything (including another
+/// all-`Null` key), matching SQL's `NULL = NULL` is never true rule. `Hash`
+/// only needs to agree with `Eq` in one direction (equal keys must hash
+/// equal; unequal keys may collide), so hashing every key -- `Null`
+/// included -- by its plain contents is sound even though equality itself
+/// special-cases `Null`.
+#[derive(Debug, Clone)]
+struct JoinKey(Vec<Value>);
+
+impl PartialEq for JoinKey {
+    fn eq(&self, other: &Self) -> bool {
+        if self.0.iter().any(|v| matches!(v, Value::Null)) {
+            return false;
+        }
+        self.0 == other.0
+    }
+}
+
+impl Eq for JoinKey {}
+
+impl Hash for JoinKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for value in &self.0 {
+            match value {
+                Value::Int(v) => {
+                    0u8.hash(state);
+                    v.hash(state);
+                }
+                Value::Float(v) => {
+                    1u8.hash(state);
+                    v.to_bits().hash(state);
+                }
+                Value::Bool(v) => {
+                    2u8.hash(state);
+                    v.hash(state);
+                }
+                Value::Str(v) => {
+                    3u8.hash(state);
+                    v.hash(state);
+                }
+                Value::Null => 4u8.hash(state),
+            }
+        }
+    }
+}
+
 /// A register machine executing one batch at a time.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Vm {
     registers: HashMap<usize, Vec<Value>>,
     output: Vec<Vec<Value>>,
+    join_tables: HashMap<usize, JoinHashTable<JoinKey, Vec<Value>>>,
+}
+
+impl fmt::Debug for Vm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Vm")
+            .field("registers", &self.registers)
+            .field("output", &self.output)
+            .field("join_tables", &self.join_tables.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl Vm {
@@ -364,6 +452,16 @@ impl Vm {
             self.step(batch, op)?;
         }
         Ok(())
+    }
+
+    /// Drop every live register (but keep built join tables and collected
+    /// output) -- callers switch to this between running a build-side
+    /// program and a probe-side program against a different batch/row
+    /// count, since [`Opcode::Filter`] and [`Opcode::HashProbe`] reshape
+    /// *every* live register and would otherwise choke on leftover
+    /// build-side registers with the wrong length.
+    pub fn clear_registers(&mut self) {
+        self.registers.clear();
     }
 
     /// Take (and clear) the rows collected so far by [`Opcode::Emit`] --
@@ -535,6 +633,93 @@ impl Vm {
                         })
                         .collect();
                     self.registers.insert(*dst, result);
+                }
+            }
+            Opcode::HashBuild {
+                key_cols,
+                payload_cols,
+                table,
+            } => {
+                let key_columns: Vec<&[Value]> = key_cols
+                    .iter()
+                    .map(|r| self.register(*r))
+                    .collect::<Result<_>>()?;
+                let payload_columns: Vec<&[Value]> = payload_cols
+                    .iter()
+                    .map(|r| self.register(*r))
+                    .collect::<Result<_>>()?;
+                let num_rows = key_columns.first().map_or(0, |c| c.len());
+
+                let mut ht: JoinHashTable<JoinKey, Vec<Value>> =
+                    JoinHashTable::with_capacity(num_rows);
+                for row in 0..num_rows {
+                    let key = JoinKey(key_columns.iter().map(|c| c[row].clone()).collect());
+                    let payload = payload_columns.iter().map(|c| c[row].clone()).collect();
+                    ht.insert(key, payload);
+                }
+                self.join_tables.insert(*table, ht);
+            }
+            Opcode::HashProbe {
+                key_cols,
+                table,
+                payload_dst,
+                kind,
+            } => {
+                let key_columns: Vec<&[Value]> = key_cols
+                    .iter()
+                    .map(|r| self.register(*r))
+                    .collect::<Result<_>>()?;
+                let num_rows = key_columns.first().map_or(0, |c| c.len());
+                let ht = self
+                    .join_tables
+                    .get(table)
+                    .ok_or(VmError::UnknownJoinTable(*table))?;
+
+                // Owned so the borrow of `self.join_tables` (via `ht`) and
+                // of `self.registers` (via `key_columns`) both end here,
+                // before the reshape below needs to mutably borrow
+                // `self.registers`.
+                let mut emitted: Vec<(usize, Option<Vec<Value>>)> = Vec::with_capacity(num_rows);
+                for row in 0..num_rows {
+                    let key = JoinKey(key_columns.iter().map(|c| c[row].clone()).collect());
+                    let matches: Vec<&Vec<Value>> = ht.get_all(&key).collect();
+                    if matches.is_empty() {
+                        if should_emit(*kind, false, false) {
+                            emitted.push((row, None));
+                        }
+                    } else if matches!(kind, JoinKind::Semi) {
+                        // At most one row per probe-side match, regardless
+                        // of build-side fanout; no payload (see doc comment
+                        // on `Opcode::HashProbe`).
+                        emitted.push((row, None));
+                    } else {
+                        for m in matches {
+                            if should_emit(*kind, true, true) {
+                                emitted.push((row, Some(m.clone())));
+                            }
+                        }
+                    }
+                }
+
+                for values in self.registers.values_mut() {
+                    if values.len() != num_rows {
+                        return Err(VmError::RegisterLengthMismatch);
+                    }
+                    *values = emitted
+                        .iter()
+                        .map(|(row, _)| values[*row].clone())
+                        .collect();
+                }
+
+                for (i, dst) in payload_dst.iter().enumerate() {
+                    let col: Vec<Value> = emitted
+                        .iter()
+                        .map(|(_, payload)| match payload {
+                            Some(p) => p.get(i).cloned().unwrap_or(Value::Null),
+                            None => Value::Null,
+                        })
+                        .collect();
+                    self.registers.insert(*dst, col);
                 }
             }
             Opcode::Emit { registers } => {
@@ -1008,6 +1193,152 @@ mod tests {
             &[Value::Float(30.0), Value::Float(20.0)]
         );
         assert_eq!(vm.register(3).unwrap(), &[Value::Int(2), Value::Int(2)]);
+    }
+
+    fn build_and_probe(kind: JoinKind, left: Batch, right: Batch) -> Vm {
+        let mut vm = Vm::new();
+        vm.execute(
+            &right,
+            &[
+                Opcode::LoadColumn {
+                    reg: 10,
+                    column: "rkey".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 11,
+                    column: "rval".into(),
+                },
+                Opcode::HashBuild {
+                    key_cols: vec![10].into(),
+                    payload_cols: vec![11].into(),
+                    table: 0,
+                },
+            ],
+        )
+        .unwrap();
+        vm.clear_registers();
+        vm.execute(
+            &left,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "lkey".into(),
+                },
+                Opcode::HashProbe {
+                    key_cols: vec![0].into(),
+                    table: 0,
+                    payload_dst: vec![1].into(),
+                    kind,
+                },
+            ],
+        )
+        .unwrap();
+        vm
+    }
+
+    #[test]
+    fn hash_probe_inner_join_keeps_only_matches() {
+        let left =
+            Batch::new(3).with_column("lkey", vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let right = Batch::new(2)
+            .with_column("rkey", vec![Value::Int(2), Value::Int(3)])
+            .with_column("rval", vec![Value::Str("b".into()), Value::Str("c".into())]);
+        let vm = build_and_probe(JoinKind::Inner, left, right);
+        assert_eq!(vm.register(0).unwrap(), &[Value::Int(2), Value::Int(3)]);
+        assert_eq!(
+            vm.register(1).unwrap(),
+            &[Value::Str("b".into()), Value::Str("c".into())]
+        );
+    }
+
+    #[test]
+    fn hash_probe_inner_join_fans_out_duplicate_build_keys() {
+        let left = Batch::new(1).with_column("lkey", vec![Value::Int(1)]);
+        let right = Batch::new(2)
+            .with_column("rkey", vec![Value::Int(1), Value::Int(1)])
+            .with_column("rval", vec![Value::Str("a".into()), Value::Str("b".into())]);
+        let vm = build_and_probe(JoinKind::Inner, left, right);
+        assert_eq!(vm.register(0).unwrap(), &[Value::Int(1), Value::Int(1)]);
+        assert_eq!(
+            vm.register(1).unwrap(),
+            &[Value::Str("a".into()), Value::Str("b".into())]
+        );
+    }
+
+    #[test]
+    fn hash_probe_left_join_null_fills_unmatched_rows() {
+        let left =
+            Batch::new(3).with_column("lkey", vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let right = Batch::new(1)
+            .with_column("rkey", vec![Value::Int(2)])
+            .with_column("rval", vec![Value::Str("b".into())]);
+        let vm = build_and_probe(JoinKind::Left, left, right);
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Int(1), Value::Int(2), Value::Int(3)]
+        );
+        assert_eq!(
+            vm.register(1).unwrap(),
+            &[Value::Null, Value::Str("b".into()), Value::Null]
+        );
+    }
+
+    #[test]
+    fn hash_probe_null_keys_never_match() {
+        let left = Batch::new(1).with_column("lkey", vec![Value::Null]);
+        let right = Batch::new(1)
+            .with_column("rkey", vec![Value::Null])
+            .with_column("rval", vec![Value::Str("x".into())]);
+        let vm = build_and_probe(JoinKind::Inner, left, right);
+        assert!(vm.register(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn hash_probe_semi_join_emits_left_row_once_per_match_group() {
+        let left = Batch::new(2).with_column("lkey", vec![Value::Int(1), Value::Int(2)]);
+        let right = Batch::new(2)
+            .with_column("rkey", vec![Value::Int(1), Value::Int(1)])
+            .with_column("rval", vec![Value::Str("a".into()), Value::Str("b".into())]);
+        let vm = build_and_probe(JoinKind::Semi, left, right);
+        assert_eq!(vm.register(0).unwrap(), &[Value::Int(1)]);
+        assert_eq!(vm.register(1).unwrap(), &[Value::Null]);
+    }
+
+    #[test]
+    fn hash_probe_anti_join_keeps_only_unmatched_rows() {
+        let left =
+            Batch::new(3).with_column("lkey", vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let right = Batch::new(1)
+            .with_column("rkey", vec![Value::Int(2)])
+            .with_column("rval", vec![Value::Str("b".into())]);
+        let vm = build_and_probe(JoinKind::Anti, left, right);
+        assert_eq!(vm.register(0).unwrap(), &[Value::Int(1), Value::Int(3)]);
+    }
+
+    #[test]
+    fn hash_probe_errors_on_unknown_join_table() {
+        let batch = Batch::new(1).with_column("lkey", vec![Value::Int(1)]);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[Opcode::LoadColumn {
+                reg: 0,
+                column: "lkey".into(),
+            }],
+        )
+        .unwrap();
+        let err = vm
+            .step(
+                &batch,
+                &Opcode::HashProbe {
+                    key_cols: vec![0].into(),
+                    table: 42,
+                    payload_dst: vec![1].into(),
+                    kind: JoinKind::Inner,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(err, VmError::UnknownJoinTable(42));
     }
 
     struct VecSource(std::vec::IntoIter<Batch>);

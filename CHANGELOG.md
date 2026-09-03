@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** all workspace crates (`sql-types`, `sql-expr`, `sql-parser`, `sql-error`, `sql-join`, `sql-vm`) version together, one tag per release.
 
+## [0.2.0] - 2026-09-03
+
+### Added
+
+- `sql-vm`: `Opcode::HashBuild`/`Opcode::HashProbe` for equi-joins, backed by `sql-join::JoinHashTable`. Supports `INNER`/`LEFT`/`SEMI`/`ANTI`; NULL-safe join keys via a new `JoinKey` wrapper. `RIGHT`/`FULL`/`CROSS JOIN` and `Opcode::Window` remain out of scope (tracked separately).
+- `sql-vm`: `Vm::clear_registers()`, for callers switching the live register set between a build-side and probe-side program run.
+
 ## [0.1.4] - 2026-09-03
 
 ### Added
