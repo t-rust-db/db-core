@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** all workspace crates (`sql-types`, `sql-expr`, `sql-parser`, `sql-join`, `sql-vm`) version together, one tag per release.
 
+## [0.5.0] - 2026-09-03
+
+### Added
+
+- `sql-parser`: split into `column`/`row` Cargo-feature-gated sections (`column` on by default), mirroring `sql-vm`'s `batch`/`row`/`stream` split (ADR 0001) — decided in `ADR 0002`. `sql_parser::column` holds column-rs's existing grammar (moved unchanged, re-exported at the crate root); `sql_parser::row` is a documented stub reserved for sqlite-rs's grammar migration (tracked separately, #23/#24).
+
 ## [0.4.1] - 2026-09-03
 
 ### Changed
