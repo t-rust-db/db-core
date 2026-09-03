@@ -183,6 +183,29 @@ pub enum Opcode {
     Halt,
 }
 
+impl Opcode {
+    /// The opcode's variant name, used as `VmError`'s runtime-error context
+    /// (the execution-time equivalent of `Span` for parse errors -- there's
+    /// no source text left at execution time, but there's always a specific
+    /// instruction that failed).
+    fn name(&self) -> &'static str {
+        match self {
+            Opcode::LoadColumn { .. } => "LoadColumn",
+            Opcode::LoadConst { .. } => "LoadConst",
+            Opcode::Map { .. } => "Map",
+            Opcode::Filter { .. } => "Filter",
+            Opcode::Reduce { .. } => "Reduce",
+            Opcode::GroupReduce { .. } => "GroupReduce",
+            Opcode::HashBuild { .. } => "HashBuild",
+            Opcode::HashProbe { .. } => "HashProbe",
+            Opcode::Scan => "Scan",
+            Opcode::Emit { .. } => "Emit",
+            Opcode::NextSegment { .. } => "NextSegment",
+            Opcode::Halt => "Halt",
+        }
+    }
+}
+
 /// Supplies successive batches (row-group segments) of a table to
 /// [`Vm::run`].
 pub trait Source {
@@ -345,21 +368,60 @@ pub fn run_parallel_top_n<'s>(
     Ok(top_n_reduce(all, spec))
 }
 
+/// A pathological/buggy compiled program can't run more `Vm::step` calls
+/// than this before [`VmError::StepLimitExceeded`] aborts it -- this
+/// project's own bounded-execution principle (see `sql-parser`'s `CROSS
+/// JOIN` `LIMIT` requirement), applied to VM execution the way sqlite-rs's
+/// `ExecError::StepLimitExceeded` bounds its own VDBE loop.
+pub const MAX_STEPS: usize = 10_000_000;
+
+/// Errors from executing a compiled program. Every variant that plausibly
+/// has one carries `opcode`, the name of the [`Opcode`] variant that
+/// triggered it -- the runtime-error equivalent of `Span` for parse errors:
+/// there's no source text left at execution time, but there's always a
+/// specific instruction that failed.
 #[derive(Debug, PartialEq)]
 pub enum VmError {
-    UnknownColumn(String),
-    UnknownRegister(usize),
-    RegisterLengthMismatch,
-    UnknownJoinTable(usize),
+    UnknownColumn {
+        opcode: &'static str,
+        column: String,
+    },
+    UnknownRegister {
+        opcode: &'static str,
+        register: usize,
+    },
+    RegisterLengthMismatch {
+        opcode: &'static str,
+    },
+    UnknownJoinTable {
+        opcode: &'static str,
+        table: usize,
+    },
+    /// `Vm::step` was about to execute past [`MAX_STEPS`] instructions.
+    StepLimitExceeded {
+        opcode: &'static str,
+        limit: usize,
+    },
 }
 
 impl fmt::Display for VmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            VmError::UnknownColumn(name) => write!(f, "unknown column: {name}"),
-            VmError::UnknownRegister(r) => write!(f, "unknown register: {r}"),
-            VmError::RegisterLengthMismatch => write!(f, "register length mismatch"),
-            VmError::UnknownJoinTable(t) => write!(f, "unknown join table: {t}"),
+            VmError::UnknownColumn { opcode, column } => {
+                write!(f, "{opcode}: unknown column: {column}")
+            }
+            VmError::UnknownRegister { opcode, register } => {
+                write!(f, "{opcode}: unknown register: {register}")
+            }
+            VmError::RegisterLengthMismatch { opcode } => {
+                write!(f, "{opcode}: register length mismatch")
+            }
+            VmError::UnknownJoinTable { opcode, table } => {
+                write!(f, "{opcode}: unknown join table: {table}")
+            }
+            VmError::StepLimitExceeded { opcode, limit } => {
+                write!(f, "{opcode}: exceeded step limit of {limit}")
+            }
         }
     }
 }
@@ -423,6 +485,9 @@ pub struct Vm {
     registers: HashMap<usize, Vec<Value>>,
     output: Vec<Vec<Value>>,
     join_tables: HashMap<usize, JoinHashTable<JoinKey, Vec<Value>>>,
+    /// Instructions executed so far, checked against [`MAX_STEPS`] by
+    /// [`Vm::execute`]/[`Vm::run`].
+    steps: usize,
 }
 
 impl fmt::Debug for Vm {
@@ -441,14 +506,38 @@ impl Vm {
     }
 
     pub fn register(&self, reg: usize) -> Result<&[Value]> {
+        self.reg(reg, "register")
+    }
+
+    /// Like [`Self::register`], but tags an unknown-register error with the
+    /// opcode that requested it, for callers inside [`Self::step`].
+    fn reg(&self, reg: usize, opcode: &'static str) -> Result<&[Value]> {
         self.registers
             .get(&reg)
             .map(Vec::as_slice)
-            .ok_or(VmError::UnknownRegister(reg))
+            .ok_or(VmError::UnknownRegister {
+                opcode,
+                register: reg,
+            })
+    }
+
+    /// Count one more executed instruction, failing once [`MAX_STEPS`] is
+    /// exceeded so a pathological or buggy compiled program can't run
+    /// forever.
+    fn check_step_limit(&mut self, opcode: &'static str) -> Result<()> {
+        self.steps += 1;
+        if self.steps > MAX_STEPS {
+            return Err(VmError::StepLimitExceeded {
+                opcode,
+                limit: MAX_STEPS,
+            });
+        }
+        Ok(())
     }
 
     pub fn execute(&mut self, batch: &Batch, program: &[Opcode]) -> Result<()> {
         for op in program {
+            self.check_step_limit(op.name())?;
             self.step(batch, op)?;
         }
         Ok(())
@@ -483,6 +572,7 @@ impl Vm {
         };
         let mut pc = 0usize;
         while pc < program.len() {
+            self.check_step_limit(program[pc].name())?;
             match &program[pc] {
                 Opcode::NextSegment { loop_start } => match source.next_batch() {
                     Some(next) => {
@@ -502,12 +592,17 @@ impl Vm {
     }
 
     fn step(&mut self, batch: &Batch, op: &Opcode) -> Result<()> {
+        let opcode = op.name();
         match op {
             Opcode::LoadColumn { reg, column } => {
-                let values = batch
-                    .columns
-                    .get(column.as_ref())
-                    .ok_or_else(|| VmError::UnknownColumn(column.to_string()))?;
+                let values =
+                    batch
+                        .columns
+                        .get(column.as_ref())
+                        .ok_or_else(|| VmError::UnknownColumn {
+                            opcode,
+                            column: column.to_string(),
+                        })?;
                 self.registers.insert(*reg, values.clone());
             }
             Opcode::LoadConst { reg, value } => {
@@ -515,9 +610,9 @@ impl Vm {
                     .insert(*reg, vec![value.clone(); batch.num_rows]);
             }
             Opcode::Map { dst, op, a, b } => {
-                let (a_vals, b_vals) = (self.register(*a)?, self.register(*b)?);
+                let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);
                 if a_vals.len() != b_vals.len() {
-                    return Err(VmError::RegisterLengthMismatch);
+                    return Err(VmError::RegisterLengthMismatch { opcode });
                 }
                 let result = a_vals
                     .iter()
@@ -528,7 +623,7 @@ impl Vm {
             }
             Opcode::Filter { predicate } => {
                 let mask: Vec<bool> = self
-                    .register(*predicate)?
+                    .reg(*predicate, opcode)?
                     .iter()
                     .map(|v| matches!(v, Value::Bool(true)))
                     .collect();
@@ -540,7 +635,7 @@ impl Vm {
                 let kept_len = mask.iter().filter(|&&keep| keep).count();
                 for values in self.registers.values_mut() {
                     if values.len() != mask.len() {
-                        return Err(VmError::RegisterLengthMismatch);
+                        return Err(VmError::RegisterLengthMismatch { opcode });
                     }
                     let mut kept = Vec::with_capacity(kept_len);
                     for (value, keep) in values.drain(..).zip(&mask) {
@@ -553,7 +648,7 @@ impl Vm {
             }
             Opcode::Reduce { func, src, dst } => {
                 let result = match src {
-                    Some(reg) => reduce_values(*func, self.register(*reg)?),
+                    Some(reg) => reduce_values(*func, self.reg(*reg, opcode)?),
                     None => reduce_count_star(*func, batch.num_rows),
                 };
                 self.registers.insert(*dst, vec![result]);
@@ -565,14 +660,13 @@ impl Vm {
             } => {
                 let key_columns: Vec<Vec<Value>> = group_by
                     .iter()
-                    .map(|reg| self.register(*reg).map(<[Value]>::to_vec))
+                    .map(|reg| self.reg(*reg, opcode).map(<[Value]>::to_vec))
                     .collect::<Result<_>>()?;
                 let num_rows = match key_columns.first() {
                     Some(c) => c.len(),
-                    None => match aggs
-                        .iter()
-                        .find_map(|(_, src)| src.map(|reg| self.register(reg).map(<[Value]>::len)))
-                    {
+                    None => match aggs.iter().find_map(|(_, src)| {
+                        src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len))
+                    }) {
                         Some(len) => len?,
                         None => self
                             .registers
@@ -611,7 +705,7 @@ impl Vm {
                         Some(reg) => {
                             // #110: borrow instead of `.to_vec()` -- same
                             // redundant-clone pattern as the old `Emit`.
-                            let values = self.register(*reg)?;
+                            let values = self.reg(*reg, opcode)?;
                             for (row, group) in row_group.iter().enumerate() {
                                 per_group[*group].push(values[row].clone());
                             }
@@ -642,11 +736,11 @@ impl Vm {
             } => {
                 let key_columns: Vec<&[Value]> = key_cols
                     .iter()
-                    .map(|r| self.register(*r))
+                    .map(|r| self.reg(*r, opcode))
                     .collect::<Result<_>>()?;
                 let payload_columns: Vec<&[Value]> = payload_cols
                     .iter()
-                    .map(|r| self.register(*r))
+                    .map(|r| self.reg(*r, opcode))
                     .collect::<Result<_>>()?;
                 let num_rows = key_columns.first().map_or(0, |c| c.len());
 
@@ -667,13 +761,16 @@ impl Vm {
             } => {
                 let key_columns: Vec<&[Value]> = key_cols
                     .iter()
-                    .map(|r| self.register(*r))
+                    .map(|r| self.reg(*r, opcode))
                     .collect::<Result<_>>()?;
                 let num_rows = key_columns.first().map_or(0, |c| c.len());
                 let ht = self
                     .join_tables
                     .get(table)
-                    .ok_or(VmError::UnknownJoinTable(*table))?;
+                    .ok_or(VmError::UnknownJoinTable {
+                        opcode,
+                        table: *table,
+                    })?;
 
                 // Owned so the borrow of `self.join_tables` (via `ht`) and
                 // of `self.registers` (via `key_columns`) both end here,
@@ -703,7 +800,7 @@ impl Vm {
 
                 for values in self.registers.values_mut() {
                     if values.len() != num_rows {
-                        return Err(VmError::RegisterLengthMismatch);
+                        return Err(VmError::RegisterLengthMismatch { opcode });
                     }
                     *values = emitted
                         .iter()
@@ -730,7 +827,7 @@ impl Vm {
                 // clone cost of every surviving value for no reason.
                 let cols: Vec<&[Value]> = registers
                     .iter()
-                    .map(|r| self.register(*r))
+                    .map(|r| self.reg(*r, opcode))
                     .collect::<Result<_>>()?;
                 let num_rows = cols.first().map_or(0, |c| c.len());
                 let mut rows = Vec::with_capacity(num_rows);
@@ -910,7 +1007,13 @@ mod tests {
                 }],
             )
             .unwrap_err();
-        assert_eq!(err, VmError::UnknownColumn("missing".into()));
+        assert_eq!(
+            err,
+            VmError::UnknownColumn {
+                opcode: "LoadColumn",
+                column: "missing".into()
+            }
+        );
     }
 
     #[test]
@@ -1028,7 +1131,7 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert_eq!(err, VmError::RegisterLengthMismatch);
+        assert_eq!(err, VmError::RegisterLengthMismatch { opcode: "Map" });
     }
 
     #[test]
@@ -1338,7 +1441,77 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert_eq!(err, VmError::UnknownJoinTable(42));
+        assert_eq!(
+            err,
+            VmError::UnknownJoinTable {
+                opcode: "HashProbe",
+                table: 42
+            }
+        );
+    }
+
+    #[test]
+    fn unknown_register_error_carries_opcode_context() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        let err = vm
+            .step(
+                &batch,
+                &Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            VmError::UnknownRegister {
+                opcode: "Map",
+                register: 0
+            }
+        );
+    }
+
+    #[test]
+    fn execute_errors_once_step_limit_exceeded() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.steps = MAX_STEPS;
+        let err = vm
+            .execute(
+                &batch,
+                &[Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Int(1),
+                }],
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            VmError::StepLimitExceeded {
+                opcode: "LoadConst",
+                limit: MAX_STEPS
+            }
+        );
+    }
+
+    #[test]
+    fn run_errors_once_step_limit_exceeded() {
+        let batches = vec![Batch::new(1).with_column("id", vec![Value::Int(1)])];
+        let mut source = VecSource::new(batches);
+        let mut vm = Vm::new();
+        vm.steps = MAX_STEPS;
+        let program = vec![Opcode::Halt];
+        let err = vm.run(&mut source, &program).unwrap_err();
+        assert_eq!(
+            err,
+            VmError::StepLimitExceeded {
+                opcode: "Halt",
+                limit: MAX_STEPS
+            }
+        );
     }
 
     struct VecSource(std::vec::IntoIter<Batch>);
