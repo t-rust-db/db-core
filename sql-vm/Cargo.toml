@@ -8,6 +8,7 @@ description = "Shared query execution engines for t-rust-db: batch (implemented)
 
 [dependencies]
 sql-expr = { path = "../sql-expr" }
+sql-join = { path = "../sql-join", optional = true }
 rayon = { version = "1", optional = true }
 
 [features]
@@ -24,6 +25,6 @@ default = ["batch"]
 # (rayon); `row`/`stream` are stubs with no deps yet, gated the same way
 # on principle so adding a real dependency to either later doesn't force
 # every existing `batch`-only consumer to start pulling it in too.
-batch = ["dep:rayon"]
+batch = ["dep:rayon", "dep:sql-join"]
 row = []
 stream = []
