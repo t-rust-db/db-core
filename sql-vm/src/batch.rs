@@ -107,6 +107,15 @@ pub enum MapOp {
     IsNull,
     /// `a IS NOT NULL` -- unary; `b` is unused. See [`MapOp::IsNull`].
     IsNotNull,
+    /// `a || b` string concatenation (DuckDB/Postgres-style) -- both
+    /// operands are stringified via [`Value`]'s `Display` impl rather
+    /// than requiring `Str`, so `1 || 'x'` produces `"1x"` instead of
+    /// erroring.
+    Concat,
+    /// `-a` -- unary; `b` is unused, same convention as [`MapOp::Not`].
+    /// `Int`/`Float` negate; anything else (including `Null`, per the
+    /// general null-propagation rule below) is `Null`.
+    Neg,
 }
 
 /// Window functions supported by [`Opcode::Window`] -- `Sum`/`Avg`/`Count`
@@ -1197,6 +1206,12 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
         MapOp::And => Value::Bool(as_bool(a) && as_bool(b)),
         MapOp::Or => Value::Bool(as_bool(a) || as_bool(b)),
         MapOp::Not => Value::Bool(!as_bool(a)),
+        MapOp::Concat => Value::Str(Cow::Owned(format!("{a}{b}"))),
+        MapOp::Neg => match a {
+            Value::Int(v) => Value::Int(-v),
+            Value::Float(v) => Value::Float(-v),
+            _ => Value::Null,
+        },
         MapOp::IsNull | MapOp::IsNotNull => unreachable!("handled above"),
     }
 }
@@ -1365,6 +1380,111 @@ mod tests {
         )
         .unwrap();
         assert_eq!(vm.register(2).unwrap(), &[Value::Null]);
+    }
+
+    #[test]
+    fn map_concat_stringifies_both_operands() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Int(1),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Str("x".into()),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Concat,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Str("1x".into())]);
+    }
+
+    #[test]
+    fn map_concat_null_propagates() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Str("a".into()),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Null,
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Concat,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Null]);
+    }
+
+    #[test]
+    fn map_neg_negates_int_and_float() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        for (input, expected) in [
+            (Value::Int(5), Value::Int(-5)),
+            (Value::Float(2.5), Value::Float(-2.5)),
+        ] {
+            vm.execute(
+                &batch,
+                &[
+                    Opcode::LoadConst {
+                        reg: 0,
+                        value: input,
+                    },
+                    Opcode::Map {
+                        dst: 1,
+                        op: MapOp::Neg,
+                        a: 0,
+                        b: 0,
+                    },
+                ],
+            )
+            .unwrap();
+            assert_eq!(vm.register(1).unwrap(), &[expected]);
+        }
+    }
+
+    #[test]
+    fn map_neg_non_numeric_is_null() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Str("x".into()),
+                },
+                Opcode::Map {
+                    dst: 1,
+                    op: MapOp::Neg,
+                    a: 0,
+                    b: 0,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(1).unwrap(), &[Value::Null]);
     }
 
     #[test]

@@ -24,6 +24,9 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    /// `||` string concatenation (DuckDB/Postgres-style; implicitly
+    /// stringifies non-`Str` operands rather than erroring).
+    Concat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +64,9 @@ pub enum Expr {
     },
     /// `NOT expr`.
     Not(Box<Expr>),
+    /// Unary `-expr`. Unary `+expr` is a no-op and isn't represented --
+    /// the parser consumes and discards a leading `+`.
+    Neg(Box<Expr>),
     /// `expr IS [NOT] NULL`.
     IsNull {
         expr: Box<Expr>,
