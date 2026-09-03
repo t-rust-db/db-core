@@ -192,6 +192,13 @@ fn tokenize(input: &str) -> Result<Vec<(Token, Span)>> {
                 }
                 tokens.push((Token::Op(op), span_of(&positions, start, i)));
             }
+            '|' if i + 1 < chars.len() && chars[i + 1] == '|' => {
+                tokens.push((
+                    Token::Op("||".to_string()),
+                    span_of(&positions, start, start + 2),
+                ));
+                i += 2;
+            }
             _ if c.is_ascii_digit() => {
                 let mut is_float = false;
                 while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
@@ -251,6 +258,7 @@ fn resolve_expr_aliases(expr: &mut Expr, aliases: &HashMap<String, String>) {
             resolve_expr_aliases(rhs, aliases);
         }
         Expr::Not(inner) => resolve_expr_aliases(inner, aliases),
+        Expr::Neg(inner) => resolve_expr_aliases(inner, aliases),
         Expr::IsNull { expr, .. } => resolve_expr_aliases(expr, aliases),
         // A subquery has its own FROM/alias scope -- its column refs are
         // resolved when *it* is parsed, not against the outer query's
@@ -776,7 +784,7 @@ impl Parser {
     }
 
     fn parse_comparison(&mut self) -> Result<Expr> {
-        let lhs = self.parse_additive()?;
+        let lhs = self.parse_concat()?;
 
         if self.peek_keyword("IS") {
             self.next()?;
@@ -828,11 +836,27 @@ impl Parser {
         };
         if let Some(op) = op {
             self.next()?;
-            let rhs = self.parse_additive()?;
+            let rhs = self.parse_concat()?;
             Ok(Expr::BinaryOp(Box::new(lhs), op, Box::new(rhs)))
         } else {
             Ok(lhs)
         }
+    }
+
+    /// `||` string concatenation (DuckDB/Postgres-style) -- binds looser
+    /// than `+`/`-`/`*`/`/` (DuckDB's own precedence, inherited from
+    /// Postgres: `1 + 2 || 'x'` is `(1 + 2) || 'x'`). Deliberately NOT
+    /// placed where sqlite-rs's own `concat-expr` sits (tighter than
+    /// `*`/`/`, a real SQLite quirk) -- column-rs targets DuckDB
+    /// semantics, not SQLite's.
+    fn parse_concat(&mut self) -> Result<Expr> {
+        let mut lhs = self.parse_additive()?;
+        while matches!(self.peek(), Some(Token::Op(op)) if op == "||") {
+            self.next()?;
+            let rhs = self.parse_additive()?;
+            lhs = Expr::BinaryOp(Box::new(lhs), BinOp::Concat, Box::new(rhs));
+        }
+        Ok(lhs)
     }
 
     fn parse_additive(&mut self) -> Result<Expr> {
@@ -855,7 +879,7 @@ impl Parser {
     }
 
     fn parse_multiplicative(&mut self) -> Result<Expr> {
-        let mut lhs = self.parse_primary()?;
+        let mut lhs = self.parse_unary()?;
         loop {
             let op = match self.peek() {
                 Some(Token::Star) => Some(BinOp::Mul),
@@ -865,11 +889,29 @@ impl Parser {
             match op {
                 Some(op) => {
                     self.next()?;
-                    let rhs = self.parse_primary()?;
+                    let rhs = self.parse_unary()?;
                     lhs = Expr::BinaryOp(Box::new(lhs), op, Box::new(rhs));
                 }
                 None => return Ok(lhs),
             }
+        }
+    }
+
+    /// Leading `+`/`-` before a primary expression. `+` is a no-op
+    /// (consumed and discarded); `-` wraps in [`Expr::Neg`]. Recursive so
+    /// `--x`/`-+x` parse (each `-` toggles negation via nested wrapping).
+    fn parse_unary(&mut self) -> Result<Expr> {
+        match self.peek() {
+            Some(Token::Op(op)) if op == "-" => {
+                self.next()?;
+                let inner = self.parse_unary()?;
+                Ok(Expr::Neg(Box::new(inner)))
+            }
+            Some(Token::Op(op)) if op == "+" => {
+                self.next()?;
+                self.parse_unary()
+            }
+            _ => self.parse_primary(),
         }
     }
 
@@ -970,6 +1012,104 @@ mod tests {
                 Box::new(Expr::Column("amount".into())),
                 BinOp::Gt,
                 Box::new(Expr::Literal(Literal::Int(10)))
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_unary_minus() {
+        let q = parse("SELECT id FROM orders WHERE amount = -5").unwrap();
+        assert_eq!(
+            q.where_clause,
+            Some(Expr::BinaryOp(
+                Box::new(Expr::Column("amount".into())),
+                BinOp::Eq,
+                Box::new(Expr::Neg(Box::new(Expr::Literal(Literal::Int(5)))))
+            ))
+        );
+    }
+
+    #[test]
+    fn unary_minus_is_chainable_and_unary_plus_is_a_no_op() {
+        let q = parse("SELECT id FROM orders WHERE amount = --5").unwrap();
+        assert_eq!(
+            q.where_clause,
+            Some(Expr::BinaryOp(
+                Box::new(Expr::Column("amount".into())),
+                BinOp::Eq,
+                Box::new(Expr::Neg(Box::new(Expr::Neg(Box::new(Expr::Literal(
+                    Literal::Int(5)
+                ))))))
+            ))
+        );
+        let q = parse("SELECT id FROM orders WHERE amount = +5").unwrap();
+        assert_eq!(
+            q.where_clause,
+            Some(Expr::BinaryOp(
+                Box::new(Expr::Column("amount".into())),
+                BinOp::Eq,
+                Box::new(Expr::Literal(Literal::Int(5)))
+            ))
+        );
+    }
+
+    #[test]
+    fn unary_minus_binds_tighter_than_multiplication() {
+        // `-2 * 3` must be `(-2) * 3`, not `-(2 * 3)` (same numeric
+        // result here, but the AST shape is what's under test).
+        let q = parse("SELECT id FROM orders WHERE amount = -2 * 3").unwrap();
+        assert_eq!(
+            q.where_clause,
+            Some(Expr::BinaryOp(
+                Box::new(Expr::Column("amount".into())),
+                BinOp::Eq,
+                Box::new(Expr::BinaryOp(
+                    Box::new(Expr::Neg(Box::new(Expr::Literal(Literal::Int(2))))),
+                    BinOp::Mul,
+                    Box::new(Expr::Literal(Literal::Int(3)))
+                ))
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_string_concat() {
+        let q = parse("SELECT id FROM orders WHERE name = 'a' || 'b'").unwrap();
+        assert_eq!(
+            q.where_clause,
+            Some(Expr::BinaryOp(
+                Box::new(Expr::Column("name".into())),
+                BinOp::Eq,
+                Box::new(Expr::BinaryOp(
+                    Box::new(Expr::Literal(Literal::Str("a".into()))),
+                    BinOp::Concat,
+                    Box::new(Expr::Literal(Literal::Str("b".into())))
+                ))
+            ))
+        );
+    }
+
+    #[test]
+    fn concat_binds_looser_than_multiplication() {
+        // `2 * 3 || 'x'` must be `(2 * 3) || 'x'` -- concat binds looser
+        // than `*`, matching DuckDB/Postgres precedence (deliberately
+        // NOT sqlite-rs's own placement, where `||` binds tighter than
+        // `*`/`/`).
+        let q = parse("SELECT id FROM orders WHERE x = 2 * 3 || 'x'").unwrap();
+        assert_eq!(
+            q.where_clause,
+            Some(Expr::BinaryOp(
+                Box::new(Expr::Column("x".into())),
+                BinOp::Eq,
+                Box::new(Expr::BinaryOp(
+                    Box::new(Expr::BinaryOp(
+                        Box::new(Expr::Literal(Literal::Int(2))),
+                        BinOp::Mul,
+                        Box::new(Expr::Literal(Literal::Int(3)))
+                    )),
+                    BinOp::Concat,
+                    Box::new(Expr::Literal(Literal::Str("x".into())))
+                ))
             ))
         );
     }
