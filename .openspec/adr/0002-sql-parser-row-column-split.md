@@ -6,9 +6,10 @@
 
 ## Status
 
-Accepted. Mechanism decided and scaffolded (`column` feature, `row`
-stub); the actual sqlite-rs grammar migration is out of scope here —
-tracked as follow-up issues (see Consequences).
+Accepted, **amended** (see Amendment below): the row/column split
+mechanism (Cargo features) stands, but "one shared AST type" does not —
+`row` gets its own AST, ported from sqlite-rs's, not new
+`sql_expr::Query` variants.
 
 ## Context
 
@@ -117,3 +118,36 @@ pass unchanged.
   `RowParseError` rather than reusing `ParseError`, since sqlite-rs's
   own parser errors are shaped differently than column-rs's subset
   ever needed. Left to the migration ticket, not decided here.
+
+## Amendment (2026-09-03, during `#23`'s AST slice)
+
+Starting the actual grammar migration (`#23`) surfaced the "real design
+work" this ADR deferred above: `sql_parser::row::ast`, sqlite-rs's own
+AST (`src/parser/ast.rs`, ~15 statement types — `Select`, `Update`,
+`Insert`, `Delete`, `CreateTable`, `CreateIndex`, `CreateView`, `Drop*`,
+`Begin`/`Commit`/`Rollback`, `Pragma`, `Analyze`, `Explain`), turned out
+not to fold cleanly into `sql_expr::Query` as new variants. Folding it
+in would mean redesigning an AST shape sqlite-rs has already built,
+tested, and wired its own codegen against, purely to satisfy this ADR's
+original "one shared AST" framing — for no consumer that needs it: no
+code anywhere joins a `column`-parsed and a `row`-parsed statement into
+one value today, so there is no actual call site "one AST type" was
+protecting.
+
+**Revised decision:** `row` and `column` do **not** share an AST type.
+`sql_parser::row::ast` is sqlite-rs's own AST, migrated in unchanged
+(mechanical port, not a redesign) — the same "consolidated location,
+not shared representation" trade ADR 0001 already made and named
+explicitly for `sql_vm::batch::Opcode` vs. a future
+`sql_vm::row::Opcode` ("Nothing in this ADR claims they should become
+one opcode enum"). What the two sections *do* still share, unchanged
+from the original decision: the Cargo-feature split mechanism, and
+`sql_parser::Span` (`row::ast`'s nodes and `row::tokenizer`'s tokens
+both carry it, reusing `column`'s primitive rather than a second
+`Span`).
+
+This also settles the parse-error question the original Consequences
+section left open: `row` needs its own `ParseError`-equivalent shaped
+for its own `ast` types regardless, so "not reusing `column`'s
+`ParseError`" was already the likely answer; this amendment confirms it
+follows from the same AST decision, not a separate one.
