@@ -73,7 +73,7 @@ const UNIX_SHM_BASE: off_t = 120;
 /// `slot` ranges 1..=4 — slot 0 is reserved (always considered "in use" by
 /// SQLite's own protocol) and is never claimed by a reader here, matching
 /// spike 005 experiment 4.
-pub(crate) fn wal_read_lock_byte(slot: usize) -> off_t {
+pub fn wal_read_lock_byte(slot: usize) -> off_t {
     UNIX_SHM_BASE
         .saturating_add(3)
         .saturating_add(slot as off_t)
@@ -471,8 +471,8 @@ pub(crate) fn claim_wal_read_lock(shm_path: &Path) -> io::Result<Option<WalReadL
 /// real second OS process (`src/vfs/test_lock_probe.rs`) — for tests
 /// outside this module (e.g. `src/pager/mod.rs`) that need to observe
 /// reader-mark lock state.
-#[cfg(test)]
-pub(crate) fn slot_is_free_test_only(shm_path: &Path, slot: usize) -> bool {
+#[cfg(any(test, feature = "test-util"))]
+pub fn slot_is_free_test_only(shm_path: &Path, slot: usize) -> bool {
     super::test_lock_probe::lock_available(shm_path, "wrlock", wal_read_lock_byte(slot), 1)
 }
 

@@ -18,8 +18,8 @@ pub mod lock;
 mod memory;
 mod page_source;
 pub mod shm;
-#[cfg(test)]
-pub(crate) mod test_lock_probe;
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_lock_probe;
 mod unix;
 
 pub use lock::{FileLockState, LockLevel};

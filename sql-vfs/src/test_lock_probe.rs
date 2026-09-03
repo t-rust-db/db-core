@@ -44,7 +44,7 @@ fn helper_path() -> std::path::PathBuf {
 /// `path`'s `start..start+len` byte range (`kind` is `"rdlock"` or
 /// `"wrlock"`) and reports whether it succeeded.
 #[allow(clippy::expect_used, reason = "test-only helper")]
-pub(crate) fn lock_available(path: &Path, kind: &str, start: off_t, len: off_t) -> bool {
+pub fn lock_available(path: &Path, kind: &str, start: off_t, len: off_t) -> bool {
     let status = Command::new(helper_path())
         .args([
             "trylock",
@@ -60,7 +60,7 @@ pub(crate) fn lock_available(path: &Path, kind: &str, start: off_t, len: off_t) 
 
 /// A lock claimed by a spawned `lock_probe` subprocess, held until
 /// [`HeldLock::release`] hands it back.
-pub(crate) struct HeldLock {
+pub struct HeldLock {
     child: Child,
     stdin: ChildStdin,
 }
@@ -105,7 +105,7 @@ impl HeldLock {
 /// Runs `during` while a subprocess holds a lock on `path`'s
 /// `start..start+len` byte range (`kind` is `"rdlock"` or `"wrlock"`), then
 /// releases it.
-pub(crate) fn lock_held_by_subprocess<R>(
+pub fn lock_held_by_subprocess<R>(
     path: &Path,
     kind: &str,
     start: off_t,
@@ -121,14 +121,14 @@ pub(crate) fn lock_held_by_subprocess<R>(
 /// Spawns one subprocess per `(kind, start, len)` in `specs`, each holding
 /// its lock until [`release_all`] is called. Generalizes
 /// [`lock_held_by_subprocess`] to "every slot contended at once".
-pub(crate) fn hold_multiple(path: &Path, specs: &[(&str, off_t, off_t)]) -> Vec<HeldLock> {
+pub fn hold_multiple(path: &Path, specs: &[(&str, off_t, off_t)]) -> Vec<HeldLock> {
     specs
         .iter()
         .map(|&(kind, start, len)| HeldLock::spawn(path, kind, start, len))
         .collect()
 }
 
-pub(crate) fn release_all(held: Vec<HeldLock>) {
+pub fn release_all(held: Vec<HeldLock>) {
     for h in held {
         h.release();
     }

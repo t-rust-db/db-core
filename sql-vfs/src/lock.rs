@@ -223,15 +223,15 @@ pub(crate) fn fcntl_lock(file: &File, kind: i16, start: off_t, len: off_t) -> io
 /// byte range would currently succeed, probed via a real second OS process
 /// (`src/vfs/test_lock_probe.rs`) — needed by `src/pager/mod.rs`'s tests,
 /// which observe `Pager::open`/`drop` lock state from outside this module.
-#[cfg(test)]
-pub(crate) fn exclusive_lock_available(path: &std::path::Path) -> bool {
+#[cfg(any(test, feature = "test-util"))]
+pub fn exclusive_lock_available(path: &std::path::Path) -> bool {
     super::test_lock_probe::lock_available(path, "wrlock", SHARED_FIRST, SHARED_SIZE)
 }
 
 /// Test-only: `(start, len)` of the RESERVED byte, for cross-module tests
 /// that simulate another process holding it via a real subprocess
 /// (`src/pager.rs`'s hot-journal-vs-live-writer test, #359).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-util"))]
 pub fn reserved_byte_range() -> (off_t, off_t) {
     (RESERVED_BYTE, 1)
 }

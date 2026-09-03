@@ -1,21 +1,17 @@
 [package]
-name = "sql-vfs"
+name = "sql-pager"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Virtual filesystem abstraction (locking, WAL/-shm access) shared across t-rust-db, extracted from sqlite-rs's src/vfs"
+description = "Page cache, WAL, rollback journal, and freelist management, extracted from sqlite-rs's src/pager"
 
 [dependencies]
-sql-sys = { path = "../sql-sys" }
+sql-vfs = { path = "../sql-vfs" }
+sql-header = { path = "../sql-header" }
 
-[features]
-# Cross-process lock-contention test helpers (`test_lock_probe`, and the
-# handful of lock/shm probes built on it) that pager's own tests need to
-# observe lock state from outside this crate -- `#[cfg(test)]` alone
-# never crosses a crate boundary, so a dependent crate's tests can't see
-# them without this. Not on by default: these exist purely for tests.
-test-util = []
+[dev-dependencies]
+sql-vfs = { path = "../sql-vfs", features = ["test-util"] }
 
 [lints.clippy]
 # Matches sqlite-rs's own [lints.clippy] baseline (see its Cargo.toml) --
