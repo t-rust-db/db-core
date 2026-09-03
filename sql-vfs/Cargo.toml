@@ -1,0 +1,10 @@
+[package]
+name = "sql-vfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Virtual filesystem abstraction (locking, WAL/-shm access) shared across t-rust-db, extracted from sqlite-rs's src/vfs"
+
+[dependencies]
+sql-sys = { path = "../sql-sys" }

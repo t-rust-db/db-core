@@ -8,6 +8,7 @@ members = [
     "sql-vm",
     "sql-sys",
     "sql-record",
+    "sql-vfs",
 ]
 
 [workspace.package]
