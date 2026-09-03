@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** all workspace crates (`sql-types`, `sql-expr`, `sql-parser`, `sql-error`, `sql-join`, `sql-vm`) version together, one tag per release.
 
+## [0.4.0] - 2026-09-03
+
+### Added
+
+- `sql-vm`: `Opcode::Window` for window functions (`ROW_NUMBER`, `RANK`, `DENSE_RANK`, `LAG`, `LEAD`, `FIRST_VALUE`, `LAST_VALUE`, `SUM`/`AVG`/`COUNT OVER`), a 1:1 port of column-rs's private `compute_window` — partitions live rows, sorts each partition by `ORDER BY`, and writes one value per row (in original row order) into a `dst` register.
+
 ## [0.3.0] - 2026-09-03
 
 ### Added
