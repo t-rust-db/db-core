@@ -1,9 +1,0 @@
-[package]
-name = "sql-error"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "Shared source-location primitive for t-rust-db error types (no central Error type, no external error crates)"
-
-[dependencies]
