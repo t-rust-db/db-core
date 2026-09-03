@@ -30,9 +30,14 @@ expression AST vs. value types) can evolve independently.
   fix column-rs's join benchmark needs. `JoinKind`/NULL-safe semantics
   and a build-side cost model are follow-up additions once an engine
   actually needs them, not built speculatively here.
+- **`sql-record`** — SQLite's on-disk record format (varints, serial
+  types, the header walk), extracted verbatim from sqlite-rs's private
+  `src/record`. Pure computation, no I/O; its own `Value`/`TextEncoding`
+  (not `sql_types::Value` — record values need a `Blob` variant and use
+  `Rc<str>`/`Rc<[u8]>` for cheap cloning during decode).
 
 Dependency direction: `sql-parser` → `sql-expr` → `sql-types`. `sql-join`
-depends on none of the others today.
+and `sql-record` depend on none of the others today.
 
 ## Roadmap
 
