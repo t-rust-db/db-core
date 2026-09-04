@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.26.0] - 2026-09-05
+
+### Added
+
+- **`vm::row`'s minimal single-key sorter** (#69, follow-up to #59/#18). Ports `SorterOpen`/`SorterInsert`/`SorterSort`/`Sort`/`SorterNext`/`SorterData` via a new `SorterCursor` that implements the existing `Cursor` trait (`rewind()` sorts and positions at the first row, doubling as `SorterSort`'s dispatch target). Adds `program::SortKeyColumn` and `P4::SortKey`. **Single-key, no LIMIT/bound** -- multi-key sort and bounded top-K maintenance remain follow-ups.
+
 ## [0.25.0] - 2026-09-05
 
 ### Fixed
