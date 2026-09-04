@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.22.0] - 2026-09-04
+
+### Added
+
+- **`vm::row`'s aggregate accumulators (`AggStep`/`AggFinal`), single-group only** (#62, follow-up to #59/#18). Ports sqlite-rs's `vdbe::aggregate` (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`) into `vm::row::aggregate`. Adds `P4::AggFunc { name, arity, collation }` and an `agg_contexts` slot table on `Vm` (mirrors `cursors`). `GROUP BY` hash aggregation (`hash_agg.rs`) remains deferred; this buys `SELECT COUNT(*), SUM(x) FROM t`-shaped queries, proven end-to-end against #59's `EphemeralTableCursor` scan.
+
 ## [0.21.0] - 2026-09-04
 
 ### Added

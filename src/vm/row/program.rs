@@ -306,6 +306,17 @@ pub enum P4 {
     },
     /// An affinity byte string, one byte per column, for `MakeRecord`.
     Affinity(Vec<u8>),
+    /// `AggStep`'s `"name(arity)"` descriptor plus the collation
+    /// `min`/`max` compares under -- `AggFinal` has no comparison to
+    /// perform, so it keeps the plain `Str` descriptor.
+    AggFunc {
+        /// The aggregate function's name.
+        name: String,
+        /// The aggregate function's argument count.
+        arity: usize,
+        /// The collation `min`/`max` compares under.
+        collation: Collation,
+    },
 }
 
 /// One VDBE instruction: an opcode tag plus sqlite-rs's raw `p1..p5`
