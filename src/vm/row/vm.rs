@@ -1,5 +1,5 @@
 //! The register file, cursor-slot table, and fetch-decode-execute loop,
-//! ported from sqlite-rs's `vdbe::exec` (db-core#51/#56). Storage-agnostic:
+//! ported from sqlite-rs's `vdbe::exec` (db-core#51/#56/#59). Storage-agnostic:
 //! cursors are [`super::cursor::Cursor`] trait objects, not real
 //! b-tree/pager access -- see `super::cursor`'s doc and ADR 0008.
 //!
@@ -11,8 +11,11 @@
 //! `Not`/`BitAnd`/`BitOr`/`ShiftLeft`/`ShiftRight`/`BitNot`/`Concat`),
 //! result-row loads (`Integer`/`Int64`/`Real`/`Blob`/`Null`/`String8`/
 //! `Variable`/`Copy`/`ResultRow`/`MakeRecord`, via [`super::record`]),
-//! and `Rewind`/`Next`/`Column`/`Rowid` over a [`super::cursor::Cursor`]
-//! opened via [`Vm::open_cursor`]. Everything else in
+//! `Rewind`/`Next`/`Column`/`Rowid` over a [`super::cursor::Cursor`]
+//! opened via [`Vm::open_cursor`], and `OpenEphemeral`/`Insert` over an
+//! in-memory [`super::cursor::EphemeralTableCursor`] (`Insert` decodes
+//! `MakeRecord`'s blob straight back into `Value`s -- sqlite-rs's own
+//! "decode-once-at-insert" design). Everything else in
 //! [`super::program::Opcode`] returns `ExecError::Unimplemented`.
 
 use std::cmp::Ordering;
@@ -22,9 +25,9 @@ use super::affinity::{apply_affinity, Affinity};
 use super::cast::cast_to;
 use super::coerce;
 use super::compare::compare;
-use super::cursor::Cursor;
+use super::cursor::{Cursor, EphemeralTableCursor};
 use super::program::{Instruction, Opcode, Program, P4};
-use super::record::encode_record;
+use super::record::{decode_record, encode_record};
 use super::value::{Collation, TextEncoding, Value};
 
 /// Caps a single register index or range count -- a backstop against an
@@ -699,6 +702,44 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             vm.set_register(instr.p2, Value::Integer(rowid))?;
             Ok(Step::Next)
         }
+        Opcode::OpenEphemeral => {
+            vm.open_cursor(instr.p1, Box::new(EphemeralTableCursor::new()))?;
+            Ok(Step::Next)
+        }
+        Opcode::Insert => {
+            let rowid = match vm.register(instr.p2)? {
+                Value::Integer(i) => *i,
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "Insert",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let payload = match vm.register(instr.p3)? {
+                Value::Blob(bytes) => bytes.clone(),
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "Insert",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let values = decode_record(&payload, TextEncoding::Utf8).map_err(|e| {
+                ExecError::MalformedInstruction {
+                    opcode: "Insert",
+                    reason: e.to_string(),
+                }
+            })?;
+            let inserted = vm.cursor_mut(instr.p1)?.insert(rowid, values);
+            if !inserted {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "Insert",
+                    reason: "cursor slot does not support insertion".to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
 
         other => Err(ExecError::Unimplemented { opcode: other }),
     }
@@ -1005,5 +1046,70 @@ mod tests {
             *vm.register(0).unwrap(),
             Value::Text("42".to_string().into())
         );
+    }
+
+    #[test]
+    fn ephemeral_table_round_trips_makerecord_insert_scan() {
+        // MakeRecord -> Insert -> Rewind/Next -> Column -> ResultRow:
+        // the first genuinely complete end-to-end micro-query, entirely
+        // storage-agnostic.
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            /* 0 */ Instruction::new(Opcode::OpenEphemeral, 0, 0, 0), // cursor 0
+            // Row 1: (rowid=1, "a")
+            /* 1 */
+            Instruction::with_p4(Opcode::String8, 0, 1, 0, P4::Str("a".to_string())),
+            /* 2 */
+            Instruction::new(Opcode::MakeRecord, 1, 1, 2), // reg2 = record([reg1])
+            /* 3 */ Instruction::new(Opcode::Integer, 1, 3, 0), // reg3 = rowid 1
+            /* 4 */ Instruction::new(Opcode::Insert, 0, 3, 2),
+            // Row 2: (rowid=2, "b")
+            /* 5 */
+            Instruction::with_p4(Opcode::String8, 0, 1, 0, P4::Str("b".to_string())),
+            /* 6 */ Instruction::new(Opcode::MakeRecord, 1, 1, 2),
+            /* 7 */ Instruction::new(Opcode::Integer, 2, 3, 0),
+            /* 8 */ Instruction::new(Opcode::Insert, 0, 3, 2),
+            // Scan cursor 0, emitting (col0, rowid) per row.
+            /* 9 */
+            Instruction::new(Opcode::Rewind, 0, 14, 0), // jump to Halt(14) if empty
+            /* 10 */ Instruction::new(Opcode::Column, 0, 0, 4),
+            /* 11 */ Instruction::new(Opcode::Rowid, 0, 5, 0),
+            /* 12 */ Instruction::new(Opcode::ResultRow, 4, 2, 0),
+            /* 13 */
+            Instruction::new(Opcode::Next, 0, 10, 0), // jump to Column(10) if a next row exists
+            /* 14 */ Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Text("a".to_string().into()), Value::Integer(1)],
+                vec![Value::Text("b".to_string().into()), Value::Integer(2)],
+            ]
+        );
+    }
+
+    #[test]
+    fn insert_into_a_non_ephemeral_cursor_slot_errors() {
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(super::super::cursor::InMemoryCursor::new(vec![])),
+        )
+        .unwrap();
+        vm.set_register(1, Value::Integer(1)).unwrap();
+        vm.set_register(
+            2,
+            Value::Blob(encode_record(&[], TextEncoding::Utf8).into()),
+        )
+        .unwrap();
+        let program = Program::new(vec![Instruction::new(Opcode::Insert, 0, 1, 2)]);
+        assert!(matches!(
+            execute(&mut vm, &program),
+            Err(ExecError::MalformedInstruction {
+                opcode: "Insert",
+                ..
+            })
+        ));
     }
 }
