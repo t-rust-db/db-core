@@ -11,10 +11,11 @@ members = [
     "sql-vfs",
     "sql-header",
     "sql-pager",
+    "sql-codegen",
 ]
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/db-core"
