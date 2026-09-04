@@ -43,6 +43,11 @@ pub enum PlanError {
     /// `Right`/`Full`/`Cross` are parseable but only `Inner`/`Left` hash-
     /// join execution exists so far.
     UnsupportedJoinKind(JoinKind),
+    /// `SELECT *` (or a mixed `SELECT col, *`) combined with `GROUP BY`, an
+    /// aggregate, or a window function -- standard SQL rejects this too,
+    /// since there's no well-defined column list to expand `*` into once
+    /// the row shape is collapsed/reordered by those clauses.
+    StarWithAggregation,
 }
 
 impl fmt::Display for PlanError {
@@ -54,8 +59,50 @@ impl fmt::Display for PlanError {
                 f,
                 "join kind {kind:?} is not yet executable (only Inner/Left are implemented)"
             ),
+            PlanError::StarWithAggregation => write!(
+                f,
+                "SELECT * cannot be combined with GROUP BY, an aggregate, or a window function"
+            ),
         }
     }
+}
+
+/// Expand every [`SelectItem::Star`] in `query.columns` into a
+/// [`SelectItem::Column`] per entry of `schema` (in `schema`'s order),
+/// leaving every other select item untouched -- so `SELECT id, * FROM t`
+/// keeps `id` first and expands `*` after it. `schema` is the resolved
+/// table's column names; `sql-parser` never sees these (see
+/// [`SelectItem::Star`]'s docs), so this is the caller's (the executor
+/// with Parquet/table schema access) job to run once, before handing the
+/// query to [`compile`]/[`compile_join`]/[`compile_semi_join`]/
+/// [`compile_window`].
+///
+/// Returns [`PlanError::StarWithAggregation`] if `*` is combined with
+/// `GROUP BY` or an aggregate/window select item. A query with no `Star`
+/// item is returned unchanged (cloned).
+pub fn expand_star(query: &Query, schema: &[String]) -> Result<Query> {
+    if !query.columns.iter().any(|c| matches!(c, SelectItem::Star)) {
+        return Ok(query.clone());
+    }
+    let has_aggregation = !query.group_by.is_empty()
+        || query
+            .columns
+            .iter()
+            .any(|c| matches!(c, SelectItem::Agg(..) | SelectItem::Window(_)));
+    if has_aggregation {
+        return Err(PlanError::StarWithAggregation);
+    }
+    let mut columns = Vec::with_capacity(query.columns.len() + schema.len());
+    for item in &query.columns {
+        match item {
+            SelectItem::Star => columns.extend(schema.iter().cloned().map(SelectItem::Column)),
+            other => columns.push(other.clone()),
+        }
+    }
+    Ok(Query {
+        columns,
+        ..query.clone()
+    })
 }
 
 impl std::error::Error for PlanError {}
@@ -1331,5 +1378,79 @@ mod tests {
             nodes.last().unwrap().detail,
             "EMIT: id, region_key, ROW_NUMBER()"
         );
+    }
+
+    #[test]
+    fn expand_star_replaces_bare_star_with_schema_columns() {
+        let query = sql::parse("SELECT * FROM t").unwrap();
+        let schema = vec!["id".to_string(), "name".to_string(), "amount".to_string()];
+        let expanded = expand_star(&query, &schema).unwrap();
+        assert_eq!(
+            expanded.columns,
+            vec![
+                SelectItem::Column("id".to_string()),
+                SelectItem::Column("name".to_string()),
+                SelectItem::Column("amount".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn expand_star_keeps_mixed_columns_in_order() {
+        let query = sql::parse("SELECT id, * FROM t").unwrap();
+        let schema = vec!["id".to_string(), "name".to_string()];
+        let expanded = expand_star(&query, &schema).unwrap();
+        assert_eq!(
+            expanded.columns,
+            vec![
+                SelectItem::Column("id".to_string()),
+                SelectItem::Column("id".to_string()),
+                SelectItem::Column("name".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn expand_star_is_noop_without_star() {
+        let query = sql::parse("SELECT id FROM t").unwrap();
+        let expanded = expand_star(&query, &["id".to_string()]).unwrap();
+        assert_eq!(expanded, query);
+    }
+
+    #[test]
+    fn expand_star_rejects_group_by() {
+        let query = sql::parse("SELECT * FROM t GROUP BY id").unwrap();
+        assert_eq!(
+            expand_star(&query, &["id".to_string()]),
+            Err(PlanError::StarWithAggregation)
+        );
+    }
+
+    #[test]
+    fn expand_star_rejects_aggregate() {
+        let query = sql::parse("SELECT *, SUM(amount) FROM t").unwrap();
+        assert_eq!(
+            expand_star(&query, &["id".to_string()]),
+            Err(PlanError::StarWithAggregation)
+        );
+    }
+
+    #[test]
+    fn expand_star_rejects_window() {
+        let query = sql::parse("SELECT *, ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
+        assert_eq!(
+            expand_star(&query, &["id".to_string()]),
+            Err(PlanError::StarWithAggregation)
+        );
+    }
+
+    #[test]
+    fn expand_star_then_compile_projects_real_columns() {
+        let query = sql::parse("SELECT * FROM t").unwrap();
+        let schema = vec!["id".to_string(), "name".to_string()];
+        let expanded = expand_star(&query, &schema).unwrap();
+        assert_eq!(output_column_names(&expanded), vec!["id", "name"]);
+        let program = compile(&expanded);
+        assert_eq!(program.columns_to_load(), vec!["id", "name"]);
     }
 }
