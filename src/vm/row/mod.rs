@@ -1,7 +1,7 @@
 //! `RowExecutor`: the cursor-driven, row-at-a-time query VM -- one of
 //! `sql-vm`'s three executors (see crate root docs).
 //!
-//! **Partial (db-core#18/#51/#56/#59/#62/#64/#68, tracking issue
+//! **Partial (db-core#18/#51/#56/#59/#62/#64/#68/#69, tracking issue
 //! db-core#18).** A literal, opcode-for-opcode port of sqlite-rs's VDBE
 //! (ADR 0008, revised for full parity -- see that ADR's history: an
 //! earlier draft mistakenly generalized [`super::batch`]'s
@@ -29,24 +29,28 @@
 //!   `p1..p5` operand shape (not typed named fields).
 //! - [`cursor`] -- the storage-agnostic [`cursor::Cursor`] trait ADR
 //!   0008 calls for, [`cursor::InMemoryCursor`] (a read-only test
-//!   fixture), and [`cursor::EphemeralTableCursor`] (a real,
+//!   fixture), [`cursor::EphemeralTableCursor`] (a real,
 //!   `Opcode::Insert`-writable in-memory table backing `Opcode::
-//!   OpenEphemeral`'s table-mode cursor).
+//!   OpenEphemeral`'s table-mode cursor), and [`cursor::SorterCursor`]
+//!   (db-core#69, backing `Opcode::SorterOpen`/`Insert`/`Sort`/`Next`/
+//!   `Data` -- **single-key, no LIMIT/bound**; multi-key sort and
+//!   bounded top-K maintenance are follow-ups).
 //! - [`record`] -- on-disk record encoding/decoding (`encode_record`/
-//!   `decode_record`/`decode_column`), backing `Opcode::MakeRecord` and
-//!   ephemeral-cursor `Insert`/`Column`.
+//!   `decode_record`/`decode_column`), backing `Opcode::MakeRecord`,
+//!   ephemeral-cursor `Insert`/`Column`, and sorter key decoding.
 //! - [`vm`] -- the register file, cursor-slot table, aggregate-context
 //!   slot table, and fetch-decode-execute loop (`Vm`, [`vm::execute`])
 //!   -- control flow, compare/cast/arithmetic, result-row loads
 //!   including `MakeRecord`, `Rewind`/`Next`/`Column`/`Rowid` over
 //!   [`cursor::Cursor`], `OpenEphemeral`/`Insert` over
 //!   [`cursor::EphemeralTableCursor`], `AggStep`/`AggFinal` over
-//!   [`aggregate::AggState`], and `Function` over [`functions::call`].
+//!   [`aggregate::AggState`], `Function` over [`functions::call`], and
+//!   the sorter opcodes over [`cursor::SorterCursor`].
 //!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
-//! and index-mode ephemeral cursors, DDL, real transactions, sorter
-//! (db-core#69), `GROUP BY` hash aggregation, `like`/`glob`/`substr`/
+//! and index-mode ephemeral cursors, DDL, real transactions, multi-key/
+//! bounded sorting, `GROUP BY` hash aggregation, `like`/`glob`/`substr`/
 //! `trim`/`replace`, `EXPLAIN`/`PRAGMA` rendering. `Opcode` already
 //! lists every variant sqlite-rs has (parity of identity); dispatch
 //! for the rest lands in later phases (tracked against db-core#18).
@@ -74,9 +78,9 @@ pub use affinity::{affinity_of, apply_affinity, comparison_affinity, Affinity};
 pub use aggregate::{AggState, AggregateError};
 pub use cast::cast_to;
 pub use compare::compare;
-pub use cursor::{Cursor, EphemeralTableCursor, InMemoryCursor};
+pub use cursor::{Cursor, EphemeralTableCursor, InMemoryCursor, SorterCursor};
 pub use functions::FunctionError;
-pub use program::{Instruction, Opcode, Program, P4};
+pub use program::{Instruction, Opcode, Program, SortKeyColumn, P4};
 pub use record::{decode_column, decode_record, encode_record, RecordError};
 pub use value::{compare_text, format_real, Collation, TextEncoding, Value};
 pub use vm::{execute, ExecError, Step, Vm};

@@ -1,6 +1,6 @@
 //! The register file, cursor-slot table, aggregate-context slot table,
 //! and fetch-decode-execute loop, ported from sqlite-rs's `vdbe::exec`
-//! (db-core#51/#56/#59/#62/#64). Storage-agnostic: cursors are
+//! (db-core#51/#56/#59/#62/#64/#68/#69). Storage-agnostic: cursors are
 //! [`super::cursor::Cursor`] trait objects, not real b-tree/pager
 //! access -- see `super::cursor`'s doc and ADR 0008.
 //!
@@ -17,9 +17,11 @@
 //! in-memory [`super::cursor::EphemeralTableCursor`] (`Insert` decodes
 //! `MakeRecord`'s blob straight back into `Value`s -- sqlite-rs's own
 //! "decode-once-at-insert" design), `AggStep`/`AggFinal` over
-//! [`super::aggregate::AggState`] (single-group only), and `Function`
-//! over [`super::functions::call`] (first slice of ~7 scalar
-//! functions). Everything else in [`super::program::Opcode`] returns
+//! [`super::aggregate::AggState`] (single-group only), `Function` over
+//! [`super::functions::call`], and `SorterOpen`/`SorterInsert`/
+//! `SorterSort`/`Sort`/`SorterNext`/`SorterData` over a
+//! [`super::cursor::SorterCursor`] (single-key, no LIMIT/bound).
+//! Everything else in [`super::program::Opcode`] returns
 //! `ExecError::Unimplemented`.
 
 use std::cmp::Ordering;
@@ -30,7 +32,7 @@ use super::aggregate::{self, AggState};
 use super::cast::cast_to;
 use super::coerce;
 use super::compare::compare;
-use super::cursor::{Cursor, EphemeralTableCursor};
+use super::cursor::{Cursor, EphemeralTableCursor, SorterCursor};
 use super::functions;
 use super::program::{Instruction, Opcode, Program, P4};
 use super::record::{decode_record, encode_record};
@@ -765,6 +767,65 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             vm.open_cursor(instr.p1, Box::new(EphemeralTableCursor::new()))?;
             Ok(Step::Next)
         }
+        Opcode::SorterOpen => {
+            let key = match &instr.p4 {
+                P4::SortKey(key) => *key,
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "SorterOpen",
+                        reason: format!("expected a SortKey P4, got {other:?}"),
+                    })
+                }
+            };
+            vm.open_cursor(instr.p1, Box::new(SorterCursor::new(key)))?;
+            Ok(Step::Next)
+        }
+        Opcode::SorterInsert => {
+            let blob = match vm.register(instr.p2)? {
+                Value::Blob(bytes) => bytes.clone(),
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "SorterInsert",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let inserted = vm.cursor_mut(instr.p1)?.sorter_insert(blob);
+            if !inserted {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "SorterInsert",
+                    reason: "cursor slot is not a sorter".to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+        Opcode::SorterSort | Opcode::Sort => {
+            let has_row = vm.cursor_mut(instr.p1)?.rewind();
+            Ok(if has_row {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::SorterNext => {
+            let has_row = vm.cursor_mut(instr.p1)?.next();
+            Ok(if has_row {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::SorterData => {
+            let blob =
+                vm.cursor(instr.p1)?
+                    .current_blob()
+                    .ok_or(ExecError::MalformedInstruction {
+                        opcode: "SorterData",
+                        reason: "sorter has not been sorted yet, or has no current row".to_string(),
+                    })?;
+            vm.set_register(instr.p2, blob)?;
+            Ok(Step::Next)
+        }
         Opcode::Insert => {
             let rowid = match vm.register(instr.p2)? {
                 Value::Integer(i) => *i,
@@ -1150,11 +1211,11 @@ mod tests {
     #[test]
     fn unimplemented_opcode_errors_by_name() {
         let mut vm = Vm::new();
-        let program = Program::new(vec![Instruction::new(Opcode::SorterOpen, 0, 0, 0)]);
+        let program = Program::new(vec![Instruction::new(Opcode::HashAggOpen, 0, 0, 0)]);
         assert!(matches!(
             execute(&mut vm, &program),
             Err(ExecError::Unimplemented {
-                opcode: Opcode::SorterOpen
+                opcode: Opcode::HashAggOpen
             })
         ));
     }
@@ -1376,6 +1437,78 @@ mod tests {
             execute(&mut vm, &program),
             Err(ExecError::MalformedInstruction {
                 opcode: "Function",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn sorter_scans_makerecord_rows_back_in_sort_order() {
+        // MakeRecord/SorterInsert three out-of-order rows, SorterSort,
+        // then scan them back via SorterNext/SorterData -- each emitted
+        // row is the raw record blob, decoded here the same way
+        // sqlite-rs's own sorter test harness does (an OpenPseudo cursor
+        // would normally feed Column, which isn't wired for sorters in
+        // this minimal, single-key port).
+        let mut vm = Vm::new();
+        let key = P4::SortKey(super::super::program::SortKeyColumn {
+            index: 0,
+            descending: false,
+            collation: Collation::Binary,
+            nulls_first: false,
+        });
+        let program = Program::new(vec![
+            /* 0 */ Instruction::with_p4(Opcode::SorterOpen, 0, 0, 0, key),
+            /* 1 */ Instruction::new(Opcode::Integer, 30, 1, 0),
+            /* 2 */ Instruction::new(Opcode::MakeRecord, 1, 1, 2),
+            /* 3 */ Instruction::new(Opcode::SorterInsert, 0, 2, 0),
+            /* 4 */ Instruction::new(Opcode::Integer, 10, 1, 0),
+            /* 5 */ Instruction::new(Opcode::MakeRecord, 1, 1, 2),
+            /* 6 */ Instruction::new(Opcode::SorterInsert, 0, 2, 0),
+            /* 7 */ Instruction::new(Opcode::Integer, 20, 1, 0),
+            /* 8 */ Instruction::new(Opcode::MakeRecord, 1, 1, 2),
+            /* 9 */ Instruction::new(Opcode::SorterInsert, 0, 2, 0),
+            /* 10 */
+            Instruction::new(Opcode::SorterSort, 0, 14, 0), // jump to Halt(14) if empty
+            /* 11 */ Instruction::new(Opcode::SorterData, 0, 3, 0),
+            /* 12 */ Instruction::new(Opcode::ResultRow, 3, 1, 0),
+            /* 13 */
+            Instruction::new(Opcode::SorterNext, 0, 11, 0), // jump to SorterData(11) if a next row exists
+            /* 14 */ Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        let decoded: Vec<Value> = rows
+            .into_iter()
+            .map(|row| {
+                let Value::Blob(bytes) = &row[0] else {
+                    panic!("expected a Blob");
+                };
+                decode_record(bytes, TextEncoding::Utf8).unwrap()[0].clone()
+            })
+            .collect();
+        assert_eq!(
+            decoded,
+            vec![Value::Integer(10), Value::Integer(20), Value::Integer(30)]
+        );
+    }
+
+    #[test]
+    fn sorter_data_before_sort_errors() {
+        let mut vm = Vm::new();
+        let key = P4::SortKey(super::super::program::SortKeyColumn {
+            index: 0,
+            descending: false,
+            collation: Collation::Binary,
+            nulls_first: false,
+        });
+        let program = Program::new(vec![
+            Instruction::with_p4(Opcode::SorterOpen, 0, 0, 0, key),
+            Instruction::new(Opcode::SorterData, 0, 1, 0),
+        ]);
+        assert!(matches!(
+            execute(&mut vm, &program),
+            Err(ExecError::MalformedInstruction {
+                opcode: "SorterData",
                 ..
             })
         ));
