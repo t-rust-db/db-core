@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.19.0] - 2026-09-04
+
+### Added
+
+- **`vm::row`'s on-disk record encoding, wired to `Opcode::MakeRecord`** (#56, follow-up to #51/#18). Ports sqlite-rs's `record::encode` (varint writer + `encode_record`) into `vm::row::record`: a varint header length, one varint serial type per column (smallest-lossless-width integers, `12+2*len`/`13+2*len` for BLOB/TEXT, 8-byte IEEE-754 for REAL), then column bodies back-to-back. `MakeRecord` packs a contiguous register range into a record blob, applying a `P4::Affinity` byte string per-column to a copy before encoding. Record decoding and ephemeral-cursor wiring remain follow-up work.
+
 ## [0.18.0] - 2026-09-04
 
 ### Added
