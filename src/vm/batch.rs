@@ -267,7 +267,7 @@ impl Opcode {
     /// (the execution-time equivalent of `Span` for parse errors -- there's
     /// no source text left at execution time, but there's always a specific
     /// instruction that failed).
-    fn name(&self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match self {
             Opcode::LoadColumn { .. } => "LoadColumn",
             Opcode::LoadConst { .. } => "LoadConst",

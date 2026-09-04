@@ -934,6 +934,169 @@ pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNod
     b.finish()
 }
 
+// ---------------------------------------------------------------------
+// EXPLAIN (bare form -- opcode listing)
+// ---------------------------------------------------------------------
+
+/// One row of a bare `EXPLAIN`'s opcode listing (#55): `addr | opcode |
+/// operands | comment`, mirroring sqlite-rs's own bare-`EXPLAIN` table as
+/// far as the batch executor's typed operands allow (ADR 0007).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpcodeRow {
+    pub addr: usize,
+    pub opcode: &'static str,
+    pub operands: String,
+    pub comment: String,
+    /// Whether this row is the [`Opcode::Finalize`] barrier: the boundary
+    /// between the parallel per-segment phase and the sequential
+    /// cross-segment merge phase (ADR 0007).
+    pub is_finalize: bool,
+}
+
+/// One named program in a bare `EXPLAIN` listing. A flat query has a
+/// single section; a join has `build`/`probe`/`body` ([`JoinProgram`]); a
+/// semi-join has a single `body` section (its subquery isn't opcode-driven
+/// -- see [`compile_semi_join`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpcodeSection {
+    pub label: String,
+    pub rows: Vec<OpcodeRow>,
+}
+
+fn render_program(program: &Program) -> Vec<OpcodeRow> {
+    program
+        .instructions
+        .iter()
+        .enumerate()
+        .map(|(addr, instr)| OpcodeRow {
+            addr,
+            opcode: instr.opcode.name(),
+            operands: render_operands(&instr.opcode),
+            comment: instr.comment.clone().unwrap_or_default(),
+            is_finalize: matches!(instr.opcode, Opcode::Finalize { .. }),
+        })
+        .collect()
+}
+
+fn render_agg_pair(func: AggFunc, src: Option<usize>) -> String {
+    match src {
+        Some(s) => format!("{func:?}({s})"),
+        None => format!("{func:?}"),
+    }
+}
+
+/// Human-readable operands for one [`Opcode`], named-field style (not a
+/// `Debug` dump) -- e.g. `reg=0 column=product`, `group_by=[0]
+/// aggs=[Sum(1)] agg_dst=[4]`.
+fn render_operands(op: &Opcode) -> String {
+    match op {
+        Opcode::LoadColumn { reg, column } => format!("reg={reg} column={column}"),
+        Opcode::LoadConst { reg, value } => format!("reg={reg} value={value}"),
+        Opcode::Map { dst, op, a, b } => format!("dst={dst} op={op:?} a={a} b={b}"),
+        Opcode::Filter { predicate } => format!("predicate=r{predicate}"),
+        Opcode::Reduce { func, src, dst } => {
+            format!("dst={dst} {}", render_agg_pair(*func, *src))
+        }
+        Opcode::GroupReduce {
+            group_by,
+            aggs,
+            agg_dst,
+        } => {
+            let aggs: Vec<String> = aggs
+                .iter()
+                .map(|(func, src)| render_agg_pair(*func, *src))
+                .collect();
+            format!(
+                "group_by={group_by:?} aggs=[{}] agg_dst={agg_dst:?}",
+                aggs.join(", ")
+            )
+        }
+        Opcode::HashBuild {
+            key_cols,
+            payload_cols,
+            table,
+        } => format!("key_cols={key_cols:?} payload_cols={payload_cols:?} table={table}"),
+        Opcode::HashProbe {
+            key_cols,
+            table,
+            payload_dst,
+            kind,
+        } => format!("key_cols={key_cols:?} table={table} payload_dst={payload_dst:?} kind={kind:?}"),
+        Opcode::Window {
+            func,
+            arg,
+            offset,
+            partition_by,
+            order_by,
+            dst,
+        } => format!(
+            "dst={dst} func={func:?} arg={arg:?} offset={offset:?} partition_by={partition_by:?} order_by={order_by:?}"
+        ),
+        Opcode::Scan => String::new(),
+        Opcode::Emit { registers } => format!("registers={registers:?}"),
+        Opcode::NextSegment { loop_start } => format!("loop_start={loop_start}"),
+        Opcode::Halt => String::new(),
+        Opcode::Finalize {
+            agg_parts,
+            num_group_keys,
+            distinct,
+            order_by,
+            limit,
+        } => format!(
+            "agg_parts={agg_parts:?} num_group_keys={num_group_keys} distinct={distinct} order_by={order_by:?} limit={limit:?}"
+        ),
+    }
+}
+
+/// Build a bare `EXPLAIN`'s opcode listing for `query` (#55): the compiled
+/// [`Program`]'s instructions, one section per phase the executor actually
+/// runs -- mirrors [`explain`]'s shape dispatch (semi-join, join, windowed,
+/// or plain single-table) but over the real compiled opcodes instead of a
+/// hand-built plan tree.
+pub fn explain_opcodes(query: &Query) -> Result<Vec<OpcodeSection>> {
+    let has_window = query
+        .columns
+        .iter()
+        .any(|c| matches!(c, SelectItem::Window(_)));
+
+    if matches!(query.where_clause, Some(Expr::InSubquery { .. })) {
+        let semi = compile_semi_join(query)?;
+        Ok(vec![OpcodeSection {
+            label: format!(
+                "SEMI JOIN body ({} IN (SELECT ... FROM {}))",
+                semi.key_column, semi.subquery.from
+            ),
+            rows: render_program(&semi.body),
+        }])
+    } else if !query.joins.is_empty() {
+        let join = compile_join(query)?;
+        Ok(vec![
+            OpcodeSection {
+                label: format!("JOIN build ({})", query.joins[0].table),
+                rows: render_program(&join.build),
+            },
+            OpcodeSection {
+                label: "JOIN probe".to_string(),
+                rows: render_program(&join.probe),
+            },
+            OpcodeSection {
+                label: "JOIN body".to_string(),
+                rows: render_program(&join.body),
+            },
+        ])
+    } else if has_window {
+        Ok(vec![OpcodeSection {
+            label: "body".to_string(),
+            rows: render_program(&compile_window(query)),
+        }])
+    } else {
+        Ok(vec![OpcodeSection {
+            label: "body".to_string(),
+            rows: render_program(&compile(query)),
+        }])
+    }
+}
+
 fn scan_detail(table: &str, stats: TableStats) -> String {
     let groups = stats.row_groups;
     format!(
@@ -1378,6 +1541,110 @@ mod tests {
             nodes.last().unwrap().detail,
             "EMIT: id, region_key, ROW_NUMBER()"
         );
+    }
+
+    fn opcodes(rows: &[OpcodeRow]) -> Vec<&'static str> {
+        rows.iter().map(|r| r.opcode).collect()
+    }
+
+    #[test]
+    fn explain_opcodes_flat_query_matches_compiled_program() {
+        let query =
+            sql::parse("SELECT region, SUM(amount) FROM t WHERE amount > 10 GROUP BY region")
+                .unwrap();
+        let program = compile(&query);
+        let sections = explain_opcodes(&query).unwrap();
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].label, "body");
+        assert_eq!(
+            opcodes(&sections[0].rows),
+            program.opcodes().map(Opcode::name).collect::<Vec<_>>()
+        );
+        let finalize_row = sections[0].rows.iter().find(|r| r.is_finalize).unwrap();
+        assert_eq!(finalize_row.opcode, "Finalize");
+        assert!(sections[0].rows.iter().filter(|r| r.is_finalize).count() == 1);
+    }
+
+    #[test]
+    fn explain_opcodes_order_by_limit_matches_compiled_program() {
+        let query = sql::parse("SELECT id FROM t ORDER BY id LIMIT 5").unwrap();
+        let program = compile(&query);
+        let sections = explain_opcodes(&query).unwrap();
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(
+            opcodes(&sections[0].rows),
+            program.opcodes().map(Opcode::name).collect::<Vec<_>>()
+        );
+        let finalize_row = sections[0].rows.iter().find(|r| r.is_finalize).unwrap();
+        assert!(finalize_row.operands.contains("limit=Some(5)"));
+    }
+
+    #[test]
+    fn explain_opcodes_join_lists_build_probe_and_body() {
+        let query = sql::parse(
+            "SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.key",
+        )
+        .unwrap();
+        let join = compile_join(&query).unwrap();
+        let sections = explain_opcodes(&query).unwrap();
+
+        assert_eq!(sections.len(), 3);
+        assert!(sections[0].label.starts_with("JOIN build"));
+        assert_eq!(sections[1].label, "JOIN probe");
+        assert_eq!(sections[2].label, "JOIN body");
+        assert_eq!(
+            opcodes(&sections[0].rows),
+            join.build.opcodes().map(Opcode::name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            opcodes(&sections[1].rows),
+            join.probe.opcodes().map(Opcode::name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            opcodes(&sections[2].rows),
+            join.body.opcodes().map(Opcode::name).collect::<Vec<_>>()
+        );
+        assert!(sections[2].rows.iter().any(|r| r.is_finalize));
+    }
+
+    #[test]
+    fn explain_opcodes_semi_join_lists_single_body_section() {
+        let query =
+            sql::parse("SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions)")
+                .unwrap();
+        let semi = compile_semi_join(&query).unwrap();
+        let sections = explain_opcodes(&query).unwrap();
+
+        assert_eq!(sections.len(), 1);
+        assert!(sections[0].label.contains("SEMI JOIN"));
+        assert!(sections[0].label.contains("region_key"));
+        assert!(sections[0].label.contains("regions"));
+        assert_eq!(
+            opcodes(&sections[0].rows),
+            semi.body.opcodes().map(Opcode::name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn explain_opcodes_window_matches_compiled_program() {
+        let query = sql::parse(
+            "SELECT id, region_key, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id) FROM orders",
+        )
+        .unwrap();
+        let program = compile_window(&query);
+        let sections = explain_opcodes(&query).unwrap();
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(
+            opcodes(&sections[0].rows),
+            program.opcodes().map(Opcode::name).collect::<Vec<_>>()
+        );
+        assert!(sections[0]
+            .rows
+            .iter()
+            .any(|r| r.opcode == "Window" && r.operands.contains("func=RowNumber")));
     }
 
     #[test]

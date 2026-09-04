@@ -980,19 +980,34 @@ pub fn parse(input: &str) -> Result<Query> {
     make_parser(input)?.parse_top_level_query()
 }
 
-/// Parses `EXPLAIN [QUERY PLAN] <select>`, returning whether the `EXPLAIN`
-/// prefix was present along with the parsed query.
-pub fn parse_explain(input: &str) -> Result<(bool, Query)> {
+/// Which `EXPLAIN` form (if any) prefixed a query: bare `EXPLAIN` renders
+/// the compiled `Program`'s opcode listing, `EXPLAIN QUERY PLAN` renders
+/// the plan tree -- two distinct outputs (#55), not a single bool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Explain {
+    /// No `EXPLAIN` prefix -- run the query normally.
+    None,
+    /// Bare `EXPLAIN`: opcode listing.
+    Opcodes,
+    /// `EXPLAIN QUERY PLAN`: plan tree.
+    QueryPlan,
+}
+
+/// Parses `EXPLAIN [QUERY PLAN] <select>`, returning which `EXPLAIN` form
+/// (if any) prefixed it along with the parsed query.
+pub fn parse_explain(input: &str) -> Result<(Explain, Query)> {
     let mut parser = make_parser(input)?;
     let explain = if parser.peek_keyword("EXPLAIN") {
         parser.next()?;
         if parser.peek_keyword("QUERY") {
             parser.next()?;
             parser.expect_keyword("PLAN")?;
+            Explain::QueryPlan
+        } else {
+            Explain::Opcodes
         }
-        true
     } else {
-        false
+        Explain::None
     };
     let query = parser.parse_top_level_query()?;
     Ok((explain, query))
@@ -1002,6 +1017,19 @@ pub fn parse_explain(input: &str) -> Result<(bool, Query)> {
 mod tests {
     use super::*;
     use crate::expr::{Join, JoinKind};
+
+    #[test]
+    fn parse_explain_distinguishes_opcodes_query_plan_and_none() {
+        let (explain, query) = parse_explain("EXPLAIN SELECT id FROM orders").unwrap();
+        assert_eq!(explain, Explain::Opcodes);
+        assert_eq!(query.from, "orders");
+
+        let (explain, _) = parse_explain("EXPLAIN QUERY PLAN SELECT id FROM orders").unwrap();
+        assert_eq!(explain, Explain::QueryPlan);
+
+        let (explain, _) = parse_explain("SELECT id FROM orders").unwrap();
+        assert_eq!(explain, Explain::None);
+    }
 
     #[test]
     fn parses_columns_and_where() {

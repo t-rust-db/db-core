@@ -32,7 +32,7 @@ pub use span::Span;
 #[cfg(feature = "parser-column")]
 pub mod column;
 #[cfg(feature = "parser-column")]
-pub use column::{parse, parse_explain, ParseError, Result};
+pub use column::{parse, parse_explain, Explain, ParseError, Result};
 
 #[cfg(feature = "parser-row")]
 pub mod row;
