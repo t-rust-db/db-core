@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.18.0] - 2026-09-04
+
+### Added
+
+- **`vm::row`'s fetch-decode-execute loop, control flow, and a storage-agnostic cursor trait** (#51, follow-up to #18). Ported from sqlite-rs's `exec.rs`/`control.rs`/`arithmetic.rs`/`result.rs`: the register file + `vm::row::vm::execute`, control flow (`Init`/`Goto`/`Once`/`BeginSubrtn`/`Return`/`Halt`/`IfNot`/`IfNotZero`/`IfPos`/`DecrJumpZero`/`IsNull`/`NotNull`/`MustBeInt`/`OffsetLimit`), fused compare-jump (`Eq`/`Ge`/`Gt`/`Le`/`Lt`), `RealAffinity`/`Cast`, arithmetic (`Add`/`Subtract`/`Multiply`/`Divide`/`Remainder`/`Not`/`BitAnd`/`BitOr`/`ShiftLeft`/`ShiftRight`/`BitNot`/`Concat`), result-row loads (`Integer`/`Int64`/`Real`/`Blob`/`Null`/`String8`/`Variable`/`Copy`/`ResultRow` -- `MakeRecord`'s record encoding deferred), and a storage-agnostic `Cursor` trait (`Rewind`/`Next`/`Column`/`Rowid`) with an `InMemoryCursor` mock proving the row-at-a-time model end-to-end.
+
+### Fixed
+
+- **ADR 0008 corrected**: `vm::row::Opcode`/`Instruction` had mistakenly generalized `vm::batch`'s typed-operand design (ADR 0007) to `vm::row`, which is meant to be a literal, opcode-for-opcode port of sqlite-rs's VDBE. `Opcode` is now a bare tag enum listing every sqlite-rs VDBE variant; `Instruction` carries sqlite-rs's literal `p1/p2/p3/p4/p5` operands. Breaking change to #18's just-landed `Opcode` shape (`Compare`/`Cast`/`Arith`/`Logic`/`Not`/`BitNot`/`Neg`).
+
 ## [0.17.0] - 2026-09-04
 
 ### Fixed
