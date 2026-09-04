@@ -23,7 +23,9 @@ default = ["parser-column", "vm-batch", "codegen-batch", "emit-batch"]
 
 # `parser`: one grammar section per Cargo feature, mirroring `vm`'s own
 # `batch`/`row`/`stream` split (ADR 0001/0002).
-parser-column = []
+# `parser-column` no longer has its own tokenizer/grammar (#57): it's a
+# thin adapter over `parser-row`'s, so it implies `parser-row`.
+parser-column = ["parser-row"]
 parser-row = []
 
 # `vm`: one executor per Cargo feature -- a consumer enables only the

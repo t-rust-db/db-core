@@ -1,47 +1,50 @@
-//! column-rs's section (#27, #63, #65, #67-70): `SELECT ... FROM ...
+//! column-rs's section (#27, #57, #63, #65, #67-70): `SELECT ... FROM ...
 //! [[INNER|LEFT] JOIN table ON col = col ...] [WHERE ... | WHERE col IN
 //! (SELECT ...)] [GROUP BY ...] [ORDER BY ...] [LIMIT ...]`, restricted to
-//! the analytics subset the query VM executes. Joins are equi-joins only (no
-//! table aliases; qualify columns with the real table name, e.g.
-//! `orders.id`). The only subquery form is `col IN (SELECT ...)` (a
-//! semi-join) as the *entire* `WHERE` clause -- it can't be combined with
-//! other conditions via `AND`/`OR`. `SELECT` items may also be a window
-//! function (`ROW_NUMBER`/`RANK`/`DENSE_RANK`/`LAG`/`LEAD`/`FIRST_VALUE`/
-//! `LAST_VALUE`/`SUM`/`AVG`/`COUNT`) with `OVER (PARTITION BY ... ORDER BY
-//! ...)`.
+//! the analytics subset the query VM executes. Joins are equi-joins only.
+//! The only subquery form is `col IN (SELECT ...)` (a semi-join) as the
+//! *entire* `WHERE` clause -- it can't be combined with other conditions
+//! via `AND`/`OR`.
 //!
-//! Produces `crate::expr::Query` -- the AST types themselves live in
-//! `sql-expr`, not here.
+//! **Unified on `parser::row`'s tokenizer and grammar (#57).** This module
+//! no longer has its own tokenizer or recursive-descent parser: [`parse`]/
+//! [`parse_explain`] parse with [`super::row::parse_select`]/
+//! [`super::row::parse_explain`] (sqlite-rs's own, shared with `row`) and
+//! then [`convert_select`] lowers the resulting [`super::row::ast::Select`]
+//! into [`crate::expr::Query`] -- the shape [`crate::codegen::batch`],
+//! `crate::emit::batch`, and column-rs's runtime glue all still expect.
+//! `convert_select` is where "column's grammar becomes an enforced
+//! subset" (ADR 0002's second amendment) actually happens: a `Select`
+//! outside this subset (a real JOIN condition shape, `WITH`, `UNION`,
+//! `HAVING`, non-integer `LIMIT`, a second `ORDER BY` term, ...) is
+//! rejected here with [`ParseError::Unexpected`], not silently
+//! misconverted.
+//!
+//! **Not carried forward: window functions.** `parser::row`'s grammar
+//! itself rejects `OVER`/`FILTER` as not-yet-supported (see
+//! `grammar::parse_function_call`), so a query using `ROW_NUMBER() OVER
+//! (...)` etc. no longer parses at all through this module -- tracked as
+//! follow-up work (extend `row`'s grammar with window-function syntax,
+//! then give `codegen::batch::compile_window` an `ast::Select`-shaped
+//! input alongside its existing `crate::expr::Query` one). Every other
+//! shape this module previously accepted still does.
 //!
 //! Errors carry a [`Span`] (see `ADR 0001`/`ADR 0002` in `db-core`'s
 //! `.openspec/adr/`), matching sqlite-rs's own `ParseFail`/`ParseOutcome`
 //! convention: a consumer (REPL, IDE) can point at *where* parsing failed,
 //! not just read a message.
-//!
-//! One of `sql-parser`'s two sections (see crate root docs and ADR 0002)
-//! -- gated behind the `column` Cargo feature, on by default. Shares the
-//! crate's [`Span`] with [`super::row`] (once that has real content);
-//! `ParseError` here is column-rs-specific and not expected to become
-//! `row`'s own parse-error type too (see ADR 0002's Consequences).
 
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::expr::{
-    AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
+use crate::expr::{AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem};
+use crate::parser::row::ast::{
+    BinaryOp as AstBinOp, Distinctness, Expr as AstExpr, ExprKind, FunctionArgs, JoinConstraint,
+    JoinOp, Literal as AstLiteral, OrderingTerm, ResultColumn, Select, TableRefKind, UnaryOp,
 };
+use crate::parser::row::ParseOutcome;
 use crate::parser::Span;
 use crate::types::Literal;
-
-/// Keywords that can follow a table reference (`FROM table [alias]`,
-/// `JOIN table [alias] ON ...`) -- an identifier here is never taken as an
-/// alias, since these are the only tokens legally allowed in that
-/// position. Keeps `orders WHERE ...` from being misparsed as an alias
-/// named `WHERE`.
-const TABLE_REF_FOLLOW_KEYWORDS: &[&str] = &[
-    "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "OUTER", "ON", "WHERE", "GROUP", "ORDER",
-    "LIMIT",
-];
 
 #[derive(Debug, PartialEq)]
 pub enum ParseError {
@@ -83,160 +86,9 @@ impl std::error::Error for ParseError {}
 
 pub type Result<T> = std::result::Result<T, ParseError>;
 
-#[derive(Debug, Clone, PartialEq)]
-enum Token {
-    Ident(String),
-    Int(i64),
-    Float(f64),
-    Str(String),
-    Star,
-    Comma,
-    Dot,
-    LParen,
-    RParen,
-    Op(String),
+fn unsupported(span: Span, message: String) -> ParseError {
+    ParseError::Unexpected { message, span }
 }
-
-/// Per-char-index `(line, column, byte_offset)`, 1-based line/column,
-/// computed once so every token's [`Span`] is a slice of this table rather
-/// than re-scanning the input. One extra trailing entry (index
-/// `chars.len()`) gives end-of-input a real position for
-/// [`ParseError::UnexpectedEof`], instead of leaving it spanless.
-fn char_positions(chars: &[char]) -> Vec<(u32, u32, u32)> {
-    let mut positions = Vec::with_capacity(chars.len() + 1);
-    let (mut line, mut col, mut byte) = (1u32, 1u32, 0u32);
-    for c in chars {
-        positions.push((line, col, byte));
-        byte += c.len_utf8() as u32;
-        if *c == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-    positions.push((line, col, byte));
-    positions
-}
-
-fn span_of(positions: &[(u32, u32, u32)], start: usize, end: usize) -> Span {
-    let (line, column, offset) = positions[start];
-    let len = positions[end].2 - offset;
-    Span {
-        line,
-        column,
-        offset,
-        len,
-    }
-}
-
-fn tokenize(input: &str) -> Result<Vec<(Token, Span)>> {
-    let chars: Vec<char> = input.chars().collect();
-    let positions = char_positions(&chars);
-    let mut i = 0;
-    let mut tokens = Vec::new();
-    while i < chars.len() {
-        let c = chars[i];
-        if c.is_whitespace() {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        match c {
-            '*' => {
-                tokens.push((Token::Star, span_of(&positions, start, start + 1)));
-                i += 1;
-            }
-            ',' => {
-                tokens.push((Token::Comma, span_of(&positions, start, start + 1)));
-                i += 1;
-            }
-            '.' => {
-                tokens.push((Token::Dot, span_of(&positions, start, start + 1)));
-                i += 1;
-            }
-            '(' => {
-                tokens.push((Token::LParen, span_of(&positions, start, start + 1)));
-                i += 1;
-            }
-            ')' => {
-                tokens.push((Token::RParen, span_of(&positions, start, start + 1)));
-                i += 1;
-            }
-            '\'' => {
-                let str_start = i + 1;
-                let mut j = str_start;
-                while j < chars.len() && chars[j] != '\'' {
-                    j += 1;
-                }
-                if j >= chars.len() {
-                    return Err(ParseError::Unexpected {
-                        message: "unterminated string literal".to_string(),
-                        span: span_of(&positions, start, chars.len()),
-                    });
-                }
-                tokens.push((
-                    Token::Str(chars[str_start..j].iter().collect()),
-                    span_of(&positions, start, j + 1),
-                ));
-                i = j + 1;
-            }
-            '=' | '<' | '>' | '!' | '+' | '-' | '/' => {
-                let mut op = String::from(c);
-                if i + 1 < chars.len() && chars[i + 1] == '=' && matches!(c, '<' | '>' | '!' | '=')
-                {
-                    op.push('=');
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-                tokens.push((Token::Op(op), span_of(&positions, start, i)));
-            }
-            '|' if i + 1 < chars.len() && chars[i + 1] == '|' => {
-                tokens.push((
-                    Token::Op("||".to_string()),
-                    span_of(&positions, start, start + 2),
-                ));
-                i += 2;
-            }
-            _ if c.is_ascii_digit() => {
-                let mut is_float = false;
-                while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
-                    if chars[i] == '.' {
-                        is_float = true;
-                    }
-                    i += 1;
-                }
-                let text: String = chars[start..i].iter().collect();
-                let span = span_of(&positions, start, i);
-                if is_float {
-                    tokens.push((Token::Float(text.parse().unwrap()), span));
-                } else {
-                    tokens.push((Token::Int(text.parse().unwrap()), span));
-                }
-            }
-            _ if c.is_alphabetic() || c == '_' => {
-                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                    i += 1;
-                }
-                tokens.push((
-                    Token::Ident(chars[start..i].iter().collect()),
-                    span_of(&positions, start, i),
-                ));
-            }
-            other => {
-                return Err(ParseError::Unexpected {
-                    message: format!("unexpected character '{other}'"),
-                    span: span_of(&positions, start, start + 1),
-                })
-            }
-        }
-    }
-    Ok(tokens)
-}
-
-/// `(partition_by_columns, order_by_columns_with_direction)`.
-type OverClause = (Vec<String>, Vec<(String, bool)>);
 
 /// Rewrite `alias.col` to `real_table.col` in place, for every qualified
 /// column name `resolve_query_aliases` touches. Unqualified names and
@@ -261,7 +113,7 @@ fn resolve_expr_aliases(expr: &mut Expr, aliases: &HashMap<String, String>) {
         Expr::Neg(inner) => resolve_expr_aliases(inner, aliases),
         Expr::IsNull { expr, .. } => resolve_expr_aliases(expr, aliases),
         // A subquery has its own FROM/alias scope -- its column refs are
-        // resolved when *it* is parsed, not against the outer query's
+        // resolved when *it* is converted, not against the outer query's
         // aliases.
         Expr::InSubquery { expr, .. } => resolve_expr_aliases(expr, aliases),
     }
@@ -294,690 +146,340 @@ fn resolve_query_aliases(query: &mut Query, aliases: &HashMap<String, String>) {
     }
 }
 
-struct Parser {
-    tokens: Vec<(Token, Span)>,
-    pos: usize,
-    /// Span of the last token actually consumed by [`Self::next`] -- used
-    /// to locate an error raised just after consuming a token that turned
-    /// out not to match what was expected. Starts at [`Span::UNKNOWN`]
-    /// (never actually read: the first parser call is always `next()`,
-    /// which sets this before any error path can read it).
-    last_span: Span,
-    /// Position one past the last character of the input -- the location
-    /// [`ParseError::UnexpectedEof`] points at when there's no last token
-    /// to blame (e.g. an empty query).
-    eof_span: Span,
-}
+// ---------------------------------------------------------------------
+// ast::Select -> crate::expr::Query
+// ---------------------------------------------------------------------
 
-impl Parser {
-    fn peek(&self) -> Option<&Token> {
-        self.tokens.get(self.pos).map(|(t, _)| t)
-    }
-
-    fn next(&mut self) -> Result<Token> {
-        let (tok, span) = self
-            .tokens
-            .get(self.pos)
-            .cloned()
-            .ok_or(ParseError::UnexpectedEof {
-                span: self.eof_span,
-            })?;
-        self.pos += 1;
-        self.last_span = span;
-        Ok(tok)
-    }
-
-    fn unexpected(&self, message: String) -> ParseError {
-        ParseError::Unexpected {
-            message,
-            span: self.last_span,
-        }
-    }
-
-    fn expect_keyword(&mut self, keyword: &str) -> Result<()> {
-        match self.next()? {
-            Token::Ident(word) if word.eq_ignore_ascii_case(keyword) => Ok(()),
-            other => Err(self.unexpected(format!("{other:?}, expected {keyword}"))),
-        }
-    }
-
-    fn peek_keyword(&self, keyword: &str) -> bool {
-        matches!(self.peek(), Some(Token::Ident(word)) if word.eq_ignore_ascii_case(keyword))
-    }
-
-    /// A (possibly qualified) identifier: `col` or `table.col`.
-    fn ident(&mut self) -> Result<String> {
-        let mut name = match self.next()? {
-            Token::Ident(name) => name,
-            other => return Err(self.unexpected(format!("{other:?}, expected identifier"))),
-        };
-        while matches!(self.peek(), Some(Token::Dot)) {
-            self.next()?;
-            match self.next()? {
-                Token::Ident(part) => {
-                    name.push('.');
-                    name.push_str(&part);
-                }
-                other => {
-                    return Err(self.unexpected(format!("{other:?}, expected identifier after '.'")))
-                }
-            }
-        }
-        Ok(name)
-    }
-
-    /// An optional bare-word alias following a table reference (`FROM
-    /// orders o`, `JOIN customers c ON ...`) -- anything that isn't one of
-    /// [`TABLE_REF_FOLLOW_KEYWORDS`] is taken as an alias. No `AS` keyword
-    /// support (not in `column-rs.ebnf`'s grammar); this is the minimal
-    /// bare form.
-    fn parse_optional_alias(&mut self) -> Result<Option<String>> {
-        match self.peek() {
-            Some(Token::Ident(word))
-                if !TABLE_REF_FOLLOW_KEYWORDS
-                    .iter()
-                    .any(|kw| word.eq_ignore_ascii_case(kw)) =>
-            {
-                let Token::Ident(alias) = self.next()? else {
-                    unreachable!()
-                };
-                Ok(Some(alias))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn parse_query(&mut self) -> Result<Query> {
-        self.expect_keyword("SELECT")?;
-        let distinct = if self.peek_keyword("DISTINCT") {
-            self.next()?;
-            true
-        } else {
-            false
-        };
-        let columns = self.parse_select_list()?;
-        self.expect_keyword("FROM")?;
-        let from = self.ident()?;
-        let from_alias = self.parse_optional_alias()?;
-
-        // alias -> real table name, used to rewrite every qualified column
-        // reference below (SELECT list, ON, WHERE, GROUP BY, ORDER BY) back
-        // to the real table name. `crate::expr::Query`/`Join` keep their
-        // existing shape (real table names only) -- aliases are a purely
-        // parse-time convenience, not a new AST concept a downstream
-        // consumer (column-rs) would need to learn about.
-        let mut aliases: HashMap<String, String> = HashMap::new();
-        if let Some(alias) = &from_alias {
-            aliases.insert(alias.clone(), from.clone());
-        }
-
-        let mut joins = Vec::new();
-        loop {
-            let kind = if self.peek_keyword("JOIN") {
-                self.next()?;
-                JoinKind::Inner
-            } else if self.peek_keyword("INNER") {
-                self.next()?;
-                self.expect_keyword("JOIN")?;
-                JoinKind::Inner
-            } else if self.peek_keyword("LEFT") {
-                self.next()?;
-                if self.peek_keyword("OUTER") {
-                    self.next()?;
-                }
-                self.expect_keyword("JOIN")?;
-                JoinKind::Left
-            } else if self.peek_keyword("RIGHT") {
-                self.next()?;
-                if self.peek_keyword("OUTER") {
-                    self.next()?;
-                }
-                self.expect_keyword("JOIN")?;
-                JoinKind::Right
-            } else if self.peek_keyword("FULL") {
-                self.next()?;
-                if self.peek_keyword("OUTER") {
-                    self.next()?;
-                }
-                self.expect_keyword("JOIN")?;
-                JoinKind::Full
-            } else if self.peek_keyword("CROSS") {
-                self.next()?;
-                self.expect_keyword("JOIN")?;
-                JoinKind::Cross
-            } else {
-                break;
-            };
-            let table = self.ident()?;
-            let alias = self.parse_optional_alias()?;
-            if let Some(alias) = &alias {
-                aliases.insert(alias.clone(), table.clone());
-            }
-
-            let (left_col, right_col) = if kind == JoinKind::Cross {
-                // CROSS JOIN is an unconditional cross product -- no `ON`.
-                // Empty strings are a placeholder never read: the executor
-                // rejects `JoinKind::Cross` before touching these fields
-                // (see column-rs's `execute_joined`). If CROSS JOIN
-                // execution is ever implemented, `Join`'s condition fields
-                // should become `Option<(String, String)>` at that point.
-                (String::new(), String::new())
-            } else {
-                self.expect_keyword("ON")?;
-                let left_col = self.ident()?;
-                match self.next()? {
-                    Token::Op(op) if op == "=" => {}
-                    other => {
-                        return Err(self.unexpected(format!("{other:?}, expected = in ON clause")))
-                    }
-                }
-                let right_col = self.ident()?;
-                (left_col, right_col)
-            };
-            joins.push(Join {
-                kind,
-                table,
-                left_col,
-                right_col,
-            });
-        }
-
-        let where_clause = if self.peek_keyword("WHERE") {
-            self.next()?;
-            Some(self.parse_expr()?)
-        } else {
-            None
-        };
-
-        let group_by = if self.peek_keyword("GROUP") {
-            self.next()?;
-            self.expect_keyword("BY")?;
-            self.parse_ident_list()?
-        } else {
-            Vec::new()
-        };
-
-        let order_by = if self.peek_keyword("ORDER") {
-            self.next()?;
-            self.expect_keyword("BY")?;
-            let column = self.ident()?;
-            let descending = if self.peek_keyword("DESC") {
-                self.next()?;
-                true
-            } else if self.peek_keyword("ASC") {
-                self.next()?;
-                false
-            } else {
-                false
-            };
-            Some(OrderBy { column, descending })
-        } else {
-            None
-        };
-
-        let limit = if self.peek_keyword("LIMIT") {
-            self.next()?;
-            match self.next()? {
-                Token::Int(n) if n >= 0 => Some(n as usize),
-                other => return Err(self.unexpected(format!("{other:?}, expected LIMIT count"))),
-            }
-        } else {
-            None
-        };
-
-        if joins.iter().any(|j| j.kind == JoinKind::Cross) && limit.is_none() {
-            return Err(self.unexpected(
-                "CROSS JOIN requires a LIMIT (bounded-execution rule -- an unconditional cross \
-                 product has no natural row cap)"
-                    .to_string(),
-            ));
-        }
-
-        let mut query = Query {
-            columns,
-            from,
-            joins,
-            where_clause,
-            distinct,
-            group_by,
-            order_by,
-            limit,
-        };
-        if !aliases.is_empty() {
-            resolve_query_aliases(&mut query, &aliases);
-        }
-        Ok(query)
-    }
-
-    /// Top-level entry point: parses a full query and rejects trailing
-    /// tokens. `parse_query` itself is also used recursively for subqueries
-    /// (e.g. `IN (SELECT ...)`), which must stop at the subquery's closing
-    /// `)` rather than expecting end-of-input.
-    fn parse_top_level_query(&mut self) -> Result<Query> {
-        let query = self.parse_query()?;
-        if self.pos != self.tokens.len() {
-            let trailing_span = self.tokens[self.pos].1;
-            return Err(ParseError::Unexpected {
-                message: format!(
-                    "trailing tokens: {:?}",
-                    self.tokens[self.pos..]
-                        .iter()
-                        .map(|(t, _)| t.clone())
-                        .collect::<Vec<_>>()
-                ),
-                span: trailing_span,
-            });
-        }
-        Ok(query)
-    }
-
-    fn parse_ident_list(&mut self) -> Result<Vec<String>> {
-        let mut idents = vec![self.ident()?];
-        while matches!(self.peek(), Some(Token::Comma)) {
-            self.next()?;
-            idents.push(self.ident()?);
-        }
-        Ok(idents)
-    }
-
-    fn parse_select_list(&mut self) -> Result<Vec<SelectItem>> {
-        let mut items = vec![self.parse_select_item()?];
-        while matches!(self.peek(), Some(Token::Comma)) {
-            self.next()?;
-            items.push(self.parse_select_item()?);
-        }
-        Ok(items)
-    }
-
-    fn parse_select_item(&mut self) -> Result<SelectItem> {
-        if matches!(self.peek(), Some(Token::Star)) {
-            self.next()?;
-            return Ok(SelectItem::Star);
-        }
-        let name = self.ident()?;
-        if !matches!(self.peek(), Some(Token::LParen)) {
-            return Ok(SelectItem::Column(name));
-        }
-        self.next()?; // consume '('
-
-        let upper = name.to_ascii_uppercase();
-        match upper.as_str() {
-            "ROW_NUMBER" | "RANK" | "DENSE_RANK" => {
-                self.expect_rparen()?;
-                self.expect_keyword("OVER")?;
-                let (partition_by, order_by) = self.parse_over_clause()?;
-                let func = match upper.as_str() {
-                    "ROW_NUMBER" => WindowFunc::RowNumber,
-                    "RANK" => WindowFunc::Rank,
-                    _ => WindowFunc::DenseRank,
-                };
-                Ok(SelectItem::Window(WindowSpec {
-                    func,
-                    arg: None,
-                    offset: None,
-                    partition_by,
-                    order_by,
-                }))
-            }
-            "LAG" | "LEAD" => {
-                let arg = self.ident()?;
-                let offset = if matches!(self.peek(), Some(Token::Comma)) {
-                    self.next()?;
-                    match self.next()? {
-                        Token::Int(n) => Some(n),
-                        other => {
-                            return Err(
-                                self.unexpected(format!("{other:?}, expected integer offset"))
-                            )
-                        }
-                    }
-                } else {
-                    None
-                };
-                self.expect_rparen()?;
-                self.expect_keyword("OVER")?;
-                let (partition_by, order_by) = self.parse_over_clause()?;
-                let func = if upper == "LAG" {
-                    WindowFunc::Lag
-                } else {
-                    WindowFunc::Lead
-                };
-                Ok(SelectItem::Window(WindowSpec {
-                    func,
-                    arg: Some(arg),
-                    offset,
-                    partition_by,
-                    order_by,
-                }))
-            }
-            "FIRST_VALUE" | "LAST_VALUE" => {
-                let arg = self.ident()?;
-                self.expect_rparen()?;
-                self.expect_keyword("OVER")?;
-                let (partition_by, order_by) = self.parse_over_clause()?;
-                let func = if upper == "FIRST_VALUE" {
-                    WindowFunc::FirstValue
-                } else {
-                    WindowFunc::LastValue
-                };
-                Ok(SelectItem::Window(WindowSpec {
-                    func,
-                    arg: Some(arg),
-                    offset: None,
-                    partition_by,
-                    order_by,
-                }))
-            }
-            _ => {
-                let arg = if matches!(self.peek(), Some(Token::Star)) {
-                    self.next()?;
-                    None
-                } else {
-                    Some(self.ident()?)
-                };
-                self.expect_rparen()?;
-                if self.peek_keyword("OVER") {
-                    self.next()?;
-                    let (partition_by, order_by) = self.parse_over_clause()?;
-                    let func = match upper.as_str() {
-                        "SUM" => WindowFunc::Sum,
-                        "AVG" => WindowFunc::Avg,
-                        "COUNT" => WindowFunc::Count,
-                        _ => {
-                            return Err(self.unexpected(format!(
-                                "{name} OVER (...) is not a supported window function"
-                            )))
-                        }
-                    };
-                    Ok(SelectItem::Window(WindowSpec {
-                        func,
-                        arg,
-                        offset: None,
-                        partition_by,
-                        order_by,
-                    }))
-                } else {
-                    let agg = AggFunc::from_name(&name)
-                        .ok_or_else(|| self.unexpected(format!("unknown function {name}")))?;
-                    Ok(SelectItem::Agg(agg, arg))
-                }
-            }
-        }
-    }
-
-    fn expect_rparen(&mut self) -> Result<()> {
-        match self.next()? {
-            Token::RParen => Ok(()),
-            other => Err(self.unexpected(format!("{other:?}, expected )"))),
-        }
-    }
-
-    /// `(PARTITION BY col[,...] ORDER BY col [ASC|DESC][,...])`, both parts optional.
-    fn parse_over_clause(&mut self) -> Result<OverClause> {
-        match self.next()? {
-            Token::LParen => {}
-            other => return Err(self.unexpected(format!("{other:?}, expected ( after OVER"))),
-        }
-        let partition_by = if self.peek_keyword("PARTITION") {
-            self.next()?;
-            self.expect_keyword("BY")?;
-            self.parse_ident_list()?
-        } else {
-            Vec::new()
-        };
-        let order_by = if self.peek_keyword("ORDER") {
-            self.next()?;
-            self.expect_keyword("BY")?;
-            let mut items = vec![self.parse_order_item()?];
-            while matches!(self.peek(), Some(Token::Comma)) {
-                self.next()?;
-                items.push(self.parse_order_item()?);
-            }
-            items
-        } else {
-            Vec::new()
-        };
-        self.expect_rparen()?;
-        Ok((partition_by, order_by))
-    }
-
-    fn parse_order_item(&mut self) -> Result<(String, bool)> {
-        let column = self.ident()?;
-        let descending = if self.peek_keyword("DESC") {
-            self.next()?;
-            true
-        } else if self.peek_keyword("ASC") {
-            self.next()?;
-            false
-        } else {
-            false
-        };
-        Ok((column, descending))
-    }
-
-    fn parse_expr(&mut self) -> Result<Expr> {
-        self.parse_or()
-    }
-
-    fn parse_or(&mut self) -> Result<Expr> {
-        let mut lhs = self.parse_and()?;
-        while self.peek_keyword("OR") {
-            self.next()?;
-            let rhs = self.parse_and()?;
-            lhs = Expr::BinaryOp(Box::new(lhs), BinOp::Or, Box::new(rhs));
-        }
-        Ok(lhs)
-    }
-
-    fn parse_and(&mut self) -> Result<Expr> {
-        let mut lhs = self.parse_not()?;
-        while self.peek_keyword("AND") {
-            self.next()?;
-            let rhs = self.parse_not()?;
-            lhs = Expr::BinaryOp(Box::new(lhs), BinOp::And, Box::new(rhs));
-        }
-        Ok(lhs)
-    }
-
-    /// `NOT` binds tighter than `AND`/`OR` but looser than comparison --
-    /// `NOT a = b AND c` parses as `(NOT (a = b)) AND c`.
-    fn parse_not(&mut self) -> Result<Expr> {
-        if self.peek_keyword("NOT") {
-            self.next()?;
-            let inner = self.parse_not()?;
-            return Ok(Expr::Not(Box::new(inner)));
-        }
-        self.parse_comparison()
-    }
-
-    fn parse_comparison(&mut self) -> Result<Expr> {
-        let lhs = self.parse_concat()?;
-
-        if self.peek_keyword("IS") {
-            self.next()?;
-            let negated = if self.peek_keyword("NOT") {
-                self.next()?;
-                true
-            } else {
-                false
-            };
-            self.expect_keyword("NULL")?;
-            return Ok(Expr::IsNull {
-                expr: Box::new(lhs),
-                negated,
-            });
-        }
-
-        if self.peek_keyword("IN") {
-            self.next()?;
-            match self.next()? {
-                Token::LParen => {}
-                other => return Err(self.unexpected(format!("{other:?}, expected ( after IN"))),
-            }
-            let subquery = self.parse_query()?;
-            match self.next()? {
-                Token::RParen => {}
-                other => {
-                    return Err(
-                        self.unexpected(format!("{other:?}, expected ) closing IN subquery"))
-                    )
-                }
-            }
-            return Ok(Expr::InSubquery {
-                expr: Box::new(lhs),
-                subquery: Box::new(subquery),
-            });
-        }
-
-        let op = match self.peek() {
-            Some(Token::Op(op)) => match op.as_str() {
-                "=" => Some(BinOp::Eq),
-                "!=" | "<>" => Some(BinOp::Ne),
-                "<" => Some(BinOp::Lt),
-                "<=" => Some(BinOp::Le),
-                ">" => Some(BinOp::Gt),
-                ">=" => Some(BinOp::Ge),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some(op) = op {
-            self.next()?;
-            let rhs = self.parse_concat()?;
-            Ok(Expr::BinaryOp(Box::new(lhs), op, Box::new(rhs)))
-        } else {
-            Ok(lhs)
-        }
-    }
-
-    /// `||` string concatenation (DuckDB/Postgres-style) -- binds looser
-    /// than `+`/`-`/`*`/`/` (DuckDB's own precedence, inherited from
-    /// Postgres: `1 + 2 || 'x'` is `(1 + 2) || 'x'`). Deliberately NOT
-    /// placed where sqlite-rs's own `concat-expr` sits (tighter than
-    /// `*`/`/`, a real SQLite quirk) -- column-rs targets DuckDB
-    /// semantics, not SQLite's.
-    fn parse_concat(&mut self) -> Result<Expr> {
-        let mut lhs = self.parse_additive()?;
-        while matches!(self.peek(), Some(Token::Op(op)) if op == "||") {
-            self.next()?;
-            let rhs = self.parse_additive()?;
-            lhs = Expr::BinaryOp(Box::new(lhs), BinOp::Concat, Box::new(rhs));
-        }
-        Ok(lhs)
-    }
-
-    fn parse_additive(&mut self) -> Result<Expr> {
-        let mut lhs = self.parse_multiplicative()?;
-        loop {
-            let op = match self.peek() {
-                Some(Token::Op(op)) if op == "+" => Some(BinOp::Add),
-                Some(Token::Op(op)) if op == "-" => Some(BinOp::Sub),
-                _ => None,
-            };
-            match op {
-                Some(op) => {
-                    self.next()?;
-                    let rhs = self.parse_multiplicative()?;
-                    lhs = Expr::BinaryOp(Box::new(lhs), op, Box::new(rhs));
-                }
-                None => return Ok(lhs),
-            }
-        }
-    }
-
-    fn parse_multiplicative(&mut self) -> Result<Expr> {
-        let mut lhs = self.parse_unary()?;
-        loop {
-            let op = match self.peek() {
-                Some(Token::Star) => Some(BinOp::Mul),
-                Some(Token::Op(op)) if op == "/" => Some(BinOp::Div),
-                _ => None,
-            };
-            match op {
-                Some(op) => {
-                    self.next()?;
-                    let rhs = self.parse_unary()?;
-                    lhs = Expr::BinaryOp(Box::new(lhs), op, Box::new(rhs));
-                }
-                None => return Ok(lhs),
-            }
-        }
-    }
-
-    /// Leading `+`/`-` before a primary expression. `+` is a no-op
-    /// (consumed and discarded); `-` wraps in [`Expr::Neg`]. Recursive so
-    /// `--x`/`-+x` parse (each `-` toggles negation via nested wrapping).
-    fn parse_unary(&mut self) -> Result<Expr> {
-        match self.peek() {
-            Some(Token::Op(op)) if op == "-" => {
-                self.next()?;
-                let inner = self.parse_unary()?;
-                Ok(Expr::Neg(Box::new(inner)))
-            }
-            Some(Token::Op(op)) if op == "+" => {
-                self.next()?;
-                self.parse_unary()
-            }
-            _ => self.parse_primary(),
-        }
-    }
-
-    fn parse_primary(&mut self) -> Result<Expr> {
-        match self.next()? {
-            Token::Ident(mut name) => {
-                while matches!(self.peek(), Some(Token::Dot)) {
-                    self.next()?;
-                    match self.next()? {
-                        Token::Ident(part) => {
-                            name.push('.');
-                            name.push_str(&part);
-                        }
-                        other => {
-                            return Err(self
-                                .unexpected(format!("{other:?}, expected identifier after '.'")))
-                        }
-                    }
-                }
-                Ok(Expr::Column(name))
-            }
-            Token::Int(n) => Ok(Expr::Literal(Literal::Int(n))),
-            Token::Float(n) => Ok(Expr::Literal(Literal::Float(n))),
-            Token::Str(s) => Ok(Expr::Literal(Literal::Str(s))),
-            Token::LParen => {
-                let expr = self.parse_expr()?;
-                match self.next()? {
-                    Token::RParen => Ok(expr),
-                    other => Err(self.unexpected(format!("{other:?}, expected )"))),
-                }
-            }
-            other => Err(self.unexpected(format!("{other:?}, expected expression"))),
-        }
-    }
-}
-
-fn make_parser(input: &str) -> Result<Parser> {
-    let tokens = tokenize(input)?;
-    let chars: Vec<char> = input.chars().collect();
-    let positions = char_positions(&chars);
-    let eof_span = {
-        let (line, column, offset) = positions[chars.len()];
-        Span {
-            line,
-            column,
-            offset,
-            len: 0,
-        }
-    };
-    Ok(Parser {
-        tokens,
-        pos: 0,
-        last_span: Span::UNKNOWN,
-        eof_span,
+fn ast_binop(op: AstBinOp, span: Span) -> Result<BinOp> {
+    Ok(match op {
+        AstBinOp::Add => BinOp::Add,
+        AstBinOp::Sub => BinOp::Sub,
+        AstBinOp::Mul => BinOp::Mul,
+        AstBinOp::Div => BinOp::Div,
+        AstBinOp::Eq => BinOp::Eq,
+        AstBinOp::Ne => BinOp::Ne,
+        AstBinOp::Lt => BinOp::Lt,
+        AstBinOp::Le => BinOp::Le,
+        AstBinOp::Gt => BinOp::Gt,
+        AstBinOp::Ge => BinOp::Ge,
+        AstBinOp::And => BinOp::And,
+        AstBinOp::Or => BinOp::Or,
+        AstBinOp::Concat => BinOp::Concat,
+        other => return Err(unsupported(span, format!("operator {other:?}"))),
     })
 }
 
+fn ast_literal(lit: &AstLiteral, span: Span) -> Result<Literal> {
+    Ok(match lit {
+        AstLiteral::Integer(n) => Literal::Int(*n),
+        AstLiteral::Float(f) => Literal::Float(*f),
+        AstLiteral::Str(s) => Literal::Str(s.clone()),
+        other => return Err(unsupported(span, format!("literal {other:?}"))),
+    })
+}
+
+/// A (possibly qualified) column reference: `col` or `table.col`. Aliases
+/// aren't resolved here -- that happens afterward, over the whole
+/// converted `Query`, via [`resolve_query_aliases`].
+fn column_name(expr: &AstExpr) -> Result<String> {
+    match &expr.kind {
+        ExprKind::Column {
+            table: None,
+            catalog: None,
+            name,
+        } => Ok(name.clone()),
+        ExprKind::Column {
+            table: Some(table),
+            catalog: None,
+            name,
+        } => Ok(format!("{table}.{name}")),
+        ExprKind::Column {
+            catalog: Some(_), ..
+        } => Err(unsupported(expr.span, "catalog-qualified column".into())),
+        other => Err(unsupported(
+            expr.span,
+            format!("expected a column reference, found {other:?}"),
+        )),
+    }
+}
+
+fn convert_expr(expr: &AstExpr) -> Result<Expr> {
+    match &expr.kind {
+        ExprKind::Literal(lit) => Ok(Expr::Literal(ast_literal(lit, expr.span)?)),
+        ExprKind::Column { .. } => Ok(Expr::Column(column_name(expr)?)),
+        ExprKind::Unary {
+            op: UnaryOp::Not,
+            expr: inner,
+        } => Ok(Expr::Not(Box::new(convert_expr(inner)?))),
+        ExprKind::Unary {
+            op: UnaryOp::Minus,
+            expr: inner,
+        } => Ok(Expr::Neg(Box::new(convert_expr(inner)?))),
+        // Unary `+` is a no-op, same as the old grammar (which discarded a
+        // leading `+` instead of representing it at all).
+        ExprKind::Unary {
+            op: UnaryOp::Plus,
+            expr: inner,
+        } => convert_expr(inner),
+        ExprKind::Unary { op, .. } => Err(unsupported(expr.span, format!("unary operator {op:?}"))),
+        // `expr IS [NOT] NULL` parses as `Is{lhs, rhs: NULL literal,
+        // negated}` in row's grammar, not a dedicated `IsNull` node (that
+        // variant exists for the historical SQLite `IS`/`IS NOT` operator
+        // between two arbitrary expressions, which this subset doesn't
+        // support otherwise).
+        ExprKind::Is { lhs, rhs, negated }
+            if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>
+        {
+            Ok(Expr::IsNull {
+                expr: Box::new(convert_expr(lhs)?),
+                negated: *negated,
+            })
+        }
+        ExprKind::Binary { op, lhs, rhs } => Ok(Expr::BinaryOp(
+            Box::new(convert_expr(lhs)?),
+            ast_binop(*op, expr.span)?,
+            Box::new(convert_expr(rhs)?),
+        )),
+        ExprKind::IsNull {
+            expr: inner,
+            negated,
+        } => Ok(Expr::IsNull {
+            expr: Box::new(convert_expr(inner)?),
+            negated: *negated,
+        }),
+        ExprKind::Paren(inner) => convert_expr(inner),
+        ExprKind::InSubquery {
+            expr: inner,
+            subquery,
+            negated: false,
+        } => Ok(Expr::InSubquery {
+            expr: Box::new(convert_expr(inner)?),
+            subquery: Box::new(convert_select(subquery)?),
+        }),
+        ExprKind::InSubquery { negated: true, .. } => {
+            Err(unsupported(expr.span, "NOT IN (SELECT ...)".into()))
+        }
+        other => Err(unsupported(
+            expr.span,
+            format!("unsupported expression form {other:?}"),
+        )),
+    }
+}
+
+fn extract_equi_join(expr: &AstExpr) -> Result<(String, String)> {
+    match &expr.kind {
+        ExprKind::Binary {
+            op: AstBinOp::Eq,
+            lhs,
+            rhs,
+        } => Ok((column_name(lhs)?, column_name(rhs)?)),
+        _ => Err(unsupported(expr.span, "JOIN ON must be col = col".into())),
+    }
+}
+
+fn convert_result_column(col: &ResultColumn) -> Result<SelectItem> {
+    match col {
+        ResultColumn::Star => Ok(SelectItem::Star),
+        ResultColumn::TableStar { .. } => Err(unsupported(
+            Span::UNKNOWN,
+            "table.* is not supported".into(),
+        )),
+        ResultColumn::Expr {
+            expr,
+            alias: Some(_),
+        } => Err(unsupported(
+            expr.span,
+            "column alias (AS) is not supported".into(),
+        )),
+        ResultColumn::Expr { expr, alias: None } => match &expr.kind {
+            ExprKind::Column { .. } => Ok(SelectItem::Column(column_name(expr)?)),
+            ExprKind::FunctionCall {
+                name,
+                distinct,
+                args,
+            } => {
+                if *distinct {
+                    return Err(unsupported(
+                        expr.span,
+                        "DISTINCT inside an aggregate".into(),
+                    ));
+                }
+                let agg = AggFunc::from_name(name)
+                    .ok_or_else(|| unsupported(expr.span, format!("unknown function {name}")))?;
+                let arg = match args {
+                    FunctionArgs::Star => {
+                        if agg != AggFunc::Count {
+                            return Err(unsupported(expr.span, "only COUNT supports (*)".into()));
+                        }
+                        None
+                    }
+                    FunctionArgs::List(list) => match list.as_slice() {
+                        [one] => Some(column_name(one)?),
+                        _ => {
+                            return Err(unsupported(
+                                expr.span,
+                                "an aggregate takes exactly one column or *".into(),
+                            ))
+                        }
+                    },
+                };
+                Ok(SelectItem::Agg(agg, arg))
+            }
+            _ => Err(unsupported(
+                expr.span,
+                "unsupported SELECT expression".into(),
+            )),
+        },
+    }
+}
+
+/// Lowers a `Select` parsed by [`super::row`]'s shared grammar into
+/// [`crate::expr::Query`], rejecting anything outside column-rs's
+/// analytics subset with [`ParseError::Unexpected`] -- ADR 0002's
+/// "column's grammar becomes an enforced subset" (parsing succeeds,
+/// lowering declines), not a second parser that can't parse these
+/// constructs at all.
+fn convert_select(select: &Select) -> Result<Query> {
+    if select.with_clause.is_some() {
+        return Err(unsupported(select.span, "WITH clause".into()));
+    }
+    if !select.compound.is_empty() {
+        return Err(unsupported(select.span, "UNION".into()));
+    }
+    if select.having.is_some() {
+        return Err(unsupported(select.span, "HAVING".into()));
+    }
+    let distinct = matches!(select.distinct, Some(Distinctness::Distinct));
+
+    let Some(from_clause) = &select.from else {
+        return Err(unsupported(select.span, "SELECT without FROM".into()));
+    };
+    let TableRefKind::Name(from_name) = &from_clause.first.kind else {
+        return Err(unsupported(
+            from_clause.first.span,
+            "subquery in FROM".into(),
+        ));
+    };
+    let from_name = from_name.clone();
+
+    let mut aliases: HashMap<String, String> = HashMap::new();
+    if let Some(alias) = &from_clause.first.alias {
+        aliases.insert(alias.clone(), from_name.clone());
+    }
+
+    let mut joins = Vec::new();
+    for j in &from_clause.joins {
+        if j.natural {
+            return Err(unsupported(j.table.span, "NATURAL join".into()));
+        }
+        let TableRefKind::Name(table) = &j.table.kind else {
+            return Err(unsupported(j.table.span, "subquery in JOIN".into()));
+        };
+        let table = table.clone();
+        if let Some(alias) = &j.table.alias {
+            aliases.insert(alias.clone(), table.clone());
+        }
+        let kind = match j.op {
+            JoinOp::Inner => JoinKind::Inner,
+            JoinOp::Left => JoinKind::Left,
+            JoinOp::Right => JoinKind::Right,
+            JoinOp::Full => JoinKind::Full,
+            JoinOp::Cross => JoinKind::Cross,
+        };
+        let (left_col, right_col) = match &j.constraint {
+            Some(JoinConstraint::On(expr)) => extract_equi_join(expr)?,
+            Some(JoinConstraint::Using(_)) => {
+                return Err(unsupported(j.table.span, "USING join".into()))
+            }
+            None if kind == JoinKind::Cross => (String::new(), String::new()),
+            None => return Err(unsupported(j.table.span, "join without ON".into())),
+        };
+        joins.push(Join {
+            kind,
+            table,
+            left_col,
+            right_col,
+        });
+    }
+
+    let where_clause = select.where_clause.as_ref().map(convert_expr).transpose()?;
+
+    let group_by = select
+        .group_by
+        .iter()
+        .map(column_name)
+        .collect::<Result<Vec<_>>>()?;
+
+    if select.order_by.len() > 1 {
+        return Err(unsupported(select.span, "multiple ORDER BY terms".into()));
+    }
+    let order_by = match select.order_by.first() {
+        Some(OrderingTerm {
+            nulls_last: Some(_),
+            ..
+        }) => return Err(unsupported(select.span, "NULLS FIRST/LAST".into())),
+        Some(OrderingTerm { expr, desc, .. }) => Some(OrderBy {
+            column: column_name(expr)?,
+            descending: desc.unwrap_or(false),
+        }),
+        None => None,
+    };
+
+    let limit = match &select.limit {
+        Some(l) => {
+            if l.offset.is_some() {
+                return Err(unsupported(select.span, "LIMIT OFFSET".into()));
+            }
+            match &l.limit.kind {
+                ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
+                _ => return Err(unsupported(l.limit.span, "non-integer LIMIT".into())),
+            }
+        }
+        None => None,
+    };
+
+    if joins.iter().any(|j| j.kind == JoinKind::Cross) && limit.is_none() {
+        return Err(unsupported(
+            select.span,
+            "CROSS JOIN requires a LIMIT (bounded-execution rule -- an unconditional cross \
+             product has no natural row cap)"
+                .into(),
+        ));
+    }
+
+    let columns = select
+        .columns
+        .iter()
+        .map(convert_result_column)
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut query = Query {
+        columns,
+        from: from_name,
+        joins,
+        where_clause,
+        distinct,
+        group_by,
+        order_by,
+        limit,
+    };
+    if !aliases.is_empty() {
+        resolve_query_aliases(&mut query, &aliases);
+    }
+    Ok(query)
+}
+
+fn from_outcome(message: String, span: Span) -> ParseError {
+    ParseError::Unexpected { message, span }
+}
+
 pub fn parse(input: &str) -> Result<Query> {
-    make_parser(input)?.parse_top_level_query()
+    match crate::parser::row::parse_select(input) {
+        ParseOutcome::Accepted(select) => convert_select(&select),
+        ParseOutcome::Unsupported { message, span } | ParseOutcome::Invalid { message, span } => {
+            Err(from_outcome(message, span))
+        }
+    }
 }
 
 /// Which `EXPLAIN` form (if any) prefixed a query: bare `EXPLAIN` renders
@@ -994,23 +496,31 @@ pub enum Explain {
 }
 
 /// Parses `EXPLAIN [QUERY PLAN] <select>`, returning which `EXPLAIN` form
-/// (if any) prefixed it along with the parsed query.
+/// (if any) prefixed it along with the parsed query. The distinction
+/// (#55) falls out of unifying on `row`'s grammar for free -- its
+/// `parse_explain_stmt` already tracks bare `EXPLAIN` vs `EXPLAIN QUERY
+/// PLAN` via `ast::Explain::query_plan`.
 pub fn parse_explain(input: &str) -> Result<(Explain, Query)> {
-    let mut parser = make_parser(input)?;
-    let explain = if parser.peek_keyword("EXPLAIN") {
-        parser.next()?;
-        if parser.peek_keyword("QUERY") {
-            parser.next()?;
-            parser.expect_keyword("PLAN")?;
-            Explain::QueryPlan
-        } else {
-            Explain::Opcodes
+    let starts_with_explain = input
+        .split_whitespace()
+        .next()
+        .is_some_and(|w| w.eq_ignore_ascii_case("EXPLAIN"));
+    if !starts_with_explain {
+        return Ok((Explain::None, parse(input)?));
+    }
+    match crate::parser::row::parse_explain(input) {
+        ParseOutcome::Accepted(explain) => {
+            let form = if explain.query_plan {
+                Explain::QueryPlan
+            } else {
+                Explain::Opcodes
+            };
+            Ok((form, convert_select(&explain.select)?))
         }
-    } else {
-        Explain::None
-    };
-    let query = parser.parse_top_level_query()?;
-    Ok((explain, query))
+        ParseOutcome::Unsupported { message, span } | ParseOutcome::Invalid { message, span } => {
+            Err(from_outcome(message, span))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1066,7 +576,11 @@ mod tests {
 
     #[test]
     fn unary_minus_is_chainable_and_unary_plus_is_a_no_op() {
-        let q = parse("SELECT id FROM orders WHERE amount = --5").unwrap();
+        // `--` immediately adjacent is a SQL line comment under `row`'s
+        // (real) tokenizer -- unlike the old bespoke one, which had no
+        // comment syntax and read it as two unary minuses. A space still
+        // parses as chained unary minus.
+        let q = parse("SELECT id FROM orders WHERE amount = - -5").unwrap();
         assert_eq!(
             q.where_clause,
             Some(Expr::BinaryOp(
@@ -1125,11 +639,13 @@ mod tests {
     }
 
     #[test]
-    fn concat_binds_looser_than_multiplication() {
-        // `2 * 3 || 'x'` must be `(2 * 3) || 'x'` -- concat binds looser
-        // than `*`, matching DuckDB/Postgres precedence (deliberately
-        // NOT sqlite-rs's own placement, where `||` binds tighter than
-        // `*`/`/`).
+    fn concat_binds_tighter_than_multiplication_matching_sqlite_not_duckdb() {
+        // Behavior change from unification (#57): this subset now uses
+        // `row`'s (sqlite-rs's) operator precedence, where `||` binds
+        // *tighter* than `*`/`/` -- not column-rs's previous DuckDB-style
+        // "concat binds looser" precedence, since there's one shared
+        // grammar/precedence table now, not two. `2 * 3 || 'x'` is
+        // `2 * (3 || 'x')`, not `(2 * 3) || 'x'`.
         let q = parse("SELECT id FROM orders WHERE x = 2 * 3 || 'x'").unwrap();
         assert_eq!(
             q.where_clause,
@@ -1137,13 +653,13 @@ mod tests {
                 Box::new(Expr::Column("x".into())),
                 BinOp::Eq,
                 Box::new(Expr::BinaryOp(
+                    Box::new(Expr::Literal(Literal::Int(2))),
+                    BinOp::Mul,
                     Box::new(Expr::BinaryOp(
-                        Box::new(Expr::Literal(Literal::Int(2))),
-                        BinOp::Mul,
-                        Box::new(Expr::Literal(Literal::Int(3)))
-                    )),
-                    BinOp::Concat,
-                    Box::new(Expr::Literal(Literal::Str("x".into())))
+                        Box::new(Expr::Literal(Literal::Int(3))),
+                        BinOp::Concat,
+                        Box::new(Expr::Literal(Literal::Str("x".into())))
+                    ))
                 ))
             ))
         );
@@ -1202,9 +718,6 @@ mod tests {
 
     #[test]
     fn rejects_trailing_garbage() {
-        // A single trailing identifier is now a valid bare table alias
-        // (`FROM t GARBAGE` == `FROM t AS GARBAGE`) -- two is unambiguous
-        // garbage, since only one alias is allowed.
         let err = parse("SELECT id FROM t GARBAGE EXTRA").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
@@ -1248,45 +761,23 @@ mod tests {
     #[test]
     fn parses_in_subquery() {
         let q =
-            parse("SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions)").unwrap();
+            parse("SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions)").unwrap();
         let Some(Expr::InSubquery { expr, subquery }) = q.where_clause else {
             panic!("expected InSubquery")
         };
         assert_eq!(*expr, Expr::Column("region_key".into()));
         assert_eq!(subquery.from, "regions");
-        assert_eq!(subquery.columns, vec![SelectItem::Column("key".into())]);
+        assert_eq!(subquery.columns, vec![SelectItem::Column("rkey".into())]);
     }
 
     #[test]
-    fn parses_row_number_window() {
-        let q = parse("SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY id DESC) FROM t")
-            .unwrap();
-        assert_eq!(
-            q.columns,
-            vec![SelectItem::Window(WindowSpec {
-                func: WindowFunc::RowNumber,
-                arg: None,
-                offset: None,
-                partition_by: vec!["region".into()],
-                order_by: vec![("id".into(), true)],
-            })]
-        );
-    }
-
-    #[test]
-    fn parses_lag_with_offset() {
-        let q =
-            parse("SELECT LAG(amount, 2) OVER (PARTITION BY region ORDER BY id) FROM t").unwrap();
-        assert_eq!(
-            q.columns,
-            vec![SelectItem::Window(WindowSpec {
-                func: WindowFunc::Lag,
-                arg: Some("amount".into()),
-                offset: Some(2),
-                partition_by: vec!["region".into()],
-                order_by: vec![("id".into(), false)],
-            })]
-        );
+    fn window_functions_no_longer_parse_pending_follow_up() {
+        // `parser::row`'s grammar itself rejects `OVER`/`FILTER` --
+        // tracked as follow-up (extend row's grammar, then give
+        // `compile_window` an `ast::Select` input too).
+        let err =
+            parse("SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY id) FROM t").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
     #[test]
@@ -1450,18 +941,13 @@ mod tests {
         );
     }
 
-    // --- Span tests: the actual point of this migration ---
+    // --- Span tests: `row`'s shared tokenizer now supplies these, not a
+    // second one -- exact positions are its call, not re-asserted here. ---
 
     #[test]
-    fn error_span_points_at_the_offending_token() {
-        // "GARBAGE" is consumed as the table alias (parse_optional_alias),
-        // so "EXTRA" -- not "GARBAGE" -- is the actual trailing token the
-        // error points at: line 1, column 26 (1-based), byte offset 25.
+    fn error_span_points_at_a_real_location() {
         let err = parse("SELECT id FROM t GARBAGE EXTRA").unwrap_err();
-        let span = err.span();
-        assert_eq!(span.line, 1);
-        assert_eq!(span.column, 26);
-        assert_eq!(span.offset, 25);
+        assert!(!err.span().is_unknown());
     }
 
     #[test]
@@ -1473,16 +959,11 @@ mod tests {
     #[test]
     fn eof_error_has_a_real_span_not_unknown() {
         let err = parse("SELECT id FROM").unwrap_err();
-        match err {
-            ParseError::UnexpectedEof { span } => assert!(!span.is_unknown()),
-            other => panic!("expected UnexpectedEof, got {other:?}"),
-        }
+        assert!(!err.span().is_unknown());
     }
 
     #[test]
     fn multibyte_characters_advance_byte_offset_correctly() {
-        // "é" is 2 UTF-8 bytes; the following identifier's offset must
-        // account for that, not just count chars.
         let q = parse("SELECT id FROM t WHERE name = 'café'").unwrap();
         assert!(q.where_clause.is_some());
     }

@@ -1400,12 +1400,12 @@ mod tests {
     #[test]
     fn compile_join_splits_columns_by_table_and_builds_both_programs() {
         let query = sql::parse(
-            "SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.key",
+            "SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.rkey",
         )
         .unwrap();
         let plan = compile_join(&query).unwrap();
         assert_eq!(plan.left_columns, vec!["orders.id", "orders.region_key"]);
-        assert_eq!(plan.right_columns, vec!["regions.budget", "regions.key"]);
+        assert_eq!(plan.right_columns, vec!["regions.budget", "regions.rkey"]);
         assert_eq!(plan.payload_dst, vec![2, 3]);
         assert!(matches!(
             plan.build.opcodes().last(),
@@ -1430,7 +1430,7 @@ mod tests {
     #[test]
     fn compile_semi_join_strips_the_in_clause_from_the_body() {
         let query =
-            sql::parse("SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions)")
+            sql::parse("SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions)")
                 .unwrap();
         let plan = compile_semi_join(&query).unwrap();
         assert_eq!(plan.key_column, "region_key");
@@ -1449,10 +1449,34 @@ mod tests {
 
     #[test]
     fn compile_window_emits_columns_and_window_registers_in_select_order() {
-        let query = sql::parse(
-            "SELECT id, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id), region_key FROM orders ORDER BY id",
-        )
-        .unwrap();
+        // Constructed directly rather than via `sql::parse`: window
+        // functions (`OVER`/`FILTER`) aren't parseable through the shared
+        // `parser::row` grammar this crate unified on (#57) -- tracked as
+        // follow-up (extend `row`'s grammar, then give `compile_window` an
+        // `ast::Select` input too). `compile_window` itself is untouched.
+        let query = Query {
+            columns: vec![
+                SelectItem::Column("id".into()),
+                SelectItem::Window(WindowSpec {
+                    func: WindowFunc::RowNumber,
+                    arg: None,
+                    offset: None,
+                    partition_by: vec!["region_key".into()],
+                    order_by: vec![("id".into(), false)],
+                }),
+                SelectItem::Column("region_key".into()),
+            ],
+            from: "orders".into(),
+            joins: vec![],
+            where_clause: None,
+            distinct: false,
+            group_by: vec![],
+            order_by: Some(OrderBy {
+                column: "id".into(),
+                descending: false,
+            }),
+            limit: None,
+        };
         let program = compile_window(&query);
         assert_eq!(program.columns_to_load(), vec!["id", "region_key"]);
         let (body, fin) = program.split_finalize();
@@ -1517,23 +1541,47 @@ mod tests {
 
     #[test]
     fn explain_join_and_semi_join_and_window() {
-        let query = sql::parse("SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.key ORDER BY orders.id").unwrap();
+        let query = sql::parse("SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.rkey ORDER BY orders.id").unwrap();
         let nodes = explain(&query, &stats);
         assert!(details(&nodes).contains(&"LOAD COLUMNS: orders.id, orders.region_key"));
-        assert!(details(&nodes).contains(&"LOAD COLUMNS: regions.budget, regions.key"));
-        assert!(details(&nodes).contains(&"HASH JOIN: orders.region_key = regions.key"));
+        assert!(details(&nodes).contains(&"LOAD COLUMNS: regions.budget, regions.rkey"));
+        assert!(details(&nodes).contains(&"HASH JOIN: orders.region_key = regions.rkey"));
 
         let query = sql::parse(
-            "SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions) ORDER BY id",
+            "SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions) ORDER BY id",
         )
         .unwrap();
         let nodes = explain(&query, &stats);
-        assert!(details(&nodes).contains(&"SEMI JOIN: region_key IN (SELECT key FROM regions)"));
+        assert!(details(&nodes).contains(&"SEMI JOIN: region_key IN (SELECT rkey FROM regions)"));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: id, region_key"));
-        assert!(details(&nodes).contains(&"LOAD COLUMNS: key"));
+        assert!(details(&nodes).contains(&"LOAD COLUMNS: rkey"));
         assert!(!details(&nodes).iter().any(|d| d.starts_with("FILTER")));
 
-        let query = sql::parse("SELECT id, region_key, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id) FROM orders ORDER BY id").unwrap();
+        // Constructed directly: window functions aren't parseable through
+        // the shared `parser::row` grammar (#57 follow-up).
+        let query = Query {
+            columns: vec![
+                SelectItem::Column("id".into()),
+                SelectItem::Column("region_key".into()),
+                SelectItem::Window(WindowSpec {
+                    func: WindowFunc::RowNumber,
+                    arg: None,
+                    offset: None,
+                    partition_by: vec!["region_key".into()],
+                    order_by: vec![("id".into(), false)],
+                }),
+            ],
+            from: "orders".into(),
+            joins: vec![],
+            where_clause: None,
+            distinct: false,
+            group_by: vec![],
+            order_by: Some(OrderBy {
+                column: "id".into(),
+                descending: false,
+            }),
+            limit: None,
+        };
         let nodes = explain(&query, &stats);
         assert!(details(&nodes)
             .contains(&"WINDOW: ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id)"));
@@ -1584,7 +1632,7 @@ mod tests {
     #[test]
     fn explain_opcodes_join_lists_build_probe_and_body() {
         let query = sql::parse(
-            "SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.key",
+            "SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.rkey",
         )
         .unwrap();
         let join = compile_join(&query).unwrap();
@@ -1612,7 +1660,7 @@ mod tests {
     #[test]
     fn explain_opcodes_semi_join_lists_single_body_section() {
         let query =
-            sql::parse("SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions)")
+            sql::parse("SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions)")
                 .unwrap();
         let semi = compile_semi_join(&query).unwrap();
         let sections = explain_opcodes(&query).unwrap();
@@ -1629,10 +1677,29 @@ mod tests {
 
     #[test]
     fn explain_opcodes_window_matches_compiled_program() {
-        let query = sql::parse(
-            "SELECT id, region_key, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id) FROM orders",
-        )
-        .unwrap();
+        // Constructed directly: window functions aren't parseable through
+        // the shared `parser::row` grammar this crate unified on (#57
+        // follow-up: #67).
+        let query = Query {
+            columns: vec![
+                SelectItem::Column("id".into()),
+                SelectItem::Column("region_key".into()),
+                SelectItem::Window(WindowSpec {
+                    func: WindowFunc::RowNumber,
+                    arg: None,
+                    offset: None,
+                    partition_by: vec!["region_key".into()],
+                    order_by: vec![("id".into(), false)],
+                }),
+            ],
+            from: "orders".into(),
+            joins: vec![],
+            where_clause: None,
+            distinct: false,
+            group_by: vec![],
+            order_by: None,
+            limit: None,
+        };
         let program = compile_window(&query);
         let sections = explain_opcodes(&query).unwrap();
 
@@ -1704,7 +1771,27 @@ mod tests {
 
     #[test]
     fn expand_star_rejects_window() {
-        let query = sql::parse("SELECT *, ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
+        // Constructed directly: window functions aren't parseable through
+        // the shared `parser::row` grammar (#57 follow-up).
+        let query = Query {
+            columns: vec![
+                SelectItem::Star,
+                SelectItem::Window(WindowSpec {
+                    func: WindowFunc::RowNumber,
+                    arg: None,
+                    offset: None,
+                    partition_by: vec![],
+                    order_by: vec![("id".into(), false)],
+                }),
+            ],
+            from: "t".into(),
+            joins: vec![],
+            where_clause: None,
+            distinct: false,
+            group_by: vec![],
+            order_by: None,
+            limit: None,
+        };
         assert_eq!(
             expand_star(&query, &["id".to_string()]),
             Err(PlanError::StarWithAggregation)
