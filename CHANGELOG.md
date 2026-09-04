@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.23.0] - 2026-09-04
+
+### Added
+
+- **`vm::row`'s scalar function set, first slice** (#64, follow-up to #62/#18). Ports sqlite-rs's `vdbe::functions` dispatch pattern into `vm::row::functions`: `abs`/`length`/`upper`/`lower`/`coalesce`/`ifnull`/`nullif`/`typeof`, wired to `Opcode::Function` (reusing `AggFinal`'s `P4::Str("name(arity)")` descriptor convention). `like`/`glob` and the `substr`/`replace`/`trim` family remain deferred.
+
 ## [0.22.0] - 2026-09-04
 
 ### Added
