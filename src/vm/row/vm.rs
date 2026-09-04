@@ -22,6 +22,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 
 use super::affinity::{apply_affinity, Affinity};
+use super::aggregate::{self, AggState};
 use super::cast::cast_to;
 use super::coerce;
 use super::compare::compare;
@@ -162,13 +163,15 @@ pub(crate) fn is_falsy(v: &Value) -> bool {
     }
 }
 
-/// The VM's mutable execution state: a register file of `Value` cells
-/// and a disjoint cursor-slot table, plus accumulated output rows and
-/// `Once`'s one-shot-guard bookkeeping.
+/// The VM's mutable execution state: a register file of `Value` cells,
+/// a disjoint cursor-slot table, a disjoint aggregate-context slot
+/// table (`AggStep`/`AggFinal`'s `p1`, same shape as `cursors`), plus
+/// accumulated output rows and `Once`'s one-shot-guard bookkeeping.
 #[derive(Default)]
 pub struct Vm {
     registers: Vec<Value>,
     cursors: Vec<Option<Box<dyn Cursor>>>,
+    agg_contexts: Vec<Option<AggState>>,
     rows: Vec<Vec<Value>>,
     once_fired: HashSet<usize>,
     params: Vec<Value>,
@@ -266,6 +269,43 @@ impl Vm {
             .get_mut(idx)
             .and_then(Option::as_mut)
             .ok_or(ExecError::CursorNotOpen { slot })
+    }
+
+    /// Reads aggregate-context slot `slot`. `None` if no `AggStep` has
+    /// run for this slot yet (or the group is empty) -- distinct from
+    /// `cursor`'s error-on-unopened behavior, since an unaggregated
+    /// slot is a legitimate zero-row state, not a malformed program.
+    fn agg_context(&self, slot: i32) -> Result<Option<&AggState>, ExecError> {
+        let idx = Self::index("agg context read", slot)?;
+        Ok(self.agg_contexts.get(idx).and_then(Option::as_ref))
+    }
+
+    /// Writes aggregate-context slot `slot`, growing the table with
+    /// empty filler as needed -- mirrors `open_cursor`'s growth policy,
+    /// into the disjoint `agg_contexts` storage.
+    fn set_agg_context(&mut self, slot: i32, value: AggState) -> Result<(), ExecError> {
+        let idx = Self::index("agg context write", slot)?;
+        if idx >= self.agg_contexts.len() {
+            self.agg_contexts
+                .resize_with(idx.saturating_add(1), || None);
+        }
+        if let Some(cell) = self.agg_contexts.get_mut(idx) {
+            *cell = Some(value);
+        }
+        Ok(())
+    }
+
+    /// Clears aggregate-context slot `slot` back to `None` -- used by
+    /// `AggFinal` so a slot's leftover accumulator from one invocation
+    /// can't leak into a later invocation that skips `AggStep` entirely
+    /// (a zero-row group, or a correlated aggregate subquery re-run
+    /// once per outer row).
+    fn clear_agg_context(&mut self, slot: i32) -> Result<(), ExecError> {
+        let idx = Self::index("agg context clear", slot)?;
+        if let Some(cell) = self.agg_contexts.get_mut(idx) {
+            *cell = None;
+        }
+        Ok(())
     }
 
     /// Appends `row` to the set of rows produced so far.
@@ -410,6 +450,20 @@ fn try_to_integer(v: &Value) -> Option<i64> {
         Value::Text(s) => s.trim().parse::<i64>().ok(),
         _ => None,
     }
+}
+
+/// Parses a `"name(arity)"` descriptor (e.g. `"count(0)"`,
+/// `"sum(1)"`) into its parts, used by `AggFinal`'s `p4`.
+fn parse_function_descriptor(descriptor: &str) -> Option<(&str, usize)> {
+    let open = descriptor.find('(')?;
+    if !descriptor.ends_with(')') {
+        return None;
+    }
+    let name = descriptor.get(..open)?;
+    let inner_start = open.checked_add(1)?;
+    let inner_end = descriptor.len().checked_sub(1)?;
+    let arity: usize = descriptor.get(inner_start..inner_end)?.parse().ok()?;
+    Some((name, arity))
 }
 
 /// Executes one instruction against `vm`, returning where control flow
@@ -738,6 +792,72 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     reason: "cursor slot does not support insertion".to_string(),
                 });
             }
+            Ok(Step::Next)
+        }
+
+        Opcode::AggStep => {
+            let (name, arity, collation) = match &instr.p4 {
+                P4::AggFunc {
+                    name,
+                    arity,
+                    collation,
+                } => (name.as_str(), *arity, *collation),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "AggStep",
+                        reason: format!("expected an AggFunc P4, got {other:?}"),
+                    })
+                }
+            };
+            let mut args = Vec::with_capacity(arity);
+            for i in 0..arity {
+                let reg = instr
+                    .p2
+                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+                    .ok_or(ExecError::RegisterOutOfRange {
+                        opcode: "AggStep",
+                        index: instr.p2,
+                    })?;
+                args.push(vm.register(reg)?.clone());
+            }
+            let current = if instr.p5 == 0 {
+                vm.agg_context(instr.p1)?.cloned()
+            } else {
+                None
+            };
+            let updated = aggregate::step(name, current, &args, collation).map_err(|e| {
+                ExecError::MalformedInstruction {
+                    opcode: "AggStep",
+                    reason: e.to_string(),
+                }
+            })?;
+            vm.set_agg_context(instr.p1, updated)?;
+            Ok(Step::Next)
+        }
+        Opcode::AggFinal => {
+            let descriptor = match &instr.p4 {
+                P4::Str(s) => s.as_str(),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "AggFinal",
+                        reason: format!("expected a \"name(arity)\" string P4, got {other:?}"),
+                    })
+                }
+            };
+            let (name, _arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
+                ExecError::MalformedInstruction {
+                    opcode: "AggFinal",
+                    reason: format!("malformed aggregate descriptor {descriptor:?}"),
+                }
+            })?;
+            let state = vm.agg_context(instr.p1)?;
+            let result =
+                aggregate::finalize(name, state).map_err(|e| ExecError::MalformedInstruction {
+                    opcode: "AggFinal",
+                    reason: e.to_string(),
+                })?;
+            vm.set_register(instr.p3, result)?;
+            vm.clear_agg_context(instr.p1)?;
             Ok(Step::Next)
         }
 
@@ -1111,5 +1231,72 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn count_and_sum_over_an_ephemeral_table_scan() {
+        // MakeRecord/Insert three rows (10, 20, 30), then AggStep
+        // COUNT(*)/SUM(x) over a Rewind/Next scan, AggFinal, ResultRow.
+        let mut vm = Vm::new();
+        let count_p4 = || P4::AggFunc {
+            name: "count".to_string(),
+            arity: 0,
+            collation: Collation::Binary,
+        };
+        let sum_p4 = || P4::AggFunc {
+            name: "sum".to_string(),
+            arity: 1,
+            collation: Collation::Binary,
+        };
+        let program = Program::new(vec![
+            /* 0 */ Instruction::new(Opcode::OpenEphemeral, 0, 0, 0),
+            // Row 1: (rowid=1, 10)
+            /* 1 */
+            Instruction::new(Opcode::Integer, 10, 1, 0),
+            /* 2 */ Instruction::new(Opcode::MakeRecord, 1, 1, 2),
+            /* 3 */ Instruction::new(Opcode::Integer, 1, 3, 0),
+            /* 4 */ Instruction::new(Opcode::Insert, 0, 3, 2),
+            // Row 2: (rowid=2, 20)
+            /* 5 */
+            Instruction::new(Opcode::Integer, 20, 1, 0),
+            /* 6 */ Instruction::new(Opcode::MakeRecord, 1, 1, 2),
+            /* 7 */ Instruction::new(Opcode::Integer, 2, 3, 0),
+            /* 8 */ Instruction::new(Opcode::Insert, 0, 3, 2),
+            // Row 3: (rowid=3, 30)
+            /* 9 */
+            Instruction::new(Opcode::Integer, 30, 1, 0),
+            /* 10 */ Instruction::new(Opcode::MakeRecord, 1, 1, 2),
+            /* 11 */ Instruction::new(Opcode::Integer, 3, 3, 0),
+            /* 12 */ Instruction::new(Opcode::Insert, 0, 3, 2),
+            // Scan, accumulating COUNT(*) (slot 0) and SUM(col0) (slot 1).
+            /* 13 */
+            Instruction::new(Opcode::Rewind, 0, 21, 0), // jump to Halt(21) if empty
+            /* 14 */ Instruction::new(Opcode::Column, 0, 0, 4),
+            /* 15 */ Instruction::with_p4(Opcode::AggStep, 0, 4, 0, count_p4()),
+            /* 16 */ Instruction::with_p4(Opcode::AggStep, 1, 4, 0, sum_p4()),
+            /* 17 */
+            Instruction::new(Opcode::Next, 0, 14, 0), // jump to Column(14) if a next row exists
+            /* 18 */
+            Instruction::with_p4(Opcode::AggFinal, 0, 0, 5, P4::Str("count(0)".to_string())),
+            /* 19 */
+            Instruction::with_p4(Opcode::AggFinal, 1, 0, 6, P4::Str("sum(1)".to_string())),
+            /* 20 */ Instruction::new(Opcode::ResultRow, 5, 2, 0),
+            /* 21 */ Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(3), Value::Integer(60)]]);
+    }
+
+    #[test]
+    fn agg_final_with_no_agg_step_finalizes_to_the_zero_row_result() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::with_p4(Opcode::AggFinal, 0, 0, 0, P4::Str("count(0)".to_string())),
+            Instruction::with_p4(Opcode::AggFinal, 1, 0, 1, P4::Str("sum(1)".to_string())),
+            Instruction::new(Opcode::ResultRow, 0, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(0), Value::Null]]);
     }
 }

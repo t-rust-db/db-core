@@ -1,8 +1,8 @@
 //! `RowExecutor`: the cursor-driven, row-at-a-time query VM -- one of
 //! `sql-vm`'s three executors (see crate root docs).
 //!
-//! **Partial (db-core#18/#51/#56/#59, tracking issue db-core#18).** A
-//! literal, opcode-for-opcode port of sqlite-rs's VDBE (ADR 0008,
+//! **Partial (db-core#18/#51/#56/#59/#62, tracking issue db-core#18).**
+//! A literal, opcode-for-opcode port of sqlite-rs's VDBE (ADR 0008,
 //! revised for full parity -- see that ADR's history: an earlier draft
 //! mistakenly generalized [`super::batch`]'s typed-operand design to
 //! `row`, which does not apply here). Ported so far:
@@ -14,6 +14,10 @@
 //! - [`affinity`] -- column type affinity.
 //! - [`cast`] -- `CAST` conversion.
 //! - [`coerce`] -- text-to-numeric coercion and checked arithmetic.
+//! - [`aggregate`] -- `AggState`/`step`/`finalize` (`COUNT`/`SUM`/
+//!   `AVG`/`MIN`/`MAX`), backing `Opcode::AggStep`/`AggFinal`.
+//!   **Single-group only** -- `GROUP BY` grouping (`hash_agg.rs`) is
+//!   not yet ported.
 //! - [`program`] -- `Opcode`/`Instruction`/`Program`, sqlite-rs's raw
 //!   `p1..p5` operand shape (not typed named fields).
 //! - [`cursor`] -- the storage-agnostic [`cursor::Cursor`] trait ADR
@@ -24,19 +28,21 @@
 //! - [`record`] -- on-disk record encoding/decoding (`encode_record`/
 //!   `decode_record`/`decode_column`), backing `Opcode::MakeRecord` and
 //!   ephemeral-cursor `Insert`/`Column`.
-//! - [`vm`] -- the register file, cursor-slot table, and
-//!   fetch-decode-execute loop (`Vm`, [`vm::execute`]) -- control flow,
-//!   compare/cast/arithmetic, result-row loads including `MakeRecord`,
-//!   `Rewind`/`Next`/`Column`/`Rowid` over [`cursor::Cursor`], and
-//!   `OpenEphemeral`/`Insert` over [`cursor::EphemeralTableCursor`].
+//! - [`vm`] -- the register file, cursor-slot table, aggregate-context
+//!   slot table, and fetch-decode-execute loop (`Vm`, [`vm::execute`])
+//!   -- control flow, compare/cast/arithmetic, result-row loads
+//!   including `MakeRecord`, `Rewind`/`Next`/`Column`/`Rowid` over
+//!   [`cursor::Cursor`], `OpenEphemeral`/`Insert` over
+//!   [`cursor::EphemeralTableCursor`], and `AggStep`/`AggFinal` over
+//!   [`aggregate::AggState`].
 //!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
 //! and index-mode ephemeral cursors, DDL, real transactions, sorter,
-//! hash aggregation, scalar functions, `EXPLAIN`/`PRAGMA` rendering.
-//! `Opcode` already lists every variant sqlite-rs has (parity of
-//! identity); dispatch for the rest lands in later phases (tracked
-//! against db-core#18).
+//! `GROUP BY` hash aggregation, scalar functions, `EXPLAIN`/`PRAGMA`
+//! rendering. `Opcode` already lists every variant sqlite-rs has
+//! (parity of identity); dispatch for the rest lands in later phases
+//! (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
@@ -45,6 +51,7 @@
 #![forbid(unsafe_code)]
 
 pub mod affinity;
+pub mod aggregate;
 pub mod cast;
 pub mod coerce;
 pub mod compare;
@@ -56,6 +63,7 @@ pub mod value;
 pub mod vm;
 
 pub use affinity::{affinity_of, apply_affinity, comparison_affinity, Affinity};
+pub use aggregate::{AggState, AggregateError};
 pub use cast::cast_to;
 pub use compare::compare;
 pub use cursor::{Cursor, EphemeralTableCursor, InMemoryCursor};
