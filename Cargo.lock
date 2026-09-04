@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "sql-codegen"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "sql-expr",
  "sql-types",
@@ -64,60 +64,30 @@ dependencies = [
 
 [[package]]
 name = "sql-expr"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "sql-types",
 ]
 
 [[package]]
-name = "sql-header"
-version = "0.10.0"
-dependencies = [
- "sql-record",
-]
-
-[[package]]
 name = "sql-join"
-version = "0.10.0"
-
-[[package]]
-name = "sql-pager"
-version = "0.10.0"
-dependencies = [
- "sql-header",
- "sql-vfs",
-]
+version = "0.11.0"
 
 [[package]]
 name = "sql-parser"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "sql-expr",
  "sql-types",
 ]
 
 [[package]]
-name = "sql-record"
-version = "0.10.0"
-
-[[package]]
-name = "sql-sys"
-version = "0.10.0"
-
-[[package]]
 name = "sql-types"
-version = "0.10.0"
-
-[[package]]
-name = "sql-vfs"
-version = "0.10.0"
-dependencies = [
- "sql-sys",
-]
+version = "0.11.0"
 
 [[package]]
 name = "sql-vm"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "rayon",
  "sql-expr",

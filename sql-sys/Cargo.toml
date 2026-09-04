@@ -1,9 +1,0 @@
-[package]
-name = "sql-sys"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "Vendored POSIX syscall bindings (fcntl byte-range locking, termios raw mode) shared across t-rust-db"
-
-[dependencies]
