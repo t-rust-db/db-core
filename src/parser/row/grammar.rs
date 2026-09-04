@@ -150,6 +150,23 @@ impl Parser {
         }
     }
 
+    /// Consume an identifier-shaped token matching `word` case-insensitively
+    /// -- for `KEY` (in `PRIMARY KEY`), which isn't a reserved keyword token
+    /// (#71): it's tokenized as a plain `Identifier` so it stays usable as a
+    /// column name (e.g. `regions.key`) everywhere else.
+    fn expect_bareword_ci(&mut self, word: &str) -> PResult<Span> {
+        if let TokenKind::Identifier(name) = &self.peek().kind {
+            if name.eq_ignore_ascii_case(word) {
+                return Ok(self.advance_span());
+            }
+        }
+        let tok = self.peek().clone();
+        Err(ParseFail::Invalid {
+            message: format!("expected {word}, found {:?}", tok.kind),
+            span: tok.span,
+        })
+    }
+
     fn eat_punct(&mut self, kind: &TokenKind) -> bool {
         if &self.peek().kind == kind {
             self.advance();
@@ -561,7 +578,7 @@ impl Parser {
             return self.unsupported("bare NULL column constraint not yet supported");
         }
         if self.eat_kw(Keyword::PRIMARY) {
-            self.expect_kw(Keyword::KEY)?;
+            self.expect_bareword_ci("KEY")?;
             let desc = if self.eat_kw(Keyword::ASC) {
                 Some(false)
             } else if self.eat_kw(Keyword::DESC) {
@@ -702,7 +719,7 @@ impl Parser {
             self.identifier()?;
         }
         if self.eat_kw(Keyword::PRIMARY) {
-            self.expect_kw(Keyword::KEY)?;
+            self.expect_bareword_ci("KEY")?;
             let cols = self.indexed_column_list()?;
             self.check_no_conflict_clause()?;
             return Ok(TableConstraint::PrimaryKey(cols));

@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.27.0] - 2026-09-05
+
+### Fixed
+
+- **`KEY` is no longer a reserved keyword token** (#71 follow-up) -- the parser unification (#57) made `parser::column` a thin adapter over `parser::row`'s shared tokenizer/grammar, which reserved `KEY` (needed only for `PRIMARY KEY` DDL syntax) as a token in its own right. Since this tokenizer has no LALR-style keyword-as-identifier fallback (unlike real SQLite), that made `KEY` unusable as an ordinary column name anywhere the shared grammar is used -- e.g. `SELECT ... FROM orders JOIN regions ON orders.region_key = regions.key` failed with `expected identifier, found Keyword(KEY)`. `KEY` is now tokenized as a plain identifier; `PRIMARY KEY` parsing matches it case-insensitively via the new `Parser::expect_bareword_ci` instead of a dedicated keyword token.
+
 ## [0.26.0] - 2026-09-05
 
 ### Added
