@@ -5,8 +5,10 @@
 //!   groups, batches of ~1024 rows at a time). **Implemented** -- this is
 //!   column-rs's VM, extracted here so other batch/columnar consumers
 //!   (loglume, reading historical log files) don't reimplement it.
-//! - [`row`] -- `RowExecutor`: cursor-driven, row-at-a-time. **Not yet
-//!   implemented** -- the eventual home for sqlite-rs-style execution.
+//! - [`row`] -- `RowExecutor`: cursor-driven, row-at-a-time. **Partial**
+//!   (db-core#18) -- the value-semantics slice (comparison, casts,
+//!   coercion, three-valued logic) is ported from sqlite-rs's VDBE; the
+//!   execution loop and cursor opcodes are not yet.
 //! - [`stream`] -- `StreamExecutor`: push-driven, for live/unbounded
 //!   sources (loglume tailing Docker/journald/K8s). **Not yet
 //!   implemented.**
