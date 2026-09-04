@@ -151,3 +151,56 @@ section left open: `row` needs its own `ParseError`-equivalent shaped
 for its own `ast` types regardless, so "not reusing `column`'s
 `ParseError`" was already the likely answer; this amendment confirms it
 follows from the same AST decision, not a separate one.
+
+## Second amendment (2026-09-04): the first amendment's rationale is falsified; unify on sqlite-rs's front end (`#57`)
+
+Two corrections, recorded rather than overwritten so the reasoning
+trail stays honest.
+
+**1. The tokenizer was never shared.** The original Decision above says
+"Both sections share `sql-parser`'s tokenizer (`Token`/`Tokenizer`, not
+duplicated)." That is false and has been since `#23` landed:
+`parser::column` has its own private inline `enum Token` + `fn
+tokenize`; `parser::row` has its own `pub struct Tokenizer` (1,668
+lines, sqlite-rs's). The first amendment quietly dropped "tokenizer"
+from its "what the two sections *do* still share" list but left the
+original claim standing. Corrected here: the two sections share
+**`Span` and the Cargo-feature mechanism, nothing else.**
+
+**2. The first amendment's "no consumer needs one AST" rationale did not
+survive contact with the code.** It argued two ASTs cost nothing because
+"no code anywhere joins a `column`-parsed and a `row`-parsed statement
+into one value." That framed the question too narrowly. The cost is not
+a missing *join site* — it is that **`codegen::batch` (the planner)
+consumes `expr::Query` and therefore cannot execute anything
+`parser::row` produces.** 7,399 lines of grammar in `db-core` with no
+downstream consumer. And divergence materialized within a day: `#55` was
+filed to *add* bare-`EXPLAIN`-vs-`EXPLAIN QUERY PLAN` to
+`parser::column` — which `parser::row::grammar::parse_explain_stmt`
+already implements correctly (`query_plan` flag, opcode listing for the
+bare form, exactly as sqlite-rs does). Two parsers sharing nothing means
+every feature gets built twice or exists in only one. That is the
+outcome the "synergy" goal exists to prevent, and ADR 0001's
+"consolidated location, not shared representation" analogy does not
+transfer: two *opcode sets* are legitimately different (row-at-a-time
+vs. vectorized execution); two *SQL grammars for SELECT* are the same
+language parsed twice.
+
+**Revised decision (supersedes the first amendment's):** unify on
+sqlite-rs's front end, sqlite-rs being the leading codebase. sqlite-rs's
+`ast.rs` becomes the shared AST (`expr::Query` is a strict subset of
+`ast::Select` and is retired); sqlite-rs's `Tokenizer` becomes the
+tokenizer (column's inline one is deleted); `codegen::batch` consumes
+`ast::Select`, and **column's grammar becomes an enforced subset** — the
+batch planner *rejects* constructs it cannot compile (DDL, DML,
+transactions, `PRAGMA`) with a clear `PlanError`, rather than a second
+parser that cannot *parse* them. This is the original Decision's Option
+A as actually intended; what shipped under `#23` was closer to Option B
+("two parsers coexist") mislabeled as A.
+
+Tracked as `#57`. `#55` narrows to just the opcode-table renderer, since
+the parse-side distinction falls out of the unification for free. The
+Cargo-feature split mechanism (`parser-column`/`parser-row`) this ADR
+originally decided **stands** — it still gates whether the full row
+grammar is compiled at all; what changes is that both features now gate
+sections of *one* parser rather than two.
