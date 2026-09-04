@@ -6,9 +6,11 @@
 //!   column-rs's VM, extracted here so other batch/columnar consumers
 //!   (loglume, reading historical log files) don't reimplement it.
 //! - [`row`] -- `RowExecutor`: cursor-driven, row-at-a-time. **Partial**
-//!   (db-core#18) -- the value-semantics slice (comparison, casts,
-//!   coercion, three-valued logic) is ported from sqlite-rs's VDBE; the
-//!   execution loop and cursor opcodes are not yet.
+//!   (db-core#18/#51) -- a literal, opcode-for-opcode port of sqlite-rs's
+//!   VDBE (value semantics, control flow, compare/arithmetic, result-row
+//!   loads, and a storage-agnostic cursor trait are ported; DDL, real
+//!   transactions, sorter/hash-aggregation/functions, and real
+//!   `db-storage` cursor wiring are not yet).
 //! - [`stream`] -- `StreamExecutor`: push-driven, for live/unbounded
 //!   sources (loglume tailing Docker/journald/K8s). **Not yet
 //!   implemented.**

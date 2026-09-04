@@ -1,35 +1,39 @@
 //! `RowExecutor`: the cursor-driven, row-at-a-time query VM -- one of
 //! `sql-vm`'s three executors (see crate root docs).
 //!
-//! **Partial (db-core#18, phase 1 of the tracking issue).** This module
-//! currently carries only the value-semantics slice mechanically ported
-//! from sqlite-rs's VDBE -- [`value`] (the row `Value`/`Collation` model
-//! and REAL formatting), [`compare`] (cross-type ordering), [`logic`]
-//! (three-valued logic / NULL propagation), [`affinity`] (column type
-//! affinity), [`cast`] (`CAST` conversion), [`coerce`] (text-to-numeric
-//! coercion and checked arithmetic), and [`program`] (a partial
-//! `Opcode`/`Instruction`/`Program` skeleton covering just those
-//! opcodes).
+//! **Partial (db-core#18/#51, tracking issue db-core#18).** A literal,
+//! opcode-for-opcode port of sqlite-rs's VDBE (ADR 0008, revised for
+//! full parity -- see that ADR's history: an earlier draft mistakenly
+//! generalized [`super::batch`]'s typed-operand design to `row`, which
+//! does not apply here). Ported so far:
 //!
-//! **Not yet ported**: the fetch-decode-execute loop (`exec.rs`), a
-//! storage-agnostic cursor trait plus real cursor opcodes (`cursor.rs`,
-//! sqlite-rs's largest VDBE file), control flow (`control.rs`), result
-//! rows (`result.rs`), aggregation (`aggregate.rs`, `hash_agg.rs`),
-//! sorting (`sorter.rs`), scalar functions (`functions.rs`), and
-//! `EXPLAIN`/`PRAGMA` rendering (`explain.rs`, `pragma.rs`). Tracked as
-//! a follow-up sub-ticket of db-core#18.
+//! - [`value`] -- `Value`/`Collation`/`compare_text`/`format_real`.
+//! - [`compare`] -- cross-type ordering (NULL < numeric < text < blob).
+//! - [`logic`] -- three-valued logic / NULL propagation (codegen-side
+//!   helpers; not used by the exec loop itself, same as sqlite-rs).
+//! - [`affinity`] -- column type affinity.
+//! - [`cast`] -- `CAST` conversion.
+//! - [`coerce`] -- text-to-numeric coercion and checked arithmetic.
+//! - [`program`] -- `Opcode`/`Instruction`/`Program`, sqlite-rs's raw
+//!   `p1..p5` operand shape (not typed named fields).
+//! - [`cursor`] -- the storage-agnostic [`cursor::Cursor`] trait ADR
+//!   0008 calls for, plus [`cursor::InMemoryCursor`], the mock this
+//!   phase's tests scan against.
+//! - [`vm`] -- the register file, cursor-slot table, and
+//!   fetch-decode-execute loop (`Vm`, [`vm::execute`]) -- control flow,
+//!   compare/cast/arithmetic, result-row loads except `MakeRecord`, and
+//!   `Rewind`/`Next`/`Column`/`Rowid` over [`cursor::Cursor`].
 //!
-//! **Opcode-set identity and cursor design: see ADR 0008.** `Opcode` is
-//! a mechanical port of sqlite-rs's VDBE opcode set (not a new design),
-//! with typed operands rather than raw `p1..p5` slots -- the same
-//! departure ADR 0007 made for [`super::batch`]. The eventual cursor
-//! abstraction is a storage-agnostic trait `vm::row` defines and an
-//! adapter crate implements over `db-storage`, not a direct `db-core` ->
-//! `db-storage` dependency.
+//! **Not yet ported**: `MakeRecord`'s on-disk record encoding, real
+//! `db-storage` cursor wiring (`cursor.rs`'s largest file), DDL, real
+//! transactions, sorter, hash aggregation, scalar functions,
+//! `EXPLAIN`/`PRAGMA` rendering. `Opcode` already lists every variant
+//! sqlite-rs has (parity of identity); dispatch for the rest lands in
+//! later phases (tracked against db-core#18).
 //!
-//! [`super::batch`] is the reference for what "done" looks like once
-//! this module is complete: one `Opcode` enum, a `Vm`, and real
-//! end-to-end test coverage over that `Vm`.
+//! [`super::batch`] is a *structural* reference only (module layout,
+//! doc density, in-module tests) -- its typed-operand `Opcode` design
+//! is `vm::batch`-specific (ADR 0007) and does not extend to `row`.
 
 #![forbid(unsafe_code)]
 
@@ -37,12 +41,16 @@ pub mod affinity;
 pub mod cast;
 pub mod coerce;
 pub mod compare;
+pub mod cursor;
 pub mod logic;
 pub mod program;
 pub mod value;
+pub mod vm;
 
 pub use affinity::{affinity_of, apply_affinity, comparison_affinity, Affinity};
 pub use cast::cast_to;
 pub use compare::compare;
-pub use program::{ArithOp, CompareOp, Instruction, LogicOp, Opcode, Program};
+pub use cursor::{Cursor, InMemoryCursor};
+pub use program::{Instruction, Opcode, Program, P4};
 pub use value::{compare_text, format_real, Collation, TextEncoding, Value};
+pub use vm::{execute, ExecError, Step, Vm};
