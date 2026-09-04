@@ -1,5 +1,5 @@
 //! The register file, cursor-slot table, and fetch-decode-execute loop,
-//! ported from sqlite-rs's `vdbe::exec` (db-core#51). Storage-agnostic:
+//! ported from sqlite-rs's `vdbe::exec` (db-core#51/#56). Storage-agnostic:
 //! cursors are [`super::cursor::Cursor`] trait objects, not real
 //! b-tree/pager access -- see `super::cursor`'s doc and ADR 0008.
 //!
@@ -10,10 +10,10 @@
 //! `Cast`, arithmetic (`Add`/`Subtract`/`Multiply`/`Divide`/`Remainder`/
 //! `Not`/`BitAnd`/`BitOr`/`ShiftLeft`/`ShiftRight`/`BitNot`/`Concat`),
 //! result-row loads (`Integer`/`Int64`/`Real`/`Blob`/`Null`/`String8`/
-//! `Variable`/`Copy`/`ResultRow`), and `Rewind`/`Next`/`Column`/`Rowid`
-//! over a [`super::cursor::Cursor`] opened via [`Vm::open_cursor`].
-//! Everything else in [`super::program::Opcode`] returns
-//! `ExecError::Unimplemented`.
+//! `Variable`/`Copy`/`ResultRow`/`MakeRecord`, via [`super::record`]),
+//! and `Rewind`/`Next`/`Column`/`Rowid` over a [`super::cursor::Cursor`]
+//! opened via [`Vm::open_cursor`]. Everything else in
+//! [`super::program::Opcode`] returns `ExecError::Unimplemented`.
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -24,7 +24,8 @@ use super::coerce;
 use super::compare::compare;
 use super::cursor::Cursor;
 use super::program::{Instruction, Opcode, Program, P4};
-use super::value::{Collation, Value};
+use super::record::encode_record;
+use super::value::{Collation, TextEncoding, Value};
 
 /// Caps a single register index or range count -- a backstop against an
 /// adversarial/corrupt instruction driving an oversized allocation.
@@ -628,6 +629,31 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             vm.set_register(instr.p2, value)?;
             Ok(Step::Next)
         }
+        Opcode::MakeRecord => {
+            let count = Vm::bounded_count("MakeRecord", instr.p2)?;
+            let affinities: &[u8] = match &instr.p4 {
+                P4::Affinity(bytes) => bytes,
+                _ => &[],
+            };
+            let mut values = Vec::with_capacity(count);
+            for i in 0..count {
+                let reg = instr
+                    .p1
+                    .checked_add(i as i32)
+                    .ok_or(ExecError::RegisterOutOfRange {
+                        opcode: "MakeRecord",
+                        index: instr.p1,
+                    })?;
+                let mut value = vm.register(reg)?.clone();
+                if let Some(byte) = affinities.get(i) {
+                    apply_affinity(&mut value, Affinity::from_p4_byte(*byte));
+                }
+                values.push(value);
+            }
+            let payload = encode_record(&values, TextEncoding::Utf8);
+            vm.set_register(instr.p3, Value::Blob(payload.into()))?;
+            Ok(Step::Next)
+        }
         Opcode::ResultRow => {
             let count = Vm::bounded_count("ResultRow", instr.p2)?;
             let mut row = Vec::with_capacity(count);
@@ -922,12 +948,62 @@ mod tests {
     #[test]
     fn unimplemented_opcode_errors_by_name() {
         let mut vm = Vm::new();
-        let program = Program::new(vec![Instruction::new(Opcode::MakeRecord, 0, 0, 0)]);
+        let program = Program::new(vec![Instruction::new(Opcode::SorterOpen, 0, 0, 0)]);
         assert!(matches!(
             execute(&mut vm, &program),
             Err(ExecError::Unimplemented {
-                opcode: Opcode::MakeRecord
+                opcode: Opcode::SorterOpen
             })
         ));
+    }
+
+    #[test]
+    fn make_record_output_matches_expected_encoding() {
+        let mut vm = Vm::new();
+        vm.set_register(0, Value::Integer(42)).unwrap();
+        vm.set_register(1, Value::Text("abc".to_string().into()))
+            .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::MakeRecord, 0, 2, 2),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        let Value::Blob(payload) = &rows[0][0] else {
+            panic!("expected a Blob");
+        };
+        assert_eq!(&payload[..], &[3, 1, 19, 42, b'a', b'b', b'c']);
+    }
+
+    #[test]
+    fn make_record_applies_p4_affinity_before_encoding() {
+        let mut vm = Vm::new();
+        vm.set_register(0, Value::Text("42".to_string().into()))
+            .unwrap();
+        let program = Program::new(vec![
+            Instruction::with_p4(
+                Opcode::MakeRecord,
+                0,
+                1,
+                1,
+                P4::Affinity(vec![Affinity::Integer.to_p4_byte()]),
+            ),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        let Value::Blob(payload) = &rows[0][0] else {
+            panic!("expected a Blob");
+        };
+        // serial type 9 (constant 1) never appears for "42"; expect
+        // integer serial type 1 (i8), body byte 42 -- proving affinity
+        // coerced the text register before encoding, not after.
+        assert_eq!(&payload[..], &[2, 1, 42]);
+        // The source register is untouched -- affinity applies to a
+        // copy, not the live register.
+        assert_eq!(
+            *vm.register(0).unwrap(),
+            Value::Text("42".to_string().into())
+        );
     }
 }
