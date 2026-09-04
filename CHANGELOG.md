@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.17.0] - 2026-09-04
+
+### Fixed
+
+- **`emit::batch`'s generated `Query { ... }` literal was missing the `distinct` field** added by `SELECT DISTINCT` (#47, v0.14.0), so any codegen'd binary for a join/semi-join/windowed query failed to compile with `E0063: missing field 'distinct'` -- `render_query` never threaded `query.distinct` through to the emitted source. Found via column-rs's `codegen_e2e` test suite (t-rust-db/column-rs#9).
+
 ## [0.16.0] - 2026-09-04
 
 ### Added
