@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.20.0] - 2026-09-04
+
+### Added
+
+- **`vm::row`'s record decoding, plus `Opcode::OpenEphemeral`/`Insert` over an in-memory ephemeral table** (#59, follow-up to #56/#18). Ports sqlite-rs's `record::decode` (`decode_record`/`decode_column`) into `vm::row::record`, self-contained like encode. `Cursor` gains an `insert(&mut self, rowid, values) -> bool` method (default `false`); `EphemeralTableCursor` is a real, `Insert`-writable in-memory table (rows carry an explicit caller-assigned rowid). `Opcode::Insert` decodes `MakeRecord`'s blob straight back into `Value`s before storing, matching sqlite-rs's "decode-once-at-insert" design. This is the first slice where a hand-built `Program` runs a genuinely complete end-to-end micro-query: `MakeRecord` -> `Insert` -> `Rewind`/`Next` (scan) -> `Column` -> `ResultRow`, entirely storage-agnostic.
+
 ## [0.19.0] - 2026-09-04
 
 ### Added
