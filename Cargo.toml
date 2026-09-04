@@ -9,6 +9,8 @@ members = [
     "sql-sys",
     "sql-record",
     "sql-vfs",
+    "sql-header",
+    "sql-pager",
 ]
 
 [workspace.package]

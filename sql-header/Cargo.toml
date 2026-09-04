@@ -1,21 +1,13 @@
 [package]
-name = "sql-vfs"
+name = "sql-header"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Virtual filesystem abstraction (locking, WAL/-shm access) shared across t-rust-db, extracted from sqlite-rs's src/vfs"
+description = "SQLite database header (bytes 0-99) parsing, extracted from sqlite-rs's src/header"
 
 [dependencies]
-sql-sys = { path = "../sql-sys" }
-
-[features]
-# Cross-process lock-contention test helpers (`test_lock_probe`, and the
-# handful of lock/shm probes built on it) that pager's own tests need to
-# observe lock state from outside this crate -- `#[cfg(test)]` alone
-# never crosses a crate boundary, so a dependent crate's tests can't see
-# them without this. Not on by default: these exist purely for tests.
-test-util = []
+sql-record = { path = "../sql-record" }
 
 [lints.clippy]
 # Matches sqlite-rs's own [lints.clippy] baseline (see its Cargo.toml) --

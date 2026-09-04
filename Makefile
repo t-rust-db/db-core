@@ -20,6 +20,10 @@ build: ## Build every crate in the workspace
 # === Test ===
 
 test: ## Run the full test suite across the workspace
+	@# Build lock_probe helper binary first -- cargo test doesn't build [[bin]]/src/bin
+	@# targets automatically, and sql-pager's tests need it too (dev-dependency on
+	@# sql-vfs's "test-util" feature), not just sql-vfs's own.
+	cargo build -p sql-vfs --bin lock_probe
 	cargo test --workspace
 
 test-lib: ## Just the library unit tests across the workspace (fastest inner loop)
