@@ -1,9 +1,0 @@
-[package]
-name = "sql-join"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "Flat open-addressing hash table and join semantics shared by t-rust-db engines"
-
-[dependencies]

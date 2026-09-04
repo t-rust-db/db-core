@@ -2,11 +2,11 @@
 //! `sql-vm` executor (db-core#20), mirroring that crate's own
 //! `batch`/`row`/`stream` split (ADR 0001):
 //!
-//! - [`batch`] -- renders a compiled `sql_vm::batch::Opcode` program (or
-//!   a reconstructed `sql_expr::Query` literal, for the join/semi-join/
+//! - [`batch`] -- renders a compiled `crate::vm::batch::Opcode` program (or
+//!   a reconstructed `crate::expr::Query` literal, for the join/semi-join/
 //!   window shapes that bypass the VM program entirely) to standalone
 //!   Rust source text. **Implemented** -- extracted from column-rs's
-//!   private `src/codegen.rs`, so other `sql_vm::batch` consumers don't
+//!   private `src/codegen.rs`, so other `crate::vm::batch` consumers don't
 //!   reimplement it.
 //! - [`row`] -- the eventual home for sqlite-rs-style codegen (AST to
 //!   VDBE-shaped bytecode). **Not yet implemented** -- see its own doc
@@ -20,7 +20,7 @@
 //! one(s) it uses, exactly like `sql-vm`'s own feature split.
 //!
 //! column-rs's own query *planning* (`compile()`, deciding which
-//! `sql_expr::Query` shape needs the VM-program path vs. the join/
+//! `crate::expr::Query` shape needs the VM-program path vs. the join/
 //! semi-join/window bypass, materializing a flat query's `Opcode`
 //! program) is NOT part of this crate -- it's product-specific query
 //! optimization, not code generation, and stays in column-rs's own
@@ -30,9 +30,9 @@
 
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "batch")]
+#[cfg(feature = "codegen-batch")]
 pub mod batch;
-#[cfg(feature = "row")]
+#[cfg(feature = "codegen-row")]
 pub mod row;
-#[cfg(feature = "stream")]
+#[cfg(feature = "codegen-stream")]
 pub mod stream;

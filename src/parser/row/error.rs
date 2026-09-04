@@ -7,7 +7,7 @@
 //! from "actually malformed" — otherwise a not-yet-built feature reads
 //! identically to a typo.
 //!
-//! Uses this crate's own [`crate::Span`], shared with [`super::ast`] and
+//! Uses this crate's own [`crate::parser::Span`], shared with [`super::ast`] and
 //! [`super::tokenizer`] -- not a duplicate `Span` type.
 
 use super::ast::{
@@ -16,7 +16,7 @@ use super::ast::{
 };
 use super::grammar::Parser;
 use super::tokenizer::Tokenizer;
-use crate::Span;
+use crate::parser::Span;
 
 /// The three-way result of attempting to parse a statement: cleanly
 /// accepted, syntactically-valid-but-unimplemented, or genuinely malformed.

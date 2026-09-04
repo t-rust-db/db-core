@@ -8,7 +8,7 @@
 
 #![forbid(unsafe_code)]
 
-use sql_types::Literal;
+use crate::types::Literal;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {

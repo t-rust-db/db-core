@@ -1,4 +1,4 @@
-//! Tokenizer and recursive-descent parser producing `sql_expr::Query`, as
+//! Tokenizer and recursive-descent parser producing `crate::expr::Query`, as
 //! two grammar sections (see `ADR 0002` in `db-core`'s `.openspec/adr/`),
 //! mirroring how `sql-vm` already splits into `batch`/`row`/`stream`
 //! executors (ADR 0001):
@@ -9,7 +9,7 @@
 //! - [`row`] -- sqlite-rs's full SQLite grammar (DDL, DML, transactions,
 //!   `PRAGMA`, ...). **Not yet implemented** -- see its own doc comment.
 //!
-//! Both sections share this crate's [`Span`] and produce `sql_expr::Query`
+//! Both sections share this crate's [`Span`] and produce `crate::expr::Query`
 //! -- the AST types themselves live in `sql-expr`, not here. Each section
 //! is gated behind its own Cargo feature (`column`/`row`), so a consumer
 //! that only needs column-rs's subset (column-rs itself) compiles with
@@ -29,10 +29,10 @@
 mod span;
 pub use span::Span;
 
-#[cfg(feature = "column")]
+#[cfg(feature = "parser-column")]
 pub mod column;
-#[cfg(feature = "column")]
+#[cfg(feature = "parser-column")]
 pub use column::{parse, parse_explain, ParseError, Result};
 
-#[cfg(feature = "row")]
+#[cfg(feature = "parser-row")]
 pub mod row;

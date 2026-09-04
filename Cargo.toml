@@ -1,16 +1,40 @@
-[workspace]
-resolver = "2"
-members = [
-    "sql-types",
-    "sql-expr",
-    "sql-parser",
-    "sql-join",
-    "sql-vm",
-    "sql-codegen",
-]
-
-[workspace.package]
-version = "0.11.0"
+[package]
+name = "db-core"
+version = "0.12.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/db-core"
+description = "Shared SQL language/execution layer for t-rust-db: types, expr, parser, join, vm, codegen"
+
+[lib]
+name = "db_core"
+path = "src/lib.rs"
+
+[dependencies]
+rayon = { version = "1", optional = true }
+
+[features]
+# `parser-column` + `vm-batch` + `codegen-batch` on by default -- these
+# are the only real, tested content today, and plain `cargo test` (no
+# feature flags) needs something to exercise. Consumers that want to be
+# explicit about depending on exactly what they use (column-rs does) set
+# `default-features = false, features = [...]` regardless of this default.
+default = ["parser-column", "vm-batch", "codegen-batch"]
+
+# `parser`: one grammar section per Cargo feature, mirroring `vm`'s own
+# `batch`/`row`/`stream` split (ADR 0001/0002).
+parser-column = []
+parser-row = []
+
+# `vm`: one executor per Cargo feature -- a consumer enables only the
+# one(s) it uses, so e.g. column-rs (`vm-batch` only) never compiles
+# `vm-row`/`vm-stream` or pulls in a dependency only one of them needs.
+vm-batch = ["dep:rayon"]
+vm-row = []
+vm-stream = []
+
+# `codegen`: one emitter per Cargo feature, one per `vm` executor.
+# `codegen-batch` needs `vm-batch`'s `Opcode`/`Value` types to render.
+codegen-batch = ["vm-batch"]
+codegen-row = []
+codegen-stream = []
