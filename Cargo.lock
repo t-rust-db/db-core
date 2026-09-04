@@ -29,7 +29,7 @@ checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
 name = "db-core"
-version = "0.25.0"
+version = "0.26.0"
 dependencies = [
  "rayon",
 ]
