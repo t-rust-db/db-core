@@ -50,6 +50,7 @@ pub fn run<'s>(segments: &[Box<dyn Segment + 's>], program: &Program) -> Result<
     let Some(Opcode::Finalize {
         agg_parts,
         num_group_keys,
+        distinct,
         order_by,
         limit,
     }) = fin
@@ -60,7 +61,7 @@ pub fn run<'s>(segments: &[Box<dyn Segment + 's>], program: &Program) -> Result<
     if let Some(limit) = bounded_scan_limit(program) {
         return bounded_scan(segments, &body, limit);
     }
-    let rows = match (agg_parts.is_empty(), order_by, limit) {
+    let rows = match (agg_parts.is_empty() && !distinct, order_by, limit) {
         (true, Some((col, descending)), Some(limit)) => run_parallel_top_n(
             segments,
             &body,
@@ -75,6 +76,7 @@ pub fn run<'s>(segments: &[Box<dyn Segment + 's>], program: &Program) -> Result<
     Ok(finalize(
         agg_parts,
         *num_group_keys,
+        *distinct,
         *order_by,
         *limit,
         rows,
@@ -89,6 +91,7 @@ pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
     let (body, fin) = program.split_finalize();
     let Some(Opcode::Finalize {
         agg_parts,
+        distinct,
         order_by: None,
         limit: Some(limit),
         ..
@@ -96,7 +99,10 @@ pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
     else {
         return None;
     };
-    if !agg_parts.is_empty() || body.iter().any(|op| matches!(op, Opcode::Filter { .. })) {
+    if *distinct
+        || !agg_parts.is_empty()
+        || body.iter().any(|op| matches!(op, Opcode::Filter { .. }))
+    {
         return None;
     }
     Some(*limit)
@@ -132,6 +138,7 @@ fn bounded_scan<'s>(
 pub fn finalize(
     agg_parts: &[AggPart],
     num_group_keys: usize,
+    distinct: bool,
     order_by: Option<(usize, bool)>,
     limit: Option<usize>,
     rows: Vec<Vec<Value>>,
@@ -161,6 +168,26 @@ pub fn finalize(
     } else {
         rows
     };
+
+    // `DISTINCT` dedups the fully-projected output rows: for a plain
+    // `SELECT DISTINCT` this is the only dedup pass (agg_parts is empty
+    // above); combined with `GROUP BY`, the group-key merge above already
+    // collapsed rows to one per group, so this second pass only catches
+    // coincidental duplicate output rows across distinct groups (e.g. a
+    // SELECT list that omits some GROUP BY columns) -- matching DuckDB's
+    // semantics of dedup applied after the hash-aggregate. Must run before
+    // `ORDER BY`/`LIMIT` per standard SQL evaluation order.
+    if distinct {
+        let mut seen: HashSet<String> = HashSet::new();
+        result_rows.retain(|row| {
+            let key = row
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\u{0}");
+            seen.insert(key)
+        });
+    }
 
     if let Some((pos, descending)) = order_by {
         result_rows.sort_by(|a, b| compare_for_order(&a[pos], &b[pos], descending));
@@ -339,6 +366,7 @@ mod tests {
         let program = group_sum_program(Opcode::Finalize {
             agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
             num_group_keys: 1,
+            distinct: false,
             order_by: Some((0, false)),
             limit: None,
         });
@@ -390,6 +418,7 @@ mod tests {
             Instruction::new(Opcode::Finalize {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
+                distinct: false,
                 order_by: None,
                 limit: Some(3),
             }),
@@ -400,6 +429,88 @@ mod tests {
             LOADS.load(Ordering::SeqCst),
             2,
             "third segment never loaded"
+        );
+    }
+
+    #[test]
+    fn distinct_dedups_rows_across_segments() {
+        // Two segments each carry a duplicate (k=1,v=0) row; DISTINCT should
+        // collapse them to one, keeping the other rows untouched.
+        let segments = vec![seg(&[(1, 0), (2, 0)]), seg(&[(1, 0), (3, 0)])];
+        let program = Program::new(vec![
+            Instruction::new(Opcode::LoadColumn {
+                reg: 0,
+                column: "k".into(),
+            }),
+            Instruction::new(Opcode::Emit {
+                registers: vec![0].into(),
+            }),
+            Instruction::new(Opcode::Finalize {
+                agg_parts: vec![].into(),
+                num_group_keys: 0,
+                distinct: true,
+                order_by: Some((0, false)),
+                limit: None,
+            }),
+        ]);
+        let rows = run(&segments, &program).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(1)],
+                vec![Value::Int(2)],
+                vec![Value::Int(3)],
+            ]
+        );
+    }
+
+    #[test]
+    fn distinct_dedups_before_order_by_and_limit() {
+        // A naive "sort/limit first, dedup later" plan would keep both
+        // copies of k=1 if limit truncated before dedup ran; the correct
+        // order (dedup, then sort, then limit) collapses them first.
+        let segments = vec![seg(&[(1, 0), (1, 0), (1, 0)]), seg(&[(2, 0)])];
+        let program = Program::new(vec![
+            Instruction::new(Opcode::LoadColumn {
+                reg: 0,
+                column: "k".into(),
+            }),
+            Instruction::new(Opcode::Emit {
+                registers: vec![0].into(),
+            }),
+            Instruction::new(Opcode::Finalize {
+                agg_parts: vec![].into(),
+                num_group_keys: 0,
+                distinct: true,
+                order_by: Some((0, false)),
+                limit: Some(2),
+            }),
+        ]);
+        let rows = run(&segments, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+    }
+
+    #[test]
+    fn distinct_with_group_by_does_not_collapse_genuinely_distinct_groups() {
+        // Same shape as `finalize_merges_partial_group_aggregates_across_segments`
+        // but with `distinct: true` -- the GROUP BY merge already yields one
+        // row per key (1 -> 13, 2 -> 5), and since those two output rows
+        // aren't equal, DISTINCT's post-aggregate dedup pass must leave both.
+        let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
+        let program = group_sum_program(Opcode::Finalize {
+            agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
+            num_group_keys: 1,
+            distinct: true,
+            order_by: Some((0, false)),
+            limit: None,
+        });
+        let rows = run(&segments, &program).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(1), Value::Float(13.0)],
+                vec![Value::Int(2), Value::Float(5.0)],
+            ]
         );
     }
 
@@ -417,6 +528,7 @@ mod tests {
             Instruction::new(Opcode::Finalize {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
+                distinct: false,
                 order_by: Some((0, true)),
                 limit: Some(2),
             }),
@@ -434,6 +546,7 @@ mod tests {
         let out = finalize(
             &[AggPart::GroupKey, AggPart::Avg(1, 2)],
             1,
+            false,
             None,
             None,
             rows,
@@ -446,6 +559,7 @@ mod tests {
         let program = group_sum_program(Opcode::Finalize {
             agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
             num_group_keys: 1,
+            distinct: false,
             order_by: None,
             limit: None,
         });
@@ -473,6 +587,7 @@ mod tests {
             &[Opcode::Finalize {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
+                distinct: false,
                 order_by: None,
                 limit: Some(0),
             }],

@@ -389,6 +389,12 @@ impl Parser {
 
     fn parse_query(&mut self) -> Result<Query> {
         self.expect_keyword("SELECT")?;
+        let distinct = if self.peek_keyword("DISTINCT") {
+            self.next()?;
+            true
+        } else {
+            false
+        };
         let columns = self.parse_select_list()?;
         self.expect_keyword("FROM")?;
         let from = self.ident()?;
@@ -532,6 +538,7 @@ impl Parser {
             from,
             joins,
             where_clause,
+            distinct,
             group_by,
             order_by,
             limit,
@@ -1125,6 +1132,25 @@ mod tests {
             ]
         );
         assert_eq!(q.group_by, vec!["region".to_string()]);
+    }
+
+    #[test]
+    fn parses_distinct() {
+        let q = parse("SELECT DISTINCT a, b FROM t").unwrap();
+        assert!(q.distinct);
+        assert_eq!(
+            q.columns,
+            vec![
+                SelectItem::Column("a".into()),
+                SelectItem::Column("b".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn plain_select_is_not_distinct() {
+        let q = parse("SELECT a FROM t").unwrap();
+        assert!(!q.distinct);
     }
 
     #[test]

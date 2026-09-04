@@ -161,6 +161,7 @@ pub struct Query {
     pub from: String,
     pub joins: Vec<Join>,
     pub where_clause: Option<Expr>,
+    pub distinct: bool,
     pub group_by: Vec<String>,
     pub order_by: Option<OrderBy>,
     pub limit: Option<usize>,
@@ -176,6 +177,7 @@ mod tests {
             from: from.into(),
             joins: vec![],
             where_clause: None,
+            distinct: false,
             group_by: vec![],
             order_by: None,
             limit: None,
@@ -310,6 +312,7 @@ mod tests {
                 left_col: "customers.id".into(),
                 right_col: "orders.customer_id".into(),
             }],
+            distinct: false,
             where_clause: Some(Expr::BinaryOp(
                 Box::new(Expr::Column("age".into())),
                 BinOp::Ge,

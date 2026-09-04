@@ -642,12 +642,13 @@ fn render_opcode(op: &Opcode) -> String {
         Opcode::Finalize {
             agg_parts,
             num_group_keys,
+            distinct,
             order_by,
             limit,
         } => {
             let parts: Vec<String> = agg_parts.iter().map(render_agg_part).collect();
             format!(
-                "Opcode::Finalize {{ agg_parts: std::borrow::Cow::Borrowed(&[{}]), num_group_keys: {num_group_keys}, order_by: {}, limit: {} }}",
+                "Opcode::Finalize {{ agg_parts: std::borrow::Cow::Borrowed(&[{}]), num_group_keys: {num_group_keys}, distinct: {distinct}, order_by: {}, limit: {} }}",
                 parts.join(", "),
                 render_order_by(*order_by),
                 render_option_usize(*limit)
@@ -810,6 +811,7 @@ mod tests {
             Opcode::Finalize {
                 agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
                 num_group_keys: 1,
+                distinct: false,
                 order_by: Some((0, true)),
                 limit: Some(10),
             },
@@ -823,7 +825,7 @@ mod tests {
             &["region".to_string(), "sum".to_string()],
         );
         assert!(
-            src.contains("Opcode::Finalize { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, order_by: Some((0, true)), limit: Some(10) }, // merge; ORDER BY region DESC; LIMIT 10"),
+            src.contains("Opcode::Finalize { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, distinct: false, order_by: Some((0, true)), limit: Some(10) }, // merge; ORDER BY region DESC; LIMIT 10"),
             "{src}"
         );
         assert!(!src.contains("const AGG_PARTS"), "{src}");
@@ -912,7 +914,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            src.contains("Opcode::Finalize { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, order_by: None, limit: None }"),
+            src.contains("Opcode::Finalize { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, distinct: false, order_by: None, limit: None }"),
             "{src}"
         );
         assert!(src.contains("Opcode::GroupReduce {"), "{src}");
@@ -942,6 +944,7 @@ mod tests {
                 right_col: "b.id".into(),
             }],
             where_clause: None,
+            distinct: false,
             group_by: vec![],
             order_by: None,
             limit: None,
@@ -979,11 +982,13 @@ mod tests {
                     from: "regions".into(),
                     joins: vec![],
                     where_clause: None,
+                    distinct: false,
                     group_by: vec![],
                     order_by: None,
                     limit: None,
                 }),
             }),
+            distinct: false,
             group_by: vec![],
             order_by: None,
             limit: None,
@@ -1018,6 +1023,7 @@ mod tests {
             from: "t".into(),
             joins: vec![],
             where_clause: None,
+            distinct: false,
             group_by: vec![],
             order_by: None,
             limit: None,
@@ -1072,6 +1078,7 @@ mod tests {
             Opcode::Finalize {
                 agg_parts: vec![AggPart::Avg(1, 2)].into(),
                 num_group_keys: 0,
+                distinct: false,
                 order_by: None,
                 limit: None,
             },
