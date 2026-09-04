@@ -510,7 +510,13 @@ const KEYWORDS: &[(&str, Keyword)] = &[
     ("IS", Keyword::IS),
     ("ISNULL", Keyword::ISNULL),
     ("JOIN", Keyword::JOIN),
-    ("KEY", Keyword::KEY),
+    // Deliberately not reserved (#71): unlike SQLite's real grammar, this
+    // tokenizer has no LALR-style keyword-as-identifier fallback, so
+    // reserving `KEY` here made it unusable as a column name (e.g.
+    // `regions.key`) anywhere `parser::column`'s shared grammar is used.
+    // `KEY` only matters syntactically in `PRIMARY KEY` (see
+    // `Parser::expect_bareword_ci`, `grammar.rs`), which never needed a
+    // dedicated token: it's tokenized as a plain identifier instead.
     ("LAST", Keyword::LAST),
     ("LEFT", Keyword::LEFT),
     ("LIKE", Keyword::LIKE),

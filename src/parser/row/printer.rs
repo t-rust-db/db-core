@@ -996,6 +996,42 @@ mod tests {
         }
     }
 
+    /// #71: `KEY` isn't a reserved keyword token (it collided with column
+    /// names like `key`), so `PRIMARY KEY` parses it as a plain identifier
+    /// matched case-insensitively -- lowercase/mixed-case `primary key`
+    /// must keep working exactly like the uppercase form.
+    #[test]
+    fn primary_key_matches_case_insensitively() {
+        for sql in [
+            "CREATE TABLE t (a INTEGER primary key)",
+            "CREATE TABLE t (a INTEGER Primary Key)",
+            "CREATE TABLE t (a, PRIMARY key (a))",
+        ] {
+            match parse_create_table(sql) {
+                ParseOutcome::Accepted(_) => {}
+                other => panic!("{sql:?} should parse, got {other:?}"),
+            }
+        }
+    }
+
+    /// #71: `key` is a perfectly ordinary column name (e.g. a join key),
+    /// not a reserved keyword -- regression test for the bug where
+    /// `regions.key` failed to parse ("expected identifier, found
+    /// Keyword(KEY)") once `KEY` was reserved by the shared tokenizer.
+    #[test]
+    fn key_is_usable_as_a_column_name() {
+        assert_eq!(
+            ok_select("SELECT key FROM regions"),
+            "SELECT key FROM regions"
+        );
+        assert_eq!(
+            ok_select(
+                "SELECT orders.id FROM orders JOIN regions ON orders.region_key = regions.key"
+            ),
+            "SELECT orders.id FROM orders JOIN regions ON orders.region_key = regions.key"
+        );
+    }
+
     #[test]
     fn create_index_and_drop_variants() {
         match parse_create_index(
