@@ -339,6 +339,7 @@ pub fn compile(query: &Query) -> Program {
         Opcode::Finalize {
             agg_parts: agg_parts.into(),
             num_group_keys: query.group_by.len(),
+            distinct: query.distinct,
             order_by,
             limit: query.limit,
         },
@@ -661,6 +662,7 @@ pub fn compile_window(query: &Query) -> Program {
         Opcode::Finalize {
             agg_parts: Vec::new().into(),
             num_group_keys: 0,
+            distinct: query.distinct,
             order_by,
             limit: query.limit,
         },
@@ -1130,6 +1132,43 @@ mod tests {
     }
 
     #[test]
+    fn compile_distinct_sets_finalize_flag_without_group_reduce() {
+        let query = sql::parse("SELECT DISTINCT a, b FROM t").unwrap();
+        let program = compile(&query);
+        assert!(matches!(
+            program.opcodes().last(),
+            Some(Opcode::Finalize {
+                distinct: true,
+                num_group_keys: 0,
+                ..
+            })
+        ));
+        let (body, _) = program.split_finalize();
+        assert!(!body
+            .iter()
+            .any(|op| matches!(op, Opcode::GroupReduce { .. })));
+    }
+
+    #[test]
+    fn compile_distinct_with_group_by_sets_both_finalize_flag_and_group_reduce() {
+        let query = sql::parse("SELECT DISTINCT region, SUM(amount) FROM t GROUP BY region")
+            .expect("DISTINCT + GROUP BY should parse (rewritten as a post-aggregate dedup)");
+        let program = compile(&query);
+        assert!(matches!(
+            program.opcodes().last(),
+            Some(Opcode::Finalize {
+                distinct: true,
+                num_group_keys: 1,
+                ..
+            })
+        ));
+        let (body, _) = program.split_finalize();
+        assert!(body
+            .iter()
+            .any(|op| matches!(op, Opcode::GroupReduce { .. })));
+    }
+
+    #[test]
     fn compile_encodes_order_by_and_limit_in_finalize_and_comments_instructions() {
         let query = sql::parse("SELECT id, val FROM t ORDER BY val DESC LIMIT 5").unwrap();
         let program = compile(&query);
@@ -1139,6 +1178,7 @@ mod tests {
             Opcode::Finalize {
                 agg_parts: Vec::new().into(),
                 num_group_keys: 0,
+                distinct: false,
                 order_by: Some((1, true)),
                 limit: Some(5),
             }

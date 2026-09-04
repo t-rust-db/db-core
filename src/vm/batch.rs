@@ -256,6 +256,7 @@ pub enum Opcode {
     Finalize {
         agg_parts: Cow<'static, [AggPart]>,
         num_group_keys: usize,
+        distinct: bool,
         order_by: Option<(usize, bool)>,
         limit: Option<usize>,
     },
