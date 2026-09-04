@@ -1,7 +1,0 @@
-[package]
-name = "sql-types"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "Base value and literal types shared across the t-rust-db SQL layer"

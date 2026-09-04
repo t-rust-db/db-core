@@ -22,13 +22,13 @@
 //! which is what lets `MAX_EXPR_DEPTH` actually be reached (rather than
 //! stack-overflowing first) within a debug build's default thread stack.
 //!
-//! Uses this crate's own [`crate::Span`], shared with [`super::ast`] and
+//! Uses this crate's own [`crate::parser::Span`], shared with [`super::ast`] and
 //! [`super::tokenizer`] -- not a duplicate `Span` type.
 
 use super::ast::*;
 use super::error::{PResult, ParseFail};
 use super::tokenizer::{Keyword, Param, Token, TokenKind};
-use crate::Span;
+use crate::parser::Span;
 
 /// Recursive-descent parser state: the token stream, a cursor into it, and
 /// the current expression-nesting depth (see [`MAX_EXPR_DEPTH`]).

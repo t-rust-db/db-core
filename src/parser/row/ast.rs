@@ -6,18 +6,18 @@
 //! the V4 GROUP BY/HAVING slice, and the V6 non-recursive `WITH`/CTE
 //! slice (`WithClause`/`CommonTableExpr`).
 //!
-//! **Deliberately not `sql_expr::Query`.** ADR 0002 originally
+//! **Deliberately not `crate::expr::Query`.** ADR 0002 originally
 //! anticipated `row` and `column` producing one shared AST type; its
 //! amendment records why that didn't hold once this module's ~15
 //! DDL/DML/transaction/`PRAGMA` statement types (with no equivalent in
 //! column-rs's `SELECT`-shaped analytics subset) were actually looked
-//! at: folding them into `sql_expr::Query` as new variants would be a
+//! at: folding them into `crate::expr::Query` as new variants would be a
 //! from-scratch AST design exercise disconnected from sqlite-rs's own
 //! (already tested, already used by its codegen) shape, for no benefit
 //! `row`'s only consumer needs today. `row` and `column` share this
 //! crate's tokenizer primitives (`Span`) but not one AST type -- the
 //! same "consolidated location, not shared representation" trade ADR
-//! 0001 already made for `sql_vm::batch`/`row`'s opcode sets.
+//! 0001 already made for `crate::vm::batch`/`row`'s opcode sets.
 //!
 //! Scoped to `.openspec/grammar/sqlite.ebnf`'s `(* V2 *)`/`(* V3 *)`/
 //! `(* V4 *)`-tagged rules: SELECT with an INNER/LEFT [OUTER]/CROSS join
@@ -38,7 +38,7 @@
 //! preserved explicitly via `ExprKind::Paren` rather than discarded, so
 //! `SELECT (a + b) * c` round-trips its grouping.
 
-use crate::Span;
+use crate::parser::Span;
 
 /// An `UPDATE table SET col = expr, ... [WHERE expr]` statement.
 #[derive(Debug, Clone, PartialEq)]

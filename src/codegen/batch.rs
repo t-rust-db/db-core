@@ -1,6 +1,6 @@
 //! `BatchExecutor` codegen -- one of `sql-codegen`'s three emitters (see
 //! crate root docs) -- extracted from column-rs's private `src/codegen.rs`
-//! (#98/#101/#103), so any `sql_vm::batch` consumer compiling queries
+//! (#98/#101/#103), so any `crate::vm::batch` consumer compiling queries
 //! ahead of time can depend on this instead of reimplementing it.
 //!
 //! Renders an already-planned query to standalone Rust source text, two
@@ -37,11 +37,11 @@
 //! has the `ParquetFile`/`execute_joined`/`execute_windowed`/`run_program`
 //! runtime glue, not a name hardcoded to column-rs specifically.
 
-use sql_expr::{
+use crate::expr::{
     AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
 };
-use sql_types::Literal;
-use sql_vm::batch::{MapOp, Opcode, Value};
+use crate::types::Literal;
+use crate::vm::batch::{MapOp, Opcode, Value};
 use std::fmt::Write as _;
 
 /// One aggregate's contribution to a `GROUP BY` query's output row,

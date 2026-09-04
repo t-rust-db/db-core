@@ -3,7 +3,7 @@
 //!
 //! **Fully implemented**, migrated in from sqlite-rs's own parser
 //! (`src/parser/*`) across #23's slices: [`tokenizer`], [`ast`] (its
-//! own AST, not `sql_expr::Query` -- see its doc comment and `ADR
+//! own AST, not `crate::expr::Query` -- see its doc comment and `ADR
 //! 0002`'s amendment for why), [`error`] (the three-way
 //! [`ParseOutcome`] and internal [`error::ParseFail`]/[`error::PResult`]),
 //! [`grammar`] (the recursive-descent [`grammar::Parser`] itself), and
@@ -12,7 +12,7 @@
 //! relies on).
 //!
 //! [`super::column`] is the reference for what "done" looks like: shares
-//! this crate's [`crate::Span`], its own `ParseError` (`column`'s, not
+//! this crate's [`crate::parser::Span`], its own `ParseError` (`column`'s, not
 //! `row`'s [`ParseOutcome`]/[`error::ParseFail`] -- see `ADR 0002`), and
 //! real test coverage -- all ported from sqlite-rs's existing parser
 //! test suite, unchanged.

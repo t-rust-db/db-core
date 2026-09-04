@@ -1,7 +1,7 @@
 //! Source-location primitive for `sql-parser`'s [`crate::ParseError`].
 //!
 //! Formerly its own `sql-error` crate; folded in here (db-core#8) once it
-//! became clear `Span` has exactly one consumer. `sql_vm::batch::VmError`
+//! became clear `Span` has exactly one consumer. `crate::vm::batch::VmError`
 //! deliberately does NOT adopt `Span` -- VM runtime errors use an opcode
 //! name as their "location" concept, not a source-text span (there's no
 //! source position left at execution time). If a second real consumer for

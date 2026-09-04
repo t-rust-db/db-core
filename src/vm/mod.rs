@@ -31,9 +31,9 @@
 
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "batch")]
+#[cfg(feature = "vm-batch")]
 pub mod batch;
-#[cfg(feature = "row")]
+#[cfg(feature = "vm-row")]
 pub mod row;
-#[cfg(feature = "stream")]
+#[cfg(feature = "vm-stream")]
 pub mod stream;

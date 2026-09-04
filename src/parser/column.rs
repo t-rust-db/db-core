@@ -10,7 +10,7 @@
 //! `LAST_VALUE`/`SUM`/`AVG`/`COUNT`) with `OVER (PARTITION BY ... ORDER BY
 //! ...)`.
 //!
-//! Produces `sql_expr::Query` -- the AST types themselves live in
+//! Produces `crate::expr::Query` -- the AST types themselves live in
 //! `sql-expr`, not here.
 //!
 //! Errors carry a [`Span`] (see `ADR 0001`/`ADR 0002` in `db-core`'s
@@ -27,11 +27,11 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::Span;
-use sql_expr::{
+use crate::expr::{
     AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
 };
-use sql_types::Literal;
+use crate::parser::Span;
+use crate::types::Literal;
 
 /// Keywords that can follow a table reference (`FROM table [alias]`,
 /// `JOIN table [alias] ON ...`) -- an identifier here is never taken as an
@@ -270,7 +270,7 @@ fn resolve_expr_aliases(expr: &mut Expr, aliases: &HashMap<String, String>) {
 /// Rewrite every qualified column reference in `query` (SELECT list, JOIN
 /// ON, WHERE, GROUP BY, ORDER BY) from an alias-qualified name to the real
 /// table name, per `aliases` (alias -> real table name). Table aliases are
-/// a parse-time-only convenience this way: `sql_expr::Query`/`Join` never
+/// a parse-time-only convenience this way: `crate::expr::Query`/`Join` never
 /// see or store an alias, so `column-rs` (an existing consumer) doesn't
 /// need any change to keep working with aliased queries.
 fn resolve_query_aliases(query: &mut Query, aliases: &HashMap<String, String>) {
@@ -396,7 +396,7 @@ impl Parser {
 
         // alias -> real table name, used to rewrite every qualified column
         // reference below (SELECT list, ON, WHERE, GROUP BY, ORDER BY) back
-        // to the real table name. `sql_expr::Query`/`Join` keep their
+        // to the real table name. `crate::expr::Query`/`Join` keep their
         // existing shape (real table names only) -- aliases are a purely
         // parse-time convenience, not a new AST concept a downstream
         // consumer (column-rs) would need to learn about.
@@ -994,7 +994,7 @@ pub fn parse_explain(input: &str) -> Result<(bool, Query)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sql_expr::{Join, JoinKind};
+    use crate::expr::{Join, JoinKind};
 
     #[test]
     fn parses_columns_and_where() {

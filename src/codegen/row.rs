@@ -1,7 +1,7 @@
 //! sqlite-rs-style codegen -- one of `sql-codegen`'s three emitters (see
 //! crate root docs).
 //!
-//! **Not yet implemented.** Blocked on [`sql_vm::row`] (db-core#18)
+//! **Not yet implemented.** Blocked on [`crate::vm::row`] (db-core#18)
 //! existing for real: codegen for a VM that doesn't exist yet in
 //! `db-core` has nothing concrete to target (a sqlite-rs-style emitter
 //! could target sqlite-rs's own private `Program`/VDBE bytecode type
@@ -34,8 +34,8 @@
 //!   correlated subqueries, flattening, materialization).
 //! - `transaction.rs` -- `BEGIN`/`COMMIT`/`ROLLBACK` codegen.
 //!
-//! This is a mechanical port target the same way `sql_parser::row` was
+//! This is a mechanical port target the same way `crate::parser::row` was
 //! (db-core#23) -- migrated in unchanged once there's a real
-//! `sql_vm::row::Opcode` to emit, not an independent reimplementation.
+//! `crate::vm::row::Opcode` to emit, not an independent reimplementation.
 //! Given the size, expect this to become several sub-tickets once #18
 //! lands, not one PR (matching db-core#20's own "Additional Notes").

@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! sqlite-rs's tokenizer (`src/parser/tokenizer.rs`), migrated in
 //! unchanged (see `#23`, `ADR 0002`) as the first real piece of
-//! `sql_parser::row`. Converts SQL source text into a stream of
-//! [`Token`]s, each carrying a [`crate::Span`] for error reporting.
+//! `crate::parser::row`. Converts SQL source text into a stream of
+//! [`Token`]s, each carrying a [`crate::parser::Span`] for error reporting.
 //! Malformed input never panics: it produces a [`TokenKind::Error`]
 //! token and scanning continues.
 //!
-//! Uses this crate's own [`crate::Span`] (shared with [`super::super::column`])
+//! Uses this crate's own [`crate::parser::Span`] (shared with [`super::super::column`])
 //! rather than a second, duplicate `Span` type -- field-for-field
 //! identical to sqlite-rs's own, so this is a pure substitution, not a
 //! shape change.
 
-use crate::Span;
+use crate::parser::Span;
 
 /// A single lexed unit of SQL source: its [`TokenKind`] plus the [`Span`]
 /// it occupies in the original text.

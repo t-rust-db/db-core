@@ -1,4 +1,4 @@
-# db-core (workspace: sql-types, sql-expr, sql-parser, ...)
+# db-core (single crate: types, expr, parser, join, vm, codegen)
 
 .DEFAULT_GOAL := help
 
@@ -14,28 +14,24 @@ help: ## Show this help
 
 # === Build ===
 
-build: ## Build every crate in the workspace
-	cargo build --workspace
+build: ## Build with all features
+	cargo build --all-features
 
 # === Test ===
 
-test: ## Run the full test suite across the workspace
-	cargo test --workspace
+test: ## Run the full test suite with all features
+	cargo test --all-features
 
-test-lib: ## Just the library unit tests across the workspace (fastest inner loop)
-	cargo test --workspace --lib
+test-lib: ## Just the library unit tests (fastest inner loop)
+	cargo test --all-features --lib
 
 # === Gates ===
 
-lint: ## Run clippy (deny warnings) and check formatting across the workspace
-	cargo clippy --workspace --all-targets -- -D warnings
+lint: ## Run clippy (deny warnings) and check formatting
+	cargo clippy --all-targets --all-features -- -D warnings
 	cargo fmt --all -- --check
 
 # === Release ===
 
-version: ## Print each workspace member's current version
-	@for f in */Cargo.toml; do \
-	  name=$$(sed -n 's/^name *= *"\([^"]*\)".*/\1/p' $$f | head -1); \
-	  ver=$$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' $$f | head -1); \
-	  printf "%-16s %s\n" "$$name" "$$ver"; \
-	done
+version: ## Print the crate's current version
+	@sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1

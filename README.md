@@ -1,53 +1,53 @@
 # db-core
 
-Shared SQL foundation for the t-rust-db family of engines (a row-oriented
-engine, `sqlite-rs`, and a columnar engine, `column-rs`, both depend on
-this workspace rather than duplicating parsing/AST logic).
+Shared SQL language/execution layer for the t-rust-db family of engines
+(`sqlite-rs`, row-oriented; `column-rs`, columnar) — one crate, so
+engines share types/expr/parser/join/vm/codegen without duplicating them,
+each gated behind Cargo features so a consumer builds only what it uses.
 
-This is a Cargo workspace, not a single crate, so that engines can depend
-on only the pieces they need and so unrelated concerns (parsing vs.
-expression AST vs. value types) can evolve independently.
+Physical storage is **not** here — see `db-storage` (`row`/`column`/
+`stream` modules, per [ADR 0006](.openspec/adr/0006-storage-consolidation-into-db-storage.md)).
+`db-core` is storage-agnostic by design.
 
-## Layout (phase 1)
+Was six separate crates (`sql-types`, `sql-expr`, `sql-parser`,
+`sql-join`, `sql-vm`, `sql-codegen`) until this repo's merge into one —
+see `CHANGELOG.md`. The module boundaries are unchanged, just no longer
+crate boundaries.
 
-- **`sql-types`** — `Literal` (the AST-level literal token) and `Value`
-  (the runtime value representation executors operate on), plus the
-  conversion between them. No SQL syntax, no evaluation logic.
-- **`sql-expr`** — the expression and query AST: `Expr`, `BinOp`, `AggFunc`,
-  `WindowFunc`, `WindowSpec`, `OrderBy`, `SelectItem`, `JoinKind`, `Join`,
-  and `Query` itself. `Query` lives here rather than in `sql-parser`
-  because `Expr::InSubquery` holds a `Query` and `Query::where_clause`
-  holds an `Expr` — the two types are mutually recursive and can't be
-  split across crates. This crate has no tokenizer and no evaluation;
-  it's AST only.
-- **`sql-parser`** — the tokenizer and recursive-descent parser. Its
-  public API (`parse`, `parse_explain`) turns SQL text into a
-  `sql_expr::Query`; it owns no AST types itself, only `ParseError` and
-  the parsing machinery.
-- **`sql-join`** — shared join infrastructure for t-rust-db engines.
-  Starts with `JoinHashTable`, a flat open-addressing multimap — the
-  hash table representation, not join semantics or a cost model, is the
-  fix column-rs's join benchmark needs. `JoinKind`/NULL-safe semantics
-  and a build-side cost model are follow-up additions once an engine
-  actually needs them, not built speculatively here.
-- **`sql-record`** — SQLite's on-disk record format (varints, serial
-  types, the header walk), extracted verbatim from sqlite-rs's private
-  `src/record`. Pure computation, no I/O; its own `Value`/`TextEncoding`
-  (not `sql_types::Value` — record values need a `Blob` variant and use
-  `Rc<str>`/`Rc<[u8]>` for cheap cloning during decode).
+## Layout
 
-Dependency direction: `sql-parser` → `sql-expr` → `sql-types`. `sql-join`
-and `sql-record` depend on none of the others today.
+- **`types`** — `Literal`/`Value`, the base value representation. No
+  syntax, no evaluation. Always compiled.
+- **`expr`** — the expression/query AST: `Expr`, `Query`, `BinOp`,
+  `AggFunc`, `WindowFunc`, `JoinKind`, etc. `Expr` and `Query` are
+  mutually recursive, which is why they live together. Always compiled.
+- **`join`** — `JoinHashTable` (a flat open-addressing multimap) and
+  join-kind emit semantics. Always compiled (small, no dependencies) —
+  its only consumer today is `vm-batch`.
+- **`parser`** — tokenizer + recursive-descent parser, producing
+  `expr::Query`. Two Cargo-feature-gated sections: `parser-column`
+  (column-rs's analytics subset, default on) and `parser-row`
+  (sqlite-rs's full grammar — DDL/DML/transactions/`PRAGMA`). See
+  `src/parser/grammar.ebnf` for the actual EBNF both sections implement.
+- **`vm`** — three execution engines over a compiled query: `vm-batch`
+  (vectorized/columnar, default on — this is column-rs's VM), `vm-row`
+  (cursor-driven, sqlite-rs-style — not yet implemented, `#18`),
+  `vm-stream` (push-driven, live/unbounded sources — not yet
+  implemented). Each has its own opcode set; they are not expected to
+  converge into one.
+- **`codegen`** — one emitter per `vm` executor: `codegen-batch`
+  (default on, needs `vm-batch`), `codegen-row`/`codegen-stream` (not
+  yet implemented).
 
-## Roadmap
+## Feature flags
 
-This is phase 1: enough structure to house the SQL parser cleanly. More
-crates will be added as functionality grows beyond what a single row- or
-column-oriented executor needs today, for example:
+```toml
+# column-rs's actual dependency shape:
+db-core = { git = "...", default-features = false, features = ["parser-column", "vm-batch"] }
+```
 
-- `sql-string` — string function implementations
-- (others as the row and columnar executors converge on shared needs)
-
-Each addition should stay a separate workspace member unless it's tightly
-coupled to an existing one, following the same "AST vs. parsing vs.
-evaluation" separation established here.
+`default = ["parser-column", "vm-batch", "codegen-batch"]` so a plain
+`cargo test` exercises real content. A consumer that only needs one
+execution mode sets `default-features = false` and lists exactly the
+features it uses — the others' modules and dependencies (e.g. `rayon`,
+needed only by `vm-batch`) then never compile.

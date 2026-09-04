@@ -13,9 +13,9 @@
 //! (`Vec<Value>`, one entry per row). Opcodes operate on whole registers at
 //! once rather than row-by-row.
 
-use sql_expr::AggFunc;
-pub use sql_join::JoinKind;
-use sql_join::{should_emit, JoinHashTable};
+use crate::expr::AggFunc;
+pub use crate::join::JoinKind;
+use crate::join::{should_emit, JoinHashTable};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;

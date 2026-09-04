@@ -3,7 +3,7 @@
 //! NULL-safe key equality is deliberately **not** here. `JoinHashTable<K,
 //! V>` is generic over `K` -- the caller chooses the key representation
 //! (see `hash_table` module docs) -- so `sql-join` never sees a
-//! `sql_types::Value` to special-case `NULL` on. column-rs's own
+//! `crate::types::Value` to special-case `NULL` on. column-rs's own
 //! `JoinKey` enum (`column-rs/src/query.rs`) already does this at the
 //! point where a `Value` is converted to a hashable key: `Value::Null`
 //! maps to `JoinKey::Null`, and since `JoinKey` derives `PartialEq`,
