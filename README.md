@@ -2,7 +2,7 @@
 
 Shared SQL language/execution layer for the t-rust-db family of engines
 (`sqlite-rs`, row-oriented; `column-rs`, columnar) — one crate, so
-engines share types/expr/parser/join/vm/codegen without duplicating them,
+engines share types/expr/parser/join/vm/codegen/emit without duplicating them,
 each gated behind Cargo features so a consumer builds only what it uses.
 
 Physical storage is **not** here — see `db-storage` (`row`/`column`/
@@ -35,18 +35,24 @@ crate boundaries.
   `vm-stream` (push-driven, live/unbounded sources — not yet
   implemented). Each has its own opcode set; they are not expected to
   converge into one.
-- **`codegen`** — one emitter per `vm` executor: `codegen-batch`
-  (default on, needs `vm-batch`), `codegen-row`/`codegen-stream` (not
-  yet implemented).
+- **`codegen`** — the planner, AST → executable `vm` `Program` (sqlite-rs's
+  meaning of "codegen", [ADR 0007](.openspec/adr/0007-program-instruction-mirror-sqlite-rs.md)):
+  `codegen-batch` (default on, needs `vm-batch`; moved here from
+  column-rs's `query.rs`), `codegen-row`/`codegen-stream` (not yet
+  implemented).
+- **`emit`** — ahead-of-time Rust-source emitter: a planned `Program` →
+  `const PROGRAM` source text for rustc (batch-only, no sqlite-rs
+  equivalent). `emit-batch` (default on, needs `codegen-batch`),
+  `emit-row`/`emit-stream` (not yet implemented).
 
 ## Feature flags
 
 ```toml
 # column-rs's actual dependency shape:
-db-core = { git = "...", default-features = false, features = ["parser-column", "vm-batch"] }
+db-core = { git = "...", default-features = false, features = ["parser-column", "vm-batch", "codegen-batch", "emit-batch"] }
 ```
 
-`default = ["parser-column", "vm-batch", "codegen-batch"]` so a plain
+`default = ["parser-column", "vm-batch", "codegen-batch", "emit-batch"]` so a plain
 `cargo test` exercises real content. A consumer that only needs one
 execution mode sets `default-features = false` and lists exactly the
 features it uses — the others' modules and dependencies (e.g. `rayon`,

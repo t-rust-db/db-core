@@ -1,5 +1,5 @@
-//! sqlite-rs-style codegen -- one of `sql-codegen`'s three emitters (see
-//! crate root docs).
+//! sqlite-rs-style planner -- one of `codegen`'s three planners (see
+//! module docs).
 //!
 //! **Not yet implemented.** Blocked on [`crate::vm::row`] (db-core#18)
 //! existing for real: codegen for a VM that doesn't exist yet in

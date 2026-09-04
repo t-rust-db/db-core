@@ -1,10 +1,9 @@
-//! Push-driven codegen for live/unbounded sources -- one of
-//! `sql-codegen`'s three emitters (see crate root docs), pairing with
-//! `crate::vm::stream`.
+//! Push-driven planner for live/unbounded sources -- one of `codegen`'s
+//! three planners (see module docs), pairing with `crate::vm::stream`.
 //!
 //! **Not yet implemented.** No product has a streaming query planner to
-//! extract this from yet -- unlike [`super::batch`] (extracted from
-//! column-rs's real `src/codegen.rs`) and [`super::row`] (a real,
+//! extract this from yet -- unlike [`super::batch`] (moved from
+//! column-rs's real `src/query.rs`) and [`super::row`] (a real,
 //! documented port target once `crate::vm::row` exists), there is no
 //! existing "streaming codegen" anywhere in the ecosystem today to
 //! mechanically port. Primary anticipated consumer: loglume (live log

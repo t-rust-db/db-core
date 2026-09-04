@@ -4,7 +4,7 @@ version = "0.12.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/db-core"
-description = "Shared SQL language/execution layer for t-rust-db: types, expr, parser, join, vm, codegen"
+description = "Shared SQL language/execution layer for t-rust-db: types, expr, parser, join, vm, codegen, emit"
 
 [lib]
 name = "db_core"
@@ -14,12 +14,12 @@ path = "src/lib.rs"
 rayon = { version = "1", optional = true }
 
 [features]
-# `parser-column` + `vm-batch` + `codegen-batch` on by default -- these
+# `parser-column` + `vm-batch` + `codegen-batch` + `emit-batch` on by default -- these
 # are the only real, tested content today, and plain `cargo test` (no
 # feature flags) needs something to exercise. Consumers that want to be
 # explicit about depending on exactly what they use (column-rs does) set
 # `default-features = false, features = [...]` regardless of this default.
-default = ["parser-column", "vm-batch", "codegen-batch"]
+default = ["parser-column", "vm-batch", "codegen-batch", "emit-batch"]
 
 # `parser`: one grammar section per Cargo feature, mirroring `vm`'s own
 # `batch`/`row`/`stream` split (ADR 0001/0002).
@@ -33,8 +33,17 @@ vm-batch = ["dep:rayon"]
 vm-row = []
 vm-stream = []
 
-# `codegen`: one emitter per Cargo feature, one per `vm` executor.
-# `codegen-batch` needs `vm-batch`'s `Opcode`/`Value` types to render.
+# `codegen`: the planner (AST -> executable `Program`), sqlite-rs's
+# meaning of the word (ADR 0007). One per `vm` executor; `codegen-batch`
+# needs `vm-batch`'s `Program`/`Opcode` types to build.
 codegen-batch = ["vm-batch"]
 codegen-row = []
 codegen-stream = []
+
+# `emit`: one ahead-of-time Rust-source emitter per Cargo feature, one
+# per `vm` executor (ADR 0007). `emit-batch` renders a planned
+# `codegen::batch` program to `const PROGRAM` source text, so it needs the
+# planner (and, through it, `vm-batch`'s `Opcode`/`Value` types).
+emit-batch = ["codegen-batch"]
+emit-row = []
+emit-stream = []

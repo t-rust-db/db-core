@@ -1,4 +1,4 @@
-# db-core (single crate: types, expr, parser, join, vm, codegen)
+# db-core (single crate: types, expr, parser, join, vm, codegen, emit)
 
 .DEFAULT_GOAL := help
 
