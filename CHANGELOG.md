@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.24.0] - 2026-09-05
+
+### Added
+
+- **`vm::row`'s scalar function set, second slice** (#68, follow-up to #64/#18). Adds `sign`, `zeroblob`, `iif`, scalar `min`/`max`, `sqlite_version`, `round`, `hex`, `unhex`, `instr`, `quote` to `vm::row::functions`'s registry -- no new opcode wiring needed, `Opcode::Function` already dispatches generically by name/arity. `like`/`glob` and the `substr`/`trim`/`replace` family remain deferred.
+
 ## [0.23.0] - 2026-09-04
 
 ### Added
