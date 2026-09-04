@@ -411,10 +411,51 @@ pub trait Segment: Send + Sync {
     fn load(&self) -> Batch;
 }
 
+/// Dynamically hands out segment indices to a fixed pool of worker threads:
+/// each thread loops fetch-adding a shared counter to claim its next
+/// segment until the counter runs past `len`, so a thread that finishes an
+/// expensive segment immediately pulls the next unclaimed one rather than
+/// sitting on a statically pre-assigned share -- the morsel-driven property
+/// `run_parallel`/`run_parallel_top_n`'s doc comments require, without a
+/// work-stealing dependency.
+fn run_morsels<T: Send>(len: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    if len == 0 {
+        return Vec::new();
+    }
+
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(len);
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<(usize, T)>> = Mutex::new(Vec::with_capacity(len));
+
+    std::thread::scope(|scope| {
+        for _ in 0..num_threads {
+            scope.spawn(|| loop {
+                let idx = next.fetch_add(1, Ordering::Relaxed);
+                if idx >= len {
+                    break;
+                }
+                let result = f(idx);
+                results.lock().unwrap().push((idx, result));
+            });
+        }
+    });
+
+    let mut results = results.into_inner().unwrap();
+    results.sort_unstable_by_key(|(idx, _)| *idx);
+    results.into_iter().map(|(_, result)| result).collect()
+}
+
 /// Run `program` (a flat, non-looping instruction list ending in
-/// [`Opcode::Emit`]) against every segment in parallel (via rayon,
-/// morsel-driven: one segment per task), then concatenate the emitted rows
-/// in segment order.
+/// [`Opcode::Emit`]) against every segment in parallel (morsel-driven: a
+/// fixed thread pool dynamically pulls one segment per task off a shared
+/// counter, see [`run_morsels`]), then concatenate the emitted rows in
+/// segment order.
 ///
 /// `GroupReduce`/`Reduce` results are per-segment only — merging partial
 /// aggregates across segments is not performed here.
@@ -422,17 +463,12 @@ pub fn run_parallel<'s>(
     segments: &[Box<dyn Segment + 's>],
     program: &[Opcode],
 ) -> Result<Vec<Vec<Value>>> {
-    use rayon::prelude::*;
-
-    let per_segment: Vec<Result<Vec<Vec<Value>>>> = segments
-        .par_iter()
-        .map(|segment| {
-            let batch = segment.load();
-            let mut vm = Vm::new();
-            vm.execute(&batch, program)?;
-            Ok(std::mem::take(&mut vm.output))
-        })
-        .collect();
+    let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments.len(), |idx| {
+        let batch = segments[idx].load();
+        let mut vm = Vm::new();
+        vm.execute(&batch, program)?;
+        Ok(std::mem::take(&mut vm.output))
+    });
 
     let mut all = Vec::new();
     for rows in per_segment {
@@ -542,17 +578,12 @@ pub fn run_parallel_top_n<'s>(
     program: &[Opcode],
     spec: &TopN,
 ) -> Result<Vec<Vec<Value>>> {
-    use rayon::prelude::*;
-
-    let per_segment: Vec<Result<Vec<Vec<Value>>>> = segments
-        .par_iter()
-        .map(|segment| {
-            let batch = segment.load();
-            let mut vm = Vm::new();
-            vm.execute(&batch, program)?;
-            Ok(top_n_reduce(std::mem::take(&mut vm.output), spec))
-        })
-        .collect();
+    let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments.len(), |idx| {
+        let batch = segments[idx].load();
+        let mut vm = Vm::new();
+        vm.execute(&batch, program)?;
+        Ok(top_n_reduce(std::mem::take(&mut vm.output), spec))
+    });
 
     let mut all = Vec::new();
     for rows in per_segment {
@@ -2539,5 +2570,58 @@ mod tests {
         };
         let rows = run_parallel_top_n(&segments, &program, &spec).unwrap();
         assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+    }
+
+    #[test]
+    fn run_morsels_rebalances_across_skewed_segment_costs() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        // More segments than worker threads, with wildly uneven simulated
+        // load: a static per-thread split (segments.len() / num_threads
+        // chunks handed out up front) would let one thread get stuck with
+        // all the expensive segments while others idle -- wall time would
+        // then track the *worst single thread's total*, not the sum spread
+        // evenly. A dynamic pull keeps every thread busy until the queue is
+        // drained, so wall time tracks (total work / thread count) instead.
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        if num_threads < 2 {
+            return; // rebalancing needs >1 worker to be observable
+        }
+
+        let costs_ms: Vec<u64> = (0..num_threads * 4)
+            .map(|i| if i % num_threads == 0 { 40 } else { 2 })
+            .collect();
+        let total_ms: u64 = costs_ms.iter().sum();
+        let concurrent_peak = AtomicUsize::new(0);
+        let concurrent_now = AtomicUsize::new(0);
+
+        let start = Instant::now();
+        run_morsels(costs_ms.len(), |idx| {
+            let n = concurrent_now.fetch_add(1, Ordering::SeqCst) + 1;
+            concurrent_peak.fetch_max(n, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(costs_ms[idx]));
+            concurrent_now.fetch_sub(1, Ordering::SeqCst);
+        });
+        let elapsed = start.elapsed();
+
+        // A static split (one contiguous chunk per thread, decided before
+        // any work starts) would serialize every "40ms" segment onto
+        // whichever thread(s) statically own that chunk, so a bad split
+        // could take close to the full `total_ms` sum. Dynamic pulling
+        // bounds wall time near `total_ms / num_threads` (plus scheduling
+        // slack) because idle threads immediately grab the next unclaimed
+        // segment instead of sitting on a fixed assignment.
+        let balanced_upper_bound = Duration::from_millis(total_ms / num_threads as u64 + 60);
+        assert!(
+            elapsed <= balanced_upper_bound,
+            "expected dynamic rebalancing to finish within {balanced_upper_bound:?}, took {elapsed:?} (total work {total_ms}ms over {num_threads} threads)"
+        );
+        assert!(
+            concurrent_peak.load(Ordering::SeqCst) > 1,
+            "expected more than one segment to run concurrently"
+        );
     }
 }
