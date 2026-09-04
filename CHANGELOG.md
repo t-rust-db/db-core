@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.25.0] - 2026-09-05
+
+### Fixed
+
+- **`EXPLAIN QUERY PLAN` now shows a `DISTINCT` node** (#71) -- `codegen::batch::explain` threaded `query.distinct` into the compiled program (`Opcode::Finalize`'s `distinct` field) and the VM really deduped, but the plan tree never reflected it, silently under-reporting what the query does. The node appears after `GROUP BY`/`AGGREGATE` and before `ORDER BY`/`LIMIT`, matching `compile`'s actual dedup ordering (post-`Finalize`, pre-sort/limit).
+
 ## [0.24.0] - 2026-09-05
 
 ### Added

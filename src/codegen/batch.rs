@@ -913,6 +913,12 @@ pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNod
                 }
             }
         }
+        // DISTINCT runs as a post-Finalize dedup pass, after GROUP BY's
+        // hash-aggregate merge and before ORDER BY/LIMIT (see
+        // `compile`'s `distinct` handling) -- the plan reflects that order.
+        if query.distinct {
+            b.push(0, "DISTINCT".to_string());
+        }
     }
 
     if let Some(OrderBy { column, descending }) = &query.order_by {
@@ -1589,6 +1595,45 @@ mod tests {
             nodes.last().unwrap().detail,
             "EMIT: id, region_key, ROW_NUMBER()"
         );
+    }
+
+    #[test]
+    fn explain_shows_distinct_node_for_plain_select_distinct() {
+        let query = sql::parse("SELECT DISTINCT region FROM production").unwrap();
+        let nodes = explain(&query, &stats);
+        assert!(details(&nodes).contains(&"DISTINCT"));
+        assert_eq!(nodes.last().unwrap().detail, "EMIT: region");
+    }
+
+    #[test]
+    fn explain_shows_distinct_after_group_by_and_aggregate() {
+        let query =
+            sql::parse("SELECT DISTINCT region, SUM(amount) FROM production GROUP BY region")
+                .unwrap();
+        let nodes = explain(&query, &stats);
+        assert!(details(&nodes).contains(&"GROUP BY: region"));
+        assert!(details(&nodes).contains(&"AGGREGATE: SUM(amount)"));
+        assert!(details(&nodes).contains(&"DISTINCT"));
+
+        // DISTINCT comes after GROUP BY/AGGREGATE, before EMIT.
+        let group_pos = details(&nodes)
+            .iter()
+            .position(|d| *d == "GROUP BY: region")
+            .unwrap();
+        let distinct_pos = details(&nodes)
+            .iter()
+            .position(|d| *d == "DISTINCT")
+            .unwrap();
+        let emit_pos = details(&nodes).len() - 1;
+        assert!(group_pos < distinct_pos);
+        assert!(distinct_pos < emit_pos);
+    }
+
+    #[test]
+    fn explain_omits_distinct_node_for_non_distinct_query() {
+        let query = sql::parse("SELECT region FROM production").unwrap();
+        let nodes = explain(&query, &stats);
+        assert!(!details(&nodes).contains(&"DISTINCT"));
     }
 
     fn opcodes(rows: &[OpcodeRow]) -> Vec<&'static str> {
