@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.28.0"
+version = "0.28.1"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/db-core"
@@ -11,7 +11,6 @@ name = "db_core"
 path = "src/lib.rs"
 
 [dependencies]
-rayon = { version = "1", optional = true }
 
 [features]
 # `parser-column` + `vm-batch` + `codegen-batch` + `emit-batch` on by default -- these
@@ -31,7 +30,7 @@ parser-row = []
 # `vm`: one executor per Cargo feature -- a consumer enables only the
 # one(s) it uses, so e.g. column-rs (`vm-batch` only) never compiles
 # `vm-row`/`vm-stream` or pulls in a dependency only one of them needs.
-vm-batch = ["dep:rayon"]
+vm-batch = []
 vm-row = []
 vm-stream = []
 
