@@ -45,7 +45,17 @@
 //!   [`cursor::Cursor`], `OpenEphemeral`/`Insert` over
 //!   [`cursor::EphemeralTableCursor`], `AggStep`/`AggFinal` over
 //!   [`aggregate::AggState`], `Function` over [`functions::call`], and
-//!   the sorter opcodes over [`cursor::SorterCursor`].
+//!   the sorter opcodes over [`cursor::SorterCursor`]. `OpenRead`/
+//!   `OpenWrite` (db-core#76) are also dispatched, but only as an
+//!   assertion that the caller pre-wired the cursor slot via
+//!   `Vm::open_cursor` -- real root-page/pager semantics against
+//!   `db-storage` are still not implemented (blocked on
+//!   t-rust-db/db-storage#8, which adds the read-only `TableCursor`
+//!   this trait's eventual adapter will wrap).
+//!
+//! [`cursor::Cursor`] also grew `prev`/`last`/`delete` (db-core#76),
+//! matching the shape a real storage-backed cursor will need, ahead of
+//! that wiring landing.
 //!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`

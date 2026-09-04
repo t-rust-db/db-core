@@ -763,6 +763,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             vm.set_register(instr.p2, Value::Integer(rowid))?;
             Ok(Step::Next)
         }
+        Opcode::OpenRead | Opcode::OpenWrite => {
+            // Real root-page/pager semantics (`db-storage` wiring) are
+            // future work -- see `cursor.rs`'s doc comment. For now this
+            // just asserts the caller already wired this slot via
+            // `open_cursor` before running the program.
+            vm.cursor(instr.p1)?;
+            Ok(Step::Next)
+        }
         Opcode::OpenEphemeral => {
             vm.open_cursor(instr.p1, Box::new(EphemeralTableCursor::new()))?;
             Ok(Step::Next)
@@ -1511,6 +1519,40 @@ mod tests {
                 opcode: "SorterData",
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn open_read_over_a_prewired_cursor_scans_normally() {
+        // Real root-page/pager semantics aren't implemented yet
+        // (db-storage wiring is a follow-up) -- OpenRead/OpenWrite just
+        // assert the caller already wired the slot via `open_cursor`.
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(super::super::cursor::InMemoryCursor::new(vec![vec![
+                Value::Integer(42),
+            ]])),
+        )
+        .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::OpenRead, 0, 0, 0),
+            Instruction::new(Opcode::Rewind, 0, 3, 0),
+            Instruction::new(Opcode::Column, 0, 0, 1),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(42)]]);
+    }
+
+    #[test]
+    fn open_read_over_an_unwired_slot_errors() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![Instruction::new(Opcode::OpenRead, 0, 0, 0)]);
+        assert!(matches!(
+            execute(&mut vm, &program),
+            Err(ExecError::CursorNotOpen { slot: 0 })
         ));
     }
 }
