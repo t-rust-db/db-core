@@ -20,14 +20,17 @@
 //! rejected here with [`ParseError::Unexpected`], not silently
 //! misconverted.
 //!
-//! **Not carried forward: window functions.** `parser::row`'s grammar
-//! itself rejects `OVER`/`FILTER` as not-yet-supported (see
-//! `grammar::parse_function_call`), so a query using `ROW_NUMBER() OVER
-//! (...)` etc. no longer parses at all through this module -- tracked as
-//! follow-up work (extend `row`'s grammar with window-function syntax,
-//! then give `codegen::batch::compile_window` an `ast::Select`-shaped
-//! input alongside its existing `crate::expr::Query` one). Every other
-//! shape this module previously accepted still does.
+//! **Window functions** (#74 follow-up): `parser::row`'s grammar parses
+//! `func(...) OVER (PARTITION BY ... ORDER BY ...)` (see
+//! `grammar::parse_function_call`/`window_def`); [`convert_window_call`]
+//! resolves `func` against [`WindowFunc::from_name`] and lowers into
+//! [`SelectItem::Window`], the same shape `codegen::batch::compile_window`
+//! already executes. Not carried forward from real SQLite/DuckDB syntax:
+//! a named `OVER window_name` (would need the still-unsupported `WINDOW`
+//! clause) and an explicit frame (`ROWS`/`RANGE`/`GROUPS ...`, no
+//! representation in `WindowSpec` -- every window function runs over a
+//! fixed default frame instead) are both rejected with a clear error, not
+//! silently accepted or misconverted.
 //!
 //! Errors carry a [`Span`] (see `ADR 0001`/`ADR 0002` in `db-core`'s
 //! `.openspec/adr/`), matching sqlite-rs's own `ParseFail`/`ParseOutcome`
@@ -37,10 +40,14 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::expr::{AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem};
+use crate::expr::{
+    AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc,
+    WindowSpec as ExprWindowSpec,
+};
 use crate::parser::row::ast::{
     BinaryOp as AstBinOp, Distinctness, Expr as AstExpr, ExprKind, FunctionArgs, JoinConstraint,
     JoinOp, Literal as AstLiteral, OrderingTerm, ResultColumn, Select, TableRefKind, UnaryOp,
+    WindowDef,
 };
 use crate::parser::row::ParseOutcome;
 use crate::parser::Span;
@@ -297,6 +304,21 @@ fn convert_result_column(col: &ResultColumn) -> Result<SelectItem> {
                 name,
                 distinct,
                 args,
+                over: Some(window_def),
+            } => {
+                if *distinct {
+                    return Err(unsupported(
+                        expr.span,
+                        "DISTINCT inside a window function".into(),
+                    ));
+                }
+                convert_window_call(expr.span, name, args, window_def)
+            }
+            ExprKind::FunctionCall {
+                name,
+                distinct,
+                args,
+                over: None,
             } => {
                 if *distinct {
                     return Err(unsupported(
@@ -331,6 +353,78 @@ fn convert_result_column(col: &ResultColumn) -> Result<SelectItem> {
             )),
         },
     }
+}
+
+/// Lowers `name(args) OVER (window_def)` into [`SelectItem::Window`]:
+/// resolves `name` against [`WindowFunc::from_name`], validates the
+/// argument count/shape each function kind expects (niladic for
+/// `ROW_NUMBER`/`RANK`/`DENSE_RANK`, one column plus an optional integer
+/// offset for `LAG`/`LEAD`, one column or `COUNT(*)` for the rest), and
+/// converts `window_def`'s `PARTITION BY`/`ORDER BY` expressions to plain
+/// column names -- the same "enforced subset" restriction the rest of
+/// this module applies (no expressions, only column references).
+fn convert_window_call(
+    span: Span,
+    name: &str,
+    args: &FunctionArgs,
+    window_def: &WindowDef,
+) -> Result<SelectItem> {
+    let func = WindowFunc::from_name(name)
+        .ok_or_else(|| unsupported(span, format!("unknown window function {name}")))?;
+
+    let (arg, offset) = match (func.is_niladic(), args) {
+        (true, FunctionArgs::List(list)) if list.is_empty() => (None, None),
+        (true, _) => Err(unsupported(span, format!("{name} takes no arguments")))?,
+        (false, FunctionArgs::Star) => {
+            if func != WindowFunc::Count {
+                return Err(unsupported(span, "only COUNT supports (*)".into()));
+            }
+            (None, None)
+        }
+        (false, FunctionArgs::List(list)) if matches!(func, WindowFunc::Lag | WindowFunc::Lead) => {
+            match list.as_slice() {
+                [one] => (Some(column_name(one)?), None),
+                [one, offset_expr] => {
+                    let offset = match &offset_expr.kind {
+                        ExprKind::Literal(AstLiteral::Integer(n)) => *n,
+                        _ => {
+                            return Err(unsupported(offset_expr.span, "non-integer offset".into()))
+                        }
+                    };
+                    (Some(column_name(one)?), Some(offset))
+                }
+                _ => return Err(unsupported(span, format!("{name} takes 1 or 2 arguments"))),
+            }
+        }
+        (false, FunctionArgs::List(list)) => match list.as_slice() {
+            [one] => (Some(column_name(one)?), None),
+            _ => {
+                return Err(unsupported(
+                    span,
+                    "a window function takes exactly one column or *".into(),
+                ))
+            }
+        },
+    };
+
+    let partition_by = window_def
+        .partition_by
+        .iter()
+        .map(column_name)
+        .collect::<Result<Vec<_>>>()?;
+    let order_by = window_def
+        .order_by
+        .iter()
+        .map(|term| Ok((column_name(&term.expr)?, term.desc.unwrap_or(false))))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(SelectItem::Window(ExprWindowSpec {
+        func,
+        arg,
+        offset,
+        partition_by,
+        order_by,
+    }))
 }
 
 /// Lowers a `Select` parsed by [`super::row`]'s shared grammar into
@@ -526,7 +620,7 @@ pub fn parse_explain(input: &str) -> Result<(Explain, Query)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expr::{Join, JoinKind};
+    use crate::expr::{Join, JoinKind, WindowSpec};
 
     #[test]
     fn parse_explain_distinguishes_opcodes_query_plan_and_none() {
@@ -771,12 +865,131 @@ mod tests {
     }
 
     #[test]
-    fn window_functions_no_longer_parse_pending_follow_up() {
-        // `parser::row`'s grammar itself rejects `OVER`/`FILTER` --
-        // tracked as follow-up (extend row's grammar, then give
-        // `compile_window` an `ast::Select` input too).
-        let err =
-            parse("SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY id) FROM t").unwrap_err();
+    fn row_number_over_partition_and_order_by() {
+        let q = parse("SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY id) FROM t").unwrap();
+        assert_eq!(
+            q.columns,
+            vec![SelectItem::Window(WindowSpec {
+                func: WindowFunc::RowNumber,
+                arg: None,
+                offset: None,
+                partition_by: vec!["region".into()],
+                order_by: vec![("id".into(), false)],
+            })]
+        );
+    }
+
+    #[test]
+    fn row_number_rejects_arguments() {
+        let err = parse("SELECT ROW_NUMBER(id) OVER (ORDER BY id) FROM t").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    #[test]
+    fn rank_and_dense_rank_over_order_by_only() {
+        for name in ["RANK", "DENSE_RANK"] {
+            let q = parse(&format!("SELECT {name}() OVER (ORDER BY id) FROM t")).unwrap();
+            assert_eq!(q.columns.len(), 1);
+            assert!(
+                matches!(&q.columns[0], SelectItem::Window(w) if w.partition_by.is_empty() && w.order_by == vec![("id".into(), false)])
+            );
+        }
+    }
+
+    #[test]
+    fn lag_and_lead_default_and_explicit_offset() {
+        let q =
+            parse("SELECT LAG(amount) OVER (PARTITION BY region ORDER BY id DESC) FROM t").unwrap();
+        assert_eq!(
+            q.columns,
+            vec![SelectItem::Window(WindowSpec {
+                func: WindowFunc::Lag,
+                arg: Some("amount".into()),
+                offset: None,
+                partition_by: vec!["region".into()],
+                order_by: vec![("id".into(), true)],
+            })]
+        );
+
+        let q = parse("SELECT LEAD(amount, 2) OVER (ORDER BY id) FROM t").unwrap();
+        assert_eq!(
+            q.columns,
+            vec![SelectItem::Window(WindowSpec {
+                func: WindowFunc::Lead,
+                arg: Some("amount".into()),
+                offset: Some(2),
+                partition_by: vec![],
+                order_by: vec![("id".into(), false)],
+            })]
+        );
+    }
+
+    #[test]
+    fn first_value_last_value_and_aggregate_as_window() {
+        for (sql, func) in [
+            (
+                "SELECT FIRST_VALUE(amount) OVER (ORDER BY id) FROM t",
+                WindowFunc::FirstValue,
+            ),
+            (
+                "SELECT LAST_VALUE(amount) OVER (ORDER BY id) FROM t",
+                WindowFunc::LastValue,
+            ),
+            (
+                "SELECT SUM(amount) OVER (PARTITION BY region) FROM t",
+                WindowFunc::Sum,
+            ),
+            (
+                "SELECT AVG(amount) OVER (PARTITION BY region) FROM t",
+                WindowFunc::Avg,
+            ),
+        ] {
+            let q = parse(sql).unwrap();
+            assert!(
+                matches!(&q.columns[0], SelectItem::Window(w) if w.func == func && w.arg == Some("amount".into())),
+                "unexpected result for {sql:?}: {:?}",
+                q.columns
+            );
+        }
+    }
+
+    #[test]
+    fn count_over_supports_star_and_column() {
+        let q = parse("SELECT COUNT(*) OVER (PARTITION BY region) FROM t").unwrap();
+        assert!(
+            matches!(&q.columns[0], SelectItem::Window(w) if w.func == WindowFunc::Count && w.arg.is_none())
+        );
+
+        let q = parse("SELECT COUNT(id) OVER (PARTITION BY region) FROM t").unwrap();
+        assert!(
+            matches!(&q.columns[0], SelectItem::Window(w) if w.func == WindowFunc::Count && w.arg == Some("id".into()))
+        );
+    }
+
+    #[test]
+    fn window_over_named_window_reference_is_unsupported() {
+        // `OVER w` (referencing a `WINDOW` clause) rather than an inline
+        // `OVER (...)` -- the WINDOW clause itself remains unsupported.
+        let err = parse(
+            "SELECT ROW_NUMBER() OVER w FROM t WINDOW w AS (PARTITION BY region ORDER BY id)",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    #[test]
+    fn window_frame_clause_is_unsupported() {
+        let err = parse(
+            "SELECT SUM(amount) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    #[test]
+    fn window_filter_clause_is_unsupported() {
+        let err = parse("SELECT SUM(amount) FILTER (WHERE amount > 0) OVER (ORDER BY id) FROM t")
+            .unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 

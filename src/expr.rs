@@ -105,6 +105,33 @@ pub enum WindowFunc {
     Count,
 }
 
+impl WindowFunc {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_uppercase().as_str() {
+            "ROW_NUMBER" => Some(WindowFunc::RowNumber),
+            "RANK" => Some(WindowFunc::Rank),
+            "DENSE_RANK" => Some(WindowFunc::DenseRank),
+            "LAG" => Some(WindowFunc::Lag),
+            "LEAD" => Some(WindowFunc::Lead),
+            "FIRST_VALUE" => Some(WindowFunc::FirstValue),
+            "LAST_VALUE" => Some(WindowFunc::LastValue),
+            "SUM" => Some(WindowFunc::Sum),
+            "AVG" => Some(WindowFunc::Avg),
+            "COUNT" => Some(WindowFunc::Count),
+            _ => None,
+        }
+    }
+
+    /// Whether this window function takes no argument (`ROW_NUMBER()`,
+    /// `RANK()`, `DENSE_RANK()`).
+    pub fn is_niladic(self) -> bool {
+        matches!(
+            self,
+            WindowFunc::RowNumber | WindowFunc::Rank | WindowFunc::DenseRank
+        )
+    }
+}
+
 /// `func(...) OVER (PARTITION BY ... ORDER BY ...)`. `offset` is only used
 /// by `LAG`/`LEAD` (default 1 when omitted).
 #[derive(Debug, Clone, PartialEq)]

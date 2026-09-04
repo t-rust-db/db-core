@@ -316,6 +316,24 @@ pub struct OrderingTerm {
     pub nulls_last: Option<bool>,
 }
 
+/// The inline, unnamed window spec of a `FunctionCall`'s `OVER (...)` tail
+/// (#74 follow-up: window functions). Only `PARTITION BY`/`ORDER BY` are
+/// carried -- a base window name (`OVER (base_name ...)`, requiring the
+/// still-unsupported `WINDOW` clause) and an explicit frame
+/// (`ROWS`/`RANGE`/`GROUPS BETWEEN ...`) are rejected during parsing with
+/// a clear "not yet supported" error rather than silently dropped, since
+/// [`crate::expr::WindowSpec`] (what this converts to) has no frame
+/// representation -- every window function runs over the fixed default
+/// frame its kind implies (cumulative when `ORDER BY` is present, whole
+/// partition otherwise; see `vm::batch`'s window execution).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowDef {
+    /// `PARTITION BY expr, ...`.
+    pub partition_by: Vec<Expr>,
+    /// `ORDER BY term, ...`.
+    pub order_by: Vec<OrderingTerm>,
+}
+
 /// `LIMIT limit [OFFSET offset]`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Limit {
@@ -350,7 +368,8 @@ pub enum ExprKind {
         /// The column name.
         name: String,
     },
-    /// A function call, e.g. `f(a, b)`, `f(DISTINCT a)`, `f(*)`.
+    /// A function call, e.g. `f(a, b)`, `f(DISTINCT a)`, `f(*)`, or a
+    /// window function `f(a) OVER (PARTITION BY ... ORDER BY ...)`.
     FunctionCall {
         /// The function name.
         name: String,
@@ -358,6 +377,8 @@ pub enum ExprKind {
         distinct: bool,
         /// The argument list.
         args: FunctionArgs,
+        /// `Some` for a window function's `OVER (...)` tail.
+        over: Option<WindowDef>,
     },
     /// A unary operator applied to an expression, e.g. `-x`, `NOT x`.
     Unary {
