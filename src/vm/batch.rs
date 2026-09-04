@@ -25,8 +25,8 @@ use std::hash::{Hash, Hasher};
 pub const BATCH_SIZE: usize = 1024;
 
 /// A runtime row value, or a `SELECT`-list literal baked into an
-/// [`Opcode::LoadConst`] -- `Str` uses `Cow<'static, str>` so a codegen'd
-/// `const PROGRAM` (see `codegen.rs`, #98) can hold `Cow::Borrowed("...")`
+/// [`Opcode::LoadConst`] -- `Str` uses `Cow<'static, str>` so an emitted
+/// `const PROGRAM` (see `crate::emit::batch`, #98) can hold `Cow::Borrowed("...")`
 /// literals with no heap allocation, while runtime column data (decoded
 /// from arbitrary Parquet `BYTE_ARRAY` bytes) still owns its `String` via
 /// `Cow::Owned`.
@@ -135,6 +135,23 @@ pub enum WindowFunc {
     Count,
 }
 
+/// One `GROUP BY`/aggregate part of an emitted row, in emit order -- the
+/// per-segment `GroupReduce` output's shape, which [`Opcode::Finalize`]
+/// needs to merge partial aggregates across segments (`Sum`/`Count` add,
+/// `Min`/`Max` compare, `Avg` divides its `(sum_index, count_index)` pair
+/// at the very end). Pure planning metadata, storage-agnostic. `Copy` so
+/// an AOT-emitted `const PROGRAM` can hold a `Cow::Borrowed(&[AggPart])`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggPart {
+    GroupKey,
+    Sum,
+    Count,
+    Min,
+    Max,
+    /// `(sum_index, count_index)` into the emitted row, combined at the end.
+    Avg(usize, usize),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Opcode {
     /// Load a named column from the current batch into a register.
@@ -227,6 +244,21 @@ pub enum Opcode {
     NextSegment { loop_start: usize },
     /// Stop execution.
     Halt,
+    /// Terminal opcode of a planned flat program (ADR 0007): the
+    /// cross-segment post-processing step -- merge per-segment partial
+    /// aggregates by group key (`agg_parts`/`num_group_keys`), then the
+    /// final `ORDER BY` (`(output column index, descending)`) and `LIMIT`.
+    /// A *barrier*: it needs every segment's output, so the per-segment
+    /// [`Vm`] treats it as a no-op control opcode (like [`Opcode::Scan`]/
+    /// [`Opcode::Halt`]) and [`crate::vm::engine::run`] applies it once
+    /// over the concatenated output. Encodes what used to be sidecar
+    /// plan fields so the instruction stream is the whole plan.
+    Finalize {
+        agg_parts: Cow<'static, [AggPart]>,
+        num_group_keys: usize,
+        order_by: Option<(usize, bool)>,
+        limit: Option<usize>,
+    },
 }
 
 impl Opcode {
@@ -249,6 +281,119 @@ impl Opcode {
             Opcode::Emit { .. } => "Emit",
             Opcode::NextSegment { .. } => "NextSegment",
             Opcode::Halt => "Halt",
+            Opcode::Finalize { .. } => "Finalize",
+        }
+    }
+}
+
+/// One instruction of a [`Program`]: a typed [`Opcode`] plus an optional
+/// human-readable comment for `EXPLAIN` listings -- the same shape as
+/// sqlite-rs's `vdbe::program::Instruction`, except that operands stay
+/// typed and named on the `Opcode` enum instead of sqlite-rs's C-heritage
+/// `p1..p5` integer slots (ADR 0007: `GroupReduce` alone carries three
+/// variable-length slices that don't fit five fixed slots without losing
+/// type safety).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Instruction {
+    pub opcode: Opcode,
+    pub comment: Option<String>,
+}
+
+impl Instruction {
+    /// An instruction with no comment.
+    pub fn new(opcode: Opcode) -> Self {
+        Self {
+            opcode,
+            comment: None,
+        }
+    }
+
+    /// An instruction carrying an `EXPLAIN` comment.
+    pub fn with_comment(opcode: Opcode, comment: impl Into<String>) -> Self {
+        Self {
+            opcode,
+            comment: Some(comment.into()),
+        }
+    }
+}
+
+/// A linear program of [`Instruction`]s, mirroring sqlite-rs's
+/// `vdbe::program::Program`. Everything the executor needs is *in* the
+/// instruction stream: the columns to load are the [`Opcode::LoadColumn`]
+/// operands, and the cross-segment merge/sort/limit metadata is the
+/// trailing [`Opcode::Finalize`] -- no sidecar plan struct (ADR 0007).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Program {
+    pub instructions: Vec<Instruction>,
+}
+
+impl Program {
+    /// Builds a program from its instruction sequence.
+    pub fn new(instructions: Vec<Instruction>) -> Self {
+        Self { instructions }
+    }
+
+    /// Builds a program from bare opcodes (no comments) -- how an AOT
+    /// `const PROGRAM: &[Opcode]` re-enters the engine at runtime.
+    pub fn from_opcodes<I: IntoIterator<Item = Opcode>>(opcodes: I) -> Self {
+        Self {
+            instructions: opcodes.into_iter().map(Instruction::new).collect(),
+        }
+    }
+
+    /// Returns the instruction at `pc`, or `None` if out of range.
+    pub fn get(&self, pc: usize) -> Option<&Instruction> {
+        self.instructions.get(pc)
+    }
+
+    /// The number of instructions in the program.
+    pub fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
+    /// Whether the program has no instructions.
+    pub fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
+    }
+
+    /// The bare opcodes, in order.
+    pub fn opcodes(&self) -> impl Iterator<Item = &Opcode> {
+        self.instructions.iter().map(|i| &i.opcode)
+    }
+
+    /// Every column the program loads, in first-load order -- derived by
+    /// scanning for [`Opcode::LoadColumn`] rather than carried separately.
+    pub fn columns_to_load(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for op in self.opcodes() {
+            if let Opcode::LoadColumn { column, .. } = op {
+                if !out.iter().any(|c| c == column.as_ref()) {
+                    out.push(column.to_string());
+                }
+            }
+        }
+        out
+    }
+
+    /// Splits off a trailing [`Opcode::Finalize`]: `(body opcodes, the
+    /// Finalize)`. A program without one returns all its opcodes and
+    /// `None`, and executes as a plain per-segment concatenation.
+    pub fn split_finalize(&self) -> (Vec<Opcode>, Option<&Opcode>) {
+        match self.instructions.last() {
+            Some(Instruction {
+                opcode: fin @ Opcode::Finalize { .. },
+                ..
+            }) => {
+                let n = self.instructions.len() - 1;
+                (
+                    self.instructions[..n]
+                        .iter()
+                        .map(|i| i.opcode.clone())
+                        .collect(),
+                    Some(fin),
+                )
+            }
+            _ => (self.opcodes().cloned().collect(), None),
         }
     }
 }
@@ -925,8 +1070,10 @@ impl Vm {
                 drop(cols);
                 self.output.extend(rows);
             }
-            // Meaningful only as loop markers interpreted by `run`.
-            Opcode::Scan | Opcode::NextSegment { .. } | Opcode::Halt => {}
+            // Meaningful only as loop markers interpreted by `run` --
+            // and `Finalize` is a cross-segment barrier applied once by
+            // `crate::vm::engine::run`, never inside a single segment.
+            Opcode::Scan | Opcode::NextSegment { .. } | Opcode::Halt | Opcode::Finalize { .. } => {}
         }
         Ok(())
     }

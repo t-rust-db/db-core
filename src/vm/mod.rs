@@ -18,6 +18,11 @@
 //! regardless of execution strategy -- in one place, rather than splitting
 //! "the VM" across two repos by strategy.
 //!
+//! [`engine`] (gated with `vm-batch`) is the cross-segment orchestration
+//! layer over `batch`: it runs a `Program`'s body per segment in parallel
+//! and applies the trailing `Finalize` barrier once (ADR 0007), plus the
+//! join/window drivers that materialize whole tables.
+//!
 //! Each executor has its own opcode set (`batch::Opcode` and a future
 //! `row::Opcode` are NOT the same type, and are not expected to become
 //! one) -- see each module's own docs.
@@ -33,6 +38,8 @@
 
 #[cfg(feature = "vm-batch")]
 pub mod batch;
+#[cfg(feature = "vm-batch")]
+pub mod engine;
 #[cfg(feature = "vm-row")]
 pub mod row;
 #[cfg(feature = "vm-stream")]

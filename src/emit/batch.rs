@@ -42,21 +42,8 @@ use crate::expr::{
     AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
 };
 use crate::types::Literal;
-use crate::vm::batch::{MapOp, Opcode, Value};
+use crate::vm::batch::{AggPart, MapOp, Opcode, Value};
 use std::fmt::Write as _;
-
-/// One aggregate's contribution to a `GROUP BY` query's output row,
-/// alongside its group-key columns -- `AVG` needs both a running sum and
-/// count register to compute the final average during post-processing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AggPart {
-    GroupKey,
-    Sum,
-    Count,
-    Min,
-    Max,
-    Avg(usize, usize),
-}
 
 /// A path or a simple `*`-glob (one wildcard, in the file name only --
 /// e.g. `data/*.parquet`) expanded against the filesystem, sorted for
@@ -617,6 +604,20 @@ fn render_opcode(op: &Opcode) -> String {
             format!("Opcode::NextSegment {{ loop_start: {loop_start} }}")
         }
         Opcode::Halt => "Opcode::Halt".to_string(),
+        Opcode::Finalize {
+            agg_parts,
+            num_group_keys,
+            order_by,
+            limit,
+        } => {
+            let parts: Vec<String> = agg_parts.iter().map(render_agg_part).collect();
+            format!(
+                "Opcode::Finalize {{ agg_parts: std::borrow::Cow::Borrowed(&[{}]), num_group_keys: {num_group_keys}, order_by: {}, limit: {} }}",
+                parts.join(", "),
+                render_order_by(*order_by),
+                render_option_usize(*limit)
+            )
+        }
         // No caller-side planner emits these three yet -- the join/semi-
         // join/window bypass shapes ([`render_joined`]/
         // [`render_semi_join`]/[`render_windowed`]) still reconstruct a
