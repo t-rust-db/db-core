@@ -54,6 +54,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sql-codegen"
+version = "0.10.0"
+dependencies = [
+ "sql-expr",
+ "sql-types",
+ "sql-vm",
+]
+
+[[package]]
 name = "sql-expr"
 version = "0.10.0"
 dependencies = [

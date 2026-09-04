@@ -11,6 +11,7 @@ members = [
     "sql-vfs",
     "sql-header",
     "sql-pager",
+    "sql-codegen",
 ]
 
 [workspace.package]
