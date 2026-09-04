@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.21.0] - 2026-09-04
+
+### Added
+
+- **Bare `EXPLAIN` opcode listing** (#55). `parser::column::parse_explain` now returns a 3-variant `Explain` enum (`None`/`Opcodes`/`QueryPlan`) instead of a bool, so callers can distinguish bare `EXPLAIN` from `EXPLAIN QUERY PLAN` (previously collapsed into one flag). New `codegen::batch::explain_opcodes(query)` builds a bare `EXPLAIN`'s opcode listing: one `OpcodeSection` per phase the executor actually runs (flat/GROUP BY/ORDER BY/LIMIT -> one `body`; join -> `build`/`probe`/`body`; semi-join and window -> one `body`), each holding `OpcodeRow`s (`addr | opcode | operands | comment`) with named-field operands (not a `Debug` dump) and the `Finalize` barrier flagged via `Program::split_finalize`. `Opcode::name()` is now `pub`.
+
 ## [0.20.0] - 2026-09-04
 
 ### Added
