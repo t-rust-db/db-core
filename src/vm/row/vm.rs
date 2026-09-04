@@ -1,7 +1,8 @@
-//! The register file, cursor-slot table, and fetch-decode-execute loop,
-//! ported from sqlite-rs's `vdbe::exec` (db-core#51/#56/#59). Storage-agnostic:
-//! cursors are [`super::cursor::Cursor`] trait objects, not real
-//! b-tree/pager access -- see `super::cursor`'s doc and ADR 0008.
+//! The register file, cursor-slot table, aggregate-context slot table,
+//! and fetch-decode-execute loop, ported from sqlite-rs's `vdbe::exec`
+//! (db-core#51/#56/#59/#62/#64). Storage-agnostic: cursors are
+//! [`super::cursor::Cursor`] trait objects, not real b-tree/pager
+//! access -- see `super::cursor`'s doc and ADR 0008.
 //!
 //! **Scope of this phase.** Dispatched: control flow (`Init`/`Goto`/
 //! `Once`/`BeginSubrtn`/`Return`/`Halt`/`IfNot`/`IfNotZero`/`IfPos`/
@@ -12,11 +13,14 @@
 //! result-row loads (`Integer`/`Int64`/`Real`/`Blob`/`Null`/`String8`/
 //! `Variable`/`Copy`/`ResultRow`/`MakeRecord`, via [`super::record`]),
 //! `Rewind`/`Next`/`Column`/`Rowid` over a [`super::cursor::Cursor`]
-//! opened via [`Vm::open_cursor`], and `OpenEphemeral`/`Insert` over an
+//! opened via [`Vm::open_cursor`], `OpenEphemeral`/`Insert` over an
 //! in-memory [`super::cursor::EphemeralTableCursor`] (`Insert` decodes
 //! `MakeRecord`'s blob straight back into `Value`s -- sqlite-rs's own
-//! "decode-once-at-insert" design). Everything else in
-//! [`super::program::Opcode`] returns `ExecError::Unimplemented`.
+//! "decode-once-at-insert" design), `AggStep`/`AggFinal` over
+//! [`super::aggregate::AggState`] (single-group only), and `Function`
+//! over [`super::functions::call`] (first slice of ~7 scalar
+//! functions). Everything else in [`super::program::Opcode`] returns
+//! `ExecError::Unimplemented`.
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -27,6 +31,7 @@ use super::cast::cast_to;
 use super::coerce;
 use super::compare::compare;
 use super::cursor::{Cursor, EphemeralTableCursor};
+use super::functions;
 use super::program::{Instruction, Opcode, Program, P4};
 use super::record::{decode_record, encode_record};
 use super::value::{Collation, TextEncoding, Value};
@@ -795,6 +800,42 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
+        Opcode::Function => {
+            let descriptor = match &instr.p4 {
+                P4::Str(s) => s.as_str(),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "Function",
+                        reason: format!("expected a \"name(arity)\" string P4, got {other:?}"),
+                    })
+                }
+            };
+            let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
+                ExecError::MalformedInstruction {
+                    opcode: "Function",
+                    reason: format!("malformed function descriptor {descriptor:?}"),
+                }
+            })?;
+            let mut args = Vec::with_capacity(arity);
+            for i in 0..arity {
+                let reg = instr
+                    .p2
+                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+                    .ok_or(ExecError::RegisterOutOfRange {
+                        opcode: "Function",
+                        index: instr.p2,
+                    })?;
+                args.push(vm.register(reg)?.clone());
+            }
+            let result =
+                functions::call(name, &args).map_err(|e| ExecError::MalformedInstruction {
+                    opcode: "Function",
+                    reason: e.to_string(),
+                })?;
+            vm.set_register(instr.p3, result)?;
+            Ok(Step::Next)
+        }
+
         Opcode::AggStep => {
             let (name, arity, collation) = match &instr.p4 {
                 P4::AggFunc {
@@ -1298,5 +1339,45 @@ mod tests {
         ]);
         let rows = execute(&mut vm, &program).unwrap();
         assert_eq!(rows, vec![vec![Value::Integer(0), Value::Null]]);
+    }
+
+    #[test]
+    fn function_calls_abs_and_upper_end_to_end() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, -5, 0, 0), // reg0 = -5
+            Instruction::with_p4(Opcode::Function, 0, 0, 1, P4::Str("abs(1)".to_string())), // reg1 = abs(reg0)
+            Instruction::with_p4(Opcode::String8, 0, 3, 0, P4::Str("hi".to_string())), // reg3 = "hi"
+            Instruction::with_p4(Opcode::Function, 0, 3, 2, P4::Str("upper(1)".to_string())), // reg2 = upper(reg3)
+            Instruction::new(Opcode::ResultRow, 1, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            rows,
+            vec![vec![
+                Value::Integer(5),
+                Value::Text("HI".to_string().into())
+            ]]
+        );
+    }
+
+    #[test]
+    fn function_with_unknown_name_errors() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![Instruction::with_p4(
+            Opcode::Function,
+            0,
+            0,
+            0,
+            P4::Str("median(0)".to_string()),
+        )]);
+        assert!(matches!(
+            execute(&mut vm, &program),
+            Err(ExecError::MalformedInstruction {
+                opcode: "Function",
+                ..
+            })
+        ));
     }
 }

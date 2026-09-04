@@ -1,11 +1,12 @@
 //! `RowExecutor`: the cursor-driven, row-at-a-time query VM -- one of
 //! `sql-vm`'s three executors (see crate root docs).
 //!
-//! **Partial (db-core#18/#51/#56/#59/#62, tracking issue db-core#18).**
-//! A literal, opcode-for-opcode port of sqlite-rs's VDBE (ADR 0008,
-//! revised for full parity -- see that ADR's history: an earlier draft
-//! mistakenly generalized [`super::batch`]'s typed-operand design to
-//! `row`, which does not apply here). Ported so far:
+//! **Partial (db-core#18/#51/#56/#59/#62/#64, tracking issue
+//! db-core#18).** A literal, opcode-for-opcode port of sqlite-rs's VDBE
+//! (ADR 0008, revised for full parity -- see that ADR's history: an
+//! earlier draft mistakenly generalized [`super::batch`]'s
+//! typed-operand design to `row`, which does not apply here). Ported
+//! so far:
 //!
 //! - [`value`] -- `Value`/`Collation`/`compare_text`/`format_real`.
 //! - [`compare`] -- cross-type ordering (NULL < numeric < text < blob).
@@ -18,6 +19,10 @@
 //!   `AVG`/`MIN`/`MAX`), backing `Opcode::AggStep`/`AggFinal`.
 //!   **Single-group only** -- `GROUP BY` grouping (`hash_agg.rs`) is
 //!   not yet ported.
+//! - [`functions`] -- scalar functions, backing `Opcode::Function`.
+//!   **First slice only**: `abs`/`length`/`upper`/`lower`/`coalesce`/
+//!   `ifnull`/`nullif`/`typeof`; `like`/`glob`/`substr`/the rest of
+//!   sqlite-rs's ~35-function set are not yet ported.
 //! - [`program`] -- `Opcode`/`Instruction`/`Program`, sqlite-rs's raw
 //!   `p1..p5` operand shape (not typed named fields).
 //! - [`cursor`] -- the storage-agnostic [`cursor::Cursor`] trait ADR
@@ -33,16 +38,16 @@
 //!   -- control flow, compare/cast/arithmetic, result-row loads
 //!   including `MakeRecord`, `Rewind`/`Next`/`Column`/`Rowid` over
 //!   [`cursor::Cursor`], `OpenEphemeral`/`Insert` over
-//!   [`cursor::EphemeralTableCursor`], and `AggStep`/`AggFinal` over
-//!   [`aggregate::AggState`].
+//!   [`cursor::EphemeralTableCursor`], `AggStep`/`AggFinal` over
+//!   [`aggregate::AggState`], and `Function` over [`functions::call`].
 //!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
 //! and index-mode ephemeral cursors, DDL, real transactions, sorter,
-//! `GROUP BY` hash aggregation, scalar functions, `EXPLAIN`/`PRAGMA`
-//! rendering. `Opcode` already lists every variant sqlite-rs has
-//! (parity of identity); dispatch for the rest lands in later phases
-//! (tracked against db-core#18).
+//! `GROUP BY` hash aggregation, the remaining ~27 scalar functions,
+//! `EXPLAIN`/`PRAGMA` rendering. `Opcode` already lists every variant
+//! sqlite-rs has (parity of identity); dispatch for the rest lands in
+//! later phases (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
@@ -56,6 +61,7 @@ pub mod cast;
 pub mod coerce;
 pub mod compare;
 pub mod cursor;
+pub mod functions;
 pub mod logic;
 pub mod program;
 pub mod record;
@@ -67,6 +73,7 @@ pub use aggregate::{AggState, AggregateError};
 pub use cast::cast_to;
 pub use compare::compare;
 pub use cursor::{Cursor, EphemeralTableCursor, InMemoryCursor};
+pub use functions::FunctionError;
 pub use program::{Instruction, Opcode, Program, P4};
 pub use record::{decode_column, decode_record, encode_record, RecordError};
 pub use value::{compare_text, format_real, Collation, TextEncoding, Value};
