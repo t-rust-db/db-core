@@ -1,7 +1,7 @@
 //! `RowExecutor`: the cursor-driven, row-at-a-time query VM -- one of
 //! `sql-vm`'s three executors (see crate root docs).
 //!
-//! **Partial (db-core#18/#51/#56/#59/#62/#64, tracking issue
+//! **Partial (db-core#18/#51/#56/#59/#62/#64/#68, tracking issue
 //! db-core#18).** A literal, opcode-for-opcode port of sqlite-rs's VDBE
 //! (ADR 0008, revised for full parity -- see that ADR's history: an
 //! earlier draft mistakenly generalized [`super::batch`]'s
@@ -20,9 +20,11 @@
 //!   **Single-group only** -- `GROUP BY` grouping (`hash_agg.rs`) is
 //!   not yet ported.
 //! - [`functions`] -- scalar functions, backing `Opcode::Function`.
-//!   **First slice only**: `abs`/`length`/`upper`/`lower`/`coalesce`/
-//!   `ifnull`/`nullif`/`typeof`; `like`/`glob`/`substr`/the rest of
-//!   sqlite-rs's ~35-function set are not yet ported.
+//!   Two slices so far: `abs`/`length`/`upper`/`lower`/`coalesce`/
+//!   `ifnull`/`nullif`/`typeof` (db-core#64), and `sign`/`zeroblob`/
+//!   `iif`/scalar `min`/`max`/`sqlite_version`/`round`/`hex`/`unhex`/
+//!   `instr`/`quote` (db-core#68); `like`/`glob`/`substr`/`trim` family
+//!   are not yet ported.
 //! - [`program`] -- `Opcode`/`Instruction`/`Program`, sqlite-rs's raw
 //!   `p1..p5` operand shape (not typed named fields).
 //! - [`cursor`] -- the storage-agnostic [`cursor::Cursor`] trait ADR
@@ -43,11 +45,11 @@
 //!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
-//! and index-mode ephemeral cursors, DDL, real transactions, sorter,
-//! `GROUP BY` hash aggregation, the remaining ~27 scalar functions,
-//! `EXPLAIN`/`PRAGMA` rendering. `Opcode` already lists every variant
-//! sqlite-rs has (parity of identity); dispatch for the rest lands in
-//! later phases (tracked against db-core#18).
+//! and index-mode ephemeral cursors, DDL, real transactions, sorter
+//! (db-core#69), `GROUP BY` hash aggregation, `like`/`glob`/`substr`/
+//! `trim`/`replace`, `EXPLAIN`/`PRAGMA` rendering. `Opcode` already
+//! lists every variant sqlite-rs has (parity of identity); dispatch
+//! for the rest lands in later phases (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
