@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.28.0] - 2026-09-05
+
+### Added
+
+- **Window function parsing** (#74 follow-up) -- `parser::row`'s grammar parses `func(...) OVER (PARTITION BY ... ORDER BY ...)` (a new `ast::WindowDef`, `ExprKind::FunctionCall`'s new `over` field, `Parser::window_def`), and `parser::column` lowers it into `SelectItem::Window` via the new `WindowFunc::from_name`/`convert_window_call`, resolving all 10 `WindowFunc` variants (`ROW_NUMBER`/`RANK`/`DENSE_RANK`, `LAG`/`LEAD` with an optional integer offset, `FIRST_VALUE`/`LAST_VALUE`, `SUM`/`AVG`/`COUNT` as windowed aggregates) with per-kind argument validation (niladic for the ranking functions, one column or `COUNT(*)` for the rest). Sqlite-rs has no prior art for this (same unimplemented stub), so the grammar was designed fresh against SQLite's/DuckDB's actual window-function syntax rather than ported.
+- Deliberately **not** carried forward, each rejected with a specific "not yet supported" error rather than silently accepted or misconverted: a named `OVER window_name` (would need the still-unsupported `WINDOW` clause), an explicit frame (`ROWS`/`RANGE`/`GROUPS BETWEEN ...` -- `WindowSpec` has no frame representation; every window function runs over its fixed default frame instead), and `FILTER (WHERE ...)` on an aggregate/window function.
+
 ## [0.27.0] - 2026-09-05
 
 ### Fixed

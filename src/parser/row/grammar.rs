@@ -2344,9 +2344,17 @@ impl Parser {
             FunctionArgs::List(self.expr_list()?)
         };
         let mut end = self.expect_punct(TokenKind::RParen, "')' to close function call")?;
-        if self.at_kw(Keyword::OVER) || self.at_kw(Keyword::FILTER) {
-            return self.unsupported("window functions (OVER/FILTER) not yet supported");
+        if self.at_kw(Keyword::FILTER) {
+            return self
+                .unsupported("FILTER clause on aggregates/window functions not yet supported");
         }
+        let over = if self.eat_kw(Keyword::OVER) {
+            let (def, over_end) = self.window_def()?;
+            end = over_end;
+            Some(def)
+        } else {
+            None
+        };
         let span = join_span(start, {
             end.len = end.len.max(1);
             end
@@ -2356,9 +2364,61 @@ impl Parser {
                 name,
                 distinct,
                 args,
+                over,
             },
             span,
         })
+    }
+
+    /// The inline window spec after `OVER`: `([PARTITION BY expr, ...]
+    /// [ORDER BY term, ...])`. A base window name or a frame clause
+    /// (`ROWS`/`RANGE`/`GROUPS ...`) inside the parens is rejected with a
+    /// clear "not yet supported" error. Returns the parsed [`WindowDef`]
+    /// plus the closing `)`'s span (for the whole function-call
+    /// expression's span).
+    fn window_def(&mut self) -> PResult<(WindowDef, Span)> {
+        if !matches!(self.peek().kind, TokenKind::LParen) {
+            return self.unsupported(
+                "OVER <window-name> not yet supported (the WINDOW clause isn't either) -- use an inline OVER (...) instead",
+            );
+        }
+        self.advance();
+
+        let mut partition_by = Vec::new();
+        if self.eat_kw(Keyword::PARTITION) {
+            self.expect_kw(Keyword::BY)?;
+            partition_by.push(self.expr()?);
+            while self.eat_punct(&TokenKind::Comma) {
+                partition_by.push(self.expr()?);
+            }
+        }
+
+        let mut order_by = Vec::new();
+        if self.eat_kw(Keyword::ORDER) {
+            self.expect_kw(Keyword::BY)?;
+            order_by.push(self.ordering_term()?);
+            while self.eat_punct(&TokenKind::Comma) {
+                order_by.push(self.ordering_term()?);
+            }
+        }
+
+        if matches!(
+            self.peek().kind,
+            TokenKind::Keyword(Keyword::ROWS)
+                | TokenKind::Keyword(Keyword::RANGE)
+                | TokenKind::Keyword(Keyword::GROUPS)
+        ) {
+            return self.unsupported("window frame (ROWS/RANGE/GROUPS) not yet supported");
+        }
+
+        let end = self.expect_punct(TokenKind::RParen, "')' to close window spec")?;
+        Ok((
+            WindowDef {
+                partition_by,
+                order_by,
+            },
+            end,
+        ))
     }
 
     fn case_expr(&mut self) -> PResult<Expr> {

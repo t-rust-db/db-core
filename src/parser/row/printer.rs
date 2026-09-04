@@ -224,6 +224,36 @@ impl fmt::Display for OrderingTerm {
     }
 }
 
+impl fmt::Display for WindowDef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "(")?;
+        let mut wrote = false;
+        if !self.partition_by.is_empty() {
+            write!(f, "PARTITION BY ")?;
+            for (i, expr) in self.partition_by.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{expr}")?;
+            }
+            wrote = true;
+        }
+        if !self.order_by.is_empty() {
+            if wrote {
+                write!(f, " ")?;
+            }
+            write!(f, "ORDER BY ")?;
+            for (i, term) in self.order_by.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{term}")?;
+            }
+        }
+        write!(f, ")")
+    }
+}
+
 impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
@@ -246,6 +276,7 @@ impl fmt::Display for Expr {
                 name,
                 distinct,
                 args,
+                over,
             } => {
                 write!(f, "{name}(")?;
                 if *distinct {
@@ -262,7 +293,11 @@ impl fmt::Display for Expr {
                         }
                     }
                 }
-                write!(f, ")")
+                write!(f, ")")?;
+                if let Some(over) = over {
+                    write!(f, " OVER {over}")?;
+                }
+                Ok(())
             }
             ExprKind::Unary { op, expr } => {
                 let op = match op {
@@ -1117,6 +1152,57 @@ mod tests {
         match parse_rollback("ROLLBACK") {
             ParseOutcome::Accepted(r) => assert_eq!(r.to_string(), "ROLLBACK"),
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// #74 follow-up: window functions round-trip through `parser::row`'s
+    /// grammar/printer -- `parser::column`'s tests cover lowering into
+    /// `SelectItem::Window`, this covers the AST/printer shape they
+    /// lower from.
+    #[test]
+    fn window_function_over_partition_and_order_by_roundtrips() {
+        assert_eq!(
+            ok_select("SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY id DESC) FROM t"),
+            "SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY id DESC) FROM t"
+        );
+        assert_eq!(
+            ok_select("SELECT LAG(amount, 2) OVER (ORDER BY id) FROM t"),
+            "SELECT LAG(amount, 2) OVER (ORDER BY id) FROM t"
+        );
+        assert_eq!(
+            ok_select("SELECT SUM(amount) OVER (PARTITION BY region) FROM t"),
+            "SELECT SUM(amount) OVER (PARTITION BY region) FROM t"
+        );
+        assert_eq!(
+            ok_select("SELECT COUNT(*) OVER (PARTITION BY region) FROM t"),
+            "SELECT COUNT(*) OVER (PARTITION BY region) FROM t"
+        );
+    }
+
+    #[test]
+    fn window_over_named_window_reference_is_unsupported() {
+        match parse_select("SELECT ROW_NUMBER() OVER w FROM t") {
+            ParseOutcome::Unsupported { .. } => {}
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn window_frame_clause_is_unsupported() {
+        match parse_select(
+            "SELECT SUM(amount) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t",
+        ) {
+            ParseOutcome::Unsupported { .. } => {}
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn window_filter_clause_is_unsupported() {
+        match parse_select("SELECT SUM(amount) FILTER (WHERE amount > 0) OVER (ORDER BY id) FROM t")
+        {
+            ParseOutcome::Unsupported { .. } => {}
+            other => panic!("expected Unsupported, got {other:?}"),
         }
     }
 }
