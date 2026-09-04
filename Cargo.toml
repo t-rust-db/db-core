@@ -6,11 +6,6 @@ members = [
     "sql-parser",
     "sql-join",
     "sql-vm",
-    "sql-sys",
-    "sql-record",
-    "sql-vfs",
-    "sql-header",
-    "sql-pager",
     "sql-codegen",
 ]
 

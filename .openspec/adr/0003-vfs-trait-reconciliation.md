@@ -8,6 +8,8 @@ Accepted. `sqlite-rs`'s `src/vfs/*` extracted verbatim into a new
 `db-core` crate, `sql-vfs`, on its own trait — `db-storage`'s
 `{Vfs, VfsFile}` is untouched.
 
+**Superseded (location only) by [ADR 0006](0006-storage-consolidation-into-db-storage.md), `#39`:** `sql-vfs` has since moved out of `db-core` into `db-storage`'s `row` module (`db_storage::row::vfs`). This ADR's reasoning — two separate traits, not one — still holds unchanged; only which repo `sql-vfs` lives in changed.
+
 ## Context
 
 `db-storage` (a separate repo, `~/wc/t-rust-db/db-storage`) already has

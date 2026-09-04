@@ -8,6 +8,8 @@ Accepted. `sql-header` (`crate::header`, 498 lines) and `sql-pager`
 (`crate::pager`, 4,613 lines) both extracted verbatim into new `db-core`
 crates, built against `sql-vfs` (`ADR 0003`) and each other.
 
+**Superseded (location only) by [ADR 0006](0006-storage-consolidation-into-db-storage.md), `#39`:** both `sql-header` and `sql-pager` have since moved out of `db-core` into `db-storage`'s `row` module (`db_storage::row::header`, `db_storage::row::pager`). The `SharedPager` newtype documented below no longer exists post-move — `PageSource` became a local trait once `vfs`/`pager` were merged into submodules of the same crate, so the orphan-rule workaround it existed for is no longer needed (`impl PageSource for RefCell<Pager>` directly, as originally attempted). Likewise the `sql-vfs` `test-util` feature this ADR introduced was removed post-move for the same reason (`#[cfg(test)]` crosses module boundaries within one crate). Everything else here — the extraction rationale, the `mod fixtures` deferral, the fixture-file selection — still holds unchanged.
+
 ## Context
 
 `#15` scoped the extraction to `src/pager.rs` + `src/pager/*`
