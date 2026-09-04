@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.27.1] - 2026-09-05
+
+### Changed
+
+- **`vm::batch`'s `run_parallel`/`run_parallel_top_n` no longer depend on `rayon`** (#42) -- replaced `par_iter().map().collect()` with a std-only morsel-driven fork-join: `std::thread::scope` spawns a fixed pool of worker threads that dynamically pull segment indices off a shared `AtomicUsize` counter, preserving the "one segment per task, dynamically rebalanced" scheduling model the code's own doc comments named as a deliberate DuckDB/HyPer-style design goal (not a static per-thread split). `rayon`/`rayon-core`/`crossbeam-deque`/`crossbeam-epoch`/`crossbeam-utils`/`either` are dropped from `Cargo.toml`; `cargo tree` now shows zero third-party runtime dependencies.
+
 ## [0.27.0] - 2026-09-05
 
 ### Fixed
