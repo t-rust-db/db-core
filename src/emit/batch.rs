@@ -883,7 +883,7 @@ mod tests {
     fn generates_query_literal_for_semi_join() {
         let src = generate(
             "column_rs",
-            "SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions)",
+            "SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions)",
         )
         .unwrap();
         assert!(
@@ -979,7 +979,7 @@ mod tests {
             where_clause: Some(Expr::InSubquery {
                 expr: Box::new(Expr::Column("region_key".into())),
                 subquery: Box::new(Query {
-                    columns: vec![SelectItem::Column("key".into())],
+                    columns: vec![SelectItem::Column("rkey".into())],
                     from: "regions".into(),
                     joins: vec![],
                     where_clause: None,
@@ -996,7 +996,7 @@ mod tests {
         };
         let src = render_semi_join(
             "column_rs",
-            "SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions)",
+            "SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions)",
             &query,
             "regions",
         );
