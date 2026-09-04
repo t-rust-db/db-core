@@ -57,11 +57,10 @@ pub fn run<'s>(segments: &[Box<dyn Segment + 's>], program: &Program) -> Result<
         return run_parallel(segments, &body);
     };
 
-    let has_filter = body.iter().any(|op| matches!(op, Opcode::Filter { .. }));
+    if let Some(limit) = bounded_scan_limit(program) {
+        return bounded_scan(segments, &body, limit);
+    }
     let rows = match (agg_parts.is_empty(), order_by, limit) {
-        (true, None, Some(limit)) if !has_filter => {
-            return bounded_scan(segments, &body, *limit);
-        }
         (true, Some((col, descending)), Some(limit)) => run_parallel_top_n(
             segments,
             &body,
@@ -80,6 +79,27 @@ pub fn run<'s>(segments: &[Box<dyn Segment + 's>], program: &Program) -> Result<
         *limit,
         rows,
     ))
+}
+
+/// The `LIMIT` when `program` can be satisfied by a sequential prefix scan
+/// (#108): a trailing [`Opcode::Finalize`] with no aggregates and no
+/// `ORDER BY`, and no [`Opcode::Filter`] in the body -- i.e. the first
+/// `limit` rows of the first however-many segments *are* the answer.
+pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
+    let (body, fin) = program.split_finalize();
+    let Some(Opcode::Finalize {
+        agg_parts,
+        order_by: None,
+        limit: Some(limit),
+        ..
+    }) = fin
+    else {
+        return None;
+    };
+    if !agg_parts.is_empty() || body.iter().any(|op| matches!(op, Opcode::Filter { .. })) {
+        return None;
+    }
+    Some(*limit)
 }
 
 /// Sequentially scan `segments` in order, running `body` against each

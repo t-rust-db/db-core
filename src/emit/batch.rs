@@ -25,11 +25,10 @@
 //!   `const PROGRAM`, since window evaluation partitions/sorts entirely
 //!   outside the register-machine model ([`render_windowed`]).
 //!
-//! **Not this module's job:** deciding *which* of the above shapes a
-//! given [`Query`] needs, or producing the `program`/`agg_parts`/etc.
-//! for the flat shape in the first place -- that's product-specific query
-//! planning (column-rs's own `query::compile()`), which stays in the
-//! caller. This module only turns already-planned data into text.
+//! Planning -- deciding which of the above shapes a [`Query`] needs and
+//! producing the flat shape's [`Program`] -- is [`crate::codegen::batch`]'s
+//! job; [`generate`] calls it and then renders. The render functions only
+//! turn already-planned data into text.
 //!
 //! **`crate_name`:** every render function takes the caller's own crate
 //! name (column-rs passes `"column_rs"`) and emits `use
@@ -38,12 +37,85 @@
 //! has the `ParquetFile`/`execute_joined`/`execute_windowed`/`run_program`
 //! runtime glue, not a name hardcoded to column-rs specifically.
 
+use crate::codegen::batch::{compile, output_column_names};
 use crate::expr::{
     AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
 };
+use crate::parser::ParseError;
 use crate::types::Literal;
-use crate::vm::batch::{AggPart, MapOp, Opcode, Value};
+use crate::vm::batch::{AggPart, MapOp, Opcode, Program, Value};
 use std::fmt::Write as _;
+
+#[derive(Debug)]
+pub enum EmitError {
+    Parse(ParseError),
+    Unsupported(&'static str),
+}
+
+impl std::fmt::Display for EmitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EmitError::Parse(e) => write!(f, "{e}"),
+            EmitError::Unsupported(what) => write!(f, "codegen does not support {what} yet"),
+        }
+    }
+}
+
+impl std::error::Error for EmitError {}
+
+impl From<ParseError> for EmitError {
+    fn from(e: ParseError) -> Self {
+        EmitError::Parse(e)
+    }
+}
+
+pub type Result<T> = std::result::Result<T, EmitError>;
+
+/// Compile `sql_text` ahead of time into a standalone `.rs` source file for
+/// `crate_name`'s runtime glue (column-rs passes `"column_rs"`): plans the
+/// query with [`crate::codegen::batch`], then renders the shape it needs
+/// -- `const PROGRAM` for flat queries ([`render_flat`]), a reconstructed
+/// `Query` literal for joins/semi-joins/windows.
+pub fn generate(crate_name: &str, sql_text: &str) -> Result<String> {
+    let query = crate::parser::parse(sql_text)?;
+    if query
+        .columns
+        .iter()
+        .any(|c| matches!(c, SelectItem::Window(_)))
+    {
+        return Ok(render_windowed(crate_name, sql_text, &query));
+    }
+
+    if !query.joins.is_empty() {
+        if query.joins.len() > 1 {
+            return Err(EmitError::Unsupported("more than one JOIN"));
+        }
+        return Ok(render_joined(crate_name, sql_text, &query));
+    }
+    if let Some(Expr::InSubquery { expr, subquery }) = &query.where_clause {
+        let Expr::Column(_) = expr.as_ref() else {
+            return Err(EmitError::Unsupported(
+                "IN (SELECT ...) with a non-column left-hand side",
+            ));
+        };
+        return Ok(render_semi_join(
+            crate_name,
+            sql_text,
+            &query,
+            &subquery.from,
+        ));
+    }
+
+    let program = compile(&query);
+    let columns = output_column_names(&query);
+    Ok(render_flat(
+        crate_name,
+        sql_text,
+        &query.from,
+        &program,
+        &columns,
+    ))
+}
 
 /// A path or a simple `*`-glob (one wildcard, in the file name only --
 /// e.g. `data/*.parquet`) expanded against the filesystem, sorted for
@@ -73,22 +145,19 @@ const EXPAND_PATH_HELPER: &str = r#"fn expand_path(pattern: &str) -> Vec<std::pa
 "#;
 
 /// Render a flat/`GROUP BY`/`ORDER BY`/`LIMIT` query: a standalone `.rs`
-/// source file with `const PROGRAM` (the compiled VM program), `const
-/// COLUMNS_TO_LOAD`/`const COLUMNS` (the input/output column names), and
-/// a `main` that reads every Parquet file path given on the command
-/// line, runs `PROGRAM` against each, and prints the results.
-#[allow(clippy::too_many_arguments)]
+/// source file with `const PROGRAM` (the planned VM program, including its
+/// terminal `Opcode::Finalize` -- the instruction stream is the whole
+/// plan, so there are no sidecar `AGG_PARTS`/`ORDER_BY`/`LIMIT` consts and
+/// the columns to load are derived from it at runtime), `const COLUMNS`
+/// (the output column names), and a `main` that reads every Parquet file
+/// path given on the command line, runs `PROGRAM` against each via the
+/// caller crate's `query::run_program`, and prints the results.
 pub fn render_flat(
     crate_name: &str,
     sql_text: &str,
     table: &str,
-    columns_to_load: &[String],
-    program: &[Opcode],
+    program: &Program,
     columns: &[String],
-    agg_parts: &[AggPart],
-    num_group_keys: usize,
-    order_by: Option<(usize, bool)>,
-    limit: Option<usize>,
 ) -> String {
     let mut out = String::new();
     let version = env!("CARGO_PKG_VERSION");
@@ -101,19 +170,27 @@ pub fn render_flat(
     out.push_str("#![forbid(unsafe_code)]\n\n");
     out.push_str("#![allow(unused_imports)]\n");
     let _ = writeln!(out, "use {crate_name}::file::ParquetFile;");
-    let _ = writeln!(out, "use {crate_name}::query::AggPart;");
     let _ = writeln!(out, "use {crate_name}::sql::AggFunc;");
-    let _ = writeln!(out, "use {crate_name}::vm::{{MapOp, Opcode, Value}};\n");
+    let _ = writeln!(
+        out,
+        "use {crate_name}::vm::{{AggPart, MapOp, Opcode, Value}};\n"
+    );
 
     out.push_str("const PROGRAM: &[Opcode] = &[\n");
-    for op in program {
-        let _ = writeln!(out, "    {},", render_opcode(op));
-    }
-    out.push_str("];\n\n");
-
-    out.push_str("const COLUMNS_TO_LOAD: &[&str] = &[");
-    for name in columns_to_load {
-        let _ = write!(out, "{}, ", rust_str_literal(name));
+    for instruction in &program.instructions {
+        match &instruction.comment {
+            Some(comment) => {
+                let _ = writeln!(
+                    out,
+                    "    {}, // {}",
+                    render_opcode(&instruction.opcode),
+                    comment.replace('\n', " ")
+                );
+            }
+            None => {
+                let _ = writeln!(out, "    {},", render_opcode(&instruction.opcode));
+            }
+        }
     }
     out.push_str("];\n\n");
 
@@ -122,24 +199,6 @@ pub fn render_flat(
         let _ = write!(out, "{}, ", rust_str_literal(name));
     }
     out.push_str("];\n\n");
-
-    out.push_str("const AGG_PARTS: &[AggPart] = &[");
-    for part in agg_parts {
-        let _ = write!(out, "{}, ", render_agg_part(part));
-    }
-    out.push_str("];\n\n");
-
-    let _ = writeln!(out, "const NUM_GROUP_KEYS: usize = {num_group_keys};");
-    let _ = writeln!(
-        out,
-        "const ORDER_BY: Option<(usize, bool)> = {};",
-        render_order_by(order_by)
-    );
-    let _ = writeln!(
-        out,
-        "const LIMIT: Option<usize> = {};\n",
-        render_option_usize(limit)
-    );
 
     out.push_str("fn main() -> Result<(), Box<dyn std::error::Error>> {\n");
     out.push_str("    let args: Vec<_> = std::env::args().skip(1).collect();\n");
@@ -154,11 +213,7 @@ pub fn render_flat(
     out.push_str("        let file = ParquetFile::open(&data)?;\n");
     let _ = writeln!(
         out,
-        "        let rows = {crate_name}::query::run_program(&file, COLUMNS_TO_LOAD, PROGRAM)?;"
-    );
-    let _ = writeln!(
-        out,
-        "        let rows = {crate_name}::query::post_process(AGG_PARTS, NUM_GROUP_KEYS, ORDER_BY, LIMIT, rows);"
+        "        let rows = {crate_name}::query::run_program(&file, PROGRAM)?;"
     );
     out.push_str("        for row in rows {\n");
     out.push_str(
@@ -364,26 +419,6 @@ pub fn render_windowed(crate_name: &str, sql_text: &str, query: &Query) -> Strin
     out.push_str("}\n\n");
     out.push_str(EXPAND_PATH_HELPER);
     out
-}
-
-/// The output column names a query's `SELECT` list produces, in order --
-/// `*` isn't valid in the multi-table/window shapes this module renders
-/// (the caller's own planner rejects it before reaching here), so every
-/// [`SelectItem`] resolves to a concrete name.
-fn output_column_names(query: &Query) -> Vec<String> {
-    query
-        .columns
-        .iter()
-        .map(|item| match item {
-            SelectItem::Column(name) => name.clone(),
-            SelectItem::Star => "*".to_string(),
-            SelectItem::Agg(func, arg) => match arg {
-                Some(col) => format!("{func:?}({col})").to_lowercase(),
-                None => format!("{func:?}(*)").to_lowercase(),
-            },
-            SelectItem::Window(spec) => format!("{:?}", spec.func).to_lowercase(),
-        })
-        .collect()
 }
 
 fn render_query(query: &Query) -> String {
@@ -717,10 +752,11 @@ fn rust_str_literal(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vm::batch::Instruction;
 
     #[test]
     fn render_flat_emits_const_program_and_columns() {
-        let program = vec![
+        let program = Program::from_opcodes([
             Opcode::LoadColumn {
                 reg: 0,
                 column: "id".into(),
@@ -732,28 +768,27 @@ mod tests {
             Opcode::Emit {
                 registers: vec![0, 1].into(),
             },
-        ];
+        ]);
         let src = render_flat(
             "column_rs",
             "SELECT id, amount FROM events",
             "events",
-            &["id".to_string(), "amount".to_string()],
             &program,
             &["id".to_string(), "amount".to_string()],
-            &[],
-            0,
-            None,
-            None,
         );
         assert!(src.contains("const PROGRAM: &[Opcode] = &["), "{src}");
-        assert!(src.contains("const COLUMNS_TO_LOAD: &[&str] ="), "{src}");
         assert!(
             src.contains("const COLUMNS: &[&str] = &[\"id\", \"amount\", ];"),
             "{src}"
         );
+        assert!(
+            !src.contains("COLUMNS_TO_LOAD"),
+            "input columns are derived from PROGRAM, not a sidecar const: {src}"
+        );
         assert!(src.contains("#![forbid(unsafe_code)]"));
         assert!(src.contains("fn main()"));
         assert!(src.contains("use column_rs::file::ParquetFile;"));
+        assert!(src.contains("column_rs::query::run_program(&file, PROGRAM)"));
     }
 
     #[test]
@@ -762,43 +797,133 @@ mod tests {
             "column_rs",
             "SELECT id FROM t",
             "t",
+            &Program::default(),
             &["id".to_string()],
-            &[],
-            &["id".to_string()],
-            &[],
-            0,
-            None,
-            None,
         );
         assert!(src.contains("fn expand_path"), "{src}");
         assert!(src.contains("for path in expand_path(pattern)"), "{src}");
     }
 
     #[test]
-    fn render_flat_renders_group_by_agg_parts_and_order_limit() {
+    fn render_flat_renders_group_by_agg_parts_and_order_limit_inside_finalize() {
+        let program = Program::new(vec![Instruction::with_comment(
+            Opcode::Finalize {
+                agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
+                num_group_keys: 1,
+                order_by: Some((0, true)),
+                limit: Some(10),
+            },
+            "merge; ORDER BY region DESC; LIMIT 10",
+        )]);
         let src = render_flat(
             "column_rs",
             "SELECT region, SUM(amount) FROM t GROUP BY region ORDER BY 1 DESC LIMIT 10",
             "t",
-            &["region".to_string(), "amount".to_string()],
-            &[],
+            &program,
             &["region".to_string(), "sum".to_string()],
-            &[AggPart::GroupKey, AggPart::Sum],
-            1,
-            Some((0, true)),
-            Some(10),
         );
         assert!(
-            src.contains("const AGG_PARTS: &[AggPart] = &[AggPart::GroupKey, AggPart::Sum, ];"),
+            src.contains("Opcode::Finalize { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, order_by: Some((0, true)), limit: Some(10) }, // merge; ORDER BY region DESC; LIMIT 10"),
             "{src}"
         );
-        assert!(src.contains("const NUM_GROUP_KEYS: usize = 1;"), "{src}");
+        assert!(!src.contains("const AGG_PARTS"), "{src}");
+    }
+
+    // --- `generate` (moved from column-rs's `src/codegen.rs`) ---
+
+    #[test]
+    fn generates_const_program_for_a_flat_filter_query() {
+        let src = generate(
+            "column_rs",
+            "SELECT id, amount FROM events WHERE amount > 100",
+        )
+        .unwrap();
+        assert!(src.contains("const PROGRAM: &[Opcode] = &["), "{src}");
         assert!(
-            src.contains("const ORDER_BY: Option<(usize, bool)> = Some((0, true));"),
+            src.contains("\"id\"") && src.contains("\"amount\""),
             "{src}"
         );
         assert!(
-            src.contains("const LIMIT: Option<usize> = Some(10);"),
+            src.contains("const COLUMNS: &[&str] = &[\"id\", \"amount\", ];"),
+            "{src}"
+        );
+        assert!(src.contains("Opcode::Filter { predicate:"), "{src}");
+        assert!(src.contains("#![forbid(unsafe_code)]"));
+        assert!(src.contains("fn main()"));
+    }
+
+    #[test]
+    fn generated_main_supports_glob_expansion() {
+        let src = generate("column_rs", "SELECT id FROM t").unwrap();
+        assert!(src.contains("fn expand_path"), "{src}");
+        assert!(src.contains("for path in expand_path(pattern)"), "{src}");
+    }
+
+    #[test]
+    fn generates_query_literal_for_join() {
+        let src = generate(
+            "column_rs",
+            "SELECT a.id, b.budget FROM a JOIN b ON a.id = b.id",
+        )
+        .unwrap();
+        assert!(src.contains("fn build_query() -> Query"), "{src}");
+        assert!(
+            src.contains("execute_joined(&main_file, &other_file, &query)"),
+            "{src}"
+        );
+        assert!(src.contains("const MAIN_TABLE: &str = \"a\";"), "{src}");
+        assert!(src.contains("const OTHER_TABLE: &str = \"b\";"), "{src}");
+        assert!(src.contains("JoinKind::Inner"), "{src}");
+    }
+
+    #[test]
+    fn generates_query_literal_for_semi_join() {
+        let src = generate(
+            "column_rs",
+            "SELECT id FROM orders WHERE region_key IN (SELECT key FROM regions)",
+        )
+        .unwrap();
+        assert!(
+            src.contains("execute_semi_join(&main_file, &other_file, &query)"),
+            "{src}"
+        );
+        assert!(
+            src.contains("const OTHER_TABLE: &str = \"regions\";"),
+            "{src}"
+        );
+        assert!(src.contains("Expr::InSubquery"), "{src}");
+    }
+
+    #[test]
+    fn rejects_more_than_one_join() {
+        let err = generate(
+            "column_rs",
+            "SELECT a.id FROM a JOIN b ON a.id = b.id JOIN c ON a.id = c.id",
+        )
+        .unwrap_err();
+        assert!(matches!(err, EmitError::Unsupported("more than one JOIN")));
+    }
+
+    #[test]
+    fn generates_const_program_for_group_by_aggregate_query() {
+        let src = generate(
+            "column_rs",
+            "SELECT region, SUM(amount) FROM t GROUP BY region",
+        )
+        .unwrap();
+        assert!(
+            src.contains("Opcode::Finalize { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, order_by: None, limit: None }"),
+            "{src}"
+        );
+        assert!(src.contains("Opcode::GroupReduce {"), "{src}");
+        assert!(src.contains("run_program(&file, PROGRAM)"), "{src}");
+    }
+
+    #[test]
+    fn generates_const_program_for_order_by_and_limit() {
+        let src = generate("column_rs", "SELECT id FROM t ORDER BY id DESC LIMIT 10").unwrap();
+        assert!(
+            src.contains("order_by: Some((0, true)), limit: Some(10) }"),
             "{src}"
         );
     }
@@ -944,6 +1069,12 @@ mod tests {
             },
             Opcode::NextSegment { loop_start: 0 },
             Opcode::Halt,
+            Opcode::Finalize {
+                agg_parts: vec![AggPart::Avg(1, 2)].into(),
+                num_group_keys: 0,
+                order_by: None,
+                limit: None,
+            },
         ] {
             let rendered = render_opcode(&op);
             assert!(!rendered.is_empty());
