@@ -16,6 +16,10 @@
 //! `default-features = false, features = ["column"]` and never builds
 //! `row`'s (eventually much larger) grammar or its dependencies.
 //!
+//! See `grammar.ebnf` (this crate's root) for the actual EBNF grammar
+//! both sections implement, and `ALIGNMENT.md` for what was checked
+//! against sqlite-rs's own conventions along the way.
+//!
 //! `column`'s public items (`parse`, `parse_explain`, `ParseError`) are
 //! re-exported at the crate root, unchanged from before this split, so
 //! existing consumers don't need to update call sites.

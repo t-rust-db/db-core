@@ -1,0 +1,865 @@
+(*
+ * t-rust-db -- unified SQL grammar source of truth
+ *
+ * Folded in from the standalone `t-rust-db/grammar` repo (db-core#43) --
+ * see this crate's `ALIGNMENT.md` for what was checked against sqlite-rs
+ * along the way, and this repo's git history / the archived grammar
+ * repo for how this file's shape (one file, three sections) was arrived
+ * at.
+ *
+ * ONE file, THREE sections, replacing the earlier column-rs.ebnf +
+ * sqlite-rs.ebnf split:
+ *
+ *   1. SHARED         -- productions genuinely, word-for-word identical
+ *                        AND self-contained (no reference into a rule
+ *                        that itself differs per engine) between the two
+ *                        grammars. Defined once, referenced by name from
+ *                        both sections below.
+ *   2. COLUMN-RS ONLY -- db-core/sql-parser's `column` Cargo-feature
+ *                        section: column-rs's analytics-over-Parquet
+ *                        subset (SELECT only, no writes).
+ *   3. SQLITE-RS ONLY (including DDL) -- db-core/sql-parser's `row`
+ *                        Cargo-feature section: sqlite-rs's own grammar,
+ *                        migrated in unchanged (`db-core#23`) -- DDL,
+ *                        DML, transactions, PRAGMA, and sqlite-rs's much
+ *                        richer expression grammar.
+ *
+ * Sections 2 and 3 each remain a complete, self-contained grammar when
+ * read on its own -- exactly the content of the two former files, just
+ * placed under one roof. Some rule NAMES repeat across sections (both
+ * define `sql-stmt`, `expr`, `or-expr`, `table-name`, `column-ref`, ...)
+ * because both grammars model the same SQL concepts under the same
+ * conventional names -- scoped by section, the same way the two former
+ * files each had their own `expr` without colliding. That is NOT the
+ * same thing as the SHARED section below, whose rules are deduplicated
+ * because they are provably identical everywhere they're used.
+ *
+ * What actually qualifies as SHARED, and what doesn't
+ * ----------------------------------------------------
+ * A rule only moves to SHARED if (a) both engines accept EXACTLY the
+ * same input for it, AND (b) it doesn't reference another nonterminal
+ * that itself diverges per engine -- otherwise a single "shared"
+ * production would silently mean something different depending on which
+ * engine's grammar you followed it from. Checked and rejected for that
+ * second reason: `expr`/`or-expr`/`and-expr` are textually IDENTICAL in
+ * both grammars (`expr ::= or-expr ;`, `or-expr ::= and-expr { "OR"
+ * and-expr } ;`, `and-expr ::= not-expr { "AND" not-expr } ;`) -- but
+ * each engine's `and-expr` bottoms out into a different `not-expr`
+ * (column-rs: `not-expr | comparison`; sqlite-rs: `{ "NOT" }
+ * equality-expr`, feeding a much richer operator ladder). A shared
+ * `and-expr` would have to pick one `not-expr` to point at, silently
+ * misdescribing the other engine. So these stay defined per section
+ * below, each self-contained -- genuinely identical text, deliberately
+ * NOT deduplicated, for the reason above. Likewise rejected: comparison
+ * operators (sqlite-rs also accepts `==`), arithmetic (sqlite-rs's
+ * `multiplicative-expr` has `%` and more precedence tiers below it),
+ * identifiers (sqlite-rs additionally accepts quoted forms), string
+ * literals (sqlite-rs's tokenizer supports `''`-doubling; column-rs's
+ * doesn't), and JOIN grammar (sqlite-rs's chain is strictly larger).
+ *
+ * What IS shared (self-contained, no downstream ambiguity):
+ *   - `ident-chars` -- the unquoted-identifier character class. Both
+ *     engines' tokenizers accept exactly this for a bare identifier.
+ *     sqlite-rs's own `identifier` extends it with quoting (see its
+ *     section); column-rs's `IDENT` is exactly this, nothing more.
+ *   - `explain-prefix` -- the `EXPLAIN [QUERY PLAN]` token sequence,
+ *     pure terminals, identical in both. What it wraps differs per
+ *     engine (column-rs: a `select-stmt` only; sqlite-rs: any
+ *     `sql-stmt`) -- see each section's own top-level rule.
+ *   - `comparison-op` -- the 7 comparison operators both engines accept
+ *     identically (`=`, `!=`, `<>`, `<`, `<=`, `>`, `>=`). Pure
+ *     terminals, no nonterminal reference, so -- unlike the operator
+ *     LEVELS that use it -- it's genuinely safe to share. See its own
+ *     entry below for what each engine does with it beyond the shared
+ *     set (sqlite-rs adds `==` and splits the set across two precedence
+ *     tiers; column-rs treats it as one flat, non-chainable tier).
+ *
+ * Tried harder and still rejected: can `additive-expr`'s SHAPE (not
+ * just its operator set) be shared, given both engines' real parser
+ * functions (`additive` in column.rs, `additive_expr` in
+ * row/grammar.rs) do the exact same precedence-climbing fold over `+`/
+ * `-`? The shape is identical -- but `additive-expr`'s body must name
+ * its own next-level operand (`multiplicative`/`multiplicative-expr`),
+ * and that's exactly the same "shared rule referencing a per-engine
+ * rule" problem `and-expr` hit above, one level down. A shared
+ * `additive-expr` would need either (a) a real generic/parameterized
+ * nonterminal, which plain EBNF has no notation for, or (b) forcing
+ * column-rs's `primary` to be re-described as walking through sqlite-
+ * rs's `concat-expr`/`collate-expr`/`unary-expr` wrapper levels it
+ * doesn't actually have real parser functions for -- which would break
+ * this file's own founding principle (both former files: "structural
+ * re-derivation of the actual parser... every rule has a corresponding
+ * parser function") for the sake of a shorter grammar file. Kept
+ * separate; not a missed opportunity, a checked and rejected one.
+ *
+ * Maintenance rule: any change to either engine's grammar (`db-core/
+ * sql-parser::column` or `::row` / sqlite-rs's own parser) MUST update
+ * the corresponding section of THIS file in the same PR/commit. Before
+ * touching a SHARED rule, re-verify it's still identical AND still
+ * self-contained in both engines -- if a change breaks either
+ * condition, move it back into each engine's own section rather than
+ * leaving a "shared" rule that's only true for one of them.
+ *
+ * Notation: ::=  rule definition          |    alternation
+ *           []   optional (0 or 1)        {}   repetition (0 or more)
+ *           ""   literal keyword/punct (keywords case-insensitive)
+ *           UPPERCASE  lexer token
+ *)
+
+(* ================================================================
+ * ===== 1. SHARED =====
+ * ================================================================
+ *)
+
+ident-chars     ::= ( ALPHA | "_" ) { ALPHA | DIGIT | "_" } ;
+                     (* the unquoted-identifier character shape, accepted
+                        identically by both tokenizers. *)
+
+explain-prefix  ::= "EXPLAIN" [ "QUERY" "PLAN" ] ;
+                     (* identical token sequence in both grammars. What
+                        it wraps differs per engine -- see each section's
+                        own top-level statement rule. *)
+
+comparison-op   ::= "=" | "!=" | "<>" | "<" | "<=" | ">" | ">=" ;
+                     (* the 7 operators both engines accept identically.
+                        column-rs's own `comp-op` (section 2) is exactly
+                        this set, used at one flat, non-chainable
+                        precedence tier. sqlite-rs (section 3) splits
+                        this SAME set across two tiers -- `equality-tail`
+                        gets `=`/`<>`/`!=` (plus its own `==` synonym,
+                        NOT part of this shared set), `relational-expr`
+                        gets `<`/`<=`/`>`/`>=` -- and allows chaining
+                        (`a < b < c`) where column-rs's parser rejects a
+                        second comparison outright. Same operator
+                        vocabulary, different precedence policy and
+                        cardinality -- see each section for its own use
+                        of this set. *)
+
+(* ================================================================
+ * ===== 2. COLUMN-RS ONLY =====
+ * db-core/sql-parser's `column` Cargo-feature section
+ * (db-core/sql-parser/src/column.rs) -- column-rs's analytics-over-
+ * Parquet subset: SELECT only, no DDL/DML, no transactions, no PRAGMA,
+ * no CTEs. Every rule here has a corresponding parser function; nothing
+ * is listed as supported that parse()/parse_explain() cannot actually
+ * accept. Self-contained: every rule referenced here is defined in this
+ * section or in SHARED above.
+ * ================================================================
+ *)
+
+sql-stmt        ::= [ explain-prefix ] select-stmt ;
+                     (* the ONLY statement form -- no INSERT/UPDATE/
+                        DELETE/DDL/transactions/PRAGMA; column-rs reads
+                        Parquet, it never writes. `explain-prefix`: see
+                        SHARED above -- unlike sqlite-rs, only ever wraps
+                        a `select-stmt`. *)
+
+(* ----- SELECT ----- *)
+
+select-stmt     ::= "SELECT" select-list
+                     "FROM" from-clause
+                     { join-clause }
+                     [ where-clause ]
+                     [ group-by-clause ]
+                     [ order-by-clause ]
+                     [ limit-clause ] ;
+
+select-list     ::= select-item { "," select-item } ;
+
+select-item     ::= "*"
+                   | column-ref
+                   | agg-call
+                   | window-call ;
+                     (* bare `*` expands to every column of the query's
+                        table(s), resolved by the caller/executor (which
+                        has the schema) at compile time -- sql-parser has
+                        no access to a table's schema itself, so `*` is
+                        carried through as an AST-level marker
+                        (sql_expr::SelectItem::Star) rather than expanded
+                        here. No arbitrary expressions in the select list
+                        beyond `*`, a bare column, an aggregate call, or a
+                        window call *)
+
+agg-call        ::= agg-func "(" ( column-ref | "*" ) ")" ;
+                     (* `*` only valid for COUNT -- COUNT(*); enforced at
+                        the AST/execution layer, not the grammar *)
+
+agg-func        ::= "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" ;
+
+window-call     ::= ranking-call | offset-call | value-call | agg-over-call ;
+
+ranking-call    ::= ( "ROW_NUMBER" | "RANK" | "DENSE_RANK" ) "(" ")"
+                     "OVER" over-clause ;
+
+offset-call     ::= ( "LAG" | "LEAD" ) "(" column-ref [ "," INTEGER ] ")"
+                     "OVER" over-clause ;
+                     (* INTEGER is the offset, default 1 when omitted --
+                        the default is applied by the AST layer, not here *)
+
+value-call      ::= ( "FIRST_VALUE" | "LAST_VALUE" ) "(" column-ref ")"
+                     "OVER" over-clause ;
+
+agg-over-call   ::= ( "SUM" | "AVG" | "COUNT" ) "(" column-ref ")"
+                     "OVER" over-clause ;
+
+over-clause     ::= "(" [ "PARTITION" "BY" ident-list ]
+                         [ "ORDER" "BY" order-item { "," order-item } ]
+                     ")" ;
+
+(* ----- FROM / JOIN -----
+ * Equi-joins only (except CROSS, which has no condition), one ON clause
+ * per non-CROSS join. Table aliases are a bare trailing identifier (no
+ * `AS`) resolved at parse time: `FROM orders o` lets `o.col` stand for
+ * `orders.col` anywhere in the query, but the alias itself never appears
+ * in the parsed AST (sql_expr::Query/Join only ever hold real table
+ * names) -- it's rewritten away before the AST is built. No comma-join,
+ * no NATURAL, no USING(...), no subqueries in FROM. Compare sqlite-rs's
+ * own `from-clause`/`join-op` in section 3 -- a strictly larger chain
+ * this is a narrow subset of; NOT shared (see the file header). *)
+
+from-clause     ::= table-name [ alias ] ;
+
+join-clause     ::= join-kind table-name [ alias ] [ "ON" column-ref "=" column-ref ] ;
+                     (* the "ON ..." condition is REQUIRED for every
+                        join-kind except "CROSS JOIN", and FORBIDDEN for
+                        "CROSS JOIN" (an unconditional cross product) *)
+
+join-kind       ::= "JOIN"
+                   | "INNER" "JOIN"
+                   | "LEFT" [ "OUTER" ] "JOIN"
+                   | "RIGHT" [ "OUTER" ] "JOIN"
+                   | "FULL" [ "OUTER" ] "JOIN"
+                   | "CROSS" "JOIN" ;
+                     (* a query containing a "CROSS JOIN" MUST also have a
+                        top-level LIMIT clause -- enforced by the parser,
+                        not by this grammar's shape, as a DO-178C
+                        bounded-execution rule: an unconditional cross
+                        product has no natural row cap the way an
+                        equi-join's selectivity gives it *)
+
+alias           ::= IDENT ;
+                     (* any IDENT not itself one of this grammar's
+                        following keywords (JOIN/INNER/LEFT/RIGHT/FULL/
+                        CROSS/OUTER/ON/WHERE/GROUP/ORDER/LIMIT) is taken as
+                        an alias -- there is no "AS" keyword *)
+
+(* ----- WHERE -----
+ * Two mutually exclusive forms: an expression, or a bare semi-join. The
+ * semi-join form must be the ENTIRE where-clause -- it cannot be combined
+ * with other conditions via AND/OR (unlike a real SQL engine, where
+ * `x IN (...)` is just another boolean-valued expression). *)
+
+where-clause    ::= "WHERE" ( semi-join | expr ) ;
+
+semi-join       ::= column-ref "IN" "(" select-stmt ")" ;
+                     (* the subquery is itself a full select-stmt,
+                        recursively -- but see select-stmt's caller: a
+                        subquery position stops at its closing ")" rather
+                        than expecting end-of-input, unlike the top-level
+                        statement *)
+
+(* ----- Expressions -----
+ * Standard precedence climb: OR < AND < NOT < comparison < concat <
+ * additive < multiplicative < unary < primary (db-core#34 added concat/
+ * unary). No LIKE/BETWEEN, no CASE.
+ *
+ * `expr`/`or-expr`/`and-expr` below are textually IDENTICAL to sqlite-
+ * rs's own (section 3) -- deliberately NOT moved to SHARED, because
+ * `and-expr` bottoms out into `not-expr`, and THIS section's `not-expr`
+ * differs from sqlite-rs's. See the file header's "What actually
+ * qualifies as SHARED" note. *)
+
+expr            ::= or-expr ;
+
+or-expr         ::= and-expr { "OR" and-expr } ;
+
+and-expr        ::= not-expr { "AND" not-expr } ;
+
+not-expr        ::= "NOT" not-expr
+                   | comparison ;
+                     (* right-recursive so `NOT NOT x` parses; binds
+                        tighter than AND/OR, looser than comparison:
+                        `NOT a = b AND c` is `(NOT (a = b)) AND c` *)
+
+comparison      ::= concat [ ( comp-op concat ) | ( "IS" [ "NOT" ] "NULL" ) ] ;
+                     (* non-associative: `a = b = c` is not accepted --
+                        at most one comparison operator (or one
+                        IS [NOT] NULL test) per comparison level *)
+
+comp-op         ::= comparison-op ;
+                     (* SHARED with sqlite-rs -- see SHARED above.
+                        column-rs collapses this set into one flat,
+                        non-chainable precedence tier, where sqlite-rs
+                        splits it across two (and adds `==`). *)
+
+concat          ::= additive { "||" additive } ;
+                     (* `||` string concatenation, DuckDB/Postgres-style:
+                        both operands stringify via `Value`'s `Display`
+                        rather than requiring `STRING` (`1 || 'x'` is
+                        valid, produces `"1x"`). Binds LOOSER than `+`/
+                        `-`/`*`/`/`, matching DuckDB's own precedence --
+                        deliberately NOT sqlite-rs's placement (its own
+                        `concat-expr` binds tighter than `*`/`/`, a real
+                        SQLite quirk column-rs does not follow, since
+                        this grammar targets DuckDB parity, not
+                        SQLite's). db-core#34. *)
+
+additive        ::= multiplicative { ( "+" | "-" ) multiplicative } ;
+
+multiplicative  ::= unary { ( "*" | "/" ) unary } ;
+                     (* no `%` -- see the file header. *)
+
+unary           ::= { "+" | "-" } primary ;
+                     (* leading `+`/`-`: `+` is a no-op (not represented
+                        in the AST); `-` wraps in a negation node,
+                        chainable (`--x` parses). db-core#34. *)
+
+primary         ::= column-ref
+                   | INTEGER
+                   | FLOAT
+                   | STRING
+                   | "(" expr ")" ;
+
+(* ----- GROUP BY / ORDER BY / LIMIT ----- *)
+
+group-by-clause ::= "GROUP" "BY" ident-list ;
+
+order-by-clause ::= "ORDER" "BY" column-ref [ "ASC" | "DESC" ] ;
+                     (* exactly one column -- no multi-column ORDER BY *)
+
+order-item      ::= column-ref [ "ASC" | "DESC" ] ;
+                     (* used inside OVER (...ORDER BY...), which DOES
+                        allow multiple columns, unlike the top-level
+                        order-by-clause above *)
+
+limit-clause    ::= "LIMIT" INTEGER ;
+                     (* non-negative integer only; no OFFSET *)
+
+(* ----- Lexical ----- *)
+
+ident-list      ::= column-ref { "," column-ref } ;
+
+column-ref      ::= IDENT [ "." IDENT ] ;
+                     (* `col` or `table.col`; more than one `.` is not a
+                        column reference this grammar recognizes (no
+                        schema.table.col). sqlite-rs's own `column-ref`
+                        (section 3) allows up to 3 parts -- NOT shared. *)
+
+table-name      ::= IDENT ;
+                     (* the Parquet file's stem, per column-rs's table
+                        resolution -- not validated by the grammar itself *)
+
+IDENT           ::= ident-chars ;
+                     (* unquoted only -- no `"quoted"`/`[bracketed]`/
+                        `` `backticked` `` forms sqlite-rs's own
+                        `identifier` accepts (section 3). `ident-chars`:
+                        see SHARED above. *)
+
+INTEGER         ::= DIGIT { DIGIT } ;
+FLOAT           ::= DIGIT { DIGIT } "." DIGIT { DIGIT } ;
+                     (* exactly one decimal point, digits on both sides
+                        -- no `1e5`/`.5`/`1.` forms sqlite-rs's own
+                        `NUMBER` accepts (section 3); NOT shared. *)
+STRING          ::= "'" { any character except "'" } "'" ;
+                     (* no escape sequences, no doubled-quote escaping --
+                        NOT shared with sqlite-rs's own `STRING`, whose
+                        tokenizer supports `''`-doubling. See the file
+                        header. *)
+
+(* ----- Not supported (deliberately) -----
+ * Tracked here so the grammar's negative space is visible, not just its
+ * positive space. Adding any of these means growing sql-parser's
+ * `column` section AND this file in the same change (see Maintenance
+ * rule above).
+ *
+ *   - comma-join, NATURAL JOIN, USING(...)
+ *   - subqueries in FROM
+ *   - multiple WHERE conditions combined with a semi-join
+ *   - LIKE, BETWEEN, CASE
+ *   - COLLATE (considered alongside unary minus/concat in db-core#34,
+ *     deliberately deferred -- a locale-comparison feature, lower value
+ *     for a Parquet analytics engine than the other two; add only if
+ *     something concrete needs it)
+ *   - multi-column ORDER BY at the top level (only inside OVER (...))
+ *   - OFFSET
+ *   - INSERT/UPDATE/DELETE/CREATE/DROP/ALTER -- column-rs never writes
+ *   - transactions, PRAGMA, CTEs (WITH), views
+ *)
+
+(* ================================================================
+ * ===== 3. SQLITE-RS ONLY (including DDL) =====
+ * db-core/sql-parser's `row` Cargo-feature section
+ * (db-core/sql-parser/src/row/*), migrated in unchanged from sqlite-rs's
+ * own parser (db-core#23). sqlite-rs itself is being absorbed into the
+ * `t-rust-db` org (`t-rust-db/sqlite-rs`) -- see DECISIONS.md.
+ * Self-contained: every rule referenced here is defined in this section
+ * or in SHARED above.
+ *
+ * SQLite publishes NO EBNF. The upstream authorities are:
+ *   - src/parse.y (Lemon LALR grammar, action-annotated) -- pinned at 3.53.4:
+ *     https://github.com/sqlite/sqlite/blob/version-3.53.4/src/parse.y
+ *   - Railroad diagrams (human-readable, generated):
+ *     https://www.sqlite.org/syntaxdiagrams.html
+ *   - Prose reference:
+ *     https://www.sqlite.org/lang.html
+ * This section is a structural re-derivation of parse.y (no SQLite
+ * source text copied) in standard EBNF. Where a rule was distilled from
+ * a verified parse.y location it carries `[parse.y:LINE rulename]`;
+ * rules added beyond the original spike distillation carry the parse.y
+ * rule NAME only.
+ *
+ * V-BLOCK ANNOTATIONS: every rule is tagged with the value block
+ * (plan.md) in which sqlite-rs implements it -- `(* V2 *)`, `(* V3 *)`, ...
+ * The grammar thereby tracks the plan's production coverage (V2 ~20%,
+ * V3 ~45%, V4 ~80%, V7+ 100%). Rules for future blocks are listed as
+ * stubs under "Future blocks" so the denominator is visible.
+ * ================================================================
+ *)
+
+sql-stmt        ::= select-stmt        (* V2/V6 -- select-stmt now carries an
+                                              optional leading with-clause, see below *)
+                  | insert-stmt        (* V3 *)
+                  | update-stmt        (* V3 *)
+                  | delete-stmt        (* V3 *)
+                  | create-table-stmt  (* V3 *)
+                  | create-index-stmt  (* V3 *)
+                  | drop-stmt          (* V3 *)
+                  | create-view-stmt   (* V6 *)
+                  | drop-view-stmt     (* V6 *)
+                  | pragma-stmt        (* V6 *)
+                  | analyze-stmt       (* V7 *)
+                  | explain-stmt       (* V4 *)
+                  | begin-stmt         (* V5 *)
+                  | commit-stmt        (* V5 *)
+                  | rollback-stmt ;    (* V5 *)
+                  (* V4+: CTEs, views -- see Future blocks;
+                     #237 landed the INNER/LEFT/CROSS JOIN subset, #250 extended it
+                     with NATURAL/RIGHT/FULL/USING/comma-join (see from-clause),
+                     #240 landed the UNION ALL compound-select tail (see select-stmt),
+                     #243 pulled EXPLAIN [QUERY PLAN] forward from its original
+                     V7 slot -- see explain-stmt below -- because the planner's
+                     index-selection work needs EQP output to be observable now;
+                     general PRAGMA remains V7 (only the narrow
+                     journal_mode=WAL|DELETE carve-out landed -- see pragma-stmt
+                     below, #388); ANALYZE's bare-name/no-argument forms landed
+                     at V7 (#461) -- see analyze-stmt below *)
+
+explain-stmt    ::= explain-prefix sql-stmt ;
+                     (* V4 [parse.y:173 explain]. `explain-prefix`: see
+                        SHARED above -- unlike column-rs, wraps ANY
+                        `sql-stmt`, not just a SELECT. *)
+
+(* ----- SELECT (V2 slice, FROM/JOIN + GROUP BY/HAVING + UNION/UNION ALL V4/V6 slice) -----
+ * [parse.y:520 cmd, :654 oneselect, :710 selcollist, :750 from, :925 orderby_opt, :967 limit_opt, :1002 where_opt]
+ * V2 restrictions vs full parse.y: no window clause (V9). The FROM
+ * clause itself (`from-clause` below) is now the V4 full JOIN slice
+ * (#237's INNER/LEFT/CROSS `JOIN ... ON`, extended by #250 with
+ * NATURAL, RIGHT/FULL, `USING (...)`, and comma-style `FROM a, b`)
+ * rather than V2's single-table-only restriction — subqueries in FROM
+ * (#238) remain a future-block stub, see below. `group-by-clause`
+ * below is the V4 GROUP BY/HAVING slice (#239). The compound-select
+ * tail is the V4 `UNION ALL` slice (#240) plus the V6 plain `UNION`
+ * slice (#377/#378) — see compound-op below. `INTERSECT`/`EXCEPT`
+ * remain a V7 future-block stub.
+ *)
+
+select-stmt     ::= [ with-clause ]                                      (* V6 [parse.y:614 cmd ::= select KW_EXPLAIN? no --
+                                                                              select ::= with selectnowith orderby_opt] *)
+                     select-core { compound-op select-core }              (* V2 core; V4/V6 [parse.y:623 selectnowith,
+                                                                              :645 multiselect_op] compound tail --
+                                                                              see compound-op below *)
+                     [ "ORDER" "BY" ordering-term { "," ordering-term } ]
+                     [ "LIMIT" expr [ ( "OFFSET" | "," ) expr ] ] ;   (* V2/V4 -- ORDER BY/LIMIT bind to the whole
+                                                                          compound statement, not any one arm *)
+
+compound-op     ::= "UNION" [ "ALL" ] ;                                   (* V4 `UNION ALL` [parse.y:647
+                                                                              multiselect_op UNION ALL]; V6 plain
+                                                                              `UNION` [parse.y:646 multiselect_op
+                                                                              UNION] added #377/#378 -- dedup via a
+                                                                              shared ephemeral index across every
+                                                                              arm, see codegen::select::
+                                                                              compile_select_compound.
+                                                                              `INTERSECT`/`EXCEPT`
+                                                                              [parse.y:648 multiselect_op EXCEPT|
+                                                                              INTERSECT] are parsed far enough to be
+                                                                              reported `unsupported(..)` rather than
+                                                                              a bare syntax error -- deferred to V7,
+                                                                              see Future blocks below. *)
+
+with-clause     ::= "WITH" [ "RECURSIVE" ] common-table-expr { "," common-table-expr } ;
+                                                                          (* V6 [parse.y:601 with ::= WITH wqlist,
+                                                                              :602 with ::= WITH RECURSIVE wqlist] --
+                                                                              #375: only the non-recursive form is
+                                                                              implemented; `WITH RECURSIVE` is parsed
+                                                                              far enough to be reported
+                                                                              `unsupported(..)` rather than a bare
+                                                                              syntax error *)
+
+common-table-expr ::= identifier [ "(" identifier { "," identifier } ")" ]
+                       "AS" "(" select-stmt ")" ;
+                                                                          (* V6 [parse.y:605 wqitem ::= nm eidlist_opt
+                                                                              AS LP select RP, :592 eidlist_opt] --
+                                                                              #375: the CTE name is parsed into
+                                                                              `CommonTableExpr` but not yet resolvable
+                                                                              in from-clause/table-ref -- materializing
+                                                                              it as a queryable table is #376's scope *)
+
+select-core     ::= "SELECT" [ "DISTINCT" | "ALL" ] result-column { "," result-column }
+                     [ "FROM" from-clause ]
+                     [ "WHERE" expr ]
+                     [ group-by-clause ]
+                     [ "HAVING" expr ] ;                               (* V2/V4/#287 -- HAVING is parse.y's own
+                                                                            independent having_opt, not nested
+                                                                            under groupby_opt: it's legal with no
+                                                                            GROUP BY at all, filtering the
+                                                                            implicit whole-table group (#287) *)
+
+group-by-clause ::= "GROUP" "BY" expr { "," expr } ;
+                     (* V4 [parse.y:950 groupby_opt]; HAVING [parse.y:955
+                        having_opt] moved to select-core above -- #287 *)
+
+result-column   ::= "*"                                   (* V2 [parse.y:717 selcollist] *)
+                  | table-name "." "*"                    (* V2 [parse.y selcollist nm DOT STAR] *)
+                  | expr [ [ "AS" ] identifier ] ;        (* V2 [parse.y:712 selcollist, :735 as] *)
+
+table-ref       ::= table-name [ [ "AS" ] identifier ]    (* V2 [parse.y:762 seltablist, single-table shape only --
+                                                              no schema-qualifier or INDEXED BY/NOT INDEXED] *)
+                  | "(" select-stmt ")" [ "AS" ] identifier ;
+                                                           (* V4 [parse.y:762 seltablist LP select RP as, #257 --
+                                                              this codebase requires the alias SQLite itself
+                                                              leaves optional, since column resolution needs a
+                                                              qualifier] *)
+
+(* #237 landed the INNER/plain JOIN, LEFT [OUTER] JOIN, and CROSS JOIN
+ * subset of this chain; #250 extended it with NATURAL, RIGHT [OUTER]/
+ * FULL [OUTER] JOIN, `USING (col, ...)`, and comma-style `FROM a, b` --
+ * left-to-right -- `a JOIN b ON .. JOIN c ON ..` joins b against a,
+ * then c against that result (`src/codegen/select.rs::compile_join_level`'s
+ * nested-loop shape). A comma is sugar for an unconstrained CROSS JOIN
+ * step in the same chain (`src/parser/grammar.rs::parse_from_clause`);
+ * NATURAL joins take no ON/USING clause at all (the join columns are
+ * same-named columns in both tables, resolved by codegen, not the
+ * parser) and NATURAL CROSS JOIN is rejected (not legal SQLite
+ * grammar -- CROSS is defined by the *absence* of a join condition,
+ * which NATURAL's implied condition contradicts). A bare `JOIN`/
+ * `INNER JOIN`/`LEFT/RIGHT/FULL [OUTER] JOIN` with no ON/USING (valid
+ * SQL, a constraint-less cross join) is deliberately still
+ * `unsupported(..)`. #250 is parser-only: codegen still only
+ * implements INNER/LEFT/CROSS with an `ON` constraint --
+ * `compile_select_joined` rejects NATURAL/RIGHT/FULL/USING joins with a
+ * clean `Unsupported` error as an interim stopgap. NOT shared with
+ * column-rs's own narrower `from-clause`/`join-kind` (section 2) --
+ * see the file header.
+ *)
+from-clause     ::= table-ref { ( "," | join-op ) table-ref
+                       [ "ON" expr | "USING" "(" column-name { "," column-name } ")" ] } ;
+                                                                          (* V4 [parse.y:750 from, :758 stl_prefix,
+                                                                              :762 seltablist, :894 on_using,
+                                                                              :895 on_using USING] *)
+join-op         ::= [ "NATURAL" ] [ "INNER" ] "JOIN"                     (* V4 [parse.y:866 joinop COMMA|JOIN,
+                                                                              :868 joinop JOIN_KW JOIN] *)
+                  | [ "NATURAL" ] "LEFT" [ "OUTER" ] "JOIN"               (* V4 [parse.y:870 joinop JOIN_KW nm JOIN] *)
+                  | [ "NATURAL" ] "RIGHT" [ "OUTER" ] "JOIN"              (* V4 [parse.y:870 joinop JOIN_KW nm JOIN] --
+                                                                              #250 *)
+                  | [ "NATURAL" ] "FULL" [ "OUTER" ] "JOIN"               (* V4 [parse.y:872 joinop JOIN_KW nm nm JOIN] --
+                                                                              #250 *)
+                  | "CROSS" "JOIN" ;                                     (* V4 [parse.y:872 joinop] --
+                                                                              CROSS JOIN takes no ON here, but
+                                                                              #250 allows USING with it *)
+
+ordering-term   ::= expr [ "COLLATE" collation-name ]
+                     [ "ASC" | "DESC" ]
+                     [ "NULLS" ( "FIRST" | "LAST" ) ] ;   (* V2 [parse.y:927 sortlist] *)
+
+collation-name  ::= identifier ;                          (* V2: BINARY | NOCASE | RTRIM *)
+
+(* ----- Expressions (V2 slice) -----
+ * [parse.y:1176 expr, :1193 term]
+ * Precedence, LOWEST to HIGHEST, mirrors parse.y's %left/%right
+ * declarations [parse.y:295-309] exactly:
+ *
+ *   OR                                        [%left OR]
+ *   AND                                       [%left AND]
+ *   NOT (unary, prefix)                       [%right NOT]
+ *   = == != <> IS ISNULL NOTNULL IN LIKE GLOB MATCH REGEXP BETWEEN
+ *                                             [%left IS MATCH LIKE_KW BETWEEN IN ISNULL NOTNULL NE EQ]
+ *   < <= > >=                                 [%left GT LE LT GE]
+ *   ESCAPE                                    [%right ESCAPE]
+ *   & | << >>                                 [%left BITAND BITOR LSHIFT RSHIFT]
+ *   + -  (binary)                             [%left PLUS MINUS]
+ *   * / %                                     [%left STAR SLASH REM]
+ *   ||                                        [%left CONCAT]
+ *   COLLATE (postfix)                         [%left COLLATE]
+ *   ~ unary + unary -                         [%right BITNOT]
+ *
+ * `expr`/`or-expr`/`and-expr` below are textually IDENTICAL to column-
+ * rs's own (section 2) -- deliberately NOT moved to SHARED; see the
+ * file header. Everything from `not-expr` down is sqlite-rs-specific.
+ *)
+
+expr            ::= or-expr ;                                             (* V2 *)
+or-expr         ::= and-expr { "OR" and-expr } ;                          (* V2 [parse.y:1349] *)
+and-expr        ::= not-expr { "AND" not-expr } ;                         (* V2 [parse.y:1348] *)
+not-expr        ::= { "NOT" } equality-expr ;                             (* V2 [parse.y:1448] *)
+
+equality-expr   ::= relational-expr { equality-tail } ;                   (* V2 *)
+equality-tail   ::= ( "=" | "==" | "!=" | "<>" ) relational-expr          (* V2 [parse.y:1350,1352]; `=`/`!=`/`<>`
+                                                                              are 3 of SHARED `comparison-op`'s 7 --
+                                                                              `==` is this engine's own extra synonym *)
+                  | "IS" [ "NOT" ] relational-expr                        (* V2 [parse.y expr ::= expr IS expr] *)
+                  | "ISNULL"                                              (* V2 [parse.y expr ::= expr ISNULL] *)
+                  | "NOTNULL" | "NOT" "NULL"                              (* V2 [parse.y expr ::= expr NOTNULL] *)
+                  | [ "NOT" ] "BETWEEN" relational-expr "AND" relational-expr
+                                                                          (* V2 [parse.y expr ::= expr between_op] *)
+                  | [ "NOT" ] "IN" "(" [ expr-list ] ")"                  (* V2 [parse.y expr ::= expr in_op LP exprlist RP] *)
+                  | [ "NOT" ] "IN" "(" select-stmt ")"                   (* V4 [parse.y expr ::= expr in_op LP select RP] --
+                                                                             #238: incl. correlated; IN table-name still stubbed below *)
+                  | [ "NOT" ] like-op relational-expr [ "ESCAPE" relational-expr ] ;
+                                                                          (* V2 [parse.y expr ::= expr likeop expr] *)
+like-op         ::= "LIKE" | "GLOB" ;                                     (* V2; "REGEXP"|"MATCH" V7+ (need functions) *)
+
+relational-expr ::= bitwise-expr { ( "<" | "<=" | ">" | ">=" ) bitwise-expr } ;  (* V2 [parse.y:1354]; the other 4
+                                                                                    of SHARED `comparison-op`'s 7 *)
+bitwise-expr    ::= additive-expr { ( "&" | "|" | "<<" | ">>" ) additive-expr } ; (* V2 [parse.y:1353] *)
+additive-expr   ::= multiplicative-expr { ( "+" | "-" ) multiplicative-expr } ;   (* V2 [parse.y:1355] *)
+multiplicative-expr ::= concat-expr { ( "*" | "/" | "%" ) concat-expr } ;         (* V2 [parse.y:1357] *)
+concat-expr     ::= collate-expr { "||" collate-expr } ;                          (* V2 [parse.y:1359]; "->"/"->>" V11 *)
+collate-expr    ::= unary-expr { "COLLATE" collation-name } ;             (* V2 [parse.y expr ::= expr COLLATE ids] *)
+unary-expr      ::= { "+" | "-" | "~" } primary-expr ;                    (* V2 [parse.y:1452, BITNOT] *)
+
+primary-expr    ::= literal-value                                         (* V2 [parse.y:1193-1204 term] *)
+                  | parameter                                             (* V2 [parse.y expr ::= VARIABLE] *)
+                  | column-ref                                            (* V2 [parse.y:1177 expr ::= idj] *)
+                  | function-call                                         (* V2 [parse.y:1235] *)
+                  | case-expr                                             (* V2 [parse.y expr ::= CASE case_operand case_exprlist case_else END] *)
+                  | cast-expr                                             (* V2 [parse.y expr ::= CAST LP expr AS typetoken RP] *)
+                  | "(" expr ")"                                          (* V2 [parse.y:1176] *)
+                  | "(" select-stmt ")"                                   (* V4 [parse.y expr ::= LP select RP] --
+                                                                             #238: scalar subquery, incl. correlated *)
+                  | [ "NOT" ] "EXISTS" "(" select-stmt ")" ;               (* V4 [parse.y expr ::= EXISTS LP select RP] --
+                                                                             #238: incl. correlated; NOT EXISTS is this crate's own negated
+                                                                             variant, not a generic NOT wrapper *)
+                  (* V9: RAISE *)
+
+case-expr       ::= "CASE" [ expr ] ( "WHEN" expr "THEN" expr ) { "WHEN" expr "THEN" expr }
+                     [ "ELSE" expr ] "END" ;                              (* V2 *)
+
+cast-expr       ::= "CAST" "(" expr "AS" type-name ")" ;                  (* V2 *)
+
+function-call   ::= identifier "(" [ [ "DISTINCT" ] expr-list | "*" ] ")" ;
+                     (* V2 scalar only (count(*) V4 with aggregates)
+                        [parse.y:1235 expr ::= idj LP distinct exprlist RP]
+                        V9: FILTER clause, OVER window *)
+
+literal-value   ::= NUMBER                                                (* V2: int, hex 0x, float incl. 1e5/.5/1. --
+                                                                              richer than column-rs's own INTEGER/
+                                                                              FLOAT (section 2); NOT shared *)
+                  | STRING                                                (* V2: '...' with '' escaping -- NOT shared
+                                                                              with column-rs's own STRING (section 2) *)
+                  | BLOB                                                  (* V2: X'hex' *)
+                  | "NULL" | "TRUE" | "FALSE"                             (* V2 *)
+                  | "CURRENT_TIME" | "CURRENT_DATE" | "CURRENT_TIMESTAMP" ; (* V9: needs date/time fns *)
+
+parameter       ::= "?" | "?" NUMBER | ":" identifier | "@" identifier | "$" identifier ;  (* V2 *)
+
+column-ref      ::= identifier [ "." identifier [ "." identifier ] ] ;    (* V2 [parse.y:1178]; 3-part = db.tbl.col,
+                                                                              ATTACH semantics V10. column-rs's own
+                                                                              `column-ref` (section 2) allows only 2
+                                                                              parts -- NOT shared. *)
+
+expr-list       ::= expr { "," expr } ;                                   (* V2 [parse.y:1605 nexprlist] *)
+
+(* ----- DML (V3 block) -----
+ * Carried from the spike distillation; V3 tickets grow these
+ * (upsert/RETURNING are V9).
+ *)
+
+insert-stmt     ::= "INSERT" [ "OR" conflict-action ] "INTO" table-name
+                     [ "(" column-name { "," column-name } ")" ]
+                     ( "VALUES" "(" expr-list ")" { "," "(" expr-list ")" }
+                     | select-stmt
+                     | "DEFAULT" "VALUES" ) ;                             (* V3 [parse.y:1082 cmd, :1114 insert_cmd, :1122 idlist_opt] *)
+
+conflict-action ::= "REPLACE" | "IGNORE" | "ABORT" | "ROLLBACK" | "FAIL" ; (* V3 [parse.y:492 orconf, :493 resolvetype] *)
+
+update-stmt     ::= "UPDATE" [ "OR" conflict-action ] table-name
+                     "SET" set-assignment { "," set-assignment }
+                     [ "WHERE" expr ] ;                                   (* V3 [parse.y:1014 cmd, :1065 setlist] *)
+
+set-assignment  ::= column-name "=" expr
+                  | "(" column-name { "," column-name } ")" "=" "(" expr-list ")" ;
+                                                                           (* V3 [parse.y:1065 setlist, :1073 nm] *)
+
+delete-stmt     ::= "DELETE" "FROM" table-name [ "WHERE" expr ] ;         (* V3 [parse.y:978 cmd, :1002 where_opt] *)
+
+(* ----- DDL (V3 block) ----- *)
+
+create-table-stmt ::= "CREATE" "TABLE" [ "IF" "NOT" "EXISTS" ] table-name
+                       "(" column-def { "," column-def } [ "," table-constraint { "," table-constraint } ] ")"
+                       [ "WITHOUT" "ROWID" | "STRICT" ] ;                 (* V3 [parse.y:207-247] *)
+
+column-def      ::= column-name [ type-name ] { [ "CONSTRAINT" identifier ] column-constraint } ;
+                                                                           (* V3 [parse.y:253 columnname, :389-424 ccons] *)
+
+type-name       ::= identifier { identifier } [ "(" NUMBER [ "," NUMBER ] ")" ] ;  (* V3 [parse.y:356 typename] *)
+
+column-constraint ::= "NOT" "NULL"                                        (* V3 [parse.y:389 ccons] *)
+                    | "PRIMARY" "KEY" [ "ASC" | "DESC" ] [ "AUTOINCREMENT" ]  (* V3 [parse.y:392 ccons] *)
+                    | "UNIQUE"                                            (* V3 *)
+                    | "DEFAULT" ( literal-value | "(" expr ")" )          (* V3 *)
+                    | "CHECK" "(" expr ")"                                (* V3 *)
+                    | "COLLATE" collation-name ;                         (* V3; FK REFERENCES V8; GENERATED V10;
+                                                                             ON CONFLICT resolution after NOT NULL/
+                                                                             PRIMARY KEY/UNIQUE not yet supported *)
+
+table-constraint ::= [ "CONSTRAINT" identifier ]
+                     ( "PRIMARY" "KEY" "(" indexed-column { "," indexed-column } ")"
+                     | "UNIQUE" "(" indexed-column { "," indexed-column } ")"
+                     | "CHECK" "(" expr ")" ) ;                           (* V3; FOREIGN KEY V8 *)
+
+indexed-column  ::= expr [ "ASC" | "DESC" ] ;                             (* V3 [parse.y sortlist];
+                                                                             expr already covers optional COLLATE
+                                                                             via collate-expr; no NULLS FIRST/LAST *)
+
+create-index-stmt ::= "CREATE" [ "UNIQUE" ] "INDEX" [ "IF" "NOT" "EXISTS" ] identifier
+                       "ON" table-name "(" indexed-column { "," indexed-column } ")"
+                       [ "WHERE" expr ] ;                                 (* V3 [parse.y cmd ::= CREATE uniqueflag INDEX]; partial-index WHERE V4 planner *)
+
+drop-stmt       ::= "DROP" ( "TABLE" | "INDEX" ) [ "IF" "EXISTS" ] identifier ;  (* V3 [parse.y cmd ::= DROP TABLE ifexists fullname] *)
+
+create-view-stmt ::= "CREATE" "VIEW" [ "IF" "NOT" "EXISTS" ] view-name
+                      [ "(" identifier { "," identifier } ")" ]
+                      "AS" select-stmt ;
+                                                                          (* V6 [parse.y:509-512 cmd] -- #379: the
+                                                                              `AS select-stmt` body is the same
+                                                                              select-stmt production as a top-level
+                                                                              SELECT (no extra wrapping parens,
+                                                                              matching real SQLite's grammar, unlike
+                                                                              common-table-expr's `AS ( select-stmt )`
+                                                                              form above); #380 is where the parsed
+                                                                              view becomes queryable (sqlite_master
+                                                                              storage + FROM-clause expansion) *)
+
+drop-view-stmt  ::= "DROP" "VIEW" [ "IF" "EXISTS" ] view-name ;
+                                                                          (* V6 [parse.y:513-515 cmd] -- #379 *)
+
+view-name       ::= identifier ;                                         (* V6 *)
+
+(* ----- PRAGMA journal_mode / integrity_check / quick_check
+ *       / synchronous (V6/V7 carve-outs) -----
+ * [parse.y:1715 cmd ::= PRAGMA nm dbnm EQ nmnum, :1717 cmd ::= PRAGMA nm
+ * dbnm] -- `nmnum` (parse.y:1723) is where `DELETE`/`FULL` are folded in
+ * as bare keyword values alongside a plain `nm` (identifier) value like
+ * `WAL`/`OFF`/`NORMAL`, which is why the `journal_mode`/`synchronous`
+ * value alternations below need their own literal cases for those two
+ * rather than one `identifier` production.
+ * `integrity_check`/`quick_check` (#540, #541) are the bare
+ * `PRAGMA nm dbnm` form (no `EQ`) with no result-set arguments --
+ * stock SQLite's `PRAGMA integrity_check(N)` (bounding the number of
+ * errors reported) and any `dbnm` (schema-qualified) prefix are out of
+ * this carve-out's scope. `synchronous` (#645) is the first pragma here
+ * that's genuinely bidirectional: `PRAGMA synchronous` (no `EQ`, same
+ * :1717 production as `integrity_check`) queries the connection's
+ * current level instead of changing it -- `journal_mode`'s own bare
+ * query form stays unimplemented (`Unsupported`). General PRAGMA
+ * support -- every other pragma name, journal_mode's other
+ * stock-SQLite values (MEMORY/OFF/TRUNCATE/PERSIST), and synchronous's
+ * `EXTRA`/`ON`/boolean aliases and out-of-0-2-range integers (with
+ * their own legacy masking quirks) -- stays deferred to V7 (see Future
+ * blocks below); #388/#540/#541/#645 carve out only these cases.
+ *)
+
+pragma-stmt     ::= "PRAGMA" "journal_mode" "=" ( "WAL" | "DELETE" )
+                   | "PRAGMA" ( "integrity_check" | "quick_check" )
+                   | "PRAGMA" "synchronous" [ "=" ( "OFF" | "NORMAL" | "FULL"
+                                                   | "0" | "1" | "2" ) ] ;
+                     (* V6 [parse.y:1715 cmd] -- #388 *)
+                     (* V7 [parse.y:1717 cmd] -- #540, #541 *)
+                     (* V7 [parse.y:1715,1717 cmd] -- #645 *)
+
+(* ----- ANALYZE (V7 carve-out) -----
+ * [parse.y:1875 cmd ::= ANALYZE, :1876 cmd ::= ANALYZE nm dbnm] --
+ * `dbnm` (an optional `.`-qualified schema-name prefix on the table
+ * name) is a stock-SQLite production this MVP carve-out doesn't
+ * implement: `table-name` below is a single bare identifier only, and
+ * the parser reports `Unsupported` (not a hard parse error) if a `.`
+ * follows it -- #461, spec 011.
+ *)
+
+analyze-stmt    ::= "ANALYZE" [ table-name ] ;
+                     (* V7 [parse.y:1875 cmd] -- #461 *)
+
+(* ----- Transaction control (V5 slice) -----
+ * [parse.y:181 cmd ::= BEGIN transtype trans_opt, :186 transtype,
+ *  :190 cmd ::= COMMIT|END trans_opt, :191 cmd ::= ROLLBACK trans_opt]
+ * `ROLLBACK ... TO SAVEPOINT nm` (parse.y:201) and SAVEPOINT/RELEASE
+ * themselves are out of scope here -- see Future blocks V5.
+ *)
+
+begin-stmt      ::= "BEGIN" [ "DEFERRED" | "IMMEDIATE" | "EXCLUSIVE" ] [ "TRANSACTION" ] ;
+                     (* V5 [parse.y:181 cmd] *)
+
+commit-stmt     ::= ( "COMMIT" | "END" ) [ "TRANSACTION" ] ;
+                     (* V5 [parse.y:190 cmd] *)
+
+rollback-stmt   ::= "ROLLBACK" [ "TRANSACTION" ] ;
+                     (* V5 [parse.y:191 cmd] *)
+
+(* ----- Lexical (sqlite-rs-specific) -----
+ * [parse.y:365-368 %token_class id/ids/idj; keyword fallback to ID
+ *  at parse.y:262-283 %fallback ID]
+ *)
+
+table-name      ::= identifier ;                                          (* V2 *)
+column-name     ::= identifier ;                                          (* V2 *)
+identifier      ::= ident-chars                                           (* bare -- see SHARED above *)
+                   | quoted-identifier ;                                  (* V2 tokenizer (#60) *)
+quoted-identifier ::= '"' { any character, `""` escapes a literal `"` } '"'
+                     | "[" { any character except "]" } "]"
+                     | "`" { any character, "``" escapes a literal "`" } "`" ;
+                     (* NOT shared with column-rs's own `IDENT` (section
+                        2), which is `ident-chars` alone. *)
+
+(* ----- Future blocks (stubs -- the denominator) -----
+ * V4:  subqueries in FROM (table-valued)
+ *      (#237 landed the INNER/LEFT [OUTER]/CROSS `JOIN ... ON` subset,
+ *      #250 landed NATURAL/RIGHT/FULL joins, USING (...), and
+ *      comma-style FROM a, b -- see from-clause/join-op above),
+ *      ANY/ALL/SOME quantified comparisons, multi-column IN
+ *      (#238 landed scalar/IN/EXISTS subquery expressions, including
+ *      correlated ones -- see equality-tail/primary-expr above;
+ *      correlation is resolved at codegen time via a scope fallback, not
+ *      a distinct grammar production; #240 landed the `UNION ALL`
+ *      compound-select tail, #377/#378 landed plain `UNION` -- see
+ *      select-stmt/compound-op above; `INTERSECT`/`EXCEPT` moved to V7,
+ *      see compound-op above),
+ *      (CREATE VIEW landed -- #379, see create-view-stmt/drop-view-stmt
+ *      above under V6;
+ *      GROUP BY / HAVING landed -- #239, see select-stmt/group-by-clause
+ *      above; WITH/CTEs moved to V6 -- see with-clause/common-table-expr
+ *      above)
+ * V5:  SAVEPOINT/RELEASE, ROLLBACK ... TO SAVEPOINT
+ *      (BEGIN/COMMIT/ROLLBACK landed -- #356, see begin-stmt/commit-stmt/
+ *      rollback-stmt above)
+ * V6:  WITH RECURSIVE (non-recursive WITH/CTEs landed -- #375, see
+ *      with-clause/common-table-expr above; codegen materialization of a
+ *      CTE as a queryable table is a separate ticket, #376; plain
+ *      `UNION` landed -- #377/#378, see compound-op above; CREATE VIEW /
+ *      DROP VIEW landed -- #379, see create-view-stmt/drop-view-stmt
+ *      above; view storage + FROM-clause expansion is #380)
+ * V7:  PRAGMA (general form -- every pragma name/value other than the
+ *      narrow `journal_mode = WAL|DELETE` carve-out that landed under
+ *      V6 -- see pragma-stmt above, #388); ANALYZE's bare/single-table-
+ *      name forms landed -- see analyze-stmt above, #461 -- but
+ *      `ANALYZE schema-name.table-name` and `ANALYZE index-name` stay a
+ *      future-block stub (EXPLAIN [QUERY PLAN] pulled forward to V4 --
+ *      #243), `INTERSECT`/`EXCEPT` compound-select ops (see compound-op
+ *      above)
+ * V8:  FOREIGN KEY refs + actions, CREATE TRIGGER (BEFORE/AFTER/INSTEAD OF, RAISE),
+ *      ALTER TABLE (RENAME / ADD|DROP|RENAME COLUMN)
+ * V9:  UPSERT (ON CONFLICT DO ...), RETURNING, window functions (OVER/PARTITION/frames),
+ *      FILTER, CURRENT_* semantics
+ * V10: WITHOUT ROWID/STRICT write semantics, GENERATED columns, ATTACH/DETACH,
+ *      VACUUM [INTO], REINDEX
+ * V11: CREATE VIRTUAL TABLE ... USING, "->" / "->>" JSON operators
+ *)
