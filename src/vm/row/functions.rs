@@ -9,10 +9,19 @@
 //! **Second slice** (db-core#68): `sign`/`zeroblob`/`iif`/scalar
 //! `min`/`max`/`sqlite_version`/`round`/`hex`/`unhex`/`instr`/`quote`.
 //!
-//! Deliberately still deferred: `like`/`glob` (~150 lines of custom
-//! recursive pattern matchers, a distinct sub-feature) and the
-//! `substr`/`trim`/`ltrim`/`rtrim`/`replace` family (multi-arg arity,
-//! byte/char-index edge cases) -- later slices.
+//! **Third slice** (db-core#90): `substr`/`trim`/`ltrim`/`rtrim`/
+//! `replace`, and `like`/`glob` with their recursive pattern matchers
+//! (`like_match`/`glob_match`, exposed for reuse by the `LIKE`/`GLOB`
+//! operators, not just the scalar functions). This closes the gap
+//! against sqlite-rs's `vdbe::functions` entirely -- there is no
+//! `printf`/date-time family in sqlite-rs's own registry to still
+//! port. sqlite-rs's `vdbe::result`/`vdbe::arithmetic` (the other two
+//! files db-core#90 named) needed no porting at all: every opcode
+//! either backs already has a `super::vm` dispatch arm (`Integer`/
+//! `Int64`/`Real`/`Blob`/`Null`/`Variable`/`String8`/`Copy`/
+//! `MakeRecord`/`ResultRow`, and `Add`/`Subtract`/`Multiply`/`Divide`/
+//! `Remainder`/`BitAnd`/`BitOr`/`ShiftLeft`/`ShiftRight`/`Concat`/
+//! `Not`/`BitNot`).
 
 use std::cmp::Ordering;
 
@@ -316,6 +325,325 @@ fn zeroblob(args: &[Value]) -> Result<Value, FunctionError> {
     Ok(Value::Blob(vec![0u8; n as usize].into()))
 }
 
+/// `substr(x, y[, z])`: `y` (1-based, negative counts from the end)
+/// selects the starting character/byte, `z` (defaulting to "the
+/// rest") the count; a negative `z` extends backward from `y` instead
+/// of forward. Operates on bytes for a BLOB argument, characters for
+/// everything else (`CAST(x AS TEXT)` first).
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+fn substr(args: &[Value]) -> Result<Value, FunctionError> {
+    if matches!(args[1], Value::Null) || args.get(2).is_some_and(|v| matches!(v, Value::Null)) {
+        return Ok(Value::Null);
+    }
+    if matches!(args[0], Value::Null) {
+        return Ok(Value::Null);
+    }
+    let mut p1 = super::coerce::cast_to_integer(&args[1]);
+    let (mut p2, neg_p2) = match args.get(2) {
+        Some(z) => {
+            let raw = super::coerce::cast_to_integer(z);
+            if raw < 0 {
+                (raw.saturating_neg(), true)
+            } else {
+                (raw, false)
+            }
+        }
+        None => (i64::MAX / 2, false),
+    };
+
+    let blob = match &args[0] {
+        Value::Blob(b) => Some(b),
+        _ => None,
+    };
+    let len: i64 = if let Some(b) = blob {
+        b.len() as i64
+    } else if p1 < 0 {
+        as_text(&args[0]).chars().count() as i64
+    } else {
+        0
+    };
+
+    if p1 < 0 {
+        p1 = p1.saturating_add(len);
+        if p1 < 0 {
+            p2 = p2.saturating_add(p1);
+            if p2 < 0 {
+                p2 = 0;
+            }
+            p1 = 0;
+        }
+    } else if p1 > 0 {
+        p1 = p1.saturating_sub(1);
+    } else if p2 > 0 {
+        p2 = p2.saturating_sub(1);
+    }
+
+    if neg_p2 {
+        p1 = p1.saturating_sub(p2);
+        if p1 < 0 {
+            p2 = p2.saturating_add(p1);
+            p1 = 0;
+        }
+    }
+    let p1 = p1.max(0) as usize;
+    let p2 = p2.max(0) as usize;
+
+    if let Some(b) = blob {
+        let start = p1.min(b.len());
+        let end = start.saturating_add(p2).min(b.len());
+        Ok(Value::Blob(b[start..end].to_vec().into()))
+    } else {
+        let text = as_text(&args[0]);
+        let out: String = text.chars().skip(p1).take(p2).collect();
+        Ok(Value::Text(out.into()))
+    }
+}
+
+/// `trim`/`ltrim`/`rtrim`'s second argument: the charset to strip,
+/// defaulting to a single space.
+fn trim_charset(args: &[Value]) -> String {
+    args.get(1).map_or(" ".to_string(), as_text)
+}
+
+fn trim_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    if matches!(args[0], Value::Null) {
+        return Ok(Value::Null);
+    }
+    let charset: Vec<char> = trim_charset(args).chars().collect();
+    let s = as_text(&args[0]);
+    Ok(Value::Text(
+        s.trim_matches(|c| charset.contains(&c)).to_string().into(),
+    ))
+}
+
+fn ltrim_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    if matches!(args[0], Value::Null) {
+        return Ok(Value::Null);
+    }
+    let charset: Vec<char> = trim_charset(args).chars().collect();
+    let s = as_text(&args[0]);
+    Ok(Value::Text(
+        s.trim_start_matches(|c| charset.contains(&c))
+            .to_string()
+            .into(),
+    ))
+}
+
+fn rtrim_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    if matches!(args[0], Value::Null) {
+        return Ok(Value::Null);
+    }
+    let charset: Vec<char> = trim_charset(args).chars().collect();
+    let s = as_text(&args[0]);
+    Ok(Value::Text(
+        s.trim_end_matches(|c| charset.contains(&c))
+            .to_string()
+            .into(),
+    ))
+}
+
+fn replace_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    if args.iter().any(|v| matches!(v, Value::Null)) {
+        return Ok(Value::Null);
+    }
+    let s = as_text(&args[0]);
+    let from = as_text(&args[1]);
+    let to = as_text(&args[2]);
+    if from.is_empty() {
+        return Ok(Value::Text(s.into()));
+    }
+    Ok(Value::Text(s.replace(&from, &to).into()))
+}
+
+/// SQLite `LIKE`: `%` matches any run of characters, `_` matches
+/// exactly one, everything else (case-insensitively, ASCII-only)
+/// matches itself -- or, if `escape` is set, `escape` followed by `%`/
+/// `_`/`escape` matches that character literally. Exposed (not just
+/// the `like()` scalar function) so codegen's `LIKE` operator can call
+/// it directly without going through the function-call machinery.
+pub fn like_match(text: &str, pattern: &str, escape: Option<char>) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
+    like_rec(&t, &p, escape, 0, 0)
+}
+
+fn like_rec(t: &[char], p: &[char], escape: Option<char>, mut ti: usize, mut pi: usize) -> bool {
+    loop {
+        if pi == p.len() {
+            return ti == t.len();
+        }
+        let pc = p[pi];
+        if Some(pc) == escape && pi.saturating_add(1) < p.len() {
+            let literal = p[pi.saturating_add(1)];
+            if ti >= t.len() || !ascii_eq(t[ti], literal) {
+                return false;
+            }
+            ti = ti.saturating_add(1);
+            pi = pi.saturating_add(2);
+            continue;
+        }
+        match pc {
+            '%' => {
+                // Collapse consecutive '%' (a run behaves as one).
+                while pi < p.len() && p[pi] == '%' {
+                    pi = pi.saturating_add(1);
+                }
+                if pi == p.len() {
+                    return true;
+                }
+                for start in ti..=t.len() {
+                    if like_rec(t, p, escape, start, pi) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            '_' => {
+                if ti >= t.len() {
+                    return false;
+                }
+                ti = ti.saturating_add(1);
+                pi = pi.saturating_add(1);
+            }
+            _ => {
+                if ti >= t.len() || !ascii_eq(t[ti], pc) {
+                    return false;
+                }
+                ti = ti.saturating_add(1);
+                pi = pi.saturating_add(1);
+            }
+        }
+    }
+}
+
+fn ascii_eq(a: char, b: char) -> bool {
+    a.eq_ignore_ascii_case(&b)
+}
+
+/// SQLite `GLOB`: case-sensitive, `*` = any run, `?` = any one char,
+/// `[...]`/`[^...]` character classes (with `-` ranges). Exposed for
+/// the same reason as [`like_match`].
+pub fn glob_match(text: &str, pattern: &str) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
+    glob_rec(&t, &p, 0, 0)
+}
+
+fn glob_rec(t: &[char], p: &[char], mut ti: usize, mut pi: usize) -> bool {
+    loop {
+        if pi == p.len() {
+            return ti == t.len();
+        }
+        match p[pi] {
+            '*' => {
+                while pi < p.len() && p[pi] == '*' {
+                    pi = pi.saturating_add(1);
+                }
+                if pi == p.len() {
+                    return true;
+                }
+                for start in ti..=t.len() {
+                    if glob_rec(t, p, start, pi) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            '?' => {
+                if ti >= t.len() {
+                    return false;
+                }
+                ti = ti.saturating_add(1);
+                pi = pi.saturating_add(1);
+            }
+            '[' => {
+                let Some((matches, next_pi)) = glob_class(p, pi, t.get(ti).copied()) else {
+                    return false;
+                };
+                if ti >= t.len() || !matches {
+                    return false;
+                }
+                ti = ti.saturating_add(1);
+                pi = next_pi;
+            }
+            c => {
+                if ti >= t.len() || t[ti] != c {
+                    return false;
+                }
+                ti = ti.saturating_add(1);
+                pi = pi.saturating_add(1);
+            }
+        }
+    }
+}
+
+/// Parses a `[...]`/`[^...]` class starting at `p[start]` (`p[start]
+/// == '['`); returns whether `c` matched and the index just past the
+/// `]`.
+fn glob_class(p: &[char], start: usize, c: Option<char>) -> Option<(bool, usize)> {
+    let mut i = start.saturating_add(1);
+    let negate = p.get(i) == Some(&'^');
+    if negate {
+        i = i.saturating_add(1);
+    }
+    let class_start = i;
+    let mut matched = false;
+    loop {
+        if i >= p.len() {
+            return None; // unterminated class: treat as no match
+        }
+        if p[i] == ']' && i > class_start {
+            i = i.saturating_add(1);
+            break;
+        }
+        if i.saturating_add(2) < p.len()
+            && p[i.saturating_add(1)] == '-'
+            && p[i.saturating_add(2)] != ']'
+        {
+            let (lo, hi) = (p[i], p[i.saturating_add(2)]);
+            if let Some(c) = c {
+                if c >= lo && c <= hi {
+                    matched = true;
+                }
+            }
+            i = i.saturating_add(3);
+        } else {
+            if Some(p[i]) == c {
+                matched = true;
+            }
+            i = i.saturating_add(1);
+        }
+    }
+    Some((matched != negate && c.is_some(), i))
+}
+
+/// `like(pattern, text[, escape])` -- note SQLite's argument order is
+/// (pattern, text), the reverse of the `text LIKE pattern` syntax.
+fn like_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    if args.iter().any(|v| matches!(v, Value::Null)) {
+        return Ok(Value::Null);
+    }
+    let escape = match args.get(2) {
+        Some(e) => as_text(e).chars().next(),
+        None => None,
+    };
+    let pattern = as_text(&args[0]);
+    let text = as_text(&args[1]);
+    Ok(Value::Integer(i64::from(like_match(
+        &text, &pattern, escape,
+    ))))
+}
+
+/// `glob(pattern, text)` -- same reversed argument order as `like()`.
+fn glob_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    if args.iter().any(|v| matches!(v, Value::Null)) {
+        return Ok(Value::Null);
+    }
+    let pattern = as_text(&args[0]);
+    let text = as_text(&args[1]);
+    Ok(Value::Integer(i64::from(glob_match(&text, &pattern))))
+}
+
 fn iif(args: &[Value]) -> Result<Value, FunctionError> {
     let cond = match &args[0] {
         Value::Null => false,
@@ -361,6 +689,13 @@ pub fn call(name: &str, args: &[Value]) -> Result<Value, FunctionError> {
         ("instr", 2) => Some(instr),
         ("zeroblob", 1) => Some(zeroblob),
         ("iif", 3) => Some(iif),
+        ("substr", 2 | 3) => Some(substr),
+        ("trim", 1 | 2) => Some(trim_fn),
+        ("ltrim", 1 | 2) => Some(ltrim_fn),
+        ("rtrim", 1 | 2) => Some(rtrim_fn),
+        ("replace", 3) => Some(replace_fn),
+        ("like", 2 | 3) => Some(like_fn),
+        ("glob", 2) => Some(glob_fn),
         _ => None,
     };
     match f {
@@ -665,5 +1000,160 @@ mod tests {
                 arity: 0
             })
         );
+    }
+
+    #[test]
+    fn substr_negative_and_zero_index_rules() {
+        assert_eq!(
+            v(
+                "substr",
+                &[Value::Text("hello".to_string().into()), Value::Integer(-3)]
+            ),
+            Value::Text("llo".to_string().into())
+        );
+        assert_eq!(
+            v(
+                "substr",
+                &[Value::Text("hello".to_string().into()), Value::Integer(0)]
+            ),
+            Value::Text("hello".to_string().into())
+        );
+        assert_eq!(
+            v(
+                "substr",
+                &[
+                    Value::Text("hello".to_string().into()),
+                    Value::Integer(2),
+                    Value::Integer(-1)
+                ]
+            ),
+            Value::Text("h".to_string().into())
+        );
+        assert_eq!(
+            v(
+                "substr",
+                &[
+                    Value::Text("hello".to_string().into()),
+                    Value::Integer(-100),
+                    Value::Integer(2)
+                ]
+            ),
+            Value::Text(String::new().into())
+        );
+        assert_eq!(v("substr", &[Value::Null, Value::Integer(1)]), Value::Null);
+    }
+
+    #[test]
+    fn substr_operates_on_bytes_for_a_blob() {
+        assert_eq!(
+            v(
+                "substr",
+                &[
+                    Value::Blob(vec![1, 2, 3, 4, 5].into()),
+                    Value::Integer(2),
+                    Value::Integer(2)
+                ]
+            ),
+            Value::Blob(vec![2, 3].into())
+        );
+    }
+
+    #[test]
+    fn trim_ltrim_rtrim_default_to_whitespace_or_use_given_charset() {
+        assert_eq!(
+            v("trim", &[Value::Text("  hi  ".to_string().into())]),
+            Value::Text("hi".to_string().into())
+        );
+        assert_eq!(
+            v("ltrim", &[Value::Text("  hi  ".to_string().into())]),
+            Value::Text("hi  ".to_string().into())
+        );
+        assert_eq!(
+            v("rtrim", &[Value::Text("  hi  ".to_string().into())]),
+            Value::Text("  hi".to_string().into())
+        );
+        assert_eq!(
+            v(
+                "trim",
+                &[
+                    Value::Text("xxhixx".to_string().into()),
+                    Value::Text("x".to_string().into())
+                ]
+            ),
+            Value::Text("hi".to_string().into())
+        );
+        assert_eq!(v("trim", &[Value::Null]), Value::Null);
+    }
+
+    #[test]
+    fn replace_substitutes_all_occurrences_and_handles_empty_from() {
+        assert_eq!(
+            v(
+                "replace",
+                &[
+                    Value::Text("banana".to_string().into()),
+                    Value::Text("a".to_string().into()),
+                    Value::Text("o".to_string().into())
+                ]
+            ),
+            Value::Text("bonono".to_string().into())
+        );
+        assert_eq!(
+            v(
+                "replace",
+                &[
+                    Value::Text("hi".to_string().into()),
+                    Value::Text(String::new().into()),
+                    Value::Text("x".to_string().into())
+                ]
+            ),
+            Value::Text("hi".to_string().into())
+        );
+        assert_eq!(
+            v(
+                "replace",
+                &[
+                    Value::Null,
+                    Value::Text("a".to_string().into()),
+                    Value::Null
+                ]
+            ),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn like_and_glob_match_oracle_semantics() {
+        let t = |s: &str| Value::Text(s.to_string().into());
+        // LIKE is ASCII case-insensitive; GLOB is case-sensitive.
+        assert_eq!(v("like", &[t("abc"), t("ABC")]), Value::Integer(1));
+        assert_eq!(v("glob", &[t("abc"), t("ABC")]), Value::Integer(0));
+        assert_eq!(v("like", &[t("a%b"), t("axxb")]), Value::Integer(1));
+        // ESCAPE makes the following wildcard literal.
+        assert_eq!(
+            v("like", &[t("a\\%b"), t("a%b"), t("\\")]),
+            Value::Integer(1)
+        );
+        // GLOB character classes, including negation.
+        assert_eq!(v("glob", &[t("a[^b]c"), t("abc")]), Value::Integer(0));
+        assert_eq!(v("glob", &[t("a[^b]c"), t("axc")]), Value::Integer(1));
+        assert_eq!(v("glob", &[t("a?c"), t("abc")]), Value::Integer(1));
+        assert_eq!(v("like", &[t("x"), Value::Null]), Value::Null);
+    }
+
+    #[test]
+    fn like_match_and_glob_match_are_directly_callable() {
+        assert!(like_match("abc", "a%c", None));
+        assert!(like_match("abc", "a_c", None));
+        assert!(!like_match("abcd", "a_c", None));
+        assert!(glob_match("abc", "a*c"));
+        assert!(!glob_match("ABC", "abc"));
+    }
+
+    #[test]
+    fn glob_range_class_matches_inclusive_bounds() {
+        assert!(glob_match("m", "[a-z]"));
+        assert!(!glob_match("M", "[a-z]"));
+        assert!(glob_match("5", "[0-9]"));
     }
 }
