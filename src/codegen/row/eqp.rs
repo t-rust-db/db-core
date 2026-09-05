@@ -18,7 +18,7 @@
 //! `ORDER BY` no index satisfies, matching the sorter that path opens.
 
 use super::{index_scan, range_scan, Result, TableSchema};
-use crate::expr::Query;
+use crate::parser::ast::{ExprKind, Select};
 
 /// One row of `EXPLAIN QUERY PLAN` output -- SQLite's own EQP shape
 /// (`id, parent, notused, detail`), distinct from plain `EXPLAIN`'s
@@ -53,7 +53,7 @@ impl EqpRow {
 /// (the `FROM` table) and `right_schema` (`query.joins[0].table`, when
 /// the query joins).
 pub fn explain_query_plan(
-    query: &Query,
+    query: &Select,
     schema: &TableSchema,
     right_schema: Option<&TableSchema>,
 ) -> Result<Vec<EqpRow>> {
@@ -81,11 +81,11 @@ pub fn explain_query_plan(
 
 /// The outermost table's access path: the index walk one of this
 /// module's fast paths would take, or a full scan.
-fn outer_access_detail(query: &Query, schema: &TableSchema) -> String {
+fn outer_access_detail(query: &Select, schema: &TableSchema) -> String {
     let name = &schema.name;
-    if query.joins.is_empty() && query.where_clause.is_none() && !query.distinct {
-        if let Some(order_by) = &query.order_by {
-            if let Some(position) = index_scan::find_ordering_index(schema, &order_by.column) {
+    if is_plain_scan(query) {
+        if let Some(name_of) = single_order_by_column(query) {
+            if let Some(position) = index_scan::find_ordering_index(schema, name_of) {
                 if let Some(index) = schema.indexes.get(position) {
                     return format!("SCAN {name} USING INDEX {}", index.name);
                 }
@@ -104,14 +104,39 @@ fn outer_access_detail(query: &Query, schema: &TableSchema) -> String {
 
 /// Whether the query's `ORDER BY` still needs the sorter -- i.e. it has
 /// one and no index-ordered scan satisfies it.
-fn uses_sorter_for_order_by(query: &Query, schema: &TableSchema) -> bool {
-    let Some(order_by) = &query.order_by else {
+fn uses_sorter_for_order_by(query: &Select, schema: &TableSchema) -> bool {
+    if query.order_by.is_empty() {
         return false;
-    };
-    if query.joins.is_empty() && query.where_clause.is_none() && !query.distinct {
-        return index_scan::find_ordering_index(schema, &order_by.column).is_none();
+    }
+    if is_plain_scan(query) {
+        // A multi-term or expression `ORDER BY` can't be served by the
+        // index-ordered scan, so it always falls to the sorter.
+        return match single_order_by_column(query) {
+            Some(name) => index_scan::find_ordering_index(schema, name).is_none(),
+            None => true,
+        };
     }
     true
+}
+
+/// Whether `query` is the shape the index-ordered fast path considers:
+/// one table, no `WHERE`, no `DISTINCT`.
+fn is_plain_scan(query: &Select) -> bool {
+    super::joins_of(query).is_empty()
+        && query.where_clause.is_none()
+        && !super::is_distinct(query)
+}
+
+/// The single bare column `query` orders by, or `None` for no `ORDER
+/// BY`, more than one term, or a term that isn't a plain column.
+fn single_order_by_column(query: &Select) -> Option<&str> {
+    let [term] = query.order_by.as_slice() else {
+        return None;
+    };
+    match &term.expr.kind {
+        ExprKind::Column { name, .. } => Some(name),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

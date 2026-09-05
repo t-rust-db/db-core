@@ -13,7 +13,7 @@ use super::super::{
     CodegenError, CondTargets, Emitter, RegAlloc, Result, Scope, TableSchema, Target,
 };
 use super::{FIRST_INDEX_CURSOR, TABLE_CURSOR};
-use crate::expr::Delete;
+use crate::parser::ast::Delete;
 use crate::vm::row::{Instruction, Opcode, Program};
 
 /// Compiles `delete` against `schema` (the resolved target table) into

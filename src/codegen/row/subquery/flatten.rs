@@ -11,13 +11,25 @@
 //! `rewrite_alias_in_select`) reduces to rewriting the single alias, and
 //! its `qualify_with_outer_alias` has nothing to qualify against.
 
-use crate::expr::{BinOp, Expr, FromClause, Query, SelectItem};
+use crate::parser::ast::{Expr, ExprKind, ResultColumn, Select, TableRefKind};
 
 /// Flattens `query`'s `FROM`-subquery in place when it is safe to,
 /// returning whether it did. Idempotent: a `query` whose `FROM` is
 /// already a plain table is left untouched.
-pub fn flatten_from_subquery(query: &mut Query) -> bool {
-    let FromClause::Subquery(inner, alias) = &query.from else {
+pub fn flatten_from_subquery(query: &mut Select) -> bool {
+    let Some(from) = &query.from else {
+        return false;
+    };
+    // Flattening merges the subquery's `FROM` into the enclosing one,
+    // which only works while the enclosing `FROM` is that subquery and
+    // nothing else.
+    if !from.joins.is_empty() {
+        return false;
+    }
+    let TableRefKind::Subquery(inner) = &from.first.kind else {
+        return false;
+    };
+    let Some(alias) = from.first.alias.as_ref() else {
         return false;
     };
     if !subquery_flatten_safe(inner) {
@@ -29,7 +41,7 @@ pub fn flatten_from_subquery(query: &mut Query) -> bool {
 
     // A `SELECT *` over a subquery that projects a *subset* of its
     // table's columns would widen to the whole table once flattened.
-    if exposed.is_some() && query.columns.iter().any(|c| matches!(c, SelectItem::Star)) {
+    if exposed.is_some() && query.columns.iter().any(|c| matches!(c, ResultColumn::Star)) {
         return false;
     }
 
@@ -63,31 +75,43 @@ pub fn flatten_from_subquery(query: &mut Query) -> bool {
 /// `HAVING`, or a `LIMIT`/`OFFSET`/`ORDER BY` would all change which
 /// rows (or how many) survive when the enclosing `WHERE` is applied in
 /// the same pass instead of afterwards.
-fn subquery_flatten_safe(inner: &Query) -> bool {
-    !inner.distinct
-        && inner.joins.is_empty()
+fn subquery_flatten_safe(inner: &Select) -> bool {
+    !super::super::is_distinct(inner)
+        && super::super::joins_of(inner).is_empty()
         && inner.group_by.is_empty()
         && inner.having.is_none()
-        && inner.order_by.is_none()
+        && inner.order_by.is_empty()
         && inner.limit.is_none()
-        && inner.offset.is_none()
-        && matches!(inner.from, FromClause::Table(_))
+        // `WITH`/compound bodies have their own scope and row shape;
+        // neither is representable in the enclosing query after a merge.
+        && inner.with_clause.is_none()
+        && inner.compound.is_empty()
         && inner
-            .columns
-            .iter()
-            .all(|c| matches!(c, SelectItem::Column(_) | SelectItem::Star))
+            .from
+            .as_ref()
+            .is_some_and(|from| matches!(from.first.kind, TableRefKind::Name(_)))
+        && inner.columns.iter().all(|c| match c {
+            ResultColumn::Star => true,
+            ResultColumn::Expr { expr, .. } => {
+                matches!(expr.kind, ExprKind::Column { .. })
+            }
+            ResultColumn::TableStar { .. } => false,
+        })
 }
 
 /// The column names `inner` exposes, or `None` for a bare `SELECT *`
 /// (any name passes through unchanged) -- the reference's `ColumnMap`,
 /// narrowed to db-core's alias-free `SelectItem`.
-fn exposed_columns(inner: &Query) -> Option<Option<Vec<String>>> {
-    if inner.columns.iter().any(|c| matches!(c, SelectItem::Star)) {
+fn exposed_columns(inner: &Select) -> Option<Option<Vec<String>>> {
+    if inner.columns.iter().any(|c| matches!(c, ResultColumn::Star)) {
         return Some(None);
     }
     let mut out = Vec::with_capacity(inner.columns.len());
     for col in &inner.columns {
-        let SelectItem::Column(name) = col else {
+        let ResultColumn::Expr { expr, .. } = col else {
+            return None;
+        };
+        let ExprKind::Column { name, .. } = &expr.kind else {
             return None;
         };
         out.push(name.clone());
@@ -114,7 +138,7 @@ fn strip_alias(name: &str, alias: &str) -> String {
 
 fn and_exprs(a: Option<Expr>, b: Option<Expr>) -> Option<Expr> {
     match (a, b) {
-        (Some(a), Some(b)) => Some(Expr::BinaryOp(Box::new(a), BinOp::And, Box::new(b))),
+        (Some(a), Some(b)) => Some(super::super::and_expr(a, b)),
         (Some(only), None) | (None, Some(only)) => Some(only),
         (None, None) => None,
     }
@@ -122,81 +146,67 @@ fn and_exprs(a: Option<Expr>, b: Option<Expr>) -> Option<Expr> {
 
 /// Every column name the *enclosing* query mentions, excluding anything
 /// inside a nested subquery expression (which has its own scope).
-pub(super) fn collect_column_names(query: &Query, out: &mut Vec<String>) {
+pub(super) fn collect_column_names(query: &Select, out: &mut Vec<String>) {
+    let mut push = |name: &str| out.push(name.to_string());
     for item in &query.columns {
-        if let SelectItem::Column(name) = item {
-            out.push(name.clone());
+        if let ResultColumn::Expr { expr, .. } = item {
+            super::super::walk_columns(expr, &mut push);
         }
     }
-    for join in &query.joins {
-        out.push(join.left_col.clone());
-        out.push(join.right_col.clone());
+    for join in super::super::joins_of(query) {
+        // The AST carries the join's real `ON <expr>` rather than a
+        // pair of column names (#147), so its columns are collected by
+        // the same expression walk as everything else.
+        if let Some(crate::parser::ast::JoinConstraint::On(expr)) = &join.constraint {
+            super::super::walk_columns(expr, &mut push);
+        }
     }
-    for name in &query.group_by {
-        out.push(name.clone());
+    for expr in &query.group_by {
+        super::super::walk_columns(expr, &mut push);
     }
-    if let Some(order_by) = &query.order_by {
-        out.push(order_by.column.clone());
+    for term in &query.order_by {
+        super::super::walk_columns(&term.expr, &mut push);
     }
     for expr in [query.where_clause.as_ref(), query.having.as_ref()]
         .into_iter()
         .flatten()
     {
-        collect_expr_column_names(expr, out);
+        super::super::walk_columns(expr, &mut push);
     }
 }
 
 pub(super) fn collect_expr_column_names(expr: &Expr, out: &mut Vec<String>) {
-    match expr {
-        Expr::Column(name) => out.push(name.clone()),
-        Expr::Literal(_) | Expr::Exists { .. } => {}
-        Expr::BinaryOp(lhs, _, rhs) => {
-            collect_expr_column_names(lhs, out);
-            collect_expr_column_names(rhs, out);
-        }
-        Expr::Not(inner) | Expr::Neg(inner) | Expr::IsNull { expr: inner, .. } => {
-            collect_expr_column_names(inner, out);
-        }
-        Expr::InSubquery { expr, .. } => collect_expr_column_names(expr, out),
-    }
+    super::super::walk_columns(expr, &mut |name| out.push(name.to_string()));
 }
 
-fn rewrite_column_names(query: &mut Query, f: &mut impl FnMut(&str) -> String) {
+fn rewrite_column_names(query: &mut Select, f: &mut impl FnMut(&str) -> String) {
+    let mut rename = |name: &mut String| *name = f(name);
     for item in &mut query.columns {
-        if let SelectItem::Column(name) = item {
-            *name = f(name);
+        if let ResultColumn::Expr { expr, .. } = item {
+            super::super::walk_columns_mut(expr, &mut rename);
         }
     }
-    for join in &mut query.joins {
-        join.left_col = f(&join.left_col);
-        join.right_col = f(&join.right_col);
-    }
-    for name in &mut query.group_by {
-        *name = f(name);
-    }
-    if let Some(order_by) = &mut query.order_by {
-        order_by.column = f(&order_by.column);
-    }
-    if let Some(expr) = &mut query.where_clause {
-        rewrite_expr_column_names(expr, f);
-    }
-    if let Some(expr) = &mut query.having {
-        rewrite_expr_column_names(expr, f);
-    }
-}
-
-fn rewrite_expr_column_names(expr: &mut Expr, f: &mut impl FnMut(&str) -> String) {
-    match expr {
-        Expr::Column(name) => *name = f(name),
-        Expr::Literal(_) | Expr::Exists { .. } => {}
-        Expr::BinaryOp(lhs, _, rhs) => {
-            rewrite_expr_column_names(lhs, f);
-            rewrite_expr_column_names(rhs, f);
+    for join in query
+        .from
+        .as_mut()
+        .map(|from| from.joins.as_mut_slice())
+        .unwrap_or_default()
+    {
+        if let Some(crate::parser::ast::JoinConstraint::On(expr)) = &mut join.constraint {
+            super::super::walk_columns_mut(expr, &mut rename);
         }
-        Expr::Not(inner) | Expr::Neg(inner) | Expr::IsNull { expr: inner, .. } => {
-            rewrite_expr_column_names(inner, f);
-        }
-        Expr::InSubquery { expr, .. } => rewrite_expr_column_names(expr, f),
+    }
+    for expr in &mut query.group_by {
+        super::super::walk_columns_mut(expr, &mut rename);
+    }
+    for term in &mut query.order_by {
+        super::super::walk_columns_mut(&mut term.expr, &mut rename);
+    }
+    for expr in [query.where_clause.as_mut(), query.having.as_mut()]
+        .into_iter()
+        .flatten()
+    {
+        super::super::walk_columns_mut(expr, &mut rename);
     }
 }
 

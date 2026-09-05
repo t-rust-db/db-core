@@ -25,7 +25,7 @@ use super::accum::{
     agg_label, collect_aggregates, column_operand, count_operand, emit_agg_final, AggSlot,
 };
 use super::{emit_boundary_check, group_key_p4};
-use crate::expr::{JoinKind, Query, SelectItem};
+use crate::parser::ast::{ExprKind, JoinOp, ResultColumn, Select};
 use crate::vm::row::{Collation, Instruction, Opcode, SortKeyColumn, P4};
 
 /// [`super::compile_grouped_scan`]'s joined counterpart: `GROUP BY`, or
@@ -34,7 +34,7 @@ use crate::vm::row::{Collation, Instruction, Opcode, SortKeyColumn, P4};
 pub(in crate::codegen::row) fn compile_joined_grouped_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    query: &Query,
+    query: &Select,
     scope: &Scope,
     cursors: super::ScanCursors,
     right_cursor: i32,
@@ -50,12 +50,12 @@ where
             reason: "HAVING combined with a JOIN is not yet supported".to_string(),
         });
     }
-    let Some(join) = query.joins.first() else {
+    let Some(join) = super::super::joins_of(query).first() else {
         return Err(CodegenError::Unsupported {
             reason: "compile_joined_grouped_scan requires a JOIN".to_string(),
         });
     };
-    if !matches!(join.kind, JoinKind::Inner | JoinKind::Left) {
+    if !matches!(join.op, JoinOp::Inner | JoinOp::Left) {
         return Err(CodegenError::Unsupported {
             reason: "only INNER/LEFT JOIN can be aggregated over".to_string(),
         });
@@ -68,9 +68,8 @@ where
     let left_width = scope.schema.columns.len();
     let total_width = left_width.saturating_add(right_schema.columns.len());
 
-    let group_offsets: Vec<usize> = query
-        .group_by
-        .iter()
+    let group_offsets: Vec<usize> = super::group_by_column_names(query)?
+        .into_iter()
         .map(|name| column_offset(scope, right_cursor, left_width, name))
         .collect::<Result<_>>()?;
     let agg_slots = collect_aggregates(query)?;
@@ -105,7 +104,7 @@ where
     // `LEFT` null-extends an outer row that matched no inner row -- the
     // flag is per outer row, so it is (re-)zeroed here inside the loop,
     // matching `select::compile_join_body`.
-    let matched_reg = if join.kind == JoinKind::Left {
+    let matched_reg = if join.op == JoinOp::Left {
         let r = reg.alloc();
         em.emit(Instruction::new(Opcode::Integer, 0, r, 0));
         Some(r)
@@ -120,7 +119,7 @@ where
     em.place(inner_loop);
     let inner_skip = em.new_label();
 
-    let join_cond = build_join_cond(scope, join);
+    let join_cond = build_join_cond(scope, join)?;
     super::super::compile_cond(
         em,
         reg,
@@ -210,9 +209,8 @@ where
     for &offset in &group_offsets {
         cur_key_regs.push(read_offset(em, reg, cursors.pseudo, offset)?);
     }
-    let key_p4s: Vec<P4> = query
-        .group_by
-        .iter()
+    let key_p4s: Vec<P4> = super::group_by_column_names(query)?
+        .into_iter()
         .map(|name| group_key_p4(scope, name))
         .collect();
 
@@ -437,7 +435,7 @@ fn emit_joined_agg_step(
 fn flush_joined_group<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    query: &Query,
+    query: &Select,
     scope: &Scope,
     right_cursor: i32,
     left_width: usize,
@@ -500,7 +498,7 @@ where
 /// `total_width` raw joined columns followed by one finalized value per
 /// aggregate, in `agg_slots` order.
 fn projected_offsets(
-    query: &Query,
+    query: &Select,
     scope: &Scope,
     right_cursor: i32,
     left_width: usize,
@@ -510,22 +508,40 @@ fn projected_offsets(
     let mut offsets = Vec::with_capacity(query.columns.len());
     for item in &query.columns {
         match item {
-            SelectItem::Column(name) => {
-                offsets.push(column_offset(scope, right_cursor, left_width, name)?);
-            }
-            SelectItem::Star => offsets.extend(0..total_width),
-            SelectItem::Agg(func, arg) => {
-                let label = agg_label(*func, arg.as_deref());
-                let pos = agg_slots
-                    .iter()
-                    .position(|a| a.label == label)
-                    .ok_or_else(|| CodegenError::UnknownColumn(label.clone()))?;
-                offsets.push(total_width.saturating_add(pos));
-            }
-            SelectItem::Window(_) => {
+            ResultColumn::Star => offsets.extend(0..total_width),
+            ResultColumn::TableStar { table } => {
                 return Err(CodegenError::Unsupported {
-                    reason: "window functions are not supported by codegen::row".to_string(),
+                    reason: format!("`{table}.*` is not supported yet"),
                 })
+            }
+            ResultColumn::Expr { expr, .. } => {
+                if let ExprKind::FunctionCall { over: Some(_), .. } = &expr.kind {
+                    return Err(CodegenError::Unsupported {
+                        reason: "window functions are not supported by codegen::row".to_string(),
+                    });
+                }
+                match super::accum::as_aggregate(expr)? {
+                    Some((func, arg)) => {
+                        let label = agg_label(func, arg.as_deref());
+                        let pos = agg_slots
+                            .iter()
+                            .position(|a| a.label == label)
+                            .ok_or_else(|| CodegenError::UnknownColumn(label.clone()))?;
+                        offsets.push(total_width.saturating_add(pos));
+                    }
+                    None => match &expr.kind {
+                        ExprKind::Column { name, .. } => {
+                            offsets.push(column_offset(scope, right_cursor, left_width, name)?);
+                        }
+                        _ => {
+                            return Err(CodegenError::Unsupported {
+                                reason: "a computed result column is not supported by \
+                                         codegen::row yet"
+                                    .to_string(),
+                            })
+                        }
+                    },
+                }
             }
         }
     }

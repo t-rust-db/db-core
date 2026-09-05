@@ -20,7 +20,7 @@ use super::super::{
     CodegenError, CondTargets, Emitter, RegAlloc, Result, Scope, TableSchema, Target,
 };
 use super::{FIRST_INDEX_CURSOR, TABLE_CURSOR};
-use crate::expr::Update;
+use crate::parser::ast::{Expr, Update};
 use crate::vm::row::{Instruction, Opcode, Program};
 
 /// Compiles `update` against `schema` (the resolved target table) into
@@ -35,17 +35,24 @@ pub fn compile_update(schema: &TableSchema, update: &Update) -> Result<Program> 
         });
     }
 
-    let mut assigned: Vec<Option<&crate::expr::Expr>> = vec![None; schema.columns.len()];
+    let mut assigned: Vec<Option<&Expr>> = vec![None; schema.columns.len()];
     for assignment in &update.assignments {
+        // `expr::Assignment` was one column per entry. The AST keeps a
+        // `Vec<String>` so the tuple form `(a, b) = (x, y)` can expand
+        // into one entry per column -- but each entry still pairs with
+        // a single RHS expression, so anything other than one column
+        // here is a shape this planner has no value to assign.
+        let [column] = assignment.columns.as_slice() else {
+            return Err(CodegenError::Unsupported {
+                reason: "a tuple assignment in UPDATE ... SET is not supported yet".to_string(),
+            });
+        };
         let idx = schema
-            .column_index(&assignment.column)
-            .ok_or_else(|| CodegenError::UnknownColumn(assignment.column.clone()))?;
+            .column_index(column)
+            .ok_or_else(|| CodegenError::UnknownColumn(column.clone()))?;
         if Some(idx) == schema.rowid_alias {
             return Err(CodegenError::Unsupported {
-                reason: format!(
-                    "UPDATE of the rowid-alias column {} is not supported yet",
-                    assignment.column
-                ),
+                reason: format!("UPDATE of the rowid-alias column {column} is not supported yet"),
             });
         }
         assigned[idx] = Some(&assignment.value);

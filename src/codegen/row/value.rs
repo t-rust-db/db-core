@@ -179,6 +179,7 @@ pub(crate) fn compile_value_depth(
         | ExprKind::In { .. }
         | ExprKind::Like { .. }
         | ExprKind::InSubquery { .. }
+        | ExprKind::InSubqueryMulti { .. }
         | ExprKind::Exists { .. } => compile_bool_to_value(em, reg, scope, expr, depth),
 
         // Reachable now that `codegen::row` consumes the full AST

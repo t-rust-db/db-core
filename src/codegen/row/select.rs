@@ -26,15 +26,17 @@ use super::{index_scan, range_scan};
 use super::{
     CodegenError, CondTargets, Emitter, Label, RegAlloc, Result, Scope, TableSchema, Target,
 };
-use crate::expr::{BinOp, Expr, FromClause, Join, JoinKind, Query, SelectItem};
+use crate::parser::ast::{
+    BinaryOp, Expr, ExprKind, Join, JoinConstraint, JoinOp, ResultColumn, Select, TableRefKind,
+};
 use crate::vm::row::{Collation, Instruction, Opcode, Program, SortKeyColumn, P4};
 
 /// Compiles `query` (a single-table `SELECT`, no `JOIN`) against
 /// `schema`, scanning the pre-wired cursor slot `cursor`. A query with a
 /// `JOIN` must use [`compile_select_join`] instead, since resolving it
 /// needs a second pre-wired cursor this signature has no room for.
-pub fn compile_select(schema: &TableSchema, cursor: i32, query: &Query) -> Result<Program> {
-    if !query.joins.is_empty() {
+pub fn compile_select(schema: &TableSchema, cursor: i32, query: &Select) -> Result<Program> {
+    if !super::joins_of(query).is_empty() {
         return Err(CodegenError::Unsupported {
             reason: "SELECT with a JOIN must be compiled via compile_select_join".to_string(),
         });
@@ -55,7 +57,7 @@ pub fn compile_select_join(
     cursor: i32,
     right_schema: &TableSchema,
     right_cursor: i32,
-    query: &Query,
+    query: &Select,
 ) -> Result<Program> {
     compile_select_inner(
         schema,
@@ -80,15 +82,18 @@ pub fn compile_select_join(
 /// order -- the same order the reference runs them (a predicate is
 /// pushed into a subquery that flattening may then dissolve entirely,
 /// leaving the predicate exactly where it would have ended up anyway).
-pub fn compile_select_with_catalog(catalog: &[TableSchema], query: &Query) -> Result<Program> {
+pub fn compile_select_with_catalog(catalog: &[TableSchema], query: &Select) -> Result<Program> {
     let mut query = query.clone();
     super::subquery::push_down_where_predicates(&mut query);
     super::subquery::flatten_from_subquery(&mut query);
 
-    let schema = super::subquery::resolve_from_table_schema(&query.from, catalog)?;
-    let from_subquery = match &query.from {
-        FromClause::Table(_) => None,
-        FromClause::Subquery(subquery, _) => Some(subquery.as_ref().clone()),
+    let schema = super::subquery::resolve_from_table_schema(query.from.as_ref(), catalog)?;
+    // The AST nests the `FROM` table inside an optional `FromClause`
+    // and spells a subquery as a `TableRefKind`, where `expr::Query`
+    // had a two-variant `FromClause` field that was always present.
+    let from_subquery = match query.from.as_ref().map(|from| &from.first.kind) {
+        Some(TableRefKind::Subquery(subquery)) => Some(subquery.as_ref().clone()),
+        _ => None,
     };
     compile_select_inner(&schema, 0, None, &query, catalog, from_subquery.as_ref())
 }
@@ -97,24 +102,38 @@ fn compile_select_inner(
     schema: &TableSchema,
     cursor: i32,
     right: Option<(&TableSchema, i32)>,
-    query: &Query,
+    query: &Select,
     catalog: &[TableSchema],
-    from_subquery: Option<&Query>,
+    from_subquery: Option<&Select>,
 ) -> Result<Program> {
-    if query.distinct {
+    if super::is_distinct(query) {
         return Err(CodegenError::Unsupported {
             reason: "DISTINCT is not yet supported".to_string(),
         });
     }
-    if query.joins.len() > 1 {
+    // Constructs `expr::Query` could not represent at all, so no
+    // codegen for them has ever existed (#147). CTEs are #143; compound
+    // SELECT has no ticket yet.
+    if query.with_clause.is_some() {
+        return Err(CodegenError::Unsupported {
+            reason: "WITH / common table expressions are not supported yet (#143)".to_string(),
+        });
+    }
+    if !query.compound.is_empty() {
+        return Err(CodegenError::Unsupported {
+            reason: "compound SELECT (UNION/INTERSECT/EXCEPT) is not supported yet".to_string(),
+        });
+    }
+    let joins = super::joins_of(query);
+    if joins.len() > 1 {
         return Err(CodegenError::Unsupported {
             reason: "only a single JOIN is supported; N-way joins are deferred to #101".to_string(),
         });
     }
-    let join = query.joins.first();
+    let join = joins.first();
     match (join, right) {
         (Some(join), Some(_)) => {
-            if !matches!(join.kind, JoinKind::Inner | JoinKind::Left | JoinKind::Full) {
+            if !matches!(join.op, JoinOp::Inner | JoinOp::Left | JoinOp::Full) {
                 return Err(CodegenError::Unsupported {
                     reason: "only INNER/LEFT/FULL JOIN are supported; the join-order/access-path \
 chooser is deferred to #117, N-way joins to #118"
@@ -150,8 +169,26 @@ chooser is deferred to #117, N-way joins to #118"
     let mut columns = Vec::with_capacity(query.columns.len());
     for item in &query.columns {
         match item {
-            SelectItem::Column(name) => columns.push(name.clone()),
-            SelectItem::Star => {
+            // `ResultColumn::Expr` covers what `SelectItem::Column` did
+            // and much more; this scan path projects columns by name,
+            // so only a bare column reference resolves here. An alias
+            // is accepted and ignored -- it renames the output, which
+            // this planner does not model yet.
+            ResultColumn::Expr { expr, .. } => match &expr.kind {
+                ExprKind::Column { table: None, name, .. } => columns.push(name.clone()),
+                ExprKind::Column {
+                    table: Some(table),
+                    name,
+                    ..
+                } => columns.push(format!("{table}.{name}")),
+                _ => {
+                    return Err(CodegenError::Unsupported {
+                        reason: "only bare column references are supported in this SELECT list"
+                            .to_string(),
+                    });
+                }
+            },
+            ResultColumn::Star => {
                 columns.extend(schema.columns.iter().cloned());
                 if let Some((right_schema, _)) = right {
                     columns.extend(
@@ -162,9 +199,9 @@ chooser is deferred to #117, N-way joins to #118"
                     );
                 }
             }
-            SelectItem::Agg(..) | SelectItem::Window(_) => {
+            ResultColumn::TableStar { table } => {
                 return Err(CodegenError::Unsupported {
-                    reason: "aggregate/window SELECT items are deferred to #93".to_string(),
+                    reason: format!("`{table}.*` is not supported yet"),
                 });
             }
         }
@@ -178,21 +215,42 @@ chooser is deferred to #117, N-way joins to #118"
     // isn't already part of the projection; `output_count` stays at the
     // original projection width so the drain loop never emits it.
     let output_count = columns.len();
-    let sort_key = query.order_by.as_ref().map(|order_by| {
-        let index = columns
-            .iter()
-            .position(|c| c.eq_ignore_ascii_case(&order_by.column))
-            .unwrap_or_else(|| {
-                columns.push(order_by.column.clone());
-                columns.len() - 1
-            });
-        SortKeyColumn {
-            index,
-            descending: order_by.descending,
-            collation: Collation::Binary,
-            nulls_first: false,
+    // The sorter takes a single key column, so only a one-term
+    // `ORDER BY` over a bare column compiles today. Multi-term and
+    // expression ordering, and explicit NULLS placement, are #149.
+    let sort_key = match query.order_by.as_slice() {
+        [] => None,
+        [term] => {
+            let ExprKind::Column { name, .. } = &term.expr.kind else {
+                return Err(CodegenError::Unsupported {
+                    reason: "ORDER BY an expression is not supported yet (#149)".to_string(),
+                });
+            };
+            if term.nulls_last.is_some() {
+                return Err(CodegenError::Unsupported {
+                    reason: "ORDER BY ... NULLS FIRST/LAST is not supported yet (#149)".to_string(),
+                });
+            }
+            let index = columns
+                .iter()
+                .position(|c| c.eq_ignore_ascii_case(name))
+                .unwrap_or_else(|| {
+                    columns.push(name.clone());
+                    columns.len() - 1
+                });
+            Some(SortKeyColumn {
+                index,
+                descending: term.desc.unwrap_or(false),
+                collation: Collation::Binary,
+                nulls_first: false,
+            })
         }
-    });
+        _ => {
+            return Err(CodegenError::Unsupported {
+                reason: "a multi-term ORDER BY is not supported yet (#149)".to_string(),
+            });
+        }
+    };
 
     let mut em = Emitter::new();
     let mut reg = RegAlloc::new();
@@ -295,7 +353,7 @@ chooser is deferred to #117, N-way joins to #118"
     // any) begins, not the true program end, so it can't double as the
     // limit target the way it does for every other join kind (where
     // there is no second pass, and the two labels are the same point).
-    let final_label = if matches!(join.map(|j| j.kind), Some(JoinKind::Full)) {
+    let final_label = if matches!(join.map(|j| j.op), Some(JoinOp::Full)) {
         em.new_label()
     } else {
         end_label
@@ -353,7 +411,7 @@ chooser is deferred to #117, N-way joins to #118"
     em.place(end_label);
 
     if let (Some(join), Some((_, right_cursor))) = (join, right) {
-        if join.kind == JoinKind::Full {
+        if join.op == JoinOp::Full {
             compile_full_outer_right_pass(
                 &mut em,
                 &mut reg,
@@ -466,15 +524,15 @@ fn compile_aggregate_select(
     schema: &TableSchema,
     cursor: i32,
     right: Option<(&TableSchema, i32)>,
-    query: &Query,
+    query: &Select,
     scope: &Scope,
 ) -> Result<Program> {
-    if query.order_by.is_some() {
+    if !query.order_by.is_empty() {
         return Err(CodegenError::Unsupported {
             reason: "ORDER BY combined with GROUP BY/aggregation is not yet supported".to_string(),
         });
     }
-    if query.offset.is_some() {
+    if query.limit.as_ref().is_some_and(|l| l.offset.is_some()) {
         return Err(CodegenError::Unsupported {
             reason: "OFFSET combined with GROUP BY/aggregation is not yet supported".to_string(),
         });
@@ -515,12 +573,19 @@ fn compile_aggregate_select(
 
 /// Emits the `LIMIT` counter register, if any -- `Opcode::IfNotZero`
 /// decrements it per emitted row (see [`emit_limit_guard`]).
-fn compile_limit_setup(em: &mut Emitter, reg: &mut RegAlloc, query: &Query) -> Result<Option<i32>> {
-    let Some(limit) = query.limit else {
+fn compile_limit_setup(em: &mut Emitter, reg: &mut RegAlloc, query: &Select) -> Result<Option<i32>> {
+    let Some(limit) = &query.limit else {
         return Ok(None);
     };
-    let p1 = i32::try_from(limit).map_err(|_| CodegenError::Unsupported {
-        reason: format!("LIMIT {limit} does not fit in a p1 operand"),
+    // Only an integer-literal bound compiles to an `Integer` immediate;
+    // an expression `LIMIT` needs a computed counter (#149).
+    let ExprKind::Literal(crate::parser::ast::Literal::Integer(count)) = &limit.limit.kind else {
+        return Err(CodegenError::Unsupported {
+            reason: "a non-literal LIMIT expression is not supported yet (#149)".to_string(),
+        });
+    };
+    let p1 = i32::try_from(*count).map_err(|_| CodegenError::Unsupported {
+        reason: format!("LIMIT {count} does not fit in a p1 operand"),
     })?;
     let r = reg.alloc();
     em.emit(Instruction::new(Opcode::Integer, p1, r, 0));
@@ -551,31 +616,68 @@ fn unqualified(name: &str) -> &str {
     }
 }
 
-/// Builds `join`'s equi-join condition as an `Expr`, qualifying both
-/// sides explicitly. `left_col`/`right_col` name which table they
-/// belong to structurally (the `Join` type's own contract), unlike a
-/// bare `Expr::Column` elsewhere in the query -- so each is qualified
-/// here rather than resolved via `Scope`'s unqualified-defaults-to-left
-/// convention, which would otherwise send an unqualified `right_col` to
-/// the wrong table.
-pub(super) fn build_join_cond(scope: &Scope, join: &Join) -> Expr {
-    let right_table_name = scope
-        .right
-        .as_ref()
-        .map(|(right_schema, _)| right_schema.name.clone())
-        .unwrap_or_default();
-    Expr::BinaryOp(
-        Box::new(Expr::Column(format!(
-            "{}.{}",
-            scope.schema.name,
-            unqualified(&join.left_col)
-        ))),
-        BinOp::Eq,
-        Box::new(Expr::Column(format!(
-            "{right_table_name}.{}",
-            unqualified(&join.right_col)
-        ))),
-    )
+/// The condition `join` matches on, as an [`Expr`].
+///
+/// `expr::Join` carried `left_col`/`right_col` -- an equi-join was the
+/// only shape it could represent, so this function *synthesized* the
+/// comparison. The AST carries the real `ON <expr>` instead (#147), so
+/// an arbitrary join condition now flows through untouched and the
+/// synthesis is needed only for `USING`, which names columns rather
+/// than writing the comparison out.
+///
+/// `USING (c, ...)` qualifies both sides explicitly: the columns belong
+/// to a specific table structurally, unlike a bare column reference
+/// elsewhere in the query, so leaving them unqualified would send the
+/// right side to the left table via `Scope`'s
+/// unqualified-defaults-to-left convention.
+pub(super) fn build_join_cond(scope: &Scope, join: &Join) -> Result<Expr> {
+    if join.natural {
+        return Err(CodegenError::Unsupported {
+            reason: "NATURAL JOIN is not supported yet".to_string(),
+        });
+    }
+    match &join.constraint {
+        Some(JoinConstraint::On(expr)) => Ok(expr.clone()),
+        Some(JoinConstraint::Using(cols)) => {
+            let right_table_name = scope
+                .right
+                .as_ref()
+                .map(|(right_schema, _)| right_schema.name.clone())
+                .unwrap_or_default();
+            let mut conds = cols.iter().map(|col| {
+                let col = unqualified(col);
+                Expr {
+                    kind: ExprKind::Binary {
+                        op: BinaryOp::Eq,
+                        lhs: Box::new(super::column_expr(format!(
+                            "{}.{col}",
+                            scope.schema.name
+                        ))),
+                        rhs: Box::new(super::column_expr(format!("{right_table_name}.{col}"))),
+                    },
+                    span: crate::parser::Span::UNKNOWN,
+                }
+            });
+            // `USING` requires at least one column (the grammar
+            // enforces it), so `next()` is `Some` for any parsed join.
+            let Some(first) = conds.next() else {
+                return Err(CodegenError::Unsupported {
+                    reason: "USING with no columns".to_string(),
+                });
+            };
+            Ok(conds.fold(first, |acc, cond| Expr {
+                kind: ExprKind::Binary {
+                    op: BinaryOp::And,
+                    lhs: Box::new(acc),
+                    rhs: Box::new(cond),
+                },
+                span: crate::parser::Span::UNKNOWN,
+            }))
+        }
+        None => Err(CodegenError::Unsupported {
+            reason: "a JOIN without ON or USING is not supported".to_string(),
+        }),
+    }
 }
 
 /// Compiles the inner-join loop for `join` against `right_cursor`,
@@ -590,7 +692,7 @@ fn compile_join_body(
     scope: &Scope,
     join: &Join,
     right_cursor: i32,
-    query: &Query,
+    query: &Select,
     columns: &[String],
     sort_key: Option<SortKeyColumn>,
     sorter_cursor: i32,
@@ -602,7 +704,7 @@ fn compile_join_body(
     // any inner row; `FULL` additionally needs a second pass (see
     // `compile_full_outer_right_pass`) for right rows no outer row ever
     // matched.
-    let matched_reg = if matches!(join.kind, JoinKind::Left | JoinKind::Full) {
+    let matched_reg = if matches!(join.op, JoinOp::Left | JoinOp::Full) {
         let r = reg.alloc();
         em.emit(Instruction::new(Opcode::Integer, 0, r, 0));
         Some(r)
@@ -618,7 +720,7 @@ fn compile_join_body(
     em.place(inner_loop_start);
     let inner_row_skip = em.new_label();
 
-    let join_cond = build_join_cond(scope, join);
+    let join_cond = build_join_cond(scope, join)?;
     super::compile_cond(
         em,
         reg,
@@ -727,7 +829,7 @@ fn compile_full_outer_right_pass(
     em.place(left_loop_start);
     let left_row_skip = em.new_label();
 
-    let join_cond = build_join_cond(scope, join);
+    let join_cond = build_join_cond(scope, join)?;
     super::compile_cond(
         em,
         reg,
@@ -951,7 +1053,7 @@ mod tests {
     fn run_join(
         schema: &TableSchema,
         right_schema: &TableSchema,
-        query: &Query,
+        query: &Select,
         left_rows: Vec<Vec<Value>>,
         right_rows: Vec<Vec<Value>>,
     ) -> Vec<Vec<Value>> {
@@ -1058,7 +1160,7 @@ mod tests {
     /// table cursor holds.
     fn run_indexed(
         schema: &TableSchema,
-        query: &Query,
+        query: &Select,
         rows: Vec<Vec<Value>>,
         index_column: usize,
     ) -> Vec<Vec<Value>> {
@@ -1079,7 +1181,7 @@ mod tests {
         execute(&mut vm, &program).unwrap()
     }
 
-    fn opcodes(schema: &TableSchema, query: &Query) -> Vec<Opcode> {
+    fn opcodes(schema: &TableSchema, query: &Select) -> Vec<Opcode> {
         compile_select(schema, 0, query)
             .unwrap()
             .instructions

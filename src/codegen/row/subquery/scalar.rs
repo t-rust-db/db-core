@@ -8,15 +8,22 @@ use crate::codegen::row::value::compile_value;
 use crate::codegen::row::{
     CodegenError, CondTargets, Emitter, NullTarget, RegAlloc, Result, Scope, Target,
 };
-use crate::expr::{Expr, Query, SelectItem};
+use crate::parser::ast::{Expr, ExprKind, ResultColumn, Select};
 use crate::vm::row::{Instruction, Opcode, P4};
 
 /// A subquery's single projected result column -- `IN (SELECT ...)`
 /// needs exactly one (`SELECT *`, an aggregate, or more than one column
 /// is `Unsupported`), mirroring the reference's `single_result_expr`.
-fn single_result_column(subquery: &Query) -> Result<&str> {
+fn single_result_column(subquery: &Select) -> Result<&str> {
     match subquery.columns.as_slice() {
-        [SelectItem::Column(name)] => Ok(name),
+        [ResultColumn::Expr {
+            expr:
+                Expr {
+                    kind: ExprKind::Column { name, .. },
+                    ..
+                },
+            ..
+        }] => Ok(name),
         _ => Err(CodegenError::Unsupported {
             reason: "an IN subquery must project exactly one plain column".to_string(),
         }),
@@ -30,7 +37,7 @@ fn open_subquery_scan(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     outer_scope: &Scope,
-    subquery: &Query,
+    subquery: &Select,
 ) -> Result<(i32, Scope)> {
     let schema = resolve_subquery_schema(subquery, outer_scope)?;
     let sub_cursor = reg.alloc_cursor();
@@ -61,7 +68,7 @@ pub fn compile_exists(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     outer_scope: &Scope,
-    subquery: &Query,
+    subquery: &Select,
     negated: bool,
     targets: CondTargets,
 ) -> Result<()> {
@@ -119,7 +126,7 @@ pub fn compile_in_subquery(
     reg: &mut RegAlloc,
     outer_scope: &Scope,
     lhs: &Expr,
-    subquery: &Query,
+    subquery: &Select,
     negated: bool,
     targets: CondTargets,
 ) -> Result<()> {
@@ -148,7 +155,7 @@ pub fn compile_in_subquery(
             CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip)),
         )?;
     }
-    let v = compile_value(em, reg, &sub_scope, &Expr::Column(col_name.to_string()))?;
+    let v = compile_value(em, reg, &sub_scope, &super::super::column_expr(col_name))?;
     em.emit(Instruction::with_p4(
         Opcode::IdxInsert,
         eph_cursor,

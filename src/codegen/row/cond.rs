@@ -46,7 +46,10 @@ fn cost_class(expr: &Expr) -> u8 {
         }
         ExprKind::Case { .. } | ExprKind::FunctionCall { .. } => 2,
         // A subquery scan is the priciest operand this compiler has.
-        ExprKind::InSubquery { .. } | ExprKind::Exists { .. } | ExprKind::Subquery(_) => 3,
+        ExprKind::InSubquery { .. }
+        | ExprKind::InSubqueryMulti { .. }
+        | ExprKind::Exists { .. }
+        | ExprKind::Subquery(_) => 3,
     }
 }
 
@@ -213,6 +216,10 @@ pub(crate) fn compile_cond_depth(
         }),
         ExprKind::In { .. } => Err(CodegenError::Unsupported {
             reason: "IN (list) is not supported by codegen::row yet".to_string(),
+        }),
+        ExprKind::InSubqueryMulti { .. } => Err(CodegenError::Unsupported {
+            reason: "a multi-column IN (SELECT ...) is not supported by codegen::row yet"
+                .to_string(),
         }),
         ExprKind::Like { glob, .. } => Err(CodegenError::Unsupported {
             reason: format!(

@@ -6,7 +6,8 @@ use super::super::value::emit_column_read;
 use super::super::{
     CodegenError, CondTargets, Emitter, Label, RegAlloc, Result, Scope, TableSchema, Target,
 };
-use crate::expr::{AggFunc, Expr, Query, SelectItem};
+use crate::expr::AggFunc;
+use crate::parser::ast::{Expr, ExprKind, FunctionArgs, ResultColumn, Select};
 use crate::vm::row::{Collation, Instruction, Opcode, P4};
 
 /// One aggregate call's `AggStep`/`AggFinal` binding: `func` selects the
@@ -57,22 +58,21 @@ pub(super) fn parse_agg_label(name: &str) -> Option<(AggFunc, Option<String>)> {
 /// deduplicated so a `HAVING COUNT(*) > 1` sharing a call with a
 /// `COUNT(*)` result column accumulates into one slot, exactly as
 /// sqlite-rs's `collect_aggregates` does.
-pub(super) fn collect_aggregates(query: &Query) -> Result<Vec<AggSlot>> {
+pub(super) fn collect_aggregates(query: &Select) -> Result<Vec<AggSlot>> {
     let mut found: Vec<(AggFunc, Option<String>)> = Vec::new();
     for item in &query.columns {
-        match item {
-            SelectItem::Agg(func, arg) => {
-                let entry = (*func, arg.clone());
-                if !found.contains(&entry) {
-                    found.push(entry);
-                }
+        let ResultColumn::Expr { expr, .. } = item else {
+            continue;
+        };
+        if let ExprKind::FunctionCall { over: Some(_), .. } = &expr.kind {
+            return Err(CodegenError::Unsupported {
+                reason: "window functions are not supported by codegen::row".to_string(),
+            });
+        }
+        if let Some(entry) = as_aggregate(expr)? {
+            if !found.contains(&entry) {
+                found.push(entry);
             }
-            SelectItem::Window(_) => {
-                return Err(CodegenError::Unsupported {
-                    reason: "window functions are not supported by codegen::row".to_string(),
-                })
-            }
-            SelectItem::Column(_) | SelectItem::Star => {}
         }
     }
     if let Some(having) = &query.having {
@@ -94,12 +94,12 @@ pub(super) fn collect_aggregates(query: &Query) -> Result<Vec<AggSlot>> {
 /// implicit whole-table group when `query.group_by` is empty,
 /// distinguishing `SELECT COUNT(*) FROM t` from an ordinary
 /// aggregate-free `SELECT` (a plain scan).
-pub(crate) fn query_has_aggregate(query: &Query) -> bool {
-    if query
-        .columns
-        .iter()
-        .any(|i| matches!(i, SelectItem::Agg(..)))
-    {
+pub(crate) fn query_has_aggregate(query: &Select) -> bool {
+    let has_agg_column = query.columns.iter().any(|item| match item {
+        ResultColumn::Expr { expr, .. } => matches!(as_aggregate(expr), Ok(Some(_))),
+        ResultColumn::Star | ResultColumn::TableStar { .. } => false,
+    });
+    if has_agg_column {
         return true;
     }
     let mut found = Vec::new();
@@ -109,24 +109,64 @@ pub(crate) fn query_has_aggregate(query: &Query) -> bool {
     !found.is_empty()
 }
 
+/// The aggregate call `expr` is, or `None` for any other expression.
+///
+/// `expr::SelectItem` had a dedicated `Agg(AggFunc, Option<String>)`
+/// variant, so the parser decided what counted as an aggregate. The AST
+/// spells every call the same way -- `ExprKind::FunctionCall` -- and
+/// leaves the classification to whoever compiles it (#147), which is
+/// here. `COUNT(*)` carries `FunctionArgs::Star` and maps to `None`,
+/// matching the old variant's `Option<String>` argument.
+///
+/// A call whose name *is* an aggregate but whose argument this planner
+/// cannot accumulate (an expression rather than a bare column, or more
+/// than one argument) is an error rather than `None`: silently treating
+/// `SUM(a + b)` as a non-aggregate would compile it as a plain column
+/// and answer nonsense.
+pub(super) fn as_aggregate(expr: &Expr) -> Result<Option<(AggFunc, Option<String>)>> {
+    let ExprKind::FunctionCall {
+        name,
+        args,
+        over: None,
+        ..
+    } = &expr.kind
+    else {
+        return Ok(None);
+    };
+    let Some(func) = AggFunc::from_name(name) else {
+        return Ok(None);
+    };
+    match args {
+        FunctionArgs::Star => Ok(Some((func, None))),
+        FunctionArgs::List(args) => match args.as_slice() {
+            [] => Ok(Some((func, None))),
+            [arg] => match &arg.kind {
+                ExprKind::Column { name, .. } => Ok(Some((func, Some(name.clone())))),
+                _ => Err(CodegenError::Unsupported {
+                    reason: format!(
+                        "{name} over an expression is not supported by codegen::row yet"
+                    ),
+                }),
+            },
+            _ => Err(CodegenError::Unsupported {
+                reason: format!("{name} with more than one argument is not supported"),
+            }),
+        },
+    }
+}
+
+/// Aggregate calls reachable from `expr`, by the label a compiled
+/// aggregate is bound to. A `HAVING` clause names an aggregate by
+/// referring to the output column it produced, so these arrive as
+/// column references carrying [`agg_label`]'s spelling, not as calls.
 fn find_aggregates(expr: &Expr, out: &mut Vec<(AggFunc, Option<String>)>) {
-    match expr {
-        Expr::Column(name) => {
-            if let Some(entry) = parse_agg_label(name) {
-                if !out.contains(&entry) {
-                    out.push(entry);
-                }
+    super::super::walk_columns(expr, &mut |name| {
+        if let Some(entry) = parse_agg_label(name) {
+            if !out.contains(&entry) {
+                out.push(entry);
             }
         }
-        Expr::BinaryOp(lhs, _, rhs) => {
-            find_aggregates(lhs, out);
-            find_aggregates(rhs, out);
-        }
-        Expr::Not(inner) | Expr::Neg(inner) | Expr::IsNull { expr: inner, .. } => {
-            find_aggregates(inner, out);
-        }
-        Expr::Literal(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {}
-    }
+    });
 }
 
 /// Emits one `AggStep` for `agg`'s slot: reads `agg.arg` (if any) into a
@@ -156,7 +196,7 @@ pub(super) fn emit_agg_step(
                 em,
                 reg,
                 scope,
-                &Expr::Column(name.clone()),
+                &super::super::column_expr(name.clone()),
             )?),
             1usize,
         ),
@@ -253,7 +293,7 @@ fn synthetic_schema(columns: &[String], agg_slots: &[AggSlot]) -> TableSchema {
 pub(super) fn flush_group<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    query: &Query,
+    query: &Select,
     columns: &[String],
     snapshot_regs: &[i32],
     agg_slots: &[AggSlot],
@@ -333,17 +373,35 @@ pub(super) fn emit_agg_final(em: &mut Emitter, agg: &AggSlot, dest: i32) {
 /// `query`'s result columns as names within the flushed group's
 /// synthetic record: a bare column verbatim, `*` expanded to `columns`,
 /// an aggregate call to its [`agg_label`].
-pub(super) fn projected_names(query: &Query, columns: &[String]) -> Result<Vec<String>> {
+pub(super) fn projected_names(query: &Select, columns: &[String]) -> Result<Vec<String>> {
     let mut names = Vec::with_capacity(query.columns.len());
     for item in &query.columns {
         match item {
-            SelectItem::Column(name) => names.push(name.clone()),
-            SelectItem::Star => names.extend(columns.iter().cloned()),
-            SelectItem::Agg(func, arg) => names.push(agg_label(*func, arg.as_deref())),
-            SelectItem::Window(_) => {
+            ResultColumn::Star => names.extend(columns.iter().cloned()),
+            ResultColumn::TableStar { table } => {
                 return Err(CodegenError::Unsupported {
-                    reason: "window functions are not supported by codegen::row".to_string(),
+                    reason: format!("`{table}.*` is not supported yet"),
                 })
+            }
+            ResultColumn::Expr { expr, .. } => {
+                if let ExprKind::FunctionCall { over: Some(_), .. } = &expr.kind {
+                    return Err(CodegenError::Unsupported {
+                        reason: "window functions are not supported by codegen::row".to_string(),
+                    });
+                }
+                match as_aggregate(expr)? {
+                    Some((func, arg)) => names.push(agg_label(func, arg.as_deref())),
+                    None => match &expr.kind {
+                        ExprKind::Column { name, .. } => names.push(name.clone()),
+                        _ => {
+                            return Err(CodegenError::Unsupported {
+                                reason: "a computed result column is not supported by \
+                                         codegen::row yet"
+                                    .to_string(),
+                            })
+                        }
+                    },
+                }
             }
         }
     }

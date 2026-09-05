@@ -6,7 +6,7 @@ use crate::codegen::row::value::compile_value;
 use crate::codegen::row::{
     CodegenError, CondTargets, Emitter, RegAlloc, Result, Scope, TableSchema, Target,
 };
-use crate::expr::{Expr, FromClause, Query, SelectItem};
+use crate::parser::ast::{ExprKind, FromClause, ResultColumn, Select, TableRefKind};
 use crate::vm::row::{Instruction, Opcode, P4};
 
 /// Rejects a subquery shape this materializing pass can't compile:
@@ -15,22 +15,23 @@ use crate::vm::row::{Instruction, Opcode, P4};
 /// (its `resolve_subquery_schema`); db-core additionally rejects the
 /// post-scan clauses here, since none of them is reachable through
 /// `compile_select`'s per-clause machinery from inside this inlined scan.
-fn reject_unsupported_shape(subquery: &Query, what: &str) -> Result<()> {
-    if !subquery.joins.is_empty() {
+fn reject_unsupported_shape(subquery: &Select, what: &str) -> Result<()> {
+    if !super::super::joins_of(subquery).is_empty() {
         return Err(CodegenError::Unsupported {
             reason: format!("{what} whose own FROM clause has a JOIN is not yet supported"),
         });
     }
-    if subquery.distinct
+    if super::super::is_distinct(subquery)
         || !subquery.group_by.is_empty()
         || subquery.having.is_some()
-        || subquery.order_by.is_some()
+        || !subquery.order_by.is_empty()
         || subquery.limit.is_some()
-        || subquery.offset.is_some()
+        || subquery.with_clause.is_some()
+        || !subquery.compound.is_empty()
     {
         return Err(CodegenError::Unsupported {
             reason: format!(
-                "{what} with DISTINCT/GROUP BY/HAVING/ORDER BY/LIMIT/OFFSET is not yet supported"
+                "{what} with DISTINCT/GROUP BY/HAVING/ORDER BY/LIMIT/WITH/UNION is not yet supported"
             ),
         });
     }
@@ -40,11 +41,15 @@ fn reject_unsupported_shape(subquery: &Query, what: &str) -> Result<()> {
 /// Resolves a subquery-expression's own single-table `FROM` against
 /// `outer_scope`'s catalog.
 pub(super) fn resolve_subquery_schema(
-    subquery: &Query,
+    subquery: &Select,
     outer_scope: &Scope,
 ) -> Result<TableSchema> {
     reject_unsupported_shape(subquery, "a subquery")?;
-    let Some(name) = subquery.from.table_name() else {
+    let Some(name) = subquery
+        .from
+        .as_ref()
+        .and_then(|from| from.first.name())
+    else {
         return Err(CodegenError::Unsupported {
             reason: "a subquery-expression's own FROM being itself a subquery is not yet supported"
                 .to_string(),
@@ -67,17 +72,27 @@ pub(super) fn resolve_subquery_schema(
 /// fallback: db-core's `SelectItem` has no alias to name them by, and
 /// [`materialize_from_subquery`] compiles the projection through
 /// `compile_value`, which cannot evaluate an aggregate.
-fn subquery_output_columns(subquery: &Query, schema: &TableSchema) -> Result<Vec<String>> {
+fn subquery_output_columns(subquery: &Select, schema: &TableSchema) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for col in &subquery.columns {
         match col {
-            SelectItem::Column(name) => out.push(name.clone()),
-            SelectItem::Star => out.extend(schema.columns.iter().cloned()),
-            SelectItem::Agg(..) | SelectItem::Window(_) => {
+            // An alias would be the natural output name, but the
+            // synthetic schema binds by position and nothing downstream
+            // reads aliases yet, so it is accepted and ignored.
+            ResultColumn::Expr { expr, .. } => match &expr.kind {
+                ExprKind::Column { name, .. } => out.push(name.clone()),
+                _ => {
+                    return Err(CodegenError::Unsupported {
+                        reason: "a computed column in a FROM-subquery's SELECT list is not yet \
+                                 supported"
+                            .to_string(),
+                    })
+                }
+            },
+            ResultColumn::Star => out.extend(schema.columns.iter().cloned()),
+            ResultColumn::TableStar { table } => {
                 return Err(CodegenError::Unsupported {
-                    reason: "an aggregate/window column in a FROM-subquery's SELECT list is not \
-                             yet supported"
-                        .to_string(),
+                    reason: format!("`{table}.*` in a FROM-subquery's SELECT list is not yet supported"),
                 })
             }
         }
@@ -91,23 +106,35 @@ fn subquery_output_columns(subquery: &Query, schema: &TableSchema) -> Result<Vec
 /// subquery's mandatory alias). Mirrors the reference's
 /// `resolve_from_table_schema`.
 pub fn resolve_from_table_schema(
-    from: &FromClause,
+    from: Option<&FromClause>,
     catalog: &[TableSchema],
 ) -> Result<TableSchema> {
-    match from {
-        FromClause::Table(name) => catalog
+    // `expr::Query.from` was always present; the AST allows a `SELECT`
+    // with no `FROM` at all, which none of this codegen can scan.
+    let Some(from) = from else {
+        return Err(CodegenError::Unsupported {
+            reason: "a SELECT with no FROM clause is not yet supported".to_string(),
+        });
+    };
+    match &from.first.kind {
+        TableRefKind::Name(name) => catalog
             .iter()
             .find(|s| s.name.eq_ignore_ascii_case(name))
             .cloned()
             .ok_or_else(|| CodegenError::Unsupported {
                 reason: format!("no such table: {name}"),
             }),
-        FromClause::Subquery(subquery, alias) => {
+        TableRefKind::Subquery(subquery) => {
             reject_unsupported_shape(subquery, "a subquery in FROM")?;
-            let inner = resolve_from_table_schema(&subquery.from, catalog)?;
+            let Some(alias) = from.first.alias.clone() else {
+                return Err(CodegenError::Unsupported {
+                    reason: "a FROM-subquery must have an alias".to_string(),
+                });
+            };
+            let inner = resolve_from_table_schema(subquery.from.as_ref(), catalog)?;
             let columns = subquery_output_columns(subquery, &inner)?;
             Ok(TableSchema {
-                name: alias.clone(),
+                name: alias,
                 column_types: vec![String::new(); columns.len()],
                 columns,
                 rowid_alias: None,
@@ -137,12 +164,12 @@ pub fn resolve_from_table_schema(
 pub fn materialize_from_subquery(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    subquery: &Query,
+    subquery: &Select,
     catalog: &[TableSchema],
     dest_cursor: i32,
 ) -> Result<TableSchema> {
     reject_unsupported_shape(subquery, "a subquery in FROM")?;
-    let inner_schema = resolve_from_table_schema(&subquery.from, catalog)?;
+    let inner_schema = resolve_from_table_schema(subquery.from.as_ref(), catalog)?;
     let columns = subquery_output_columns(subquery, &inner_schema)?;
     let synthetic = TableSchema {
         name: String::new(),
@@ -166,8 +193,8 @@ pub fn materialize_from_subquery(
     });
 
     let src_cursor = reg.alloc_cursor();
-    match &subquery.from {
-        FromClause::Table(_) => {
+    match subquery.from.as_ref().map(|from| &from.first.kind) {
+        None | Some(TableRefKind::Name(_)) => {
             em.emit(Instruction::new(
                 Opcode::OpenRead,
                 src_cursor,
@@ -180,7 +207,7 @@ pub fn materialize_from_subquery(
                 0,
             ));
         }
-        FromClause::Subquery(inner, _) => {
+        Some(TableRefKind::Subquery(inner)) => {
             materialize_from_subquery(em, reg, inner, catalog, src_cursor)?;
         }
     }
@@ -206,7 +233,7 @@ pub fn materialize_from_subquery(
 
     let mut first_reg = None;
     for (i, name) in columns.iter().enumerate() {
-        let r = compile_value(em, reg, &scope, &Expr::Column(name.clone()))?;
+        let r = compile_value(em, reg, &scope, &super::super::column_expr(name.clone()))?;
         match first_reg {
             None => first_reg = Some(r),
             // `MakeRecord` reads a contiguous run, so a projection that

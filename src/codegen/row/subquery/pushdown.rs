@@ -16,12 +16,18 @@
 //! exactly where it was.
 
 use super::flatten::{collect_expr_column_names, split_qualified};
-use crate::expr::{BinOp, Expr, FromClause, Query, SelectItem};
+use crate::parser::ast::{BinaryOp, Expr, ExprKind, ResultColumn, Select, TableRefKind};
 
 /// Pushes every safely-movable `WHERE` conjunct of `query` into its
 /// `FROM`-subquery, returning whether it moved any.
-pub fn push_down_where_predicates(query: &mut Query) -> bool {
-    let FromClause::Subquery(inner, alias) = &query.from else {
+pub fn push_down_where_predicates(query: &mut Select) -> bool {
+    let Some(from) = &query.from else {
+        return false;
+    };
+    let TableRefKind::Subquery(inner) = &from.first.kind else {
+        return false;
+    };
+    let Some(alias) = from.first.alias.as_ref() else {
         return false;
     };
     if !subquery_pushdown_safe(inner) {
@@ -33,7 +39,7 @@ pub fn push_down_where_predicates(query: &mut Query) -> bool {
     let alias = alias.clone();
     // An unqualified column is only unambiguously the subquery's when
     // there is no `JOIN`ed table it could equally belong to.
-    let require_qualified = !query.joins.is_empty();
+    let require_qualified = !super::super::joins_of(query).is_empty();
 
     let Some(where_expr) = query.where_clause.take() else {
         return false;
@@ -53,7 +59,9 @@ pub fn push_down_where_predicates(query: &mut Query) -> bool {
     if pushed.is_empty() {
         return false;
     }
-    if let FromClause::Subquery(inner, _) = &mut query.from {
+    if let Some(TableRefKind::Subquery(inner)) =
+        query.from.as_mut().map(|from| &mut from.first.kind)
+    {
         for conjunct in pushed {
             inner.where_clause = and_exprs(inner.where_clause.take(), conjunct);
         }
@@ -67,25 +75,31 @@ pub fn push_down_where_predicates(query: &mut Query) -> bool {
 /// filtering the materialized result. Unlike [`super::flatten`]'s check,
 /// a `JOIN`ed or subquery `FROM` inside `inner` is fine here -- the
 /// predicate is still applied to the same row set, just earlier.
-fn subquery_pushdown_safe(inner: &Query) -> bool {
-    !inner.distinct
+fn subquery_pushdown_safe(inner: &Select) -> bool {
+    !super::super::is_distinct(inner)
         && inner.group_by.is_empty()
         && inner.having.is_none()
         && inner.limit.is_none()
-        && inner.offset.is_none()
+        // A `WITH` body or a compound arm changes which rows exist at
+        // all, so a pre-filter is not equivalent to a post-filter.
+        && inner.with_clause.is_none()
+        && inner.compound.is_empty()
 }
 
 /// The subquery's projected column names, or `None` for a `SELECT *`
 /// (any name passes through unchanged); `Some(None)` for a projection
 /// this pass can't map back (an aggregate/window item has no single
 /// underlying column a predicate on it could be rewritten against).
-fn exposed_columns(inner: &Query) -> Option<Option<Vec<String>>> {
-    if inner.columns.iter().any(|c| matches!(c, SelectItem::Star)) {
+fn exposed_columns(inner: &Select) -> Option<Option<Vec<String>>> {
+    if inner.columns.iter().any(|c| matches!(c, ResultColumn::Star)) {
         return Some(None);
     }
     let mut out = Vec::with_capacity(inner.columns.len());
     for col in &inner.columns {
-        let SelectItem::Column(name) = col else {
+        let ResultColumn::Expr { expr, .. } = col else {
+            return None;
+        };
+        let ExprKind::Column { name, .. } = &expr.kind else {
             return None;
         };
         out.push(name.clone());
@@ -130,58 +144,48 @@ fn rewrite_for_pushdown(
 }
 
 fn contains_subquery(expr: &Expr) -> bool {
-    match expr {
-        Expr::InSubquery { .. } | Expr::Exists { .. } => true,
-        Expr::Column(_) | Expr::Literal(_) => false,
-        Expr::BinaryOp(lhs, _, rhs) => contains_subquery(lhs) || contains_subquery(rhs),
-        Expr::Not(inner) | Expr::Neg(inner) | Expr::IsNull { expr: inner, .. } => {
-            contains_subquery(inner)
-        }
-    }
+    super::super::contains_subquery(expr)
 }
 
 fn strip_alias_in_expr(expr: &mut Expr, alias: &str) {
-    match expr {
-        Expr::Column(name) => {
-            if let (Some(q), col) = split_qualified(name) {
-                if q.eq_ignore_ascii_case(alias) {
-                    *name = col.to_string();
-                }
+    super::super::walk_columns_mut(expr, &mut |name| {
+        if let (Some(q), col) = split_qualified(name) {
+            if q.eq_ignore_ascii_case(alias) {
+                *name = col.to_string();
             }
         }
-        Expr::Literal(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {}
-        Expr::BinaryOp(lhs, _, rhs) => {
-            strip_alias_in_expr(lhs, alias);
-            strip_alias_in_expr(rhs, alias);
-        }
-        Expr::Not(inner) | Expr::Neg(inner) | Expr::IsNull { expr: inner, .. } => {
-            strip_alias_in_expr(inner, alias);
-        }
-    }
+    });
 }
 
 /// Splits an expression into its top-level `AND` conjuncts -- the same
 /// split the reference's `top_level_and_conjuncts` makes.
 fn top_level_and_conjuncts(expr: Expr) -> Vec<Expr> {
-    match expr {
-        Expr::BinaryOp(lhs, BinOp::And, rhs) => {
+    match expr.kind {
+        ExprKind::Binary {
+            op: BinaryOp::And,
+            lhs,
+            rhs,
+        } => {
             let mut out = top_level_and_conjuncts(*lhs);
             out.extend(top_level_and_conjuncts(*rhs));
             out
         }
-        other => vec![other],
+        // A parenthesized `AND` is still a top-level conjunction; the
+        // parens only recorded how it was written.
+        ExprKind::Paren(inner) => top_level_and_conjuncts(*inner),
+        _ => vec![expr],
     }
 }
 
 fn rebuild_conjunction(exprs: Vec<Expr>) -> Option<Expr> {
     exprs
         .into_iter()
-        .reduce(|acc, e| Expr::BinaryOp(Box::new(acc), BinOp::And, Box::new(e)))
+        .reduce(super::super::and_expr)
 }
 
 fn and_exprs(existing: Option<Expr>, addition: Expr) -> Option<Expr> {
     Some(match existing {
-        Some(existing) => Expr::BinaryOp(Box::new(existing), BinOp::And, Box::new(addition)),
+        Some(existing) => super::super::and_expr(existing, addition),
         None => addition,
     })
 }

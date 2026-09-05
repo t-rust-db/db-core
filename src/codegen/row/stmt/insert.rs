@@ -13,7 +13,7 @@
 use super::super::index_maintenance::{emit_index_key_ops_from_regs, open_index_cursors};
 use super::super::{CodegenError, Emitter, RegAlloc, Result, Scope, TableSchema};
 use super::{FIRST_INDEX_CURSOR, TABLE_CURSOR};
-use crate::expr::Insert;
+use crate::parser::ast::{Insert, InsertSource};
 use crate::vm::row::{Instruction, Opcode, Program};
 
 /// Compiles `insert` against `schema` (the resolved target table) into
@@ -28,18 +28,35 @@ pub fn compile_insert(schema: &TableSchema, insert: &Insert) -> Result<Program> 
         });
     }
 
-    let target_columns: Vec<usize> = if insert.columns.is_empty() {
-        (0..schema.columns.len()).collect()
-    } else {
-        insert
-            .columns
+    // The AST distinguishes "no column list given" (`None`) from an
+    // explicit list, where `expr::Insert` used an empty `Vec` for both.
+    let target_columns: Vec<usize> = match &insert.columns {
+        None => (0..schema.columns.len()).collect(),
+        Some(names) => names
             .iter()
             .map(|name| {
                 schema
                     .column_index(name)
                     .ok_or_else(|| CodegenError::UnknownColumn(name.clone()))
             })
-            .collect::<Result<_>>()?
+            .collect::<Result<_>>()?,
+    };
+
+    // `INSERT ... SELECT` and `DEFAULT VALUES` have no `expr::Insert`
+    // equivalent and so have never had codegen (#147).
+    let rows = match &insert.source {
+        InsertSource::Values(rows) => rows,
+        InsertSource::Select(_) => {
+            return Err(CodegenError::Unsupported {
+                reason: "INSERT ... SELECT is not supported by codegen::row yet".to_string(),
+            })
+        }
+        InsertSource::DefaultValues => {
+            return Err(CodegenError::Unsupported {
+                reason: "INSERT ... DEFAULT VALUES is not supported by codegen::row yet"
+                    .to_string(),
+            })
+        }
     };
 
     let mut em = Emitter::new();
@@ -55,7 +72,7 @@ pub fn compile_insert(schema: &TableSchema, insert: &Insert) -> Result<Program> 
 
     let scope = Scope::single(schema.clone(), TABLE_CURSOR);
 
-    for row in &insert.values {
+    for row in rows {
         if row.len() != target_columns.len() {
             return Err(CodegenError::Unsupported {
                 reason: format!(

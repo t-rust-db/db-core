@@ -12,12 +12,13 @@
 //! cost.
 
 use super::{CodegenError, Emitter, Instruction, Label, Opcode, RegAlloc, Result};
-use crate::expr::Query;
+use crate::parser::ast::{Expr, ExprKind, Literal, Select};
 
 /// The `LIMIT`/`OFFSET` counter registers, set up once before a scan
 /// loop starts. Mirrors sqlite-rs's own `LimitState`, holding plain
-/// register numbers rather than compiled `Expr`s since db-core's
-/// [`Query::limit`]/[`Query::offset`] are already plain values.
+/// register numbers rather than compiled `Expr`s. The AST spells
+/// `LIMIT`/`OFFSET` as expressions ([`crate::parser::ast::Limit`]);
+/// only integer literals are compiled today -- see [`literal_count`].
 #[derive(Debug, Clone, Copy)]
 pub(super) struct LimitState {
     pub limit_reg: Option<i32>,
@@ -29,23 +30,50 @@ pub(super) struct LimitState {
 pub(super) fn compile_limit_setup(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    query: &Query,
+    query: &Select,
 ) -> Result<Option<LimitState>> {
-    if query.limit.is_none() && query.offset.is_none() {
+    // The AST nests `OFFSET` inside `LIMIT` (SQLite's grammar has no
+    // bare `OFFSET`), so one `None` check covers both.
+    let Some(limit) = &query.limit else {
         return Ok(None);
-    }
-    let limit_reg = match query.limit {
-        Some(limit) => Some(emit_counter(em, reg, limit, "LIMIT")?),
-        None => None,
     };
-    let offset_reg = match query.offset {
-        Some(offset) => Some(emit_counter(em, reg, offset, "OFFSET")?),
+    let limit_reg = Some(emit_counter(
+        em,
+        reg,
+        literal_count(&limit.limit, "LIMIT")?,
+        "LIMIT",
+    )?);
+    let offset_reg = match &limit.offset {
+        Some(offset) => Some(emit_counter(
+            em,
+            reg,
+            literal_count(offset, "OFFSET")?,
+            "OFFSET",
+        )?),
         None => None,
     };
     Ok(Some(LimitState {
         limit_reg,
         offset_reg,
     }))
+}
+
+/// A `LIMIT`/`OFFSET` bound as a plain count. `expr::Query` typed these
+/// as `Option<usize>`, so only an integer literal could ever appear;
+/// the AST allows any expression (`LIMIT ?`, `LIMIT n + 1`), which
+/// needs register-computed counters rather than an `Integer` immediate.
+/// Deferred to #149 -- rejected here rather than silently mis-limiting.
+fn literal_count(expr: &Expr, what: &str) -> Result<usize> {
+    match &expr.kind {
+        ExprKind::Literal(Literal::Integer(i)) => {
+            usize::try_from(*i).map_err(|_| CodegenError::Unsupported {
+                reason: format!("negative {what} {i}"),
+            })
+        }
+        _ => Err(CodegenError::Unsupported {
+            reason: format!("a non-literal {what} expression is not supported yet"),
+        }),
+    }
 }
 
 fn emit_counter(em: &mut Emitter, reg: &mut RegAlloc, value: usize, what: &str) -> Result<i32> {

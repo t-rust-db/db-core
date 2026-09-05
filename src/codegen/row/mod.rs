@@ -120,7 +120,9 @@ pub mod value;
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::parser::ast::{Distinctness, Expr, ExprKind, Join, Select};
+use crate::parser::ast::{
+    BinaryOp, Distinctness, Expr, ExprKind, FunctionArgs, Join, Select,
+};
 use crate::vm::row::{Instruction, Opcode, P4};
 
 pub use analyze::compile_analyze;
@@ -393,6 +395,248 @@ pub(crate) fn column_expr(name: impl Into<String>) -> Expr {
             table: None,
             catalog: None,
             name: name.into(),
+        },
+        span: crate::parser::Span::UNKNOWN,
+    }
+}
+
+/// Visits every column reference in `expr`, in source order.
+///
+/// Does **not** descend into a nested `SELECT` (a scalar subquery,
+/// `EXISTS`, or `IN (SELECT ...)`): those resolve against their own
+/// scope, so their column names are not this expression's to read or
+/// rewrite. Callers that need the subquery's columns walk it separately.
+///
+/// Centralized here because `expr::Expr` had 8 variants and the AST has
+/// 20 (#147) -- open-coding the match in each caller made every new AST
+/// node a multi-file change, and a missed arm silently skips columns
+/// rather than failing to compile.
+pub(crate) fn walk_columns(expr: &Expr, f: &mut impl FnMut(&str)) {
+    match &expr.kind {
+        ExprKind::Column { name, .. } => f(name),
+        ExprKind::Literal(_) | ExprKind::Param(_) => {}
+        ExprKind::Paren(inner)
+        | ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Collate { expr: inner, .. }
+        | ExprKind::InSubquery { expr: inner, .. } => walk_columns(inner, f),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            walk_columns(lhs, f);
+            walk_columns(rhs, f);
+        }
+        ExprKind::Between { expr: inner, lo, hi, .. } => {
+            walk_columns(inner, f);
+            walk_columns(lo, f);
+            walk_columns(hi, f);
+        }
+        ExprKind::In { expr: inner, list, .. } => {
+            walk_columns(inner, f);
+            for item in list {
+                walk_columns(item, f);
+            }
+        }
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            escape,
+            ..
+        } => {
+            walk_columns(inner, f);
+            walk_columns(pattern, f);
+            if let Some(escape) = escape {
+                walk_columns(escape, f);
+            }
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(operand) = operand {
+                walk_columns(operand, f);
+            }
+            for (cond, result) in whens {
+                walk_columns(cond, f);
+                walk_columns(result, f);
+            }
+            if let Some(else_) = else_ {
+                walk_columns(else_, f);
+            }
+        }
+        ExprKind::FunctionCall { args, .. } => {
+            if let FunctionArgs::List(args) = args {
+                for arg in args {
+                    walk_columns(arg, f);
+                }
+            }
+        }
+        ExprKind::InSubqueryMulti { exprs, .. } => {
+            for e in exprs {
+                walk_columns(e, f);
+            }
+        }
+        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}
+    }
+}
+
+/// [`walk_columns`], but able to rename each column reference in place.
+pub(crate) fn walk_columns_mut(expr: &mut Expr, f: &mut impl FnMut(&mut String)) {
+    match &mut expr.kind {
+        ExprKind::Column { name, .. } => f(name),
+        ExprKind::Literal(_) | ExprKind::Param(_) => {}
+        ExprKind::Paren(inner)
+        | ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Collate { expr: inner, .. }
+        | ExprKind::InSubquery { expr: inner, .. } => walk_columns_mut(inner, f),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            walk_columns_mut(lhs, f);
+            walk_columns_mut(rhs, f);
+        }
+        ExprKind::Between { expr: inner, lo, hi, .. } => {
+            walk_columns_mut(inner, f);
+            walk_columns_mut(lo, f);
+            walk_columns_mut(hi, f);
+        }
+        ExprKind::In { expr: inner, list, .. } => {
+            walk_columns_mut(inner, f);
+            for item in list {
+                walk_columns_mut(item, f);
+            }
+        }
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            escape,
+            ..
+        } => {
+            walk_columns_mut(inner, f);
+            walk_columns_mut(pattern, f);
+            if let Some(escape) = escape {
+                walk_columns_mut(escape, f);
+            }
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(operand) = operand {
+                walk_columns_mut(operand, f);
+            }
+            for (cond, result) in whens {
+                walk_columns_mut(cond, f);
+                walk_columns_mut(result, f);
+            }
+            if let Some(else_) = else_ {
+                walk_columns_mut(else_, f);
+            }
+        }
+        ExprKind::FunctionCall { args, .. } => {
+            if let FunctionArgs::List(args) = args {
+                for arg in args {
+                    walk_columns_mut(arg, f);
+                }
+            }
+        }
+        ExprKind::InSubqueryMulti { exprs, .. } => {
+            for e in exprs {
+                walk_columns_mut(e, f);
+            }
+        }
+        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}
+    }
+}
+
+/// Whether `expr` contains a nested `SELECT` anywhere.
+pub(crate) fn contains_subquery(expr: &Expr) -> bool {
+    let mut found = false;
+    walk_subexprs(expr, &mut |e| {
+        if matches!(
+            e.kind,
+            ExprKind::Subquery(_)
+                | ExprKind::Exists { .. }
+                | ExprKind::InSubquery { .. }
+                | ExprKind::InSubqueryMulti { .. }
+        ) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Visits `expr` and every sub-expression below it, outermost first.
+pub(crate) fn walk_subexprs(expr: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(expr);
+    let mut recurse = |e: &Expr| walk_subexprs(e, f);
+    match &expr.kind {
+        ExprKind::Column { .. } | ExprKind::Literal(_) | ExprKind::Param(_) => {}
+        ExprKind::Paren(inner)
+        | ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Collate { expr: inner, .. }
+        | ExprKind::InSubquery { expr: inner, .. } => recurse(inner),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            recurse(lhs);
+            recurse(rhs);
+        }
+        ExprKind::Between { expr: inner, lo, hi, .. } => {
+            recurse(inner);
+            recurse(lo);
+            recurse(hi);
+        }
+        ExprKind::In { expr: inner, list, .. } => {
+            recurse(inner);
+            list.iter().for_each(recurse);
+        }
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            escape,
+            ..
+        } => {
+            recurse(inner);
+            recurse(pattern);
+            if let Some(escape) = escape {
+                recurse(escape);
+            }
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(operand) = operand {
+                recurse(operand);
+            }
+            for (cond, result) in whens {
+                recurse(cond);
+                recurse(result);
+            }
+            if let Some(else_) = else_ {
+                recurse(else_);
+            }
+        }
+        ExprKind::FunctionCall { args, .. } => {
+            if let FunctionArgs::List(args) = args {
+                args.iter().for_each(recurse);
+            }
+        }
+        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().for_each(recurse),
+        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}
+    }
+}
+
+/// Builds `lhs AND rhs`.
+pub(crate) fn and_expr(lhs: Expr, rhs: Expr) -> Expr {
+    Expr {
+        kind: ExprKind::Binary {
+            op: BinaryOp::And,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
         },
         span: crate::parser::Span::UNKNOWN,
     }
