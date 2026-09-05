@@ -50,6 +50,34 @@ pub trait Cursor {
     /// The current row's rowid.
     fn rowid(&self) -> i64;
 
+    /// Seeks directly to the row with `rowid`, without a linear
+    /// `rewind`/`next` scan (`Opcode::SeekRowid`). Returns `true` (and
+    /// positions the cursor there) if it exists; `false` (and leaves
+    /// the cursor with no current row) on a miss. Default `false` --
+    /// unsupported, same rationale as [`Cursor::last`] -- so a real
+    /// b-tree-backed adapter (db-core#81) is the one expected to
+    /// override this with an actual key-based seek; this crate's own
+    /// in-memory fixtures ([`InMemoryCursor`], [`EphemeralTableCursor`])
+    /// override it too, cheaply, since they already index by rowid.
+    fn seek(&mut self, _rowid: i64) -> bool {
+        false
+    }
+
+    /// The current row's raw, still-encoded record bytes, for an
+    /// adapter that wants to decode lazily rather than eagerly on
+    /// every [`Cursor::column`] call (db-core#81) -- e.g. a real
+    /// b-tree cursor already holds a page's raw bytes and would rather
+    /// decode once, on demand, than per column. `None` if this cursor
+    /// kind doesn't retain raw bytes (every cursor kind in this crate
+    /// decodes eagerly at `insert` time instead, so none override this)
+    /// or has no current row. Not consumed by any opcode dispatch in
+    /// this crate today -- unlike [`Cursor::current_blob`] (the
+    /// sorter's own record blob, which `Opcode::SorterData` does
+    /// dispatch), this exists purely as a hook for a real adapter.
+    fn payload(&self) -> Option<Rc<[u8]>> {
+        None
+    }
+
     /// Inserts a decoded row under `rowid`. Returns `false` if this
     /// cursor kind doesn't support insertion (e.g. [`InMemoryCursor`],
     /// a read-only fixture) -- `Opcode::Insert`'s dispatch turns that
@@ -218,6 +246,20 @@ impl Cursor for InMemoryCursor {
         }
     }
 
+    fn seek(&mut self, rowid: i64) -> bool {
+        let idx = usize::try_from(rowid.saturating_sub(1)).ok();
+        match idx.filter(|&idx| idx < self.rows.len()) {
+            Some(idx) => {
+                self.pos = Some(idx);
+                true
+            }
+            None => {
+                self.pos = None;
+                false
+            }
+        }
+    }
+
     fn delete(&mut self) -> bool {
         let Some(pos) = self.pos else {
             return false;
@@ -357,6 +399,20 @@ impl Cursor for EphemeralTableCursor {
             reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
         )]
         self.current_rowid.expect("rowid read with no current row")
+    }
+
+    fn seek(&mut self, rowid: i64) -> bool {
+        match self.row_index(rowid) {
+            Some(_) => {
+                self.current_rowid = Some(rowid);
+                self.at_row = true;
+                true
+            }
+            None => {
+                self.at_row = false;
+                false
+            }
+        }
     }
 
     fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
@@ -852,6 +908,24 @@ mod tests {
     }
 
     #[test]
+    fn seek_positions_on_exact_rowid() {
+        let mut c = InMemoryCursor::new(vec![
+            vec![Value::Integer(10)],
+            vec![Value::Integer(20)],
+            vec![Value::Integer(30)],
+        ]);
+        assert!(c.seek(2));
+        assert_eq!(c.column(0), Value::Integer(20));
+    }
+
+    #[test]
+    fn seek_misses_out_of_range_rowid() {
+        let mut c = InMemoryCursor::new(vec![vec![Value::Integer(10)]]);
+        assert!(!c.seek(2));
+        assert!(!c.seek(0));
+    }
+
+    #[test]
     fn ephemeral_table_cursor_starts_empty() {
         let mut c = EphemeralTableCursor::new();
         assert!(!c.rewind());
@@ -1010,6 +1084,22 @@ mod tests {
         assert!(c.delete());
         assert!(c.rewind());
         assert_eq!(c.rowid(), 20);
+    }
+
+    #[test]
+    fn ephemeral_table_cursor_seek_positions_on_exact_rowid() {
+        let mut c = EphemeralTableCursor::new();
+        c.insert(10, vec![Value::Integer(1)]);
+        c.insert(20, vec![Value::Integer(2)]);
+        assert!(c.seek(20));
+        assert_eq!(c.column(0), Value::Integer(2));
+    }
+
+    #[test]
+    fn ephemeral_table_cursor_seek_misses_absent_rowid() {
+        let mut c = EphemeralTableCursor::new();
+        c.insert(10, vec![Value::Integer(1)]);
+        assert!(!c.seek(99));
     }
 
     fn group_key(index: usize) -> GroupKeyColumn {

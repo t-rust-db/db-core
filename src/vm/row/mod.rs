@@ -70,24 +70,38 @@
 //!   `Synchronous` (db-core#89) are also dispatched, but -- since
 //!   `db-core` has no pager of its own -- reduce to the no-writer
 //!   fallback sqlite-rs itself defines for a read-only connection:
-//!   `SetJournalMode` is a no-op (erroring only on `Vm::autocommit`,
-//!   a new flag `Opcode::Transaction`/`AutoCommit` will set/clear once
-//!   #81 wires them), and `Synchronous`'s query form always reports
-//!   `FULL`. `IntegrityCheck` is *not* dispatched -- it has no
-//!   no-writer fallback in sqlite-rs (it always needs a real page
-//!   source), so it stays `ExecError::Unimplemented` until `db-core`
-//!   has one to attach.
+//!   `SetJournalMode` is a no-op (erroring only on `Vm::autocommit`),
+//!   and `Synchronous`'s query form always reports `FULL`.
+//!   `Opcode::Transaction`/`AutoCommit` (db-core#81) toggle
+//!   `Vm::autocommit` and, when one is installed via [`vm::Vm::
+//!   set_transaction_hook`], call into a [`transaction::Transaction`]
+//!   hook -- with none installed, they reduce to the same no-op
+//!   `SetJournalMode` already assumed. `Opcode::SeekRowid` (db-core#81)
+//!   is also dispatched, over [`cursor::Cursor::seek`]. `IntegrityCheck`
+//!   is *not* dispatched -- it has no no-writer fallback in sqlite-rs
+//!   (it always needs a real page source), so it stays
+//!   `ExecError::Unimplemented` until `db-core` has one to attach.
 //!
-//! [`cursor::Cursor`] also grew `prev`/`last`/`delete` (db-core#76),
-//! matching the shape a real storage-backed cursor will need, ahead of
-//! that wiring landing.
+//! [`cursor::Cursor`] also grew `prev`/`last`/`delete` (db-core#76) and
+//! `seek`/`payload` (db-core#81), matching the shape a real
+//! storage-backed cursor will need -- proven sufficient by a mock
+//! `TableCursor`-shaped implementor in [`cursor`]'s own tests, ahead of
+//! the real `db-storage` adapter (which lives in the consumer,
+//! t-rust-db/sqlite-rs, per ADR 0008's amendment) landing there.
+//!
+//! - [`transaction`] -- the [`transaction::Transaction`] hook surface
+//!   (db-core#81) a consumer's pager installs to observe/react to
+//!   `BEGIN`/`COMMIT`/`ROLLBACK`.
+//! - [`cursor_conformance`] -- trait-level [`cursor::Cursor`]
+//!   conformance checks (db-core#81), public so a real adapter can run
+//!   the same checks this crate runs against its own fixtures.
 //!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
-//! and index-mode ephemeral cursors, DDL, real transactions
-//! (`Transaction`/`AutoCommit`), `IntegrityCheck`. `Opcode` already
-//! lists every variant sqlite-rs has (parity of identity); dispatch
-//! for the rest lands in later phases (tracked against db-core#18).
+//! and index-mode ephemeral cursors, DDL, `IntegrityCheck`. `Opcode`
+//! already lists every variant sqlite-rs has (parity of identity);
+//! dispatch for the rest lands in later phases (tracked against
+//! db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
@@ -101,11 +115,13 @@ pub mod cast;
 pub mod coerce;
 pub mod compare;
 pub mod cursor;
+pub mod cursor_conformance;
 pub mod explain;
 pub mod functions;
 pub mod logic;
 pub mod program;
 pub mod record;
+pub mod transaction;
 pub mod value;
 pub mod vm;
 
@@ -123,5 +139,6 @@ pub use program::{
     TRANSACTION_MODE_IMMEDIATE,
 };
 pub use record::{decode_column, decode_record, encode_record, RecordError};
+pub use transaction::{Transaction, TransactionError};
 pub use value::{compare_text, format_real, Collation, TextEncoding, Value};
 pub use vm::{execute, ExecError, Step, Vm};

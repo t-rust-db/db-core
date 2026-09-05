@@ -95,6 +95,20 @@ it only says the boundary is a trait, not that no crate anywhere depends
 on both; the follow-up ticket for the execution-loop phase (`db-core#18`
 sub-ticket, filed alongside this ADR) owns the trait's actual shape.
 
+**Amendment (db-core#81, decided):** "the composition root" above was
+left open-ended pending a concrete consumer. It's now decided: the
+adapter over `db_storage::row::btree::TableCursor` lives in
+**t-rust-db/sqlite-rs**, as part of that repo's VDBE repoint (phase 3),
+**not** in `db-storage` gaining an optional adapter feature. `db-core`
+itself never depends on `db-storage` (this ADR's core decision,
+unchanged) — #81 instead completed the trait side of the boundary:
+`Cursor` grew `seek`/`payload` (alongside #76's `prev`/`last`/`delete`)
+and a separate `Transaction` hook trait (`vm::row::transaction`) a
+consumer's pager installs to observe `BEGIN`/`COMMIT`/`ROLLBACK`, and
+`vm::row::cursor_conformance` publishes trait-level conformance checks
+so the sqlite-rs adapter can prove it satisfies the same contract this
+crate's own tests do, without ever pulling `db-storage` into `db-core`.
+
 ## Consequences
 
 - `vm::row::value` gains its own `Value`/`Collation`/`compare_text`,
