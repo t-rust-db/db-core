@@ -19,12 +19,15 @@
 //!   `AVG`/`MIN`/`MAX`), backing `Opcode::AggStep`/`AggFinal` (single
 //!   accumulator per slot) and, via [`cursor::HashAggCursor`]
 //!   (db-core#86), `Opcode::HashAggStep`'s per-group accumulators.
-//! - [`functions`] -- scalar functions, backing `Opcode::Function`.
-//!   Two slices so far: `abs`/`length`/`upper`/`lower`/`coalesce`/
-//!   `ifnull`/`nullif`/`typeof` (db-core#64), and `sign`/`zeroblob`/
-//!   `iif`/scalar `min`/`max`/`sqlite_version`/`round`/`hex`/`unhex`/
-//!   `instr`/`quote` (db-core#68); `like`/`glob`/`substr`/`trim` family
-//!   are not yet ported.
+//! - [`functions`] -- scalar functions, backing `Opcode::Function`,
+//!   now closing the gap against sqlite-rs's `vdbe::functions`
+//!   entirely: `abs`/`length`/`upper`/`lower`/`coalesce`/`ifnull`/
+//!   `nullif`/`typeof` (db-core#64), `sign`/`zeroblob`/`iif`/scalar
+//!   `min`/`max`/`sqlite_version`/`round`/`hex`/`unhex`/`instr`/
+//!   `quote` (db-core#68), and `substr`/`trim`/`ltrim`/`rtrim`/
+//!   `replace`/`like`/`glob` (db-core#90, whose `like_match`/
+//!   `glob_match` are exposed for a future `LIKE`/`GLOB` operator to
+//!   call directly).
 //! - [`program`] -- `Opcode`/`Instruction`/`Program`, sqlite-rs's raw
 //!   `p1..p5` operand shape (not typed named fields).
 //! - [`cursor`] -- the storage-agnostic [`cursor::Cursor`] trait ADR
@@ -82,10 +85,9 @@
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
 //! and index-mode ephemeral cursors, DDL, real transactions
-//! (`Transaction`/`AutoCommit`), `like`/`glob`/`substr`/`trim`/
-//! `replace`, `IntegrityCheck`. `Opcode` already lists every variant
-//! sqlite-rs has (parity of identity); dispatch for the rest lands in
-//! later phases (tracked against db-core#18).
+//! (`Transaction`/`AutoCommit`), `IntegrityCheck`. `Opcode` already
+//! lists every variant sqlite-rs has (parity of identity); dispatch
+//! for the rest lands in later phases (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
