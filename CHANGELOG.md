@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.39.0] - 2026-09-05
+
+### Added
+
+- **`vm::row` PRAGMA opcodes `SetJournalMode`/`Synchronous`** (#89) -- ports the two `vdbe/pragma.rs` functions that have a well-defined no-writer fallback in sqlite-rs itself; `db-core` has no pager (ADR 0008/0006), so its `Vm` is always in that "read-only connection, no writer attached" state. `SetJournalMode` is unconditionally a no-op but errors with a new `ExecError::JournalModeChangeDuringTransaction` if a new `Vm::autocommit` flag (default `true`, ahead of #81's full transaction-hook surface) is `false`. `Synchronous`'s bare query form always reports `FULL`; the set form is a no-op. `IntegrityCheck` stays unimplemented -- it has no no-writer fallback in sqlite-rs, always needing a real page source `db-core` has no concept of.
+
 ## [0.38.0] - 2026-09-05
 
 ### Added
