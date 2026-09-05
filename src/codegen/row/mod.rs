@@ -70,8 +70,10 @@ pub mod analyze;
 pub mod cond;
 pub mod ddl;
 pub mod dispatch;
+pub mod index_maintenance;
 pub mod pragma;
 pub mod select;
+pub mod stmt;
 pub mod transaction;
 pub mod value;
 
@@ -88,6 +90,7 @@ pub use ddl::{
 };
 pub use pragma::compile_pragma;
 pub use select::compile_select;
+pub use stmt::{compile_delete, compile_insert, compile_update};
 pub use transaction::{compile_begin, compile_commit, compile_rollback};
 pub use value::compile_value;
 
@@ -328,7 +331,10 @@ pub struct TableSchema {
     /// needs this to bake root pages into `P4` at codegen time; the
     /// expr-only slice from #91 never read it).
     pub root_page: u32,
-    /// Every index on this table (db-core#97).
+    /// Every index on this table (db-core#97/#96) -- maintained by
+    /// `INSERT`/`UPDATE`/`DELETE` codegen (see [`index_maintenance`]),
+    /// not yet consulted by any scan (that's `#94`'s index-scan
+    /// codegen, a separate ticket).
     pub indexes: Vec<IndexSchema>,
 }
 
@@ -340,15 +346,18 @@ impl TableSchema {
     }
 }
 
-/// A placeholder index descriptor (db-core#97) -- just enough
-/// (`name`/`root_page`) for `ddl`/`analyze` to bake index identity into
-/// `P4` at codegen time. Not a real catalog entry: no column list,
-/// collation, or partial-index predicate, since nothing here needs to
-/// resolve those yet.
+/// An index descriptor: just enough for `ddl`/`analyze` (db-core#97) to
+/// bake index identity into `P4` at codegen time, and for
+/// `INSERT`/`UPDATE`/`DELETE` (db-core#96) to build/maintain its
+/// entries. Not a real catalog entry: no collation or partial-index
+/// predicate, and `columns` is ascending-only (no per-column `DESC`,
+/// since no index b-tree comparator here is aware of sort direction
+/// either).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct IndexSchema {
     pub name: String,
     pub root_page: u32,
+    pub columns: Vec<String>,
 }
 
 /// The single table a query's column references resolve against --

@@ -273,6 +273,7 @@ mod tests {
             indexes: vec![IndexSchema {
                 name: "idx_t_a".to_string(),
                 root_page: 3,
+                columns: vec![],
             }],
         }
     }

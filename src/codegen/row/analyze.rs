@@ -93,6 +93,7 @@ mod tests {
         let idx = IndexSchema {
             name: "idx_a".to_string(),
             root_page: 3,
+            columns: vec![],
         };
         let t = table("t", 2, vec![idx]);
         let program = compile_analyze(&[&t]);
