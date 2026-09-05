@@ -423,6 +423,7 @@ mod tests {
             having: None,
             order_by: None,
             limit: None,
+            offset: None,
         };
         let expr = Expr::InSubquery {
             expr: Box::new(Expr::Literal(Literal::Int(1))),

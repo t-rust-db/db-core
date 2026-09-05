@@ -8,8 +8,21 @@
 //! (needs a working `ANALYZE` VM implementation, #116) to #117; N-way
 //! joins and multi-table catalogs to #118 (no consumer needs them yet);
 //! `DISTINCT` is not yet supported.
+//!
+//! **#94 adds index-aware access paths**: [`super::index_scan`] (an
+//! `ORDER BY` an index already satisfies, walked directly instead of
+//! sorted), [`super::range_scan`] (a `WHERE`-bounded indexed column,
+//! seeked instead of scanned and filtered), [`super::limit_scan`]
+//! (`LIMIT`/`OFFSET` counters and guards), and [`super::eqp`]
+//! (`EXPLAIN QUERY PLAN`). Both fast paths are tried before the
+//! ordinary `Rewind`/`Next` scan and fall back to it whenever their
+//! shape doesn't match; neither compares candidate indexes by cost,
+//! since that needs the `planner::Stats` deferred with #116/#117 --
+//! see each module's own doc for the exact scope.
 
+use super::limit_scan::{self, LimitState};
 use super::value::emit_column_read;
+use super::{index_scan, range_scan};
 use super::{
     CodegenError, CondTargets, Emitter, Label, RegAlloc, Result, Scope, TableSchema, Target,
 };
@@ -148,22 +161,37 @@ chooser is deferred to #117, N-way joins to #118"
     let mut em = Emitter::new();
     let mut reg = RegAlloc::new();
 
-    let limit_reg = match query.limit {
-        Some(limit) => {
-            let p1 = i32::try_from(limit).map_err(|_| CodegenError::Unsupported {
-                reason: format!("LIMIT {limit} does not fit in a p1 operand"),
-            })?;
-            let r = reg.alloc();
-            em.emit(Instruction::new(Opcode::Integer, p1, r, 0));
-            Some(r)
-        }
-        None => None,
-    };
+    let limit = limit_scan::compile_limit_setup(&mut em, &mut reg, query)?;
 
     // The sorter cursor uses a slot past every cursor the caller wired
     // up -- `Opcode::SorterOpen` opens it itself at runtime, so it needs
-    // no caller-side wiring, just an id that can't collide.
+    // no caller-side wiring, just an id that can't collide. The index
+    // cursor the #94 fast paths below open takes the slot after it.
     let sorter_cursor = right.map_or(cursor, |(_, c)| cursor.max(c)) + 1;
+    let index_cursor = sorter_cursor + 1;
+
+    // An index-ordered scan produces the requested order straight out of
+    // the b-tree, so it replaces the sorter entirely rather than feeding
+    // it -- hence it is tried before `SorterOpen` is ever emitted.
+    if right.is_none() {
+        let index_end_label = em.new_label();
+        if index_scan::try_compile_index_ordered_scan(
+            &mut em,
+            &mut reg,
+            query,
+            &scope,
+            &columns,
+            cursor,
+            index_cursor,
+            limit,
+            index_end_label,
+        )? {
+            em.place(index_end_label);
+            em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+            return Ok(em.finish());
+        }
+    }
+
     if let Some(key) = sort_key {
         em.emit(Instruction::with_p4(
             Opcode::SorterOpen,
@@ -175,6 +203,39 @@ chooser is deferred to #117, N-way joins to #118"
     }
 
     let end_label = em.new_label();
+
+    // A `WHERE`-bounded indexed column seeks straight to its first
+    // matching index entry instead of scanning every row and filtering;
+    // it still feeds the sorter above when there's an `ORDER BY`, so
+    // unlike the index-ordered scan it slots in where the sequential
+    // scan would go.
+    let seeked = right.is_none()
+        && range_scan::try_compile_range_seek(
+            &mut em,
+            &mut reg,
+            query,
+            &scope,
+            &columns,
+            sort_key,
+            sorter_cursor,
+            cursor,
+            index_cursor,
+            limit,
+            end_label,
+        )?;
+    if seeked {
+        em.place(end_label);
+        return finish_scan(
+            em,
+            reg,
+            sort_key,
+            sorter_cursor,
+            output_count,
+            limit,
+            end_label,
+        );
+    }
+
     let outer_rewind_addr = em.emit(Instruction::new(Opcode::Rewind, cursor, 0, 0));
     em.patch_p2(outer_rewind_addr, end_label);
 
@@ -205,7 +266,7 @@ chooser is deferred to #117, N-way joins to #118"
                 &columns,
                 sort_key,
                 sorter_cursor,
-                limit_reg,
+                limit,
                 final_label,
                 outer_row_skip,
             )?;
@@ -231,7 +292,8 @@ chooser is deferred to #117, N-way joins to #118"
                 None,
                 sort_key,
                 sorter_cursor,
-                limit_reg,
+                limit,
+                outer_row_skip,
                 end_label,
             )?;
         }
@@ -255,11 +317,42 @@ chooser is deferred to #117, N-way joins to #118"
                 &columns,
                 sort_key,
                 sorter_cursor,
-                limit_reg,
+                limit,
                 final_label,
             )?;
         }
     }
+
+    finish_scan(
+        em,
+        reg,
+        sort_key,
+        sorter_cursor,
+        output_count,
+        limit,
+        end_label,
+    )
+}
+
+/// Emits a scan's shared tail: the post-sort drain loop (when there's an
+/// `ORDER BY`, where `LIMIT`/`OFFSET` apply to the *sorted* output
+/// rather than scan order) and the terminating `Halt`. Shared by the
+/// ordinary sequential scan and #94's range-seek fast path, which differ
+/// only in how they reach it.
+#[allow(clippy::too_many_arguments)]
+fn finish_scan(
+    mut em: Emitter,
+    mut reg: RegAlloc,
+    sort_key: Option<SortKeyColumn>,
+    sorter_cursor: i32,
+    output_count: usize,
+    limit: Option<LimitState>,
+    end_label: Label,
+) -> Result<Program> {
+    // `end_label` is placed by the caller, not here: `FULL OUTER`'s
+    // second pass deliberately begins at it, so it can't be rebound to
+    // the drain loop's address.
+    let _ = end_label;
 
     if sort_key.is_some() {
         let sorter_end_label = em.new_label();
@@ -268,9 +361,11 @@ chooser is deferred to #117, N-way joins to #118"
 
         let sorter_loop_start = em.new_label();
         em.place(sorter_loop_start);
+        let sorter_row_skip = em.new_label();
 
-        if let Some(limit_reg) = limit_reg {
-            emit_limit_guard(&mut em, limit_reg, sorter_end_label);
+        if let Some(limit) = &limit {
+            limit_scan::emit_offset_guard(&mut em, limit, sorter_row_skip);
+            limit_scan::emit_limit_guard(&mut em, limit, sorter_end_label);
         }
 
         let mut regs = Vec::with_capacity(output_count);
@@ -301,6 +396,7 @@ chooser is deferred to #117, N-way joins to #118"
             em.emit(Instruction::new(Opcode::ResultRow, reg.alloc(), 0, 0));
         }
 
+        em.place(sorter_row_skip);
         let sorter_next_addr = em.emit(Instruction::new(Opcode::SorterNext, sorter_cursor, 0, 0));
         em.patch_p2(sorter_next_addr, sorter_loop_start);
 
@@ -329,6 +425,11 @@ fn compile_aggregate_select(
     if query.order_by.is_some() {
         return Err(CodegenError::Unsupported {
             reason: "ORDER BY combined with GROUP BY/aggregation is not yet supported".to_string(),
+        });
+    }
+    if query.offset.is_some() {
+        return Err(CodegenError::Unsupported {
+            reason: "OFFSET combined with GROUP BY/aggregation is not yet supported".to_string(),
         });
     }
 
@@ -446,7 +547,7 @@ fn compile_join_body(
     columns: &[String],
     sort_key: Option<SortKeyColumn>,
     sorter_cursor: i32,
-    limit_reg: Option<i32>,
+    limit: Option<LimitState>,
     end_label: Label,
     outer_row_skip: Label,
 ) -> Result<()> {
@@ -501,7 +602,8 @@ fn compile_join_body(
         None,
         sort_key,
         sorter_cursor,
-        limit_reg,
+        limit,
+        inner_row_skip,
         end_label,
     )?;
 
@@ -527,7 +629,8 @@ fn compile_join_body(
             Some(right_cursor),
             sort_key,
             sorter_cursor,
-            limit_reg,
+            limit,
+            outer_row_skip,
             end_label,
         )?;
     }
@@ -556,7 +659,7 @@ fn compile_full_outer_right_pass(
     columns: &[String],
     sort_key: Option<SortKeyColumn>,
     sorter_cursor: i32,
-    limit_reg: Option<i32>,
+    limit: Option<LimitState>,
     final_label: Label,
 ) -> Result<()> {
     let right_rewind_addr = em.emit(Instruction::new(Opcode::Rewind, right_cursor, 0, 0));
@@ -608,7 +711,8 @@ fn compile_full_outer_right_pass(
         Some(left_cursor),
         sort_key,
         sorter_cursor,
-        limit_reg,
+        limit,
+        pass_row_skip,
         final_label,
     )?;
 
@@ -625,9 +729,11 @@ fn compile_full_outer_right_pass(
 /// `MakeRecord`/`SorterInsert` (an `ORDER BY` is present, so `LIMIT`
 /// applies later, during the post-sort drain). `null_cursor`, when set,
 /// null-fills every column that would otherwise be read from it -- used
-/// for `LEFT` join's unmatched-row null-extension.
+/// for `LEFT` join's unmatched-row null-extension. `row_skip` is where
+/// an `OFFSET`-skipped row continues -- the caller's own per-row skip
+/// label, so the skip lands on the loop's advance instruction.
 #[allow(clippy::too_many_arguments)]
-fn emit_row(
+pub(super) fn emit_row(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     scope: &Scope,
@@ -635,7 +741,8 @@ fn emit_row(
     null_cursor: Option<i32>,
     sort_key: Option<SortKeyColumn>,
     sorter_cursor: i32,
-    limit_reg: Option<i32>,
+    limit: Option<LimitState>,
+    row_skip: Label,
     end_label: Label,
 ) -> Result<()> {
     if sort_key.is_some() {
@@ -658,8 +765,9 @@ fn emit_row(
         return Ok(());
     }
 
-    if let Some(limit_reg) = limit_reg {
-        emit_limit_guard(em, limit_reg, end_label);
+    if let Some(limit) = &limit {
+        limit_scan::emit_offset_guard(em, limit, row_skip);
+        limit_scan::emit_limit_guard(em, limit, end_label);
     }
     let (first, count) = compile_row_values(em, reg, scope, columns, null_cursor)?;
     em.emit(Instruction::new(
@@ -753,7 +861,7 @@ mod tests {
     use super::*;
     use crate::expr::{BinOp, Expr};
     use crate::types::Literal;
-    use crate::vm::row::{execute, InMemoryCursor, Value, Vm};
+    use crate::vm::row::{execute, Cursor, InMemoryCursor, InMemoryIndexCursor, Value, Vm};
 
     fn schema(columns: &[&str]) -> TableSchema {
         schema_named("t", columns)
@@ -781,6 +889,7 @@ mod tests {
             having: None,
             order_by: None,
             limit: None,
+            offset: None,
         }
     }
 
@@ -883,6 +992,352 @@ mod tests {
         query.limit = Some(0);
         let rows = run(&schema, &query, vec![vec![Value::Integer(1)]]);
         assert!(rows.is_empty());
+    }
+
+    fn indexed_schema(columns: &[&str], index_column: &str) -> TableSchema {
+        let mut schema = schema(columns);
+        schema.column_types = columns.iter().map(|_| "INTEGER".to_string()).collect();
+        schema.root_page = 2;
+        schema.indexes = vec![super::super::IndexSchema {
+            name: format!("t_{index_column}"),
+            root_page: 3,
+            columns: vec![index_column.to_string()],
+        }];
+        schema
+    }
+
+    /// Runs `query` with an index cursor pre-wired on the slot #94's fast
+    /// paths open (`sorter_cursor + 1`), built from the same rows the
+    /// table cursor holds.
+    fn run_indexed(
+        schema: &TableSchema,
+        query: &Query,
+        rows: Vec<Vec<Value>>,
+        index_column: usize,
+    ) -> Vec<Vec<Value>> {
+        let program = compile_select(schema, 0, query).unwrap();
+        let mut vm = Vm::new();
+        let mut index = InMemoryIndexCursor::new(vec![SortKeyColumn {
+            index: index_column,
+            descending: false,
+            collation: Collation::Binary,
+            nulls_first: false,
+        }]);
+        for (i, row) in rows.iter().enumerate() {
+            index.insert(i32::try_from(i).unwrap() as i64 + 1, row.clone());
+        }
+        vm.open_cursor(0, Box::new(InMemoryCursor::new(rows)))
+            .unwrap();
+        vm.open_cursor(2, Box::new(index)).unwrap();
+        execute(&mut vm, &program).unwrap()
+    }
+
+    fn opcodes(schema: &TableSchema, query: &Query) -> Vec<Opcode> {
+        compile_select(schema, 0, query)
+            .unwrap()
+            .instructions
+            .iter()
+            .map(|i| i.opcode)
+            .collect()
+    }
+
+    #[test]
+    fn offset_skips_leading_rows() {
+        let schema = schema(&["a"]);
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.offset = Some(2);
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(3)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(3)]]);
+    }
+
+    #[test]
+    fn limit_applies_after_offset() {
+        let schema = schema(&["a"]);
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.offset = Some(1);
+        query.limit = Some(2);
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(3)],
+                vec![Value::Integer(4)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)], vec![Value::Integer(3)]]);
+    }
+
+    #[test]
+    fn offset_applies_to_sorted_output_not_scan_order() {
+        let schema = schema(&["a"]);
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.order_by = Some(crate::expr::OrderBy {
+            column: "a".into(),
+            descending: false,
+        });
+        query.offset = Some(1);
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(3)],
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)], vec![Value::Integer(3)]]);
+    }
+
+    #[test]
+    fn an_indexed_order_by_walks_the_index_instead_of_sorting() {
+        let schema = indexed_schema(&["a"], "a");
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.order_by = Some(crate::expr::OrderBy {
+            column: "a".into(),
+            descending: false,
+        });
+        let ops = opcodes(&schema, &query);
+        assert!(ops.contains(&Opcode::IdxRewind));
+        assert!(ops.contains(&Opcode::IdxRowid));
+        assert!(!ops.contains(&Opcode::SorterOpen));
+
+        let rows = run_indexed(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(3)],
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+            ],
+            0,
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(3)]
+            ]
+        );
+    }
+
+    #[test]
+    fn a_descending_indexed_order_by_walks_the_index_backward() {
+        let schema = indexed_schema(&["a"], "a");
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.order_by = Some(crate::expr::OrderBy {
+            column: "a".into(),
+            descending: true,
+        });
+        let ops = opcodes(&schema, &query);
+        assert!(ops.contains(&Opcode::IdxLast));
+        assert!(ops.contains(&Opcode::IdxPrev));
+
+        let rows = run_indexed(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(3)],
+                vec![Value::Integer(2)],
+            ],
+            0,
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(3)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(1)]
+            ]
+        );
+    }
+
+    #[test]
+    fn an_index_ordered_scan_still_honours_limit_and_offset() {
+        let schema = indexed_schema(&["a"], "a");
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.order_by = Some(crate::expr::OrderBy {
+            column: "a".into(),
+            descending: false,
+        });
+        query.offset = Some(1);
+        query.limit = Some(1);
+        let rows = run_indexed(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(3)],
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+            ],
+            0,
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn an_unindexed_order_by_still_uses_the_sorter() {
+        let schema = indexed_schema(&["a", "b"], "a");
+        let mut query = base_query(vec![SelectItem::Column("b".into())]);
+        query.order_by = Some(crate::expr::OrderBy {
+            column: "b".into(),
+            descending: false,
+        });
+        let ops = opcodes(&schema, &query);
+        assert!(ops.contains(&Opcode::SorterOpen));
+        assert!(!ops.contains(&Opcode::IdxRewind));
+    }
+
+    #[test]
+    fn an_inclusive_lower_bound_seeks_the_index() {
+        let schema = indexed_schema(&["a"], "a");
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.where_clause = Some(Expr::BinaryOp(
+            Box::new(Expr::Column("a".into())),
+            BinOp::Ge,
+            Box::new(Expr::Literal(Literal::Int(2))),
+        ));
+        let ops = opcodes(&schema, &query);
+        assert!(ops.contains(&Opcode::SeekIndexGE));
+        assert!(!ops.contains(&Opcode::Rewind));
+
+        let rows = run_indexed(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(3)],
+            ],
+            0,
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)], vec![Value::Integer(3)]]);
+    }
+
+    #[test]
+    fn an_exclusive_lower_bound_skips_the_equal_run() {
+        let schema = indexed_schema(&["a"], "a");
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.where_clause = Some(Expr::BinaryOp(
+            Box::new(Expr::Column("a".into())),
+            BinOp::Gt,
+            Box::new(Expr::Literal(Literal::Int(1))),
+        ));
+        let rows = run_indexed(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+            ],
+            0,
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn a_two_sided_range_stops_at_the_upper_bound() {
+        let schema = indexed_schema(&["a"], "a");
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.where_clause = Some(Expr::BinaryOp(
+            Box::new(Expr::BinaryOp(
+                Box::new(Expr::Column("a".into())),
+                BinOp::Ge,
+                Box::new(Expr::Literal(Literal::Int(2))),
+            )),
+            BinOp::And,
+            Box::new(Expr::BinaryOp(
+                Box::new(Expr::Column("a".into())),
+                BinOp::Le,
+                Box::new(Expr::Literal(Literal::Int(3))),
+            )),
+        ));
+        let ops = opcodes(&schema, &query);
+        assert!(ops.contains(&Opcode::IdxCompareGT));
+
+        let rows = run_indexed(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(3)],
+                vec![Value::Integer(4)],
+            ],
+            0,
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)], vec![Value::Integer(3)]]);
+    }
+
+    #[test]
+    fn an_equality_on_an_indexed_column_seeks_that_key_only() {
+        let schema = indexed_schema(&["a"], "a");
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.where_clause = Some(Expr::BinaryOp(
+            Box::new(Expr::Column("a".into())),
+            BinOp::Eq,
+            Box::new(Expr::Literal(Literal::Int(2))),
+        ));
+        let rows = run_indexed(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(3)],
+            ],
+            0,
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)], vec![Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn an_unindexed_where_clause_falls_back_to_the_sequential_scan() {
+        let schema = indexed_schema(&["a", "b"], "a");
+        let mut query = base_query(vec![SelectItem::Column("b".into())]);
+        query.where_clause = Some(Expr::BinaryOp(
+            Box::new(Expr::Column("b".into())),
+            BinOp::Gt,
+            Box::new(Expr::Literal(Literal::Int(1))),
+        ));
+        let ops = opcodes(&schema, &query);
+        assert!(ops.contains(&Opcode::Rewind));
+        assert!(!ops.contains(&Opcode::SeekIndexGE));
+    }
+
+    #[test]
+    fn a_join_never_takes_an_index_fast_path() {
+        let schema = indexed_schema(&["a"], "a");
+        let mut right = indexed_schema(&["x"], "x");
+        right.name = "u".into();
+        let mut query = base_query(vec![SelectItem::Column("a".into())]);
+        query.joins = vec![Join {
+            kind: JoinKind::Inner,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "x".into(),
+        }];
+        query.where_clause = Some(Expr::BinaryOp(
+            Box::new(Expr::Column("a".into())),
+            BinOp::Ge,
+            Box::new(Expr::Literal(Literal::Int(1))),
+        ));
+        let program = compile_select_join(&schema, 0, &right, 1, &query).unwrap();
+        let ops: Vec<Opcode> = program.instructions.iter().map(|i| i.opcode).collect();
+        assert!(!ops.contains(&Opcode::SeekIndexGE));
     }
 
     #[test]

@@ -435,6 +435,7 @@ mod tests {
             having: Some(Expr::Column("COUNT(*)".into())),
             order_by: None,
             limit: None,
+            offset: None,
         };
         let slots = collect_aggregates(&query).unwrap();
         assert_eq!(slots.len(), 1);

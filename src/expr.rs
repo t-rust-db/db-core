@@ -215,6 +215,11 @@ pub struct Query {
     pub having: Option<Expr>,
     pub order_by: Option<OrderBy>,
     pub limit: Option<usize>,
+    /// `OFFSET <n>` -- how many otherwise-qualifying rows to skip before
+    /// the first is emitted. Mirrors sqlite-rs's own `offset` field on
+    /// `parser::ast::Limit`, simplified to a plain value the same way
+    /// `limit` above already is (sqlite-rs carries both as an `Expr`).
+    pub offset: Option<usize>,
 }
 
 /// A single `SET column = value` pair in an [`Update`].
@@ -279,6 +284,7 @@ mod tests {
             having: None,
             order_by: None,
             limit: None,
+            offset: None,
         }
     }
 
@@ -423,6 +429,7 @@ mod tests {
                 descending: false,
             }),
             limit: Some(10),
+            offset: None,
         };
 
         assert_eq!(q.from, "customers");

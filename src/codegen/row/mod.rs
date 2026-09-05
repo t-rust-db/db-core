@@ -47,6 +47,16 @@
 //! aggregation over a join. See that module's own doc for what db-core's
 //! narrower `Query`/`SelectItem` scopes out of the reference.
 //!
+//! **#94 adds index-aware access paths**: [`index_scan`]
+//! (index-ordered scans, ADR 0020), [`range_scan`] (index range seeks,
+//! ADR 0034), [`limit_scan`] (`LIMIT`/`OFFSET`, and `Query` grows the
+//! matching `offset` field), and [`eqp`] (`EXPLAIN QUERY PLAN`). Each
+//! is scoped to the case that needs no cost model -- "is there an index
+//! whose leading column matches?" -- with the reference's stats-driven
+//! parts (skip-scan, `compile_direct_scan`'s chooser, EQP's
+//! `stats_by_table`) left unported for the same reason `planner.rs`
+//! below is. See each module's own doc.
+//!
 //! **#97 adds the DDL/transaction/PRAGMA/ANALYZE slice**: [`ddl`]
 //! (`CREATE`/`DROP TABLE`/`INDEX`/`VIEW`), [`transaction`]
 //! (`BEGIN`/`COMMIT`/`ROLLBACK`), [`pragma`] (`journal_mode`/
@@ -82,8 +92,12 @@ pub mod analyze;
 pub mod cond;
 pub mod ddl;
 pub mod dispatch;
+pub mod eqp;
 pub mod index_maintenance;
+pub mod index_scan;
+pub mod limit_scan;
 pub mod pragma;
+pub mod range_scan;
 pub mod select;
 pub mod stmt;
 pub mod transaction;
@@ -100,6 +114,7 @@ pub use ddl::{
     compile_create_index, compile_create_table, compile_create_view, compile_drop_index,
     compile_drop_table,
 };
+pub use eqp::{explain_query_plan, EqpRow};
 pub use pragma::compile_pragma;
 pub use select::{compile_select, compile_select_join};
 pub use stmt::{compile_delete, compile_insert, compile_update};

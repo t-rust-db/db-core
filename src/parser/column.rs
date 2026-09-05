@@ -577,15 +577,18 @@ fn convert_select(select: &Select) -> Result<Query> {
     };
 
     let limit = match &select.limit {
-        Some(l) => {
-            if l.offset.is_some() {
-                return Err(unsupported(select.span, "LIMIT OFFSET".into()));
-            }
-            match &l.limit.kind {
-                ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
-                _ => return Err(unsupported(l.limit.span, "non-integer LIMIT".into())),
-            }
-        }
+        Some(l) => match &l.limit.kind {
+            ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
+            _ => return Err(unsupported(l.limit.span, "non-integer LIMIT".into())),
+        },
+        None => None,
+    };
+
+    let offset = match select.limit.as_ref().and_then(|l| l.offset.as_ref()) {
+        Some(o) => match &o.kind {
+            ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
+            _ => return Err(unsupported(o.span, "non-integer OFFSET".into())),
+        },
         None => None,
     };
 
@@ -649,6 +652,7 @@ fn convert_select(select: &Select) -> Result<Query> {
         having: None,
         order_by,
         limit,
+        offset,
     };
     if !aliases.is_empty() {
         resolve_query_aliases(&mut query, &aliases);
@@ -960,6 +964,19 @@ mod tests {
             })
         );
         assert_eq!(q.limit, Some(5));
+    }
+
+    #[test]
+    fn parses_limit_with_offset() {
+        let q = parse("SELECT id FROM t LIMIT 5 OFFSET 10").unwrap();
+        assert_eq!(q.limit, Some(5));
+        assert_eq!(q.offset, Some(10));
+    }
+
+    #[test]
+    fn a_query_without_offset_lowers_none() {
+        let q = parse("SELECT id FROM t LIMIT 5").unwrap();
+        assert_eq!(q.offset, None);
     }
 
     #[test]
