@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.51.0] - 2026-09-05
+
+### Added
+
+- **`codegen::row` aggregation, index/range/limit scans, and subqueries** (#93, #94, #95 -- #20 sub-tickets) -- ports `codegen::row::aggregate` (GROUP BY sorted/hash strategies per ADR 0032, HAVING, aggregate-over-join, `AggStep` p4 collation/p5 reset), index-ordered scans (ADR 0020), index range seeks (ADR 0034), LIMIT/OFFSET fast paths, EXPLAIN QUERY PLAN, and scalar/`EXISTS`/`IN`/FROM-clause subquery codegen, mechanically from Lab271/sqlite-rs, targeting `db_core::vm::row::Opcode` directly (the #18 decision). Adds `Query.having`, `Query.offset`, `Expr::Exists`, and turns `Query.from` into a `FromClause` (`Table`/`Subquery`) enum -- minimal, additive `db_core::expr` AST changes mirroring sqlite-rs's own AST shape. Skip-scan/full cost-based scan chooser (#144) and CTE support (#143) are deliberately deferred as follow-ups.
+
+### Fixed
+
+- **`codegen-row` feature now implies `parser-row`** -- `cargo build --no-default-features --features codegen-row` previously failed since some `codegen/row/*` files (from #97) depend on `parser-row`, which wasn't pulled in transitively.
+
 ## [0.44.2] - 2026-09-05
 
 ### Fixed
