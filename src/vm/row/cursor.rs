@@ -78,6 +78,35 @@ pub trait Cursor {
     fn delete(&mut self) -> bool {
         false
     }
+
+    /// The rowid `Opcode::NewRowid` should hand out next for this
+    /// cursor's table -- one past the largest rowid currently stored.
+    /// Default `1`, matching sqlite-rs's behaviour for a table with no
+    /// rows yet; cursor kinds that don't track insertion (e.g.
+    /// read-only fixtures) never have `Opcode::NewRowid` run against
+    /// them in practice.
+    fn next_rowid(&self) -> i64 {
+        1
+    }
+
+    /// Inserts an index entry (`db-core#96`'s secondary-index
+    /// maintenance): `key` is the indexed column values followed by the
+    /// row's rowid, matching `IdxInsert`'s register-run convention.
+    /// Returns `false` if this cursor kind isn't an index cursor.
+    /// Storage-agnostic stand-in for a real b-tree index -- entries are
+    /// looked up by exact equality ([`Cursor::idx_delete`]), not ordered
+    /// range scan (that's `#94`'s index-scan codegen, a separate
+    /// ticket).
+    fn idx_insert(&mut self, _key: Vec<Value>) -> bool {
+        false
+    }
+
+    /// Deletes the index entry equal to `key` (see [`Cursor::idx_insert`]).
+    /// Returns `false` if no such entry exists, or this cursor kind
+    /// isn't an index cursor.
+    fn idx_delete(&mut self, _key: &[Value]) -> bool {
+        false
+    }
 }
 
 /// An in-memory table: a fixed set of rows, each a fixed-width `Vec<
@@ -177,89 +206,175 @@ impl Cursor for InMemoryCursor {
 /// each carrying an explicit caller-assigned rowid rather than an
 /// implicit position-based one (codegen assigns sequential rowids
 /// starting at 1, but nothing here enforces that).
+///
+/// **Kept sorted by rowid, and positioned by rowid rather than by Vec
+/// index** (db-core#96): `DELETE`/`UPDATE` codegen deletes (and, for
+/// `UPDATE`, re-inserts) the *current* row mid-scan, exactly like
+/// sqlite-rs's own codegen does against a real b-tree cursor -- safe
+/// there because a b-tree cursor's traversal is key-based, so a
+/// concurrent delete/insert elsewhere in the tree never invalidates it
+/// (see `stmt/delete.rs`'s doc comment). An index-based `pos: Option<
+/// usize>` would *not* be safe: removing the current element shifts
+/// every later index down by one, so `next()` would either skip a row
+/// or (worse, since [`Cursor::insert`] appends) revisit an
+/// already-updated one. Tracking `current_rowid` instead and searching
+/// for "the smallest stored rowid greater than this" on every `next()`
+/// reproduces the b-tree cursor's actual invariant with a `Vec`.
 #[derive(Default)]
 pub struct EphemeralTableCursor {
+    /// Sorted ascending by rowid (the first element of each tuple).
     rows: Vec<(i64, Vec<Value>)>,
-    pos: Option<usize>,
+    /// The rowid last positioned at, kept even after that row is
+    /// deleted (a fence-post `next()`/`prev()` resume from) --
+    /// [`Self::at_row`] says whether it still names a live row.
+    current_rowid: Option<i64>,
+    at_row: bool,
 }
 
 impl EphemeralTableCursor {
     pub fn new() -> Self {
         EphemeralTableCursor::default()
     }
+
+    fn row_index(&self, rowid: i64) -> Option<usize> {
+        self.rows.binary_search_by_key(&rowid, |(r, _)| *r).ok()
+    }
 }
 
 impl Cursor for EphemeralTableCursor {
     fn rewind(&mut self) -> bool {
-        self.pos = if self.rows.is_empty() { None } else { Some(0) };
-        self.pos.is_some()
+        match self.rows.first() {
+            Some((rowid, _)) => {
+                self.current_rowid = Some(*rowid);
+                self.at_row = true;
+                true
+            }
+            None => {
+                self.current_rowid = None;
+                self.at_row = false;
+                false
+            }
+        }
     }
 
     fn next(&mut self) -> bool {
-        let next = self.pos.map_or(0, |p| p.saturating_add(1));
-        if next < self.rows.len() {
-            self.pos = Some(next);
-            true
-        } else {
-            self.pos = None;
-            false
+        let after = self.current_rowid.unwrap_or(i64::MIN);
+        let pos = self.rows.partition_point(|(r, _)| *r <= after);
+        match self.rows.get(pos) {
+            Some((rowid, _)) => {
+                self.current_rowid = Some(*rowid);
+                self.at_row = true;
+                true
+            }
+            None => {
+                self.at_row = false;
+                false
+            }
         }
     }
 
     fn last(&mut self) -> bool {
-        self.pos = self.rows.len().checked_sub(1);
-        self.pos.is_some()
-    }
-
-    fn prev(&mut self) -> bool {
-        match self.pos {
-            Some(0) | None => {
-                self.pos = None;
-                false
-            }
-            Some(p) => {
-                self.pos = Some(p - 1);
+        match self.rows.last() {
+            Some((rowid, _)) => {
+                self.current_rowid = Some(*rowid);
+                self.at_row = true;
                 true
+            }
+            None => {
+                self.current_rowid = None;
+                self.at_row = false;
+                false
             }
         }
     }
 
+    fn prev(&mut self) -> bool {
+        let before = self.current_rowid.unwrap_or(i64::MAX);
+        let pos = self.rows.partition_point(|(r, _)| *r < before);
+        if pos == 0 {
+            self.at_row = false;
+            return false;
+        }
+        self.current_rowid = Some(self.rows[pos - 1].0);
+        self.at_row = true;
+        true
+    }
+
     fn column(&self, col: usize) -> Value {
+        assert!(self.at_row, "column read with no current row");
         #[allow(
             clippy::expect_used,
             reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
         )]
-        let pos = self.pos.expect("column read with no current row");
-        self.rows
-            .get(pos)
-            .and_then(|(_, values)| values.get(col))
-            .cloned()
-            .unwrap_or(Value::Null)
+        let rowid = self.current_rowid.expect("column read with no current row");
+        #[allow(
+            clippy::expect_used,
+            reason = "at_row true implies current_rowid still names a live row"
+        )]
+        let idx = self.row_index(rowid).expect("current row vanished");
+        self.rows[idx].1.get(col).cloned().unwrap_or(Value::Null)
     }
 
     fn rowid(&self) -> i64 {
+        assert!(self.at_row, "rowid read with no current row");
         #[allow(
             clippy::expect_used,
             reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
         )]
-        let pos = self.pos.expect("rowid read with no current row");
-        self.rows.get(pos).map_or(0, |(rowid, _)| *rowid)
+        self.current_rowid.expect("rowid read with no current row")
     }
 
     fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
-        self.rows.push((rowid, values));
+        let pos = self.rows.partition_point(|(r, _)| *r < rowid);
+        if self.rows.get(pos).is_some_and(|(r, _)| *r == rowid) {
+            self.rows[pos].1 = values;
+        } else {
+            self.rows.insert(pos, (rowid, values));
+        }
         true
     }
 
     fn delete(&mut self) -> bool {
-        let Some(pos) = self.pos else {
-            return false;
-        };
-        if pos >= self.rows.len() {
+        if !self.at_row {
             return false;
         }
+        #[allow(
+            clippy::expect_used,
+            reason = "at_row true implies current_rowid still names a live row"
+        )]
+        let rowid = self.current_rowid.expect("at_row implies current_rowid");
+        let Some(idx) = self.row_index(rowid) else {
+            return false;
+        };
+        self.rows.remove(idx);
+        self.at_row = false;
+        true
+    }
+
+    fn next_rowid(&self) -> i64 {
+        self.rows
+            .last()
+            .map_or(0, |(rowid, _)| *rowid)
+            .saturating_add(1)
+    }
+
+    /// Doubles as an index cursor for `db-core#96`'s secondary-index
+    /// maintenance: `key` (indexed columns + rowid) is appended as an
+    /// ordinary row under a placeholder rowid of `0`, bypassing the
+    /// rowid-sort/positioning machinery above entirely -- index
+    /// cursors are never scanned (`rewind`/`next`) in this ticket's
+    /// scope (that's `#94`'s index-scan codegen), only inserted into
+    /// and deleted from by key equality.
+    fn idx_insert(&mut self, key: Vec<Value>) -> bool {
+        self.rows.push((0, key));
+        true
+    }
+
+    fn idx_delete(&mut self, key: &[Value]) -> bool {
+        let Some(pos) = self.rows.iter().position(|(_, values)| values == key) else {
+            return false;
+        };
         self.rows.remove(pos);
-        self.pos = None;
         true
     }
 }

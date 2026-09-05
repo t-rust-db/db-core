@@ -971,6 +971,64 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
+        Opcode::Delete => {
+            let deleted = vm.cursor_mut(instr.p1)?.delete();
+            if !deleted {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "Delete",
+                    reason: "cursor slot does not support deletion".to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+        Opcode::NewRowid => {
+            let rowid = vm.cursor(instr.p1)?.next_rowid();
+            vm.set_register(instr.p2, Value::Integer(rowid))?;
+            Ok(Step::Next)
+        }
+        Opcode::IdxInsert | Opcode::IdxDelete => {
+            let count = match &instr.p4 {
+                P4::Int(n) => Vm::bounded_count(
+                    "IdxInsert/IdxDelete",
+                    i32::try_from(*n).map_err(|_| ExecError::MalformedInstruction {
+                        opcode: "IdxInsert/IdxDelete",
+                        reason: format!("key count {n} does not fit in p4"),
+                    })?,
+                )?,
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "IdxInsert/IdxDelete",
+                        reason: format!("expected an Int P4 (key count), got {other:?}"),
+                    })
+                }
+            };
+            let mut key = Vec::with_capacity(count);
+            for i in 0..count {
+                let reg = instr
+                    .p2
+                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+                    .ok_or(ExecError::RegisterOutOfRange {
+                        opcode: "IdxInsert/IdxDelete",
+                        index: instr.p2,
+                    })?;
+                key.push(vm.register(reg)?.clone());
+            }
+            let ok = if instr.opcode == Opcode::IdxInsert {
+                vm.cursor_mut(instr.p1)?.idx_insert(key)
+            } else {
+                vm.cursor_mut(instr.p1)?.idx_delete(&key)
+            };
+            if !ok {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "IdxInsert/IdxDelete",
+                    reason:
+                        "cursor slot does not support this index operation, or no matching entry"
+                            .to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+
         other => Err(ExecError::Unimplemented { opcode: other }),
     }
 }

@@ -194,6 +194,46 @@ pub struct Query {
     pub limit: Option<usize>,
 }
 
+/// A single `SET column = value` pair in an [`Update`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Assignment {
+    pub column: String,
+    pub value: Expr,
+}
+
+/// A single-table `INSERT` (db-core#96): one or more `VALUES` rows,
+/// each providing one [`Expr`] per entry in `columns` (or, if `columns`
+/// is empty, one per `TableSchema` column in declared order --
+/// `INSERT INTO t VALUES (...)`'s shorthand). No `INSERT ... SELECT`,
+/// `ON CONFLICT`/upsert, `DEFAULT VALUES`, or `RETURNING` -- sqlite-rs's
+/// richer `Insert` covers those; this mirrors how `Query` was scoped
+/// down from `parser::ast::Select` for the same reason (#91/#92's
+/// precedent).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Insert {
+    pub table: String,
+    pub columns: Vec<String>,
+    pub values: Vec<Vec<Expr>>,
+}
+
+/// A single-table `UPDATE` (db-core#96): scans every row, applying
+/// `assignments` to rows matching `where_clause` (all rows if `None`).
+/// No `FROM`/join, no `ORDER BY`/`LIMIT`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Update {
+    pub table: String,
+    pub assignments: Vec<Assignment>,
+    pub where_clause: Option<Expr>,
+}
+
+/// A single-table `DELETE` (db-core#96): scans every row, removing
+/// those matching `where_clause` (all rows if `None`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Delete {
+    pub table: String,
+    pub where_clause: Option<Expr>,
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
