@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.36.0] - 2026-09-05
+
+### Added
+
+- **`codegen::row` gains a single equi-join and `ORDER BY`** (#102) -- `compile_select_join` adds a single `INNER`/`LEFT` nested-loop equi-join (`LEFT`'s null-extension via `Opcode::Null` for unmatched outer rows) and `ORDER BY` buffered through the existing single-key sorter opcodes (`SorterOpen`/`Insert`/`Sort`/`Next`), decoded back via `Opcode::Column` against the sorter cursor; `LIMIT` now applies to the sorted output rather than scan order when `ORDER BY` is present. `Scope` grows an optional right-hand table binding, resolved with `codegen::batch::compile_join`'s already-shipped qualified-column convention (unqualified name resolves to the left/`FROM` table only). `Right`/`Full`/`Cross` joins, N-way joins, and the join-order/access-path chooser stay deferred to #101 (needs `planner::Stats`, which db-core doesn't have yet).
+
+## [0.35.0] - 2026-09-05
+
+### Added
+
+- **`db_core::value`** (#83) -- `Value`/`Collation`/`TextEncoding`/`compare_text`/`format_real` move to a feature-free, dependency-free crate-level module per ADR 0010; `vm::row::value` re-exports the same items so every existing `super::value` path inside `vm::row` is unchanged. Landed alongside db-storage's matching PR (db-storage#18, v0.5.0), which now re-exports `db_core::value::Value` as `db_storage::row::record::Value` -- exactly one `Value`/`Collation` definition across both crates.
+
 ## [0.34.0] - 2026-09-05
 
 ### Added
