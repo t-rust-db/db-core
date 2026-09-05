@@ -2,10 +2,15 @@
 //! `ADR 0002` in `db-core`'s `.openspec/adr/`), mirroring how `sql-vm`
 //! already splits into `batch`/`row`/`stream` executors (ADR 0001):
 //!
+//! - [`ast`] -- the crate's AST, contributed by sqlite-rs. Lives here
+//!   rather than under [`row`] (#147) because it is not row's: ADR 0002's
+//!   second amendment makes it the single AST, with `crate::expr::Query`
+//!   retired as a strict subset of `ast::Select`. `parser::row::ast`
+//!   remains as a re-export for one release.
 //! - [`row`] -- sqlite-rs's full SQLite grammar (DDL, DML, transactions,
-//!   `PRAGMA`, ...), ~7,400 lines (`ast`/`grammar`/`tokenizer`/`error`/
-//!   `printer`). Produces `ast::Select`. This is now the *only* tokenizer
-//!   and grammar in the crate (#57).
+//!   `PRAGMA`, ...), ~7,400 lines (`grammar`/`tokenizer`/`error`/
+//!   `printer`). Produces [`ast::Select`]. This is now the *only*
+//!   tokenizer and grammar in the crate (#57).
 //! - [`column`] -- column-rs's analytics-subset grammar (`SELECT ...`,
 //!   restricted to what the query VM executes). On by default. Has no
 //!   tokenizer or parser of its own: [`column::parse`]/
@@ -43,6 +48,9 @@ pub use span::Span;
 pub mod column;
 #[cfg(feature = "parser-column")]
 pub use column::{parse, parse_explain, Explain, ParseError, Result};
+
+#[cfg(any(feature = "parser-column", feature = "parser-row"))]
+pub mod ast;
 
 #[cfg(any(feature = "parser-column", feature = "parser-row"))]
 pub mod row;
