@@ -546,6 +546,11 @@ pub struct GroupKeyColumn {
     /// The collation two values must compare equal under to be the
     /// same group.
     pub collation: Collation,
+    /// The comparison affinity applied to the key value before hashing
+    /// (`Affinity::to_p4_byte`), so `1` and `'1'` land in one group under
+    /// NUMERIC affinity exactly as the sort strategy's group-boundary
+    /// `Eq` would judge them (sqlite-rs `hash_agg::group_key_into`, #134).
+    pub affinity: u8,
 }
 
 /// One VDBE instruction: an opcode tag plus sqlite-rs's raw `p1..p5`

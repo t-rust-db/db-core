@@ -563,10 +563,12 @@ mod tests {
                     GroupKeyColumn {
                         index: 0,
                         collation: Collation::Binary,
+                        affinity: b'A',
                     },
                     GroupKeyColumn {
                         index: 1,
                         collation: Collation::RTrim,
+                        affinity: b'A',
                     },
                 ]),
             ),
