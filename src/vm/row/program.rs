@@ -342,11 +342,10 @@ pub enum P4 {
         /// The collation `min`/`max` compares under.
         collation: Collation,
     },
-    /// `SorterOpen`'s sort-key descriptor (db-core#69). **Single-key
-    /// only** -- sqlite-rs's `P4::SortKey` carries a `Vec<SortKeyColumn>`
-    /// for multi-key sort; this ticket narrows to one column, per its
-    /// own scope note. Multi-key is a follow-up.
-    SortKey(SortKeyColumn),
+    /// `SorterOpen`'s sort-key descriptor (db-core#69, extended to
+    /// multi-key by db-core#87): one entry per `ORDER BY` term, applied
+    /// in order (matching sqlite-rs's `P4::SortKey`).
+    SortKey(Vec<SortKeyColumn>),
     /// `CreateTable` (db-core#97): the new table's name and verbatim
     /// `sqlite_master.sql` text.
     CreateTable {
@@ -431,7 +430,8 @@ pub struct AnalyzeIndexTarget {
 
 /// One `ORDER BY` sort key: which record column to compare, its
 /// direction, collation, and NULL placement. Ported from sqlite-rs's
-/// `SortKeyColumn` (single-column subset, db-core#69).
+/// `SortKeyColumn`; `P4::SortKey` carries one of these per key column
+/// (db-core#69 landed the single-key case, db-core#87 the `Vec`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SortKeyColumn {
     /// The record column index this key compares.
