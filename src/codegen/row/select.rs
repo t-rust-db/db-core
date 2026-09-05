@@ -168,7 +168,7 @@ chooser and FULL OUTER are deferred to #101"
             sorter_cursor,
             0,
             0,
-            P4::SortKey(key),
+            P4::SortKey(vec![key]),
         ));
     }
 

@@ -32,7 +32,7 @@ use super::aggregate::{self, AggState};
 use super::cast::cast_to;
 use super::coerce;
 use super::compare::compare;
-use super::cursor::{Cursor, EphemeralTableCursor, SorterCursor};
+use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, SorterCursor};
 use super::functions;
 use super::program::{Instruction, Opcode, Program, P4};
 use super::record::{decode_record, encode_record};
@@ -815,7 +815,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             }
             Ok(Step::Next)
         }
-        Opcode::SorterSort | Opcode::Sort => {
+        Opcode::SorterSort | Opcode::Sort | Opcode::HashAggRewind => {
             let has_row = vm.cursor_mut(instr.p1)?.rewind();
             Ok(if has_row {
                 Step::Next
@@ -823,7 +823,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 Step::Jump(to_pc(instr.p2))
             })
         }
-        Opcode::SorterNext => {
+        Opcode::SorterNext | Opcode::HashAggNext => {
             let has_row = vm.cursor_mut(instr.p1)?.next();
             Ok(if has_row {
                 Step::Jump(to_pc(instr.p2))
@@ -839,6 +839,105 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                         opcode: "SorterData",
                         reason: "sorter has not been sorted yet, or has no current row".to_string(),
                     })?;
+            vm.set_register(instr.p2, blob)?;
+            Ok(Step::Next)
+        }
+        Opcode::HashAggOpen => {
+            let keys = match &instr.p4 {
+                P4::GroupKey(keys) => keys.clone(),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "HashAggOpen",
+                        reason: format!("expected a GroupKey P4, got {other:?}"),
+                    })
+                }
+            };
+            vm.open_cursor(instr.p1, Box::new(HashAggCursor::new(keys)))?;
+            Ok(Step::Next)
+        }
+        Opcode::HashAggFind => {
+            let blob = match vm.register(instr.p2)? {
+                Value::Blob(bytes) => bytes.clone(),
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "HashAggFind",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let found = vm.cursor_mut(instr.p1)?.hash_agg_find(blob);
+            if !found {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "HashAggFind",
+                    reason: "cursor slot is not a hash-aggregation cursor".to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+        Opcode::HashAggStep => {
+            let (name, arity, collation) = match &instr.p4 {
+                P4::AggFunc {
+                    name,
+                    arity,
+                    collation,
+                } => (name.as_str(), *arity, *collation),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "HashAggStep",
+                        reason: format!("expected an AggFunc P4, got {other:?}"),
+                    })
+                }
+            };
+            let mut args = Vec::with_capacity(arity);
+            for i in 0..arity {
+                let reg = instr
+                    .p2
+                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+                    .ok_or(ExecError::RegisterOutOfRange {
+                        opcode: "HashAggStep",
+                        index: instr.p2,
+                    })?;
+                args.push(vm.register(reg)?.clone());
+            }
+            #[allow(clippy::cast_sign_loss)]
+            let slot = instr.p1.max(0) as usize;
+            let handled = vm
+                .cursor_mut(instr.p3)?
+                .hash_agg_step(slot, name, &args, collation)
+                .map_err(|e| ExecError::MalformedInstruction {
+                    opcode: "HashAggStep",
+                    reason: e.to_string(),
+                })?;
+            if !handled {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "HashAggStep",
+                    reason: "cursor slot has no current group".to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+        Opcode::HashAggData => {
+            let blob =
+                vm.cursor(instr.p1)?
+                    .current_blob()
+                    .ok_or(ExecError::MalformedInstruction {
+                    opcode: "HashAggData",
+                    reason:
+                        "hash-aggregation cursor has not been rewound yet, or has no current group"
+                            .to_string(),
+                })?;
+            let accumulators: Vec<Option<AggState>> = vm
+                .cursor(instr.p1)?
+                .hash_agg_group_accumulators()
+                .map(<[_]>::to_vec)
+                .unwrap_or_default();
+            for (slot, state) in accumulators.into_iter().enumerate() {
+                let slot = i32::try_from(slot).unwrap_or(i32::MAX);
+                match state {
+                    Some(state) => vm.set_agg_context(slot, state)?,
+                    None => vm.clear_agg_context(slot)?,
+                }
+            }
             vm.set_register(instr.p2, blob)?;
             Ok(Step::Next)
         }
@@ -1292,11 +1391,11 @@ mod tests {
     #[test]
     fn unimplemented_opcode_errors_by_name() {
         let mut vm = Vm::new();
-        let program = Program::new(vec![Instruction::new(Opcode::HashAggOpen, 0, 0, 0)]);
+        let program = Program::new(vec![Instruction::new(Opcode::OpenDup, 0, 0, 0)]);
         assert!(matches!(
             execute(&mut vm, &program),
             Err(ExecError::Unimplemented {
-                opcode: Opcode::HashAggOpen
+                opcode: Opcode::OpenDup
             })
         ));
     }
@@ -1468,6 +1567,78 @@ mod tests {
         ]);
         let rows = execute(&mut vm, &program).unwrap();
         assert_eq!(rows, vec![vec![Value::Integer(3), Value::Integer(60)]]);
+    }
+
+    #[test]
+    fn group_by_hash_aggregation_sums_per_group_ordered_by_key() {
+        // Three rows (group=1,val=10), (group=2,val=5), (group=1,val=20):
+        // MakeRecord/HashAggFind/HashAggStep(sum) per row, then
+        // HashAggRewind/Data/Next scan out the two groups in key order,
+        // AggFinal-ing each group's sum via HashAggData's installed
+        // accumulators.
+        let mut vm = Vm::new();
+        let group_key = P4::GroupKey(vec![super::super::program::GroupKeyColumn {
+            index: 0,
+            collation: Collation::Binary,
+        }]);
+        let sum_p4 = || P4::AggFunc {
+            name: "sum".to_string(),
+            arity: 1,
+            collation: Collation::Binary,
+        };
+        let program = Program::new(vec![
+            /* 0 */ Instruction::with_p4(Opcode::HashAggOpen, 0, 0, 0, group_key),
+            // Row 1: group=1, val=10
+            /* 1 */
+            Instruction::new(Opcode::Integer, 1, 1, 0),
+            /* 2 */ Instruction::new(Opcode::Integer, 10, 2, 0),
+            /* 3 */ Instruction::new(Opcode::MakeRecord, 1, 2, 3),
+            /* 4 */ Instruction::new(Opcode::HashAggFind, 0, 3, 0),
+            /* 5 */ Instruction::with_p4(Opcode::HashAggStep, 0, 2, 0, sum_p4()),
+            // Row 2: group=2, val=5
+            /* 6 */
+            Instruction::new(Opcode::Integer, 2, 1, 0),
+            /* 7 */ Instruction::new(Opcode::Integer, 5, 2, 0),
+            /* 8 */ Instruction::new(Opcode::MakeRecord, 1, 2, 3),
+            /* 9 */ Instruction::new(Opcode::HashAggFind, 0, 3, 0),
+            /* 10 */ Instruction::with_p4(Opcode::HashAggStep, 0, 2, 0, sum_p4()),
+            // Row 3: group=1, val=20
+            /* 11 */
+            Instruction::new(Opcode::Integer, 1, 1, 0),
+            /* 12 */ Instruction::new(Opcode::Integer, 20, 2, 0),
+            /* 13 */ Instruction::new(Opcode::MakeRecord, 1, 2, 3),
+            /* 14 */ Instruction::new(Opcode::HashAggFind, 0, 3, 0),
+            /* 15 */ Instruction::with_p4(Opcode::HashAggStep, 0, 2, 0, sum_p4()),
+            // Scan the two groups out in key order.
+            /* 16 */
+            Instruction::new(Opcode::HashAggRewind, 0, 21, 0), // jump to Halt(21) if empty
+            /* 17 */ Instruction::new(Opcode::HashAggData, 0, 4, 0),
+            /* 18 */
+            Instruction::with_p4(Opcode::AggFinal, 0, 0, 5, P4::Str("sum(1)".to_string())),
+            /* 19 */ Instruction::new(Opcode::ResultRow, 4, 2, 0),
+            /* 20 */
+            Instruction::new(Opcode::HashAggNext, 0, 17, 0), // jump to HashAggData(17) if a next group exists
+            /* 21 */ Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows.len(), 2);
+        let decoded: Vec<(Value, Value)> = rows
+            .into_iter()
+            .map(|row| {
+                let Value::Blob(bytes) = &row[0] else {
+                    panic!("expected a Blob");
+                };
+                let group = decode_record(bytes, TextEncoding::Utf8).unwrap()[0].clone();
+                (group, row[1].clone())
+            })
+            .collect();
+        assert_eq!(
+            decoded,
+            vec![
+                (Value::Integer(1), Value::Integer(30)),
+                (Value::Integer(2), Value::Integer(5)),
+            ]
+        );
     }
 
     #[test]

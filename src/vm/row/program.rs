@@ -305,10 +305,9 @@ pub enum Opcode {
 
 /// The dynamically-typed fourth operand, ported from sqlite-rs's
 /// `vdbe::program::P4`. Only the variants `vm::row`'s current dispatch
-/// scope needs are included; `SeekKey`/`AggFunc`/`SortKey`/`GroupKey`
-/// (index/aggregation/sorter descriptors) are deferred to the phases
-/// that implement those opcode families, matching how sqlite-rs itself
-/// grew `P4` incrementally rather than all at once.
+/// scope needs are included; `SeekKey` (index-descriptor) is deferred
+/// to the phase that implements index-scan opcodes, matching how
+/// sqlite-rs itself grew `P4` incrementally rather than all at once.
 #[derive(Debug, Clone, PartialEq)]
 pub enum P4 {
     /// No P4 operand.
@@ -346,6 +345,9 @@ pub enum P4 {
     /// multi-key by db-core#87): one entry per `ORDER BY` term, applied
     /// in order (matching sqlite-rs's `P4::SortKey`).
     SortKey(Vec<SortKeyColumn>),
+    /// `HashAggOpen`'s group-key descriptor (db-core#86): one entry per
+    /// `GROUP BY` term, in `GROUP BY` order.
+    GroupKey(Vec<GroupKeyColumn>),
     /// `CreateTable` (db-core#97): the new table's name and verbatim
     /// `sqlite_master.sql` text.
     CreateTable {
@@ -443,6 +445,20 @@ pub struct SortKeyColumn {
     /// Where NULLs sort: `true` for `NULLS FIRST`, `false` for `NULLS
     /// LAST`.
     pub nulls_first: bool,
+}
+
+/// One `GROUP BY` key column: which record column to group on, and the
+/// collation two values must compare equal under to land in the same
+/// group (post `apply_affinity`/comparison-affinity rules, same as the
+/// sort strategy's group-boundary `Eq`). Ported from sqlite-rs's
+/// `GroupKeyColumn` (db-core#86).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupKeyColumn {
+    /// The record column index this key groups on.
+    pub index: usize,
+    /// The collation two values must compare equal under to be the
+    /// same group.
+    pub collation: Collation,
 }
 
 /// One VDBE instruction: an opcode tag plus sqlite-rs's raw `p1..p5`
