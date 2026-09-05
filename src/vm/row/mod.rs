@@ -90,7 +90,12 @@ pub use cast::cast_to;
 pub use compare::compare;
 pub use cursor::{Cursor, EphemeralTableCursor, InMemoryCursor, SorterCursor};
 pub use functions::FunctionError;
-pub use program::{Instruction, Opcode, Program, SortKeyColumn, P4};
+pub use program::{
+    AnalyzeIndexTarget, AnalyzeTarget, Instruction, Opcode, Program, SortKeyColumn,
+    JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_NORMAL,
+    SYNCHRONOUS_OFF, SYNCHRONOUS_QUERY, TRANSACTION_MODE_DEFERRED, TRANSACTION_MODE_EXCLUSIVE,
+    TRANSACTION_MODE_IMMEDIATE,
+};
 pub use record::{decode_column, decode_record, encode_record, RecordError};
 pub use value::{compare_text, format_real, Collation, TextEncoding, Value};
 pub use vm::{execute, ExecError, Step, Vm};

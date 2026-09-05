@@ -291,6 +291,8 @@ mod tests {
             columns: columns.iter().map(|c| (*c).to_string()).collect(),
             column_types: columns.iter().map(|_| String::new()).collect(),
             rowid_alias: None,
+            root_page: 0,
+            indexes: vec![],
         }
     }
 

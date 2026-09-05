@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.33.0] - 2026-09-05
+
+### Added
+
+- **`codegen::row` gains DDL, transactions, PRAGMA, ANALYZE and statement dispatch** (#97) -- ports sqlite-rs's `src/codegen/{ddl,transaction,pragma,analyze,dispatch}.rs`: `CREATE`/`DROP TABLE`/`INDEX`/`CREATE VIEW` each compile to a single procedural opcode carrying its `sqlite_master` payload in `P4`; `BEGIN`/`COMMIT`/`ROLLBACK` compile to `Transaction`/`AutoCommit`; `PRAGMA journal_mode`/`integrity_check`/`quick_check`/`synchronous` compile to their matching control opcodes; `ANALYZE` bakes every target table's (and its indexes') root pages into `P4::Analyze` for the exec-time `sqlite_stat1` rewrite. `codegen::row::dispatch::compile_statement` keyword-sniffs a raw SQL string and routes it to the matching compiler against a schema catalog, scoped to the statement kinds this crate has codegen for today (DDL/transaction/PRAGMA/ANALYZE plus #91's expressions) -- `INSERT`/`UPDATE`/`DELETE`/`SELECT` dispatch is deferred to whichever sub-ticket of #20 ports their codegen. `TableSchema` gains `root_page`/`indexes` (a new placeholder `IndexSchema`) to bake catalog identity into `P4` at codegen time. `vm::row::Opcode`'s DDL/PRAGMA/transaction opcodes gain their `P4` payload shapes and `TRANSACTION_MODE_*`/`JOURNAL_MODE_*`/`SYNCHRONOUS_*` constants. Porting sqlite-rs's `src/planner.rs` cost model (also part of #97) is deferred as a follow-up: it has no caller yet without real storage integration (#18) and join codegen (#92).
+
 ## [0.32.0] - 2026-09-05
 
 ### Added
