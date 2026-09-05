@@ -1143,12 +1143,13 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::Rowid => {
-            let rowid = if vm.is_null_row(instr.p1)? {
-                0
+            // sqlite-rs: a NullRow'd cursor reads NULL for its rowid too.
+            let value = if vm.is_null_row(instr.p1)? {
+                Value::Null
             } else {
-                vm.cursor(instr.p1)?.rowid()
+                Value::Integer(vm.cursor(instr.p1)?.rowid())
             };
-            vm.set_register(instr.p2, Value::Integer(rowid))?;
+            vm.set_register(instr.p2, value)?;
             Ok(Step::Next)
         }
         Opcode::SeekRowid => {
@@ -3352,7 +3353,7 @@ mod tests {
     }
 
     #[test]
-    fn null_row_makes_column_and_rowid_read_as_null_and_zero() {
+    fn null_row_makes_column_and_rowid_read_as_null() {
         let mut vm = Vm::new();
         vm.open_cursor(
             0,
@@ -3367,7 +3368,7 @@ mod tests {
             Instruction::new(Opcode::Halt, 0, 0, 0),
         ]);
         let rows = execute(&mut vm, &program).unwrap();
-        assert_eq!(rows, vec![vec![Value::Null, Value::Integer(0)]]);
+        assert_eq!(rows, vec![vec![Value::Null, Value::Null]]);
     }
 
     #[test]
