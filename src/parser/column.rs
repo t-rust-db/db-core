@@ -210,6 +210,43 @@ fn column_name(expr: &AstExpr) -> Result<String> {
     }
 }
 
+/// Lowers an aggregate `FunctionCall` (`COUNT(x)`, `COUNT(*)`, ...) to
+/// the same output label [`convert_result_column`]'s `SelectItem::Agg`
+/// branch would render for it (via [`AggFunc::name`]) -- used by
+/// `ORDER BY` (#131) to reference a `SELECT`-list aggregate by the
+/// identical string `codegen::batch::select_output_index` matches
+/// against, without introducing a second aggregate-lowering path.
+fn aggregate_call_label(
+    expr: &AstExpr,
+    name: &str,
+    distinct: bool,
+    args: &FunctionArgs,
+) -> Result<String> {
+    if distinct {
+        return Err(unsupported(
+            expr.span,
+            "DISTINCT inside an aggregate".into(),
+        ));
+    }
+    let agg = AggFunc::from_name(name)
+        .ok_or_else(|| unsupported(expr.span, format!("unknown function {name}")))?;
+    match args {
+        FunctionArgs::Star => {
+            if agg != AggFunc::Count {
+                return Err(unsupported(expr.span, "only COUNT supports (*)".into()));
+            }
+            Ok(format!("{}(*)", agg.name()))
+        }
+        FunctionArgs::List(list) => match list.as_slice() {
+            [one] => Ok(format!("{}({})", agg.name(), column_name(one)?)),
+            _ => Err(unsupported(
+                expr.span,
+                "an aggregate takes exactly one column or *".into(),
+            )),
+        },
+    }
+}
+
 fn convert_expr(expr: &AstExpr) -> Result<Expr> {
     match &expr.kind {
         ExprKind::Literal(lit) => Ok(Expr::Literal(ast_literal(lit, expr.span)?)),
@@ -512,10 +549,30 @@ fn convert_select(select: &Select) -> Result<Query> {
             nulls_last: Some(_),
             ..
         }) => return Err(unsupported(select.span, "NULLS FIRST/LAST".into())),
-        Some(OrderingTerm { expr, desc, .. }) => Some(OrderBy {
-            column: column_name(expr)?,
-            descending: desc.unwrap_or(false),
-        }),
+        Some(OrderingTerm { expr, desc, .. }) => {
+            let column = match &expr.kind {
+                ExprKind::Column { .. } => column_name(expr)?,
+                ExprKind::FunctionCall {
+                    name,
+                    distinct,
+                    args,
+                    over: None,
+                } => aggregate_call_label(expr, name, *distinct, args)?,
+                _ => {
+                    return Err(unsupported(
+                        expr.span,
+                        format!(
+                            "expected a column reference or aggregate, found {:?}",
+                            expr.kind
+                        ),
+                    ))
+                }
+            };
+            Some(OrderBy {
+                column,
+                descending: desc.unwrap_or(false),
+            })
+        }
         None => None,
     };
 
@@ -900,6 +957,42 @@ mod tests {
             })
         );
         assert_eq!(q.limit, Some(5));
+    }
+
+    #[test]
+    fn order_by_references_a_select_list_aggregate() {
+        // #131: ORDER BY may reference a SELECT-list aggregate, not just
+        // a bare column.
+        let q = parse(
+            "SELECT customer_id, COUNT(event_id), SUM(amount) FROM events \
+             GROUP BY customer_id ORDER BY COUNT(event_id) DESC",
+        )
+        .unwrap();
+        assert_eq!(
+            q.order_by,
+            Some(OrderBy {
+                column: "COUNT(event_id)".into(),
+                descending: true
+            })
+        );
+    }
+
+    #[test]
+    fn order_by_references_count_star() {
+        let q = parse("SELECT COUNT(*) FROM t ORDER BY COUNT(*)").unwrap();
+        assert_eq!(
+            q.order_by,
+            Some(OrderBy {
+                column: "COUNT(*)".into(),
+                descending: false
+            })
+        );
+    }
+
+    #[test]
+    fn order_by_rejects_non_aggregate_expression() {
+        let err = parse("SELECT id FROM t ORDER BY id + 1").unwrap_err();
+        assert!(format!("{err}").contains("expected a column reference"));
     }
 
     #[test]

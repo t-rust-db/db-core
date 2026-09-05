@@ -727,11 +727,18 @@ pub fn compile_window(query: &Query) -> Program {
     Program::new(program)
 }
 
+/// Resolves an `ORDER BY` reference to its position in the `SELECT`
+/// list, matching against each item's rendered output label -- not just
+/// [`SelectItem::Column`] -- so `ORDER BY COUNT(x)` resolves to a
+/// `SELECT COUNT(x)` item the same way `ORDER BY x` resolves to `SELECT
+/// x` (#131: `parser::column`'s `ORDER BY` lowering renders an
+/// aggregate reference through the identical [`select_item_label`]
+/// format for exactly this reason).
 fn select_output_index(query: &Query, column: &str) -> Option<usize> {
     query
         .columns
         .iter()
-        .position(|item| matches!(item, SelectItem::Column(name) if name == column))
+        .position(|item| select_item_label(item) == column)
 }
 
 /// Derive each `SELECT`-list item's output column header (e.g. `SUM(amount)`,
@@ -1121,13 +1128,7 @@ fn scan_detail(table: &str, stats: TableStats) -> String {
 }
 
 fn agg_func_name(func: AggFunc) -> &'static str {
-    match func {
-        AggFunc::Count => "COUNT",
-        AggFunc::Sum => "SUM",
-        AggFunc::Avg => "AVG",
-        AggFunc::Min => "MIN",
-        AggFunc::Max => "MAX",
-    }
+    func.name()
 }
 
 fn window_func_name(func: WindowFunc) -> &'static str {
@@ -1300,7 +1301,19 @@ fn referenced_columns(query: &Query) -> Vec<String> {
         push_unique(&mut out, join.right_col.clone());
     }
     if let Some(order_by) = &query.order_by {
-        push_unique(&mut out, order_by.column.clone());
+        // #131: an `ORDER BY` referencing a SELECT-list aggregate carries
+        // that aggregate's rendered label (e.g. `COUNT(x)`), not a real
+        // column name -- its underlying column, if any, is already
+        // covered above via that item's own `SelectItem::Agg` arm, so
+        // only push here when the label isn't itself a `SELECT`-list
+        // item (i.e. it's a genuine bare-column reference).
+        let is_select_item_label = query
+            .columns
+            .iter()
+            .any(|item| select_item_label(item) == order_by.column);
+        if !is_select_item_label {
+            push_unique(&mut out, order_by.column.clone());
+        }
     }
     out
 }
@@ -1416,6 +1429,29 @@ mod tests {
         );
         assert_eq!(fin.comment.as_deref(), Some("ORDER BY val DESC; LIMIT 5"));
         assert!(program.instructions.iter().all(|i| i.comment.is_some()));
+    }
+
+    #[test]
+    fn compile_encodes_order_by_referencing_a_select_list_aggregate() {
+        // #131: ORDER BY may reference a SELECT-list aggregate by the
+        // same output position resolution as ORDER BY on a plain column.
+        let query = sql::parse(
+            "SELECT customer_id, COUNT(event_id), SUM(amount) FROM t \
+             GROUP BY customer_id ORDER BY COUNT(event_id) DESC",
+        )
+        .unwrap();
+        let program = compile(&query);
+        let fin = program.instructions.last().unwrap();
+        assert_eq!(
+            fin.opcode,
+            Opcode::Finalize {
+                agg_parts: vec![AggPart::GroupKey, AggPart::Count, AggPart::Sum].into(),
+                num_group_keys: 1,
+                distinct: false,
+                order_by: Some((1, true)),
+                limit: None,
+            }
+        );
     }
 
     #[test]

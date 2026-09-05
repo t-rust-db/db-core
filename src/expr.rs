@@ -39,6 +39,22 @@ pub enum AggFunc {
 }
 
 impl AggFunc {
+    /// The canonical uppercase SQL name (`"COUNT"`, `"SUM"`, ...) -- the
+    /// single source of truth [`AggFunc::from_name`] parses and
+    /// `codegen::batch`'s `select_item_label`/`agg_func_name` and
+    /// `parser::column`'s `ORDER BY` lowering (#131) both render back,
+    /// so a SELECT-list aggregate and an `ORDER BY` reference to it
+    /// produce byte-identical labels.
+    pub fn name(self) -> &'static str {
+        match self {
+            AggFunc::Count => "COUNT",
+            AggFunc::Sum => "SUM",
+            AggFunc::Avg => "AVG",
+            AggFunc::Min => "MIN",
+            AggFunc::Max => "MAX",
+        }
+    }
+
     pub fn from_name(name: &str) -> Option<Self> {
         match name.to_ascii_uppercase().as_str() {
             "COUNT" => Some(AggFunc::Count),
