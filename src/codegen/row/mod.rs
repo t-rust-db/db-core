@@ -20,8 +20,10 @@
 //! [`Emitter`], a plain-bump [`RegAlloc`] (no CTE cache, no
 //! subquery-cursor allocation), and a single-table [`Scope`] (bare
 //! column name to index, no catalog/joins/hoisting) -- sized to what
-//! `Expr` has today. `InSubquery` codegen is deferred to #95, which is
-//! where subquery materialization actually lands.
+//! `Expr` has today. #95 grows [`RegAlloc`] a cursor allocator and
+//! [`Scope`] a catalog plus an `outer` link, which is what subquery
+//! materialization needs; the reference's hoisting/memoization caches
+//! are still unported (see [`subquery`]'s own doc).
 //!
 //! [`TableSchema`] here is a placeholder: just enough (declared column
 //! types, one optional rowid-alias column) for [`value::compile_value`]'s
@@ -37,8 +39,25 @@
 //! single-key sorter, both without any stats/access-path cost model;
 //! that chooser and N-way joins are deferred to #117 (needs
 //! `planner::Stats`, blocked on #116's missing `ANALYZE` VM
-//! implementation) and #118 (no consumer needs N-way joins yet); `GROUP
-//! BY`/aggregation to #93.
+//! implementation) and #118 (no consumer needs N-way joins yet).
+//!
+//! **#93 adds `GROUP BY`/`HAVING`/aggregation**: [`aggregate`], ported
+//! from sqlite-rs's `codegen/select/aggregate.rs` and its
+//! `aggregate/{accum,hash,join}.rs`. Both of that module's grouping
+//! strategies are ported (sort-then-group over `Sorter*`, and the
+//! single-pass hash one over #86's `HashAgg*` slice), plus `HAVING` and
+//! aggregation over a join. See that module's own doc for what db-core's
+//! narrower `Query`/`SelectItem` scopes out of the reference.
+//!
+//! **#94 adds index-aware access paths**: [`index_scan`]
+//! (index-ordered scans, ADR 0020), [`range_scan`] (index range seeks,
+//! ADR 0034), [`limit_scan`] (`LIMIT`/`OFFSET`, and `Query` grows the
+//! matching `offset` field), and [`eqp`] (`EXPLAIN QUERY PLAN`). Each
+//! is scoped to the case that needs no cost model -- "is there an index
+//! whose leading column matches?" -- with the reference's stats-driven
+//! parts (skip-scan, `compile_direct_scan`'s chooser, EQP's
+//! `stats_by_table`) left unported for the same reason `planner.rs`
+//! below is. See each module's own doc.
 //!
 //! **#97 adds the DDL/transaction/PRAGMA/ANALYZE slice**: [`ddl`]
 //! (`CREATE`/`DROP TABLE`/`INDEX`/`VIEW`), [`transaction`]
@@ -59,6 +78,17 @@
 //! but those have no codegen counterpart in `db-core` yet, so routing
 //! them is deferred to whichever sub-ticket of #20 ports that codegen.
 //!
+//! **#95 adds subqueries**: [`subquery`], ported from sqlite-rs's
+//! `codegen/subquery.rs` and its `subquery/{scalar,from_clause,flatten,
+//! pushdown}.rs`. `Expr` grows an `Exists` variant and `Query.from`
+//! becomes a [`crate::expr::FromClause`] (a table name or a subquery
+//! plus its alias), and [`select::compile_select_with_catalog`] is the
+//! entry point that wires the cursors itself, since a subquery's own
+//! `FROM` table can't be pre-wired by the caller. See that module's own
+//! doc for what db-core's narrower `Expr`/`Query` scopes out of the
+//! reference -- notably CTEs and the correlated-subquery
+//! hoisting/memoization caches.
+//!
 //! **`planner.rs` (sqlite-rs's 386-line cost model) is deliberately not
 //! ported here yet**, even though `codegen::row::planner` is its
 //! natural home (per #97's own note): it decodes `sqlite_stat1` via
@@ -70,14 +100,20 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aggregate;
 pub mod analyze;
 pub mod cond;
 pub mod ddl;
 pub mod dispatch;
+pub mod eqp;
 pub mod index_maintenance;
+pub mod index_scan;
+pub mod limit_scan;
 pub mod pragma;
+pub mod range_scan;
 pub mod select;
 pub mod stmt;
+pub mod subquery;
 pub mod transaction;
 pub mod value;
 
@@ -92,9 +128,14 @@ pub use ddl::{
     compile_create_index, compile_create_table, compile_create_view, compile_drop_index,
     compile_drop_table,
 };
+pub use eqp::{explain_query_plan, EqpRow};
 pub use pragma::compile_pragma;
-pub use select::{compile_select, compile_select_join};
+pub use select::{compile_select, compile_select_join, compile_select_with_catalog};
 pub use stmt::{compile_delete, compile_insert, compile_update};
+pub use subquery::{
+    compile_exists, compile_in_subquery, flatten_from_subquery, materialize_from_subquery,
+    push_down_where_predicates, resolve_from_table_schema,
+};
 pub use transaction::{compile_begin, compile_commit, compile_rollback};
 pub use value::compile_value;
 
@@ -107,7 +148,7 @@ pub const MAX_EXPR_DEPTH: usize = 200;
 
 /// Codegen failures: an unresolvable column, an `Expr` tree deeper than
 /// [`MAX_EXPR_DEPTH`], or a construct this scoped-down compiler doesn't
-/// implement yet (`InSubquery` -- see this module's doc comment).
+/// implement yet (see this module's doc comment).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CodegenError {
     UnknownColumn(String),
@@ -287,6 +328,7 @@ impl Emitter {
 #[derive(Debug, Default)]
 pub struct RegAlloc {
     next: i32,
+    next_cursor: i32,
 }
 
 impl RegAlloc {
@@ -298,6 +340,24 @@ impl RegAlloc {
         let r = self.next;
         self.next = self.next.saturating_add(1);
         r
+    }
+
+    /// Hands out a fresh cursor slot (db-core#95): every subquery
+    /// occurrence opens its own table cursor, plus an ephemeral one for
+    /// `IN`'s membership index or a `FROM`-subquery's materialized
+    /// result. Mirrors sqlite-rs's `RegAlloc::alloc_cursor`.
+    pub fn alloc_cursor(&mut self) -> i32 {
+        let c = self.next_cursor;
+        self.next_cursor = self.next_cursor.saturating_add(1);
+        c
+    }
+
+    /// Moves the cursor bump allocator past `cursor`, so a later
+    /// [`RegAlloc::alloc_cursor`] can't hand back a slot the caller
+    /// wired up by hand (`select.rs` derives its sorter/index cursors by
+    /// arithmetic rather than through this allocator).
+    pub fn reserve_cursors_through(&mut self, cursor: i32) {
+        self.next_cursor = self.next_cursor.max(cursor.saturating_add(1));
     }
 
     /// The register the next [`RegAlloc::alloc`] call would hand out,
@@ -368,15 +428,27 @@ pub struct IndexSchema {
 /// queries never need to disambiguate, since db-core's current
 /// [`crate::expr::Expr::Column`] has no qualifier of its own -- qualifiers
 /// only ever arrive as a `"table.column"`-shaped plain string. #102 grows
-/// this to an optional second (right-side) binding for a single equi-join;
-/// full multi-table resolution (subqueries, N-way joins) is still deferred
-/// to #95/#101.
+/// this to an optional second (right-side) binding for a single equi-join,
+/// and #95 a `catalog`/`outer` pair for subqueries; full multi-table
+/// resolution (N-way joins) is still deferred to #101.
 #[derive(Debug, Clone)]
 pub struct Scope {
     pub schema: TableSchema,
     pub cursor: i32,
     /// The join's right-hand table, when this scope covers a join.
     pub right: Option<(TableSchema, i32)>,
+    /// Every table a subquery nested in this scope may name in its own
+    /// `FROM` (db-core#95). Empty for a caller that wired its cursors up
+    /// by hand and has no subquery to resolve -- the same reason
+    /// sqlite-rs's `Scope` carries a catalog while db-core's didn't.
+    pub catalog: Vec<TableSchema>,
+    /// The enclosing query's scope, for a correlated subquery
+    /// (db-core#95): [`Scope::resolve`] falls back here for any
+    /// reference this scope's own tables don't resolve, which is all
+    /// correlation needs under materialization -- the outer cursor is
+    /// already positioned on the current row every time the inlined
+    /// subquery code runs.
+    pub outer: Option<Box<Scope>>,
 }
 
 impl Scope {
@@ -385,7 +457,26 @@ impl Scope {
             schema,
             cursor,
             right: None,
+            catalog: Vec::new(),
+            outer: None,
         }
+    }
+
+    pub fn with_catalog(mut self, catalog: Vec<TableSchema>) -> Self {
+        self.catalog = catalog;
+        self
+    }
+
+    pub fn with_outer(mut self, outer: Scope) -> Self {
+        self.outer = Some(Box::new(outer));
+        self
+    }
+
+    /// Looks `name` up in `catalog`, case-insensitively by table name.
+    pub fn catalog_table(&self, name: &str) -> Option<&TableSchema> {
+        self.catalog
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
     }
 
     /// A scope over a single equi-join's two tables.
@@ -399,6 +490,8 @@ impl Scope {
             schema,
             cursor,
             right: Some((right_schema, right_cursor)),
+            catalog: Vec::new(),
+            outer: None,
         }
     }
 
@@ -418,19 +511,36 @@ impl Scope {
     /// explicit qualifier, sidestepping true ambiguity detection when both
     /// tables share a column name.
     pub fn resolve(&self, name: &str) -> Result<(i32, usize)> {
+        match self.resolve_local(name) {
+            Some(binding) => Ok(binding),
+            None => match &self.outer {
+                Some(outer) => outer.resolve(name),
+                None => Err(CodegenError::UnknownColumn(name.to_string())),
+            },
+        }
+    }
+
+    /// Resolves against this scope's own table(s) only, without the
+    /// [`Scope::outer`] fallback. A qualifier naming neither of this
+    /// scope's tables resolves to nothing here rather than being
+    /// stripped and matched against the left table anyway -- that's what
+    /// lets a correlated `WHERE inner.x = outer.x` reach the enclosing
+    /// scope even when both tables happen to have an `x`.
+    fn resolve_local(&self, name: &str) -> Option<(i32, usize)> {
         let (qualifier, col) = Self::split_qualified(name);
         if let (Some(q), Some((right_schema, right_cursor))) = (qualifier, &self.right) {
             if q.eq_ignore_ascii_case(&right_schema.name) {
                 return right_schema
                     .column_index(col)
-                    .map(|idx| (*right_cursor, idx))
-                    .ok_or_else(|| CodegenError::UnknownColumn(name.to_string()));
+                    .map(|idx| (*right_cursor, idx));
             }
         }
-        self.schema
-            .column_index(col)
-            .map(|idx| (self.cursor, idx))
-            .ok_or_else(|| CodegenError::UnknownColumn(name.to_string()))
+        if let Some(q) = qualifier {
+            if self.outer.is_some() && !q.eq_ignore_ascii_case(&self.schema.name) {
+                return None;
+            }
+        }
+        self.schema.column_index(col).map(|idx| (self.cursor, idx))
     }
 }
 

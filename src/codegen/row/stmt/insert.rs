@@ -181,13 +181,15 @@ mod tests {
 
         let query = Query {
             columns: vec![SelectItem::Star],
-            from: schema.name.clone(),
+            from: schema.name.clone().into(),
             joins: vec![],
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
+            offset: None,
         };
         let select_program = compile_select(schema, 0, &query).unwrap();
         execute(&mut vm, &select_program).unwrap()

@@ -193,13 +193,15 @@ mod tests {
     fn scan_all(schema: &TableSchema, vm: &mut Vm) -> Vec<Vec<Value>> {
         let query = Query {
             columns: vec![SelectItem::Star],
-            from: schema.name.clone(),
+            from: schema.name.clone().into(),
             joins: vec![],
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
+            offset: None,
         };
         let program = compile_select(schema, 0, &query).unwrap();
         execute(vm, &program).unwrap()

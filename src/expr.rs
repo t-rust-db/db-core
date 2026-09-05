@@ -2,9 +2,10 @@
 //! built from. This crate holds types only — no tokenizing, no parsing
 //! (see `sql-parser`), no evaluation (that lives in the executors).
 //!
-//! `Expr` and `Query` are mutually recursive (`Expr::InSubquery` holds a
-//! `Query`, and `Query::where_clause` holds an `Expr`), so both live here
-//! rather than splitting `Query` into `sql-parser`.
+//! `Expr` and `Query` are mutually recursive (`Expr::InSubquery`/
+//! `Expr::Exists` and `FromClause::Subquery` hold a `Query`, and
+//! `Query::where_clause` holds an `Expr`), so both live here rather than
+//! splitting `Query` into `sql-parser`.
 
 #![forbid(unsafe_code)]
 
@@ -86,6 +87,14 @@ pub enum Expr {
     /// `expr IS [NOT] NULL`.
     IsNull {
         expr: Box<Expr>,
+        negated: bool,
+    },
+    /// `[NOT] EXISTS (SELECT ...)` -- a semi-join that never needs a
+    /// row's actual values, only whether the subquery yields one.
+    /// Mirrors `parser::row::ast::ExprKind::Exists`'s own
+    /// `subquery`/`negated` shape, which in turn mirrors sqlite-rs's.
+    Exists {
+        subquery: Box<Query>,
         negated: bool,
     },
 }
@@ -198,16 +207,74 @@ pub struct Join {
     pub right_col: String,
 }
 
+/// A query's `FROM`: a bare table name, or (db-core#95) a subquery with
+/// its mandatory alias -- the same `Name`/`Subquery` split sqlite-rs's
+/// `parser::ast::TableRefKind` makes, narrowed to db-core's single-table
+/// `FROM` (sqlite-rs's `TableRef` also carries an optional alias for the
+/// `Name` case; db-core resolves table aliases at parse time, so they
+/// never reach this AST).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FromClause {
+    Table(String),
+    /// `FROM (SELECT ...) alias` -- the alias is mandatory, and is the
+    /// name the enclosing query's qualified column references use.
+    Subquery(Box<Query>, String),
+}
+
+impl FromClause {
+    /// The name the enclosing query refers to this `FROM` item by: the
+    /// table's own name, or a subquery's alias.
+    pub fn name(&self) -> &str {
+        match self {
+            FromClause::Table(name) => name,
+            FromClause::Subquery(_, alias) => alias,
+        }
+    }
+
+    /// The real catalog table name, or `None` for a subquery -- the
+    /// discriminator every caller that can only scan a real table uses.
+    pub fn table_name(&self) -> Option<&str> {
+        match self {
+            FromClause::Table(name) => Some(name),
+            FromClause::Subquery(..) => None,
+        }
+    }
+}
+
+impl From<&str> for FromClause {
+    fn from(name: &str) -> Self {
+        FromClause::Table(name.to_string())
+    }
+}
+
+impl From<String> for FromClause {
+    fn from(name: String) -> Self {
+        FromClause::Table(name)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub columns: Vec<SelectItem>,
-    pub from: String,
+    pub from: FromClause,
     pub joins: Vec<Join>,
     pub where_clause: Option<Expr>,
     pub distinct: bool,
     pub group_by: Vec<String>,
+    /// `HAVING <expr>` -- the post-aggregation filter, mirroring
+    /// sqlite-rs's own `having: Option<Expr>` on `parser::ast::Select`.
+    /// An aggregate is referenced here the same way `ORDER BY` already
+    /// references one (#131): by its `SELECT`-item label
+    /// (`"COUNT(*)"`, `"SUM(amount)"`), since this crate's scoped-down
+    /// [`Expr`] has no function-call variant of its own.
+    pub having: Option<Expr>,
     pub order_by: Option<OrderBy>,
     pub limit: Option<usize>,
+    /// `OFFSET <n>` -- how many otherwise-qualifying rows to skip before
+    /// the first is emitted. Mirrors sqlite-rs's own `offset` field on
+    /// `parser::ast::Limit`, simplified to a plain value the same way
+    /// `limit` above already is (sqlite-rs carries both as an `Expr`).
+    pub offset: Option<usize>,
 }
 
 /// A single `SET column = value` pair in an [`Update`].
@@ -269,8 +336,10 @@ mod tests {
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
+            offset: None,
         }
     }
 
@@ -409,14 +478,16 @@ mod tests {
                 Box::new(Expr::Literal(Literal::Int(18))),
             )),
             group_by: vec!["id".into()],
+            having: None,
             order_by: Some(OrderBy {
                 column: "id".into(),
                 descending: false,
             }),
             limit: Some(10),
+            offset: None,
         };
 
-        assert_eq!(q.from, "customers");
+        assert_eq!(q.from.name(), "customers");
         assert_eq!(q.columns.len(), 2);
         assert_eq!(q.joins.len(), 1);
         assert!(q.where_clause.is_some());

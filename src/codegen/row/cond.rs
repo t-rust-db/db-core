@@ -24,7 +24,8 @@ fn cost_class(expr: &Expr) -> u8 {
             };
             cost_class(lhs).max(cost_class(rhs)).max(base)
         }
-        Expr::InSubquery { .. } => 3,
+        // A subquery scan is the priciest operand this compiler has.
+        Expr::InSubquery { .. } | Expr::Exists { .. } => 3,
     }
 }
 
@@ -146,9 +147,14 @@ pub(crate) fn compile_cond_depth(
             Ok(())
         }
 
-        Expr::InSubquery { .. } => Err(CodegenError::Unsupported {
-            reason: "InSubquery codegen is deferred to #95 (subquery materialization)".to_string(),
-        }),
+        Expr::InSubquery {
+            expr: lhs,
+            subquery,
+        } => super::subquery::compile_in_subquery(em, reg, scope, lhs, subquery, false, targets),
+
+        Expr::Exists { subquery, negated } => {
+            super::subquery::compile_exists(em, reg, scope, subquery, *negated, targets)
+        }
 
         // Any other expression used in boolean context (a bare column,
         // arithmetic, etc.): evaluate to a value and test truthiness.

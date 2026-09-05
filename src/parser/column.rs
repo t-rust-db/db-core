@@ -41,7 +41,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::expr::{
-    AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc,
+    AggFunc, BinOp, Expr, FromClause, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc,
     WindowSpec as ExprWindowSpec,
 };
 use crate::parser::row::ast::{
@@ -123,6 +123,7 @@ fn resolve_expr_aliases(expr: &mut Expr, aliases: &HashMap<String, String>) {
         // resolved when *it* is converted, not against the outer query's
         // aliases.
         Expr::InSubquery { expr, .. } => resolve_expr_aliases(expr, aliases),
+        Expr::Exists { .. } => {}
     }
 }
 
@@ -303,6 +304,10 @@ fn convert_expr(expr: &AstExpr) -> Result<Expr> {
         ExprKind::InSubquery { negated: true, .. } => {
             Err(unsupported(expr.span, "NOT IN (SELECT ...)".into()))
         }
+        ExprKind::Exists { subquery, negated } => Ok(Expr::Exists {
+            subquery: Box::new(convert_select(subquery)?),
+            negated: *negated,
+        }),
         other => Err(unsupported(
             expr.span,
             format!("unsupported expression form {other:?}"),
@@ -485,13 +490,24 @@ fn convert_select(select: &Select) -> Result<Query> {
     let Some(from_clause) = &select.from else {
         return Err(unsupported(select.span, "SELECT without FROM".into()));
     };
-    let TableRefKind::Name(from_name) = &from_clause.first.kind else {
-        return Err(unsupported(
-            from_clause.first.span,
-            "subquery in FROM".into(),
-        ));
+    // db-core#95: a `FROM`-subquery's mandatory alias is the name the
+    // enclosing query refers to it by, so it takes `from_name`'s place
+    // in the alias table below.
+    let (from, from_name) = match &from_clause.first.kind {
+        TableRefKind::Name(name) => (FromClause::Table(name.clone()), name.clone()),
+        TableRefKind::Subquery(subselect) => {
+            let Some(alias) = &from_clause.first.alias else {
+                return Err(unsupported(
+                    from_clause.first.span,
+                    "a subquery in FROM requires an alias".into(),
+                ));
+            };
+            (
+                FromClause::Subquery(Box::new(convert_select(subselect)?), alias.clone()),
+                alias.clone(),
+            )
+        }
     };
-    let from_name = from_name.clone();
 
     let mut aliases: HashMap<String, String> = HashMap::new();
     if let Some(alias) = &from_clause.first.alias {
@@ -577,15 +593,18 @@ fn convert_select(select: &Select) -> Result<Query> {
     };
 
     let limit = match &select.limit {
-        Some(l) => {
-            if l.offset.is_some() {
-                return Err(unsupported(select.span, "LIMIT OFFSET".into()));
-            }
-            match &l.limit.kind {
-                ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
-                _ => return Err(unsupported(l.limit.span, "non-integer LIMIT".into())),
-            }
-        }
+        Some(l) => match &l.limit.kind {
+            ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
+            _ => return Err(unsupported(l.limit.span, "non-integer LIMIT".into())),
+        },
+        None => None,
+    };
+
+    let offset = match select.limit.as_ref().and_then(|l| l.offset.as_ref()) {
+        Some(o) => match &o.kind {
+            ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
+            _ => return Err(unsupported(o.span, "non-integer OFFSET".into())),
+        },
         None => None,
     };
 
@@ -639,13 +658,17 @@ fn convert_select(select: &Select) -> Result<Query> {
 
     let mut query = Query {
         columns,
-        from: from_name,
+        from,
         joins,
         where_clause,
         distinct,
         group_by,
+        // `HAVING` is rejected above -- `column-rs`'s enforced subset of
+        // the shared grammar has no lowering for it (see `convert_select`).
+        having: None,
         order_by,
         limit,
+        offset,
     };
     if !aliases.is_empty() {
         resolve_query_aliases(&mut query, &aliases);
@@ -723,7 +746,7 @@ mod tests {
     fn parse_explain_distinguishes_opcodes_query_plan_and_none() {
         let (explain, query) = parse_explain("EXPLAIN SELECT id FROM orders").unwrap();
         assert_eq!(explain, Explain::Opcodes);
-        assert_eq!(query.from, "orders");
+        assert_eq!(query.from.name(), "orders");
 
         let (explain, _) = parse_explain("EXPLAIN QUERY PLAN SELECT id FROM orders").unwrap();
         assert_eq!(explain, Explain::QueryPlan);
@@ -960,6 +983,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_limit_with_offset() {
+        let q = parse("SELECT id FROM t LIMIT 5 OFFSET 10").unwrap();
+        assert_eq!(q.limit, Some(5));
+        assert_eq!(q.offset, Some(10));
+    }
+
+    #[test]
+    fn a_query_without_offset_lowers_none() {
+        let q = parse("SELECT id FROM t LIMIT 5").unwrap();
+        assert_eq!(q.offset, None);
+    }
+
+    #[test]
     fn order_by_references_a_select_list_aggregate() {
         // #131: ORDER BY may reference a SELECT-list aggregate, not just
         // a bare column.
@@ -1010,7 +1046,7 @@ mod tests {
     #[test]
     fn parses_inner_join() {
         let q = parse("SELECT orders.id, customers.name FROM orders JOIN customers ON orders.cust_id = customers.id").unwrap();
-        assert_eq!(q.from, "orders");
+        assert_eq!(q.from.name(), "orders");
         assert_eq!(
             q.columns,
             vec![
@@ -1051,7 +1087,7 @@ mod tests {
             panic!("expected InSubquery")
         };
         assert_eq!(*expr, Expr::Column("region_key".into()));
-        assert_eq!(subquery.from, "regions");
+        assert_eq!(subquery.from.name(), "regions");
         assert_eq!(subquery.columns, vec![SelectItem::Column("rkey".into())]);
     }
 
@@ -1211,7 +1247,7 @@ mod tests {
     #[test]
     fn parses_table_alias_and_rewrites_qualified_select_column() {
         let q = parse("SELECT o.id FROM orders o").unwrap();
-        assert_eq!(q.from, "orders");
+        assert_eq!(q.from.name(), "orders");
         assert_eq!(q.columns, vec![SelectItem::Column("orders.id".into())]);
     }
 
