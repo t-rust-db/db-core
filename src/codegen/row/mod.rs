@@ -26,16 +26,18 @@
 //! [`TableSchema`] here is a placeholder: just enough (declared column
 //! types, one optional rowid-alias column) for [`value::compile_value`]'s
 //! column-read/affinity logic to be correct. It is not a real catalog --
-//! #101/#102 are expected to replace it with one once a real join needs
+//! #118 is expected to replace it with one once a real N-way join needs
 //! multi-table resolution.
 //!
 //! [`select::compile_select`] (db-core#92) covers a single-table scan
 //! plus projection (bare columns, `SELECT *`) plus `WHERE` plus
-//! `LIMIT`. [`select::compile_select_join`] (db-core#102) adds a single
-//! `INNER`/`LEFT` equi-join and `ORDER BY` via the existing single-key
-//! sorter, both without any stats/access-path cost model; the
-//! join-order/access-path chooser and `FULL OUTER` are deferred to #101
-//! (needs `planner::Stats`, which db-core doesn't have yet); `GROUP
+//! `LIMIT`. [`select::compile_select_join`] (db-core#102/#101) adds a
+//! single `INNER`/`LEFT`/`FULL` equi-join (a two-pass nested loop for
+//! `FULL`'s both-sides null-extension) and `ORDER BY` via the existing
+//! single-key sorter, both without any stats/access-path cost model;
+//! that chooser and N-way joins are deferred to #117 (needs
+//! `planner::Stats`, blocked on #116's missing `ANALYZE` VM
+//! implementation) and #118 (no consumer needs N-way joins yet); `GROUP
 //! BY`/aggregation to #93.
 //!
 //! **#97 adds the DDL/transaction/PRAGMA/ANALYZE slice**: [`ddl`]
