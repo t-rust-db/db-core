@@ -96,12 +96,58 @@
 //!   conformance checks (db-core#81), public so a real adapter can run
 //!   the same checks this crate runs against its own fixtures.
 //!
+//! - [`cursor_factory`] -- the [`cursor_factory::CursorFactory`] hook
+//!   (db-core#125) a consumer's pager installs via [`vm::Vm::
+//!   set_cursor_factory`] to resolve `OpenRead`/`OpenWrite`'s `p2` root
+//!   page to a real cursor at run time; `OpenDup` re-opens an
+//!   already-open slot's root a second time, and `OpenPseudo` opens
+//!   [`cursor::PseudoCursor`] over an already-`MakeRecord`-encoded
+//!   register. With no factory installed, `OpenRead`/`OpenWrite` keep
+//!   the earlier pre-wired-slot fallback.
+//!
+//! - [`schema_storage`] -- the [`schema_storage::SchemaStorage`] hook
+//!   (db-core#128) a consumer's pager installs via [`vm::Vm::
+//!   set_schema_storage`] to back `CreateTable`/`CreateIndex`/
+//!   `DropTable`/`DropIndex`/`Analyze` -- allocating/freeing b-tree
+//!   roots, writing/deleting `sqlite_master` rows, bumping the schema
+//!   cookie, and computing `sqlite_stat1` rows, none of which
+//!   `db-core` can do itself (ADR 0008). With no hook installed, those
+//!   five opcodes fail with `ExecError::SchemaStorageMissing`.
+//!
+//! [`vm::Vm`] also now dispatches (db-core#127): `Opcode::AutoIndexInsert`/
+//! `Seek`/`Rowid`/`Next` over [`cursor::AutoIndexCursor`] (a transient,
+//! in-memory join index that never touches storage -- `AutoIndexInsert`
+//! opens the slot itself on first use, since there's no dedicated
+//! `OpenAutoIndex` opcode); `Opcode::Count` (a fast path via
+//! [`cursor::Cursor::count`], falling back to a full `rewind`/`next`
+//! scan when a cursor kind doesn't track one); `Opcode::Last` (mirrors
+//! `Rewind`, over [`cursor::Cursor::last`]); `Opcode::NullRow` (marks a
+//! cursor slot's `Column`/`Rowid` reads as NULL/0 until the next
+//! repositioning opcode clears it -- `LEFT JOIN`'s unmatched side);
+//! `Opcode::Sequence` (a plain per-slot monotonic counter, independent
+//! of any open cursor).
+//!
+//! Index-mode cursors landed too (db-core#126): [`cursor::Cursor`]
+//! grew `seek_index_eq`/`seek_index_ge`/`idx_compare`/`idx_rowid`, kept
+//! on the same trait rather than a separate one so a cursor kind that
+//! is both table- and index-shaped (unlikely here, but true of a real
+//! b-tree adapter) needs only one `impl`. `Opcode::IdxRewind`/`IdxLast`/
+//! `IdxNext`/`IdxPrev` mirror `Rewind`/`Last`/`Next`/`Prev`'s dispatch
+//! shape; `IdxRowid` reads the trailing rowid column via
+//! `idx_rowid` (distinct from a table cursor's own `rowid`);
+//! `SeekIndexEq`/`SeekIndexGE`/`IdxCompareGT`/`IdxLE`/`Found`/
+//! `NoConflict` all read their key from `p3..p3+p4` registers (`p4`
+//! carrying `P4::Int`, the same register-count convention `IdxInsert`/
+//! `IdxDelete` already used) and differ only in which
+//! `seek_index_eq`/`idx_compare` outcome triggers the jump.
+//! [`cursor::InMemoryIndexCursor`] is this crate's own test fixture;
+//! [`cursor_conformance::assert_index_cursor_conformance`] is the
+//! trait-level suite a real index-cursor adapter can run too.
+//!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
-//! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
-//! and index-mode ephemeral cursors, DDL, `IntegrityCheck`. `Opcode`
-//! already lists every variant sqlite-rs has (parity of identity);
-//! dispatch for the rest lands in later phases (tracked against
-//! db-core#18).
+//! largest file), `IntegrityCheck`. `Opcode` already lists every
+//! variant sqlite-rs has (parity of identity); dispatch for the rest
+//! lands in later phases (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
@@ -116,11 +162,13 @@ pub mod coerce;
 pub mod compare;
 pub mod cursor;
 pub mod cursor_conformance;
+pub mod cursor_factory;
 pub mod explain;
 pub mod functions;
 pub mod logic;
 pub mod program;
 pub mod record;
+pub mod schema_storage;
 pub mod transaction;
 pub mod value;
 pub mod vm;
@@ -129,7 +177,11 @@ pub use affinity::{affinity_of, apply_affinity, comparison_affinity, Affinity};
 pub use aggregate::{AggState, AggregateError};
 pub use cast::cast_to;
 pub use compare::compare;
-pub use cursor::{Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor, SorterCursor};
+pub use cursor::{
+    AutoIndexCursor, Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor,
+    InMemoryIndexCursor, PseudoCursor, SorterCursor,
+};
+pub use cursor_factory::{CursorFactory, CursorFactoryError};
 pub use explain::{explain, ExplainRow};
 pub use functions::FunctionError;
 pub use program::{
@@ -139,6 +191,7 @@ pub use program::{
     TRANSACTION_MODE_IMMEDIATE,
 };
 pub use record::{decode_column, decode_record, encode_record, RecordError};
+pub use schema_storage::{SchemaStorage, SchemaStorageError};
 pub use transaction::{Transaction, TransactionError};
 pub use value::{compare_text, format_real, Collation, TextEncoding, Value};
 pub use vm::{execute, ExecError, Step, Vm};

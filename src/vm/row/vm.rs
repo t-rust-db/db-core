@@ -32,10 +32,12 @@ use super::aggregate::{self, AggState};
 use super::cast::cast_to;
 use super::coerce;
 use super::compare::compare;
-use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, SorterCursor};
+use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, PseudoCursor, SorterCursor};
+use super::cursor_factory::{CursorFactory, CursorFactoryError};
 use super::functions;
 use super::program::{Instruction, Opcode, Program, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY};
 use super::record::{decode_record, encode_record};
+use super::schema_storage::{SchemaStorage, SchemaStorageError};
 use super::transaction::Transaction;
 use super::value::{Collation, TextEncoding, Value};
 
@@ -88,6 +90,19 @@ pub enum ExecError {
     /// `rollback` failed (`Opcode::Transaction`/`AutoCommit`,
     /// db-core#81).
     TransactionFailed(super::transaction::TransactionError),
+    /// `OpenRead`/`OpenWrite` named a nonzero `p3` (attached-database
+    /// index) -- db-core has no notion of attached databases
+    /// (db-core#125).
+    AttachedDatabasesUnsupported,
+    /// A [`super::cursor_factory::CursorFactory`] call failed
+    /// (db-core#125).
+    CursorFactoryFailed(CursorFactoryError),
+    /// `opcode` needs a [`super::schema_storage::SchemaStorage`] hook
+    /// but none is installed (db-core#128).
+    SchemaStorageMissing { opcode: &'static str },
+    /// A [`super::schema_storage::SchemaStorage`] call failed
+    /// (db-core#128).
+    SchemaStorageFailed(SchemaStorageError),
 }
 
 impl std::fmt::Display for ExecError {
@@ -137,6 +152,14 @@ impl std::fmt::Display for ExecError {
                 "SetJournalMode: cannot change journal mode within a transaction"
             ),
             ExecError::TransactionFailed(err) => write!(f, "transaction hook failed: {err}"),
+            ExecError::AttachedDatabasesUnsupported => {
+                write!(f, "attached databases are not supported")
+            }
+            ExecError::CursorFactoryFailed(err) => write!(f, "cursor factory failed: {err}"),
+            ExecError::SchemaStorageMissing { opcode } => {
+                write!(f, "{opcode}: no schema storage hook is installed")
+            }
+            ExecError::SchemaStorageFailed(err) => write!(f, "schema storage failed: {err}"),
         }
     }
 }
@@ -209,6 +232,33 @@ pub struct Vm {
     /// run (db-core#81). `None` (the default) means those opcodes only
     /// toggle [`Self::autocommit`].
     transaction_hook: Option<Box<dyn Transaction>>,
+    /// A consumer's cursor-opening hook, installed via
+    /// [`Self::set_cursor_factory`] (db-core#125). `None` (the default)
+    /// means `OpenRead`/`OpenWrite` fall back to the pre-wired path:
+    /// asserting the caller already opened the slot via
+    /// [`Self::open_cursor`] before running the program.
+    cursor_factory: Option<Box<dyn CursorFactory>>,
+    /// The root page each open cursor slot was last opened against,
+    /// parallel to `cursors` -- `OpenDup`'s only way to re-derive which
+    /// root to hand the factory for a second cursor onto the same
+    /// table (db-core#125).
+    cursor_roots: Vec<Option<u32>>,
+    /// A consumer's schema-write hook, installed via
+    /// [`Self::set_schema_storage`] (db-core#128). `None` (the
+    /// default) means `CreateTable`/`CreateIndex`/`DropTable`/
+    /// `DropIndex`/`Analyze` fail with
+    /// [`ExecError::SchemaStorageMissing`].
+    schema_storage: Option<Box<dyn SchemaStorage>>,
+    /// Which open cursor slots `Opcode::NullRow` has pointed at a
+    /// synthetic all-NULL row (db-core#127, `LEFT JOIN`'s unmatched
+    /// side) -- parallel to `cursors`. Cleared by any repositioning
+    /// opcode (`Rewind`/`Next`/`Last`/`Prev`/`SeekRowid`) on that slot.
+    null_rows: Vec<bool>,
+    /// Per-cursor-slot monotonic counters for `Opcode::Sequence`
+    /// (db-core#127) -- parallel to `cursors`, though `Sequence` never
+    /// requires the slot to actually hold an open cursor (it's purely a
+    /// counter identified by `p1`).
+    sequences: Vec<i64>,
 }
 
 impl Default for Vm {
@@ -222,6 +272,11 @@ impl Default for Vm {
             params: Vec::new(),
             autocommit: true,
             transaction_hook: None,
+            cursor_factory: None,
+            cursor_roots: Vec::new(),
+            schema_storage: None,
+            null_rows: Vec::new(),
+            sequences: Vec::new(),
         }
     }
 }
@@ -241,6 +296,98 @@ impl Vm {
     /// those opcodes only toggle [`Vm::autocommit`].
     pub fn set_transaction_hook(&mut self, hook: Box<dyn Transaction>) {
         self.transaction_hook = Some(hook);
+    }
+
+    /// Installs `factory` to resolve `OpenRead`/`OpenWrite`'s `p2` root
+    /// page to a real cursor (db-core#125). With none installed (the
+    /// default), those opcodes fall back to asserting the slot was
+    /// pre-wired via [`Self::open_cursor`].
+    pub fn set_cursor_factory(&mut self, factory: Box<dyn CursorFactory>) {
+        self.cursor_factory = Some(factory);
+    }
+
+    /// Installs `storage` to back `CreateTable`/`CreateIndex`/
+    /// `DropTable`/`DropIndex`/`Analyze` (db-core#128). With none
+    /// installed (the default), those opcodes fail with
+    /// [`ExecError::SchemaStorageMissing`].
+    pub fn set_schema_storage(&mut self, storage: Box<dyn SchemaStorage>) {
+        self.schema_storage = Some(storage);
+    }
+
+    /// Marks cursor slot `slot` as pointed at a synthetic NULL row
+    /// (`Opcode::NullRow`, db-core#127).
+    fn set_null_row(&mut self, slot: i32) -> Result<(), ExecError> {
+        let idx = Self::index("cursor slot write", slot)?;
+        if idx >= self.null_rows.len() {
+            self.null_rows.resize(idx.saturating_add(1), false);
+        }
+        if let Some(cell) = self.null_rows.get_mut(idx) {
+            *cell = true;
+        }
+        Ok(())
+    }
+
+    /// Clears slot `slot`'s NULL-row flag -- called by every opcode
+    /// that repositions a cursor, so a later normal read doesn't keep
+    /// reading NULLs.
+    fn clear_null_row(&mut self, slot: i32) -> Result<(), ExecError> {
+        let idx = Self::index("cursor slot write", slot)?;
+        if let Some(cell) = self.null_rows.get_mut(idx) {
+            *cell = false;
+        }
+        Ok(())
+    }
+
+    fn is_null_row(&self, slot: i32) -> Result<bool, ExecError> {
+        let idx = Self::index("cursor slot read", slot)?;
+        Ok(self.null_rows.get(idx).copied().unwrap_or(false))
+    }
+
+    /// Reads slot `slot`'s next `Opcode::Sequence` value and advances
+    /// it (db-core#127) -- growing the counter table with zero filler
+    /// as needed, same policy as `open_cursor`/`set_agg_context`.
+    fn next_sequence(&mut self, slot: i32) -> Result<i64, ExecError> {
+        let idx = Self::index("sequence slot", slot)?;
+        if idx >= self.sequences.len() {
+            self.sequences.resize(idx.saturating_add(1), 0);
+        }
+        let Some(cell) = self.sequences.get_mut(idx) else {
+            return Ok(0);
+        };
+        let value = *cell;
+        *cell = value.saturating_add(1);
+        Ok(value)
+    }
+
+    fn schema_storage(
+        &mut self,
+        opcode: &'static str,
+    ) -> Result<&mut Box<dyn SchemaStorage>, ExecError> {
+        self.schema_storage
+            .as_mut()
+            .ok_or(ExecError::SchemaStorageMissing { opcode })
+    }
+
+    /// Records `root` as the root page cursor slot `slot` was last
+    /// opened against -- `OpenDup`'s lookup key (db-core#125).
+    fn set_cursor_root(&mut self, slot: i32, root: u32) -> Result<(), ExecError> {
+        let idx = Self::index("cursor slot write", slot)?;
+        if idx >= self.cursor_roots.len() {
+            self.cursor_roots.resize(idx.saturating_add(1), None);
+        }
+        if let Some(cell) = self.cursor_roots.get_mut(idx) {
+            *cell = Some(root);
+        }
+        Ok(())
+    }
+
+    fn cursor_root(&self, slot: i32) -> Result<u32, ExecError> {
+        let idx = Self::index("cursor slot read", slot)?;
+        self.cursor_roots
+            .get(idx)
+            .copied()
+            .flatten()
+            .ok_or(ExecError::CursorNotOpen { slot })
     }
 
     fn param(&self, index: i32) -> Option<&Value> {
@@ -492,6 +639,46 @@ fn register_as_i64(vm: &Vm, reg: i32) -> Result<i64, ExecError> {
             found: value_kind(other),
         }),
     }
+}
+
+/// Reads `p4`'s register-count (`P4::Int(n)`) worth of values starting
+/// at register `first_reg`, cloned into a `Vec` -- the shared key-read
+/// convention `Found`/`IdxLE`/`SeekIndexEq`/`SeekIndexGE`/
+/// `IdxCompareGT`/`NoConflict`'s docs describe as "a key from registers
+/// `p3..p3+p4`" (db-core#126), mirroring `IdxInsert`/`IdxDelete`'s
+/// existing identical read.
+fn key_from_registers(
+    vm: &Vm,
+    opcode: &'static str,
+    first_reg: i32,
+    p4: &P4,
+) -> Result<Vec<Value>, ExecError> {
+    let count = match p4 {
+        P4::Int(n) => Vm::bounded_count(
+            opcode,
+            i32::try_from(*n).map_err(|_| ExecError::MalformedInstruction {
+                opcode,
+                reason: format!("key count {n} does not fit in p4"),
+            })?,
+        )?,
+        other => {
+            return Err(ExecError::MalformedInstruction {
+                opcode,
+                reason: format!("expected an Int P4 (key count), got {other:?}"),
+            })
+        }
+    };
+    let mut key = Vec::with_capacity(count);
+    for i in 0..count {
+        let reg = first_reg
+            .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+            .ok_or(ExecError::RegisterOutOfRange {
+                opcode,
+                index: first_reg,
+            })?;
+        key.push(vm.register(reg)?.clone());
+    }
+    Ok(key)
 }
 
 fn in_i64_range(r: f64) -> bool {
@@ -785,6 +972,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         }
 
         Opcode::Rewind => {
+            vm.clear_null_row(instr.p1)?;
             let has_row = vm.cursor_mut(instr.p1)?.rewind();
             Ok(if has_row {
                 Step::Next
@@ -793,6 +981,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
         Opcode::Next => {
+            vm.clear_null_row(instr.p1)?;
             let has_row = vm.cursor_mut(instr.p1)?.next();
             Ok(if has_row {
                 Step::Jump(to_pc(instr.p2))
@@ -800,19 +989,37 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 Step::Next
             })
         }
+        Opcode::Last => {
+            vm.clear_null_row(instr.p1)?;
+            let has_row = vm.cursor_mut(instr.p1)?.last();
+            Ok(if has_row {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
         Opcode::Column => {
             #[allow(clippy::cast_sign_loss)]
             let col = instr.p2 as usize;
-            let value = vm.cursor(instr.p1)?.column(col);
+            let value = if vm.is_null_row(instr.p1)? {
+                Value::Null
+            } else {
+                vm.cursor(instr.p1)?.column(col)
+            };
             vm.set_register(instr.p3, value)?;
             Ok(Step::Next)
         }
         Opcode::Rowid => {
-            let rowid = vm.cursor(instr.p1)?.rowid();
+            let rowid = if vm.is_null_row(instr.p1)? {
+                0
+            } else {
+                vm.cursor(instr.p1)?.rowid()
+            };
             vm.set_register(instr.p2, Value::Integer(rowid))?;
             Ok(Step::Next)
         }
         Opcode::SeekRowid => {
+            vm.clear_null_row(instr.p1)?;
             let rowid = register_as_i64(vm, instr.p3)?;
             let found = vm.cursor_mut(instr.p1)?.seek(rowid);
             Ok(if found {
@@ -821,12 +1028,124 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 Step::Jump(to_pc(instr.p2))
             })
         }
+        Opcode::NullRow => {
+            vm.set_null_row(instr.p1)?;
+            Ok(Step::Next)
+        }
+        Opcode::Sequence => {
+            let value = vm.next_sequence(instr.p1)?;
+            vm.set_register(instr.p2, Value::Integer(value))?;
+            Ok(Step::Next)
+        }
+        Opcode::Count => {
+            let count = match vm.cursor(instr.p1)?.count() {
+                Some(n) => n,
+                None => {
+                    let cursor = vm.cursor_mut(instr.p1)?;
+                    let mut n: i64 = 0;
+                    let mut has_row = cursor.rewind();
+                    while has_row {
+                        n = n.saturating_add(1);
+                        has_row = cursor.next();
+                    }
+                    n
+                }
+            };
+            vm.set_register(instr.p2, Value::Integer(count))?;
+            Ok(Step::Next)
+        }
+        Opcode::AutoIndexInsert => {
+            let key = match vm.register(instr.p2)? {
+                Value::Blob(bytes) => decode_record(bytes, TextEncoding::Utf8).unwrap_or_default(),
+                other => vec![other.clone()],
+            };
+            let rowid = register_as_i64(vm, instr.p3)?;
+            if vm.cursor(instr.p1).is_err() {
+                vm.open_cursor(instr.p1, Box::new(super::cursor::AutoIndexCursor::new()))?;
+            }
+            let ok = vm.cursor_mut(instr.p1)?.auto_index_insert(key, rowid);
+            if !ok {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "AutoIndexInsert",
+                    reason: "cursor slot is not an automatic-index cursor".to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+        Opcode::AutoIndexSeek => {
+            let key = match vm.register(instr.p3)? {
+                Value::Blob(bytes) => decode_record(bytes, TextEncoding::Utf8).unwrap_or_default(),
+                other => vec![other.clone()],
+            };
+            let found = vm.cursor_mut(instr.p1)?.auto_index_seek(&key);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::AutoIndexRowid => {
+            let rowid = vm.cursor(instr.p1)?.rowid();
+            vm.set_register(instr.p2, Value::Integer(rowid))?;
+            Ok(Step::Next)
+        }
+        Opcode::AutoIndexNext => {
+            let has_next = vm.cursor_mut(instr.p1)?.auto_index_next();
+            Ok(if has_next {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
         Opcode::OpenRead | Opcode::OpenWrite => {
-            // Real root-page/pager semantics (`db-storage` wiring) are
-            // future work -- see `cursor.rs`'s doc comment. For now this
-            // just asserts the caller already wired this slot via
-            // `open_cursor` before running the program.
-            vm.cursor(instr.p1)?;
+            if instr.p3 != 0 {
+                return Err(ExecError::AttachedDatabasesUnsupported);
+            }
+            let Some(factory) = vm.cursor_factory.as_deref_mut() else {
+                // No factory installed -- fall back to the pre-wired
+                // path: assert the caller already wired this slot via
+                // `open_cursor` before running the program.
+                vm.cursor(instr.p1)?;
+                return Ok(Step::Next);
+            };
+            #[allow(clippy::cast_sign_loss)]
+            let root = instr.p2 as u32;
+            let cursor = match (&instr.p4, instr.opcode) {
+                (P4::SortKey(key), _) => factory.open_index(root, key),
+                (_, Opcode::OpenWrite) => factory.open_write(root),
+                _ => factory.open_read(root),
+            }
+            .map_err(ExecError::CursorFactoryFailed)?;
+            vm.open_cursor(instr.p1, cursor)?;
+            vm.set_cursor_root(instr.p1, root)?;
+            Ok(Step::Next)
+        }
+        Opcode::OpenDup => {
+            let root = vm.cursor_root(instr.p2)?;
+            let factory =
+                vm.cursor_factory
+                    .as_deref_mut()
+                    .ok_or(ExecError::CursorFactoryFailed(CursorFactoryError(
+                        "OpenDup requires a cursor factory".to_string(),
+                    )))?;
+            let cursor = factory
+                .open_read(root)
+                .map_err(ExecError::CursorFactoryFailed)?;
+            vm.open_cursor(instr.p1, cursor)?;
+            vm.set_cursor_root(instr.p1, root)?;
+            Ok(Step::Next)
+        }
+        Opcode::OpenPseudo => {
+            let blob = match vm.register(instr.p2)? {
+                Value::Blob(bytes) => bytes.clone(),
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "OpenPseudo",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            vm.open_cursor(instr.p1, Box::new(PseudoCursor::new(&blob)))?;
             Ok(Step::Next)
         }
         Opcode::OpenEphemeral => {
@@ -1236,6 +1555,244 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
+        Opcode::CreateTable => {
+            let P4::CreateTable { name, sql } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "CreateTable",
+                    reason: format!("expected a CreateTable P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, sql) = (name.clone(), sql.clone());
+            let storage = vm.schema_storage("CreateTable")?;
+            let root = storage
+                .create_table_root()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .insert_master_row(&name, &sql, root)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::CreateIndex => {
+            let P4::CreateIndex {
+                name,
+                table_root_page,
+                sql,
+                column_indices,
+                ..
+            } = &instr.p4
+            else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "CreateIndex",
+                    reason: format!("expected a CreateIndex P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, table_root_page, sql, column_indices) = (
+                name.clone(),
+                *table_root_page,
+                sql.clone(),
+                column_indices.clone(),
+            );
+            let storage = vm.schema_storage("CreateIndex")?;
+            let root = storage
+                .create_index_root()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .populate_index(root, table_root_page, &column_indices)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .insert_master_row(&name, &sql, root)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::DropTable => {
+            let P4::DropTable {
+                name,
+                root_page,
+                indexes,
+            } = &instr.p4
+            else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "DropTable",
+                    reason: format!("expected a DropTable P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, root_page, indexes) = (name.clone(), *root_page, indexes.clone());
+            let storage = vm.schema_storage("DropTable")?;
+            storage
+                .delete_master_row(&name)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .free_root(root_page)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            for (index_name, index_root) in &indexes {
+                storage
+                    .delete_master_row(index_name)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+                storage
+                    .free_root(*index_root)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+            }
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::DropIndex => {
+            let P4::DropIndex { name, root_page } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "DropIndex",
+                    reason: format!("expected a DropIndex P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, root_page) = (name.clone(), *root_page);
+            let storage = vm.schema_storage("DropIndex")?;
+            storage
+                .delete_master_row(&name)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .free_root(root_page)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::Analyze => {
+            let P4::Analyze { targets } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "Analyze",
+                    reason: format!("expected an Analyze P4, got {:?}", instr.p4),
+                });
+            };
+            let targets = targets.clone();
+            let storage = vm.schema_storage("Analyze")?;
+            for target in &targets {
+                storage
+                    .write_stat1(target)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+            }
+            Ok(Step::Next)
+        }
+
+        Opcode::IdxRewind => {
+            let has_row = vm.cursor_mut(instr.p1)?.rewind();
+            Ok(if has_row {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::IdxLast => {
+            let has_row = vm.cursor_mut(instr.p1)?.last();
+            Ok(if has_row {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::IdxNext => {
+            let has_row = vm.cursor_mut(instr.p1)?.next();
+            Ok(if has_row {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::IdxPrev => {
+            let has_row = vm.cursor_mut(instr.p1)?.prev();
+            Ok(if has_row {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::IdxRowid => {
+            let rowid =
+                vm.cursor(instr.p1)?
+                    .idx_rowid()
+                    .ok_or(ExecError::MalformedInstruction {
+                        opcode: "IdxRowid",
+                        reason: "cursor slot is not an index cursor, or has no current entry"
+                            .to_string(),
+                    })?;
+            vm.set_register(instr.p2, Value::Integer(rowid))?;
+            Ok(Step::Next)
+        }
+        Opcode::SeekIndexEq => {
+            let key = key_from_registers(vm, "SeekIndexEq", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::SeekIndexGE => {
+            let key = key_from_registers(vm, "SeekIndexGE", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_ge(&key);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::IdxCompareGT => {
+            let key = key_from_registers(vm, "IdxCompareGT", instr.p3, &instr.p4)?;
+            let cmp =
+                vm.cursor(instr.p1)?
+                    .idx_compare(&key)
+                    .ok_or(ExecError::MalformedInstruction {
+                        opcode: "IdxCompareGT",
+                        reason: "cursor slot is not an index cursor, or has no current entry"
+                            .to_string(),
+                    })?;
+            Ok(if cmp == Ordering::Greater {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::IdxLE => {
+            let key = key_from_registers(vm, "IdxLE", instr.p3, &instr.p4)?;
+            let cmp =
+                vm.cursor(instr.p1)?
+                    .idx_compare(&key)
+                    .ok_or(ExecError::MalformedInstruction {
+                        opcode: "IdxLE",
+                        reason: "cursor slot is not an index cursor, or has no current entry"
+                            .to_string(),
+                    })?;
+            Ok(if cmp != Ordering::Greater {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::Found => {
+            let key = key_from_registers(vm, "Found", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key);
+            Ok(if found {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::NoConflict => {
+            let key = key_from_registers(vm, "NoConflict", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+
         other => Err(ExecError::Unimplemented { opcode: other }),
     }
 }
@@ -1533,11 +2090,11 @@ mod tests {
     #[test]
     fn unimplemented_opcode_errors_by_name() {
         let mut vm = Vm::new();
-        let program = Program::new(vec![Instruction::new(Opcode::OpenDup, 0, 0, 0)]);
+        let program = Program::new(vec![Instruction::new(Opcode::IntegrityCheck, 0, 0, 0)]);
         assert!(matches!(
             execute(&mut vm, &program),
             Err(ExecError::Unimplemented {
-                opcode: Opcode::OpenDup
+                opcode: Opcode::IntegrityCheck
             })
         ));
     }
@@ -2127,5 +2684,657 @@ mod tests {
             execute(&mut vm, &program),
             Err(ExecError::CursorNotOpen { slot: 0 })
         ));
+    }
+
+    /// A minimal [`super::super::cursor_factory::CursorFactory`] over a
+    /// fixed table of `root -> rows` -- this suite's stand-in for a
+    /// real consumer pager.
+    struct TestCursorFactory {
+        tables: std::collections::HashMap<u32, Vec<Vec<Value>>>,
+    }
+
+    impl super::super::cursor_factory::CursorFactory for TestCursorFactory {
+        fn open_read(
+            &mut self,
+            root: u32,
+        ) -> Result<Box<dyn Cursor>, super::super::cursor_factory::CursorFactoryError> {
+            let rows = self.tables.get(&root).cloned().unwrap_or_default();
+            Ok(Box::new(super::super::cursor::InMemoryCursor::new(rows)))
+        }
+    }
+
+    #[test]
+    fn cursor_factory_opens_two_different_roots_by_p2() {
+        let mut vm = Vm::new();
+        vm.set_cursor_factory(Box::new(TestCursorFactory {
+            tables: std::collections::HashMap::from([
+                (10, vec![vec![Value::Integer(1)]]),
+                (20, vec![vec![Value::Integer(2)]]),
+            ]),
+        }));
+        let program = Program::new(vec![
+            Instruction::new(Opcode::OpenRead, 0, 10, 0),
+            Instruction::new(Opcode::OpenRead, 1, 20, 0),
+            Instruction::new(Opcode::Rewind, 0, 4, 0),
+            Instruction::new(Opcode::Column, 0, 0, 2),
+            Instruction::new(Opcode::Rewind, 1, 6, 0),
+            Instruction::new(Opcode::Column, 1, 0, 3),
+            Instruction::new(Opcode::ResultRow, 2, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn open_read_with_nonzero_p3_errors_attached_databases_unsupported() {
+        let mut vm = Vm::new();
+        let mut instr = Instruction::new(Opcode::OpenRead, 0, 0, 0);
+        instr.p3 = 1;
+        let program = Program::new(vec![instr]);
+        assert!(matches!(
+            execute(&mut vm, &program),
+            Err(ExecError::AttachedDatabasesUnsupported)
+        ));
+    }
+
+    #[test]
+    fn open_dup_opens_a_second_cursor_onto_the_same_root() {
+        let mut vm = Vm::new();
+        vm.set_cursor_factory(Box::new(TestCursorFactory {
+            tables: std::collections::HashMap::from([(10, vec![vec![Value::Integer(1)]])]),
+        }));
+        let program = Program::new(vec![
+            Instruction::new(Opcode::OpenRead, 0, 10, 0),
+            Instruction::new(Opcode::OpenDup, 1, 0, 0),
+            Instruction::new(Opcode::Rewind, 1, 4, 0),
+            Instruction::new(Opcode::Column, 1, 0, 1),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn open_pseudo_reads_columns_from_the_makerecord_blob_in_p2() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 42, 0, 0),
+            Instruction::new(Opcode::MakeRecord, 0, 1, 1),
+            Instruction::new(Opcode::OpenPseudo, 0, 1, 0),
+            Instruction::new(Opcode::Rewind, 0, 6, 0),
+            Instruction::new(Opcode::Column, 0, 0, 2),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(42)]]);
+    }
+
+    /// Records every call it receives, in order, as a plain string log
+    /// -- this suite's stand-in for a real consumer's schema storage.
+    /// `log` is shared (`Rc<RefCell<_>>`) so a test can still read it
+    /// back after the `Box<dyn SchemaStorage>` it's installed behind is
+    /// consumed by `Vm`.
+    #[derive(Default)]
+    struct TestSchemaStorage {
+        log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+        next_root: u32,
+    }
+
+    impl super::super::schema_storage::SchemaStorage for TestSchemaStorage {
+        fn create_table_root(
+            &mut self,
+        ) -> Result<u32, super::super::schema_storage::SchemaStorageError> {
+            self.next_root += 1;
+            self.log
+                .borrow_mut()
+                .push(format!("create_table_root -> {}", self.next_root));
+            Ok(self.next_root)
+        }
+
+        fn create_index_root(
+            &mut self,
+        ) -> Result<u32, super::super::schema_storage::SchemaStorageError> {
+            self.next_root += 1;
+            self.log
+                .borrow_mut()
+                .push(format!("create_index_root -> {}", self.next_root));
+            Ok(self.next_root)
+        }
+
+        fn populate_index(
+            &mut self,
+            index_root: u32,
+            table_root: u32,
+            column_indices: &[usize],
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log.borrow_mut().push(format!(
+                "populate_index({index_root}, {table_root}, {column_indices:?})"
+            ));
+            Ok(())
+        }
+
+        fn free_root(
+            &mut self,
+            root: u32,
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log.borrow_mut().push(format!("free_root({root})"));
+            Ok(())
+        }
+
+        fn insert_master_row(
+            &mut self,
+            name: &str,
+            sql: &str,
+            root_page: u32,
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log
+                .borrow_mut()
+                .push(format!("insert_master_row({name}, {sql}, {root_page})"));
+            Ok(())
+        }
+
+        fn delete_master_row(
+            &mut self,
+            name: &str,
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log
+                .borrow_mut()
+                .push(format!("delete_master_row({name})"));
+            Ok(())
+        }
+
+        fn bump_schema_cookie(
+            &mut self,
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log.borrow_mut().push("bump_schema_cookie".to_string());
+            Ok(())
+        }
+
+        fn write_stat1(
+            &mut self,
+            target: &super::super::program::AnalyzeTarget,
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log
+                .borrow_mut()
+                .push(format!("write_stat1({})", target.table_name));
+            Ok(())
+        }
+    }
+
+    fn instr_p4(opcode: Opcode, p4: P4) -> Instruction {
+        let mut instr = Instruction::new(opcode, 0, 0, 0);
+        instr.p4 = p4;
+        instr
+    }
+
+    #[test]
+    fn create_table_without_a_schema_storage_hook_errors() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![instr_p4(
+            Opcode::CreateTable,
+            P4::CreateTable {
+                name: "t".to_string(),
+                sql: "CREATE TABLE t (a)".to_string(),
+            },
+        )]);
+        assert!(matches!(
+            execute(&mut vm, &program),
+            Err(ExecError::SchemaStorageMissing {
+                opcode: "CreateTable"
+            })
+        ));
+    }
+
+    #[test]
+    fn create_table_allocates_a_root_and_writes_the_master_row() {
+        let mut vm = Vm::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: log.clone(),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            instr_p4(
+                Opcode::CreateTable,
+                P4::CreateTable {
+                    name: "t".to_string(),
+                    sql: "CREATE TABLE t (a)".to_string(),
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                "create_table_root -> 1",
+                "insert_master_row(t, CREATE TABLE t (a), 1)",
+                "bump_schema_cookie",
+            ]
+        );
+    }
+
+    #[test]
+    fn create_index_populates_from_the_target_table_root() {
+        let mut vm = Vm::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: log.clone(),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            instr_p4(
+                Opcode::CreateIndex,
+                P4::CreateIndex {
+                    name: "idx".to_string(),
+                    table_name: "t".to_string(),
+                    table_root_page: 7,
+                    sql: "CREATE INDEX idx ON t(a)".to_string(),
+                    column_indices: vec![0],
+                    unique: false,
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                "create_index_root -> 1",
+                "populate_index(1, 7, [0])",
+                "insert_master_row(idx, CREATE INDEX idx ON t(a), 1)",
+                "bump_schema_cookie",
+            ]
+        );
+    }
+
+    #[test]
+    fn drop_table_frees_its_own_root_and_every_index_root() {
+        let mut vm = Vm::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: log.clone(),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            instr_p4(
+                Opcode::DropTable,
+                P4::DropTable {
+                    name: "t".to_string(),
+                    root_page: 5,
+                    indexes: vec![("idx".to_string(), 6)],
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                "delete_master_row(t)",
+                "free_root(5)",
+                "delete_master_row(idx)",
+                "free_root(6)",
+                "bump_schema_cookie",
+            ]
+        );
+    }
+
+    #[test]
+    fn drop_index_frees_its_root() {
+        let mut vm = Vm::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: log.clone(),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            instr_p4(
+                Opcode::DropIndex,
+                P4::DropIndex {
+                    name: "idx".to_string(),
+                    root_page: 6,
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                "delete_master_row(idx)",
+                "free_root(6)",
+                "bump_schema_cookie"
+            ]
+        );
+    }
+
+    #[test]
+    fn analyze_writes_stat1_for_every_target() {
+        use super::super::program::{AnalyzeIndexTarget, AnalyzeTarget};
+        let mut vm = Vm::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: log.clone(),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            instr_p4(
+                Opcode::Analyze,
+                P4::Analyze {
+                    targets: vec![AnalyzeTarget {
+                        table_name: "t".to_string(),
+                        table_root_page: 5,
+                        indexes: vec![AnalyzeIndexTarget {
+                            index_name: "idx".to_string(),
+                            root_page: 6,
+                        }],
+                    }],
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(*log.borrow(), vec!["write_stat1(t)"]);
+    }
+
+    #[test]
+    fn count_falls_back_to_a_scan_when_the_cursor_has_no_fast_count() {
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(InMemoryCursor::new(vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(3)],
+            ])),
+        )
+        .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Count, 0, 1, 0),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(3)]]);
+    }
+
+    #[test]
+    fn last_positions_at_the_final_row_jumping_to_p2_when_empty() {
+        let mut vm = Vm::new();
+        vm.open_cursor(0, Box::new(InMemoryCursor::new(vec![])))
+            .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Last, 0, 3, 0),
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, Vec::<Vec<Value>>::new());
+    }
+
+    #[test]
+    fn null_row_makes_column_and_rowid_read_as_null_and_zero() {
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(InMemoryCursor::new(vec![vec![Value::Integer(1)]])),
+        )
+        .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::NullRow, 0, 0, 0),
+            Instruction::new(Opcode::Column, 0, 0, 1),
+            Instruction::new(Opcode::Rowid, 0, 2, 0),
+            Instruction::new(Opcode::ResultRow, 1, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Null, Value::Integer(0)]]);
+    }
+
+    #[test]
+    fn null_row_flag_clears_on_the_next_rewind() {
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(InMemoryCursor::new(vec![vec![Value::Integer(7)]])),
+        )
+        .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::NullRow, 0, 0, 0),
+            Instruction::new(Opcode::Rewind, 0, 5, 0),
+            Instruction::new(Opcode::Column, 0, 0, 1),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(7)]]);
+    }
+
+    #[test]
+    fn sequence_hands_out_increasing_values_per_slot() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Sequence, 0, 0, 0),
+            Instruction::new(Opcode::Sequence, 0, 1, 0),
+            Instruction::new(Opcode::ResultRow, 0, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(0), Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn auto_index_insert_opens_the_slot_on_first_use_and_seek_finds_it() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 42, 1, 0),
+            Instruction::new(Opcode::Integer, 99, 2, 0),
+            Instruction::new(Opcode::AutoIndexInsert, 0, 1, 2),
+            Instruction::new(Opcode::AutoIndexSeek, 0, 6, 1),
+            Instruction::new(Opcode::AutoIndexRowid, 0, 3, 0),
+            Instruction::new(Opcode::ResultRow, 3, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(99)]]);
+    }
+
+    #[test]
+    fn auto_index_seek_jumps_to_p2_on_a_miss() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 42, 1, 0),
+            Instruction::new(Opcode::Integer, 99, 2, 0),
+            Instruction::new(Opcode::AutoIndexInsert, 0, 1, 2),
+            Instruction::new(Opcode::Integer, 7, 1, 0),
+            Instruction::new(Opcode::AutoIndexSeek, 0, 7, 1),
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+    }
+
+    fn asc_key(index: usize) -> super::super::program::SortKeyColumn {
+        super::super::program::SortKeyColumn {
+            index,
+            descending: false,
+            collation: Collation::Binary,
+            nulls_first: false,
+        }
+    }
+
+    fn open_index_cursor(vm: &mut Vm, slot: i32, rows: &[(i64, Value)]) {
+        let mut cursor = super::super::cursor::InMemoryIndexCursor::new(vec![asc_key(0)]);
+        for (rowid, value) in rows {
+            cursor.insert(*rowid, vec![value.clone()]);
+        }
+        vm.open_cursor(slot, Box::new(cursor)).unwrap();
+    }
+
+    #[test]
+    fn idx_rewind_last_next_prev_and_rowid_walk_an_index_cursor() {
+        let mut vm = Vm::new();
+        open_index_cursor(
+            &mut vm,
+            0,
+            &[(10, Value::Integer(1)), (20, Value::Integer(2))],
+        );
+        let program = Program::new(vec![
+            Instruction::new(Opcode::IdxRewind, 0, 8, 0),
+            Instruction::new(Opcode::IdxRowid, 0, 1, 0),
+            Instruction::new(Opcode::IdxNext, 0, 4, 0),
+            Instruction::new(Opcode::Goto, 0, 8, 0),
+            Instruction::new(Opcode::IdxRowid, 0, 2, 0),
+            Instruction::new(Opcode::ResultRow, 1, 2, 0),
+            Instruction::new(Opcode::Goto, 0, 8, 0),
+            Instruction::new(Opcode::Goto, 0, 8, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(10), Value::Integer(20)]]);
+    }
+
+    #[test]
+    fn idx_last_and_prev_walk_backward() {
+        let mut vm = Vm::new();
+        open_index_cursor(
+            &mut vm,
+            0,
+            &[(10, Value::Integer(1)), (20, Value::Integer(2))],
+        );
+        let program = Program::new(vec![
+            Instruction::new(Opcode::IdxLast, 0, 6, 0),
+            Instruction::new(Opcode::IdxRowid, 0, 1, 0),
+            Instruction::new(Opcode::IdxPrev, 0, 4, 0),
+            Instruction::new(Opcode::Goto, 0, 6, 0),
+            Instruction::new(Opcode::IdxRowid, 0, 2, 0),
+            Instruction::new(Opcode::ResultRow, 1, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(20), Value::Integer(10)]]);
+    }
+
+    #[test]
+    fn seek_index_eq_jumps_to_p2_on_a_miss() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(1))]);
+        let mut instr = Instruction::new(Opcode::SeekIndexEq, 0, 4, 1);
+        instr.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 99, 1, 0),
+            instr,
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, Vec::<Vec<Value>>::new());
+    }
+
+    #[test]
+    fn seek_index_eq_falls_through_on_a_hit() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(1))]);
+        let mut instr = Instruction::new(Opcode::SeekIndexEq, 0, 5, 1);
+        instr.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 1, 1, 0),
+            instr,
+            Instruction::new(Opcode::IdxRowid, 0, 2, 0),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(10)]]);
+    }
+
+    #[test]
+    fn seek_index_ge_jumps_to_p2_when_none_qualify() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(1))]);
+        let mut instr = Instruction::new(Opcode::SeekIndexGE, 0, 4, 1);
+        instr.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 99, 1, 0),
+            instr,
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, Vec::<Vec<Value>>::new());
+    }
+
+    #[test]
+    fn idx_compare_gt_jumps_when_the_current_entry_exceeds_the_key() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(5))]);
+        let mut gt = Instruction::new(Opcode::IdxCompareGT, 0, 5, 1);
+        gt.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::IdxRewind, 0, 6, 0),
+            Instruction::new(Opcode::Integer, 1, 1, 0),
+            gt,
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::ResultRow, 0, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn idx_le_jumps_when_the_current_entry_does_not_exceed_the_key() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(5))]);
+        let mut le = Instruction::new(Opcode::IdxLE, 0, 5, 1);
+        le.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::IdxRewind, 0, 6, 0),
+            Instruction::new(Opcode::Integer, 9, 1, 0),
+            le,
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::ResultRow, 0, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn found_jumps_to_p2_on_a_hit_and_no_conflict_jumps_to_p2_on_a_miss() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(1))]);
+        let mut found = Instruction::new(Opcode::Found, 0, 3, 1);
+        found.p4 = P4::Int(1);
+        let mut no_conflict = Instruction::new(Opcode::NoConflict, 0, 6, 1);
+        no_conflict.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 1, 1, 0),
+            found,
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 99, 1, 0),
+            no_conflict,
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
     }
 }
