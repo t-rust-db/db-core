@@ -2605,6 +2605,7 @@ mod tests {
         let group_key = P4::GroupKey(vec![super::super::program::GroupKeyColumn {
             index: 0,
             collation: Collation::Binary,
+            affinity: b'A',
         }]);
         let sum_p4 = || P4::AggFunc {
             name: "sum".to_string(),

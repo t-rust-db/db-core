@@ -1018,7 +1018,15 @@ impl Cursor for HashAggCursor {
         let key_values: Vec<Value> = self
             .keys
             .iter()
-            .map(|k| decode_column(&blob, k.index, TextEncoding::Utf8).unwrap_or(Value::Null))
+            .map(|k| {
+                let mut value =
+                    decode_column(&blob, k.index, TextEncoding::Utf8).unwrap_or(Value::Null);
+                super::affinity::apply_affinity(
+                    &mut value,
+                    super::affinity::Affinity::from_p4_byte(k.affinity),
+                );
+                value
+            })
             .collect();
         let idx = match self.find_group(&key_values) {
             Some(idx) => idx,
@@ -1628,6 +1636,7 @@ mod tests {
         GroupKeyColumn {
             index,
             collation: super::super::value::Collation::Binary,
+            affinity: b'A',
         }
     }
 
