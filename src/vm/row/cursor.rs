@@ -203,6 +203,39 @@ pub trait Cursor {
     fn auto_index_next(&mut self) -> bool {
         false
     }
+
+    /// Seeks this index cursor to the first entry whose key equals
+    /// `key` exactly (`Opcode::SeekIndexEq`/`Found`/`NoConflict`,
+    /// db-core#126). Returns `false` (and leaves no current entry) on a
+    /// miss, or if this cursor kind isn't an index cursor.
+    fn seek_index_eq(&mut self, _key: &[Value]) -> bool {
+        false
+    }
+
+    /// Seeks this index cursor to the first entry whose key is `>=`
+    /// `key` (`Opcode::SeekIndexGE`, db-core#126). Returns `false` (and
+    /// leaves no current entry) if no such entry exists, or this cursor
+    /// kind isn't an index cursor.
+    fn seek_index_ge(&mut self, _key: &[Value]) -> bool {
+        false
+    }
+
+    /// Compares this index cursor's current entry's key against `key`
+    /// (`Opcode::IdxCompareGT`/`IdxLE`, db-core#126). `None` if this
+    /// cursor kind isn't an index cursor, or there is no current entry.
+    fn idx_compare(&self, _key: &[Value]) -> Option<std::cmp::Ordering> {
+        None
+    }
+
+    /// This index cursor's current entry's trailing rowid column
+    /// (`Opcode::IdxRowid`, db-core#126) -- distinct from
+    /// [`Cursor::rowid`] since an index entry's "rowid" is itself one
+    /// more key column, not the entry's own identity the way a table
+    /// cursor's rowid is. `None` if this cursor kind isn't an index
+    /// cursor, or there is no current entry.
+    fn idx_rowid(&self) -> Option<i64> {
+        None
+    }
 }
 
 /// An in-memory table: a fixed set of rows, each a fixed-width `Vec<
@@ -996,6 +1029,153 @@ impl Cursor for AutoIndexCursor {
     }
 }
 
+/// A storage-agnostic index-mode cursor (db-core#126) -- entries are
+/// key columns plus a trailing rowid, kept sorted by key per `key_cols`
+/// (reusing [`SortKeyColumn`]'s direction/collation/NULLS shape, the
+/// same descriptor [`SorterCursor`] already keys on). The real adapter
+/// over a b-tree index lives in the consumer (ADR 0008); this is purely
+/// this crate's own test fixture, proven sufficient by
+/// `cursor_conformance`'s index-contract checks.
+pub struct InMemoryIndexCursor {
+    key_cols: Vec<SortKeyColumn>,
+    /// Sorted ascending per `key_cols`.
+    entries: Vec<(Vec<Value>, i64)>,
+    pos: Option<usize>,
+}
+
+impl InMemoryIndexCursor {
+    pub fn new(key_cols: Vec<SortKeyColumn>) -> Self {
+        InMemoryIndexCursor {
+            key_cols,
+            entries: Vec::new(),
+            pos: None,
+        }
+    }
+
+    fn key_of(&self, values: &[Value]) -> Vec<Value> {
+        self.key_cols
+            .iter()
+            .map(|k| values.get(k.index).cloned().unwrap_or(Value::Null))
+            .collect()
+    }
+}
+
+impl Cursor for InMemoryIndexCursor {
+    fn rewind(&mut self) -> bool {
+        self.pos = if self.entries.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+        self.pos.is_some()
+    }
+
+    fn next(&mut self) -> bool {
+        let next = self.pos.map_or(0, |p| p.saturating_add(1));
+        if next < self.entries.len() {
+            self.pos = Some(next);
+            true
+        } else {
+            self.pos = None;
+            false
+        }
+    }
+
+    fn last(&mut self) -> bool {
+        self.pos = self.entries.len().checked_sub(1);
+        self.pos.is_some()
+    }
+
+    fn prev(&mut self) -> bool {
+        match self.pos {
+            Some(0) | None => {
+                self.pos = None;
+                false
+            }
+            Some(p) => {
+                self.pos = Some(p - 1);
+                true
+            }
+        }
+    }
+
+    fn column(&self, col: usize) -> Value {
+        #[allow(
+            clippy::expect_used,
+            reason = "Cursor contract: column/rowid are only read after a successful positioning call"
+        )]
+        let pos = self.pos.expect("column read with no current entry");
+        self.entries
+            .get(pos)
+            .and_then(|(key, _)| key.get(col))
+            .cloned()
+            .unwrap_or(Value::Null)
+    }
+
+    fn rowid(&self) -> i64 {
+        #[allow(
+            clippy::expect_used,
+            reason = "Cursor contract: column/rowid are only read after a successful positioning call"
+        )]
+        let pos = self.pos.expect("rowid read with no current entry");
+        self.entries[pos].1
+    }
+
+    /// Inserts `values` (the row's indexed columns; extra columns
+    /// beyond `key_cols`'s width are ignored) under `rowid`, keeping
+    /// `entries` sorted -- this fixture's only way to build index data
+    /// purely through the trait, matching `cursor_conformance`'s
+    /// `build` helper.
+    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
+        let key = self.key_of(&values);
+        let pos = self.entries.partition_point(|(k, _)| {
+            compare_keys(k, &key, &self.key_cols) == std::cmp::Ordering::Less
+        });
+        self.entries.insert(pos, (key, rowid));
+        true
+    }
+
+    fn seek_index_eq(&mut self, key: &[Value]) -> bool {
+        let pos = self.entries.partition_point(|(k, _)| {
+            compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Less
+        });
+        match self.entries.get(pos) {
+            Some((k, _)) if compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Equal => {
+                self.pos = Some(pos);
+                true
+            }
+            _ => {
+                self.pos = None;
+                false
+            }
+        }
+    }
+
+    fn seek_index_ge(&mut self, key: &[Value]) -> bool {
+        let pos = self.entries.partition_point(|(k, _)| {
+            compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Less
+        });
+        if pos < self.entries.len() {
+            self.pos = Some(pos);
+            true
+        } else {
+            self.pos = None;
+            false
+        }
+    }
+
+    fn idx_compare(&self, key: &[Value]) -> Option<std::cmp::Ordering> {
+        let pos = self.pos?;
+        let (current, _) = self.entries.get(pos)?;
+        Some(compare_keys(current, key, &self.key_cols))
+    }
+
+    fn idx_rowid(&self) -> Option<i64> {
+        let pos = self.pos?;
+        self.entries.get(pos).map(|(_, rowid)| *rowid)
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -1357,6 +1537,61 @@ mod tests {
         let mut c = HashAggCursor::new(vec![group_key(0)]);
         assert!(!c.rewind());
         assert!(c.current_blob().is_none());
+    }
+
+    fn asc_key(index: usize) -> SortKeyColumn {
+        SortKeyColumn {
+            index,
+            descending: false,
+            collation: super::super::value::Collation::Binary,
+            nulls_first: false,
+        }
+    }
+
+    #[test]
+    fn in_memory_index_cursor_seek_eq_finds_an_exact_key() {
+        let mut c = InMemoryIndexCursor::new(vec![asc_key(0)]);
+        c.insert(1, vec![Value::Integer(10)]);
+        c.insert(2, vec![Value::Integer(20)]);
+        assert!(c.seek_index_eq(&[Value::Integer(20)]));
+        assert_eq!(c.idx_rowid(), Some(2));
+        assert!(!c.seek_index_eq(&[Value::Integer(99)]));
+    }
+
+    #[test]
+    fn in_memory_index_cursor_seek_ge_positions_at_the_first_not_less_key() {
+        let mut c = InMemoryIndexCursor::new(vec![asc_key(0)]);
+        c.insert(1, vec![Value::Integer(10)]);
+        c.insert(2, vec![Value::Integer(30)]);
+        assert!(c.seek_index_ge(&[Value::Integer(20)]));
+        assert_eq!(c.column(0), Value::Integer(30));
+        assert!(!c.seek_index_ge(&[Value::Integer(999)]));
+    }
+
+    #[test]
+    fn in_memory_index_cursor_idx_compare_reports_current_vs_given_key() {
+        let mut c = InMemoryIndexCursor::new(vec![asc_key(0)]);
+        c.insert(1, vec![Value::Integer(10)]);
+        c.rewind();
+        assert_eq!(
+            c.idx_compare(&[Value::Integer(5)]),
+            Some(std::cmp::Ordering::Greater)
+        );
+        assert_eq!(
+            c.idx_compare(&[Value::Integer(10)]),
+            Some(std::cmp::Ordering::Equal)
+        );
+        assert_eq!(
+            c.idx_compare(&[Value::Integer(15)]),
+            Some(std::cmp::Ordering::Less)
+        );
+    }
+
+    #[test]
+    fn in_memory_index_cursor_satisfies_the_conformance_suite() {
+        super::super::cursor_conformance::assert_forward_scan_matches_insertion_order(|| {
+            InMemoryIndexCursor::new(vec![asc_key(0)])
+        });
     }
 
     #[test]

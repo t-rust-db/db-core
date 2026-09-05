@@ -108,6 +108,71 @@ pub fn assert_cursor_conformance<C: Cursor>(mut make: impl FnMut() -> C) {
     assert_delete_removes_only_the_current_row(&mut make);
 }
 
+/// `seek_index_eq` positions on an exact key match and reports the
+/// entry's trailing rowid via `idx_rowid` (db-core#126); `column`
+/// reads back the indexed value at that entry.
+pub fn assert_seek_index_eq_finds_an_exact_key<C: Cursor>(mut make: impl FnMut() -> C) {
+    let rows = vec![(10, vec![Value::Integer(1)]), (20, vec![Value::Integer(2)])];
+    let mut cursor = make();
+    build(&mut cursor, &rows);
+
+    assert!(cursor.seek_index_eq(&[Value::Integer(2)]));
+    assert_eq!(cursor.column(0), Value::Integer(2));
+    assert_eq!(cursor.idx_rowid(), Some(20));
+}
+
+/// `seek_index_eq` reports `false` on a key with no matching entry.
+pub fn assert_seek_index_eq_misses_an_absent_key<C: Cursor>(mut make: impl FnMut() -> C) {
+    let rows = vec![(10, vec![Value::Integer(1)])];
+    let mut cursor = make();
+    build(&mut cursor, &rows);
+
+    assert!(!cursor.seek_index_eq(&[Value::Integer(999)]));
+}
+
+/// `seek_index_ge` positions at the first entry whose key is not less
+/// than the given key, even when no entry matches it exactly.
+pub fn assert_seek_index_ge_positions_at_the_first_not_less_key<C: Cursor>(
+    mut make: impl FnMut() -> C,
+) {
+    let rows = vec![(10, vec![Value::Integer(1)]), (20, vec![Value::Integer(3)])];
+    let mut cursor = make();
+    build(&mut cursor, &rows);
+
+    assert!(cursor.seek_index_ge(&[Value::Integer(2)]));
+    assert_eq!(cursor.column(0), Value::Integer(3));
+}
+
+/// `idx_compare` reports how the current entry's key orders against an
+/// arbitrary key, in both directions.
+pub fn assert_idx_compare_orders_the_current_entry_against_a_key<C: Cursor>(
+    mut make: impl FnMut() -> C,
+) {
+    let rows = vec![(10, vec![Value::Integer(5)])];
+    let mut cursor = make();
+    build(&mut cursor, &rows);
+
+    assert!(cursor.rewind());
+    assert_eq!(
+        cursor.idx_compare(&[Value::Integer(1)]),
+        Some(std::cmp::Ordering::Greater)
+    );
+    assert_eq!(
+        cursor.idx_compare(&[Value::Integer(9)]),
+        Some(std::cmp::Ordering::Less)
+    );
+}
+
+/// Runs every index-cursor check in this module against `make` -- the
+/// entry point a real index-cursor adapter's own test wants (db-core#126).
+pub fn assert_index_cursor_conformance<C: Cursor>(mut make: impl FnMut() -> C) {
+    assert_forward_scan_matches_insertion_order(&mut make);
+    assert_seek_index_eq_finds_an_exact_key(&mut make);
+    assert_seek_index_eq_misses_an_absent_key(&mut make);
+    assert_seek_index_ge_positions_at_the_first_not_less_key(&mut make);
+    assert_idx_compare_orders_the_current_entry_against_a_key(&mut make);
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -210,6 +275,22 @@ mod tests {
     #[test]
     fn mock_table_cursor_satisfies_the_conformance_suite() {
         assert_cursor_conformance(MockTableCursor::default);
+    }
+
+    #[test]
+    fn in_memory_index_cursor_satisfies_the_index_conformance_suite() {
+        use super::super::cursor::InMemoryIndexCursor;
+        use super::super::program::SortKeyColumn;
+        use super::super::value::Collation;
+
+        assert_index_cursor_conformance(|| {
+            InMemoryIndexCursor::new(vec![SortKeyColumn {
+                index: 0,
+                descending: false,
+                collation: Collation::Binary,
+                nulls_first: false,
+            }])
+        });
     }
 
     #[test]

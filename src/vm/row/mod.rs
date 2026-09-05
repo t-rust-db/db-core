@@ -127,11 +127,27 @@
 //! `Opcode::Sequence` (a plain per-slot monotonic counter, independent
 //! of any open cursor).
 //!
+//! Index-mode cursors landed too (db-core#126): [`cursor::Cursor`]
+//! grew `seek_index_eq`/`seek_index_ge`/`idx_compare`/`idx_rowid`, kept
+//! on the same trait rather than a separate one so a cursor kind that
+//! is both table- and index-shaped (unlikely here, but true of a real
+//! b-tree adapter) needs only one `impl`. `Opcode::IdxRewind`/`IdxLast`/
+//! `IdxNext`/`IdxPrev` mirror `Rewind`/`Last`/`Next`/`Prev`'s dispatch
+//! shape; `IdxRowid` reads the trailing rowid column via
+//! `idx_rowid` (distinct from a table cursor's own `rowid`);
+//! `SeekIndexEq`/`SeekIndexGE`/`IdxCompareGT`/`IdxLE`/`Found`/
+//! `NoConflict` all read their key from `p3..p3+p4` registers (`p4`
+//! carrying `P4::Int`, the same register-count convention `IdxInsert`/
+//! `IdxDelete` already used) and differ only in which
+//! `seek_index_eq`/`idx_compare` outcome triggers the jump.
+//! [`cursor::InMemoryIndexCursor`] is this crate's own test fixture;
+//! [`cursor_conformance::assert_index_cursor_conformance`] is the
+//! trait-level suite a real index-cursor adapter can run too.
+//!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
-//! largest file), index-mode cursors, `IntegrityCheck`. `Opcode`
-//! already lists every variant sqlite-rs has (parity of identity);
-//! dispatch for the rest lands in later phases (tracked against
-//! db-core#18).
+//! largest file), `IntegrityCheck`. `Opcode` already lists every
+//! variant sqlite-rs has (parity of identity); dispatch for the rest
+//! lands in later phases (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
@@ -162,8 +178,8 @@ pub use aggregate::{AggState, AggregateError};
 pub use cast::cast_to;
 pub use compare::compare;
 pub use cursor::{
-    AutoIndexCursor, Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor, PseudoCursor,
-    SorterCursor,
+    AutoIndexCursor, Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor,
+    InMemoryIndexCursor, PseudoCursor, SorterCursor,
 };
 pub use cursor_factory::{CursorFactory, CursorFactoryError};
 pub use explain::{explain, ExplainRow};

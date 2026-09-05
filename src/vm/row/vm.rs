@@ -641,6 +641,46 @@ fn register_as_i64(vm: &Vm, reg: i32) -> Result<i64, ExecError> {
     }
 }
 
+/// Reads `p4`'s register-count (`P4::Int(n)`) worth of values starting
+/// at register `first_reg`, cloned into a `Vec` -- the shared key-read
+/// convention `Found`/`IdxLE`/`SeekIndexEq`/`SeekIndexGE`/
+/// `IdxCompareGT`/`NoConflict`'s docs describe as "a key from registers
+/// `p3..p3+p4`" (db-core#126), mirroring `IdxInsert`/`IdxDelete`'s
+/// existing identical read.
+fn key_from_registers(
+    vm: &Vm,
+    opcode: &'static str,
+    first_reg: i32,
+    p4: &P4,
+) -> Result<Vec<Value>, ExecError> {
+    let count = match p4 {
+        P4::Int(n) => Vm::bounded_count(
+            opcode,
+            i32::try_from(*n).map_err(|_| ExecError::MalformedInstruction {
+                opcode,
+                reason: format!("key count {n} does not fit in p4"),
+            })?,
+        )?,
+        other => {
+            return Err(ExecError::MalformedInstruction {
+                opcode,
+                reason: format!("expected an Int P4 (key count), got {other:?}"),
+            })
+        }
+    };
+    let mut key = Vec::with_capacity(count);
+    for i in 0..count {
+        let reg = first_reg
+            .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+            .ok_or(ExecError::RegisterOutOfRange {
+                opcode,
+                index: first_reg,
+            })?;
+        key.push(vm.register(reg)?.clone());
+    }
+    Ok(key)
+}
+
 fn in_i64_range(r: f64) -> bool {
     r >= i64::MIN as f64 && r < i64::MAX as f64
 }
@@ -1638,6 +1678,119 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     .map_err(ExecError::SchemaStorageFailed)?;
             }
             Ok(Step::Next)
+        }
+
+        Opcode::IdxRewind => {
+            let has_row = vm.cursor_mut(instr.p1)?.rewind();
+            Ok(if has_row {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::IdxLast => {
+            let has_row = vm.cursor_mut(instr.p1)?.last();
+            Ok(if has_row {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::IdxNext => {
+            let has_row = vm.cursor_mut(instr.p1)?.next();
+            Ok(if has_row {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::IdxPrev => {
+            let has_row = vm.cursor_mut(instr.p1)?.prev();
+            Ok(if has_row {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::IdxRowid => {
+            let rowid =
+                vm.cursor(instr.p1)?
+                    .idx_rowid()
+                    .ok_or(ExecError::MalformedInstruction {
+                        opcode: "IdxRowid",
+                        reason: "cursor slot is not an index cursor, or has no current entry"
+                            .to_string(),
+                    })?;
+            vm.set_register(instr.p2, Value::Integer(rowid))?;
+            Ok(Step::Next)
+        }
+        Opcode::SeekIndexEq => {
+            let key = key_from_registers(vm, "SeekIndexEq", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::SeekIndexGE => {
+            let key = key_from_registers(vm, "SeekIndexGE", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_ge(&key);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::IdxCompareGT => {
+            let key = key_from_registers(vm, "IdxCompareGT", instr.p3, &instr.p4)?;
+            let cmp =
+                vm.cursor(instr.p1)?
+                    .idx_compare(&key)
+                    .ok_or(ExecError::MalformedInstruction {
+                        opcode: "IdxCompareGT",
+                        reason: "cursor slot is not an index cursor, or has no current entry"
+                            .to_string(),
+                    })?;
+            Ok(if cmp == Ordering::Greater {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::IdxLE => {
+            let key = key_from_registers(vm, "IdxLE", instr.p3, &instr.p4)?;
+            let cmp =
+                vm.cursor(instr.p1)?
+                    .idx_compare(&key)
+                    .ok_or(ExecError::MalformedInstruction {
+                        opcode: "IdxLE",
+                        reason: "cursor slot is not an index cursor, or has no current entry"
+                            .to_string(),
+                    })?;
+            Ok(if cmp != Ordering::Greater {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::Found => {
+            let key = key_from_registers(vm, "Found", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key);
+            Ok(if found {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::NoConflict => {
+            let key = key_from_registers(vm, "NoConflict", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
         }
 
         other => Err(ExecError::Unimplemented { opcode: other }),
@@ -3005,6 +3158,181 @@ mod tests {
             Instruction::new(Opcode::Integer, 1, 0, 0),
             Instruction::new(Opcode::Halt, 0, 0, 0),
             Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+    }
+
+    fn asc_key(index: usize) -> super::super::program::SortKeyColumn {
+        super::super::program::SortKeyColumn {
+            index,
+            descending: false,
+            collation: Collation::Binary,
+            nulls_first: false,
+        }
+    }
+
+    fn open_index_cursor(vm: &mut Vm, slot: i32, rows: &[(i64, Value)]) {
+        let mut cursor = super::super::cursor::InMemoryIndexCursor::new(vec![asc_key(0)]);
+        for (rowid, value) in rows {
+            cursor.insert(*rowid, vec![value.clone()]);
+        }
+        vm.open_cursor(slot, Box::new(cursor)).unwrap();
+    }
+
+    #[test]
+    fn idx_rewind_last_next_prev_and_rowid_walk_an_index_cursor() {
+        let mut vm = Vm::new();
+        open_index_cursor(
+            &mut vm,
+            0,
+            &[(10, Value::Integer(1)), (20, Value::Integer(2))],
+        );
+        let program = Program::new(vec![
+            Instruction::new(Opcode::IdxRewind, 0, 8, 0),
+            Instruction::new(Opcode::IdxRowid, 0, 1, 0),
+            Instruction::new(Opcode::IdxNext, 0, 4, 0),
+            Instruction::new(Opcode::Goto, 0, 8, 0),
+            Instruction::new(Opcode::IdxRowid, 0, 2, 0),
+            Instruction::new(Opcode::ResultRow, 1, 2, 0),
+            Instruction::new(Opcode::Goto, 0, 8, 0),
+            Instruction::new(Opcode::Goto, 0, 8, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(10), Value::Integer(20)]]);
+    }
+
+    #[test]
+    fn idx_last_and_prev_walk_backward() {
+        let mut vm = Vm::new();
+        open_index_cursor(
+            &mut vm,
+            0,
+            &[(10, Value::Integer(1)), (20, Value::Integer(2))],
+        );
+        let program = Program::new(vec![
+            Instruction::new(Opcode::IdxLast, 0, 6, 0),
+            Instruction::new(Opcode::IdxRowid, 0, 1, 0),
+            Instruction::new(Opcode::IdxPrev, 0, 4, 0),
+            Instruction::new(Opcode::Goto, 0, 6, 0),
+            Instruction::new(Opcode::IdxRowid, 0, 2, 0),
+            Instruction::new(Opcode::ResultRow, 1, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(20), Value::Integer(10)]]);
+    }
+
+    #[test]
+    fn seek_index_eq_jumps_to_p2_on_a_miss() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(1))]);
+        let mut instr = Instruction::new(Opcode::SeekIndexEq, 0, 4, 1);
+        instr.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 99, 1, 0),
+            instr,
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, Vec::<Vec<Value>>::new());
+    }
+
+    #[test]
+    fn seek_index_eq_falls_through_on_a_hit() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(1))]);
+        let mut instr = Instruction::new(Opcode::SeekIndexEq, 0, 5, 1);
+        instr.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 1, 1, 0),
+            instr,
+            Instruction::new(Opcode::IdxRowid, 0, 2, 0),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(10)]]);
+    }
+
+    #[test]
+    fn seek_index_ge_jumps_to_p2_when_none_qualify() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(1))]);
+        let mut instr = Instruction::new(Opcode::SeekIndexGE, 0, 4, 1);
+        instr.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 99, 1, 0),
+            instr,
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, Vec::<Vec<Value>>::new());
+    }
+
+    #[test]
+    fn idx_compare_gt_jumps_when_the_current_entry_exceeds_the_key() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(5))]);
+        let mut gt = Instruction::new(Opcode::IdxCompareGT, 0, 5, 1);
+        gt.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::IdxRewind, 0, 6, 0),
+            Instruction::new(Opcode::Integer, 1, 1, 0),
+            gt,
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::ResultRow, 0, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn idx_le_jumps_when_the_current_entry_does_not_exceed_the_key() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(5))]);
+        let mut le = Instruction::new(Opcode::IdxLE, 0, 5, 1);
+        le.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::IdxRewind, 0, 6, 0),
+            Instruction::new(Opcode::Integer, 9, 1, 0),
+            le,
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::ResultRow, 0, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn found_jumps_to_p2_on_a_hit_and_no_conflict_jumps_to_p2_on_a_miss() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(10, Value::Integer(1))]);
+        let mut found = Instruction::new(Opcode::Found, 0, 3, 1);
+        found.p4 = P4::Int(1);
+        let mut no_conflict = Instruction::new(Opcode::NoConflict, 0, 6, 1);
+        no_conflict.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 1, 1, 0),
+            found,
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 99, 1, 0),
+            no_conflict,
+            Instruction::new(Opcode::Halt, 0, 0, 0),
             Instruction::new(Opcode::Halt, 0, 0, 0),
         ]);
         execute(&mut vm, &program).unwrap();
