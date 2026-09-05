@@ -32,4 +32,5 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0006](0006-storage-consolidation-into-db-storage.md) — All physical storage (row/column/stream) consolidates into `db-storage`; `db-core` stays storage-agnostic
 - [0007](0007-program-instruction-mirror-sqlite-rs.md) — Batch execution mirrors sqlite-rs's Program/Instruction shape
 - [0008](0008-vm-row-opcode-and-cursor-design.md) — `vm::row`'s opcode identity and cursor abstraction
+- [0010](0010-shared-row-value-type.md) — One row `Value` type, defined in `db-core::value`, consumed by `db-storage`
 - [0009](0009-parser-row-backport-rule.md) — While two copies of the row parser exist, Lab271/sqlite-rs leads and `parser::row` back-ports

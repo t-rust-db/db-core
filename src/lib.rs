@@ -40,6 +40,7 @@
 pub mod expr;
 pub mod join;
 pub mod types;
+pub mod value;
 
 pub mod codegen;
 pub mod emit;
