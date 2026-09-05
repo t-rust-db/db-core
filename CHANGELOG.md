@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.43.0] - 2026-09-05
+
+### Added
+
+- **`vm::row`'s `Cursor` trait gains `seek`/`payload`, plus a `Transaction` hook and a public conformance suite** (#81) -- `Cursor::seek(rowid)` wires `Opcode::SeekRowid`'s previously-unimplemented dispatch to direct key-based positioning (overridden by `InMemoryCursor`/`EphemeralTableCursor`); `Cursor::payload()` is a lazy raw-record-bytes hook for a real b-tree cursor, proven sufficient by a new `MockTableCursor` test type (no production cursor in this crate retains raw bytes to override it with). `vm::row::transaction::Transaction` is a `begin`/`commit`/`rollback` hook a consumer's pager installs via `Vm::set_transaction_hook`, finally giving `Opcode::Transaction`/`AutoCommit` real dispatch arms that toggle `Vm::autocommit` and, when installed, drive the hook. `vm::row::cursor_conformance` publishes trait-level `Cursor` conformance checks so a real adapter (t-rust-db/sqlite-rs) can run the same checks this crate runs against its own fixtures, without `db-core` ever depending on `db-storage`. ADR 0008 amended: the adapter's location (sqlite-rs, not a `db-storage` feature) is now a decided fact.
+
 ## [0.42.0] - 2026-09-05
 
 ### Added

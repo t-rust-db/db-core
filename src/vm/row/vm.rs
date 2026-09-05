@@ -36,6 +36,7 @@ use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, SorterCursor};
 use super::functions;
 use super::program::{Instruction, Opcode, Program, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY};
 use super::record::{decode_record, encode_record};
+use super::transaction::Transaction;
 use super::value::{Collation, TextEncoding, Value};
 
 /// Caps a single register index or range count -- a backstop against an
@@ -83,6 +84,10 @@ pub enum ExecError {
     /// (`!Vm::autocommit`) -- stock SQLite refuses to change journal
     /// mode mid-transaction.
     JournalModeChangeDuringTransaction,
+    /// A [`super::transaction::Transaction`] hook's `begin`/`commit`/
+    /// `rollback` failed (`Opcode::Transaction`/`AutoCommit`,
+    /// db-core#81).
+    TransactionFailed(super::transaction::TransactionError),
 }
 
 impl std::fmt::Display for ExecError {
@@ -131,6 +136,7 @@ impl std::fmt::Display for ExecError {
                 f,
                 "SetJournalMode: cannot change journal mode within a transaction"
             ),
+            ExecError::TransactionFailed(err) => write!(f, "transaction hook failed: {err}"),
         }
     }
 }
@@ -189,14 +195,20 @@ pub struct Vm {
     rows: Vec<Vec<Value>>,
     once_fired: HashSet<usize>,
     params: Vec<Value>,
-    /// Whether this `Vm` is outside an explicit transaction (db-core#89,
-    /// ahead of #81's full transaction-hook surface) -- `true` until
-    /// `Opcode::Transaction` clears it, restored by `Opcode::
-    /// AutoCommit`. Only `Opcode::SetJournalMode` consults it so far
+    /// Whether this `Vm` is outside an explicit transaction (db-core#89)
+    /// -- `true` until `Opcode::Transaction` clears it, restored by
+    /// `Opcode::AutoCommit`. `Opcode::SetJournalMode` consults it
     /// (matches stock SQLite's refusal to change journal mode
-    /// mid-transaction); `db-core` has no pager of its own, so there is
-    /// nothing else for this flag to gate yet.
+    /// mid-transaction); with no [`Self::transaction_hook`] installed,
+    /// this flag is the only real effect `Transaction`/`AutoCommit`
+    /// have, since `db-core` has no pager of its own.
     autocommit: bool,
+    /// A consumer's pager, installed via
+    /// [`Self::set_transaction_hook`], observing/driving real
+    /// transaction semantics when `Opcode::Transaction`/`AutoCommit`
+    /// run (db-core#81). `None` (the default) means those opcodes only
+    /// toggle [`Self::autocommit`].
+    transaction_hook: Option<Box<dyn Transaction>>,
 }
 
 impl Default for Vm {
@@ -209,6 +221,7 @@ impl Default for Vm {
             once_fired: HashSet::new(),
             params: Vec::new(),
             autocommit: true,
+            transaction_hook: None,
         }
     }
 }
@@ -221,6 +234,13 @@ impl Vm {
     /// Binds parameter values for `Opcode::Variable`, 1-based.
     pub fn bind_params(&mut self, values: Vec<Value>) {
         self.params = values;
+    }
+
+    /// Installs `hook` to observe/drive `Opcode::Transaction`/
+    /// `AutoCommit` (db-core#81). With none installed (the default),
+    /// those opcodes only toggle [`Vm::autocommit`].
+    pub fn set_transaction_hook(&mut self, hook: Box<dyn Transaction>) {
+        self.transaction_hook = Some(hook);
     }
 
     fn param(&self, index: i32) -> Option<&Value> {
@@ -792,6 +812,15 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             vm.set_register(instr.p2, Value::Integer(rowid))?;
             Ok(Step::Next)
         }
+        Opcode::SeekRowid => {
+            let rowid = register_as_i64(vm, instr.p3)?;
+            let found = vm.cursor_mut(instr.p1)?.seek(rowid);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
         Opcode::OpenRead | Opcode::OpenWrite => {
             // Real root-page/pager semantics (`db-storage` wiring) are
             // future work -- see `cursor.rs`'s doc comment. For now this
@@ -1107,6 +1136,24 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
+        Opcode::Transaction => {
+            if let Some(hook) = vm.transaction_hook.as_mut() {
+                hook.begin(instr.p1).map_err(ExecError::TransactionFailed)?;
+            }
+            vm.autocommit = false;
+            Ok(Step::Next)
+        }
+        Opcode::AutoCommit => {
+            if let Some(hook) = vm.transaction_hook.as_mut() {
+                if instr.p2 == 0 {
+                    hook.rollback().map_err(ExecError::TransactionFailed)?;
+                } else {
+                    hook.commit().map_err(ExecError::TransactionFailed)?;
+                }
+            }
+            vm.autocommit = true;
+            Ok(Step::Next)
+        }
         Opcode::SetJournalMode => {
             if !vm.autocommit {
                 return Err(ExecError::JournalModeChangeDuringTransaction);
@@ -1442,6 +1489,48 @@ mod tests {
     }
 
     #[test]
+    fn seek_rowid_positions_directly_on_a_hit() {
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(InMemoryCursor::new(vec![
+                vec![Value::Integer(10)],
+                vec![Value::Integer(20)],
+                vec![Value::Integer(30)],
+            ])),
+        )
+        .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 2, 0, 0),
+            Instruction::new(Opcode::SeekRowid, 0, 3, 0),
+            Instruction::new(Opcode::Column, 0, 0, 1),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(20)]]);
+    }
+
+    #[test]
+    fn seek_rowid_jumps_to_p2_on_a_miss() {
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(InMemoryCursor::new(vec![vec![Value::Integer(10)]])),
+        )
+        .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 99, 0, 0),
+            Instruction::new(Opcode::SeekRowid, 0, 4, 0),
+            Instruction::new(Opcode::Column, 0, 0, 1),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[test]
     fn unimplemented_opcode_errors_by_name() {
         let mut vm = Vm::new();
         let program = Program::new(vec![Instruction::new(Opcode::OpenDup, 0, 0, 0)]);
@@ -1479,6 +1568,98 @@ mod tests {
             step(&mut vm, 0, &instr),
             Err(ExecError::JournalModeChangeDuringTransaction)
         ));
+    }
+
+    #[test]
+    fn transaction_with_no_hook_installed_only_toggles_autocommit() {
+        let mut vm = Vm::new();
+        assert!(vm.autocommit);
+        let instr = Instruction::new(
+            Opcode::Transaction,
+            super::super::program::TRANSACTION_MODE_DEFERRED,
+            0,
+            0,
+        );
+        assert_eq!(step(&mut vm, 0, &instr).unwrap(), Step::Next);
+        assert!(!vm.autocommit);
+
+        let instr = Instruction::new(Opcode::AutoCommit, 0, 1, 0);
+        assert_eq!(step(&mut vm, 0, &instr).unwrap(), Step::Next);
+        assert!(vm.autocommit);
+    }
+
+    struct RecordingHook {
+        calls: Vec<String>,
+    }
+
+    impl super::super::transaction::Transaction for RecordingHook {
+        fn begin(&mut self, mode: i32) -> Result<(), super::super::transaction::TransactionError> {
+            self.calls.push(format!("begin({mode})"));
+            Ok(())
+        }
+        fn commit(&mut self) -> Result<(), super::super::transaction::TransactionError> {
+            self.calls.push("commit".to_string());
+            Ok(())
+        }
+        fn rollback(&mut self) -> Result<(), super::super::transaction::TransactionError> {
+            self.calls.push("rollback".to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn transaction_and_auto_commit_drive_an_installed_hook() {
+        let mut vm = Vm::new();
+        vm.set_transaction_hook(Box::new(RecordingHook { calls: Vec::new() }));
+
+        let begin = Instruction::new(
+            Opcode::Transaction,
+            super::super::program::TRANSACTION_MODE_IMMEDIATE,
+            0,
+            0,
+        );
+        step(&mut vm, 0, &begin).unwrap();
+
+        let commit = Instruction::new(Opcode::AutoCommit, 0, 1, 0);
+        step(&mut vm, 0, &commit).unwrap();
+
+        let rollback = Instruction::new(Opcode::AutoCommit, 0, 0, 0);
+        step(&mut vm, 0, &rollback).unwrap();
+
+        assert!(vm.autocommit);
+    }
+
+    struct FailingHook;
+
+    impl super::super::transaction::Transaction for FailingHook {
+        fn begin(&mut self, _mode: i32) -> Result<(), super::super::transaction::TransactionError> {
+            Err(super::super::transaction::TransactionError(
+                "disk full".to_string(),
+            ))
+        }
+        fn commit(&mut self) -> Result<(), super::super::transaction::TransactionError> {
+            Ok(())
+        }
+        fn rollback(&mut self) -> Result<(), super::super::transaction::TransactionError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn transaction_propagates_a_failing_hook_and_leaves_autocommit_set() {
+        let mut vm = Vm::new();
+        vm.set_transaction_hook(Box::new(FailingHook));
+        let instr = Instruction::new(
+            Opcode::Transaction,
+            super::super::program::TRANSACTION_MODE_DEFERRED,
+            0,
+            0,
+        );
+        assert!(matches!(
+            step(&mut vm, 0, &instr),
+            Err(ExecError::TransactionFailed(_))
+        ));
+        assert!(vm.autocommit);
     }
 
     #[test]
