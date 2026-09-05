@@ -718,6 +718,16 @@ impl Cursor for EphemeralIndexCursor {
         }
         true
     }
+
+    /// `IdxLE` on an ephemeral index (sqlite-rs `cursor::idx_le`): the last
+    /// touched key against the probe, by encoded-record byte order; with no
+    /// key touched yet the bound trivially holds.
+    fn idx_compare(&self, key: &[Value], collations: &[Collation]) -> Option<std::cmp::Ordering> {
+        Some(match &self.last_key {
+            Some(last) => last.as_slice().cmp(encode_key(key, collations).as_slice()),
+            None => std::cmp::Ordering::Less,
+        })
+    }
 }
 
 /// `ORDER BY` buffering and sort, backing `Opcode::SorterOpen`/
