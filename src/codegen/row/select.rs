@@ -82,6 +82,7 @@ pub fn compile_select_join(
 /// leaving the predicate exactly where it would have ended up anyway).
 pub fn compile_select_with_catalog(catalog: &[TableSchema], query: &Query) -> Result<Program> {
     let mut query = query.clone();
+    super::subquery::expand_with_clause(&mut query)?;
     super::subquery::push_down_where_predicates(&mut query);
     super::subquery::flatten_from_subquery(&mut query);
 
@@ -937,6 +938,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         }
     }
 

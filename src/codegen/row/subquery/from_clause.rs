@@ -130,10 +130,23 @@ pub fn resolve_from_table_schema(
 /// table's columns. Nesting to arbitrary depth falls out of the
 /// recursion, as it does in the reference.
 ///
-/// The reference's structural-equality materialization cache
-/// (`RegAlloc::cached_cte`/`OpenDup`) is not ported: it exists to stop a
-/// CTE referenced N times from being re-run N times, and db-core has no
-/// CTEs yet (see `super`'s module doc).
+/// db-core#143: if an earlier call in this same statement's compile
+/// already materialized a *structurally identical* `subquery` (checked
+/// via `Query`'s derived `PartialEq` -- this is how
+/// [`super::cte::expand_with_clause`] rewrites a CTE referenced N times:
+/// N independent [`FromClause::Subquery`] AST clones, one per `FROM`
+/// site, but every clone is byte-for-byte the same query), this call
+/// reuses that materialization (`OpenDup`) instead of paying to re-run
+/// and re-populate the identical query again. Safe for any
+/// subquery-in-FROM, not just CTEs, given what this crate can express
+/// today: no correlated variables reach this materialization path (see
+/// the module doc), and no volatile/non-deterministic expression exists
+/// yet either, so two textually-identical subqueries are currently
+/// guaranteed to produce the same rows. **This stops being true the day
+/// a volatile function is added** -- whichever ticket adds the first
+/// one must revisit this cache (exclude a `Query` containing it, or key
+/// off genuine CTE identity instead of raw structural equality),
+/// mirroring the caveat on sqlite-rs's own `cached_cte`/`cache_cte`.
 pub fn materialize_from_subquery(
     em: &mut Emitter,
     reg: &mut RegAlloc,
@@ -141,6 +154,16 @@ pub fn materialize_from_subquery(
     catalog: &[TableSchema],
     dest_cursor: i32,
 ) -> Result<TableSchema> {
+    if let Some((source_cursor, schema)) = reg.cached_cte(subquery) {
+        em.emit(Instruction::new(
+            Opcode::OpenDup,
+            dest_cursor,
+            source_cursor,
+            0,
+        ));
+        return Ok(schema);
+    }
+
     reject_unsupported_shape(subquery, "a subquery in FROM")?;
     let inner_schema = resolve_from_table_schema(&subquery.from, catalog)?;
     let columns = subquery_output_columns(subquery, &inner_schema)?;
@@ -259,6 +282,7 @@ pub fn materialize_from_subquery(
     em.patch_p2(next_addr, loop_start);
     em.place(end_label);
 
+    reg.cache_cte(subquery.clone(), dest_cursor, synthetic.clone());
     Ok(synthetic)
 }
 
@@ -322,6 +346,31 @@ mod tests {
         assert!(ops.contains(&Opcode::Sequence), "{ops:?}");
         assert!(ops.contains(&Opcode::MakeRecord), "{ops:?}");
         assert!(ops.contains(&Opcode::Insert), "{ops:?}");
+    }
+
+    #[test]
+    fn a_structurally_identical_subquery_reuses_the_first_materialization() {
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        let inner = crate::parser::column::parse("SELECT b FROM t WHERE a = 1").unwrap();
+        let first = materialize_from_subquery(&mut em, &mut reg, &inner, &catalog(), 0).unwrap();
+        let second = materialize_from_subquery(&mut em, &mut reg, &inner, &catalog(), 1).unwrap();
+        assert_eq!(first.columns, second.columns);
+
+        let program = em.finish();
+        let open_ephemeral_count = program
+            .instructions
+            .iter()
+            .filter(|i| i.opcode == Opcode::OpenEphemeral)
+            .count();
+        assert_eq!(open_ephemeral_count, 1, "{:?}", program.instructions);
+        let open_dup = program
+            .instructions
+            .iter()
+            .find(|i| i.opcode == Opcode::OpenDup)
+            .unwrap_or_else(|| panic!("expected an OpenDup, got {:?}", program.instructions));
+        assert_eq!(open_dup.p1, 1);
+        assert_eq!(open_dup.p2, 0);
     }
 
     #[test]

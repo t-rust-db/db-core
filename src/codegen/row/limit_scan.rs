@@ -95,6 +95,7 @@ mod tests {
             order_by: None,
             limit,
             offset,
+            with_clause: None,
         }
     }
 

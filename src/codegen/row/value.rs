@@ -427,6 +427,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         };
         // db-core#95 compiles `InSubquery` in a value context, but a
         // scope with no catalog can't resolve the subquery's own table.

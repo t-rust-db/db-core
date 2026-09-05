@@ -1608,6 +1608,7 @@ mod tests {
             }),
             limit: None,
             offset: None,
+            with_clause: None,
         };
         let program = compile_window(&query);
         assert_eq!(program.columns_to_load(), vec!["id", "region_key"]);
@@ -1715,6 +1716,7 @@ mod tests {
             }),
             limit: None,
             offset: None,
+            with_clause: None,
         };
         let nodes = explain(&query, &stats);
         assert!(details(&nodes)
@@ -1874,6 +1876,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         };
         let program = compile_window(&query);
         let sections = explain_opcodes(&query).unwrap();
@@ -1968,6 +1971,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         };
         assert_eq!(
             expand_star(&query, &["id".to_string()]),

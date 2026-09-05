@@ -669,6 +669,9 @@ fn convert_select(select: &Select) -> Result<Query> {
         order_by,
         limit,
         offset,
+        // `WITH` is rejected above -- `column-rs`'s enforced subset of
+        // the shared grammar has no lowering for it (see `convert_select`).
+        with_clause: None,
     };
     if !aliases.is_empty() {
         resolve_query_aliases(&mut query, &aliases);

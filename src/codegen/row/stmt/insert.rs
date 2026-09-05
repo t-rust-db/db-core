@@ -190,6 +190,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         };
         let select_program = compile_select(schema, 0, &query).unwrap();
         execute(&mut vm, &select_program).unwrap()

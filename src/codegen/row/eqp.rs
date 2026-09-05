@@ -153,6 +153,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         }
     }
 
