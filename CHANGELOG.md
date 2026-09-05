@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.32.0] - 2026-09-05
+
+### Added
+
+- **`codegen::row` gains single-table `SELECT` compilation** (#92) -- `compile_select` covers a single-table scan (`Rewind`/`Next`) plus projection (bare columns, `SELECT *` expansion) plus `WHERE` filtering plus `LIMIT` (ported 1:1 from sqlite-rs's `IfNotZero`/`Goto` guard, including the `LIMIT 0` check-before-emit ordering). Joins and `ORDER BY` are deferred to #102; the join-order/access-path chooser and `FULL OUTER` to #101 (needs `planner::Stats`, which db-core doesn't have yet); `GROUP BY`/aggregation to #93.
+
 ## [0.31.0] - 2026-09-05
 
 ### Added
