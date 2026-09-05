@@ -6,18 +6,22 @@
 //! the V4 GROUP BY/HAVING slice, and the V6 non-recursive `WITH`/CTE
 //! slice (`WithClause`/`CommonTableExpr`).
 //!
-//! **Deliberately not `crate::expr::Query`.** ADR 0002 originally
-//! anticipated `row` and `column` producing one shared AST type; its
-//! amendment records why that didn't hold once this module's ~15
-//! DDL/DML/transaction/`PRAGMA` statement types (with no equivalent in
-//! column-rs's `SELECT`-shaped analytics subset) were actually looked
-//! at: folding them into `crate::expr::Query` as new variants would be a
-//! from-scratch AST design exercise disconnected from sqlite-rs's own
-//! (already tested, already used by its codegen) shape, for no benefit
-//! `row`'s only consumer needs today. `row` and `column` share this
-//! crate's tokenizer primitives (`Span`) but not one AST type -- the
-//! same "consolidated location, not shared representation" trade ADR
-//! 0001 already made for `crate::vm::batch`/`row`'s opcode sets.
+//! **This is the crate's AST** (`parser::ast`, moved out of
+//! `parser::row` in #147), not `row`'s private one. ADR 0002's second
+//! amendment settles the direction that its first amendment had
+//! reversed: `row` leads, and `crate::expr::Query` is retired as a
+//! strict subset of [`Select`] rather than grown to meet it.
+//!
+//! The subset relationship is the whole point. `expr::Query` models
+//! `group_by: Vec<String>`, `limit: Option<usize>` and
+//! `SelectItem::{Column, Star, ...}`; this module models `group_by:
+//! Vec<Expr>`, [`Limit`] (expressions, so parameters bind) and
+//! [`ResultColumn::Expr`] (arbitrary expressions with aliases), plus
+//! [`WithClause`], compound `UNION` and a real join chain that
+//! `expr::Query` cannot express at all. Backporting those into
+//! `expr::Query` was the drift #147 corrects; features are added here,
+//! and `column`/`batch` enforce their executable subset at lowering
+//! (`parser::column::convert_select`) rather than by parsing less.
 //!
 //! Scoped to `.openspec/grammar/sqlite.ebnf`'s `(* V2 *)`/`(* V3 *)`/
 //! `(* V4 *)`-tagged rules: SELECT with an INNER/LEFT [OUTER]/CROSS join
