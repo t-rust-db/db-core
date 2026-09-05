@@ -1719,7 +1719,26 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 .create_table_root()
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
-                .insert_master_row(&name, &sql, root)
+                .insert_master_row("table", &name, &name, root, &sql)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::CreateView => {
+            // sqlite-rs `cursor::create_view`: a view has no b-tree — one
+            // sqlite_master row with rootpage 0, then the cookie bump.
+            let P4::CreateView { name, sql } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "CreateView",
+                    reason: format!("expected a CreateView P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, sql) = (name.clone(), sql.clone());
+            let storage = vm.schema_storage("CreateView")?;
+            storage
+                .insert_master_row("view", &name, &name, 0, &sql)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
@@ -1729,6 +1748,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         Opcode::CreateIndex => {
             let P4::CreateIndex {
                 name,
+                table_name,
                 table_root_page,
                 sql,
                 column_indices,
@@ -1740,8 +1760,9 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     reason: format!("expected a CreateIndex P4, got {:?}", instr.p4),
                 });
             };
-            let (name, table_root_page, sql, column_indices) = (
+            let (name, table_name, table_root_page, sql, column_indices) = (
                 name.clone(),
+                table_name.clone(),
                 *table_root_page,
                 sql.clone(),
                 column_indices.clone(),
@@ -1754,7 +1775,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 .populate_index(root, table_root_page, &column_indices)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
-                .insert_master_row(&name, &sql, root)
+                .insert_master_row("index", &name, &table_name, root, &sql)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
@@ -1775,20 +1796,23 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             };
             let (name, root_page, indexes) = (name.clone(), *root_page, indexes.clone());
             let storage = vm.schema_storage("DropTable")?;
-            storage
-                .delete_master_row(&name)
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .free_root(root_page)
-                .map_err(ExecError::SchemaStorageFailed)?;
+            // sqlite-rs order (page-image parity with the oracle): each
+            // index's pages then its row, then the table's pages, then
+            // its row.
             for (index_name, index_root) in &indexes {
-                storage
-                    .delete_master_row(index_name)
-                    .map_err(ExecError::SchemaStorageFailed)?;
                 storage
                     .free_root(*index_root)
                     .map_err(ExecError::SchemaStorageFailed)?;
+                storage
+                    .delete_master_row(index_name)
+                    .map_err(ExecError::SchemaStorageFailed)?;
             }
+            storage
+                .free_root(root_page)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .delete_master_row(&name)
+                .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
                 .map_err(ExecError::SchemaStorageFailed)?;
@@ -1804,10 +1828,10 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             let (name, root_page) = (name.clone(), *root_page);
             let storage = vm.schema_storage("DropIndex")?;
             storage
-                .delete_master_row(&name)
+                .free_root(root_page)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
-                .free_root(root_page)
+                .delete_master_row(&name)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
@@ -1953,8 +1977,6 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 Step::Jump(to_pc(instr.p2))
             })
         }
-
-        other => Err(ExecError::Unimplemented { opcode: other }),
     }
 }
 
@@ -2989,13 +3011,15 @@ mod tests {
 
         fn insert_master_row(
             &mut self,
+            kind: &str,
             name: &str,
-            sql: &str,
+            tbl_name: &str,
             root_page: u32,
+            sql: &str,
         ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
-            self.log
-                .borrow_mut()
-                .push(format!("insert_master_row({name}, {sql}, {root_page})"));
+            self.log.borrow_mut().push(format!(
+                "insert_master_row({kind}, {name}, {tbl_name}, {root_page}, {sql})"
+            ));
             Ok(())
         }
 
@@ -3074,7 +3098,38 @@ mod tests {
             *log.borrow(),
             vec![
                 "create_table_root -> 1",
-                "insert_master_row(t, CREATE TABLE t (a), 1)",
+                "insert_master_row(table, t, t, 1, CREATE TABLE t (a))",
+                "bump_schema_cookie",
+            ]
+        );
+    }
+
+    #[test]
+    fn create_view_writes_a_rootless_master_row_and_bumps_the_cookie() {
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut vm = Vm::new();
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: std::rc::Rc::clone(&log),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            Instruction::with_p4(
+                Opcode::CreateView,
+                0,
+                0,
+                0,
+                P4::CreateView {
+                    name: "v".to_string(),
+                    sql: "CREATE VIEW v AS SELECT 1".to_string(),
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                "insert_master_row(view, v, v, 0, CREATE VIEW v AS SELECT 1)",
                 "bump_schema_cookie",
             ]
         );
@@ -3108,7 +3163,7 @@ mod tests {
             vec![
                 "create_index_root -> 1",
                 "populate_index(1, 7, [0])",
-                "insert_master_row(idx, CREATE INDEX idx ON t(a), 1)",
+                "insert_master_row(index, idx, t, 1, CREATE INDEX idx ON t(a))",
                 "bump_schema_cookie",
             ]
         );
@@ -3137,10 +3192,10 @@ mod tests {
         assert_eq!(
             *log.borrow(),
             vec![
-                "delete_master_row(t)",
-                "free_root(5)",
-                "delete_master_row(idx)",
                 "free_root(6)",
+                "delete_master_row(idx)",
+                "free_root(5)",
+                "delete_master_row(t)",
                 "bump_schema_cookie",
             ]
         );
@@ -3168,8 +3223,8 @@ mod tests {
         assert_eq!(
             *log.borrow(),
             vec![
-                "delete_master_row(idx)",
                 "free_root(6)",
+                "delete_master_row(idx)",
                 "bump_schema_cookie"
             ]
         );
@@ -3708,7 +3763,9 @@ mod tests {
                 &mut self,
                 _: &str,
                 _: &str,
+                _: &str,
                 _: u32,
+                _: &str,
             ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
                 unreachable!()
             }

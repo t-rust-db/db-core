@@ -38,11 +38,17 @@ pub trait SchemaStorage {
 
     /// Inserts `name`'s row into `sqlite_master`, with `sql` as its
     /// verbatim source text and `root_page` as its b-tree root.
+    /// One `sqlite_master` row: `kind` is `"table"`/`"index"`/`"view"`,
+    /// `tbl_name` the table it belongs to (`name` itself for a table or
+    /// view, the indexed table for an index), `root_page` 0 for a view
+    /// (sqlite-rs `MasterEntry`, #134).
     fn insert_master_row(
         &mut self,
+        kind: &str,
         name: &str,
-        sql: &str,
+        tbl_name: &str,
         root_page: u32,
+        sql: &str,
     ) -> Result<(), SchemaStorageError>;
 
     /// Deletes `name`'s row from `sqlite_master`.
