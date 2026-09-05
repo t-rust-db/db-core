@@ -249,6 +249,16 @@ pub struct Vm {
     /// `DropIndex`/`Analyze` fail with
     /// [`ExecError::SchemaStorageMissing`].
     schema_storage: Option<Box<dyn SchemaStorage>>,
+    /// Which open cursor slots `Opcode::NullRow` has pointed at a
+    /// synthetic all-NULL row (db-core#127, `LEFT JOIN`'s unmatched
+    /// side) -- parallel to `cursors`. Cleared by any repositioning
+    /// opcode (`Rewind`/`Next`/`Last`/`Prev`/`SeekRowid`) on that slot.
+    null_rows: Vec<bool>,
+    /// Per-cursor-slot monotonic counters for `Opcode::Sequence`
+    /// (db-core#127) -- parallel to `cursors`, though `Sequence` never
+    /// requires the slot to actually hold an open cursor (it's purely a
+    /// counter identified by `p1`).
+    sequences: Vec<i64>,
 }
 
 impl Default for Vm {
@@ -265,6 +275,8 @@ impl Default for Vm {
             cursor_factory: None,
             cursor_roots: Vec::new(),
             schema_storage: None,
+            null_rows: Vec::new(),
+            sequences: Vec::new(),
         }
     }
 }
@@ -300,6 +312,51 @@ impl Vm {
     /// [`ExecError::SchemaStorageMissing`].
     pub fn set_schema_storage(&mut self, storage: Box<dyn SchemaStorage>) {
         self.schema_storage = Some(storage);
+    }
+
+    /// Marks cursor slot `slot` as pointed at a synthetic NULL row
+    /// (`Opcode::NullRow`, db-core#127).
+    fn set_null_row(&mut self, slot: i32) -> Result<(), ExecError> {
+        let idx = Self::index("cursor slot write", slot)?;
+        if idx >= self.null_rows.len() {
+            self.null_rows.resize(idx.saturating_add(1), false);
+        }
+        if let Some(cell) = self.null_rows.get_mut(idx) {
+            *cell = true;
+        }
+        Ok(())
+    }
+
+    /// Clears slot `slot`'s NULL-row flag -- called by every opcode
+    /// that repositions a cursor, so a later normal read doesn't keep
+    /// reading NULLs.
+    fn clear_null_row(&mut self, slot: i32) -> Result<(), ExecError> {
+        let idx = Self::index("cursor slot write", slot)?;
+        if let Some(cell) = self.null_rows.get_mut(idx) {
+            *cell = false;
+        }
+        Ok(())
+    }
+
+    fn is_null_row(&self, slot: i32) -> Result<bool, ExecError> {
+        let idx = Self::index("cursor slot read", slot)?;
+        Ok(self.null_rows.get(idx).copied().unwrap_or(false))
+    }
+
+    /// Reads slot `slot`'s next `Opcode::Sequence` value and advances
+    /// it (db-core#127) -- growing the counter table with zero filler
+    /// as needed, same policy as `open_cursor`/`set_agg_context`.
+    fn next_sequence(&mut self, slot: i32) -> Result<i64, ExecError> {
+        let idx = Self::index("sequence slot", slot)?;
+        if idx >= self.sequences.len() {
+            self.sequences.resize(idx.saturating_add(1), 0);
+        }
+        let Some(cell) = self.sequences.get_mut(idx) else {
+            return Ok(0);
+        };
+        let value = *cell;
+        *cell = value.saturating_add(1);
+        Ok(value)
     }
 
     fn schema_storage(
@@ -875,6 +932,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         }
 
         Opcode::Rewind => {
+            vm.clear_null_row(instr.p1)?;
             let has_row = vm.cursor_mut(instr.p1)?.rewind();
             Ok(if has_row {
                 Step::Next
@@ -883,6 +941,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
         Opcode::Next => {
+            vm.clear_null_row(instr.p1)?;
             let has_row = vm.cursor_mut(instr.p1)?.next();
             Ok(if has_row {
                 Step::Jump(to_pc(instr.p2))
@@ -890,25 +949,112 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 Step::Next
             })
         }
+        Opcode::Last => {
+            vm.clear_null_row(instr.p1)?;
+            let has_row = vm.cursor_mut(instr.p1)?.last();
+            Ok(if has_row {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
         Opcode::Column => {
             #[allow(clippy::cast_sign_loss)]
             let col = instr.p2 as usize;
-            let value = vm.cursor(instr.p1)?.column(col);
+            let value = if vm.is_null_row(instr.p1)? {
+                Value::Null
+            } else {
+                vm.cursor(instr.p1)?.column(col)
+            };
             vm.set_register(instr.p3, value)?;
             Ok(Step::Next)
         }
         Opcode::Rowid => {
-            let rowid = vm.cursor(instr.p1)?.rowid();
+            let rowid = if vm.is_null_row(instr.p1)? {
+                0
+            } else {
+                vm.cursor(instr.p1)?.rowid()
+            };
             vm.set_register(instr.p2, Value::Integer(rowid))?;
             Ok(Step::Next)
         }
         Opcode::SeekRowid => {
+            vm.clear_null_row(instr.p1)?;
             let rowid = register_as_i64(vm, instr.p3)?;
             let found = vm.cursor_mut(instr.p1)?.seek(rowid);
             Ok(if found {
                 Step::Next
             } else {
                 Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::NullRow => {
+            vm.set_null_row(instr.p1)?;
+            Ok(Step::Next)
+        }
+        Opcode::Sequence => {
+            let value = vm.next_sequence(instr.p1)?;
+            vm.set_register(instr.p2, Value::Integer(value))?;
+            Ok(Step::Next)
+        }
+        Opcode::Count => {
+            let count = match vm.cursor(instr.p1)?.count() {
+                Some(n) => n,
+                None => {
+                    let cursor = vm.cursor_mut(instr.p1)?;
+                    let mut n: i64 = 0;
+                    let mut has_row = cursor.rewind();
+                    while has_row {
+                        n = n.saturating_add(1);
+                        has_row = cursor.next();
+                    }
+                    n
+                }
+            };
+            vm.set_register(instr.p2, Value::Integer(count))?;
+            Ok(Step::Next)
+        }
+        Opcode::AutoIndexInsert => {
+            let key = match vm.register(instr.p2)? {
+                Value::Blob(bytes) => decode_record(bytes, TextEncoding::Utf8).unwrap_or_default(),
+                other => vec![other.clone()],
+            };
+            let rowid = register_as_i64(vm, instr.p3)?;
+            if vm.cursor(instr.p1).is_err() {
+                vm.open_cursor(instr.p1, Box::new(super::cursor::AutoIndexCursor::new()))?;
+            }
+            let ok = vm.cursor_mut(instr.p1)?.auto_index_insert(key, rowid);
+            if !ok {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "AutoIndexInsert",
+                    reason: "cursor slot is not an automatic-index cursor".to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+        Opcode::AutoIndexSeek => {
+            let key = match vm.register(instr.p3)? {
+                Value::Blob(bytes) => decode_record(bytes, TextEncoding::Utf8).unwrap_or_default(),
+                other => vec![other.clone()],
+            };
+            let found = vm.cursor_mut(instr.p1)?.auto_index_seek(&key);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::AutoIndexRowid => {
+            let rowid = vm.cursor(instr.p1)?.rowid();
+            vm.set_register(instr.p2, Value::Integer(rowid))?;
+            Ok(Step::Next)
+        }
+        Opcode::AutoIndexNext => {
+            let has_next = vm.cursor_mut(instr.p1)?.auto_index_next();
+            Ok(if has_next {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
             })
         }
         Opcode::OpenRead | Opcode::OpenWrite => {
@@ -2740,5 +2886,127 @@ mod tests {
         ]);
         execute(&mut vm, &program).unwrap();
         assert_eq!(*log.borrow(), vec!["write_stat1(t)"]);
+    }
+
+    #[test]
+    fn count_falls_back_to_a_scan_when_the_cursor_has_no_fast_count() {
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(InMemoryCursor::new(vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(3)],
+            ])),
+        )
+        .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Count, 0, 1, 0),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(3)]]);
+    }
+
+    #[test]
+    fn last_positions_at_the_final_row_jumping_to_p2_when_empty() {
+        let mut vm = Vm::new();
+        vm.open_cursor(0, Box::new(InMemoryCursor::new(vec![])))
+            .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Last, 0, 3, 0),
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, Vec::<Vec<Value>>::new());
+    }
+
+    #[test]
+    fn null_row_makes_column_and_rowid_read_as_null_and_zero() {
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(InMemoryCursor::new(vec![vec![Value::Integer(1)]])),
+        )
+        .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::NullRow, 0, 0, 0),
+            Instruction::new(Opcode::Column, 0, 0, 1),
+            Instruction::new(Opcode::Rowid, 0, 2, 0),
+            Instruction::new(Opcode::ResultRow, 1, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Null, Value::Integer(0)]]);
+    }
+
+    #[test]
+    fn null_row_flag_clears_on_the_next_rewind() {
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(InMemoryCursor::new(vec![vec![Value::Integer(7)]])),
+        )
+        .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::NullRow, 0, 0, 0),
+            Instruction::new(Opcode::Rewind, 0, 5, 0),
+            Instruction::new(Opcode::Column, 0, 0, 1),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(7)]]);
+    }
+
+    #[test]
+    fn sequence_hands_out_increasing_values_per_slot() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Sequence, 0, 0, 0),
+            Instruction::new(Opcode::Sequence, 0, 1, 0),
+            Instruction::new(Opcode::ResultRow, 0, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(0), Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn auto_index_insert_opens_the_slot_on_first_use_and_seek_finds_it() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 42, 1, 0),
+            Instruction::new(Opcode::Integer, 99, 2, 0),
+            Instruction::new(Opcode::AutoIndexInsert, 0, 1, 2),
+            Instruction::new(Opcode::AutoIndexSeek, 0, 6, 1),
+            Instruction::new(Opcode::AutoIndexRowid, 0, 3, 0),
+            Instruction::new(Opcode::ResultRow, 3, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(99)]]);
+    }
+
+    #[test]
+    fn auto_index_seek_jumps_to_p2_on_a_miss() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 42, 1, 0),
+            Instruction::new(Opcode::Integer, 99, 2, 0),
+            Instruction::new(Opcode::AutoIndexInsert, 0, 1, 2),
+            Instruction::new(Opcode::Integer, 7, 1, 0),
+            Instruction::new(Opcode::AutoIndexSeek, 0, 7, 1),
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
     }
 }

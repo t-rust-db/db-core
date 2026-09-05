@@ -114,11 +114,24 @@
 //!   `db-core` can do itself (ADR 0008). With no hook installed, those
 //!   five opcodes fail with `ExecError::SchemaStorageMissing`.
 //!
+//! [`vm::Vm`] also now dispatches (db-core#127): `Opcode::AutoIndexInsert`/
+//! `Seek`/`Rowid`/`Next` over [`cursor::AutoIndexCursor`] (a transient,
+//! in-memory join index that never touches storage -- `AutoIndexInsert`
+//! opens the slot itself on first use, since there's no dedicated
+//! `OpenAutoIndex` opcode); `Opcode::Count` (a fast path via
+//! [`cursor::Cursor::count`], falling back to a full `rewind`/`next`
+//! scan when a cursor kind doesn't track one); `Opcode::Last` (mirrors
+//! `Rewind`, over [`cursor::Cursor::last`]); `Opcode::NullRow` (marks a
+//! cursor slot's `Column`/`Rowid` reads as NULL/0 until the next
+//! repositioning opcode clears it -- `LEFT JOIN`'s unmatched side);
+//! `Opcode::Sequence` (a plain per-slot monotonic counter, independent
+//! of any open cursor).
+//!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
-//! largest file), index-mode cursors, `AutoIndex*`/`Count`/`Last`/
-//! `NullRow`/`Sequence`, `IntegrityCheck`. `Opcode` already lists every
-//! variant sqlite-rs has (parity of identity); dispatch for the rest
-//! lands in later phases (tracked against db-core#18).
+//! largest file), index-mode cursors, `IntegrityCheck`. `Opcode`
+//! already lists every variant sqlite-rs has (parity of identity);
+//! dispatch for the rest lands in later phases (tracked against
+//! db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
@@ -149,7 +162,8 @@ pub use aggregate::{AggState, AggregateError};
 pub use cast::cast_to;
 pub use compare::compare;
 pub use cursor::{
-    Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor, PseudoCursor, SorterCursor,
+    AutoIndexCursor, Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor, PseudoCursor,
+    SorterCursor,
 };
 pub use cursor_factory::{CursorFactory, CursorFactoryError};
 pub use explain::{explain, ExplainRow};
