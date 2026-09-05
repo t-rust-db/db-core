@@ -37,6 +37,7 @@ use super::cursor_factory::{CursorFactory, CursorFactoryError};
 use super::functions;
 use super::program::{Instruction, Opcode, Program, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY};
 use super::record::{decode_record, encode_record};
+use super::schema_storage::{SchemaStorage, SchemaStorageError};
 use super::transaction::Transaction;
 use super::value::{Collation, TextEncoding, Value};
 
@@ -96,6 +97,12 @@ pub enum ExecError {
     /// A [`super::cursor_factory::CursorFactory`] call failed
     /// (db-core#125).
     CursorFactoryFailed(CursorFactoryError),
+    /// `opcode` needs a [`super::schema_storage::SchemaStorage`] hook
+    /// but none is installed (db-core#128).
+    SchemaStorageMissing { opcode: &'static str },
+    /// A [`super::schema_storage::SchemaStorage`] call failed
+    /// (db-core#128).
+    SchemaStorageFailed(SchemaStorageError),
 }
 
 impl std::fmt::Display for ExecError {
@@ -149,6 +156,10 @@ impl std::fmt::Display for ExecError {
                 write!(f, "attached databases are not supported")
             }
             ExecError::CursorFactoryFailed(err) => write!(f, "cursor factory failed: {err}"),
+            ExecError::SchemaStorageMissing { opcode } => {
+                write!(f, "{opcode}: no schema storage hook is installed")
+            }
+            ExecError::SchemaStorageFailed(err) => write!(f, "schema storage failed: {err}"),
         }
     }
 }
@@ -232,6 +243,12 @@ pub struct Vm {
     /// root to hand the factory for a second cursor onto the same
     /// table (db-core#125).
     cursor_roots: Vec<Option<u32>>,
+    /// A consumer's schema-write hook, installed via
+    /// [`Self::set_schema_storage`] (db-core#128). `None` (the
+    /// default) means `CreateTable`/`CreateIndex`/`DropTable`/
+    /// `DropIndex`/`Analyze` fail with
+    /// [`ExecError::SchemaStorageMissing`].
+    schema_storage: Option<Box<dyn SchemaStorage>>,
 }
 
 impl Default for Vm {
@@ -247,6 +264,7 @@ impl Default for Vm {
             transaction_hook: None,
             cursor_factory: None,
             cursor_roots: Vec::new(),
+            schema_storage: None,
         }
     }
 }
@@ -274,6 +292,23 @@ impl Vm {
     /// pre-wired via [`Self::open_cursor`].
     pub fn set_cursor_factory(&mut self, factory: Box<dyn CursorFactory>) {
         self.cursor_factory = Some(factory);
+    }
+
+    /// Installs `storage` to back `CreateTable`/`CreateIndex`/
+    /// `DropTable`/`DropIndex`/`Analyze` (db-core#128). With none
+    /// installed (the default), those opcodes fail with
+    /// [`ExecError::SchemaStorageMissing`].
+    pub fn set_schema_storage(&mut self, storage: Box<dyn SchemaStorage>) {
+        self.schema_storage = Some(storage);
+    }
+
+    fn schema_storage(
+        &mut self,
+        opcode: &'static str,
+    ) -> Result<&mut Box<dyn SchemaStorage>, ExecError> {
+        self.schema_storage
+            .as_mut()
+            .ok_or(ExecError::SchemaStorageMissing { opcode })
     }
 
     /// Records `root` as the root page cursor slot `slot` was last
@@ -1334,6 +1369,131 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
+        Opcode::CreateTable => {
+            let P4::CreateTable { name, sql } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "CreateTable",
+                    reason: format!("expected a CreateTable P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, sql) = (name.clone(), sql.clone());
+            let storage = vm.schema_storage("CreateTable")?;
+            let root = storage
+                .create_table_root()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .insert_master_row(&name, &sql, root)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::CreateIndex => {
+            let P4::CreateIndex {
+                name,
+                table_root_page,
+                sql,
+                column_indices,
+                ..
+            } = &instr.p4
+            else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "CreateIndex",
+                    reason: format!("expected a CreateIndex P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, table_root_page, sql, column_indices) = (
+                name.clone(),
+                *table_root_page,
+                sql.clone(),
+                column_indices.clone(),
+            );
+            let storage = vm.schema_storage("CreateIndex")?;
+            let root = storage
+                .create_index_root()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .populate_index(root, table_root_page, &column_indices)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .insert_master_row(&name, &sql, root)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::DropTable => {
+            let P4::DropTable {
+                name,
+                root_page,
+                indexes,
+            } = &instr.p4
+            else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "DropTable",
+                    reason: format!("expected a DropTable P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, root_page, indexes) = (name.clone(), *root_page, indexes.clone());
+            let storage = vm.schema_storage("DropTable")?;
+            storage
+                .delete_master_row(&name)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .free_root(root_page)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            for (index_name, index_root) in &indexes {
+                storage
+                    .delete_master_row(index_name)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+                storage
+                    .free_root(*index_root)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+            }
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::DropIndex => {
+            let P4::DropIndex { name, root_page } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "DropIndex",
+                    reason: format!("expected a DropIndex P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, root_page) = (name.clone(), *root_page);
+            let storage = vm.schema_storage("DropIndex")?;
+            storage
+                .delete_master_row(&name)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .free_root(root_page)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::Analyze => {
+            let P4::Analyze { targets } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "Analyze",
+                    reason: format!("expected an Analyze P4, got {:?}", instr.p4),
+                });
+            };
+            let targets = targets.clone();
+            let storage = vm.schema_storage("Analyze")?;
+            for target in &targets {
+                storage
+                    .write_stat1(target)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+            }
+            Ok(Step::Next)
+        }
+
         other => Err(ExecError::Unimplemented { opcode: other }),
     }
 }
@@ -2311,5 +2471,274 @@ mod tests {
         ]);
         let rows = execute(&mut vm, &program).unwrap();
         assert_eq!(rows, vec![vec![Value::Integer(42)]]);
+    }
+
+    /// Records every call it receives, in order, as a plain string log
+    /// -- this suite's stand-in for a real consumer's schema storage.
+    /// `log` is shared (`Rc<RefCell<_>>`) so a test can still read it
+    /// back after the `Box<dyn SchemaStorage>` it's installed behind is
+    /// consumed by `Vm`.
+    #[derive(Default)]
+    struct TestSchemaStorage {
+        log: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+        next_root: u32,
+    }
+
+    impl super::super::schema_storage::SchemaStorage for TestSchemaStorage {
+        fn create_table_root(
+            &mut self,
+        ) -> Result<u32, super::super::schema_storage::SchemaStorageError> {
+            self.next_root += 1;
+            self.log
+                .borrow_mut()
+                .push(format!("create_table_root -> {}", self.next_root));
+            Ok(self.next_root)
+        }
+
+        fn create_index_root(
+            &mut self,
+        ) -> Result<u32, super::super::schema_storage::SchemaStorageError> {
+            self.next_root += 1;
+            self.log
+                .borrow_mut()
+                .push(format!("create_index_root -> {}", self.next_root));
+            Ok(self.next_root)
+        }
+
+        fn populate_index(
+            &mut self,
+            index_root: u32,
+            table_root: u32,
+            column_indices: &[usize],
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log.borrow_mut().push(format!(
+                "populate_index({index_root}, {table_root}, {column_indices:?})"
+            ));
+            Ok(())
+        }
+
+        fn free_root(
+            &mut self,
+            root: u32,
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log.borrow_mut().push(format!("free_root({root})"));
+            Ok(())
+        }
+
+        fn insert_master_row(
+            &mut self,
+            name: &str,
+            sql: &str,
+            root_page: u32,
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log
+                .borrow_mut()
+                .push(format!("insert_master_row({name}, {sql}, {root_page})"));
+            Ok(())
+        }
+
+        fn delete_master_row(
+            &mut self,
+            name: &str,
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log
+                .borrow_mut()
+                .push(format!("delete_master_row({name})"));
+            Ok(())
+        }
+
+        fn bump_schema_cookie(
+            &mut self,
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log.borrow_mut().push("bump_schema_cookie".to_string());
+            Ok(())
+        }
+
+        fn write_stat1(
+            &mut self,
+            target: &super::super::program::AnalyzeTarget,
+        ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+            self.log
+                .borrow_mut()
+                .push(format!("write_stat1({})", target.table_name));
+            Ok(())
+        }
+    }
+
+    fn instr_p4(opcode: Opcode, p4: P4) -> Instruction {
+        let mut instr = Instruction::new(opcode, 0, 0, 0);
+        instr.p4 = p4;
+        instr
+    }
+
+    #[test]
+    fn create_table_without_a_schema_storage_hook_errors() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![instr_p4(
+            Opcode::CreateTable,
+            P4::CreateTable {
+                name: "t".to_string(),
+                sql: "CREATE TABLE t (a)".to_string(),
+            },
+        )]);
+        assert!(matches!(
+            execute(&mut vm, &program),
+            Err(ExecError::SchemaStorageMissing {
+                opcode: "CreateTable"
+            })
+        ));
+    }
+
+    #[test]
+    fn create_table_allocates_a_root_and_writes_the_master_row() {
+        let mut vm = Vm::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: log.clone(),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            instr_p4(
+                Opcode::CreateTable,
+                P4::CreateTable {
+                    name: "t".to_string(),
+                    sql: "CREATE TABLE t (a)".to_string(),
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                "create_table_root -> 1",
+                "insert_master_row(t, CREATE TABLE t (a), 1)",
+                "bump_schema_cookie",
+            ]
+        );
+    }
+
+    #[test]
+    fn create_index_populates_from_the_target_table_root() {
+        let mut vm = Vm::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: log.clone(),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            instr_p4(
+                Opcode::CreateIndex,
+                P4::CreateIndex {
+                    name: "idx".to_string(),
+                    table_name: "t".to_string(),
+                    table_root_page: 7,
+                    sql: "CREATE INDEX idx ON t(a)".to_string(),
+                    column_indices: vec![0],
+                    unique: false,
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                "create_index_root -> 1",
+                "populate_index(1, 7, [0])",
+                "insert_master_row(idx, CREATE INDEX idx ON t(a), 1)",
+                "bump_schema_cookie",
+            ]
+        );
+    }
+
+    #[test]
+    fn drop_table_frees_its_own_root_and_every_index_root() {
+        let mut vm = Vm::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: log.clone(),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            instr_p4(
+                Opcode::DropTable,
+                P4::DropTable {
+                    name: "t".to_string(),
+                    root_page: 5,
+                    indexes: vec![("idx".to_string(), 6)],
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                "delete_master_row(t)",
+                "free_root(5)",
+                "delete_master_row(idx)",
+                "free_root(6)",
+                "bump_schema_cookie",
+            ]
+        );
+    }
+
+    #[test]
+    fn drop_index_frees_its_root() {
+        let mut vm = Vm::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: log.clone(),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            instr_p4(
+                Opcode::DropIndex,
+                P4::DropIndex {
+                    name: "idx".to_string(),
+                    root_page: 6,
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                "delete_master_row(idx)",
+                "free_root(6)",
+                "bump_schema_cookie"
+            ]
+        );
+    }
+
+    #[test]
+    fn analyze_writes_stat1_for_every_target() {
+        use super::super::program::{AnalyzeIndexTarget, AnalyzeTarget};
+        let mut vm = Vm::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        vm.set_schema_storage(Box::new(TestSchemaStorage {
+            log: log.clone(),
+            next_root: 0,
+        }));
+        let program = Program::new(vec![
+            instr_p4(
+                Opcode::Analyze,
+                P4::Analyze {
+                    targets: vec![AnalyzeTarget {
+                        table_name: "t".to_string(),
+                        table_root_page: 5,
+                        indexes: vec![AnalyzeIndexTarget {
+                            index_name: "idx".to_string(),
+                            root_page: 6,
+                        }],
+                    }],
+                },
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(*log.borrow(), vec!["write_stat1(t)"]);
     }
 }

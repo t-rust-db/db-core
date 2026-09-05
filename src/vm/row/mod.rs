@@ -105,11 +105,20 @@
 //!   register. With no factory installed, `OpenRead`/`OpenWrite` keep
 //!   the earlier pre-wired-slot fallback.
 //!
+//! - [`schema_storage`] -- the [`schema_storage::SchemaStorage`] hook
+//!   (db-core#128) a consumer's pager installs via [`vm::Vm::
+//!   set_schema_storage`] to back `CreateTable`/`CreateIndex`/
+//!   `DropTable`/`DropIndex`/`Analyze` -- allocating/freeing b-tree
+//!   roots, writing/deleting `sqlite_master` rows, bumping the schema
+//!   cookie, and computing `sqlite_stat1` rows, none of which
+//!   `db-core` can do itself (ADR 0008). With no hook installed, those
+//!   five opcodes fail with `ExecError::SchemaStorageMissing`.
+//!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file), index-mode cursors, `AutoIndex*`/`Count`/`Last`/
-//! `NullRow`/`Sequence`, DDL, `IntegrityCheck`. `Opcode` already lists
-//! every variant sqlite-rs has (parity of identity); dispatch for the
-//! rest lands in later phases (tracked against db-core#18).
+//! `NullRow`/`Sequence`, `IntegrityCheck`. `Opcode` already lists every
+//! variant sqlite-rs has (parity of identity); dispatch for the rest
+//! lands in later phases (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
@@ -130,6 +139,7 @@ pub mod functions;
 pub mod logic;
 pub mod program;
 pub mod record;
+pub mod schema_storage;
 pub mod transaction;
 pub mod value;
 pub mod vm;
@@ -151,6 +161,7 @@ pub use program::{
     TRANSACTION_MODE_IMMEDIATE,
 };
 pub use record::{decode_column, decode_record, encode_record, RecordError};
+pub use schema_storage::{SchemaStorage, SchemaStorageError};
 pub use transaction::{Transaction, TransactionError};
 pub use value::{compare_text, format_real, Collation, TextEncoding, Value};
 pub use vm::{execute, ExecError, Step, Vm};
