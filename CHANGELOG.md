@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.31.0] - 2026-09-05
+
+### Added
+
+- **`codegen::row` gains expression compilation** (#91) -- ports sqlite-rs's `src/codegen.rs` shared infra + `expr.rs`/`expr/{cond,value}.rs`, targeting `vm::row::Opcode` directly, scoped to what db-core's current `Expr`/`Opcode` support today: a minimal `Emitter`/`RegAlloc`/`Scope`/`CondTargets` jump-based compilation mechanism covering `Not`, `And`/`Or` (cheapest-first short-circuit reordering), comparisons, `IsNull`, arithmetic, `Concat`, and column/literal reads, plus a 200-level expression-depth bound. `InSubquery` codegen and `Case`/`Cast`/`Like`/`Between`/`Exists`/multi-table `Scope` are deferred to later sub-tickets (#92/#95) that actually need them. `codegen-row` now depends on `vm-row`.
+
 ## [0.30.0] - 2026-09-05
 
 ### Fixed

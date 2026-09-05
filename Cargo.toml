@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.30.0"
+version = "0.31.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/db-core"
@@ -38,7 +38,7 @@ vm-stream = []
 # meaning of the word (ADR 0007). One per `vm` executor; `codegen-batch`
 # needs `vm-batch`'s `Program`/`Opcode` types to build.
 codegen-batch = ["vm-batch"]
-codegen-row = []
+codegen-row = ["vm-row"]
 codegen-stream = []
 
 # `emit`: one ahead-of-time Rust-source emitter per Cargo feature, one
