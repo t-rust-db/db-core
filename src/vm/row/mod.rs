@@ -56,7 +56,17 @@
 //!   `Vm::open_cursor` -- real root-page/pager semantics against
 //!   `db-storage` are still not implemented (blocked on
 //!   t-rust-db/db-storage#8, which adds the read-only `TableCursor`
-//!   this trait's eventual adapter will wrap).
+//!   this trait's eventual adapter will wrap). `SetJournalMode`/
+//!   `Synchronous` (db-core#89) are also dispatched, but -- since
+//!   `db-core` has no pager of its own -- reduce to the no-writer
+//!   fallback sqlite-rs itself defines for a read-only connection:
+//!   `SetJournalMode` is a no-op (erroring only on `Vm::autocommit`,
+//!   a new flag `Opcode::Transaction`/`AutoCommit` will set/clear once
+//!   #81 wires them), and `Synchronous`'s query form always reports
+//!   `FULL`. `IntegrityCheck` is *not* dispatched -- it has no
+//!   no-writer fallback in sqlite-rs (it always needs a real page
+//!   source), so it stays `ExecError::Unimplemented` until `db-core`
+//!   has one to attach.
 //!
 //! [`cursor::Cursor`] also grew `prev`/`last`/`delete` (db-core#76),
 //! matching the shape a real storage-backed cursor will need, ahead of
@@ -64,11 +74,11 @@
 //!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
-//! and index-mode ephemeral cursors, DDL, real transactions,
-//! `like`/`glob`/`substr`/`trim`/`replace`, `EXPLAIN`/`PRAGMA`
-//! rendering. `Opcode` already lists every variant sqlite-rs has
-//! (parity of identity); dispatch for the rest lands in later phases
-//! (tracked against db-core#18).
+//! and index-mode ephemeral cursors, DDL, real transactions
+//! (`Transaction`/`AutoCommit`), `like`/`glob`/`substr`/`trim`/
+//! `replace`, `EXPLAIN` rendering, `IntegrityCheck`. `Opcode` already
+//! lists every variant sqlite-rs has (parity of identity); dispatch
+//! for the rest lands in later phases (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
