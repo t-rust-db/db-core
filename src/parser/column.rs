@@ -547,6 +547,39 @@ fn convert_select(select: &Select) -> Result<Query> {
         .map(convert_result_column)
         .collect::<Result<Vec<_>>>()?;
 
+    // `compile` (codegen::batch) emits every non-aggregated SELECT column
+    // via GROUP BY's own key registers, in GROUP BY's stated order -- not
+    // by re-checking each SELECT column against `group_by` itself. A
+    // `SELECT` whose bare columns don't match `group_by` exactly (extra
+    // column, missing key, or different order) desyncs from that
+    // assumption: previously this either silently produced wrong values
+    // (order mismatch) or crashed outright (a bare column with no GROUP BY
+    // at all -- its full-length register got zipped against an
+    // aggregate's single-row one in `Emit`, indexing past the end).
+    // Window queries have their own, separate semantics and never reach
+    // `compile` this way, so they're exempt.
+    let has_window = columns.iter().any(|c| matches!(c, SelectItem::Window(_)));
+    let has_agg = columns.iter().any(|c| matches!(c, SelectItem::Agg(..)));
+    if has_agg && !has_window {
+        let select_bare: Vec<&String> = columns
+            .iter()
+            .filter_map(|c| match c {
+                SelectItem::Column(name) => Some(name),
+                _ => None,
+            })
+            .collect();
+        if select_bare != group_by.iter().collect::<Vec<_>>() {
+            let message = if group_by.is_empty() {
+                "a plain column alongside an aggregate requires GROUP BY".to_string()
+            } else {
+                "every non-aggregated SELECT column must be a GROUP BY key, listed in the \
+                 same order as GROUP BY"
+                    .to_string()
+            };
+            return Err(unsupported(select.span, message));
+        }
+    }
+
     let mut query = Query {
         columns,
         from: from_name,
@@ -770,6 +803,64 @@ mod tests {
             ]
         );
         assert_eq!(q.group_by, vec!["region".to_string()]);
+    }
+
+    /// Regression: `SELECT active, MAX(id) FROM t` (a bare column alongside
+    /// an aggregate, no GROUP BY) used to compile into mismatched-length
+    /// registers and panic in `Emit` at runtime ("index out of bounds").
+    /// Invalid SQL -- must be rejected at parse time instead.
+    #[test]
+    fn bare_column_with_aggregate_and_no_group_by_is_rejected() {
+        let err = parse("SELECT active, MAX(id) FROM t").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    #[test]
+    fn aggregate_only_with_no_group_by_and_no_bare_column_is_fine() {
+        assert!(parse("SELECT MAX(id) FROM t").is_ok());
+        assert!(parse("SELECT COUNT(*), SUM(amount) FROM t").is_ok());
+    }
+
+    /// A bare column that isn't a GROUP BY key at all.
+    #[test]
+    fn bare_column_not_a_group_by_key_is_rejected() {
+        let err = parse("SELECT active, SUM(amount) FROM t GROUP BY region").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    /// `compile` (codegen::batch) emits non-aggregated SELECT columns via
+    /// GROUP BY's own stated order, not the SELECT list's -- a SELECT
+    /// naming its GROUP BY keys in a different order than GROUP BY itself
+    /// would otherwise silently show values under the wrong headers.
+    #[test]
+    fn select_list_group_by_keys_in_a_different_order_than_group_by_is_rejected() {
+        let err =
+            parse("SELECT year, region, SUM(amount) FROM t GROUP BY region, year").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    /// GROUP BY on a column that isn't itself selected (valid SQL: you can
+    /// group by a column you don't project) is still rejected today --
+    /// `compile`'s GROUP BY registers always get emitted regardless of
+    /// whether they were requested, so the two must match exactly for now.
+    #[test]
+    fn group_by_key_omitted_from_select_list_is_rejected() {
+        let err = parse("SELECT SUM(amount) FROM t GROUP BY region").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    #[test]
+    fn select_list_matching_group_by_keys_exactly_is_accepted() {
+        assert!(parse("SELECT region, year, SUM(amount) FROM t GROUP BY region, year").is_ok());
+    }
+
+    /// Window functions are exempt: they have their own semantics and never
+    /// require GROUP BY.
+    #[test]
+    fn window_function_alongside_a_bare_column_needs_no_group_by() {
+        assert!(
+            parse("SELECT id, ROW_NUMBER() OVER (PARTITION BY region ORDER BY id) FROM t").is_ok()
+        );
     }
 
     #[test]
