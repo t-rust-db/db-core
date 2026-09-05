@@ -34,7 +34,7 @@ use super::coerce;
 use super::compare::compare;
 use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, SorterCursor};
 use super::functions;
-use super::program::{Instruction, Opcode, Program, P4};
+use super::program::{Instruction, Opcode, Program, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY};
 use super::record::{decode_record, encode_record};
 use super::value::{Collation, TextEncoding, Value};
 
@@ -79,6 +79,10 @@ pub enum ExecError {
     StepLimitExceeded,
     /// The program executed `Halt` with a non-success result `code`.
     Halted { code: i32, message: Option<String> },
+    /// `SetJournalMode` ran while a transaction was open
+    /// (`!Vm::autocommit`) -- stock SQLite refuses to change journal
+    /// mode mid-transaction.
+    JournalModeChangeDuringTransaction,
 }
 
 impl std::fmt::Display for ExecError {
@@ -122,6 +126,10 @@ impl std::fmt::Display for ExecError {
                     .as_deref()
                     .map(|m| format!(": {m}"))
                     .unwrap_or_default()
+            ),
+            ExecError::JournalModeChangeDuringTransaction => write!(
+                f,
+                "SetJournalMode: cannot change journal mode within a transaction"
             ),
         }
     }
@@ -174,7 +182,6 @@ pub(crate) fn is_falsy(v: &Value) -> bool {
 /// a disjoint cursor-slot table, a disjoint aggregate-context slot
 /// table (`AggStep`/`AggFinal`'s `p1`, same shape as `cursors`), plus
 /// accumulated output rows and `Once`'s one-shot-guard bookkeeping.
-#[derive(Default)]
 pub struct Vm {
     registers: Vec<Value>,
     cursors: Vec<Option<Box<dyn Cursor>>>,
@@ -182,6 +189,28 @@ pub struct Vm {
     rows: Vec<Vec<Value>>,
     once_fired: HashSet<usize>,
     params: Vec<Value>,
+    /// Whether this `Vm` is outside an explicit transaction (db-core#89,
+    /// ahead of #81's full transaction-hook surface) -- `true` until
+    /// `Opcode::Transaction` clears it, restored by `Opcode::
+    /// AutoCommit`. Only `Opcode::SetJournalMode` consults it so far
+    /// (matches stock SQLite's refusal to change journal mode
+    /// mid-transaction); `db-core` has no pager of its own, so there is
+    /// nothing else for this flag to gate yet.
+    autocommit: bool,
+}
+
+impl Default for Vm {
+    fn default() -> Self {
+        Vm {
+            registers: Vec::new(),
+            cursors: Vec::new(),
+            agg_contexts: Vec::new(),
+            rows: Vec::new(),
+            once_fired: HashSet::new(),
+            params: Vec::new(),
+            autocommit: true,
+        }
+    }
 }
 
 impl Vm {
@@ -1078,6 +1107,30 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
+        Opcode::SetJournalMode => {
+            if !vm.autocommit {
+                return Err(ExecError::JournalModeChangeDuringTransaction);
+            }
+            // sqlite-rs switches the attached pager's on-disk journal
+            // mode (per `instr.p1`) here; `db-core` has no pager (ADR
+            // 0008/0006), so this is unconditionally the no-op
+            // sqlite-rs itself falls back to for a read-only
+            // connection with no writer.
+            Ok(Step::Next)
+        }
+        Opcode::Synchronous => {
+            // `db-core` never has a writer to report/set a real
+            // synchronous level for, so the query form always reports
+            // sqlite-rs's own no-writer fallback
+            // (`SynchronousMode::default()`, i.e. `FULL`); setting a
+            // level (per `instr.p1`) is a no-op, same as sqlite-rs's
+            // own no-writer case.
+            if instr.p1 == SYNCHRONOUS_QUERY {
+                vm.emit_row(vec![Value::Integer(i64::from(SYNCHRONOUS_FULL))]);
+            }
+            Ok(Step::Next)
+        }
+
         Opcode::Delete => {
             let deleted = vm.cursor_mut(instr.p1)?.delete();
             if !deleted {
@@ -1398,6 +1451,55 @@ mod tests {
                 opcode: Opcode::OpenDup
             })
         ));
+    }
+
+    #[test]
+    fn set_journal_mode_is_a_no_op_with_no_writer_attached() {
+        let mut vm = Vm::new();
+        let instr = Instruction::new(
+            Opcode::SetJournalMode,
+            super::super::program::JOURNAL_MODE_WAL,
+            0,
+            0,
+        );
+        assert_eq!(step(&mut vm, 0, &instr).unwrap(), Step::Next);
+    }
+
+    #[test]
+    fn set_journal_mode_errors_when_a_transaction_is_open() {
+        let mut vm = Vm::new();
+        vm.autocommit = false;
+        let instr = Instruction::new(
+            Opcode::SetJournalMode,
+            super::super::program::JOURNAL_MODE_WAL,
+            0,
+            0,
+        );
+        assert!(matches!(
+            step(&mut vm, 0, &instr),
+            Err(ExecError::JournalModeChangeDuringTransaction)
+        ));
+    }
+
+    #[test]
+    fn synchronous_query_reports_full_with_no_writer_attached() {
+        let mut vm = Vm::new();
+        let instr = Instruction::new(Opcode::Synchronous, SYNCHRONOUS_QUERY, 0, 0);
+        assert_eq!(step(&mut vm, 0, &instr).unwrap(), Step::Next);
+        assert_eq!(vm.rows(), &[vec![Value::Integer(SYNCHRONOUS_FULL.into())]]);
+    }
+
+    #[test]
+    fn synchronous_set_is_a_no_op_with_no_writer_attached() {
+        let mut vm = Vm::new();
+        let instr = Instruction::new(
+            Opcode::Synchronous,
+            super::super::program::SYNCHRONOUS_OFF,
+            0,
+            0,
+        );
+        assert_eq!(step(&mut vm, 0, &instr).unwrap(), Step::Next);
+        assert!(vm.rows().is_empty());
     }
 
     #[test]
