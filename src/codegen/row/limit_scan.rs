@@ -109,54 +109,86 @@ pub(super) fn emit_limit_guard(em: &mut Emitter, limit: &LimitState, end_label: 
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::expr::{Query, SelectItem};
-
-    fn query(limit: Option<usize>, offset: Option<usize>) -> Query {
-        Query {
-            columns: vec![SelectItem::Column("a".to_string())],
-            from: "t".into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit,
-            offset,
-        }
-    }
+    use crate::codegen::row::testutil::select;
 
     #[test]
-    fn no_limit_or_offset_sets_up_nothing() {
+    fn no_limit_sets_up_nothing() {
         let mut em = Emitter::new();
         let mut reg = RegAlloc::new();
-        assert!(compile_limit_setup(&mut em, &mut reg, &query(None, None))
-            .unwrap()
-            .is_none());
+        assert!(
+            compile_limit_setup(&mut em, &mut reg, &select("SELECT a FROM t"))
+                .unwrap()
+                .is_none()
+        );
         assert!(em.finish().instructions.is_empty());
     }
 
+    /// SQLite's grammar has no bare `OFFSET` -- it is only reachable as
+    /// `LIMIT n OFFSET m`, which the AST records by nesting `offset`
+    /// inside `Limit`. `expr::Query` had them as independent
+    /// `Option<usize>` fields, so the old suite tested an
+    /// offset-without-limit query the parser could never produce.
     #[test]
-    fn offset_alone_sets_up_only_the_offset_counter() {
+    fn limit_and_offset_each_get_a_counter() {
         let mut em = Emitter::new();
         let mut reg = RegAlloc::new();
-        let state = compile_limit_setup(&mut em, &mut reg, &query(None, Some(7)))
+        let state = compile_limit_setup(
+            &mut em,
+            &mut reg,
+            &select("SELECT a FROM t LIMIT 3 OFFSET 7"),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(state.limit_reg.is_some());
+        assert!(state.offset_reg.is_some());
+        let program = em.finish();
+        let counters: Vec<i32> = program
+            .instructions
+            .iter()
+            .filter(|i| i.opcode == Opcode::Integer)
+            .map(|i| i.p1)
+            .collect();
+        assert_eq!(counters, vec![3, 7]);
+    }
+
+    #[test]
+    fn limit_alone_sets_up_only_the_limit_counter() {
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        let state = compile_limit_setup(&mut em, &mut reg, &select("SELECT a FROM t LIMIT 5"))
             .unwrap()
             .unwrap();
-        assert!(state.limit_reg.is_none());
+        assert!(state.offset_reg.is_none());
         let program = em.finish();
         assert_eq!(program.instructions.len(), 1);
         assert_eq!(program.instructions[0].opcode, Opcode::Integer);
-        assert_eq!(program.instructions[0].p1, 7);
+        assert_eq!(program.instructions[0].p1, 5);
+    }
+
+    /// An expression bound needs a computed counter rather than an
+    /// `Integer` immediate; rejected until #149 rather than silently
+    /// mis-limiting.
+    #[test]
+    fn a_non_literal_limit_is_unsupported() {
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        assert!(matches!(
+            compile_limit_setup(&mut em, &mut reg, &select("SELECT a FROM t LIMIT 2 + 3")),
+            Err(CodegenError::Unsupported { .. })
+        ));
     }
 
     #[test]
     fn offset_guard_decrements_and_skips() {
         let mut em = Emitter::new();
         let mut reg = RegAlloc::new();
-        let state = compile_limit_setup(&mut em, &mut reg, &query(Some(3), Some(2)))
-            .unwrap()
-            .unwrap();
+        let state = compile_limit_setup(
+            &mut em,
+            &mut reg,
+            &select("SELECT a FROM t LIMIT 3 OFFSET 2"),
+        )
+        .unwrap()
+        .unwrap();
         let row_skip = em.new_label();
         emit_offset_guard(&mut em, &state, row_skip);
         em.place(row_skip);

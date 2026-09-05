@@ -45,11 +45,7 @@ pub(super) fn resolve_subquery_schema(
     outer_scope: &Scope,
 ) -> Result<TableSchema> {
     reject_unsupported_shape(subquery, "a subquery")?;
-    let Some(name) = subquery
-        .from
-        .as_ref()
-        .and_then(|from| from.first.name())
-    else {
+    let Some(name) = subquery.from.as_ref().and_then(|from| from.first.name()) else {
         return Err(CodegenError::Unsupported {
             reason: "a subquery-expression's own FROM being itself a subquery is not yet supported"
                 .to_string(),
@@ -92,7 +88,9 @@ fn subquery_output_columns(subquery: &Select, schema: &TableSchema) -> Result<Ve
             ResultColumn::Star => out.extend(schema.columns.iter().cloned()),
             ResultColumn::TableStar { table } => {
                 return Err(CodegenError::Unsupported {
-                    reason: format!("`{table}.*` in a FROM-subquery's SELECT list is not yet supported"),
+                    reason: format!(
+                        "`{table}.*` in a FROM-subquery's SELECT list is not yet supported"
+                    ),
                 })
             }
         }
@@ -308,8 +306,7 @@ mod tests {
     }
 
     fn compile(sql: &str) -> Result<Program> {
-        let query = crate::parser::column::parse(sql).unwrap();
-        compile_select_with_catalog(&catalog(), &query)
+        compile_select_with_catalog(&catalog(), &crate::codegen::row::testutil::select(sql))
     }
 
     fn opcodes(program: &Program) -> Vec<Opcode> {
@@ -318,8 +315,8 @@ mod tests {
 
     #[test]
     fn resolves_a_subquerys_projected_columns_as_a_synthetic_schema() {
-        let query = crate::parser::column::parse("SELECT b FROM (SELECT b FROM t) x").unwrap();
-        let schema = resolve_from_table_schema(&query.from, &catalog()).unwrap();
+        let query = crate::codegen::row::testutil::select("SELECT b FROM (SELECT b FROM t) x");
+        let schema = resolve_from_table_schema(query.from.as_ref(), &catalog()).unwrap();
         assert_eq!(schema.name, "x");
         assert_eq!(schema.columns, vec!["b".to_string()]);
         assert_eq!(schema.root_page, 0);
@@ -327,8 +324,8 @@ mod tests {
 
     #[test]
     fn star_projection_exposes_every_underlying_column() {
-        let query = crate::parser::column::parse("SELECT a FROM (SELECT * FROM t) x").unwrap();
-        let schema = resolve_from_table_schema(&query.from, &catalog()).unwrap();
+        let query = crate::codegen::row::testutil::select("SELECT a FROM (SELECT * FROM t) x");
+        let schema = resolve_from_table_schema(query.from.as_ref(), &catalog()).unwrap();
         assert_eq!(schema.columns, vec!["a".to_string(), "b".to_string()]);
     }
 
@@ -341,7 +338,7 @@ mod tests {
 
         let mut em = Emitter::new();
         let mut reg = RegAlloc::new();
-        let inner = crate::parser::column::parse("SELECT b FROM t WHERE a = 1").unwrap();
+        let inner = crate::codegen::row::testutil::select("SELECT b FROM t WHERE a = 1");
         let schema = materialize_from_subquery(&mut em, &mut reg, &inner, &catalog(), 0).unwrap();
         assert_eq!(schema.columns, vec!["b".to_string()]);
         let ops: Vec<Opcode> = em.finish().instructions.iter().map(|i| i.opcode).collect();
@@ -373,9 +370,7 @@ mod tests {
 
     #[test]
     fn an_aggregate_in_a_from_subquery_is_unsupported() {
-        let err = crate::parser::column::parse("SELECT c FROM (SELECT COUNT(*) FROM t) x")
-            .map_err(|_| ())
-            .and_then(|q| resolve_from_table_schema(&q.from, &catalog()).map_err(|_| ()));
-        assert!(err.is_err());
+        let q = crate::codegen::row::testutil::select("SELECT c FROM (SELECT COUNT(*) FROM t) x");
+        assert!(resolve_from_table_schema(q.from.as_ref(), &catalog()).is_err());
     }
 }

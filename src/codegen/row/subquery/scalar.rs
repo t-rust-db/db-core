@@ -225,8 +225,11 @@ mod tests {
     }
 
     fn compile(sql: &str) -> Result<Program> {
-        let query = crate::parser::column::parse(sql).unwrap();
-        compile_select_with_catalog(&catalog(), &query)
+        // Parses through the crate's only grammar rather than
+        // `parser::column`'s analytics-subset lowering, which exists to
+        // feed `codegen::batch` and rejects most of what this planner
+        // now accepts (#147).
+        compile_select_with_catalog(&catalog(), &crate::codegen::row::testutil::select(sql))
     }
 
     fn opcodes(program: &Program) -> Vec<Opcode> {

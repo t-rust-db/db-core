@@ -175,7 +175,9 @@ chooser is deferred to #117, N-way joins to #118"
             // is accepted and ignored -- it renames the output, which
             // this planner does not model yet.
             ResultColumn::Expr { expr, .. } => match &expr.kind {
-                ExprKind::Column { table: None, name, .. } => columns.push(name.clone()),
+                ExprKind::Column {
+                    table: None, name, ..
+                } => columns.push(name.clone()),
                 ExprKind::Column {
                     table: Some(table),
                     name,
@@ -573,7 +575,11 @@ fn compile_aggregate_select(
 
 /// Emits the `LIMIT` counter register, if any -- `Opcode::IfNotZero`
 /// decrements it per emitted row (see [`emit_limit_guard`]).
-fn compile_limit_setup(em: &mut Emitter, reg: &mut RegAlloc, query: &Select) -> Result<Option<i32>> {
+fn compile_limit_setup(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    query: &Select,
+) -> Result<Option<i32>> {
     let Some(limit) = &query.limit else {
         return Ok(None);
     };
@@ -649,10 +655,7 @@ pub(super) fn build_join_cond(scope: &Scope, join: &Join) -> Result<Expr> {
                 Expr {
                     kind: ExprKind::Binary {
                         op: BinaryOp::Eq,
-                        lhs: Box::new(super::column_expr(format!(
-                            "{}.{col}",
-                            scope.schema.name
-                        ))),
+                        lhs: Box::new(super::column_expr(format!("{}.{col}", scope.schema.name))),
                         rhs: Box::new(super::column_expr(format!("{right_table_name}.{col}"))),
                     },
                     span: crate::parser::Span::UNKNOWN,
@@ -1008,8 +1011,7 @@ fn compile_row_values(
 )]
 mod tests {
     use super::*;
-    use crate::expr::{BinOp, Expr};
-    use crate::types::Literal;
+    use crate::codegen::row::testutil::select as query;
     use crate::vm::row::{execute, Cursor, InMemoryCursor, InMemoryIndexCursor, Value, Vm};
 
     fn schema(columns: &[&str]) -> TableSchema {
@@ -1027,22 +1029,7 @@ mod tests {
         }
     }
 
-    fn base_query(columns: Vec<SelectItem>) -> Query {
-        Query {
-            columns,
-            from: "t".into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        }
-    }
-
-    fn run(schema: &TableSchema, query: &Query, rows: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
+    fn run(schema: &TableSchema, query: &Select, rows: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
         let program = compile_select(schema, 0, query).unwrap();
         let mut vm = Vm::new();
         vm.open_cursor(0, Box::new(InMemoryCursor::new(rows)))
@@ -1069,7 +1056,7 @@ mod tests {
     #[test]
     fn scans_every_row_projecting_selected_columns() {
         let schema = schema(&["a", "b"]);
-        let query = base_query(vec![SelectItem::Column("b".into())]);
+        let query = query("SELECT b FROM t");
         let rows = run(
             &schema,
             &query,
@@ -1087,7 +1074,7 @@ mod tests {
     #[test]
     fn star_expands_to_every_schema_column_in_order() {
         let schema = schema(&["a", "b"]);
-        let query = base_query(vec![SelectItem::Star]);
+        let query = query("SELECT * FROM t");
         let rows = run(
             &schema,
             &query,
@@ -1099,12 +1086,7 @@ mod tests {
     #[test]
     fn where_clause_filters_rows() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("a".into())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(1))),
-        ));
+        let query = query("SELECT a FROM t WHERE a > 1");
         let rows = run(
             &schema,
             &query,
@@ -1120,8 +1102,7 @@ mod tests {
     #[test]
     fn limit_stops_the_scan_early() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.limit = Some(2);
+        let query = query("SELECT a FROM t LIMIT 2");
         let rows = run(
             &schema,
             &query,
@@ -1137,8 +1118,7 @@ mod tests {
     #[test]
     fn limit_zero_emits_no_rows() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.limit = Some(0);
+        let query = query("SELECT a FROM t LIMIT 0");
         let rows = run(&schema, &query, vec![vec![Value::Integer(1)]]);
         assert!(rows.is_empty());
     }
@@ -1190,11 +1170,15 @@ mod tests {
             .collect()
     }
 
+    /// SQLite's grammar has no bare `OFFSET` -- only `LIMIT n OFFSET m`
+    /// -- so a very large `LIMIT` stands in for "no real limit" when a
+    /// test only cares about the offset. `expr::Query` had them as
+    /// independent `Option<usize>` fields, so the old suite could build
+    /// a query the parser could never actually produce.
     #[test]
     fn offset_skips_leading_rows() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.offset = Some(2);
+        let query = query("SELECT a FROM t LIMIT 1000000 OFFSET 2");
         let rows = run(
             &schema,
             &query,
@@ -1210,9 +1194,7 @@ mod tests {
     #[test]
     fn limit_applies_after_offset() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.offset = Some(1);
-        query.limit = Some(2);
+        let query = query("SELECT a FROM t LIMIT 2 OFFSET 1");
         let rows = run(
             &schema,
             &query,
@@ -1229,12 +1211,7 @@ mod tests {
     #[test]
     fn offset_applies_to_sorted_output_not_scan_order() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "a".into(),
-            descending: false,
-        });
-        query.offset = Some(1);
+        let query = query("SELECT a FROM t ORDER BY a LIMIT 1000000 OFFSET 1");
         let rows = run(
             &schema,
             &query,
@@ -1250,11 +1227,7 @@ mod tests {
     #[test]
     fn an_indexed_order_by_walks_the_index_instead_of_sorting() {
         let schema = indexed_schema(&["a"], "a");
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "a".into(),
-            descending: false,
-        });
+        let query = query("SELECT a FROM t ORDER BY a");
         let ops = opcodes(&schema, &query);
         assert!(ops.contains(&Opcode::IdxRewind));
         assert!(ops.contains(&Opcode::IdxRowid));
@@ -1283,11 +1256,7 @@ mod tests {
     #[test]
     fn a_descending_indexed_order_by_walks_the_index_backward() {
         let schema = indexed_schema(&["a"], "a");
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "a".into(),
-            descending: true,
-        });
+        let query = query("SELECT a FROM t ORDER BY a DESC");
         let ops = opcodes(&schema, &query);
         assert!(ops.contains(&Opcode::IdxLast));
         assert!(ops.contains(&Opcode::IdxPrev));
@@ -1315,13 +1284,7 @@ mod tests {
     #[test]
     fn an_index_ordered_scan_still_honours_limit_and_offset() {
         let schema = indexed_schema(&["a"], "a");
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "a".into(),
-            descending: false,
-        });
-        query.offset = Some(1);
-        query.limit = Some(1);
+        let query = query("SELECT a FROM t ORDER BY a LIMIT 1 OFFSET 1");
         let rows = run_indexed(
             &schema,
             &query,
@@ -1338,11 +1301,7 @@ mod tests {
     #[test]
     fn an_unindexed_order_by_still_uses_the_sorter() {
         let schema = indexed_schema(&["a", "b"], "a");
-        let mut query = base_query(vec![SelectItem::Column("b".into())]);
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "b".into(),
-            descending: false,
-        });
+        let query = query("SELECT b FROM t ORDER BY b");
         let ops = opcodes(&schema, &query);
         assert!(ops.contains(&Opcode::SorterOpen));
         assert!(!ops.contains(&Opcode::IdxRewind));
@@ -1351,12 +1310,7 @@ mod tests {
     #[test]
     fn an_inclusive_lower_bound_seeks_the_index() {
         let schema = indexed_schema(&["a"], "a");
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("a".into())),
-            BinOp::Ge,
-            Box::new(Expr::Literal(Literal::Int(2))),
-        ));
+        let query = query("SELECT a FROM t WHERE a >= 2");
         let ops = opcodes(&schema, &query);
         assert!(ops.contains(&Opcode::SeekIndexGE));
         assert!(!ops.contains(&Opcode::Rewind));
@@ -1377,12 +1331,7 @@ mod tests {
     #[test]
     fn an_exclusive_lower_bound_skips_the_equal_run() {
         let schema = indexed_schema(&["a"], "a");
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("a".into())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(1))),
-        ));
+        let query = query("SELECT a FROM t WHERE a > 1");
         let rows = run_indexed(
             &schema,
             &query,
@@ -1399,20 +1348,7 @@ mod tests {
     #[test]
     fn a_two_sided_range_stops_at_the_upper_bound() {
         let schema = indexed_schema(&["a"], "a");
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::BinaryOp(
-                Box::new(Expr::Column("a".into())),
-                BinOp::Ge,
-                Box::new(Expr::Literal(Literal::Int(2))),
-            )),
-            BinOp::And,
-            Box::new(Expr::BinaryOp(
-                Box::new(Expr::Column("a".into())),
-                BinOp::Le,
-                Box::new(Expr::Literal(Literal::Int(3))),
-            )),
-        ));
+        let query = query("SELECT a FROM t WHERE a >= 2 AND a <= 3");
         let ops = opcodes(&schema, &query);
         assert!(ops.contains(&Opcode::IdxCompareGT));
 
@@ -1433,12 +1369,7 @@ mod tests {
     #[test]
     fn an_equality_on_an_indexed_column_seeks_that_key_only() {
         let schema = indexed_schema(&["a"], "a");
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("a".into())),
-            BinOp::Eq,
-            Box::new(Expr::Literal(Literal::Int(2))),
-        ));
+        let query = query("SELECT a FROM t WHERE a = 2");
         let rows = run_indexed(
             &schema,
             &query,
@@ -1456,12 +1387,7 @@ mod tests {
     #[test]
     fn an_unindexed_where_clause_falls_back_to_the_sequential_scan() {
         let schema = indexed_schema(&["a", "b"], "a");
-        let mut query = base_query(vec![SelectItem::Column("b".into())]);
-        query.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("b".into())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(1))),
-        ));
+        let query = query("SELECT b FROM t WHERE b > 1");
         let ops = opcodes(&schema, &query);
         assert!(ops.contains(&Opcode::Rewind));
         assert!(!ops.contains(&Opcode::SeekIndexGE));
@@ -1472,18 +1398,7 @@ mod tests {
         let schema = indexed_schema(&["a"], "a");
         let mut right = indexed_schema(&["x"], "x");
         right.name = "u".into();
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.joins = vec![Join {
-            kind: JoinKind::Inner,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "x".into(),
-        }];
-        query.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("a".into())),
-            BinOp::Ge,
-            Box::new(Expr::Literal(Literal::Int(1))),
-        ));
+        let query = query("SELECT a FROM t JOIN u ON t.a = u.x WHERE a >= 1");
         let program = compile_select_join(&schema, 0, &right, 1, &query).unwrap();
         let ops: Vec<Opcode> = program.instructions.iter().map(|i| i.opcode).collect();
         assert!(!ops.contains(&Opcode::SeekIndexGE));
@@ -1492,7 +1407,7 @@ mod tests {
     #[test]
     fn empty_table_scans_zero_rows() {
         let schema = schema(&["a"]);
-        let query = base_query(vec![SelectItem::Column("a".into())]);
+        let query = query("SELECT a FROM t");
         let rows = run(&schema, &query, vec![]);
         assert!(rows.is_empty());
     }
@@ -1500,13 +1415,7 @@ mod tests {
     #[test]
     fn join_without_a_right_cursor_is_unsupported() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.joins = vec![Join {
-            kind: JoinKind::Inner,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query = query("SELECT a FROM t JOIN u ON t.a = u.b");
         assert!(matches!(
             compile_select(&schema, 0, &query),
             Err(CodegenError::Unsupported { .. })
@@ -1517,13 +1426,7 @@ mod tests {
     fn right_join_is_unsupported() {
         let schema = schema(&["a"]);
         let right = schema_named("u", &["b"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.joins = vec![Join {
-            kind: JoinKind::Right,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query = query("SELECT a FROM t RIGHT JOIN u ON t.a = u.b");
         assert!(matches!(
             compile_select_join(&schema, 0, &right, 1, &query),
             Err(CodegenError::Unsupported { .. })
@@ -1534,16 +1437,7 @@ mod tests {
     fn full_outer_join_null_extends_both_unmatched_sides() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b", "c"]);
-        let mut query = base_query(vec![
-            SelectItem::Column("a".into()),
-            SelectItem::Column("u.c".into()),
-        ]);
-        query.joins = vec![Join {
-            kind: JoinKind::Full,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query = query("SELECT a, u.c FROM t FULL JOIN u ON t.a = u.b");
         let rows = run_join(
             &left,
             &right,
@@ -1568,16 +1462,7 @@ mod tests {
     fn full_outer_join_with_no_matches_null_extends_every_row() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b", "c"]);
-        let mut query = base_query(vec![
-            SelectItem::Column("a".into()),
-            SelectItem::Column("u.c".into()),
-        ]);
-        query.joins = vec![Join {
-            kind: JoinKind::Full,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query = query("SELECT a, u.c FROM t FULL JOIN u ON t.a = u.b");
         let rows = run_join(
             &left,
             &right,
@@ -1598,16 +1483,7 @@ mod tests {
     fn full_outer_join_with_empty_left_null_extends_every_right_row() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b", "c"]);
-        let mut query = base_query(vec![
-            SelectItem::Column("a".into()),
-            SelectItem::Column("u.c".into()),
-        ]);
-        query.joins = vec![Join {
-            kind: JoinKind::Full,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query = query("SELECT a, u.c FROM t FULL JOIN u ON t.a = u.b");
         let rows = run_join(
             &left,
             &right,
@@ -1631,16 +1507,7 @@ mod tests {
     fn inner_join_matches_rows_on_equi_condition() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b", "c"]);
-        let mut query = base_query(vec![
-            SelectItem::Column("a".into()),
-            SelectItem::Column("u.c".into()),
-        ]);
-        query.joins = vec![Join {
-            kind: JoinKind::Inner,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query = query("SELECT a, u.c FROM t JOIN u ON t.a = u.b");
         let rows = run_join(
             &left,
             &right,
@@ -1658,16 +1525,7 @@ mod tests {
     fn left_join_null_extends_unmatched_rows() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b", "c"]);
-        let mut query = base_query(vec![
-            SelectItem::Column("a".into()),
-            SelectItem::Column("u.c".into()),
-        ]);
-        query.joins = vec![Join {
-            kind: JoinKind::Left,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query = query("SELECT a, u.c FROM t LEFT JOIN u ON t.a = u.b");
         let rows = run_join(
             &left,
             &right,
@@ -1687,11 +1545,7 @@ mod tests {
     #[test]
     fn order_by_sorts_rows() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "a".into(),
-            descending: false,
-        });
+        let query = query("SELECT a FROM t ORDER BY a");
         let rows = run(
             &schema,
             &query,
@@ -1714,11 +1568,7 @@ mod tests {
     #[test]
     fn order_by_descending_sorts_rows() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "a".into(),
-            descending: true,
-        });
+        let query = query("SELECT a FROM t ORDER BY a DESC");
         let rows = run(
             &schema,
             &query,
@@ -1741,11 +1591,7 @@ mod tests {
     #[test]
     fn order_by_column_absent_from_select_list_still_sorts() {
         let schema = schema(&["a", "b"]);
-        let mut query = base_query(vec![SelectItem::Column("b".into())]);
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "a".into(),
-            descending: false,
-        });
+        let query = query("SELECT b FROM t ORDER BY a");
         let rows = run(
             &schema,
             &query,
@@ -1763,12 +1609,7 @@ mod tests {
     #[test]
     fn order_by_respects_limit_on_sorted_output() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Column("a".into())]);
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "a".into(),
-            descending: false,
-        });
-        query.limit = Some(2);
+        let query = query("SELECT a FROM t ORDER BY a LIMIT 2");
         let rows = run(
             &schema,
             &query,
@@ -1785,20 +1626,7 @@ mod tests {
     fn full_outer_join_order_by_sorts_both_passes_together() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b", "c"]);
-        let mut query = base_query(vec![
-            SelectItem::Column("a".into()),
-            SelectItem::Column("u.c".into()),
-        ]);
-        query.joins = vec![Join {
-            kind: JoinKind::Full,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "a".into(),
-            descending: false,
-        });
+        let query = query("SELECT a, u.c FROM t FULL JOIN u ON t.a = u.b ORDER BY a");
         let rows = run_join(
             &left,
             &right,
@@ -1824,17 +1652,7 @@ mod tests {
     fn full_outer_join_limit_applies_across_both_passes() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b", "c"]);
-        let mut query = base_query(vec![
-            SelectItem::Column("a".into()),
-            SelectItem::Column("u.c".into()),
-        ]);
-        query.joins = vec![Join {
-            kind: JoinKind::Full,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
-        query.limit = Some(1);
+        let query = query("SELECT a, u.c FROM t FULL JOIN u ON t.a = u.b LIMIT 1");
         let rows = run_join(
             &left,
             &right,
@@ -1853,13 +1671,7 @@ mod tests {
     #[test]
     fn window_select_item_is_unsupported() {
         let schema = schema(&["a"]);
-        let query = base_query(vec![SelectItem::Window(crate::expr::WindowSpec {
-            func: crate::expr::WindowFunc::RowNumber,
-            arg: None,
-            offset: None,
-            partition_by: vec![],
-            order_by: vec![],
-        })]);
+        let query = query("SELECT ROW_NUMBER() OVER (ORDER BY a) FROM t");
         assert!(matches!(
             compile_select(&schema, 0, &query),
             Err(CodegenError::Unsupported { .. })
@@ -1870,18 +1682,10 @@ mod tests {
     // `codegen::row::aggregate` from sqlite-rs's own codegen tests for
     // that slice.
 
-    use crate::expr::AggFunc;
-
-    fn agg_query(columns: Vec<SelectItem>, group_by: Vec<&str>) -> Query {
-        let mut q = base_query(columns);
-        q.group_by = group_by.iter().map(|c| (*c).to_string()).collect();
-        q
-    }
-
     #[test]
     fn whole_table_count_star_over_an_empty_table_still_emits_one_row() {
         let schema = schema(&["a"]);
-        let query = base_query(vec![SelectItem::Agg(AggFunc::Count, None)]);
+        let query = query("SELECT COUNT(*) FROM t");
         let rows = run(&schema, &query, vec![]);
         assert_eq!(rows, vec![vec![Value::Integer(0)]]);
     }
@@ -1889,12 +1693,7 @@ mod tests {
     #[test]
     fn whole_table_aggregates_over_an_empty_table_finalize_to_null() {
         let schema = schema(&["a"]);
-        let query = base_query(vec![
-            SelectItem::Agg(AggFunc::Sum, Some("a".into())),
-            SelectItem::Agg(AggFunc::Min, Some("a".into())),
-            SelectItem::Agg(AggFunc::Max, Some("a".into())),
-            SelectItem::Agg(AggFunc::Avg, Some("a".into())),
-        ]);
+        let query = query("SELECT SUM(a), MIN(a), MAX(a), AVG(a) FROM t");
         let rows = run(&schema, &query, vec![]);
         assert_eq!(
             rows,
@@ -1905,13 +1704,7 @@ mod tests {
     #[test]
     fn whole_table_aggregates_fold_every_row() {
         let schema = schema(&["a"]);
-        let query = base_query(vec![
-            SelectItem::Agg(AggFunc::Count, None),
-            SelectItem::Agg(AggFunc::Sum, Some("a".into())),
-            SelectItem::Agg(AggFunc::Min, Some("a".into())),
-            SelectItem::Agg(AggFunc::Max, Some("a".into())),
-            SelectItem::Agg(AggFunc::Avg, Some("a".into())),
-        ]);
+        let query = query("SELECT COUNT(*), SUM(a), MIN(a), MAX(a), AVG(a) FROM t");
         let rows = run(
             &schema,
             &query,
@@ -1936,12 +1729,7 @@ mod tests {
     #[test]
     fn whole_table_aggregate_honours_the_where_clause() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Agg(AggFunc::Count, None)]);
-        query.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("a".into())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(1))),
-        ));
+        let query = query("SELECT COUNT(*) FROM t WHERE a > 1");
         let rows = run(
             &schema,
             &query,
@@ -1957,14 +1745,7 @@ mod tests {
     #[test]
     fn group_by_emits_one_row_per_group_in_key_order() {
         let schema = schema(&["g", "v"]);
-        let query = agg_query(
-            vec![
-                SelectItem::Column("g".into()),
-                SelectItem::Agg(AggFunc::Count, None),
-                SelectItem::Agg(AggFunc::Sum, Some("v".into())),
-            ],
-            vec!["g"],
-        );
+        let query = query("SELECT g, COUNT(*), SUM(v) FROM t GROUP BY g");
         let rows = run(
             &schema,
             &query,
@@ -1987,26 +1768,14 @@ mod tests {
     #[test]
     fn group_by_over_an_empty_table_emits_no_rows() {
         let schema = schema(&["g", "v"]);
-        let query = agg_query(
-            vec![
-                SelectItem::Column("g".into()),
-                SelectItem::Agg(AggFunc::Count, None),
-            ],
-            vec!["g"],
-        );
+        let query = query("SELECT g, COUNT(*) FROM t GROUP BY g");
         assert!(run(&schema, &query, vec![]).is_empty());
     }
 
     #[test]
     fn group_by_collects_null_keys_into_one_group() {
         let schema = schema(&["g", "v"]);
-        let query = agg_query(
-            vec![
-                SelectItem::Column("g".into()),
-                SelectItem::Agg(AggFunc::Count, None),
-            ],
-            vec!["g"],
-        );
+        let query = query("SELECT g, COUNT(*) FROM t GROUP BY g");
         let rows = run(
             &schema,
             &query,
@@ -2024,14 +1793,7 @@ mod tests {
     #[test]
     fn group_by_two_keys_groups_on_the_pair() {
         let schema = schema(&["a", "b", "v"]);
-        let query = agg_query(
-            vec![
-                SelectItem::Column("a".into()),
-                SelectItem::Column("b".into()),
-                SelectItem::Agg(AggFunc::Sum, Some("v".into())),
-            ],
-            vec!["a", "b"],
-        );
+        let query = query("SELECT a, b, SUM(v) FROM t GROUP BY a, b");
         let rows = run(
             &schema,
             &query,
@@ -2053,18 +1815,7 @@ mod tests {
     #[test]
     fn having_filters_whole_groups_after_aggregation() {
         let schema = schema(&["g", "v"]);
-        let mut query = agg_query(
-            vec![
-                SelectItem::Column("g".into()),
-                SelectItem::Agg(AggFunc::Count, None),
-            ],
-            vec!["g"],
-        );
-        query.having = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("COUNT(*)".into())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(1))),
-        ));
+        let query = query("SELECT g, COUNT(*) FROM t GROUP BY g HAVING \"COUNT(*)\" > 1");
         let rows = run(
             &schema,
             &query,
@@ -2083,12 +1834,7 @@ mod tests {
     #[test]
     fn having_may_reference_an_aggregate_absent_from_the_select_list() {
         let schema = schema(&["g", "v"]);
-        let mut query = agg_query(vec![SelectItem::Column("g".into())], vec!["g"]);
-        query.having = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("SUM(v)".into())),
-            BinOp::Ge,
-            Box::new(Expr::Literal(Literal::Int(50))),
-        ));
+        let query = query("SELECT g FROM t GROUP BY g HAVING \"SUM(v)\" >= 50");
         let rows = run(
             &schema,
             &query,
@@ -2106,18 +1852,7 @@ mod tests {
     #[test]
     fn having_shares_one_slot_with_an_identical_result_column() {
         let schema = schema(&["g", "v"]);
-        let mut query = agg_query(
-            vec![
-                SelectItem::Column("g".into()),
-                SelectItem::Agg(AggFunc::Sum, Some("v".into())),
-            ],
-            vec!["g"],
-        );
-        query.having = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("SUM(v)".into())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(15))),
-        ));
+        let query = query("SELECT g, SUM(v) FROM t GROUP BY g HAVING \"SUM(v)\" > 15");
         let rows = run(
             &schema,
             &query,
@@ -2132,12 +1867,7 @@ mod tests {
     #[test]
     fn having_on_a_whole_table_aggregate_may_suppress_the_only_row() {
         let schema = schema(&["a"]);
-        let mut query = base_query(vec![SelectItem::Agg(AggFunc::Count, None)]);
-        query.having = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("COUNT(*)".into())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(5))),
-        ));
+        let query = query("SELECT COUNT(*) FROM t HAVING \"COUNT(*)\" > 5");
         let rows = run(&schema, &query, vec![vec![Value::Integer(1)]]);
         assert!(rows.is_empty());
     }
@@ -2145,14 +1875,7 @@ mod tests {
     #[test]
     fn limit_applies_to_groups_not_to_scanned_rows() {
         let schema = schema(&["g", "v"]);
-        let mut query = agg_query(
-            vec![
-                SelectItem::Column("g".into()),
-                SelectItem::Agg(AggFunc::Count, None),
-            ],
-            vec!["g"],
-        );
-        query.limit = Some(1);
+        let query = query("SELECT g, COUNT(*) FROM t GROUP BY g LIMIT 1");
         let rows = run(
             &schema,
             &query,
@@ -2171,13 +1894,7 @@ mod tests {
     #[test]
     fn a_non_key_plain_column_reads_the_groups_first_row() {
         let schema = schema(&["g", "v"]);
-        let query = agg_query(
-            vec![
-                SelectItem::Column("v".into()),
-                SelectItem::Agg(AggFunc::Count, None),
-            ],
-            vec!["g"],
-        );
+        let query = query("SELECT v, COUNT(*) FROM t GROUP BY g");
         let rows = run(
             &schema,
             &query,
@@ -2192,10 +1909,7 @@ mod tests {
     #[test]
     fn star_alongside_an_aggregate_expands_to_every_schema_column() {
         let schema = schema(&["g", "v"]);
-        let query = agg_query(
-            vec![SelectItem::Star, SelectItem::Agg(AggFunc::Count, None)],
-            vec!["g"],
-        );
+        let query = query("SELECT *, COUNT(*) FROM t GROUP BY g");
         let rows = run(
             &schema,
             &query,
@@ -2215,16 +1929,7 @@ mod tests {
     fn aggregate_over_an_inner_join_folds_only_matched_rows() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b", "c"]);
-        let mut query = base_query(vec![
-            SelectItem::Agg(AggFunc::Count, None),
-            SelectItem::Agg(AggFunc::Sum, Some("u.c".into())),
-        ]);
-        query.joins = vec![Join {
-            kind: JoinKind::Inner,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query = query("SELECT COUNT(*), SUM(u.c) FROM t JOIN u ON t.a = u.b");
         let rows = run_join(
             &left,
             &right,
@@ -2242,19 +1947,7 @@ mod tests {
     fn group_by_over_an_inner_join_groups_on_a_left_column() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b", "c"]);
-        let mut query = agg_query(
-            vec![
-                SelectItem::Column("a".into()),
-                SelectItem::Agg(AggFunc::Sum, Some("u.c".into())),
-            ],
-            vec!["a"],
-        );
-        query.joins = vec![Join {
-            kind: JoinKind::Inner,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query = query("SELECT a, SUM(u.c) FROM t JOIN u ON t.a = u.b GROUP BY a");
         let rows = run_join(
             &left,
             &right,
@@ -2281,20 +1974,8 @@ mod tests {
     fn group_by_over_a_left_join_keeps_unmatched_outer_rows() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b", "c"]);
-        let mut query = agg_query(
-            vec![
-                SelectItem::Column("a".into()),
-                SelectItem::Agg(AggFunc::Count, None),
-                SelectItem::Agg(AggFunc::Sum, Some("u.c".into())),
-            ],
-            vec!["a"],
-        );
-        query.joins = vec![Join {
-            kind: JoinKind::Left,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query =
+            query("SELECT a, COUNT(*), SUM(u.c) FROM t LEFT JOIN u ON t.a = u.b GROUP BY a");
         let rows = run_join(
             &left,
             &right,
@@ -2315,20 +1996,7 @@ mod tests {
     fn having_combined_with_a_join_is_unsupported() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b"]);
-        let mut query = agg_query(
-            vec![
-                SelectItem::Column("a".into()),
-                SelectItem::Agg(AggFunc::Count, None),
-            ],
-            vec!["a"],
-        );
-        query.joins = vec![Join {
-            kind: JoinKind::Inner,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
-        query.having = Some(Expr::Literal(Literal::Int(1)));
+        let query = query("SELECT a, COUNT(*) FROM t JOIN u ON t.a = u.b GROUP BY a HAVING 1");
         assert!(matches!(
             compile_select_join(&left, 0, &right, 1, &query),
             Err(CodegenError::Unsupported { .. })
@@ -2339,13 +2007,7 @@ mod tests {
     fn full_outer_join_combined_with_aggregation_is_unsupported() {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b"]);
-        let mut query = base_query(vec![SelectItem::Agg(AggFunc::Count, None)]);
-        query.joins = vec![Join {
-            kind: JoinKind::Full,
-            table: "u".into(),
-            left_col: "a".into(),
-            right_col: "b".into(),
-        }];
+        let query = query("SELECT COUNT(*) FROM t FULL JOIN u ON t.a = u.b");
         assert!(matches!(
             compile_select_join(&left, 0, &right, 1, &query),
             Err(CodegenError::Unsupported { .. })
@@ -2355,17 +2017,7 @@ mod tests {
     #[test]
     fn order_by_combined_with_aggregation_is_unsupported() {
         let schema = schema(&["g"]);
-        let mut query = agg_query(
-            vec![
-                SelectItem::Column("g".into()),
-                SelectItem::Agg(AggFunc::Count, None),
-            ],
-            vec!["g"],
-        );
-        query.order_by = Some(crate::expr::OrderBy {
-            column: "g".into(),
-            descending: false,
-        });
+        let query = query("SELECT g, COUNT(*) FROM t GROUP BY g ORDER BY g");
         assert!(matches!(
             compile_select(&schema, 0, &query),
             Err(CodegenError::Unsupported { .. })
@@ -2375,7 +2027,7 @@ mod tests {
     #[test]
     fn group_by_an_unknown_column_is_rejected() {
         let schema = schema(&["a"]);
-        let query = agg_query(vec![SelectItem::Agg(AggFunc::Count, None)], vec!["nope"]);
+        let query = query("SELECT COUNT(*) FROM t GROUP BY nope");
         assert!(matches!(
             compile_select(&schema, 0, &query),
             Err(CodegenError::UnknownColumn(_))
@@ -2388,13 +2040,7 @@ mod tests {
     #[test]
     fn the_sort_strategy_produces_the_same_groups_as_the_hash_strategy() {
         let schema = schema(&["g", "v"]);
-        let query = agg_query(
-            vec![
-                SelectItem::Column("g".into()),
-                SelectItem::Agg(AggFunc::Sum, Some("v".into())),
-            ],
-            vec!["g"],
-        );
+        let query = query("SELECT g, SUM(v) FROM t GROUP BY g");
         let rows = vec![
             vec![Value::Integer(2), Value::Integer(10)],
             vec![Value::Integer(1), Value::Integer(1)],

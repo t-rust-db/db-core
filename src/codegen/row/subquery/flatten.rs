@@ -41,7 +41,12 @@ pub fn flatten_from_subquery(query: &mut Select) -> bool {
 
     // A `SELECT *` over a subquery that projects a *subset* of its
     // table's columns would widen to the whole table once flattened.
-    if exposed.is_some() && query.columns.iter().any(|c| matches!(c, ResultColumn::Star)) {
+    if exposed.is_some()
+        && query
+            .columns
+            .iter()
+            .any(|c| matches!(c, ResultColumn::Star))
+    {
         return false;
     }
 
@@ -103,7 +108,11 @@ fn subquery_flatten_safe(inner: &Select) -> bool {
 /// (any name passes through unchanged) -- the reference's `ColumnMap`,
 /// narrowed to db-core's alias-free `SelectItem`.
 fn exposed_columns(inner: &Select) -> Option<Option<Vec<String>>> {
-    if inner.columns.iter().any(|c| matches!(c, ResultColumn::Star)) {
+    if inner
+        .columns
+        .iter()
+        .any(|c| matches!(c, ResultColumn::Star))
+    {
         return Some(None);
     }
     let mut out = Vec::with_capacity(inner.columns.len());
@@ -215,29 +224,66 @@ fn rewrite_column_names(query: &mut Select, f: &mut impl FnMut(&str) -> String) 
 mod tests {
     use super::*;
 
-    fn parse(sql: &str) -> Query {
-        crate::parser::column::parse(sql).unwrap()
+    fn parse(sql: &str) -> Select {
+        crate::codegen::row::testutil::select(sql)
+    }
+
+    fn is_table(from: Option<&crate::parser::ast::FromClause>, name: &str) -> bool {
+        matches!(
+            from.map(|f| &f.first.kind),
+            Some(TableRefKind::Name(n)) if n == name
+        )
     }
 
     #[test]
     fn flattens_a_plain_projection_subquery_and_conjoins_both_wheres() {
         let mut query = parse("SELECT b FROM (SELECT a, b FROM t WHERE a > 1) x WHERE x.b < 9");
         assert!(flatten_from_subquery(&mut query));
-        assert_eq!(query.from, FromClause::Table("t".to_string()));
-        let Some(Expr::BinaryOp(lhs, BinOp::And, rhs)) = &query.where_clause else {
+        assert!(is_table(query.from.as_ref(), "t"));
+        let Some(Expr {
+            kind:
+                ExprKind::Binary {
+                    op: crate::parser::ast::BinaryOp::And,
+                    lhs,
+                    rhs,
+                },
+            ..
+        }) = &query.where_clause
+        else {
             panic!("expected a conjunction, got {:?}", query.where_clause);
         };
         // The subquery's own predicate comes first, the enclosing one
         // second, matching the reference's `and_exprs` order.
-        assert!(matches!(**lhs, Expr::BinaryOp(_, BinOp::Gt, _)));
-        assert!(matches!(**rhs, Expr::BinaryOp(_, BinOp::Lt, _)));
+        assert!(matches!(
+            lhs.kind,
+            ExprKind::Binary {
+                op: crate::parser::ast::BinaryOp::Gt,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rhs.kind,
+            ExprKind::Binary {
+                op: crate::parser::ast::BinaryOp::Lt,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn flattening_strips_the_subquery_alias_from_every_reference() {
         let mut query = parse("SELECT x.b FROM (SELECT a, b FROM t) x WHERE x.a = 1");
         assert!(flatten_from_subquery(&mut query));
-        assert_eq!(query.columns, vec![SelectItem::Column("b".to_string())]);
+        assert!(matches!(
+            query.columns.as_slice(),
+            [ResultColumn::Expr {
+                expr: Expr {
+                    kind: ExprKind::Column { name, .. },
+                    ..
+                },
+                ..
+            }] if name == "b"
+        ));
         let mut names = Vec::new();
         collect_column_names(&query, &mut names);
         assert!(names.iter().all(|n| !n.contains('.')), "{names:?}");
@@ -247,7 +293,7 @@ mod tests {
     fn a_plain_table_from_is_left_alone() {
         let mut query = parse("SELECT a FROM t");
         assert!(!flatten_from_subquery(&mut query));
-        assert_eq!(query.from, FromClause::Table("t".to_string()));
+        assert!(is_table(query.from.as_ref(), "t"));
     }
 
     #[test]

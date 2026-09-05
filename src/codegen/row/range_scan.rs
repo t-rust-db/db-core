@@ -35,7 +35,9 @@ use crate::vm::row::{affinity_of, Affinity, Collation, SortKeyColumn, P4};
 /// anything that isn't a bare (unqualified) column reference.
 pub(super) fn where_col(expr: &Expr) -> Option<&str> {
     match &expr.kind {
-        ExprKind::Column { table: None, name, .. } => Some(name.as_str()),
+        ExprKind::Column {
+            table: None, name, ..
+        } => Some(name.as_str()),
         _ => None,
     }
 }
@@ -146,7 +148,12 @@ fn as_upper_bound(expr: &Expr) -> Option<Bound<'_>> {
 /// sqlite-rs's `BETWEEN`), or an equality (both bounds, both inclusive,
 /// the same literal).
 fn as_seek_bounds(where_expr: &Expr) -> Option<(Bound<'_>, Option<Bound<'_>>)> {
-    if let ExprKind::Binary { op: BinaryOp::And, lhs, rhs } = &where_expr.kind {
+    if let ExprKind::Binary {
+        op: BinaryOp::And,
+        lhs,
+        rhs,
+    } = &where_expr.kind
+    {
         let lo = as_lower_bound(lhs)?;
         let hi = as_upper_bound(rhs)?;
         if !lo.column.eq_ignore_ascii_case(hi.column) {
@@ -154,7 +161,12 @@ fn as_seek_bounds(where_expr: &Expr) -> Option<(Bound<'_>, Option<Bound<'_>>)> {
         }
         return Some((lo, Some(hi)));
     }
-    if let ExprKind::Binary { op: BinaryOp::Eq, lhs, rhs } = &where_expr.kind {
+    if let ExprKind::Binary {
+        op: BinaryOp::Eq,
+        lhs,
+        rhs,
+    } = &where_expr.kind
+    {
         let (column, operand) = match (where_col(lhs), where_col(rhs)) {
             (Some(column), _) => (column, rhs.as_ref()),
             (None, Some(column)) => (column, lhs.as_ref()),
@@ -197,7 +209,10 @@ pub(super) fn seek_detail<'a>(
     find_leading_index(schema, lo.column)?;
     let is_equality = matches!(
         query.where_clause.as_ref()?.kind,
-        ExprKind::Binary { op: BinaryOp::Eq, .. }
+        ExprKind::Binary {
+            op: BinaryOp::Eq,
+            ..
+        }
     );
     Some((lo.column, if is_equality { "=" } else { ">" }))
 }
@@ -370,16 +385,31 @@ mod tests {
         }
     }
 
+    fn e(kind: ExprKind) -> Expr {
+        Expr {
+            kind,
+            span: crate::parser::Span::UNKNOWN,
+        }
+    }
+
     fn col(name: &str) -> Expr {
-        Expr::Column(name.to_string())
+        e(ExprKind::Column {
+            table: None,
+            catalog: None,
+            name: name.to_string(),
+        })
     }
 
     fn int(n: i64) -> Expr {
-        Expr::Literal(Literal::Int(n))
+        e(ExprKind::Literal(Literal::Integer(n)))
     }
 
-    fn binary(lhs: Expr, op: BinOp, rhs: Expr) -> Expr {
-        Expr::BinaryOp(Box::new(lhs), op, Box::new(rhs))
+    fn binary(lhs: Expr, op: BinaryOp, rhs: Expr) -> Expr {
+        e(ExprKind::Binary {
+            op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        })
     }
 
     #[test]
@@ -390,7 +420,7 @@ mod tests {
 
     #[test]
     fn forward_comparison_yields_a_lower_bound_only() {
-        let expr = binary(col("a"), BinOp::Gt, int(5));
+        let expr = binary(col("a"), BinaryOp::Gt, int(5));
         let (lo, hi) = as_seek_bounds(&expr).unwrap();
         assert_eq!(lo.column, "a");
         assert!(!lo.inclusive);
@@ -399,7 +429,7 @@ mod tests {
 
     #[test]
     fn reversed_comparison_binds_the_column_side() {
-        let expr = binary(int(5), BinOp::Le, col("a"));
+        let expr = binary(int(5), BinaryOp::Le, col("a"));
         let (lo, _) = as_seek_bounds(&expr).unwrap();
         assert_eq!(lo.column, "a");
         assert!(lo.inclusive);
@@ -408,9 +438,9 @@ mod tests {
     #[test]
     fn conjunction_of_two_bounds_yields_a_range() {
         let expr = binary(
-            binary(col("a"), BinOp::Ge, int(1)),
-            BinOp::And,
-            binary(col("a"), BinOp::Le, int(9)),
+            binary(col("a"), BinaryOp::Ge, int(1)),
+            BinaryOp::And,
+            binary(col("a"), BinaryOp::Le, int(9)),
         );
         let (lo, hi) = as_seek_bounds(&expr).unwrap();
         assert!(lo.inclusive);
@@ -422,16 +452,16 @@ mod tests {
     #[test]
     fn conjunction_over_two_different_columns_is_rejected() {
         let expr = binary(
-            binary(col("a"), BinOp::Ge, int(1)),
-            BinOp::And,
-            binary(col("b"), BinOp::Le, int(9)),
+            binary(col("a"), BinaryOp::Ge, int(1)),
+            BinaryOp::And,
+            binary(col("b"), BinaryOp::Le, int(9)),
         );
         assert!(as_seek_bounds(&expr).is_none());
     }
 
     #[test]
     fn equality_yields_both_bounds_inclusive() {
-        let expr = binary(col("a"), BinOp::Eq, int(4));
+        let expr = binary(col("a"), BinaryOp::Eq, int(4));
         let (lo, hi) = as_seek_bounds(&expr).unwrap();
         assert!(lo.inclusive);
         assert!(hi.unwrap().inclusive);
@@ -443,7 +473,7 @@ mod tests {
         let affinity = column_affinity(&schema, "a");
         assert!(operand_matches_column_affinity(&int(1), affinity));
         assert!(!operand_matches_column_affinity(
-            &Expr::Literal(Literal::Str("x".to_string())),
+            &e(ExprKind::Literal(Literal::Str("x".to_string()))),
             affinity
         ));
     }

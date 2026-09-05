@@ -141,7 +141,19 @@ pub(super) fn as_aggregate(expr: &Expr) -> Result<Option<(AggFunc, Option<String
         FunctionArgs::List(args) => match args.as_slice() {
             [] => Ok(Some((func, None))),
             [arg] => match &arg.kind {
-                ExprKind::Column { name, .. } => Ok(Some((func, Some(name.clone())))),
+                ExprKind::Column {
+                    table: None, name, ..
+                } => Ok(Some((func, Some(name.clone())))),
+                // A qualified reference (`SUM(u.c)`) keeps its
+                // qualifier -- downstream column resolution needs the
+                // full "table.column" spelling, the same string
+                // `expr::SelectItem::Agg`'s caller-supplied argument
+                // always carried.
+                ExprKind::Column {
+                    table: Some(table),
+                    name,
+                    ..
+                } => Ok(Some((func, Some(format!("{table}.{name}"))))),
                 _ => Err(CodegenError::Unsupported {
                     reason: format!(
                         "{name} over an expression is not supported by codegen::row yet"
@@ -483,18 +495,11 @@ mod tests {
 
     #[test]
     fn collect_aggregates_dedups_a_having_call_shared_with_a_result_column() {
-        let query = Query {
-            columns: vec![SelectItem::Agg(AggFunc::Count, None)],
-            from: "t".into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: Some(Expr::Column("COUNT(*)".into())),
-            order_by: None,
-            limit: None,
-            offset: None,
-        };
+        // `HAVING` names the aggregate by the output column it
+        // produced, which is why the two dedup to one slot.
+        let query = crate::codegen::row::testutil::select(
+            "SELECT COUNT(*) FROM t GROUP BY a HAVING \"COUNT(*)\" > 1",
+        );
         let slots = collect_aggregates(&query).unwrap();
         assert_eq!(slots.len(), 1);
         assert_eq!(slots[0].slot, 0);

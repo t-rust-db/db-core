@@ -91,7 +91,11 @@ fn subquery_pushdown_safe(inner: &Select) -> bool {
 /// this pass can't map back (an aggregate/window item has no single
 /// underlying column a predicate on it could be rewritten against).
 fn exposed_columns(inner: &Select) -> Option<Option<Vec<String>>> {
-    if inner.columns.iter().any(|c| matches!(c, ResultColumn::Star)) {
+    if inner
+        .columns
+        .iter()
+        .any(|c| matches!(c, ResultColumn::Star))
+    {
         return Some(None);
     }
     let mut out = Vec::with_capacity(inner.columns.len());
@@ -178,9 +182,7 @@ fn top_level_and_conjuncts(expr: Expr) -> Vec<Expr> {
 }
 
 fn rebuild_conjunction(exprs: Vec<Expr>) -> Option<Expr> {
-    exprs
-        .into_iter()
-        .reduce(super::super::and_expr)
+    exprs.into_iter().reduce(super::super::and_expr)
 }
 
 fn and_exprs(existing: Option<Expr>, addition: Expr) -> Option<Expr> {
@@ -195,14 +197,14 @@ fn and_exprs(existing: Option<Expr>, addition: Expr) -> Option<Expr> {
 mod tests {
     use super::*;
 
-    fn parse(sql: &str) -> Query {
-        crate::parser::column::parse(sql).unwrap()
+    fn parse(sql: &str) -> Select {
+        crate::codegen::row::testutil::select(sql)
     }
 
-    fn inner(query: &Query) -> &Query {
-        match &query.from {
-            FromClause::Subquery(inner, _) => inner,
-            FromClause::Table(_) => panic!("expected a FROM-subquery"),
+    fn inner(query: &Select) -> &Select {
+        match query.from.as_ref().map(|f| &f.first.kind) {
+            Some(TableRefKind::Subquery(inner)) => inner,
+            _ => panic!("expected a FROM-subquery"),
         }
     }
 
@@ -213,14 +215,18 @@ mod tests {
         assert!(query.where_clause.is_none(), "{:?}", query.where_clause);
         // The alias qualifier is dropped: inside the subquery, `a` is
         // its own table's column.
-        assert_eq!(
-            inner(&query).where_clause,
-            Some(Expr::BinaryOp(
-                Box::new(Expr::Column("a".to_string())),
-                BinOp::Eq,
-                Box::new(Expr::Literal(crate::types::Literal::Int(1))),
-            ))
-        );
+        assert!(matches!(
+            &inner(&query).where_clause,
+            Some(Expr {
+                kind: ExprKind::Binary {
+                    op: BinaryOp::Eq,
+                    lhs,
+                    rhs,
+                },
+                ..
+            }) if matches!(&lhs.kind, ExprKind::Column { name, .. } if name == "a")
+                && matches!(&rhs.kind, ExprKind::Literal(crate::parser::ast::Literal::Integer(1)))
+        ));
     }
 
     #[test]
@@ -252,8 +258,14 @@ mod tests {
         let mut query = parse("SELECT b FROM (SELECT a, b FROM t WHERE b > 0) x WHERE x.a = 1");
         assert!(push_down_where_predicates(&mut query));
         assert!(matches!(
-            inner(&query).where_clause,
-            Some(Expr::BinaryOp(_, BinOp::And, _))
+            &inner(&query).where_clause,
+            Some(Expr {
+                kind: ExprKind::Binary {
+                    op: BinaryOp::And,
+                    ..
+                },
+                ..
+            })
         ));
     }
 

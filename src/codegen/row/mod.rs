@@ -120,9 +120,7 @@ pub mod value;
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::parser::ast::{
-    BinaryOp, Distinctness, Expr, ExprKind, FunctionArgs, Join, Select,
-};
+use crate::parser::ast::{BinaryOp, Distinctness, Expr, ExprKind, FunctionArgs, Join, Select};
 use crate::vm::row::{Instruction, Opcode, P4};
 
 pub use analyze::compile_analyze;
@@ -425,12 +423,19 @@ pub(crate) fn walk_columns(expr: &Expr, f: &mut impl FnMut(&str)) {
             walk_columns(lhs, f);
             walk_columns(rhs, f);
         }
-        ExprKind::Between { expr: inner, lo, hi, .. } => {
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            ..
+        } => {
             walk_columns(inner, f);
             walk_columns(lo, f);
             walk_columns(hi, f);
         }
-        ExprKind::In { expr: inner, list, .. } => {
+        ExprKind::In {
+            expr: inner, list, ..
+        } => {
             walk_columns(inner, f);
             for item in list {
                 walk_columns(item, f);
@@ -495,12 +500,19 @@ pub(crate) fn walk_columns_mut(expr: &mut Expr, f: &mut impl FnMut(&mut String))
             walk_columns_mut(lhs, f);
             walk_columns_mut(rhs, f);
         }
-        ExprKind::Between { expr: inner, lo, hi, .. } => {
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            ..
+        } => {
             walk_columns_mut(inner, f);
             walk_columns_mut(lo, f);
             walk_columns_mut(hi, f);
         }
-        ExprKind::In { expr: inner, list, .. } => {
+        ExprKind::In {
+            expr: inner, list, ..
+        } => {
             walk_columns_mut(inner, f);
             for item in list {
                 walk_columns_mut(item, f);
@@ -583,12 +595,19 @@ pub(crate) fn walk_subexprs(expr: &Expr, f: &mut impl FnMut(&Expr)) {
             recurse(lhs);
             recurse(rhs);
         }
-        ExprKind::Between { expr: inner, lo, hi, .. } => {
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            ..
+        } => {
             recurse(inner);
             recurse(lo);
             recurse(hi);
         }
-        ExprKind::In { expr: inner, list, .. } => {
+        ExprKind::In {
+            expr: inner, list, ..
+        } => {
             recurse(inner);
             list.iter().for_each(recurse);
         }
@@ -639,6 +658,63 @@ pub(crate) fn and_expr(lhs: Expr, rhs: Expr) -> Expr {
             rhs: Box::new(rhs),
         },
         span: crate::parser::Span::UNKNOWN,
+    }
+}
+
+/// Test-only AST constructors.
+///
+/// These parse real SQL through the crate's only grammar rather than
+/// hand-building planner structs. Before #147 the tests had no choice
+/// but to build `expr::Query` literals, because no parser produced that
+/// type -- which meant they could assert on shapes the parser could
+/// never actually deliver. Parsing closes that gap.
+#[cfg(test)]
+#[allow(clippy::panic)]
+pub(crate) mod testutil {
+    use crate::parser::ast::{Expr, ResultColumn, Select};
+    use crate::parser::row::{parse_select, ParseOutcome};
+
+    /// Parses a complete `SELECT`, panicking with the parse failure if
+    /// `sql` does not parse.
+    pub(crate) fn select(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("expected {sql:?} to parse as a SELECT, got {other:?}"),
+        }
+    }
+
+    /// Parses a bare expression, by parsing it as a one-column
+    /// `SELECT` list and taking that column back out.
+    pub(crate) fn expr(sql: &str) -> Expr {
+        let select = select(&format!("SELECT {sql} FROM t"));
+        match select.columns.into_iter().next() {
+            Some(ResultColumn::Expr { expr, .. }) => expr,
+            other => panic!("expected {sql:?} to parse as one expression, got {other:?}"),
+        }
+    }
+
+    /// Parses a complete `INSERT`.
+    pub(crate) fn insert(sql: &str) -> crate::parser::ast::Insert {
+        match crate::parser::row::parse_insert(sql) {
+            ParseOutcome::Accepted(insert) => *insert,
+            other => panic!("expected {sql:?} to parse as an INSERT, got {other:?}"),
+        }
+    }
+
+    /// Parses a complete `UPDATE`.
+    pub(crate) fn update(sql: &str) -> crate::parser::ast::Update {
+        match crate::parser::row::parse_update(sql) {
+            ParseOutcome::Accepted(update) => *update,
+            other => panic!("expected {sql:?} to parse as an UPDATE, got {other:?}"),
+        }
+    }
+
+    /// Parses a complete `DELETE`.
+    pub(crate) fn delete(sql: &str) -> crate::parser::ast::Delete {
+        match crate::parser::row::parse_delete(sql) {
+            ParseOutcome::Accepted(delete) => *delete,
+            other => panic!("expected {sql:?} to parse as a DELETE, got {other:?}"),
+        }
     }
 }
 

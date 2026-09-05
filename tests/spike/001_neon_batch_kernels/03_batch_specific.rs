@@ -26,9 +26,7 @@
 //! ```
 
 use db_core::expr::AggFunc;
-use db_core::vm::batch::{
-    run_parallel, Batch, MapOp, Opcode, Segment, Value, Vm, BATCH_SIZE,
-};
+use db_core::vm::batch::{run_parallel, Batch, MapOp, Opcode, Segment, Value, Vm, BATCH_SIZE};
 use std::borrow::Cow;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -83,11 +81,7 @@ fn build_segments(rows_total: usize) -> Vec<Batch> {
         let n = BATCH_SIZE.min(rows_total - row as usize);
         let a: Vec<Value> = (0..n as i64).map(|i| Value::Int(row + i)).collect();
         let b: Vec<Value> = (0..n as i64).map(|i| Value::Int((row + i) % 7)).collect();
-        segments.push(
-            Batch::new(n)
-                .with_column("a", a)
-                .with_column("b", b),
-        );
+        segments.push(Batch::new(n).with_column("a", a).with_column("b", b));
         row += n as i64;
     }
     segments
@@ -202,7 +196,9 @@ fn batch_specific_spike() {
         "map_add(int)/run_parallel",
         t_parallel,
         t_vm.as_secs_f64() / t_parallel.as_secs_f64(),
-        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1),
     );
 
     // -- Reduce sum: LoadColumn a, Reduce{Sum}, Emit -- per-segment
@@ -308,7 +304,11 @@ fn vm_program_matches_raw_loop() {
     for batch in &batches {
         let mut vm = Vm::new();
         vm.execute(batch, &program_add).unwrap();
-        let vm_out: Vec<Value> = vm.take_output().into_iter().map(|row| row[0].clone()).collect();
+        let vm_out: Vec<Value> = vm
+            .take_output()
+            .into_iter()
+            .map(|row| row[0].clone())
+            .collect();
         let raw_out = raw_map_add(&batch.columns["a"], &batch.columns["b"]);
         assert_eq!(vm_out, raw_out);
     }

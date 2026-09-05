@@ -27,11 +27,18 @@ fn cost_class(expr: &Expr) -> u8 {
             };
             cost_class(lhs).max(cost_class(rhs)).max(base)
         }
-        ExprKind::Between { expr: inner, lo, hi, .. } => cost_class(inner)
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            ..
+        } => cost_class(inner)
             .max(cost_class(lo))
             .max(cost_class(hi))
             .max(1),
-        ExprKind::In { expr: inner, list, .. } => list
+        ExprKind::In {
+            expr: inner, list, ..
+        } => list
             .iter()
             .map(cost_class)
             .fold(cost_class(inner), u8::max)
@@ -195,9 +202,7 @@ pub(crate) fn compile_cond_depth(
             expr: lhs,
             subquery,
             negated,
-        } => super::subquery::compile_in_subquery(
-            em, reg, scope, lhs, subquery, *negated, targets,
-        ),
+        } => super::subquery::compile_in_subquery(em, reg, scope, lhs, subquery, *negated, targets),
 
         ExprKind::Exists { subquery, negated } => {
             super::subquery::compile_exists(em, reg, scope, subquery, *negated, targets)
@@ -366,8 +371,8 @@ fn emit_compare_false_jump(
 )]
 mod tests {
     use super::*;
+    use crate::codegen::row::testutil::expr;
     use crate::codegen::row::TableSchema;
-    use crate::types::Literal;
     use crate::vm::row::{execute, Value, Vm};
 
     fn schema(columns: &[&str]) -> TableSchema {
@@ -413,97 +418,66 @@ mod tests {
         }
     }
 
-    fn lit(i: i64) -> Expr {
-        Expr::Literal(Literal::Int(i))
+    /// Runs `sql`'s expression (parsed via [`expr`]) as a condition over
+    /// a scope with no columns.
+    fn run(sql: &str) -> i64 {
+        run_cond(&expr(sql), &Scope::single(schema(&[]), 0))
     }
 
     #[test]
     fn eq_true_and_false() {
-        let scope = Scope::single(schema(&[]), 0);
-        let expr = Expr::BinaryOp(Box::new(lit(5)), BinOp::Eq, Box::new(lit(5)));
-        assert_eq!(run_cond(&expr, &scope), 1);
-        let expr = Expr::BinaryOp(Box::new(lit(5)), BinOp::Eq, Box::new(lit(6)));
-        assert_eq!(run_cond(&expr, &scope), 0);
+        assert_eq!(run("5 = 5"), 1);
+        assert_eq!(run("5 = 6"), 0);
     }
 
     #[test]
     fn ne_is_eqs_complement() {
-        let scope = Scope::single(schema(&[]), 0);
-        let expr = Expr::BinaryOp(Box::new(lit(5)), BinOp::Ne, Box::new(lit(6)));
-        assert_eq!(run_cond(&expr, &scope), 1);
-        let expr = Expr::BinaryOp(Box::new(lit(5)), BinOp::Ne, Box::new(lit(5)));
-        assert_eq!(run_cond(&expr, &scope), 0);
+        assert_eq!(run("5 <> 6"), 1);
+        assert_eq!(run("5 <> 5"), 0);
     }
 
     #[test]
     fn ordering_comparisons() {
-        let scope = Scope::single(schema(&[]), 0);
-        assert_eq!(
-            run_cond(
-                &Expr::BinaryOp(Box::new(lit(3)), BinOp::Lt, Box::new(lit(5))),
-                &scope
-            ),
-            1
-        );
-        assert_eq!(
-            run_cond(
-                &Expr::BinaryOp(Box::new(lit(5)), BinOp::Lt, Box::new(lit(3))),
-                &scope
-            ),
-            0
-        );
-        assert_eq!(
-            run_cond(
-                &Expr::BinaryOp(Box::new(lit(5)), BinOp::Ge, Box::new(lit(5))),
-                &scope
-            ),
-            1
-        );
+        assert_eq!(run("3 < 5"), 1);
+        assert_eq!(run("5 < 3"), 0);
+        assert_eq!(run("5 >= 5"), 1);
     }
 
     #[test]
     fn and_short_circuits_both_true_and_false() {
-        let scope = Scope::single(schema(&[]), 0);
-        let t = Expr::BinaryOp(Box::new(lit(1)), BinOp::Eq, Box::new(lit(1)));
-        let f = Expr::BinaryOp(Box::new(lit(1)), BinOp::Eq, Box::new(lit(2)));
-        let expr = Expr::BinaryOp(Box::new(t.clone()), BinOp::And, Box::new(t.clone()));
-        assert_eq!(run_cond(&expr, &scope), 1);
-        let expr = Expr::BinaryOp(Box::new(t.clone()), BinOp::And, Box::new(f.clone()));
-        assert_eq!(run_cond(&expr, &scope), 0);
+        assert_eq!(run("1 = 1 AND 1 = 1"), 1);
+        assert_eq!(run("1 = 1 AND 1 = 2"), 0);
     }
 
     #[test]
     fn or_true_when_either_operand_true() {
-        let scope = Scope::single(schema(&[]), 0);
-        let t = Expr::BinaryOp(Box::new(lit(1)), BinOp::Eq, Box::new(lit(1)));
-        let f = Expr::BinaryOp(Box::new(lit(1)), BinOp::Eq, Box::new(lit(2)));
-        let expr = Expr::BinaryOp(Box::new(f.clone()), BinOp::Or, Box::new(t.clone()));
-        assert_eq!(run_cond(&expr, &scope), 1);
-        let expr = Expr::BinaryOp(Box::new(f.clone()), BinOp::Or, Box::new(f.clone()));
-        assert_eq!(run_cond(&expr, &scope), 0);
+        assert_eq!(run("1 = 2 OR 1 = 1"), 1);
+        assert_eq!(run("1 = 2 OR 1 = 2"), 0);
     }
 
     #[test]
     fn not_negates_condition() {
-        let scope = Scope::single(schema(&[]), 0);
-        let t = Expr::BinaryOp(Box::new(lit(1)), BinOp::Eq, Box::new(lit(1)));
-        let expr = Expr::Not(Box::new(t));
-        assert_eq!(run_cond(&expr, &scope), 0);
+        assert_eq!(run("NOT (1 = 1)"), 0);
     }
 
     #[test]
     fn is_null_true_and_is_not_null_false_for_a_literal() {
-        let scope = Scope::single(schema(&[]), 0);
-        let expr = Expr::IsNull {
-            expr: Box::new(lit(1)),
-            negated: false,
-        };
-        assert_eq!(run_cond(&expr, &scope), 0);
-        let expr = Expr::IsNull {
-            expr: Box::new(lit(1)),
-            negated: true,
-        };
-        assert_eq!(run_cond(&expr, &scope), 1);
+        // `ISNULL`/`NOTNULL` (no space) is SQLite's postfix spelling
+        // and parses directly to `ExprKind::IsNull`. The two-word `IS
+        // NULL`/`IS NOT NULL` instead parses through the general `IS`
+        // operator as `ExprKind::Is { rhs: NULL literal, .. }` -- which
+        // is semantically equivalent but not yet compiled (#150), so it
+        // is not what this test exercises.
+        assert_eq!(run("1 ISNULL"), 0);
+        assert_eq!(run("1 NOTNULL"), 1);
+    }
+
+    /// Parenthesization is preserved in the AST but must not change
+    /// what the condition evaluates to.
+    #[test]
+    fn paren_is_transparent_to_cond_codegen() {
+        assert_eq!(run("(1 = 1) AND (2 = 2)"), 1);
+        assert_eq!(run("NOT (1 = 2)"), 1);
     }
 
     #[test]
@@ -513,7 +487,7 @@ mod tests {
         let scope = Scope::single(schema(&["a"]), 0);
         // A bare column used as a boolean condition tests truthiness of
         // its value, same as `WHERE some_int_column`.
-        let expr = Expr::Column("a".into());
+        let expr = expr("a");
 
         let mut em = Emitter::new();
         let mut reg = RegAlloc::new();
@@ -554,9 +528,15 @@ mod tests {
     #[test]
     fn depth_bound_rejects_deeply_nested_expressions() {
         let scope = Scope::single(schema(&[]), 0);
-        let mut expr = lit(1);
+        let mut expr = expr("1");
         for _ in 0..(MAX_EXPR_DEPTH + 10) {
-            expr = Expr::Not(Box::new(expr));
+            expr = Expr {
+                kind: ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    expr: Box::new(expr),
+                },
+                span: crate::parser::Span::UNKNOWN,
+            };
         }
         let mut em = Emitter::new();
         let mut reg = RegAlloc::new();
@@ -568,5 +548,35 @@ mod tests {
             CondTargets::null_is_false(Target::Fallthrough, Target::Fallthrough),
         );
         assert_eq!(result, Err(CodegenError::TooDeep));
+    }
+
+    /// `IS`/`BETWEEN`/`IN (list)`/`LIKE` are condition forms the AST can
+    /// express that `codegen::row` cannot compile yet (#150). The
+    /// explicit `Unsupported` arms are load-bearing: without them these
+    /// would fall through to the `_` arm and be compiled as a truthy
+    /// *value*, which is simply wrong for a condition.
+    #[test]
+    fn unsupported_condition_forms_fail_soft_and_name_themselves() {
+        let scope = Scope::single(schema(&["a"]), 0);
+        for sql in [
+            "a IS 1",
+            "a BETWEEN 1 AND 5",
+            "a IN (1, 2, 3)",
+            "a LIKE 'x%'",
+        ] {
+            let mut em = Emitter::new();
+            let mut reg = RegAlloc::new();
+            let result = compile_cond(
+                &mut em,
+                &mut reg,
+                &scope,
+                &expr(sql),
+                CondTargets::null_is_false(Target::Fallthrough, Target::Fallthrough),
+            );
+            assert!(
+                matches!(result, Err(CodegenError::Unsupported { .. })),
+                "{sql:?} should be reported as unsupported"
+            );
+        }
     }
 }

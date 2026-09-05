@@ -162,10 +162,8 @@ pub fn compile_insert(schema: &TableSchema, insert: &Insert) -> Result<Program> 
 )]
 mod tests {
     use super::*;
+    use crate::codegen::row::testutil::{insert, select};
     use crate::codegen::row::{compile_select, IndexSchema};
-    use crate::expr::Expr;
-    use crate::expr::{Insert, Query, SelectItem};
-    use crate::types::Literal;
     use crate::vm::row::{execute, EphemeralTableCursor, Value, Vm};
 
     fn schema(columns: &[&str]) -> TableSchema {
@@ -196,84 +194,47 @@ mod tests {
         }
         execute(&mut vm, &program).unwrap();
 
-        let query = Query {
-            columns: vec![SelectItem::Star],
-            from: schema.name.clone().into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        };
-        let select_program = compile_select(schema, 0, &query).unwrap();
+        let select_query = select(&format!("SELECT * FROM {}", schema.name));
+        let select_program = compile_select(schema, 0, &select_query).unwrap();
         execute(&mut vm, &select_program).unwrap()
     }
 
     #[test]
     fn inserts_a_single_row_with_all_columns() {
         let schema = schema(&["a", "b"]);
-        let insert = Insert {
-            table: "t".into(),
-            columns: vec![],
-            values: vec![vec![
-                Expr::Literal(Literal::Int(1)),
-                Expr::Literal(Literal::Int(2)),
-            ]],
-        };
-        let rows = run_insert_then_scan(&schema, &insert);
+        let stmt = insert("INSERT INTO t VALUES (1, 2)");
+        let rows = run_insert_then_scan(&schema, &stmt);
         assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(2)]]);
     }
 
     #[test]
     fn inserts_multiple_rows_in_order() {
         let schema = schema(&["a"]);
-        let insert = Insert {
-            table: "t".into(),
-            columns: vec![],
-            values: vec![
-                vec![Expr::Literal(Literal::Int(1))],
-                vec![Expr::Literal(Literal::Int(2))],
-            ],
-        };
-        let rows = run_insert_then_scan(&schema, &insert);
+        let stmt = insert("INSERT INTO t VALUES (1), (2)");
+        let rows = run_insert_then_scan(&schema, &stmt);
         assert_eq!(rows, vec![vec![Value::Integer(1)], vec![Value::Integer(2)]]);
     }
 
     #[test]
     fn column_list_leaves_unnamed_columns_null() {
         let schema = schema(&["a", "b"]);
-        let insert = Insert {
-            table: "t".into(),
-            columns: vec!["b".into()],
-            values: vec![vec![Expr::Literal(Literal::Int(9))]],
-        };
-        let rows = run_insert_then_scan(&schema, &insert);
+        let stmt = insert("INSERT INTO t (b) VALUES (9)");
+        let rows = run_insert_then_scan(&schema, &stmt);
         assert_eq!(rows, vec![vec![Value::Null, Value::Integer(9)]]);
     }
 
     #[test]
     fn wrong_table_name_is_rejected() {
         let schema = schema(&["a"]);
-        let insert = Insert {
-            table: "other".into(),
-            columns: vec![],
-            values: vec![vec![Expr::Literal(Literal::Int(1))]],
-        };
-        assert!(compile_insert(&schema, &insert).is_err());
+        let stmt = insert("INSERT INTO other VALUES (1)");
+        assert!(compile_insert(&schema, &stmt).is_err());
     }
 
     #[test]
     fn mismatched_value_count_is_rejected() {
         let schema = schema(&["a", "b"]);
-        let insert = Insert {
-            table: "t".into(),
-            columns: vec![],
-            values: vec![vec![Expr::Literal(Literal::Int(1))]],
-        };
-        assert!(compile_insert(&schema, &insert).is_err());
+        let stmt = insert("INSERT INTO t VALUES (1)");
+        assert!(compile_insert(&schema, &stmt).is_err());
     }
 
     #[test]
@@ -284,15 +245,8 @@ mod tests {
             root_page: 0,
             columns: vec!["b".into()],
         });
-        let insert = Insert {
-            table: "t".into(),
-            columns: vec![],
-            values: vec![vec![
-                Expr::Literal(Literal::Int(1)),
-                Expr::Literal(Literal::Int(2)),
-            ]],
-        };
-        let program = compile_insert(&schema, &insert).unwrap();
+        let stmt = insert("INSERT INTO t VALUES (1, 2)");
+        let program = compile_insert(&schema, &stmt).unwrap();
         let mut vm = Vm::new();
         vm.open_cursor(0, Box::new(EphemeralTableCursor::new()))
             .unwrap();
@@ -305,16 +259,32 @@ mod tests {
     fn explicit_rowid_alias_value_is_used_as_the_rowid() {
         let mut schema = schema(&["id", "b"]);
         schema.rowid_alias = Some(0);
-        let insert = Insert {
-            table: "t".into(),
-            columns: vec![],
-            values: vec![vec![
-                Expr::Literal(Literal::Int(42)),
-                Expr::Literal(Literal::Int(2)),
-            ]],
-        };
-        let rows = run_insert_then_scan(&schema, &insert);
+        let stmt = insert("INSERT INTO t VALUES (42, 2)");
+        let rows = run_insert_then_scan(&schema, &stmt);
         // Reading the rowid-alias column back yields the rowid itself.
         assert_eq!(rows, vec![vec![Value::Integer(42), Value::Integer(2)]]);
+    }
+
+    /// `INSERT ... SELECT` and `DEFAULT VALUES` are constructs
+    /// `expr::Insert` could never represent, so codegen has never
+    /// compiled them (#147). Failing soft with the construct named
+    /// beats a panic once real INSERT statements start reaching this
+    /// planner (#148).
+    #[test]
+    fn insert_select_and_default_values_are_unsupported() {
+        let schema = schema(&["a"]);
+        for sql in [
+            "INSERT INTO t SELECT a FROM t",
+            "INSERT INTO t DEFAULT VALUES",
+        ] {
+            let stmt = insert(sql);
+            assert!(
+                matches!(
+                    compile_insert(&schema, &stmt),
+                    Err(CodegenError::Unsupported { .. })
+                ),
+                "{sql:?} should be reported as unsupported"
+            );
+        }
     }
 }

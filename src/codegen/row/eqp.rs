@@ -122,9 +122,7 @@ fn uses_sorter_for_order_by(query: &Select, schema: &TableSchema) -> bool {
 /// Whether `query` is the shape the index-ordered fast path considers:
 /// one table, no `WHERE`, no `DISTINCT`.
 fn is_plain_scan(query: &Select) -> bool {
-    super::joins_of(query).is_empty()
-        && query.where_clause.is_none()
-        && !super::is_distinct(query)
+    super::joins_of(query).is_empty() && query.where_clause.is_none() && !super::is_distinct(query)
 }
 
 /// The single bare column `query` orders by, or `None` for no `ORDER
@@ -143,9 +141,8 @@ fn single_order_by_column(query: &Select) -> Option<&str> {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use crate::codegen::row::testutil::select;
     use crate::codegen::row::IndexSchema;
-    use crate::expr::{BinOp, Expr, OrderBy, SelectItem};
-    use crate::types::Literal;
 
     fn schema(indexes: Vec<IndexSchema>) -> TableSchema {
         TableSchema {
@@ -166,24 +163,9 @@ mod tests {
         }
     }
 
-    fn query() -> Query {
-        Query {
-            columns: vec![SelectItem::Column("a".to_string())],
-            from: "t".into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        }
-    }
-
     #[test]
     fn a_bare_select_reports_a_full_scan() {
-        let rows = explain_query_plan(&query(), &schema(vec![]), None).unwrap();
+        let rows = explain_query_plan(&select("SELECT a FROM t"), &schema(vec![]), None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].detail, "SCAN t");
         assert_eq!(rows[0].id, 1);
@@ -192,77 +174,87 @@ mod tests {
 
     #[test]
     fn an_indexed_order_by_reports_an_index_scan_and_no_temp_b_tree() {
-        let mut q = query();
-        q.order_by = Some(OrderBy {
-            column: "a".to_string(),
-            descending: false,
-        });
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), None).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t ORDER BY a"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].detail, "SCAN t USING INDEX t_a");
     }
 
     #[test]
     fn an_unindexed_order_by_reports_a_temp_b_tree() {
-        let mut q = query();
-        q.order_by = Some(OrderBy {
-            column: "b".to_string(),
-            descending: false,
-        });
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), None).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t ORDER BY b"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].detail, "SCAN t");
+        assert_eq!(rows[1].detail, "USE TEMP B-TREE FOR ORDER BY");
+    }
+
+    /// A multi-term `ORDER BY` cannot be served by the single-key
+    /// index-ordered scan, so it must fall to the sorter even when its
+    /// leading column is indexed. Not expressible before #147.
+    #[test]
+    fn a_multi_term_order_by_reports_a_temp_b_tree() {
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t ORDER BY a, b"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows[0].detail, "SCAN t");
         assert_eq!(rows[1].detail, "USE TEMP B-TREE FOR ORDER BY");
     }
 
     #[test]
     fn a_bounded_indexed_column_reports_a_search() {
-        let mut q = query();
-        q.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("a".to_string())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(5))),
-        ));
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), None).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t WHERE a > 5"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows[0].detail, "SEARCH t USING INDEX t_a (a>?)");
     }
 
     #[test]
     fn an_equality_on_an_indexed_column_reports_an_equality_search() {
-        let mut q = query();
-        q.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("a".to_string())),
-            BinOp::Eq,
-            Box::new(Expr::Literal(Literal::Int(5))),
-        ));
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), None).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t WHERE a = 5"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows[0].detail, "SEARCH t USING INDEX t_a (a=?)");
     }
 
     #[test]
     fn an_unindexed_where_clause_reports_a_full_scan() {
-        let mut q = query();
-        q.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("b".to_string())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(5))),
-        ));
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), None).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t WHERE b > 5"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows[0].detail, "SCAN t");
     }
 
     #[test]
     fn a_joined_query_reports_one_row_per_table() {
-        let mut q = query();
-        q.joins = vec![crate::expr::Join {
-            kind: crate::expr::JoinKind::Inner,
-            table: "u".to_string(),
-            left_col: "a".to_string(),
-            right_col: "x".to_string(),
-        }];
         let mut right = schema(vec![]);
         right.name = "u".to_string();
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), Some(&right)).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t JOIN u ON t.a = u.x"),
+            &schema(vec![index_on_a()]),
+            Some(&right),
+        )
+        .unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].detail, "SCAN t");
         assert_eq!(rows[1].detail, "SCAN u");

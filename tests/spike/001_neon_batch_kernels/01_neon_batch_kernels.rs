@@ -273,7 +273,9 @@ fn neon_batch_kernel_spike() {
     // -- Map add (int) --
     let (a, b) = (int_typed(ROWS), int_typed(ROWS));
     let mut out = vec![0i64; ROWS];
-    let t_typed = time_it(REPS, || map_add_typed(black_box(&a), black_box(&b), &mut out));
+    let t_typed = time_it(REPS, || {
+        map_add_typed(black_box(&a), black_box(&b), &mut out)
+    });
     black_box(&out);
 
     let (at, bt) = (int_tagged(ROWS), int_tagged(ROWS));
@@ -287,7 +289,9 @@ fn neon_batch_kernel_spike() {
     // -- Map mul (float) --
     let (a, b) = (float_typed(ROWS), float_typed(ROWS));
     let mut out = vec![0.0f64; ROWS];
-    let t_typed = time_it(REPS, || map_mul_typed(black_box(&a), black_box(&b), &mut out));
+    let t_typed = time_it(REPS, || {
+        map_mul_typed(black_box(&a), black_box(&b), &mut out)
+    });
     black_box(&out);
 
     let (at, bt) = (float_tagged(ROWS), float_tagged(ROWS));
@@ -301,7 +305,9 @@ fn neon_batch_kernel_spike() {
     // -- Map and (bool) --
     let (a, b) = (bool_typed(ROWS), bool_typed(ROWS));
     let mut out = vec![false; ROWS];
-    let t_typed = time_it(REPS, || map_and_typed(black_box(&a), black_box(&b), &mut out));
+    let t_typed = time_it(REPS, || {
+        map_and_typed(black_box(&a), black_box(&b), &mut out)
+    });
     black_box(&out);
 
     let (at, bt) = (bool_tagged(ROWS), bool_tagged(ROWS));
@@ -402,5 +408,8 @@ fn kernels_typed_and_tagged_agree() {
 
     let s = str_typed(N);
     let st = str_tagged(N);
-    assert_eq!(str_eq_count_typed(&s, "beta"), str_eq_count_tagged(&st, "beta"));
+    assert_eq!(
+        str_eq_count_typed(&s, "beta"),
+        str_eq_count_tagged(&st, "beta")
+    );
 }

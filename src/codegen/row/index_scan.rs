@@ -112,7 +112,10 @@ pub(super) fn try_compile_index_ordered_scan(
     if order_by.nulls_last.is_some() {
         return Ok(false);
     }
-    let ExprKind::Column { table: None, name, .. } = &order_by.expr.kind else {
+    let ExprKind::Column {
+        table: None, name, ..
+    } = &order_by.expr.kind
+    else {
         return Ok(false);
     };
     let Some(index_position) = find_ordering_index(&scope.schema, name) else {

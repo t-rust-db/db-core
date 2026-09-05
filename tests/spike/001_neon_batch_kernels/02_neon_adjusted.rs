@@ -364,7 +364,9 @@ fn str_eq_count_tagged(a: &[Value], needle: &str) -> usize {
 fn neon_adjusted_spike() {
     const REPS: usize = 11;
 
-    println!("\n=== db-core#141 NEON spike (adjusted), median of {REPS} runs, min in parentheses ===");
+    println!(
+        "\n=== db-core#141 NEON spike (adjusted), median of {REPS} runs, min in parentheses ==="
+    );
     println!(
         "size_of::<Value>() = {} bytes vs i64/f64 = 8 bytes, bool = 1 byte (this ratio drives the streaming-size results)\n",
         size_of::<Value>()
@@ -427,7 +429,11 @@ fn neon_adjusted_spike() {
         }
     });
     report("reduce_sum(int)/cached", t_typed, t_tagged);
-    report("reduce_sum(int)/cached/unrolled4", t_typed_unrolled, t_tagged);
+    report(
+        "reduce_sum(int)/cached/unrolled4",
+        t_typed_unrolled,
+        t_tagged,
+    );
 
     let f = float_typed(ROWS_CACHED);
     let (t_naive, _) = time_it(REPS, || {
@@ -454,7 +460,9 @@ fn neon_adjusted_spike() {
 
     let (a, b) = (int_typed(ROWS_STREAMING), int_typed(ROWS_STREAMING));
     let mut out = vec![0i64; ROWS_STREAMING];
-    let (t_typed, _) = time_it(REPS, || map_add_typed(black_box(&a), black_box(&b), &mut out));
+    let (t_typed, _) = time_it(REPS, || {
+        map_add_typed(black_box(&a), black_box(&b), &mut out)
+    });
     black_box(&out);
     let (at, bt) = (int_tagged(ROWS_STREAMING), int_tagged(ROWS_STREAMING));
     let mut out_t = vec![Value::Null; ROWS_STREAMING];
@@ -497,12 +505,18 @@ fn neon_adjusted_spike() {
         black_box(reduce_sum_f64_tagged(black_box(&ft)));
     });
     report("reduce_sum(float)/streaming/naive", t_naive, t_tagged);
-    report("reduce_sum(float)/streaming/unrolled4", t_unrolled, t_tagged);
+    report(
+        "reduce_sum(float)/streaming/unrolled4",
+        t_unrolled,
+        t_tagged,
+    );
 
     // ---- Map and (bool), Filter, string -- streaming only ----
     let (a, b) = (bool_typed(ROWS_STREAMING), bool_typed(ROWS_STREAMING));
     let mut out = vec![false; ROWS_STREAMING];
-    let (t_typed, _) = time_it(REPS, || map_and_typed(black_box(&a), black_box(&b), &mut out));
+    let (t_typed, _) = time_it(REPS, || {
+        map_and_typed(black_box(&a), black_box(&b), &mut out)
+    });
     black_box(&out);
     let (at, bt) = (bool_tagged(ROWS_STREAMING), bool_tagged(ROWS_STREAMING));
     let mut out_t = vec![Value::Null; ROWS_STREAMING];
@@ -533,7 +547,11 @@ fn neon_adjusted_spike() {
         filter_into_tagged(black_box(&at), threshold, &mut into_t);
         black_box(&into_t);
     });
-    report("filter_into(int)/streaming (reused buf)", t_typed_into, t_tagged_into);
+    report(
+        "filter_into(int)/streaming (reused buf)",
+        t_typed_into,
+        t_tagged_into,
+    );
 
     let a = str_typed(ROWS_STREAMING);
     let (t_typed, _) = time_it(REPS, || {
@@ -596,5 +614,8 @@ fn kernels_typed_and_tagged_agree() {
 
     let s = str_typed(N);
     let st = str_tagged(N);
-    assert_eq!(str_eq_count_typed(&s, "beta"), str_eq_count_tagged(&st, "beta"));
+    assert_eq!(
+        str_eq_count_typed(&s, "beta"),
+        str_eq_count_tagged(&st, "beta")
+    );
 }

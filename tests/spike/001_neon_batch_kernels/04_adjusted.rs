@@ -75,7 +75,10 @@ fn ns_per_row(d: Duration, rows: usize) -> f64 {
 }
 
 fn report_step(label: &str, d: Duration, rows: usize) {
-    println!("  {label:<32} {d:>10?}  ({:>6.2} ns/row)", ns_per_row(d, rows));
+    println!(
+        "  {label:<32} {d:>10?}  ({:>6.2} ns/row)",
+        ns_per_row(d, rows)
+    );
 }
 
 fn report_increment(label: &str, from: Duration, to: Duration, rows: usize) {
@@ -173,19 +176,49 @@ fn adjusted_batch_specific_spike() {
     println!("--- map_add(int) ladder: Load, Load+Map, Load+Map+Emit ---");
 
     let program_load = [
-        Opcode::LoadColumn { reg: 0, column: Cow::Borrowed("a") },
-        Opcode::LoadColumn { reg: 1, column: Cow::Borrowed("b") },
+        Opcode::LoadColumn {
+            reg: 0,
+            column: Cow::Borrowed("a"),
+        },
+        Opcode::LoadColumn {
+            reg: 1,
+            column: Cow::Borrowed("b"),
+        },
     ];
     let program_load_map = [
-        Opcode::LoadColumn { reg: 0, column: Cow::Borrowed("a") },
-        Opcode::LoadColumn { reg: 1, column: Cow::Borrowed("b") },
-        Opcode::Map { dst: 2, op: MapOp::Add, a: 0, b: 1 },
+        Opcode::LoadColumn {
+            reg: 0,
+            column: Cow::Borrowed("a"),
+        },
+        Opcode::LoadColumn {
+            reg: 1,
+            column: Cow::Borrowed("b"),
+        },
+        Opcode::Map {
+            dst: 2,
+            op: MapOp::Add,
+            a: 0,
+            b: 1,
+        },
     ];
     let program_load_map_emit = [
-        Opcode::LoadColumn { reg: 0, column: Cow::Borrowed("a") },
-        Opcode::LoadColumn { reg: 1, column: Cow::Borrowed("b") },
-        Opcode::Map { dst: 2, op: MapOp::Add, a: 0, b: 1 },
-        Opcode::Emit { registers: Cow::Borrowed(&[2]) },
+        Opcode::LoadColumn {
+            reg: 0,
+            column: Cow::Borrowed("a"),
+        },
+        Opcode::LoadColumn {
+            reg: 1,
+            column: Cow::Borrowed("b"),
+        },
+        Opcode::Map {
+            dst: 2,
+            op: MapOp::Add,
+            a: 0,
+            b: 1,
+        },
+        Opcode::Emit {
+            registers: Cow::Borrowed(&[2]),
+        },
     ];
 
     let t_load = time_it(REPS, || {
@@ -220,7 +253,12 @@ fn adjusted_batch_specific_spike() {
 
     report_step("Load (2 cols)", t_load, ROWS_TOTAL);
     report_increment("Map (dispatch+add)", t_load, t_load_map, ROWS_TOTAL);
-    report_increment("Emit (row transpose)", t_load_map, t_load_map_emit, ROWS_TOTAL);
+    report_increment(
+        "Emit (row transpose)",
+        t_load_map,
+        t_load_map_emit,
+        ROWS_TOTAL,
+    );
     report_step("raw fused loop (no VM)", t_raw, ROWS_TOTAL);
     println!(
         "  => vm(load+map+emit)/raw = {:.2}x   vm(load+map only)/raw = {:.2}x\n",
@@ -255,15 +293,34 @@ fn adjusted_batch_specific_spike() {
     // ---- Reduce sum ladder: Load -> +Reduce -> +Emit ----
     println!("--- reduce_sum(int) ladder: Load, Load+Reduce, Load+Reduce+Emit ---");
 
-    let program_load_a = [Opcode::LoadColumn { reg: 0, column: Cow::Borrowed("a") }];
+    let program_load_a = [Opcode::LoadColumn {
+        reg: 0,
+        column: Cow::Borrowed("a"),
+    }];
     let program_load_reduce = [
-        Opcode::LoadColumn { reg: 0, column: Cow::Borrowed("a") },
-        Opcode::Reduce { func: AggFunc::Sum, src: Some(0), dst: 1 },
+        Opcode::LoadColumn {
+            reg: 0,
+            column: Cow::Borrowed("a"),
+        },
+        Opcode::Reduce {
+            func: AggFunc::Sum,
+            src: Some(0),
+            dst: 1,
+        },
     ];
     let program_load_reduce_emit = [
-        Opcode::LoadColumn { reg: 0, column: Cow::Borrowed("a") },
-        Opcode::Reduce { func: AggFunc::Sum, src: Some(0), dst: 1 },
-        Opcode::Emit { registers: Cow::Borrowed(&[1]) },
+        Opcode::LoadColumn {
+            reg: 0,
+            column: Cow::Borrowed("a"),
+        },
+        Opcode::Reduce {
+            func: AggFunc::Sum,
+            src: Some(0),
+            dst: 1,
+        },
+        Opcode::Emit {
+            registers: Cow::Borrowed(&[1]),
+        },
     ];
 
     let t_load_a = time_it(REPS, || {
@@ -295,7 +352,12 @@ fn adjusted_batch_specific_spike() {
 
     report_step("Load (1 col)", t_load_a, ROWS_TOTAL);
     report_increment("Reduce (dispatch+sum)", t_load_a, t_load_reduce, ROWS_TOTAL);
-    report_increment("Emit (1 row/segment)", t_load_reduce, t_load_reduce_emit, ROWS_TOTAL);
+    report_increment(
+        "Emit (1 row/segment)",
+        t_load_reduce,
+        t_load_reduce_emit,
+        ROWS_TOTAL,
+    );
     report_step("raw fused loop (no VM)", t_raw_sum, ROWS_TOTAL);
     println!(
         "  => vm(load+reduce+emit)/raw = {:.2}x\n",
@@ -306,11 +368,24 @@ fn adjusted_batch_specific_spike() {
     println!("--- filter(int), ~50% selectivity (per-segment-local column) ---");
     let threshold = BATCH_SIZE as i64 / 2;
     let program_filter = [
-        Opcode::LoadColumn { reg: 0, column: Cow::Borrowed("a") },
-        Opcode::LoadConst { reg: 1, value: Value::Int(threshold) },
-        Opcode::Map { dst: 2, op: MapOp::Gt, a: 0, b: 1 },
+        Opcode::LoadColumn {
+            reg: 0,
+            column: Cow::Borrowed("a"),
+        },
+        Opcode::LoadConst {
+            reg: 1,
+            value: Value::Int(threshold),
+        },
+        Opcode::Map {
+            dst: 2,
+            op: MapOp::Gt,
+            a: 0,
+            b: 1,
+        },
         Opcode::Filter { predicate: 2 },
-        Opcode::Emit { registers: Cow::Borrowed(&[0]) },
+        Opcode::Emit {
+            registers: Cow::Borrowed(&[0]),
+        },
     ];
     let t_vm_filter = time_it(REPS, || {
         for batch in &batches {
@@ -348,8 +423,14 @@ fn adjusted_batch_specific_spike() {
     let t_parallel = time_it(REPS, || {
         black_box(run_parallel(&owned, &program_load_map_emit).unwrap());
     });
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
-    report_step("single-threaded, incl. load()", t_single_with_load, ROWS_TOTAL);
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    report_step(
+        "single-threaded, incl. load()",
+        t_single_with_load,
+        ROWS_TOTAL,
+    );
     report_step("run_parallel", t_parallel, ROWS_TOTAL);
     println!(
         "  => speedup = {:.2}x on {threads} available threads (round 3's uncorrected \
@@ -364,15 +445,32 @@ fn adjusted_batch_specific_spike() {
 fn vm_program_matches_raw_loop() {
     let batches = build_segments(BATCH_SIZE * 3 + 17); // not a whole number of segments
     let program_add = [
-        Opcode::LoadColumn { reg: 0, column: Cow::Borrowed("a") },
-        Opcode::LoadColumn { reg: 1, column: Cow::Borrowed("b") },
-        Opcode::Map { dst: 2, op: MapOp::Add, a: 0, b: 1 },
-        Opcode::Emit { registers: Cow::Borrowed(&[2]) },
+        Opcode::LoadColumn {
+            reg: 0,
+            column: Cow::Borrowed("a"),
+        },
+        Opcode::LoadColumn {
+            reg: 1,
+            column: Cow::Borrowed("b"),
+        },
+        Opcode::Map {
+            dst: 2,
+            op: MapOp::Add,
+            a: 0,
+            b: 1,
+        },
+        Opcode::Emit {
+            registers: Cow::Borrowed(&[2]),
+        },
     ];
     for batch in &batches {
         let mut vm = Vm::new();
         vm.execute(batch, &program_add).unwrap();
-        let vm_out: Vec<Value> = vm.take_output().into_iter().map(|row| row[0].clone()).collect();
+        let vm_out: Vec<Value> = vm
+            .take_output()
+            .into_iter()
+            .map(|row| row[0].clone())
+            .collect();
         let raw_out = raw_map_add(&batch.columns["a"], &batch.columns["b"]);
         assert_eq!(vm_out, raw_out);
     }

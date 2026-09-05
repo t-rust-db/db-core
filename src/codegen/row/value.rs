@@ -5,6 +5,17 @@ use super::{CodegenError, CondTargets, Emitter, RegAlloc, Result, Scope, Target,
 use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, UnaryOp};
 use crate::vm::row::{affinity_of, Affinity, Instruction, Opcode, P4};
 
+/// Rebuilds the `"table.column"` string [`Scope::resolve`] expects.
+/// `ExprKind::Column` carries `table` and `name` as separate fields;
+/// `Scope::resolve` (unchanged since before #147) still takes one
+/// dotted string, matching how `expr::Expr::Column` stored it.
+fn qualified_name(table: Option<&str>, name: &str) -> String {
+    match table {
+        Some(table) => format!("{table}.{name}"),
+        None => name.to_string(),
+    }
+}
+
 /// Reads column `idx` of the row at `cursor` into `dest`, emitting
 /// `Rowid` rather than `Column` for a rowid-alias column. A table's
 /// `INTEGER PRIMARY KEY` column is stored as a NULL placeholder in
@@ -47,8 +58,10 @@ pub(crate) fn emit_column_read(
 /// arithmetic) has none of its own.
 pub(crate) fn expr_affinity(scope: &Scope, expr: &Expr) -> Option<Affinity> {
     match &expr.kind {
-        ExprKind::Column { name, .. } => {
-            let (_, idx) = scope.resolve(name).ok()?;
+        ExprKind::Column { table, name, .. } => {
+            let (_, idx) = scope
+                .resolve(&qualified_name(table.as_deref(), name))
+                .ok()?;
             let declared = scope.schema.column_types.get(idx)?;
             Some(affinity_of(declared))
         }
@@ -130,8 +143,8 @@ pub(crate) fn compile_value_depth(
             Ok(r)
         }
 
-        ExprKind::Column { name, .. } => {
-            let (cursor, idx) = scope.resolve(name)?;
+        ExprKind::Column { table, name, .. } => {
+            let (cursor, idx) = scope.resolve(&qualified_name(table.as_deref(), name))?;
             let r = reg.alloc();
             emit_column_read(em, &scope.schema, cursor, idx, r)?;
             Ok(r)
@@ -168,7 +181,9 @@ pub(crate) fn compile_value_depth(
             }
         }
 
-        ExprKind::Binary { op, lhs, rhs } => compile_binary(em, reg, scope, expr, *op, lhs, rhs, depth),
+        ExprKind::Binary { op, lhs, rhs } => {
+            compile_binary(em, reg, scope, expr, *op, lhs, rhs, depth)
+        }
 
         // Every condition form, used in a value context: each answers
         // true/false/unknown, which `compile_bool_to_value`
@@ -566,7 +581,7 @@ mod tests {
     /// planner-shaped struct (#147).
     fn parse_one_select(sql: &str) -> crate::parser::ast::Select {
         match crate::parser::row::parse_select(sql) {
-            crate::parser::row::ParseOutcome::Parsed(select) => *select,
+            crate::parser::row::ParseOutcome::Accepted(select) => *select,
             other => panic!("expected {sql:?} to parse, got {other:?}"),
         }
     }
