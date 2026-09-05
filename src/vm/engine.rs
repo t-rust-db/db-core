@@ -397,6 +397,85 @@ mod tests {
         assert_eq!(rows.len(), 3);
     }
 
+    fn scan_program(fin: Opcode, with_filter: bool) -> Program {
+        let mut instructions = vec![Instruction::new(Opcode::LoadColumn {
+            reg: 0,
+            column: "k".into(),
+        })];
+        if with_filter {
+            instructions.push(Instruction::new(Opcode::Filter { predicate: 0 }));
+        }
+        instructions.push(Instruction::new(Opcode::Emit {
+            registers: vec![0].into(),
+        }));
+        instructions.push(Instruction::new(fin));
+        Program::new(instructions)
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_102__v1_distinct_disqualifies_bounded_scan() {
+        let program = scan_program(
+            Opcode::Finalize {
+                agg_parts: vec![].into(),
+                num_group_keys: 0,
+                distinct: true,
+                order_by: None,
+                limit: Some(5),
+            },
+            false,
+        );
+        assert_eq!(bounded_scan_limit(&program), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_102__v2_non_empty_agg_parts_disqualifies_bounded_scan() {
+        let program = scan_program(
+            Opcode::Finalize {
+                agg_parts: vec![AggPart::Sum].into(),
+                num_group_keys: 0,
+                distinct: false,
+                order_by: None,
+                limit: Some(5),
+            },
+            false,
+        );
+        assert_eq!(bounded_scan_limit(&program), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_102__v3_filter_in_body_disqualifies_bounded_scan() {
+        let program = scan_program(
+            Opcode::Finalize {
+                agg_parts: vec![].into(),
+                num_group_keys: 0,
+                distinct: false,
+                order_by: None,
+                limit: Some(5),
+            },
+            true,
+        );
+        assert_eq!(bounded_scan_limit(&program), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_102__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan() {
+        let program = scan_program(
+            Opcode::Finalize {
+                agg_parts: vec![].into(),
+                num_group_keys: 0,
+                distinct: false,
+                order_by: None,
+                limit: Some(5),
+            },
+            false,
+        );
+        assert_eq!(bounded_scan_limit(&program), Some(5));
+    }
+
     #[test]
     fn bare_limit_stops_before_loading_later_segments() {
         use std::sync::atomic::{AtomicUsize, Ordering};

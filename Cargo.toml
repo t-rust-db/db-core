@@ -10,15 +10,33 @@ description = "Shared SQL language/execution layer for t-rust-db: types, expr, p
 name = "db_core"
 path = "src/lib.rs"
 
+[[test]]
+name = "unit_mcdc_discharge"
+path = "tests/unit/mcdc_discharge_test.rs"
+
 [dependencies]
 
 [features]
-# `parser-column` + `vm-batch` + `codegen-batch` + `emit-batch` on by default -- these
-# are the only real, tested content today, and plain `cargo test` (no
-# feature flags) needs something to exercise. Consumers that want to be
-# explicit about depending on exactly what they use (column-rs does) set
-# `default-features = false, features = [...]` regardless of this default.
-default = ["parser-column", "vm-batch", "codegen-batch", "emit-batch"]
+# Every feature on by default (db-core#111): `cargo-mvl-mcdc harvest`
+# (the MC/DC discharge tool -- see `make test-mcdc`) hardcodes a
+# feature-less `cargo test`, so any module gated out of `default` would
+# never compile under it and its obligations could never be discharged.
+# Consumers that want to be explicit about depending on exactly what
+# they use (column-rs does) set `default-features = false, features =
+# [...]` regardless of this default -- narrowing it here would only
+# affect a fresh `cargo add db-core`/bare `cargo build` in this repo.
+default = [
+    "parser-column",
+    "vm-batch",
+    "vm-row",
+    "vm-stream",
+    "codegen-batch",
+    "codegen-row",
+    "codegen-stream",
+    "emit-batch",
+    "emit-row",
+    "emit-stream",
+]
 
 # `parser`: one grammar section per Cargo feature, mirroring `vm`'s own
 # `batch`/`row`/`stream` split (ADR 0001/0002).

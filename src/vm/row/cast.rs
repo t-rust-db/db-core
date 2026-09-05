@@ -258,4 +258,49 @@ mod tests {
         );
         assert_eq!(cast_to(&Value::Null, Affinity::Numeric), Value::Null);
     }
+
+    /// MC/DC vector (obligation `cast_126`, `downgrade_whole_reals`'s
+    /// decision `r.fract() == 0.0 && r.is_finite() && in_i64_range(r)`):
+    /// baseline all three leaves true -- a whole, finite, in-range REAL
+    /// downgrades to INTEGER.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__cast_126__v1_whole_finite_in_range_downgrades() {
+        assert_eq!(cast_to(&text("5.0"), Affinity::Numeric), Value::Integer(5));
+    }
+
+    /// MC/DC vector (obligation `cast_126`): leaf A (`fract() == 0.0`)
+    /// false -- a fractional REAL stays REAL. Independence pair for A
+    /// against `mcdc__cast_126__v1_whole_finite_in_range_downgrades`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__cast_126__v2_fractional_real_stays_real() {
+        assert_eq!(cast_to(&text("5.5"), Affinity::Numeric), Value::Real(5.5));
+    }
+
+    /// MC/DC vector (obligation `cast_126`): leaf B (`is_finite()`)
+    /// false -- an infinite REAL stays REAL (its `fract()` is NaN, so
+    /// leaf A is collaterally false too, per IEEE-754: no infinite value
+    /// is whole-valued). Exercises B's false branch alongside A's.
+    /// `f64::MAX * 2.0` overflows to `f64::INFINITY` at parse time, since
+    /// the custom numeric-prefix scanner delegates to `str::parse`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__cast_126__v3_infinite_real_stays_real() {
+        let doubled_max = format!("{}0", f64::MAX); // overflows f64::parse to +inf
+        assert_eq!(
+            cast_to(&text(&doubled_max), Affinity::Numeric),
+            Value::Real(f64::INFINITY)
+        );
+    }
+
+    /// MC/DC vector (obligation `cast_126`): leaf C (`in_i64_range`)
+    /// false, leaves A and B true -- a whole, finite REAL outside
+    /// `i64`'s range stays REAL. Independence pair for C against
+    /// `mcdc__cast_126__v1_whole_finite_in_range_downgrades`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__cast_126__v4_out_of_range_whole_real_stays_real() {
+        assert_eq!(cast_to(&text("1e30"), Affinity::Numeric), Value::Real(1e30));
+    }
 }

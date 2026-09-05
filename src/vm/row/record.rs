@@ -586,20 +586,38 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__encode_33__v1_groups_grows() {
+    fn mcdc__record_77__v1_groups_grows() {
         assert_eq!(encode_varint(128).len(), 2);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__encode_33__v2_groups_stays_one() {
+    fn mcdc__record_77__v2_groups_stays_one() {
         assert_eq!(encode_varint(5).len(), 1);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__encode_33__v3_groups_caps_at_eight() {
+    fn mcdc__record_77__v3_groups_caps_at_eight() {
         assert_eq!(encode_varint((1u64 << 56) - 1).len(), 8);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__record_112__v1_groups_grows() {
+        assert_eq!(varint_len(128), 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__record_112__v2_groups_stays_one() {
+        assert_eq!(varint_len(5), 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__record_112__v3_groups_caps_at_eight() {
+        assert_eq!(varint_len((1u64 << 56) - 1), 8);
     }
 
     #[test]
