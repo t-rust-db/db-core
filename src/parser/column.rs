@@ -644,6 +644,9 @@ fn convert_select(select: &Select) -> Result<Query> {
         where_clause,
         distinct,
         group_by,
+        // `HAVING` is rejected above -- `column-rs`'s enforced subset of
+        // the shared grammar has no lowering for it (see `convert_select`).
+        having: None,
         order_by,
         limit,
     };

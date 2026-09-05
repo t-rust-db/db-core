@@ -420,6 +420,7 @@ mod tests {
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
         };

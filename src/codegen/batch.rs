@@ -1588,6 +1588,7 @@ mod tests {
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: Some(OrderBy {
                 column: "id".into(),
                 descending: false,
@@ -1693,6 +1694,7 @@ mod tests {
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: Some(OrderBy {
                 column: "id".into(),
                 descending: false,
@@ -1853,6 +1855,7 @@ mod tests {
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
         };
@@ -1945,6 +1948,7 @@ mod tests {
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
         };

@@ -206,6 +206,13 @@ pub struct Query {
     pub where_clause: Option<Expr>,
     pub distinct: bool,
     pub group_by: Vec<String>,
+    /// `HAVING <expr>` -- the post-aggregation filter, mirroring
+    /// sqlite-rs's own `having: Option<Expr>` on `parser::ast::Select`.
+    /// An aggregate is referenced here the same way `ORDER BY` already
+    /// references one (#131): by its `SELECT`-item label
+    /// (`"COUNT(*)"`, `"SUM(amount)"`), since this crate's scoped-down
+    /// [`Expr`] has no function-call variant of its own.
+    pub having: Option<Expr>,
     pub order_by: Option<OrderBy>,
     pub limit: Option<usize>,
 }
@@ -269,6 +276,7 @@ mod tests {
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
         }
@@ -409,6 +417,7 @@ mod tests {
                 Box::new(Expr::Literal(Literal::Int(18))),
             )),
             group_by: vec!["id".into()],
+            having: None,
             order_by: Some(OrderBy {
                 column: "id".into(),
                 descending: false,

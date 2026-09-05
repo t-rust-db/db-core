@@ -3,8 +3,8 @@
 //! **Single-table scan + projection + `WHERE` + `LIMIT`** (db-core#92),
 //! **a single `INNER`/`LEFT`/`FULL` equi-join and `ORDER BY` via the
 //! existing single-key sorter** (db-core#102/#101, both without any
-//! stats/access-path cost model). `GROUP BY`/aggregation is deferred to
-//! #93; the join-order/access-path chooser and real `planner::Stats`
+//! stats/access-path cost model), and `GROUP BY`/`HAVING`/aggregation
+//! via [`super::aggregate`] (db-core#93). The join-order/access-path chooser and real `planner::Stats`
 //! (needs a working `ANALYZE` VM implementation, #116) to #117; N-way
 //! joins and multi-table catalogs to #118 (no consumer needs them yet);
 //! `DISTINCT` is not yet supported.
@@ -58,11 +58,6 @@ fn compile_select_inner(
             reason: "DISTINCT is not yet supported".to_string(),
         });
     }
-    if !query.group_by.is_empty() {
-        return Err(CodegenError::Unsupported {
-            reason: "GROUP BY is deferred to #93".to_string(),
-        });
-    }
     if query.joins.len() > 1 {
         return Err(CodegenError::Unsupported {
             reason: "only a single JOIN is supported; N-way joins are deferred to #101".to_string(),
@@ -98,6 +93,10 @@ chooser is deferred to #117, N-way joins to #118"
         }
         None => Scope::single(schema.clone(), cursor),
     };
+
+    if !query.group_by.is_empty() || super::aggregate::query_has_aggregate(query) {
+        return compile_aggregate_select(schema, cursor, right, query, &scope);
+    }
 
     let mut columns = Vec::with_capacity(query.columns.len());
     for item in &query.columns {
@@ -313,6 +312,89 @@ chooser is deferred to #117, N-way joins to #118"
     Ok(em.finish())
 }
 
+/// Compiles a `SELECT` that aggregates -- an explicit `GROUP BY`, or a
+/// whole-table aggregate with no `GROUP BY` key at all -- through
+/// [`super::aggregate`] (db-core#93).
+///
+/// `ORDER BY` and `DISTINCT` combined with aggregation are rejected
+/// rather than composed, matching sqlite-rs's own documented
+/// simplification for this slice.
+fn compile_aggregate_select(
+    schema: &TableSchema,
+    cursor: i32,
+    right: Option<(&TableSchema, i32)>,
+    query: &Query,
+    scope: &Scope,
+) -> Result<Program> {
+    if query.order_by.is_some() {
+        return Err(CodegenError::Unsupported {
+            reason: "ORDER BY combined with GROUP BY/aggregation is not yet supported".to_string(),
+        });
+    }
+
+    let mut em = Emitter::new();
+    let mut reg = RegAlloc::new();
+    let limit_reg = compile_limit_setup(&mut em, &mut reg, query)?;
+    let end_label = em.new_label();
+
+    let highest = right.map_or(cursor, |(_, c)| cursor.max(c));
+    let cursors = super::aggregate::ScanCursors::past(cursor, highest);
+    let mut sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: usize| -> Result<()> {
+        emit_result_row(em, reg, first, count)
+    };
+
+    match right {
+        Some((_, right_cursor)) => super::aggregate::compile_joined_grouped_scan(
+            &mut em,
+            &mut reg,
+            query,
+            scope,
+            cursors,
+            right_cursor,
+            limit_reg,
+            end_label,
+            &mut sink,
+        )?,
+        None => super::aggregate::compile_aggregate_scan(
+            &mut em, &mut reg, query, schema, cursors, limit_reg, end_label, &mut sink,
+        )?,
+    }
+
+    em.place(end_label);
+    em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+    Ok(em.finish())
+}
+
+/// Emits the `LIMIT` counter register, if any -- `Opcode::IfNotZero`
+/// decrements it per emitted row (see [`emit_limit_guard`]).
+fn compile_limit_setup(em: &mut Emitter, reg: &mut RegAlloc, query: &Query) -> Result<Option<i32>> {
+    let Some(limit) = query.limit else {
+        return Ok(None);
+    };
+    let p1 = i32::try_from(limit).map_err(|_| CodegenError::Unsupported {
+        reason: format!("LIMIT {limit} does not fit in a p1 operand"),
+    })?;
+    let r = reg.alloc();
+    em.emit(Instruction::new(Opcode::Integer, p1, r, 0));
+    Ok(Some(r))
+}
+
+fn emit_result_row(em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: usize) -> Result<()> {
+    if count == 0 {
+        em.emit(Instruction::new(Opcode::ResultRow, reg.alloc(), 0, 0));
+        return Ok(());
+    }
+    em.emit(Instruction::new(
+        Opcode::ResultRow,
+        first,
+        i32::try_from(count).map_err(|_| CodegenError::Unsupported {
+            reason: format!("SELECT list of {count} columns does not fit in a p2 operand"),
+        })?,
+        0,
+    ));
+    Ok(())
+}
+
 /// Strips an optional `table.` qualifier off `name`.
 fn unqualified(name: &str) -> &str {
     match name.find('.') {
@@ -328,7 +410,7 @@ fn unqualified(name: &str) -> &str {
 /// here rather than resolved via `Scope`'s unqualified-defaults-to-left
 /// convention, which would otherwise send an unqualified `right_col` to
 /// the wrong table.
-fn build_join_cond(scope: &Scope, join: &Join) -> Expr {
+pub(super) fn build_join_cond(scope: &Scope, join: &Join) -> Expr {
     let right_table_name = scope
         .right
         .as_ref()
@@ -600,7 +682,7 @@ fn emit_row(
 /// Checking before emitting (not after) matters for `LIMIT 0`: an
 /// after-the-fact check would let the first row escape before the
 /// guard ever ran.
-fn emit_limit_guard(em: &mut Emitter, limit_reg: i32, end_label: super::Label) {
+pub(super) fn emit_limit_guard(em: &mut Emitter, limit_reg: i32, end_label: super::Label) {
     let has_budget_addr = em.emit(Instruction::new(Opcode::IfNotZero, limit_reg, 0, 0));
     let stop_addr = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
     em.patch_p2(stop_addr, end_label);
@@ -696,6 +778,7 @@ mod tests {
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
         }
@@ -1164,12 +1247,589 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_select_item_is_unsupported() {
+    fn window_select_item_is_unsupported() {
         let schema = schema(&["a"]);
-        let query = base_query(vec![SelectItem::Agg(crate::expr::AggFunc::Count, None)]);
+        let query = base_query(vec![SelectItem::Window(crate::expr::WindowSpec {
+            func: crate::expr::WindowFunc::RowNumber,
+            arg: None,
+            offset: None,
+            partition_by: vec![],
+            order_by: vec![],
+        })]);
         assert!(matches!(
             compile_select(&schema, 0, &query),
             Err(CodegenError::Unsupported { .. })
         ));
+    }
+
+    // db-core#93: `GROUP BY`/`HAVING`/aggregation, ported alongside
+    // `codegen::row::aggregate` from sqlite-rs's own codegen tests for
+    // that slice.
+
+    use crate::expr::AggFunc;
+
+    fn agg_query(columns: Vec<SelectItem>, group_by: Vec<&str>) -> Query {
+        let mut q = base_query(columns);
+        q.group_by = group_by.iter().map(|c| (*c).to_string()).collect();
+        q
+    }
+
+    #[test]
+    fn whole_table_count_star_over_an_empty_table_still_emits_one_row() {
+        let schema = schema(&["a"]);
+        let query = base_query(vec![SelectItem::Agg(AggFunc::Count, None)]);
+        let rows = run(&schema, &query, vec![]);
+        assert_eq!(rows, vec![vec![Value::Integer(0)]]);
+    }
+
+    #[test]
+    fn whole_table_aggregates_over_an_empty_table_finalize_to_null() {
+        let schema = schema(&["a"]);
+        let query = base_query(vec![
+            SelectItem::Agg(AggFunc::Sum, Some("a".into())),
+            SelectItem::Agg(AggFunc::Min, Some("a".into())),
+            SelectItem::Agg(AggFunc::Max, Some("a".into())),
+            SelectItem::Agg(AggFunc::Avg, Some("a".into())),
+        ]);
+        let rows = run(&schema, &query, vec![]);
+        assert_eq!(
+            rows,
+            vec![vec![Value::Null, Value::Null, Value::Null, Value::Null]]
+        );
+    }
+
+    #[test]
+    fn whole_table_aggregates_fold_every_row() {
+        let schema = schema(&["a"]);
+        let query = base_query(vec![
+            SelectItem::Agg(AggFunc::Count, None),
+            SelectItem::Agg(AggFunc::Sum, Some("a".into())),
+            SelectItem::Agg(AggFunc::Min, Some("a".into())),
+            SelectItem::Agg(AggFunc::Max, Some("a".into())),
+            SelectItem::Agg(AggFunc::Avg, Some("a".into())),
+        ]);
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(5)],
+                vec![Value::Integer(3)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![vec![
+                Value::Integer(3),
+                Value::Integer(9),
+                Value::Integer(1),
+                Value::Integer(5),
+                Value::Real(3.0),
+            ]]
+        );
+    }
+
+    #[test]
+    fn whole_table_aggregate_honours_the_where_clause() {
+        let schema = schema(&["a"]);
+        let mut query = base_query(vec![SelectItem::Agg(AggFunc::Count, None)]);
+        query.where_clause = Some(Expr::BinaryOp(
+            Box::new(Expr::Column("a".into())),
+            BinOp::Gt,
+            Box::new(Expr::Literal(Literal::Int(1))),
+        ));
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(3)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn group_by_emits_one_row_per_group_in_key_order() {
+        let schema = schema(&["g", "v"]);
+        let query = agg_query(
+            vec![
+                SelectItem::Column("g".into()),
+                SelectItem::Agg(AggFunc::Count, None),
+                SelectItem::Agg(AggFunc::Sum, Some("v".into())),
+            ],
+            vec!["g"],
+        );
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(2), Value::Integer(10)],
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(2), Value::Integer(20)],
+                vec![Value::Integer(1), Value::Integer(2)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)],
+                vec![Value::Integer(2), Value::Integer(2), Value::Integer(30)],
+            ]
+        );
+    }
+
+    #[test]
+    fn group_by_over_an_empty_table_emits_no_rows() {
+        let schema = schema(&["g", "v"]);
+        let query = agg_query(
+            vec![
+                SelectItem::Column("g".into()),
+                SelectItem::Agg(AggFunc::Count, None),
+            ],
+            vec!["g"],
+        );
+        assert!(run(&schema, &query, vec![]).is_empty());
+    }
+
+    #[test]
+    fn group_by_collects_null_keys_into_one_group() {
+        let schema = schema(&["g", "v"]);
+        let query = agg_query(
+            vec![
+                SelectItem::Column("g".into()),
+                SelectItem::Agg(AggFunc::Count, None),
+            ],
+            vec!["g"],
+        );
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Null, Value::Integer(1)],
+                vec![Value::Integer(1), Value::Integer(2)],
+                vec![Value::Null, Value::Integer(3)],
+            ],
+        );
+        assert!(rows.contains(&vec![Value::Null, Value::Integer(2)]));
+        assert!(rows.contains(&vec![Value::Integer(1), Value::Integer(1)]));
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn group_by_two_keys_groups_on_the_pair() {
+        let schema = schema(&["a", "b", "v"]);
+        let query = agg_query(
+            vec![
+                SelectItem::Column("a".into()),
+                SelectItem::Column("b".into()),
+                SelectItem::Agg(AggFunc::Sum, Some("v".into())),
+            ],
+            vec!["a", "b"],
+        );
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1), Value::Integer(10)],
+                vec![Value::Integer(1), Value::Integer(2), Value::Integer(20)],
+                vec![Value::Integer(1), Value::Integer(1), Value::Integer(5)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1), Value::Integer(15)],
+                vec![Value::Integer(1), Value::Integer(2), Value::Integer(20)],
+            ]
+        );
+    }
+
+    #[test]
+    fn having_filters_whole_groups_after_aggregation() {
+        let schema = schema(&["g", "v"]);
+        let mut query = agg_query(
+            vec![
+                SelectItem::Column("g".into()),
+                SelectItem::Agg(AggFunc::Count, None),
+            ],
+            vec!["g"],
+        );
+        query.having = Some(Expr::BinaryOp(
+            Box::new(Expr::Column("COUNT(*)".into())),
+            BinOp::Gt,
+            Box::new(Expr::Literal(Literal::Int(1))),
+        ));
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(10)],
+                vec![Value::Integer(2), Value::Integer(20)],
+                vec![Value::Integer(2), Value::Integer(30)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2), Value::Integer(2)]]);
+    }
+
+    /// A `HAVING` aggregate absent from the `SELECT` list still gets its
+    /// own accumulator slot -- sqlite-rs's `collect_aggregates` scans the
+    /// `HAVING` clause too.
+    #[test]
+    fn having_may_reference_an_aggregate_absent_from_the_select_list() {
+        let schema = schema(&["g", "v"]);
+        let mut query = agg_query(vec![SelectItem::Column("g".into())], vec!["g"]);
+        query.having = Some(Expr::BinaryOp(
+            Box::new(Expr::Column("SUM(v)".into())),
+            BinOp::Ge,
+            Box::new(Expr::Literal(Literal::Int(50))),
+        ));
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(10)],
+                vec![Value::Integer(2), Value::Integer(20)],
+                vec![Value::Integer(2), Value::Integer(30)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)]]);
+    }
+
+    /// A `HAVING` sharing its aggregate with a result column accumulates
+    /// into a single slot, so both read the same finalized value.
+    #[test]
+    fn having_shares_one_slot_with_an_identical_result_column() {
+        let schema = schema(&["g", "v"]);
+        let mut query = agg_query(
+            vec![
+                SelectItem::Column("g".into()),
+                SelectItem::Agg(AggFunc::Sum, Some("v".into())),
+            ],
+            vec!["g"],
+        );
+        query.having = Some(Expr::BinaryOp(
+            Box::new(Expr::Column("SUM(v)".into())),
+            BinOp::Gt,
+            Box::new(Expr::Literal(Literal::Int(15))),
+        ));
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(10)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2), Value::Integer(20)]]);
+    }
+
+    #[test]
+    fn having_on_a_whole_table_aggregate_may_suppress_the_only_row() {
+        let schema = schema(&["a"]);
+        let mut query = base_query(vec![SelectItem::Agg(AggFunc::Count, None)]);
+        query.having = Some(Expr::BinaryOp(
+            Box::new(Expr::Column("COUNT(*)".into())),
+            BinOp::Gt,
+            Box::new(Expr::Literal(Literal::Int(5))),
+        ));
+        let rows = run(&schema, &query, vec![vec![Value::Integer(1)]]);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn limit_applies_to_groups_not_to_scanned_rows() {
+        let schema = schema(&["g", "v"]);
+        let mut query = agg_query(
+            vec![
+                SelectItem::Column("g".into()),
+                SelectItem::Agg(AggFunc::Count, None),
+            ],
+            vec!["g"],
+        );
+        query.limit = Some(1);
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(10)],
+                vec![Value::Integer(1), Value::Integer(11)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(2)]]);
+    }
+
+    /// A plain (non-aggregate) column that isn't a `GROUP BY` key takes
+    /// an "arbitrary row" from the group -- the group's first row, which
+    /// is what both strategies retain.
+    #[test]
+    fn a_non_key_plain_column_reads_the_groups_first_row() {
+        let schema = schema(&["g", "v"]);
+        let query = agg_query(
+            vec![
+                SelectItem::Column("v".into()),
+                SelectItem::Agg(AggFunc::Count, None),
+            ],
+            vec!["g"],
+        );
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(10)],
+                vec![Value::Integer(1), Value::Integer(11)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(10), Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn star_alongside_an_aggregate_expands_to_every_schema_column() {
+        let schema = schema(&["g", "v"]);
+        let query = agg_query(
+            vec![SelectItem::Star, SelectItem::Agg(AggFunc::Count, None)],
+            vec!["g"],
+        );
+        let rows = run(
+            &schema,
+            &query,
+            vec![vec![Value::Integer(1), Value::Integer(10)]],
+        );
+        assert_eq!(
+            rows,
+            vec![vec![
+                Value::Integer(1),
+                Value::Integer(10),
+                Value::Integer(1)
+            ]]
+        );
+    }
+
+    #[test]
+    fn aggregate_over_an_inner_join_folds_only_matched_rows() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let mut query = base_query(vec![
+            SelectItem::Agg(AggFunc::Count, None),
+            SelectItem::Agg(AggFunc::Sum, Some("u.c".into())),
+        ]);
+        query.joins = vec![Join {
+            kind: JoinKind::Inner,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "b".into(),
+        }];
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(3), Value::Integer(300)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(100)]]);
+    }
+
+    #[test]
+    fn group_by_over_an_inner_join_groups_on_a_left_column() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let mut query = agg_query(
+            vec![
+                SelectItem::Column("a".into()),
+                SelectItem::Agg(AggFunc::Sum, Some("u.c".into())),
+            ],
+            vec!["a"],
+        );
+        query.joins = vec![Join {
+            kind: JoinKind::Inner,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "b".into(),
+        }];
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(1), Value::Integer(50)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(150)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ]
+        );
+    }
+
+    /// `LEFT`'s null-extended row still forms a group: `COUNT(*)` counts
+    /// it, but `SUM` over the null-extended right column skips it.
+    #[test]
+    fn group_by_over_a_left_join_keeps_unmatched_outer_rows() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let mut query = agg_query(
+            vec![
+                SelectItem::Column("a".into()),
+                SelectItem::Agg(AggFunc::Count, None),
+                SelectItem::Agg(AggFunc::Sum, Some("u.c".into())),
+            ],
+            vec!["a"],
+        );
+        query.joins = vec![Join {
+            kind: JoinKind::Left,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "b".into(),
+        }];
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![vec![Value::Integer(1), Value::Integer(100)]],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(2), Value::Integer(1), Value::Null],
+            ]
+        );
+    }
+
+    #[test]
+    fn having_combined_with_a_join_is_unsupported() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b"]);
+        let mut query = agg_query(
+            vec![
+                SelectItem::Column("a".into()),
+                SelectItem::Agg(AggFunc::Count, None),
+            ],
+            vec!["a"],
+        );
+        query.joins = vec![Join {
+            kind: JoinKind::Inner,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "b".into(),
+        }];
+        query.having = Some(Expr::Literal(Literal::Int(1)));
+        assert!(matches!(
+            compile_select_join(&left, 0, &right, 1, &query),
+            Err(CodegenError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn full_outer_join_combined_with_aggregation_is_unsupported() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b"]);
+        let mut query = base_query(vec![SelectItem::Agg(AggFunc::Count, None)]);
+        query.joins = vec![Join {
+            kind: JoinKind::Full,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "b".into(),
+        }];
+        assert!(matches!(
+            compile_select_join(&left, 0, &right, 1, &query),
+            Err(CodegenError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn order_by_combined_with_aggregation_is_unsupported() {
+        let schema = schema(&["g"]);
+        let mut query = agg_query(
+            vec![
+                SelectItem::Column("g".into()),
+                SelectItem::Agg(AggFunc::Count, None),
+            ],
+            vec!["g"],
+        );
+        query.order_by = Some(crate::expr::OrderBy {
+            column: "g".into(),
+            descending: false,
+        });
+        assert!(matches!(
+            compile_select(&schema, 0, &query),
+            Err(CodegenError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn group_by_an_unknown_column_is_rejected() {
+        let schema = schema(&["a"]);
+        let query = agg_query(vec![SelectItem::Agg(AggFunc::Count, None)], vec!["nope"]);
+        assert!(matches!(
+            compile_select(&schema, 0, &query),
+            Err(CodegenError::UnknownColumn(_))
+        ));
+    }
+
+    /// The sort-then-group strategy is the fallback the hash strategy
+    /// declines to; exercised directly here so both strategies are
+    /// covered on an explicit `GROUP BY`, not just via the join path.
+    #[test]
+    fn the_sort_strategy_produces_the_same_groups_as_the_hash_strategy() {
+        let schema = schema(&["g", "v"]);
+        let query = agg_query(
+            vec![
+                SelectItem::Column("g".into()),
+                SelectItem::Agg(AggFunc::Sum, Some("v".into())),
+            ],
+            vec!["g"],
+        );
+        let rows = vec![
+            vec![Value::Integer(2), Value::Integer(10)],
+            vec![Value::Integer(1), Value::Integer(1)],
+            vec![Value::Integer(2), Value::Integer(20)],
+        ];
+
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        let end_label = em.new_label();
+        let cursors = super::super::aggregate::ScanCursors::past(0, 0);
+        super::super::aggregate::compile_grouped_scan(
+            &mut em,
+            &mut reg,
+            &query,
+            &schema,
+            cursors,
+            None,
+            end_label,
+            false,
+            &mut |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: usize| {
+                emit_result_row(em, reg, first, count)
+            },
+        )
+        .unwrap();
+        em.place(end_label);
+        em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+        let program = em.finish();
+
+        let mut vm = Vm::new();
+        vm.open_cursor(0, Box::new(InMemoryCursor::new(rows.clone())))
+            .unwrap();
+        let sorted = execute(&mut vm, &program).unwrap();
+        assert_eq!(sorted, run(&schema, &query, rows));
+        assert_eq!(
+            sorted,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(2), Value::Integer(30)],
+            ]
+        );
     }
 }

@@ -37,8 +37,15 @@
 //! single-key sorter, both without any stats/access-path cost model;
 //! that chooser and N-way joins are deferred to #117 (needs
 //! `planner::Stats`, blocked on #116's missing `ANALYZE` VM
-//! implementation) and #118 (no consumer needs N-way joins yet); `GROUP
-//! BY`/aggregation to #93.
+//! implementation) and #118 (no consumer needs N-way joins yet).
+//!
+//! **#93 adds `GROUP BY`/`HAVING`/aggregation**: [`aggregate`], ported
+//! from sqlite-rs's `codegen/select/aggregate.rs` and its
+//! `aggregate/{accum,hash,join}.rs`. Both of that module's grouping
+//! strategies are ported (sort-then-group over `Sorter*`, and the
+//! single-pass hash one over #86's `HashAgg*` slice), plus `HAVING` and
+//! aggregation over a join. See that module's own doc for what db-core's
+//! narrower `Query`/`SelectItem` scopes out of the reference.
 //!
 //! **#97 adds the DDL/transaction/PRAGMA/ANALYZE slice**: [`ddl`]
 //! (`CREATE`/`DROP TABLE`/`INDEX`/`VIEW`), [`transaction`]
@@ -70,6 +77,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aggregate;
 pub mod analyze;
 pub mod cond;
 pub mod ddl;

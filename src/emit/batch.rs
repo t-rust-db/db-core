@@ -437,13 +437,14 @@ fn render_query(query: &Query) -> String {
         .map(|c| format!("{}.to_string()", rust_str_literal(c)))
         .collect();
     format!(
-        "Query {{ columns: vec![{}], from: {}.to_string(), joins: vec![{}], where_clause: {}, distinct: {}, group_by: vec![{}], order_by: {}, limit: {} }}",
+        "Query {{ columns: vec![{}], from: {}.to_string(), joins: vec![{}], where_clause: {}, distinct: {}, group_by: vec![{}], having: {}, order_by: {}, limit: {} }}",
         columns.join(", "),
         rust_str_literal(&query.from),
         joins.join(", "),
         render_option_expr(query.where_clause.as_ref()),
         query.distinct,
         group_by.join(", "),
+        render_option_expr(query.having.as_ref()),
         render_option_order_by(query.order_by.as_ref()),
         render_option_usize(query.limit),
     )
@@ -961,6 +962,7 @@ mod tests {
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
         }
@@ -999,12 +1001,14 @@ mod tests {
                     where_clause: None,
                     distinct: false,
                     group_by: vec![],
+                    having: None,
                     order_by: None,
                     limit: None,
                 }),
             }),
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
         };
@@ -1040,6 +1044,7 @@ mod tests {
             where_clause: None,
             distinct: false,
             group_by: vec![],
+            having: None,
             order_by: None,
             limit: None,
         };
