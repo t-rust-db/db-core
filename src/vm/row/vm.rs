@@ -310,6 +310,20 @@ impl Vm {
     /// `DropTable`/`DropIndex`/`Analyze` (db-core#128). With none
     /// installed (the default), those opcodes fail with
     /// [`ExecError::SchemaStorageMissing`].
+    /// Whether the VM is outside an explicit transaction. A consumer
+    /// driving a multi-statement session (sqlite-rs's REPL/`exec`) carries
+    /// this across programs: read it after `execute`, seed the next `Vm`
+    /// with [`Self::set_autocommit`].
+    pub fn autocommit(&self) -> bool {
+        self.autocommit
+    }
+
+    /// Seeds the autocommit state (see [`Self::autocommit`]); `false`
+    /// means "a `BEGIN` from an earlier program is still open".
+    pub fn set_autocommit(&mut self, autocommit: bool) {
+        self.autocommit = autocommit;
+    }
+
     pub fn set_schema_storage(&mut self, storage: Box<dyn SchemaStorage>) {
         self.schema_storage = Some(storage);
     }
