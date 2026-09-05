@@ -29,9 +29,9 @@
 //! #101/#102 are expected to replace it with one once a real join needs
 //! multi-table resolution.
 //!
-//! **`select`** ([`select::compile_select`], db-core#92) covers a
-//! single-table scan + projection (bare columns, `SELECT *`) + `WHERE`
-//! + `LIMIT`. Joins and `ORDER BY` are deferred to #102 (mechanical
+//! [`select::compile_select`] (db-core#92) covers a single-table scan
+//! plus projection (bare columns, `SELECT *`) plus `WHERE` plus
+//! `LIMIT`. Joins and `ORDER BY` are deferred to #102 (mechanical
 //! single-join/sorter execution); the join-order/access-path chooser
 //! and `FULL OUTER` to #101 (needs `planner::Stats`, which db-core
 //! doesn't have yet); `GROUP BY`/aggregation to #93.
