@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.38.0] - 2026-09-05
+
+### Added
+
+- **`vm::row` `GROUP BY` hash aggregation** (#86) -- ports sqlite-rs's hash-aggregation opcode family (`HashAggOpen`/`Find`/`Step`/`Rewind`/`Data`/`Next`, `P4::GroupKey`) as the O(n) alternative to `SorterCursor`'s sort-then-group strategy, backed by a new `cursor::HashAggCursor`: `HashAggFind` locates (creating on first sight) a row's group by its decoded key columns, retaining only the group's first row; `HashAggStep` folds into the current group's own accumulator slots; `HashAggRewind` freezes and orders groups by key; `HashAggData` installs the current group's accumulators into `Vm`'s `agg_contexts` table so the existing `AggFinal` opcode needs no hash-specific case. Group lookup is a documented linear scan rather than an actual hash table -- a correctness-equivalent simplification for this non-perf-critical reference VM.
+
 ## [0.37.0] - 2026-09-05
 
 ### Added
