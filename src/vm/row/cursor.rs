@@ -9,9 +9,10 @@
 
 use std::rc::Rc;
 
-use super::program::SortKeyColumn;
+use super::aggregate::{AggState, AggregateError};
+use super::program::{GroupKeyColumn, SortKeyColumn};
 use super::record::{decode_column, decode_record};
-use super::value::{TextEncoding, Value};
+use super::value::{Collation, TextEncoding, Value};
 
 /// A forward-scanning, row-at-a-time cursor over a table's rows.
 /// Mirrors the read-only subset of sqlite-rs's `TableCursor` interface
@@ -106,6 +107,40 @@ pub trait Cursor {
     /// isn't an index cursor.
     fn idx_delete(&mut self, _key: &[Value]) -> bool {
         false
+    }
+
+    /// Locates (creating on first sight) the group `blob` -- this
+    /// row's `MakeRecord`-encoded bytes -- belongs to, making it the
+    /// current group (`Opcode::HashAggFind`'s dispatch target); `blob`
+    /// itself is retained only if this is the group's first row.
+    /// Returns `false` if this cursor kind isn't a hash-aggregation
+    /// cursor.
+    fn hash_agg_find(&mut self, _blob: Rc<[u8]>) -> bool {
+        false
+    }
+
+    /// Folds `args` into accumulator `slot` of the current group
+    /// (`Opcode::HashAggStep`'s dispatch target). `Ok(false)` if this
+    /// cursor kind isn't a hash-aggregation cursor, or no group is
+    /// current yet.
+    fn hash_agg_step(
+        &mut self,
+        _slot: usize,
+        _name: &str,
+        _args: &[Value],
+        _collation: Collation,
+    ) -> Result<bool, AggregateError> {
+        Ok(false)
+    }
+
+    /// The current group's accumulators, indexed by `Opcode::
+    /// HashAggStep`'s `p1` slot -- `Opcode::HashAggData`'s dispatch
+    /// target installs these into `Vm`'s aggregate-context table so
+    /// the ordinary `AggFinal` opcodes that follow need no
+    /// hash-specific case at all. `None` if this cursor kind isn't a
+    /// hash-aggregation cursor, or there is no current group.
+    fn hash_agg_group_accumulators(&self) -> Option<&[Option<AggState>]> {
+        None
     }
 }
 
@@ -539,6 +574,199 @@ impl Cursor for SorterCursor {
     }
 }
 
+/// One `GROUP BY` group's accumulated state: the row retained to
+/// answer plain (non-aggregate) column references, that row's already
+/// -decoded key values (kept only to order the groups at
+/// `HashAggRewind`), and one accumulator per `HashAggStep` slot.
+struct GroupSlot {
+    /// The `MakeRecord`-encoded *first* row seen for this group,
+    /// handed back verbatim by `HashAggData`. First rather than last
+    /// on purpose, matching SQLite's "arbitrary row" semantics for a
+    /// plain column and the sort strategy's stable-sort tie-break.
+    row: Rc<[u8]>,
+    /// This group's key values, in key order.
+    key_values: Vec<Value>,
+    /// One accumulator per `HashAggStep` slot; `None` for a slot this
+    /// group never stepped.
+    accumulators: Vec<Option<AggState>>,
+}
+
+/// `GROUP BY` aggregation, backing `Opcode::HashAggOpen`/`Find`/`Step`/
+/// `Rewind`/`Data`/`Next` (db-core#86). The O(n) alternative to
+/// [`SorterCursor`]'s sort-then-group strategy -- see this module's own
+/// scope note.
+///
+/// **Group lookup is a linear scan over `groups`, not an actual
+/// hash table** -- a correctness-equivalent, simpler stand-in (same
+/// tradeoff [`SorterCursor`]'s bound truncation makes): building a
+/// `Hash` impl consistent with [`super::compare::compare`]'s
+/// collation-aware equality (so `1` and `1.0` hash alike) is
+/// non-trivial and not worth it for a reference VM that is not
+/// perf-critical. `HashAggRewind` still only sorts the `K` distinct
+/// groups, not all `n` rows, so the strategy's O(rows) find + O(K log
+/// K) order still beats the sort strategy's O(n log n) whenever groups
+/// are few relative to rows.
+pub struct HashAggCursor {
+    keys: Vec<GroupKeyColumn>,
+    groups: Vec<GroupSlot>,
+    /// Group positions in output order, filled in by `rewind` (freezing
+    /// the group set -- no further `hash_agg_find` after this).
+    order: Vec<usize>,
+    pos: Option<usize>,
+    frozen: bool,
+    /// The group `hash_agg_find` most recently located, which
+    /// `hash_agg_step` folds into. `None` before the first find.
+    current_group: Option<usize>,
+}
+
+impl HashAggCursor {
+    pub fn new(keys: Vec<GroupKeyColumn>) -> Self {
+        HashAggCursor {
+            keys,
+            groups: Vec::new(),
+            order: Vec::new(),
+            pos: None,
+            frozen: false,
+            current_group: None,
+        }
+    }
+
+    fn keys_equal(&self, a: &[Value], b: &[Value]) -> bool {
+        self.keys.iter().enumerate().all(|(i, key)| {
+            matches!(
+                (a.get(i), b.get(i)),
+                (Some(av), Some(bv)) if super::compare::compare(av, bv, key.collation) == std::cmp::Ordering::Equal
+            )
+        })
+    }
+
+    fn find_group(&self, key_values: &[Value]) -> Option<usize> {
+        self.groups
+            .iter()
+            .position(|g| self.keys_equal(&g.key_values, key_values))
+    }
+}
+
+impl Cursor for HashAggCursor {
+    /// Freezes the group set, orders groups by key (ascending, per
+    /// column, matching the sort strategy's group-boundary order), and
+    /// positions at the first -- `HashAggRewind`'s dispatch target.
+    fn rewind(&mut self) -> bool {
+        if !self.frozen {
+            let mut order: Vec<usize> = (0..self.groups.len()).collect();
+            let keys = &self.keys;
+            let groups = &self.groups;
+            order.sort_by(|&a, &b| {
+                let (ka, kb) = (&groups[a].key_values, &groups[b].key_values);
+                for (i, key) in keys.iter().enumerate() {
+                    let ord = super::compare::compare(&ka[i], &kb[i], key.collation);
+                    if ord != std::cmp::Ordering::Equal {
+                        return ord;
+                    }
+                }
+                std::cmp::Ordering::Equal
+            });
+            self.order = order;
+            self.frozen = true;
+        }
+        self.pos = if self.order.is_empty() { None } else { Some(0) };
+        self.pos.is_some()
+    }
+
+    fn next(&mut self) -> bool {
+        let next = self.pos.map_or(0, |p| p.saturating_add(1));
+        if next < self.order.len() {
+            self.pos = Some(next);
+            true
+        } else {
+            self.pos = None;
+            false
+        }
+    }
+
+    fn column(&self, col: usize) -> Value {
+        #[allow(
+            clippy::expect_used,
+            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
+        )]
+        let pos = self.pos.expect("column read with no current row");
+        self.order
+            .get(pos)
+            .and_then(|&i| self.groups.get(i))
+            .and_then(|g| decode_record(&g.row, TextEncoding::Utf8).ok())
+            .and_then(|values| values.get(col).cloned())
+            .unwrap_or(Value::Null)
+    }
+
+    fn rowid(&self) -> i64 {
+        0 // groups have no rowid concept, same as SorterCursor
+    }
+
+    fn current_blob(&self) -> Option<Value> {
+        let pos = self.pos?;
+        let i = *self.order.get(pos)?;
+        self.groups.get(i).map(|g| Value::Blob(g.row.clone()))
+    }
+
+    fn hash_agg_find(&mut self, blob: Rc<[u8]>) -> bool {
+        let key_values: Vec<Value> = self
+            .keys
+            .iter()
+            .map(|k| decode_column(&blob, k.index, TextEncoding::Utf8).unwrap_or(Value::Null))
+            .collect();
+        let idx = match self.find_group(&key_values) {
+            Some(idx) => idx,
+            None => {
+                self.groups.push(GroupSlot {
+                    row: blob,
+                    key_values,
+                    accumulators: Vec::new(),
+                });
+                self.groups.len() - 1
+            }
+        };
+        self.current_group = Some(idx);
+        true
+    }
+
+    fn hash_agg_step(
+        &mut self,
+        slot: usize,
+        name: &str,
+        args: &[Value],
+        collation: Collation,
+    ) -> Result<bool, AggregateError> {
+        let Some(idx) = self.current_group else {
+            return Ok(false);
+        };
+        let Some(group) = self.groups.get_mut(idx) else {
+            return Ok(false);
+        };
+        if group.accumulators.len() <= slot {
+            group.accumulators.resize(slot + 1, None);
+        }
+        let current = group.accumulators[slot].take();
+        let updated = super::aggregate::step(name, current, args, collation)?;
+        group.accumulators[slot] = Some(updated);
+        Ok(true)
+    }
+
+    fn hash_agg_group_accumulators(&self) -> Option<&[Option<AggState>]> {
+        // Before `rewind` freezes the group set, "current" means the
+        // group `hash_agg_find` most recently located (the build
+        // phase); after, it follows `pos`/`order` like `column`/
+        // `current_blob` do (the output phase) -- `HashAggStep` and
+        // `HashAggData` never interleave per sqlite-rs's own opcode
+        // shape, so this never needs to serve both at once.
+        let idx = if self.frozen {
+            *self.order.get(self.pos?)?
+        } else {
+            self.current_group?
+        };
+        self.groups.get(idx).map(|g| g.accumulators.as_slice())
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -782,5 +1010,109 @@ mod tests {
         assert!(c.delete());
         assert!(c.rewind());
         assert_eq!(c.rowid(), 20);
+    }
+
+    fn group_key(index: usize) -> GroupKeyColumn {
+        GroupKeyColumn {
+            index,
+            collation: super::super::value::Collation::Binary,
+        }
+    }
+
+    fn make_row(values: &[Value]) -> Rc<[u8]> {
+        super::super::record::encode_record(values, TextEncoding::Utf8).into()
+    }
+
+    #[test]
+    fn hash_agg_cursor_groups_by_key_and_orders_by_key_on_rewind() {
+        let mut c = HashAggCursor::new(vec![group_key(0)]);
+        for group in ["b", "a", "b", "c"] {
+            assert!(c.hash_agg_find(make_row(&[Value::Text(group.to_string().into())])));
+        }
+        assert!(c.rewind());
+        assert_eq!(c.column(0), Value::Text("a".to_string().into()));
+        assert!(c.next());
+        assert_eq!(c.column(0), Value::Text("b".to_string().into()));
+        assert!(c.next());
+        assert_eq!(c.column(0), Value::Text("c".to_string().into()));
+        assert!(!c.next());
+    }
+
+    #[test]
+    fn hash_agg_cursor_retains_first_row_seen_per_group() {
+        let mut c = HashAggCursor::new(vec![group_key(0)]);
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(1), Value::Integer(100)])));
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(1), Value::Integer(200)])));
+        assert!(c.rewind());
+        assert_eq!(c.column(1), Value::Integer(100));
+    }
+
+    #[test]
+    fn hash_agg_cursor_steps_fold_into_the_current_group_only() {
+        let mut c = HashAggCursor::new(vec![group_key(0)]);
+        assert!(c.hash_agg_find(make_row(&[Value::Text("x".to_string().into())])));
+        c.hash_agg_step(
+            0,
+            "count",
+            &[Value::Integer(1)],
+            super::super::value::Collation::Binary,
+        )
+        .unwrap();
+        c.hash_agg_step(
+            0,
+            "count",
+            &[Value::Integer(1)],
+            super::super::value::Collation::Binary,
+        )
+        .unwrap();
+        assert!(c.hash_agg_find(make_row(&[Value::Text("y".to_string().into())])));
+        c.hash_agg_step(
+            0,
+            "count",
+            &[Value::Integer(1)],
+            super::super::value::Collation::Binary,
+        )
+        .unwrap();
+
+        assert!(c.rewind());
+        assert_eq!(c.column(0), Value::Text("x".to_string().into()));
+        assert_eq!(
+            c.hash_agg_group_accumulators(),
+            Some([Some(AggState::Count(2))].as_slice())
+        );
+        assert!(c.next());
+        assert_eq!(c.column(0), Value::Text("y".to_string().into()));
+        assert_eq!(
+            c.hash_agg_group_accumulators(),
+            Some([Some(AggState::Count(1))].as_slice())
+        );
+        assert!(!c.next());
+    }
+
+    #[test]
+    fn hash_agg_cursor_empty_rewind_reports_no_row() {
+        let mut c = HashAggCursor::new(vec![group_key(0)]);
+        assert!(!c.rewind());
+        assert!(c.current_blob().is_none());
+    }
+
+    #[test]
+    fn hash_agg_cursor_multi_key_groups_on_every_key_column() {
+        let mut c = HashAggCursor::new(vec![group_key(0), group_key(1)]);
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(1), Value::Integer(1)])));
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(1), Value::Integer(2)])));
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(1), Value::Integer(1)])));
+        c.hash_agg_step(
+            0,
+            "count",
+            &[Value::Integer(1)],
+            super::super::value::Collation::Binary,
+        )
+        .unwrap();
+        assert!(c.rewind());
+        assert_eq!(c.column(1), Value::Integer(1));
+        assert!(c.next());
+        assert_eq!(c.column(1), Value::Integer(2));
+        assert!(!c.next());
     }
 }

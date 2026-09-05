@@ -16,9 +16,9 @@
 //! - [`cast`] -- `CAST` conversion.
 //! - [`coerce`] -- text-to-numeric coercion and checked arithmetic.
 //! - [`aggregate`] -- `AggState`/`step`/`finalize` (`COUNT`/`SUM`/
-//!   `AVG`/`MIN`/`MAX`), backing `Opcode::AggStep`/`AggFinal`.
-//!   **Single-group only** -- `GROUP BY` grouping (`hash_agg.rs`) is
-//!   not yet ported.
+//!   `AVG`/`MIN`/`MAX`), backing `Opcode::AggStep`/`AggFinal` (single
+//!   accumulator per slot) and, via [`cursor::HashAggCursor`]
+//!   (db-core#86), `Opcode::HashAggStep`'s per-group accumulators.
 //! - [`functions`] -- scalar functions, backing `Opcode::Function`.
 //!   Two slices so far: `abs`/`length`/`upper`/`lower`/`coalesce`/
 //!   `ifnull`/`nullif`/`typeof` (db-core#64), and `sign`/`zeroblob`/
@@ -34,7 +34,12 @@
 //!   OpenEphemeral`'s table-mode cursor), and [`cursor::SorterCursor`]
 //!   (db-core#69, extended by db-core#87 to multi-key `ORDER BY` and an
 //!   optional `LIMIT`-derived top-K bound), backing `Opcode::
-//!   SorterOpen`/`Insert`/`Sort`/`Next`/`Data`.
+//!   SorterOpen`/`Insert`/`Sort`/`Next`/`Data`, and
+//!   [`cursor::HashAggCursor`] (db-core#86, backing `Opcode::
+//!   HashAggOpen`/`Find`/`Step`/`Rewind`/`Data`/`Next` -- the O(n)
+//!   `GROUP BY` alternative to the sort strategy; group lookup is a
+//!   linear scan rather than an actual hash table, a deliberate
+//!   simplification documented on the type itself).
 //! - [`record`] -- on-disk record encoding/decoding (`encode_record`/
 //!   `decode_record`/`decode_column`), backing `Opcode::MakeRecord`,
 //!   ephemeral-cursor `Insert`/`Column`, and sorter key decoding.
@@ -60,10 +65,10 @@
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
 //! and index-mode ephemeral cursors, DDL, real transactions,
-//! `GROUP BY` hash aggregation, `like`/`glob`/`substr`/
-//! `trim`/`replace`, `EXPLAIN`/`PRAGMA` rendering. `Opcode` already
-//! lists every variant sqlite-rs has (parity of identity); dispatch
-//! for the rest lands in later phases (tracked against db-core#18).
+//! `like`/`glob`/`substr`/`trim`/`replace`, `EXPLAIN`/`PRAGMA`
+//! rendering. `Opcode` already lists every variant sqlite-rs has
+//! (parity of identity); dispatch for the rest lands in later phases
+//! (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
@@ -88,10 +93,10 @@ pub use affinity::{affinity_of, apply_affinity, comparison_affinity, Affinity};
 pub use aggregate::{AggState, AggregateError};
 pub use cast::cast_to;
 pub use compare::compare;
-pub use cursor::{Cursor, EphemeralTableCursor, InMemoryCursor, SorterCursor};
+pub use cursor::{Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor, SorterCursor};
 pub use functions::FunctionError;
 pub use program::{
-    AnalyzeIndexTarget, AnalyzeTarget, Instruction, Opcode, Program, SortKeyColumn,
+    AnalyzeIndexTarget, AnalyzeTarget, GroupKeyColumn, Instruction, Opcode, Program, SortKeyColumn,
     JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_NORMAL,
     SYNCHRONOUS_OFF, SYNCHRONOUS_QUERY, TRANSACTION_MODE_DEFERRED, TRANSACTION_MODE_EXCLUSIVE,
     TRANSACTION_MODE_IMMEDIATE,
