@@ -2019,18 +2019,34 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         }
         Opcode::NoConflict => {
             let (key, collations) = key_from_registers(vm, "NoConflict", instr.p3, &instr.p4)?;
+            let count = i32::try_from(key.len()).unwrap_or(i32::MAX);
             let cursor = vm.cursor_mut(instr.p1)?;
-            // Ephemeral index (DISTINCT / IN-subquery): membership of the
-            // normalized key; real index: a seek.
+            // Ephemeral index: membership of the normalized key; real
+            // index: a seek. sqlite-rs (`cursor::no_conflict`): on a
+            // conflict the conflicting entry's rowid lands in the register
+            // right after the probe (`p3 + count`) so OR REPLACE / OR
+            // IGNORE can SeekRowid straight to the displaced row.
             let found = match cursor.found(&key, &collations) {
                 Some(present) => present,
                 None => cursor.seek_index_eq(&key, &collations),
             };
-            Ok(if found {
-                Step::Next
+            if found {
+                let rowid = cursor.idx_rowid();
+                if let Some(rowid) = rowid {
+                    let dest =
+                        instr
+                            .p3
+                            .checked_add(count)
+                            .ok_or(ExecError::RegisterRangeTooLarge {
+                                opcode: "NoConflict",
+                                count,
+                            })?;
+                    vm.set_register(dest, Value::Integer(rowid))?;
+                }
+                Ok(Step::Next)
             } else {
-                Step::Jump(to_pc(instr.p2))
-            })
+                Ok(Step::Jump(to_pc(instr.p2)))
+            }
         }
     }
 }
@@ -4176,5 +4192,24 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__vm_766__v4_out_of_range_whole_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(1e30)), None);
+    }
+
+    #[test]
+    fn no_conflict_hit_writes_the_conflicting_rowid_after_the_probe() {
+        let mut vm = Vm::new();
+        open_index_cursor(&mut vm, 0, &[(7, Value::Integer(42))]);
+        let mut no_conflict = Instruction::new(Opcode::NoConflict, 0, 5, 1);
+        no_conflict.p4 = P4::Int(1);
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 42, 1, 0),
+            no_conflict,
+            Instruction::new(Opcode::ResultRow, 2, 1, 0), // r[2] = conflicting rowid
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Integer, -1, 2, 0),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(7)]]);
     }
 }
