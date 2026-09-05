@@ -37,6 +37,13 @@
 //! has the `ParquetFile`/`execute_joined`/`execute_windowed`/`run_program`
 //! runtime glue, not a name hardcoded to column-rs specifically.
 
+// Every `write!` here targets a `String`, which cannot fail; the discarded
+// `fmt::Result` is the idiom, not a swallowed error.
+#![allow(
+    clippy::let_underscore_must_use,
+    reason = "fmt::Write into String is infallible"
+)]
+
 use crate::codegen::batch::{compile, output_column_names};
 use crate::expr::{
     AggFunc, BinOp, Expr, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
@@ -752,6 +759,13 @@ fn rust_str_literal(s: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::*;
     use crate::vm::batch::Instruction;
