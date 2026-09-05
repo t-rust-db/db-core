@@ -31,10 +31,12 @@
 //!
 //! [`select::compile_select`] (db-core#92) covers a single-table scan
 //! plus projection (bare columns, `SELECT *`) plus `WHERE` plus
-//! `LIMIT`. Joins and `ORDER BY` are deferred to #102 (mechanical
-//! single-join/sorter execution); the join-order/access-path chooser
-//! and `FULL OUTER` to #101 (needs `planner::Stats`, which db-core
-//! doesn't have yet); `GROUP BY`/aggregation to #93.
+//! `LIMIT`. [`select::compile_select_join`] (db-core#102) adds a single
+//! `INNER`/`LEFT` equi-join and `ORDER BY` via the existing single-key
+//! sorter, both without any stats/access-path cost model; the
+//! join-order/access-path chooser and `FULL OUTER` are deferred to #101
+//! (needs `planner::Stats`, which db-core doesn't have yet); `GROUP
+//! BY`/aggregation to #93.
 //!
 //! **#97 adds the DDL/transaction/PRAGMA/ANALYZE slice**: [`ddl`]
 //! (`CREATE`/`DROP TABLE`/`INDEX`/`VIEW`), [`transaction`]
@@ -89,7 +91,7 @@ pub use ddl::{
     compile_drop_table,
 };
 pub use pragma::compile_pragma;
-pub use select::compile_select;
+pub use select::{compile_select, compile_select_join};
 pub use stmt::{compile_delete, compile_insert, compile_update};
 pub use transaction::{compile_begin, compile_commit, compile_rollback};
 pub use value::compile_value;
@@ -360,27 +362,71 @@ pub struct IndexSchema {
     pub columns: Vec<String>,
 }
 
-/// The single table a query's column references resolve against --
-/// db-core's current [`crate::expr::Expr::Column`] has no qualifier, so
-/// unlike sqlite-rs's `Scope` this never needs to disambiguate between
-/// multiple bindings. Multi-table resolution (joins, subqueries) is
-/// deferred to #92/#95, which are expected to grow this into something
-/// closer to sqlite-rs's own `Scope`.
+/// The table(s) a query's column references resolve against. Single-table
+/// queries never need to disambiguate, since db-core's current
+/// [`crate::expr::Expr::Column`] has no qualifier of its own -- qualifiers
+/// only ever arrive as a `"table.column"`-shaped plain string. #102 grows
+/// this to an optional second (right-side) binding for a single equi-join;
+/// full multi-table resolution (subqueries, N-way joins) is still deferred
+/// to #95/#101.
 #[derive(Debug, Clone)]
 pub struct Scope {
     pub schema: TableSchema,
     pub cursor: i32,
+    /// The join's right-hand table, when this scope covers a join.
+    pub right: Option<(TableSchema, i32)>,
 }
 
 impl Scope {
     pub fn single(schema: TableSchema, cursor: i32) -> Self {
-        Scope { schema, cursor }
+        Scope {
+            schema,
+            cursor,
+            right: None,
+        }
     }
 
-    /// Resolves a bare column name to `(cursor, column_index)`.
+    /// A scope over a single equi-join's two tables.
+    pub fn join(
+        schema: TableSchema,
+        cursor: i32,
+        right_schema: TableSchema,
+        right_cursor: i32,
+    ) -> Self {
+        Scope {
+            schema,
+            cursor,
+            right: Some((right_schema, right_cursor)),
+        }
+    }
+
+    /// Splits an optional `table.column` qualifier off `name`, mirroring
+    /// `codegen::batch::split_qualified`'s convention.
+    fn split_qualified(name: &str) -> (Option<&str>, &str) {
+        match name.find('.') {
+            Some(idx) => (Some(&name[..idx]), &name[idx + 1..]),
+            None => (None, name),
+        }
+    }
+
+    /// Resolves a (possibly `table.column`-qualified) column name to
+    /// `(cursor, column_index)`. Following `codegen::batch::compile_join`'s
+    /// established convention: an unqualified name always resolves to the
+    /// left/`FROM` table; reaching the right table's column requires an
+    /// explicit qualifier, sidestepping true ambiguity detection when both
+    /// tables share a column name.
     pub fn resolve(&self, name: &str) -> Result<(i32, usize)> {
+        let (qualifier, col) = Self::split_qualified(name);
+        if let (Some(q), Some((right_schema, right_cursor))) = (qualifier, &self.right) {
+            if q.eq_ignore_ascii_case(&right_schema.name) {
+                return right_schema
+                    .column_index(col)
+                    .map(|idx| (*right_cursor, idx))
+                    .ok_or_else(|| CodegenError::UnknownColumn(name.to_string()));
+            }
+        }
         self.schema
-            .column_index(name)
+            .column_index(col)
             .map(|idx| (self.cursor, idx))
             .ok_or_else(|| CodegenError::UnknownColumn(name.to_string()))
     }
