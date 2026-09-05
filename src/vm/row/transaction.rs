@@ -22,6 +22,34 @@ pub trait Transaction {
 
     /// `ROLLBACK` (`Opcode::AutoCommit` with `p2` zero).
     fn rollback(&mut self) -> Result<(), TransactionError>;
+
+    /// `SetJournalMode p1` (`JOURNAL_MODE_DELETE`/`JOURNAL_MODE_WAL`):
+    /// switch the attached pager's journal mode. Default: no-op, the
+    /// read-only fallback sqlite-rs itself uses without a writer (#134).
+    fn set_journal_mode(&mut self, mode: i32) -> Result<(), TransactionError> {
+        let _ = mode;
+        Ok(())
+    }
+
+    /// `PRAGMA synchronous` query form: the pager's current level
+    /// (`SYNCHRONOUS_OFF`/`NORMAL`/`FULL`); `None` reports `FULL` (#134).
+    fn synchronous(&self) -> Option<i32> {
+        None
+    }
+
+    /// `PRAGMA synchronous = level`. Default: no-op (#134).
+    fn set_synchronous(&mut self, level: i32) -> Result<(), TransactionError> {
+        let _ = level;
+        Ok(())
+    }
+
+    /// `PRAGMA integrity_check` / `quick_check` (`quick`): the problem
+    /// lines to report, `["ok"]` for a clean file. `None` leaves the
+    /// opcode `Unimplemented`, as without any hook (#134).
+    fn integrity_check(&mut self, quick: bool) -> Option<Result<Vec<String>, TransactionError>> {
+        let _ = quick;
+        None
+    }
 }
 
 /// Why a [`Transaction`] hook's `begin`/`commit`/`rollback` failed --

@@ -86,6 +86,12 @@ pub enum ExecError {
     /// (`!Vm::autocommit`) -- stock SQLite refuses to change journal
     /// mode mid-transaction.
     JournalModeChangeDuringTransaction,
+    /// `Transaction` while one is already open (sqlite-rs, #134).
+    TransactionAlreadyActive,
+    /// `AutoCommit` commit with no open transaction (#134).
+    NoActiveTransactionToCommit,
+    /// `AutoCommit` rollback with no open transaction (#134).
+    NoActiveTransactionToRollback,
     /// A [`super::transaction::Transaction`] hook's `begin`/`commit`/
     /// `rollback` failed (`Opcode::Transaction`/`AutoCommit`,
     /// db-core#81).
@@ -151,6 +157,15 @@ impl std::fmt::Display for ExecError {
                 f,
                 "SetJournalMode: cannot change journal mode within a transaction"
             ),
+            ExecError::TransactionAlreadyActive => {
+                write!(f, "cannot start a transaction within a transaction")
+            }
+            ExecError::NoActiveTransactionToCommit => {
+                write!(f, "cannot commit - no transaction is active")
+            }
+            ExecError::NoActiveTransactionToRollback => {
+                write!(f, "cannot rollback - no transaction is active")
+            }
             ExecError::TransactionFailed(err) => write!(f, "transaction hook failed: {err}"),
             ExecError::AttachedDatabasesUnsupported => {
                 write!(f, "attached databases are not supported")
@@ -1538,6 +1553,9 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         }
 
         Opcode::Transaction => {
+            if !vm.autocommit {
+                return Err(ExecError::TransactionAlreadyActive);
+            }
             if let Some(hook) = vm.transaction_hook.as_mut() {
                 hook.begin(instr.p1).map_err(ExecError::TransactionFailed)?;
             }
@@ -1545,6 +1563,13 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::AutoCommit => {
+            if vm.autocommit {
+                return Err(if instr.p2 == 0 {
+                    ExecError::NoActiveTransactionToRollback
+                } else {
+                    ExecError::NoActiveTransactionToCommit
+                });
+            }
             if let Some(hook) = vm.transaction_hook.as_mut() {
                 if instr.p2 == 0 {
                     hook.rollback().map_err(ExecError::TransactionFailed)?;
@@ -1559,22 +1584,49 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             if !vm.autocommit {
                 return Err(ExecError::JournalModeChangeDuringTransaction);
             }
-            // sqlite-rs switches the attached pager's on-disk journal
-            // mode (per `instr.p1`) here; `db-core` has no pager (ADR
-            // 0008/0006), so this is unconditionally the no-op
-            // sqlite-rs itself falls back to for a read-only
-            // connection with no writer.
+            // The attached pager (via the transaction hook) switches its
+            // on-disk journal mode; with no hook this is the no-op
+            // sqlite-rs itself falls back to for a read-only connection.
+            if let Some(hook) = vm.transaction_hook.as_mut() {
+                hook.set_journal_mode(instr.p1)
+                    .map_err(ExecError::TransactionFailed)?;
+            }
             Ok(Step::Next)
         }
         Opcode::Synchronous => {
-            // `db-core` never has a writer to report/set a real
-            // synchronous level for, so the query form always reports
-            // sqlite-rs's own no-writer fallback
-            // (`SynchronousMode::default()`, i.e. `FULL`); setting a
-            // level (per `instr.p1`) is a no-op, same as sqlite-rs's
-            // own no-writer case.
+            // Query form reports the pager's level (FULL with no pager,
+            // sqlite-rs's no-writer fallback); otherwise sets it.
             if instr.p1 == SYNCHRONOUS_QUERY {
-                vm.emit_row(vec![Value::Integer(i64::from(SYNCHRONOUS_FULL))]);
+                let level = vm
+                    .transaction_hook
+                    .as_deref()
+                    .and_then(|h| h.synchronous())
+                    .unwrap_or(SYNCHRONOUS_FULL);
+                vm.emit_row(vec![Value::Integer(i64::from(level))]);
+                return Ok(Step::Next);
+            }
+            if let Some(hook) = vm.transaction_hook.as_mut() {
+                hook.set_synchronous(instr.p1)
+                    .map_err(ExecError::TransactionFailed)?;
+            }
+            Ok(Step::Next)
+        }
+        Opcode::IntegrityCheck => {
+            // `p1 != 0` is quick_check. One TEXT row per problem line
+            // (sqlite-rs `pragma::integrity_check`); without a hook that
+            // can read the file this stays Unimplemented.
+            let quick = instr.p1 != 0;
+            let Some(result) = vm
+                .transaction_hook
+                .as_mut()
+                .and_then(|h| h.integrity_check(quick))
+            else {
+                return Err(ExecError::Unimplemented {
+                    opcode: Opcode::IntegrityCheck,
+                });
+            };
+            for line in result.map_err(ExecError::TransactionFailed)? {
+                vm.emit_row(vec![Value::Text(line.into())]);
             }
             Ok(Step::Next)
         }
@@ -2289,6 +2341,8 @@ mod tests {
         let commit = Instruction::new(Opcode::AutoCommit, 0, 1, 0);
         step(&mut vm, 0, &commit).unwrap();
 
+        // sqlite-rs: a rollback needs an open transaction.
+        step(&mut vm, 0, &begin).unwrap();
         let rollback = Instruction::new(Opcode::AutoCommit, 0, 0, 0);
         step(&mut vm, 0, &rollback).unwrap();
 
@@ -3698,5 +3752,94 @@ mod tests {
         ]);
         let rows = execute(&mut vm, &program).unwrap();
         assert_eq!(rows, vec![vec![Value::Integer(11)]]);
+    }
+
+    #[test]
+    fn nested_begin_and_bare_commit_or_rollback_error_like_sqlite_rs() {
+        let mut vm = Vm::new();
+        let begin = Instruction::new(
+            Opcode::Transaction,
+            super::super::program::TRANSACTION_MODE_DEFERRED,
+            0,
+            0,
+        );
+        assert!(matches!(
+            step(&mut vm, 0, &Instruction::new(Opcode::AutoCommit, 0, 1, 0)),
+            Err(ExecError::NoActiveTransactionToCommit)
+        ));
+        assert!(matches!(
+            step(&mut vm, 0, &Instruction::new(Opcode::AutoCommit, 0, 0, 0)),
+            Err(ExecError::NoActiveTransactionToRollback)
+        ));
+        step(&mut vm, 0, &begin).unwrap();
+        assert!(matches!(
+            step(&mut vm, 0, &begin),
+            Err(ExecError::TransactionAlreadyActive)
+        ));
+    }
+
+    #[test]
+    fn journal_mode_synchronous_and_integrity_check_reach_the_hook() {
+        use super::super::program::{JOURNAL_MODE_WAL, SYNCHRONOUS_OFF};
+        struct PagerHook(Vec<String>, i32);
+        impl super::super::transaction::Transaction for PagerHook {
+            fn begin(&mut self, _: i32) -> Result<(), super::super::transaction::TransactionError> {
+                Ok(())
+            }
+            fn commit(&mut self) -> Result<(), super::super::transaction::TransactionError> {
+                Ok(())
+            }
+            fn rollback(&mut self) -> Result<(), super::super::transaction::TransactionError> {
+                Ok(())
+            }
+            fn set_journal_mode(
+                &mut self,
+                mode: i32,
+            ) -> Result<(), super::super::transaction::TransactionError> {
+                self.0.push(format!("journal({mode})"));
+                Ok(())
+            }
+            fn synchronous(&self) -> Option<i32> {
+                Some(self.1)
+            }
+            fn set_synchronous(
+                &mut self,
+                level: i32,
+            ) -> Result<(), super::super::transaction::TransactionError> {
+                self.1 = level;
+                Ok(())
+            }
+            fn integrity_check(
+                &mut self,
+                quick: bool,
+            ) -> Option<Result<Vec<String>, super::super::transaction::TransactionError>>
+            {
+                Some(Ok(vec![format!("ok quick={quick}")]))
+            }
+        }
+        let mut vm = Vm::new();
+        vm.set_transaction_hook(Box::new(PagerHook(Vec::new(), SYNCHRONOUS_FULL)));
+        let program = Program::new(vec![
+            Instruction::new(Opcode::SetJournalMode, JOURNAL_MODE_WAL, 0, 0),
+            Instruction::new(Opcode::Synchronous, SYNCHRONOUS_OFF, 0, 0),
+            Instruction::new(Opcode::Synchronous, SYNCHRONOUS_QUERY, 0, 0),
+            Instruction::new(Opcode::IntegrityCheck, 1, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(i64::from(SYNCHRONOUS_OFF))],
+                vec![Value::Text("ok quick=true".into())],
+            ]
+        );
+    }
+
+    #[test]
+    fn opcode_all_is_sqlite_rs_harvested_inventory() {
+        assert_eq!(Opcode::ALL.len(), 68);
+        assert!(Opcode::ALL.contains(&Opcode::SorterOpen));
+        assert!(!Opcode::ALL.contains(&Opcode::AutoCommit));
     }
 }
