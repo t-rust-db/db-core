@@ -1,12 +1,13 @@
 //! `SELECT` codegen -- see `super`'s module doc.
 //!
 //! **Single-table scan + projection + `WHERE` + `LIMIT`** (db-core#92),
-//! **a single `INNER`/`LEFT` equi-join and `ORDER BY` via the existing
-//! single-key sorter** (db-core#102, both without any stats/access-path
-//! cost model). `GROUP BY`/aggregation is deferred to #93; the
-//! join-order/access-path chooser, `planner::Stats`, `FULL OUTER`,
-//! N-way joins and multi-table catalogs are deferred to #101; `DISTINCT`
-//! is not yet supported.
+//! **a single `INNER`/`LEFT`/`FULL` equi-join and `ORDER BY` via the
+//! existing single-key sorter** (db-core#102/#101, both without any
+//! stats/access-path cost model). `GROUP BY`/aggregation is deferred to
+//! #93; the join-order/access-path chooser and real `planner::Stats`
+//! (needs a working `ANALYZE` VM implementation, #116) to #117; N-way
+//! joins and multi-table catalogs to #118 (no consumer needs them yet);
+//! `DISTINCT` is not yet supported.
 
 use super::value::emit_column_read;
 use super::{
@@ -28,12 +29,14 @@ pub fn compile_select(schema: &TableSchema, cursor: i32, query: &Query) -> Resul
     compile_select_inner(schema, cursor, None, query)
 }
 
-/// Compiles `query` (a `SELECT` with a single `INNER`/`LEFT` equi-join)
-/// against `schema`/`cursor` (the `FROM` table) joined to
-/// `right_schema`/`right_cursor` (`query.joins[0].table`), both pre-wired
-/// cursor slots. `Right`/`Full`/`Cross` joins, and more than one `JOIN`,
-/// are deferred to #101 (they need `planner::Stats` and a multi-table
-/// catalog `Scope` this crate doesn't have yet).
+/// Compiles `query` (a `SELECT` with a single `INNER`/`LEFT`/`FULL`
+/// equi-join) against `schema`/`cursor` (the `FROM` table) joined to
+/// `right_schema`/`right_cursor` (`query.joins[0].table`), both
+/// pre-wired cursor slots. `Right`/`Cross` joins, more than one `JOIN`,
+/// and any join-order/access-path cost model are deferred to #117
+/// (needs `planner::Stats`, which db-core doesn't have yet); N-way
+/// joins and a multi-table catalog `Scope` to #118 (no consumer needs
+/// them yet).
 pub fn compile_select_join(
     schema: &TableSchema,
     cursor: i32,
@@ -68,10 +71,10 @@ fn compile_select_inner(
     let join = query.joins.first();
     match (join, right) {
         (Some(join), Some(_)) => {
-            if !matches!(join.kind, JoinKind::Inner | JoinKind::Left) {
+            if !matches!(join.kind, JoinKind::Inner | JoinKind::Left | JoinKind::Full) {
                 return Err(CodegenError::Unsupported {
-                    reason: "only INNER/LEFT JOIN are supported; the join-order/access-path \
-chooser and FULL OUTER are deferred to #101"
+                    reason: "only INNER/LEFT/FULL JOIN are supported; the join-order/access-path \
+chooser is deferred to #117, N-way joins to #118"
                         .to_string(),
                 });
             }
@@ -180,6 +183,17 @@ chooser and FULL OUTER are deferred to #101"
     em.place(outer_loop_start);
     let outer_row_skip = em.new_label();
 
+    // `FULL OUTER`'s limit-guard target must skip *both* passes, not
+    // just this outer scan -- `end_label` here is where pass two (if
+    // any) begins, not the true program end, so it can't double as the
+    // limit target the way it does for every other join kind (where
+    // there is no second pass, and the two labels are the same point).
+    let final_label = if matches!(join.map(|j| j.kind), Some(JoinKind::Full)) {
+        em.new_label()
+    } else {
+        end_label
+    };
+
     match (join, right) {
         (Some(join), Some((_, right_cursor))) => {
             compile_join_body(
@@ -193,7 +207,7 @@ chooser and FULL OUTER are deferred to #101"
                 sort_key,
                 sorter_cursor,
                 limit_reg,
-                end_label,
+                final_label,
                 outer_row_skip,
             )?;
         }
@@ -229,6 +243,24 @@ chooser and FULL OUTER are deferred to #101"
     em.patch_p2(next_addr, outer_loop_start);
 
     em.place(end_label);
+
+    if let (Some(join), Some((_, right_cursor))) = (join, right) {
+        if join.kind == JoinKind::Full {
+            compile_full_outer_right_pass(
+                &mut em,
+                &mut reg,
+                &scope,
+                join,
+                cursor,
+                right_cursor,
+                &columns,
+                sort_key,
+                sorter_cursor,
+                limit_reg,
+                final_label,
+            )?;
+        }
+    }
 
     if sort_key.is_some() {
         let sorter_end_label = em.new_label();
@@ -289,6 +321,33 @@ fn unqualified(name: &str) -> &str {
     }
 }
 
+/// Builds `join`'s equi-join condition as an `Expr`, qualifying both
+/// sides explicitly. `left_col`/`right_col` name which table they
+/// belong to structurally (the `Join` type's own contract), unlike a
+/// bare `Expr::Column` elsewhere in the query -- so each is qualified
+/// here rather than resolved via `Scope`'s unqualified-defaults-to-left
+/// convention, which would otherwise send an unqualified `right_col` to
+/// the wrong table.
+fn build_join_cond(scope: &Scope, join: &Join) -> Expr {
+    let right_table_name = scope
+        .right
+        .as_ref()
+        .map(|(right_schema, _)| right_schema.name.clone())
+        .unwrap_or_default();
+    Expr::BinaryOp(
+        Box::new(Expr::Column(format!(
+            "{}.{}",
+            scope.schema.name,
+            unqualified(&join.left_col)
+        ))),
+        BinOp::Eq,
+        Box::new(Expr::Column(format!(
+            "{right_table_name}.{}",
+            unqualified(&join.right_col)
+        ))),
+    )
+}
+
 /// Compiles the inner-join loop for `join` against `right_cursor`,
 /// nested inside the already-open outer scan. Handles `LEFT`'s
 /// null-extension: a `matched` flag tracks whether the `ON` condition
@@ -309,7 +368,11 @@ fn compile_join_body(
     end_label: Label,
     outer_row_skip: Label,
 ) -> Result<()> {
-    let matched_reg = if join.kind == JoinKind::Left {
+    // `LEFT` and `FULL` both null-extend an outer row that never matched
+    // any inner row; `FULL` additionally needs a second pass (see
+    // `compile_full_outer_right_pass`) for right rows no outer row ever
+    // matched.
+    let matched_reg = if matches!(join.kind, JoinKind::Left | JoinKind::Full) {
         let r = reg.alloc();
         em.emit(Instruction::new(Opcode::Integer, 0, r, 0));
         Some(r)
@@ -325,29 +388,7 @@ fn compile_join_body(
     em.place(inner_loop_start);
     let inner_row_skip = em.new_label();
 
-    // `left_col`/`right_col` name which table they belong to
-    // structurally (the `Join` type's own contract), unlike a bare
-    // `Expr::Column` elsewhere in the query -- so each is qualified
-    // explicitly here rather than resolved via `Scope`'s
-    // unqualified-defaults-to-left convention, which would otherwise
-    // send an unqualified `right_col` to the wrong table.
-    let right_table_name = scope
-        .right
-        .as_ref()
-        .map(|(right_schema, _)| right_schema.name.clone())
-        .unwrap_or_default();
-    let join_cond = Expr::BinaryOp(
-        Box::new(Expr::Column(format!(
-            "{}.{}",
-            scope.schema.name,
-            unqualified(&join.left_col)
-        ))),
-        BinOp::Eq,
-        Box::new(Expr::Column(format!(
-            "{right_table_name}.{}",
-            unqualified(&join.right_col)
-        ))),
-    );
+    let join_cond = build_join_cond(scope, join);
     super::compile_cond(
         em,
         reg,
@@ -408,6 +449,91 @@ fn compile_join_body(
             end_label,
         )?;
     }
+
+    Ok(())
+}
+
+/// `FULL OUTER`'s second pass (db-core#101): right-outer, left-inner,
+/// emitting a right-null-extended row for every right row the first
+/// pass's inner loop never matched. Matching here re-checks only the
+/// `ON` condition (not `WHERE`) against every left row -- mirroring
+/// `compile_join_body`'s own simplification of skipping `WHERE` on its
+/// null-extension path -- so a right row already emitted (matched, or
+/// filtered out by `WHERE`) in the first pass is never emitted twice:
+/// once any left row satisfies `ON`, the first pass already produced
+/// this right row's output (or explicitly filtered it), and this pass
+/// only fires when no left row satisfies `ON` at all.
+#[allow(clippy::too_many_arguments)]
+fn compile_full_outer_right_pass(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    scope: &Scope,
+    join: &Join,
+    left_cursor: i32,
+    right_cursor: i32,
+    columns: &[String],
+    sort_key: Option<SortKeyColumn>,
+    sorter_cursor: i32,
+    limit_reg: Option<i32>,
+    final_label: Label,
+) -> Result<()> {
+    let right_rewind_addr = em.emit(Instruction::new(Opcode::Rewind, right_cursor, 0, 0));
+    em.patch_p2(right_rewind_addr, final_label);
+
+    let pass_loop_start = em.new_label();
+    em.place(pass_loop_start);
+    let pass_row_skip = em.new_label();
+
+    let matched_reg = reg.alloc();
+    em.emit(Instruction::new(Opcode::Integer, 0, matched_reg, 0));
+
+    let left_end_label = em.new_label();
+    let left_rewind_addr = em.emit(Instruction::new(Opcode::Rewind, left_cursor, 0, 0));
+    em.patch_p2(left_rewind_addr, left_end_label);
+
+    let left_loop_start = em.new_label();
+    em.place(left_loop_start);
+    let left_row_skip = em.new_label();
+
+    let join_cond = build_join_cond(scope, join);
+    super::compile_cond(
+        em,
+        reg,
+        scope,
+        &join_cond,
+        CondTargets::null_is_false(Target::Fallthrough, Target::Jump(left_row_skip)),
+    )?;
+    em.emit(Instruction::new(Opcode::Integer, 1, matched_reg, 0));
+
+    em.place(left_row_skip);
+    let left_next_addr = em.emit(Instruction::new(Opcode::Next, left_cursor, 0, 0));
+    em.patch_p2(left_next_addr, left_loop_start);
+    em.place(left_end_label);
+
+    let zero_reg = reg.alloc();
+    em.emit(Instruction::new(Opcode::Integer, 0, zero_reg, 0));
+    let eq_addr = em.emit(Instruction::new(Opcode::Eq, matched_reg, 0, zero_reg));
+    let unmatched_label = em.new_label();
+    em.patch_p2(eq_addr, unmatched_label);
+    em.goto(pass_row_skip);
+
+    em.place(unmatched_label);
+    emit_row(
+        em,
+        reg,
+        scope,
+        columns,
+        Some(left_cursor),
+        sort_key,
+        sorter_cursor,
+        limit_reg,
+        final_label,
+    )?;
+
+    em.place(pass_row_skip);
+    let pass_next_addr = em.emit(Instruction::new(Opcode::Next, right_cursor, 0, 0));
+    em.patch_p2(pass_next_addr, pass_loop_start);
+    em.place(final_label);
 
     Ok(())
 }
@@ -701,12 +827,12 @@ mod tests {
     }
 
     #[test]
-    fn full_outer_join_is_unsupported() {
+    fn right_join_is_unsupported() {
         let schema = schema(&["a"]);
         let right = schema_named("u", &["b"]);
         let mut query = base_query(vec![SelectItem::Column("a".into())]);
         query.joins = vec![Join {
-            kind: JoinKind::Full,
+            kind: JoinKind::Right,
             table: "u".into(),
             left_col: "a".into(),
             right_col: "b".into(),
@@ -715,6 +841,103 @@ mod tests {
             compile_select_join(&schema, 0, &right, 1, &query),
             Err(CodegenError::Unsupported { .. })
         ));
+    }
+
+    #[test]
+    fn full_outer_join_null_extends_both_unmatched_sides() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let mut query = base_query(vec![
+            SelectItem::Column("a".into()),
+            SelectItem::Column("u.c".into()),
+        ]);
+        query.joins = vec![Join {
+            kind: JoinKind::Full,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "b".into(),
+        }];
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(3), Value::Integer(300)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(2), Value::Null],
+                vec![Value::Null, Value::Integer(300)],
+            ]
+        );
+    }
+
+    #[test]
+    fn full_outer_join_with_no_matches_null_extends_every_row() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let mut query = base_query(vec![
+            SelectItem::Column("a".into()),
+            SelectItem::Column("u.c".into()),
+        ]);
+        query.joins = vec![Join {
+            kind: JoinKind::Full,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "b".into(),
+        }];
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)]],
+            vec![vec![Value::Integer(2), Value::Integer(200)]],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Null],
+                vec![Value::Null, Value::Integer(200)],
+            ]
+        );
+    }
+
+    #[test]
+    fn full_outer_join_with_empty_left_null_extends_every_right_row() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let mut query = base_query(vec![
+            SelectItem::Column("a".into()),
+            SelectItem::Column("u.c".into()),
+        ]);
+        query.joins = vec![Join {
+            kind: JoinKind::Full,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "b".into(),
+        }];
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(2), Value::Integer(200)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Null, Value::Integer(100)],
+                vec![Value::Null, Value::Integer(200)],
+            ]
+        );
     }
 
     #[test]
@@ -869,6 +1092,75 @@ mod tests {
             ],
         );
         assert_eq!(rows, vec![vec![Value::Integer(1)], vec![Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn full_outer_join_order_by_sorts_both_passes_together() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let mut query = base_query(vec![
+            SelectItem::Column("a".into()),
+            SelectItem::Column("u.c".into()),
+        ]);
+        query.joins = vec![Join {
+            kind: JoinKind::Full,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "b".into(),
+        }];
+        query.order_by = Some(crate::expr::OrderBy {
+            column: "a".into(),
+            descending: false,
+        });
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(2)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(2), Value::Integer(200)],
+            ],
+        );
+        // `a` is NULL for the right-unmatched row (b=1), so it sorts
+        // last under this sorter's `nulls_first: false` default.
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(2), Value::Integer(200)],
+                vec![Value::Null, Value::Integer(100)],
+            ]
+        );
+    }
+
+    #[test]
+    fn full_outer_join_limit_applies_across_both_passes() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let mut query = base_query(vec![
+            SelectItem::Column("a".into()),
+            SelectItem::Column("u.c".into()),
+        ]);
+        query.joins = vec![Join {
+            kind: JoinKind::Full,
+            table: "u".into(),
+            left_col: "a".into(),
+            right_col: "b".into(),
+        }];
+        query.limit = Some(1);
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(2), Value::Integer(200)],
+            ],
+        );
+        // The first pass alone hits LIMIT 1, so the second (right-outer)
+        // pass never runs -- the unmatched right row is never emitted.
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(100)]]);
     }
 
     #[test]
