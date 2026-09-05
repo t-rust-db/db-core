@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.44.0] - 2026-09-05
+
+### Added
+
+- **`vm::row` cursor factory, DDL/ANALYZE schema hook, auto-index/misc opcodes, and index-mode cursors** (#125, #128, #127, #126 -- #18 sub-tickets) -- closes out `vm::row`'s remaining `ExecError::Unimplemented` opcodes. `CursorFactory` + `Vm::set_cursor_factory` resolve `OpenRead`/`OpenWrite`'s `p2` root page through a consumer hook, replacing the old pre-wired-only assertion (`OpenDup`/`OpenPseudo` implemented alongside). `SchemaStorage` + `Vm::set_schema_storage` drive `CreateTable`/`CreateIndex`/`DropTable`/`DropIndex`/`Analyze` from a storage-agnostic hook (ADR 0008). `AutoIndexInsert`/`Seek`/`Rowid`/`Next` (an in-memory transient join index), `Count` (with a `Cursor::count()` fast-path/scan-fallback), `Last`, `NullRow`, and `Sequence` are now dispatched. The `Cursor` trait gains an index-mode contract (`seek_index_eq`/`seek_index_ge`/`idx_compare`/`idx_rowid`) backing all eleven index-cursor opcodes (`IdxRewind`/`Last`/`Next`/`Prev`/`Rowid`, `SeekIndexEq`/`GE`, `IdxCompareGT`/`LE`, `Found`, `NoConflict`), with an `InMemoryIndexCursor` fixture and published conformance checks for a real adapter to reuse.
+
 ## [0.43.0] - 2026-09-05
 
 ### Added
