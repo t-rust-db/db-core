@@ -1586,6 +1586,202 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_1361__v1_a_null_propagates() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Null,
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(5),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Null]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_1361__v2_b_null_propagates() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Int(5),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Null,
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Null]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_1361__v3_neither_null_computes_result() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Int(5),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(3),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Int(8)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_1377__v1_both_int_non_div_stays_int() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Int(10),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(4),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Int(14)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_1377__v2_a_not_int_promotes_to_float() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Float(10.0),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(4),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Float(14.0)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_1377__v3_b_not_int_promotes_to_float() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Int(10),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Float(4.0),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Float(14.0)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_1377__v4_div_promotes_to_float_even_with_two_ints() {
+        let batch = Batch::new(1);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Int(10),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(4),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Div,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Float(2.5)]);
+    }
+
+    #[test]
     fn map_concat_stringifies_both_operands() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
@@ -2247,6 +2443,91 @@ mod tests {
             lead,
             vec![Value::Str("y".into()), Value::Str("z".into()), Value::Null]
         );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_1202__v1_target_in_bounds_yields_source_value() {
+        let batch = Batch::new(3)
+            .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+            .with_column(
+                "val",
+                vec![
+                    Value::Str("x".into()),
+                    Value::Str("y".into()),
+                    Value::Str("z".into()),
+                ],
+            );
+        // LEAD at pos 0 with offset 1: target = 1, in bounds [0, 3).
+        let lead = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::Lead,
+                arg: Some(2),
+                offset: Some(1),
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(lead[0], Value::Str("y".into()));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_1202__v2_target_below_zero_yields_null() {
+        let batch = Batch::new(3)
+            .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+            .with_column(
+                "val",
+                vec![
+                    Value::Str("x".into()),
+                    Value::Str("y".into()),
+                    Value::Str("z".into()),
+                ],
+            );
+        // LAG at pos 0 with offset 1: target = -1, fails `target >= 0`.
+        let lag = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::Lag,
+                arg: Some(2),
+                offset: Some(1),
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(lag[0], Value::Null);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_1202__v3_target_at_or_past_len_yields_null() {
+        let batch = Batch::new(3)
+            .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+            .with_column(
+                "val",
+                vec![
+                    Value::Str("x".into()),
+                    Value::Str("y".into()),
+                    Value::Str("z".into()),
+                ],
+            );
+        // LEAD at pos 2 (last row) with offset 1: target = 3, fails
+        // `target < n` (n = 3) even though `target >= 0` holds.
+        let lead = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::Lead,
+                arg: Some(2),
+                offset: Some(1),
+                partition_by: vec![].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(lead[2], Value::Null);
     }
 
     #[test]

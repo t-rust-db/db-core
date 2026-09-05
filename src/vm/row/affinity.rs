@@ -224,4 +224,142 @@ mod tests {
         apply_affinity(&mut value, Affinity::Blob);
         assert!(matches!(value, Value::Text(_)));
     }
+
+    /// MC/DC vector (obligation `affinity_32`, `affinity_of`'s decision
+    /// `upper.contains("CHAR") || upper.contains("CLOB") ||
+    /// upper.contains("TEXT")`): leaf A (`CHAR`) true, others false.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_32__v1_char_only() {
+        assert_eq!(affinity_of("CHAR"), Affinity::Text);
+    }
+
+    /// MC/DC vector (obligation `affinity_32`): all three leaves false --
+    /// falls through past this branch entirely. Independence pair for A
+    /// against `mcdc__affinity_32__v1_char_only`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_32__v2_none_of_char_clob_text() {
+        assert_ne!(affinity_of("BLOB"), Affinity::Text);
+    }
+
+    /// MC/DC vector (obligation `affinity_32`): leaf B (`CLOB`) true,
+    /// others false. Independence pair for B against
+    /// `mcdc__affinity_32__v2_none_of_char_clob_text`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_32__v3_clob_only() {
+        assert_eq!(affinity_of("CLOB"), Affinity::Text);
+    }
+
+    /// MC/DC vector (obligation `affinity_32`): leaf C (`TEXT`) true,
+    /// others false. Independence pair for C against
+    /// `mcdc__affinity_32__v2_none_of_char_clob_text`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_32__v4_text_only() {
+        assert_eq!(affinity_of("TEXT"), Affinity::Text);
+    }
+
+    /// MC/DC vector (obligation `affinity_34`, `affinity_of`'s decision
+    /// `upper.contains("BLOB") || upper.is_empty()`, reached only once
+    /// the INT/CHAR/CLOB/TEXT branches above are false): leaf A (`BLOB`)
+    /// true.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_34__v1_blob_only() {
+        assert_eq!(affinity_of("BLOB"), Affinity::Blob);
+    }
+
+    /// MC/DC vector (obligation `affinity_34`): both leaves false --
+    /// falls through to the REAL/NUMERIC branches below. Independence
+    /// pair for A against `mcdc__affinity_34__v1_blob_only`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_34__v2_neither_blob_nor_empty() {
+        assert_ne!(affinity_of("NUMERIC"), Affinity::Blob);
+    }
+
+    /// MC/DC vector (obligation `affinity_34`): leaf B (empty string)
+    /// true, leaf A false. Independence pair for B against
+    /// `mcdc__affinity_34__v2_neither_blob_nor_empty`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_34__v3_empty_declared_type() {
+        assert_eq!(affinity_of(""), Affinity::Blob);
+    }
+
+    /// MC/DC vector (obligation `affinity_36`, `affinity_of`'s decision
+    /// `upper.contains("REAL") || upper.contains("FLOA") ||
+    /// upper.contains("DOUB")`, reached only once every branch above is
+    /// false): leaf A (`REAL`) true, others false.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_36__v1_real_only() {
+        assert_eq!(affinity_of("REAL"), Affinity::Real);
+    }
+
+    /// MC/DC vector (obligation `affinity_36`): all three leaves false --
+    /// falls through to NUMERIC. Independence pair for A against
+    /// `mcdc__affinity_36__v1_real_only`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_36__v2_none_of_real_floa_doub() {
+        assert_eq!(affinity_of("NUMERIC"), Affinity::Numeric);
+    }
+
+    /// MC/DC vector (obligation `affinity_36`): leaf B (`FLOA`) true,
+    /// others false. Independence pair for B against
+    /// `mcdc__affinity_36__v2_none_of_real_floa_doub`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_36__v3_floa_only() {
+        assert_eq!(affinity_of("FLOAT"), Affinity::Real);
+    }
+
+    /// MC/DC vector (obligation `affinity_36`): leaf C (`DOUB`) true,
+    /// others false. Independence pair for C against
+    /// `mcdc__affinity_36__v2_none_of_real_floa_doub`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_36__v4_doub_only() {
+        assert_eq!(affinity_of("DOUBLE"), Affinity::Real);
+    }
+
+    /// MC/DC vector (obligation `affinity_85`, `comparison_affinity`'s
+    /// decision `a.is_numeric() || b.is_numeric()`, within the `(Some,
+    /// Some)` arm): leaf A (`a` numeric) true, leaf B false.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_85__v1_lhs_numeric() {
+        assert_eq!(
+            comparison_affinity(Some(Affinity::Integer), Some(Affinity::Text)),
+            Affinity::Numeric
+        );
+    }
+
+    /// MC/DC vector (obligation `affinity_85`): both leaves false --
+    /// neither operand is numeric, so no affinity is applied.
+    /// Independence pair for A against
+    /// `mcdc__affinity_85__v1_lhs_numeric`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_85__v2_neither_numeric() {
+        assert_eq!(
+            comparison_affinity(Some(Affinity::Text), Some(Affinity::Blob)),
+            Affinity::Blob
+        );
+    }
+
+    /// MC/DC vector (obligation `affinity_85`): leaf B (`b` numeric)
+    /// true, leaf A false. Independence pair for B against
+    /// `mcdc__affinity_85__v2_neither_numeric`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__affinity_85__v3_rhs_numeric() {
+        assert_eq!(
+            comparison_affinity(Some(Affinity::Text), Some(Affinity::Numeric)),
+            Affinity::Numeric
+        );
+    }
 }

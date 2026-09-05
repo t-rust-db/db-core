@@ -1269,6 +1269,55 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__column_592__v1_cross_join_without_limit_is_rejected() {
+        let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__column_592__v2_cross_join_with_limit_is_accepted() {
+        let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();
+        assert_eq!(q.limit, Some(10));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__column_592__v3_non_cross_join_without_limit_is_accepted() {
+        let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
+        assert_eq!(q.limit, None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__column_620__v1_agg_without_window_validates_group_by_keys() {
+        let err = parse("SELECT foo, SUM(amount) FROM t").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__column_620__v2_no_agg_skips_group_by_key_validation() {
+        // No aggregate column at all: a mismatched bare column list is
+        // never checked against GROUP BY, so this parses fine.
+        let q = parse("SELECT foo, bar FROM t").unwrap();
+        assert_eq!(q.columns.len(), 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__column_620__v3_agg_with_window_skips_group_by_key_validation() {
+        // Both an aggregate and a window column, with a bare `region`
+        // column and no GROUP BY -- this would fail the "plain column
+        // alongside an aggregate requires GROUP BY" check if it ran, but
+        // window queries are exempt from it.
+        let q =
+            parse("SELECT region, SUM(amount), ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
+        assert_eq!(q.columns.len(), 3);
+    }
+
+    #[test]
     fn parses_right_join() {
         let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
         assert_eq!(

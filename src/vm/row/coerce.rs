@@ -423,6 +423,66 @@ mod tests {
         );
     }
 
+    /// MC/DC vector (obligation `coerce_39`, `scan_number_prefix`'s
+    /// decision `int_len > 0 || frac_len > 0`, reached only when a `.`
+    /// follows the leading digits): leaf A (`int_len > 0`) true, leaf B
+    /// false -- digits before the point, none after.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__coerce_39__v1_digits_before_point_only() {
+        assert_eq!(coerce_text_to_numeric("5."), Value::Real(5.0));
+    }
+
+    /// MC/DC vector (obligation `coerce_39`): both leaves false -- a bare
+    /// `.` with no digits on either side is not float-shaped, so no
+    /// numeric prefix exists at all. Independence pair for A against
+    /// `mcdc__coerce_39__v1_digits_before_point_only`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__coerce_39__v2_no_digits_either_side() {
+        assert_eq!(coerce_text_to_numeric("."), Value::Integer(0));
+    }
+
+    /// MC/DC vector (obligation `coerce_39`): leaf B (`frac_len > 0`)
+    /// true, leaf A false -- digits after the point, none before.
+    /// Independence pair for B against
+    /// `mcdc__coerce_39__v2_no_digits_either_side`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__coerce_39__v3_digits_after_point_only() {
+        assert_eq!(coerce_text_to_numeric(".5"), Value::Real(0.5));
+    }
+
+    /// MC/DC vector (obligation `coerce_44`, `scan_number_prefix`'s
+    /// decision `int_len == 0 && !is_float`): baseline both leaves true
+    /// -- no digits and not float-shaped, so no numeric prefix exists.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__coerce_44__v1_no_digits_not_float_yields_no_prefix() {
+        assert_eq!(coerce_text_to_numeric("abc"), Value::Integer(0));
+    }
+
+    /// MC/DC vector (obligation `coerce_44`): leaf A (`int_len == 0`)
+    /// false -- leading digits are present, so a prefix exists.
+    /// Independence pair for A against
+    /// `mcdc__coerce_44__v1_no_digits_not_float_yields_no_prefix`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__coerce_44__v2_leading_digits_yield_a_prefix() {
+        assert_eq!(coerce_text_to_numeric("123abc"), Value::Integer(123));
+    }
+
+    /// MC/DC vector (obligation `coerce_44`): leaf B (`!is_float`) false
+    /// (i.e. `is_float` true) -- no leading digits, but a fractional part
+    /// makes it float-shaped, so a prefix still exists. Independence pair
+    /// for B against
+    /// `mcdc__coerce_44__v1_no_digits_not_float_yields_no_prefix`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__coerce_44__v3_no_leading_digits_but_float_shaped() {
+        assert_eq!(coerce_text_to_numeric(".5"), Value::Real(0.5));
+    }
+
     #[test]
     fn arithmetic_on_real_operands_avoids_integer_path() {
         assert_eq!(

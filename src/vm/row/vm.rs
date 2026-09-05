@@ -3900,4 +3900,226 @@ mod tests {
         assert!(Opcode::ALL.contains(&Opcode::SorterOpen));
         assert!(!Opcode::ALL.contains(&Opcode::AutoCommit));
     }
+
+    /// MC/DC vector (obligation `vm_442`, `Vm::index`'s decision `reg <
+    /// 0 || reg as usize > MAX_REGISTERS`): leaf A (`reg < 0`) true.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_442__v1_negative_register_is_out_of_range() {
+        let vm = Vm::new();
+        assert!(matches!(
+            vm.register(-1),
+            Err(ExecError::RegisterOutOfRange { index: -1, .. })
+        ));
+    }
+
+    /// MC/DC vector (obligation `vm_442`): both leaves false -- an
+    /// ordinary in-range register. Independence pair for A against
+    /// `mcdc__vm_442__v1_negative_register_is_out_of_range`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_442__v2_in_range_register_is_ok() {
+        let vm = Vm::new();
+        assert!(vm.register(0).is_ok());
+    }
+
+    /// MC/DC vector (obligation `vm_442`): leaf B (`reg as usize >
+    /// MAX_REGISTERS`) true, leaf A false. Independence pair for B
+    /// against `mcdc__vm_442__v2_in_range_register_is_ok`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_442__v3_register_past_the_cap_is_out_of_range() {
+        let vm = Vm::new();
+        let past_cap = i32::try_from(MAX_REGISTERS).unwrap().saturating_add(1);
+        assert!(matches!(
+            vm.register(past_cap),
+            Err(ExecError::RegisterOutOfRange { .. })
+        ));
+    }
+
+    /// MC/DC vector (obligation `vm_579`, `compare_jump`'s decision
+    /// `matches!(a, Value::Null) || matches!(b, Value::Null)`): leaf A
+    /// (`a` is NULL) true -- no jump is taken regardless of `b`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_579__v1_lhs_null_suppresses_the_jump() {
+        let rows = run(vec![
+            Instruction::new(Opcode::Null, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 5, 1, 0),
+            Instruction::new(Opcode::Eq, 0, 4, 1),
+            Instruction::new(Opcode::Integer, 1, 2, 0),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(rows, vec![vec![Value::Integer(1)]], "no jump was taken");
+    }
+
+    /// MC/DC vector (obligation `vm_579`): both leaves false -- neither
+    /// operand is NULL, so the comparison runs normally and the jump is
+    /// taken on equality. Independence pair for A against
+    /// `mcdc__vm_579__v1_lhs_null_suppresses_the_jump`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_579__v2_neither_null_lets_the_comparison_decide() {
+        let rows = run(vec![
+            Instruction::new(Opcode::Integer, 5, 0, 0),
+            Instruction::new(Opcode::Integer, 5, 1, 0),
+            Instruction::new(Opcode::Eq, 0, 4, 1),
+            Instruction::new(Opcode::Integer, 999, 2, 0),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(rows, vec![vec![Value::Null]], "the jump was taken");
+    }
+
+    /// MC/DC vector (obligation `vm_579`): leaf B (`b` is NULL) true,
+    /// leaf A false -- no jump. Independence pair for B against
+    /// `mcdc__vm_579__v2_neither_null_lets_the_comparison_decide`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_579__v3_rhs_null_suppresses_the_jump() {
+        let rows = run(vec![
+            Instruction::new(Opcode::Integer, 5, 0, 0),
+            Instruction::new(Opcode::Null, 0, 1, 0),
+            Instruction::new(Opcode::Eq, 0, 4, 1),
+            Instruction::new(Opcode::Integer, 1, 2, 0),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(rows, vec![vec![Value::Integer(1)]], "no jump was taken");
+    }
+
+    /// MC/DC vector (obligation `vm_628`, `binary_op`'s decision
+    /// `matches!(a, Value::Null) || matches!(b, Value::Null)`): leaf A
+    /// true -- the result is NULL regardless of `b`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_628__v1_lhs_null_forces_null_result() {
+        let rows = run(vec![
+            Instruction::new(Opcode::Null, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 5, 1, 0),
+            Instruction::new(Opcode::Add, 0, 1, 2),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(rows, vec![vec![Value::Null]]);
+    }
+
+    /// MC/DC vector (obligation `vm_628`): both leaves false -- the
+    /// underlying operation actually runs. Independence pair for A
+    /// against `mcdc__vm_628__v1_lhs_null_forces_null_result`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_628__v2_neither_null_runs_the_operation() {
+        let rows = run(vec![
+            Instruction::new(Opcode::Integer, 2, 0, 0),
+            Instruction::new(Opcode::Integer, 3, 1, 0),
+            Instruction::new(Opcode::Add, 0, 1, 2),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(rows, vec![vec![Value::Integer(5)]]);
+    }
+
+    /// MC/DC vector (obligation `vm_628`): leaf B true, leaf A false --
+    /// the result is NULL. Independence pair for B against
+    /// `mcdc__vm_628__v2_neither_null_runs_the_operation`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_628__v3_rhs_null_forces_null_result() {
+        let rows = run(vec![
+            Instruction::new(Opcode::Integer, 5, 0, 0),
+            Instruction::new(Opcode::Null, 0, 1, 0),
+            Instruction::new(Opcode::Add, 0, 1, 2),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(rows, vec![vec![Value::Null]]);
+    }
+
+    /// MC/DC vector (obligation `vm_648`, `binary_op_reversed`'s
+    /// decision `matches!(a, Value::Null) || matches!(b, Value::Null)`):
+    /// leaf A (`p1`'s operand) true -- the result is NULL.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_648__v1_lhs_null_forces_null_result() {
+        let rows = run(vec![
+            Instruction::new(Opcode::Null, 0, 0, 0),
+            Instruction::new(Opcode::Integer, 10, 1, 0),
+            Instruction::new(Opcode::Subtract, 0, 1, 2),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(rows, vec![vec![Value::Null]]);
+    }
+
+    /// MC/DC vector (obligation `vm_648`): both leaves false -- the
+    /// reversed subtraction (`p2 - p1`) actually runs. Independence pair
+    /// for A against `mcdc__vm_648__v1_lhs_null_forces_null_result`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_648__v2_neither_null_runs_the_operation() {
+        let rows = run(vec![
+            Instruction::new(Opcode::Integer, 3, 0, 0),
+            Instruction::new(Opcode::Integer, 10, 1, 0),
+            Instruction::new(Opcode::Subtract, 0, 1, 2),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(rows, vec![vec![Value::Integer(7)]]);
+    }
+
+    /// MC/DC vector (obligation `vm_648`): leaf B (`p2`'s operand) true,
+    /// leaf A false -- the result is NULL. Independence pair for B
+    /// against `mcdc__vm_648__v2_neither_null_runs_the_operation`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_648__v3_rhs_null_forces_null_result() {
+        let rows = run(vec![
+            Instruction::new(Opcode::Integer, 3, 0, 0),
+            Instruction::new(Opcode::Null, 0, 1, 0),
+            Instruction::new(Opcode::Subtract, 0, 1, 2),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(rows, vec![vec![Value::Null]]);
+    }
+
+    /// MC/DC vector (obligation `vm_766`, `try_to_integer`'s decision
+    /// `r.fract() == 0.0 && r.is_finite() && in_i64_range(*r)`): baseline
+    /// all three leaves true -- a whole, finite, in-range REAL converts.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_766__v1_whole_finite_in_range_converts() {
+        assert_eq!(try_to_integer(&Value::Real(5.0)), Some(5));
+    }
+
+    /// MC/DC vector (obligation `vm_766`): leaf A (`fract() == 0.0`)
+    /// false -- a fractional REAL never converts. Independence pair for
+    /// A against `mcdc__vm_766__v1_whole_finite_in_range_converts`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_766__v2_fractional_real_does_not_convert() {
+        assert_eq!(try_to_integer(&Value::Real(5.5)), None);
+    }
+
+    /// MC/DC vector (obligation `vm_766`): leaf B (`is_finite()`) false
+    /// -- an infinite REAL never converts (its `fract()` is NaN, so leaf
+    /// A is collaterally false too, per IEEE-754: no infinite value is
+    /// whole-valued). Exercises B's false branch alongside A's.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_766__v3_infinite_real_does_not_convert() {
+        assert_eq!(try_to_integer(&Value::Real(f64::INFINITY)), None);
+    }
+
+    /// MC/DC vector (obligation `vm_766`): leaf C (`in_i64_range`) false,
+    /// leaves A and B true -- a whole, finite REAL outside `i64`'s range
+    /// never converts. Independence pair for C against
+    /// `mcdc__vm_766__v1_whole_finite_in_range_converts`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_766__v4_out_of_range_whole_real_does_not_convert() {
+        assert_eq!(try_to_integer(&Value::Real(1e30)), None);
+    }
 }

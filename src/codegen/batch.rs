@@ -1455,6 +1455,66 @@ mod tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_355__v1_agg_without_group_by_emits_group_reduce() {
+        let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
+        let program = compile(&query);
+        let (body, _) = program.split_finalize();
+        assert!(body
+            .iter()
+            .any(|op| matches!(op, Opcode::GroupReduce { .. })));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_355__v2_group_by_without_agg_emits_group_reduce() {
+        let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
+        let program = compile(&query);
+        let (body, _) = program.split_finalize();
+        assert!(body
+            .iter()
+            .any(|op| matches!(op, Opcode::GroupReduce { .. })));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_355__v3_no_agg_no_group_by_omits_group_reduce() {
+        let query = sql::parse("SELECT id FROM t").unwrap();
+        let program = compile(&query);
+        let (body, _) = program.split_finalize();
+        assert!(!body
+            .iter()
+            .any(|op| matches!(op, Opcode::GroupReduce { .. })));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_401__v1_group_by_without_agg_column_merges_partial_aggregates() {
+        let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
+        let program = compile(&query);
+        let fin = program.instructions.last().unwrap();
+        assert_eq!(fin.comment.as_deref(), Some("merge partial aggregates"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_401__v2_agg_column_without_group_by_merges_partial_aggregates() {
+        let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
+        let program = compile(&query);
+        let fin = program.instructions.last().unwrap();
+        assert_eq!(fin.comment.as_deref(), Some("merge partial aggregates"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__batch_401__v3_no_group_by_no_agg_column_concatenates_segments() {
+        let query = sql::parse("SELECT id FROM t").unwrap();
+        let program = compile(&query);
+        let fin = program.instructions.last().unwrap();
+        assert_eq!(fin.comment.as_deref(), Some("concatenate segments"));
+    }
+
+    #[test]
     fn compile_join_splits_columns_by_table_and_builds_both_programs() {
         let query = sql::parse(
             "SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.rkey",
