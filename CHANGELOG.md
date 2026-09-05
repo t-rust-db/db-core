@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.42.0] - 2026-09-05
+
+### Added
+
+- **`vm::row` remaining scalar functions** (#90) -- closes the gap against sqlite-rs's `vdbe::functions` entirely: `substr`, `trim`/`ltrim`/`rtrim`, `replace`, and `like`/`glob` with their recursive pattern matchers (`like_match`/`glob_match`, exposed for a future `LIKE`/`GLOB` operator). Confirmed `vdbe::result`/`vdbe::arithmetic` needed no porting -- every opcode they back is already dispatched in `vm.rs`.
+
 ## [0.41.0] - 2026-09-05
 
 ### Added
