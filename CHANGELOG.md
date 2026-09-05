@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.40.0] - 2026-09-05
+
+### Added
+
+- **`codegen::row` gains `FULL OUTER` join emission** (#101, scoped) -- `compile_select_join` now supports `FULL OUTER` via a two-pass nested loop: pass one reuses `LEFT`'s matched/null-extend loop (left-outer, right-inner); pass two mirrors it (right-outer, left-inner), emitting a left-null-extended row for every right row pass one's inner loop never matched. `LIMIT`'s guard targets a distinct final label when the join is `FULL`, so hitting the limit during pass one correctly skips pass two. The rest of #101 as originally scoped -- a real `planner::Stats` cost model and the join-order/access-path chooser, N-way joins and a multi-table catalog `Scope` -- is deferred: `ANALYZE` has no working VM implementation yet (filed as #116, a bug -- #97 shipped codegen for an opcode the VM can't execute, so there's no real data a cost model could read), and no consumer anywhere needs N-way joins, matching #97's own precedent against vendoring speculative infrastructure with no caller (#117/#118 track the follow-ups).
+
 ## [0.39.0] - 2026-09-05
 
 ### Added
