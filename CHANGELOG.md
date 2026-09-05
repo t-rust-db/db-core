@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.41.0] - 2026-09-05
+
+### Added
+
+- **`vm::row` `EXPLAIN` opcode-listing rendering** (#88) -- ports sqlite-rs's `vdbe/explain.rs`: `explain(&Program) -> Vec<ExplainRow>`, one row per instruction (`addr`/`opcode`/`p1..p5`/`p4`-in-display-form/`comment`), with `opcode_name`/`render_p4` exhaustive over `vm::row`'s actual `Opcode`/`P4` shapes. Prefers an instruction's own `comment` field (ADR 0007) over the computed fallback, so a codegen-supplied comment is never discarded. `EXPLAIN QUERY PLAN`'s tree renderer is out of scope -- it lives in the query planner, not the VDBE.
+
 ## [0.40.0] - 2026-09-05
 
 ### Added

@@ -43,6 +43,13 @@
 //! - [`record`] -- on-disk record encoding/decoding (`encode_record`/
 //!   `decode_record`/`decode_column`), backing `Opcode::MakeRecord`,
 //!   ephemeral-cursor `Insert`/`Column`, and sorter key decoding.
+//! - [`explain`] -- `EXPLAIN` output rendering (db-core#88):
+//!   [`explain::explain`] renders a [`program::Program`] as one
+//!   [`explain::ExplainRow`] per instruction (addr/opcode/p1-p5/p4/
+//!   comment), preferring an instruction's own `comment` field (ADR
+//!   0007) over a computed default. `EXPLAIN QUERY PLAN`'s tree
+//!   renderer is out of scope here -- in sqlite-rs it lives in the
+//!   query *planner* (`codegen/select/eqp.rs`), not the VDBE.
 //! - [`vm`] -- the register file, cursor-slot table, aggregate-context
 //!   slot table, and fetch-decode-execute loop (`Vm`, [`vm::execute`])
 //!   -- control flow, compare/cast/arithmetic, result-row loads
@@ -76,9 +83,9 @@
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
 //! and index-mode ephemeral cursors, DDL, real transactions
 //! (`Transaction`/`AutoCommit`), `like`/`glob`/`substr`/`trim`/
-//! `replace`, `EXPLAIN` rendering, `IntegrityCheck`. `Opcode` already
-//! lists every variant sqlite-rs has (parity of identity); dispatch
-//! for the rest lands in later phases (tracked against db-core#18).
+//! `replace`, `IntegrityCheck`. `Opcode` already lists every variant
+//! sqlite-rs has (parity of identity); dispatch for the rest lands in
+//! later phases (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
@@ -92,6 +99,7 @@ pub mod cast;
 pub mod coerce;
 pub mod compare;
 pub mod cursor;
+pub mod explain;
 pub mod functions;
 pub mod logic;
 pub mod program;
@@ -104,6 +112,7 @@ pub use aggregate::{AggState, AggregateError};
 pub use cast::cast_to;
 pub use compare::compare;
 pub use cursor::{Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor, SorterCursor};
+pub use explain::{explain, ExplainRow};
 pub use functions::FunctionError;
 pub use program::{
     AnalyzeIndexTarget, AnalyzeTarget, GroupKeyColumn, Instruction, Opcode, Program, SortKeyColumn,
