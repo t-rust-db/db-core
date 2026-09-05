@@ -120,6 +120,7 @@ pub mod value;
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::parser::ast::{Distinctness, Expr, ExprKind, Join, Select};
 use crate::vm::row::{Instruction, Opcode, P4};
 
 pub use analyze::compile_analyze;
@@ -364,6 +365,36 @@ impl RegAlloc {
     /// without allocating it.
     pub fn peek(&self) -> i32 {
         self.next
+    }
+}
+
+/// Whether `select` asks for `DISTINCT`. The AST spells distinctness
+/// as an `Option<Distinctness>` (`None` = neither keyword given, which
+/// is `ALL`), where `expr::Query` had a bare `bool` (#147).
+pub(crate) fn is_distinct(select: &Select) -> bool {
+    matches!(select.distinct, Some(Distinctness::Distinct))
+}
+
+/// The join chain of `select`'s `FROM`, or empty when it has no `FROM`
+/// at all. `expr::Query` kept `from` and `joins` as sibling fields;
+/// the AST nests `joins` inside an optional [`FromClause`] (#147),
+/// which is the shape a `SELECT` with no `FROM` needs.
+pub(crate) fn joins_of(select: &Select) -> &[Join] {
+    select.from.as_ref().map_or(&[], |from| &from.joins)
+}
+
+/// Builds an unqualified column reference. Codegen synthesizes these
+/// when it needs to name a column it just materialized (an aggregate
+/// output, a join key); they never come from source text, so they carry
+/// [`Span::UNKNOWN`].
+pub(crate) fn column_expr(name: impl Into<String>) -> Expr {
+    Expr {
+        kind: ExprKind::Column {
+            table: None,
+            catalog: None,
+            name: name.into(),
+        },
+        span: crate::parser::Span::UNKNOWN,
     }
 }
 

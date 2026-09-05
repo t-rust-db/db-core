@@ -28,15 +28,14 @@ use super::index_scan::open_index_cursor;
 use super::limit_scan::LimitState;
 use super::select::emit_row;
 use super::{Emitter, Instruction, Label, Opcode, RegAlloc, Result, Scope, TableSchema};
-use crate::expr::{BinOp, Expr, Query};
-use crate::types::Literal;
+use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, Select};
 use crate::vm::row::{affinity_of, Affinity, Collation, SortKeyColumn, P4};
 
 /// The column name a `WHERE`-clause operand names, or `None` for
 /// anything that isn't a bare (unqualified) column reference.
 pub(super) fn where_col(expr: &Expr) -> Option<&str> {
-    match expr {
-        Expr::Column(name) if !name.contains('.') => Some(name.as_str()),
+    match &expr.kind {
+        ExprKind::Column { table: None, name, .. } => Some(name.as_str()),
         _ => None,
     }
 }
@@ -46,7 +45,7 @@ pub(super) fn where_col(expr: &Expr) -> Option<&str> {
 /// accepts a bind parameter, which this crate's `Expr` has no variant
 /// for).
 pub(super) fn is_supported_operand(expr: &Expr) -> bool {
-    matches!(expr, Expr::Literal(_))
+    matches!(expr.kind, ExprKind::Literal(_))
 }
 
 /// The declared affinity of `col_name`, or `Blob` when the column has no
@@ -63,13 +62,13 @@ fn column_affinity(schema: &TableSchema, col_name: &str) -> Affinity {
 /// bound that would be coerced can't be compared against raw key bytes
 /// and must fall back to the ordinary scan.
 pub(super) fn operand_matches_column_affinity(expr: &Expr, column_affinity: Affinity) -> bool {
-    let Expr::Literal(lit) = expr else {
+    let ExprKind::Literal(lit) = &expr.kind else {
         return false;
     };
     matches!(
         (lit, column_affinity),
         (
-            Literal::Int(_),
+            Literal::Integer(_),
             Affinity::Integer | Affinity::Numeric | Affinity::Real
         ) | (Literal::Float(_), Affinity::Real | Affinity::Numeric)
             | (Literal::Str(_), Affinity::Text)
@@ -104,14 +103,14 @@ struct Bound<'a> {
 /// walk from the top of the index, which needs a stop-check opcode this
 /// codegen doesn't have.
 fn as_lower_bound(expr: &Expr) -> Option<Bound<'_>> {
-    let Expr::BinaryOp(lhs, op, rhs) = expr else {
+    let ExprKind::Binary { op, lhs, rhs } = &expr.kind else {
         return None;
     };
     let (column, operand, inclusive) = match op {
-        BinOp::Gt => (where_col(lhs)?, rhs.as_ref(), false),
-        BinOp::Ge => (where_col(lhs)?, rhs.as_ref(), true),
-        BinOp::Lt => (where_col(rhs)?, lhs.as_ref(), false),
-        BinOp::Le => (where_col(rhs)?, lhs.as_ref(), true),
+        BinaryOp::Gt => (where_col(lhs)?, rhs.as_ref(), false),
+        BinaryOp::Ge => (where_col(lhs)?, rhs.as_ref(), true),
+        BinaryOp::Lt => (where_col(rhs)?, lhs.as_ref(), false),
+        BinaryOp::Le => (where_col(rhs)?, lhs.as_ref(), true),
         _ => return None,
     };
     Some(Bound {
@@ -124,14 +123,14 @@ fn as_lower_bound(expr: &Expr) -> Option<Bound<'_>> {
 /// `col < lit`/`col <= lit`/`lit > col`/`lit >= col` -- the shapes that
 /// can stop a forward walk.
 fn as_upper_bound(expr: &Expr) -> Option<Bound<'_>> {
-    let Expr::BinaryOp(lhs, op, rhs) = expr else {
+    let ExprKind::Binary { op, lhs, rhs } = &expr.kind else {
         return None;
     };
     let (column, operand, inclusive) = match op {
-        BinOp::Lt => (where_col(lhs)?, rhs.as_ref(), false),
-        BinOp::Le => (where_col(lhs)?, rhs.as_ref(), true),
-        BinOp::Gt => (where_col(rhs)?, lhs.as_ref(), false),
-        BinOp::Ge => (where_col(rhs)?, lhs.as_ref(), true),
+        BinaryOp::Lt => (where_col(lhs)?, rhs.as_ref(), false),
+        BinaryOp::Le => (where_col(lhs)?, rhs.as_ref(), true),
+        BinaryOp::Gt => (where_col(rhs)?, lhs.as_ref(), false),
+        BinaryOp::Ge => (where_col(rhs)?, lhs.as_ref(), true),
         _ => return None,
     };
     Some(Bound {
@@ -147,7 +146,7 @@ fn as_upper_bound(expr: &Expr) -> Option<Bound<'_>> {
 /// sqlite-rs's `BETWEEN`), or an equality (both bounds, both inclusive,
 /// the same literal).
 fn as_seek_bounds(where_expr: &Expr) -> Option<(Bound<'_>, Option<Bound<'_>>)> {
-    if let Expr::BinaryOp(lhs, BinOp::And, rhs) = where_expr {
+    if let ExprKind::Binary { op: BinaryOp::And, lhs, rhs } = &where_expr.kind {
         let lo = as_lower_bound(lhs)?;
         let hi = as_upper_bound(rhs)?;
         if !lo.column.eq_ignore_ascii_case(hi.column) {
@@ -155,7 +154,7 @@ fn as_seek_bounds(where_expr: &Expr) -> Option<(Bound<'_>, Option<Bound<'_>>)> {
         }
         return Some((lo, Some(hi)));
     }
-    if let Expr::BinaryOp(lhs, BinOp::Eq, rhs) = where_expr {
+    if let ExprKind::Binary { op: BinaryOp::Eq, lhs, rhs } = &where_expr.kind {
         let (column, operand) = match (where_col(lhs), where_col(rhs)) {
             (Some(column), _) => (column, rhs.as_ref()),
             (None, Some(column)) => (column, lhs.as_ref()),
@@ -178,10 +177,10 @@ fn as_seek_bounds(where_expr: &Expr) -> Option<(Bound<'_>, Option<Bound<'_>>)> {
 /// when no fast path applies. Factored out so [`super::eqp`] can
 /// inspect the decision without emitting anything.
 pub(super) fn seek_detail<'a>(
-    query: &'a Query,
+    query: &'a Select,
     schema: &TableSchema,
 ) -> Option<(&'a str, &'static str)> {
-    if query.distinct || !query.joins.is_empty() {
+    if super::is_distinct(query) || !super::joins_of(query).is_empty() {
         return None;
     }
     let (lo, hi) = as_seek_bounds(query.where_clause.as_ref()?)?;
@@ -197,8 +196,8 @@ pub(super) fn seek_detail<'a>(
     }
     find_leading_index(schema, lo.column)?;
     let is_equality = matches!(
-        query.where_clause.as_ref()?,
-        Expr::BinaryOp(_, BinOp::Eq, _)
+        query.where_clause.as_ref()?.kind,
+        ExprKind::Binary { op: BinaryOp::Eq, .. }
     );
     Some((lo.column, if is_equality { "=" } else { ">" }))
 }
@@ -212,7 +211,7 @@ pub(super) fn seek_detail<'a>(
 pub(super) fn try_compile_range_seek(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    query: &Query,
+    query: &Select,
     scope: &Scope,
     columns: &[String],
     sort_key: Option<SortKeyColumn>,
@@ -222,7 +221,7 @@ pub(super) fn try_compile_range_seek(
     limit: Option<LimitState>,
     end_label: Label,
 ) -> Result<bool> {
-    if query.distinct || !query.joins.is_empty() {
+    if super::is_distinct(query) || !super::joins_of(query).is_empty() {
         return Ok(false);
     }
     let Some(where_expr) = &query.where_clause else {

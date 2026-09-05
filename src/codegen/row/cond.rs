@@ -5,7 +5,7 @@ use super::{
     p4_coll_seq, CodegenError, CondTargets, Emitter, Label, NullTarget, RegAlloc, Result, Scope,
     Target, MAX_EXPR_DEPTH,
 };
-use crate::expr::{BinOp, Expr};
+use crate::parser::ast::{BinaryOp, Expr, ExprKind, UnaryOp};
 use crate::vm::row::{comparison_affinity, Collation, Instruction, Opcode};
 
 /// A rough, static cost class for an expression, used only to order
@@ -13,19 +13,40 @@ use crate::vm::row::{comparison_affinity, Collation, Instruction, Opcode};
 /// the pricier side more often -- never to change what a query returns.
 /// Lower is cheaper.
 fn cost_class(expr: &Expr) -> u8 {
-    match expr {
-        Expr::Literal(_) | Expr::Column(_) => 0,
-        Expr::Not(inner) | Expr::Neg(inner) => cost_class(inner).max(1),
-        Expr::IsNull { expr: inner, .. } => cost_class(inner).max(1),
-        Expr::BinaryOp(lhs, op, rhs) => {
+    match &expr.kind {
+        ExprKind::Literal(_) | ExprKind::Column { .. } | ExprKind::Param(_) => 0,
+        // Parentheses cost nothing of their own.
+        ExprKind::Paren(inner) => cost_class(inner),
+        ExprKind::Unary { expr: inner, .. } => cost_class(inner).max(1),
+        ExprKind::IsNull { expr: inner, .. } => cost_class(inner).max(1),
+        ExprKind::Is { lhs, rhs, .. } => cost_class(lhs).max(cost_class(rhs)).max(1),
+        ExprKind::Binary { op, lhs, rhs } => {
             let base = match op {
-                BinOp::And | BinOp::Or => 0,
+                BinaryOp::And | BinaryOp::Or => 0,
                 _ => 1,
             };
             cost_class(lhs).max(cost_class(rhs)).max(base)
         }
+        ExprKind::Between { expr: inner, lo, hi, .. } => cost_class(inner)
+            .max(cost_class(lo))
+            .max(cost_class(hi))
+            .max(1),
+        ExprKind::In { expr: inner, list, .. } => list
+            .iter()
+            .map(cost_class)
+            .fold(cost_class(inner), u8::max)
+            .max(1),
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            ..
+        } => cost_class(inner).max(cost_class(pattern)).max(2),
+        ExprKind::Cast { expr: inner, .. } | ExprKind::Collate { expr: inner, .. } => {
+            cost_class(inner).max(1)
+        }
+        ExprKind::Case { .. } | ExprKind::FunctionCall { .. } => 2,
         // A subquery scan is the priciest operand this compiler has.
-        Expr::InSubquery { .. } | Expr::Exists { .. } => 3,
+        ExprKind::InSubquery { .. } | ExprKind::Exists { .. } | ExprKind::Subquery(_) => 3,
     }
 }
 
@@ -61,13 +82,24 @@ pub(crate) fn compile_cond_depth(
     if depth > MAX_EXPR_DEPTH {
         return Err(CodegenError::TooDeep);
     }
-    match expr {
+    match &expr.kind {
+        // Parentheses are pure grouping; the tree shape already records
+        // what they meant.
+        ExprKind::Paren(inner) => compile_cond_depth(em, reg, scope, inner, targets, depth + 1),
+
         // Swapping the targets is right, but only once `on_null` comes
         // along for the ride -- flipping it keeps the unknown outcome
         // on the same address across the swap.
-        Expr::Not(inner) => compile_cond_depth(em, reg, scope, inner, targets.negate(), depth + 1),
+        ExprKind::Unary {
+            op: UnaryOp::Not,
+            expr: inner,
+        } => compile_cond_depth(em, reg, scope, inner, targets.negate(), depth + 1),
 
-        Expr::BinaryOp(lhs, BinOp::And, rhs) => {
+        ExprKind::Binary {
+            op: BinaryOp::And,
+            lhs,
+            rhs,
+        } => {
             let (first, second) = if rhs_is_cheaper(lhs, rhs) {
                 (rhs.as_ref(), lhs.as_ref())
             } else {
@@ -90,7 +122,11 @@ pub(crate) fn compile_cond_depth(
             Ok(())
         }
 
-        Expr::BinaryOp(lhs, BinOp::Or, rhs) => {
+        ExprKind::Binary {
+            op: BinaryOp::Or,
+            lhs,
+            rhs,
+        } => {
             let (first, second) = if rhs_is_cheaper(lhs, rhs) {
                 (rhs.as_ref(), lhs.as_ref())
             } else {
@@ -113,10 +149,15 @@ pub(crate) fn compile_cond_depth(
             Ok(())
         }
 
-        Expr::BinaryOp(lhs, op, rhs)
+        ExprKind::Binary { op, lhs, rhs }
             if matches!(
                 op,
-                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+                BinaryOp::Eq
+                    | BinaryOp::Ne
+                    | BinaryOp::Lt
+                    | BinaryOp::Le
+                    | BinaryOp::Gt
+                    | BinaryOp::Ge
             ) =>
         {
             let affinity =
@@ -126,7 +167,7 @@ pub(crate) fn compile_cond_depth(
             emit_compare_false_jump(em, *op, l, r, affinity, targets)
         }
 
-        Expr::IsNull {
+        ExprKind::IsNull {
             expr: inner,
             negated,
         } => {
@@ -147,14 +188,38 @@ pub(crate) fn compile_cond_depth(
             Ok(())
         }
 
-        Expr::InSubquery {
+        ExprKind::InSubquery {
             expr: lhs,
             subquery,
-        } => super::subquery::compile_in_subquery(em, reg, scope, lhs, subquery, false, targets),
+            negated,
+        } => super::subquery::compile_in_subquery(
+            em, reg, scope, lhs, subquery, *negated, targets,
+        ),
 
-        Expr::Exists { subquery, negated } => {
+        ExprKind::Exists { subquery, negated } => {
             super::subquery::compile_exists(em, reg, scope, subquery, *negated, targets)
         }
+
+        // Condition forms the AST can express but `expr::Expr` could
+        // not, so `codegen::row` has never compiled them (#147). Each
+        // is real follow-up work; failing soft with the construct named
+        // beats silently treating it as a truthy value, which the `_`
+        // arm below would otherwise do and get wrong.
+        ExprKind::Is { .. } => Err(CodegenError::Unsupported {
+            reason: "IS / IS NOT is not supported by codegen::row yet".to_string(),
+        }),
+        ExprKind::Between { .. } => Err(CodegenError::Unsupported {
+            reason: "BETWEEN is not supported by codegen::row yet".to_string(),
+        }),
+        ExprKind::In { .. } => Err(CodegenError::Unsupported {
+            reason: "IN (list) is not supported by codegen::row yet".to_string(),
+        }),
+        ExprKind::Like { glob, .. } => Err(CodegenError::Unsupported {
+            reason: format!(
+                "{} is not supported by codegen::row yet",
+                if *glob { "GLOB" } else { "LIKE" }
+            ),
+        }),
 
         // Any other expression used in boolean context (a bare column,
         // arithmetic, etc.): evaluate to a value and test truthiness.
@@ -242,7 +307,7 @@ pub(super) fn finish_bool(
 /// complement, so its false-jump primitive is a plain `Eq` jump.
 fn emit_compare_false_jump(
     em: &mut Emitter,
-    op: BinOp,
+    op: BinaryOp,
     lhs: i32,
     rhs: i32,
     affinity: crate::vm::row::Affinity,
@@ -250,12 +315,12 @@ fn emit_compare_false_jump(
 ) -> Result<()> {
     let p4 = p4_coll_seq(Collation::Binary, affinity);
     let resolved = match op {
-        BinOp::Ne => Some((Opcode::Eq, targets.negate())),
-        BinOp::Eq => Some((Opcode::Eq, targets)),
-        BinOp::Lt => Some((Opcode::Lt, targets)),
-        BinOp::Le => Some((Opcode::Le, targets)),
-        BinOp::Gt => Some((Opcode::Gt, targets)),
-        BinOp::Ge => Some((Opcode::Ge, targets)),
+        BinaryOp::Ne => Some((Opcode::Eq, targets.negate())),
+        BinaryOp::Eq => Some((Opcode::Eq, targets)),
+        BinaryOp::Lt => Some((Opcode::Lt, targets)),
+        BinaryOp::Le => Some((Opcode::Le, targets)),
+        BinaryOp::Gt => Some((Opcode::Gt, targets)),
+        BinaryOp::Ge => Some((Opcode::Ge, targets)),
         _ => None,
     };
     let Some((opcode, targets)) = resolved else {
