@@ -43,11 +43,9 @@
 //!   threaded as one mutable pass) has no place to hold. Both are pure
 //!   optimizations over the codegen here, so they are deferred rather
 //!   than scoped down.
-//! - **CTEs** (`WITH ... AS (...)`) and views: neither `Query` nor the
-//!   `column` parser has a `with_clause`, and a CTE referenced N times
-//!   needs the reference's structural-equality materialization cache
-//!   (`RegAlloc::cached_cte`/`OpenDup`) to avoid re-running the body per
-//!   reference. Follow-up ticket.
+//! - **Views** are not ported -- nothing in `crate::expr` represents a
+//!   stored view definition today, unlike a `WITH`-clause CTE (which
+//!   [`cte::expand_with_clause`] now does port -- db-core#143).
 //!
 //! [`flatten`] and [`pushdown`] are AST rewrites rather than codegen, and
 //! are ported at db-core's own scope: a single `FROM` item, no aliasing
@@ -56,11 +54,13 @@
 //! N `FROM` items) have no counterpart while `Query.from` holds exactly
 //! one item.
 
+pub mod cte;
 pub mod flatten;
 pub mod from_clause;
 pub mod pushdown;
 pub mod scalar;
 
+pub use cte::expand_with_clause;
 pub use flatten::flatten_from_subquery;
 pub use from_clause::{materialize_from_subquery, resolve_from_table_schema};
 pub use pushdown::push_down_where_predicates;

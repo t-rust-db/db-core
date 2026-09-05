@@ -985,6 +985,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         }
     }
 
@@ -1025,6 +1026,7 @@ mod tests {
                     order_by: None,
                     limit: None,
                     offset: None,
+                    with_clause: None,
                 }),
             }),
             distinct: false,
@@ -1033,6 +1035,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         };
         let src = render_semi_join(
             "column_rs",
@@ -1070,6 +1073,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         };
         let src = render_windowed(
             "column_rs",

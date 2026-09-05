@@ -253,6 +253,27 @@ impl From<String> for FromClause {
     }
 }
 
+/// One `name AS (query)` (or `name(col, ...) AS (query)`) entry in a
+/// `WITH` clause. Mirrors sqlite-rs's `parser::ast::CommonTableExpr`,
+/// minus `span` (this crate's `Query`/`Expr` carry no source-location
+/// info at all).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommonTableExpr {
+    pub name: String,
+    /// An explicit `(col, ...)` column-rename list, if the CTE was
+    /// declared with one.
+    pub columns: Option<Vec<String>>,
+    pub query: Box<Query>,
+}
+
+/// `WITH cte1 AS (...), cte2 AS (...) <query>` -- non-recursive only
+/// (`WITH RECURSIVE` has no representation here, same as sqlite-rs's
+/// parser rejects it ahead of this crate ever seeing it -- db-core#143).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WithClause {
+    pub ctes: Vec<CommonTableExpr>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub columns: Vec<SelectItem>,
@@ -275,6 +296,12 @@ pub struct Query {
     /// `parser::ast::Limit`, simplified to a plain value the same way
     /// `limit` above already is (sqlite-rs carries both as an `Expr`).
     pub offset: Option<usize>,
+    /// `WITH ... <query>` -- mirrors sqlite-rs's own `with_clause:
+    /// Option<WithClause>` on `parser::ast::Select` (db-core#143).
+    /// Expanded away by [`crate::codegen::row::subquery::expand_with_clause`]
+    /// before codegen ever sees it -- every `FROM` reference naming a
+    /// CTE becomes a [`FromClause::Subquery`] wrapping that CTE's query.
+    pub with_clause: Option<WithClause>,
 }
 
 /// A single `SET column = value` pair in an [`Update`].
@@ -340,6 +367,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         }
     }
 
@@ -485,6 +513,7 @@ mod tests {
             }),
             limit: Some(10),
             offset: None,
+            with_clause: None,
         };
 
         assert_eq!(q.from.name(), "customers");

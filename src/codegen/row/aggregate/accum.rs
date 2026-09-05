@@ -436,6 +436,7 @@ mod tests {
             order_by: None,
             limit: None,
             offset: None,
+            with_clause: None,
         };
         let slots = collect_aggregates(&query).unwrap();
         assert_eq!(slots.len(), 1);
