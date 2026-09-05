@@ -776,8 +776,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::SorterOpen => {
-            let key = match &instr.p4 {
-                P4::SortKey(key) => *key,
+            let keys = match &instr.p4 {
+                P4::SortKey(keys) => keys.clone(),
                 other => {
                     return Err(ExecError::MalformedInstruction {
                         opcode: "SorterOpen",
@@ -785,7 +785,15 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     })
                 }
             };
-            vm.open_cursor(instr.p1, Box::new(SorterCursor::new(key)))?;
+            let bound = if instr.p5 == 0 {
+                None
+            } else {
+                match vm.register(instr.p2)? {
+                    Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),
+                    _ => None,
+                }
+            };
+            vm.open_cursor(instr.p1, Box::new(SorterCursor::new(keys, bound)))?;
             Ok(Step::Next)
         }
         Opcode::SorterInsert => {
@@ -1524,12 +1532,12 @@ mod tests {
         // would normally feed Column, which isn't wired for sorters in
         // this minimal, single-key port).
         let mut vm = Vm::new();
-        let key = P4::SortKey(super::super::program::SortKeyColumn {
+        let key = P4::SortKey(vec![super::super::program::SortKeyColumn {
             index: 0,
             descending: false,
             collation: Collation::Binary,
             nulls_first: false,
-        });
+        }]);
         let program = Program::new(vec![
             /* 0 */ Instruction::with_p4(Opcode::SorterOpen, 0, 0, 0, key),
             /* 1 */ Instruction::new(Opcode::Integer, 30, 1, 0),
@@ -1566,14 +1574,60 @@ mod tests {
     }
 
     #[test]
-    fn sorter_data_before_sort_errors() {
+    fn sorter_open_reads_bound_from_register_when_p5_nonzero() {
+        // SorterOpen(p1=0 cursor, p2=1 bound register, p5=1) with
+        // register 1 holding an Integer(2), then insert three rows --
+        // only the two smallest should survive.
         let mut vm = Vm::new();
-        let key = P4::SortKey(super::super::program::SortKeyColumn {
+        let key = P4::SortKey(vec![super::super::program::SortKeyColumn {
             index: 0,
             descending: false,
             collation: Collation::Binary,
             nulls_first: false,
-        });
+        }]);
+        let mut instr = Instruction::with_p4(Opcode::SorterOpen, 0, 1, 0, key);
+        instr.p5 = 1;
+        let program = Program::new(vec![
+            /* 0 */ Instruction::new(Opcode::Integer, 2, 1, 0),
+            /* 1 */ instr,
+            /* 2 */ Instruction::new(Opcode::Integer, 30, 2, 0),
+            /* 3 */ Instruction::new(Opcode::MakeRecord, 2, 1, 3),
+            /* 4 */ Instruction::new(Opcode::SorterInsert, 0, 3, 0),
+            /* 5 */ Instruction::new(Opcode::Integer, 10, 2, 0),
+            /* 6 */ Instruction::new(Opcode::MakeRecord, 2, 1, 3),
+            /* 7 */ Instruction::new(Opcode::SorterInsert, 0, 3, 0),
+            /* 8 */ Instruction::new(Opcode::Integer, 20, 2, 0),
+            /* 9 */ Instruction::new(Opcode::MakeRecord, 2, 1, 3),
+            /* 10 */ Instruction::new(Opcode::SorterInsert, 0, 3, 0),
+            /* 11 */
+            Instruction::new(Opcode::SorterSort, 0, 15, 0),
+            /* 12 */ Instruction::new(Opcode::SorterData, 0, 4, 0),
+            /* 13 */ Instruction::new(Opcode::ResultRow, 4, 1, 0),
+            /* 14 */ Instruction::new(Opcode::SorterNext, 0, 12, 0),
+            /* 15 */ Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        let decoded: Vec<Value> = rows
+            .into_iter()
+            .map(|row| {
+                let Value::Blob(bytes) = &row[0] else {
+                    panic!("expected a Blob");
+                };
+                decode_record(bytes, TextEncoding::Utf8).unwrap()[0].clone()
+            })
+            .collect();
+        assert_eq!(decoded, vec![Value::Integer(10), Value::Integer(20)]);
+    }
+
+    #[test]
+    fn sorter_data_before_sort_errors() {
+        let mut vm = Vm::new();
+        let key = P4::SortKey(vec![super::super::program::SortKeyColumn {
+            index: 0,
+            descending: false,
+            collation: Collation::Binary,
+            nulls_first: false,
+        }]);
         let program = Program::new(vec![
             Instruction::with_p4(Opcode::SorterOpen, 0, 0, 0, key),
             Instruction::new(Opcode::SorterData, 0, 1, 0),

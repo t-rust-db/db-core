@@ -380,37 +380,54 @@ impl Cursor for EphemeralTableCursor {
 }
 
 /// `ORDER BY` buffering and sort, backing `Opcode::SorterOpen`/
-/// `Insert`/`Sort`/`Next`/`Data` (db-core#69). **Single-key, no
-/// LIMIT/bound** -- see this module's own doc and db-core#69's scope
-/// note; multi-key sort and bounded top-K maintenance are follow-ups.
+/// `Insert`/`Sort`/`Next`/`Data` (db-core#69, extended to multi-key and
+/// an optional top-K bound by db-core#87).
 ///
 /// Rows buffer as raw record bytes (`SorterData` hands them back
-/// unchanged) paired with their already-decoded sort-key value (so
-/// `SorterSort`'s comparisons never re-decode); the key column is
+/// unchanged) paired with their already-decoded sort-key values (so
+/// `SorterSort`'s comparisons never re-decode); each key column is
 /// decoded once at `sorter_insert` time via [`decode_column`], not the
 /// whole row, matching sqlite-rs's "decode only what comparisons need"
 /// design (its own `#507`/`#631`).
+///
+/// `bound`, when set (`Opcode::SorterOpen`'s `P5`/`P2`), caps the
+/// buffer at that many rows: once over it, the buffer is re-sorted and
+/// truncated to the bound, keeping only the best-so-far rows. This is
+/// a correctness-equivalent, simpler stand-in for sqlite-rs's
+/// heap-ordered O(log bound) eviction (`sorter.rs`'s `SorterState`) --
+/// still never buffers (past the next truncation) more than a small
+/// multiple of `bound` rows, just without that file's tighter
+/// per-insert bound.
 pub struct SorterCursor {
-    key: SortKeyColumn,
-    buffer: Vec<(Rc<[u8]>, Value)>,
+    keys: Vec<SortKeyColumn>,
+    buffer: Vec<(Rc<[u8]>, Vec<Value>)>,
     sorted: bool,
     pos: Option<usize>,
+    bound: Option<usize>,
 }
 
 impl SorterCursor {
-    pub fn new(key: SortKeyColumn) -> Self {
+    pub fn new(keys: Vec<SortKeyColumn>, bound: Option<usize>) -> Self {
         SorterCursor {
-            key,
+            keys,
             buffer: Vec::new(),
             sorted: false,
             pos: None,
+            bound,
         }
+    }
+
+    fn decode_keys(&self, blob: &[u8]) -> Vec<Value> {
+        self.keys
+            .iter()
+            .map(|k| decode_column(blob, k.index, TextEncoding::Utf8).unwrap_or(Value::Null))
+            .collect()
     }
 }
 
 /// The sort order two already-decoded key values fall in, per `key`'s
 /// direction/collation/NULLS placement.
-fn compare_keys(a: &Value, b: &Value, key: &SortKeyColumn) -> std::cmp::Ordering {
+fn compare_key(a: &Value, b: &Value, key: &SortKeyColumn) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {
         (Value::Null, Value::Null) => Ordering::Equal,
@@ -439,15 +456,27 @@ fn compare_keys(a: &Value, b: &Value, key: &SortKeyColumn) -> std::cmp::Ordering
     }
 }
 
+/// Multi-key comparison: the first non-equal key column decides the
+/// order, matching `ORDER BY col1, col2, ...`'s left-to-right tie-break.
+fn compare_keys(a: &[Value], b: &[Value], keys: &[SortKeyColumn]) -> std::cmp::Ordering {
+    for (i, key) in keys.iter().enumerate() {
+        let ord = compare_key(&a[i], &b[i], key);
+        if ord != std::cmp::Ordering::Equal {
+            return ord;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
 impl Cursor for SorterCursor {
     /// Sorts the buffer (if not already sorted since the last insert)
     /// and positions at the first row -- `SorterSort`/`Sort`'s dispatch
     /// target.
     fn rewind(&mut self) -> bool {
         if !self.sorted {
-            let key = self.key;
+            let keys = self.keys.clone();
             self.buffer
-                .sort_by(|(_, a), (_, b)| compare_keys(a, b, &key));
+                .sort_by(|(_, a), (_, b)| compare_keys(a, b, &keys));
             self.sorted = true;
         }
         self.pos = if self.buffer.is_empty() {
@@ -487,10 +516,18 @@ impl Cursor for SorterCursor {
     }
 
     fn sorter_insert(&mut self, blob: Rc<[u8]>) -> bool {
-        let key_value =
-            decode_column(&blob, self.key.index, TextEncoding::Utf8).unwrap_or(Value::Null);
-        self.buffer.push((blob, key_value));
+        let key_values = self.decode_keys(&blob);
+        self.buffer.push((blob, key_values));
         self.sorted = false;
+        if let Some(bound) = self.bound {
+            if self.buffer.len() > bound {
+                let keys = self.keys.clone();
+                self.buffer
+                    .sort_by(|(_, a), (_, b)| compare_keys(a, b, &keys));
+                self.buffer.truncate(bound);
+                self.sorted = true;
+            }
+        }
         true
     }
 
@@ -617,7 +654,7 @@ mod tests {
 
     #[test]
     fn sorter_cursor_sorts_buffered_rows_on_rewind() {
-        let mut c = SorterCursor::new(ascending_key(0));
+        let mut c = SorterCursor::new(vec![ascending_key(0)], None);
         for v in [30i64, 10, 20] {
             let blob =
                 super::super::record::encode_record(&[Value::Integer(v)], TextEncoding::Utf8);
@@ -640,7 +677,7 @@ mod tests {
             collation: super::super::value::Collation::Binary,
             nulls_first: true,
         };
-        let mut c = SorterCursor::new(key);
+        let mut c = SorterCursor::new(vec![key], None);
         for v in [Value::Integer(5), Value::Null, Value::Integer(-7)] {
             let blob = super::super::record::encode_record(&[v], TextEncoding::Utf8);
             c.sorter_insert(blob.into());
@@ -656,14 +693,14 @@ mod tests {
 
     #[test]
     fn empty_sorter_rewind_reports_no_row() {
-        let mut c = SorterCursor::new(ascending_key(0));
+        let mut c = SorterCursor::new(vec![ascending_key(0)], None);
         assert!(!c.rewind());
         assert!(c.current_blob().is_none());
     }
 
     #[test]
     fn sorter_current_blob_returns_the_full_encoded_row() {
-        let mut c = SorterCursor::new(ascending_key(0));
+        let mut c = SorterCursor::new(vec![ascending_key(0)], None);
         let blob = super::super::record::encode_record(
             &[Value::Integer(1), Value::Text("payload".to_string().into())],
             TextEncoding::Utf8,
@@ -671,6 +708,57 @@ mod tests {
         c.sorter_insert(blob.clone().into());
         c.rewind();
         assert_eq!(c.current_blob(), Some(Value::Blob(blob.into())));
+    }
+
+    #[test]
+    fn sorter_cursor_multi_key_breaks_ties_on_second_column() {
+        let mut c = SorterCursor::new(vec![ascending_key(0), ascending_key(1)], None);
+        for (a, b) in [(1i64, 20i64), (1, 10), (0, 5)] {
+            let blob = super::super::record::encode_record(
+                &[Value::Integer(a), Value::Integer(b)],
+                TextEncoding::Utf8,
+            );
+            c.sorter_insert(blob.into());
+        }
+        assert!(c.rewind());
+        assert_eq!(
+            (c.column(0), c.column(1)),
+            (Value::Integer(0), Value::Integer(5))
+        );
+        assert!(c.next());
+        assert_eq!(
+            (c.column(0), c.column(1)),
+            (Value::Integer(1), Value::Integer(10))
+        );
+        assert!(c.next());
+        assert_eq!(
+            (c.column(0), c.column(1)),
+            (Value::Integer(1), Value::Integer(20))
+        );
+        assert!(!c.next());
+    }
+
+    #[test]
+    fn sorter_cursor_bound_keeps_only_the_best_rows() {
+        let mut c = SorterCursor::new(vec![ascending_key(0)], Some(2));
+        for v in [5i64, 1, 4, 2, 3] {
+            let blob =
+                super::super::record::encode_record(&[Value::Integer(v)], TextEncoding::Utf8);
+            c.sorter_insert(blob.into());
+        }
+        assert!(c.rewind());
+        assert_eq!(c.column(0), Value::Integer(1));
+        assert!(c.next());
+        assert_eq!(c.column(0), Value::Integer(2));
+        assert!(!c.next());
+    }
+
+    #[test]
+    fn sorter_cursor_zero_bound_keeps_no_rows() {
+        let mut c = SorterCursor::new(vec![ascending_key(0)], Some(0));
+        let blob = super::super::record::encode_record(&[Value::Integer(1)], TextEncoding::Utf8);
+        c.sorter_insert(blob.into());
+        assert!(!c.rewind());
     }
 
     #[test]

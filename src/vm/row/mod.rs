@@ -32,9 +32,9 @@
 //!   fixture), [`cursor::EphemeralTableCursor`] (a real,
 //!   `Opcode::Insert`-writable in-memory table backing `Opcode::
 //!   OpenEphemeral`'s table-mode cursor), and [`cursor::SorterCursor`]
-//!   (db-core#69, backing `Opcode::SorterOpen`/`Insert`/`Sort`/`Next`/
-//!   `Data` -- **single-key, no LIMIT/bound**; multi-key sort and
-//!   bounded top-K maintenance are follow-ups).
+//!   (db-core#69, extended by db-core#87 to multi-key `ORDER BY` and an
+//!   optional `LIMIT`-derived top-K bound), backing `Opcode::
+//!   SorterOpen`/`Insert`/`Sort`/`Next`/`Data`.
 //! - [`record`] -- on-disk record encoding/decoding (`encode_record`/
 //!   `decode_record`/`decode_column`), backing `Opcode::MakeRecord`,
 //!   ephemeral-cursor `Insert`/`Column`, and sorter key decoding.
@@ -59,8 +59,8 @@
 //!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
 //! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
-//! and index-mode ephemeral cursors, DDL, real transactions, multi-key/
-//! bounded sorting, `GROUP BY` hash aggregation, `like`/`glob`/`substr`/
+//! and index-mode ephemeral cursors, DDL, real transactions,
+//! `GROUP BY` hash aggregation, `like`/`glob`/`substr`/
 //! `trim`/`replace`, `EXPLAIN`/`PRAGMA` rendering. `Opcode` already
 //! lists every variant sqlite-rs has (parity of identity); dispatch
 //! for the rest lands in later phases (tracked against db-core#18).
