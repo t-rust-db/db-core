@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.44.2] - 2026-09-05
+
+### Fixed
+
+- **`ORDER BY` may reference a `SELECT`-list aggregate** (#131) -- `ORDER BY COUNT(x) DESC` previously failed with `expected a column reference, found FunctionCall {...}` because `parser::column`'s `ORDER BY` lowering only accepted a bare/qualified column name. `AggFunc::name()` is now the single source of truth for an aggregate's canonical label, shared by `codegen::batch`'s `SELECT`-list rendering and the new `ORDER BY` lowering, which accepts an aggregate call (no `DISTINCT`, no `OVER`) matching a known `AggFunc` and renders it to the identical label a matching `SelectItem::Agg` produces; `codegen::batch::select_output_index` now resolves `ORDER BY` against any `SELECT`-list item's rendered label, not just `SelectItem::Column`. Arbitrary non-aggregate expressions, ordinal-position `ORDER BY N`, and multi-key `ORDER BY` remain out of scope, left open on #131.
+
 ## [0.44.0] - 2026-09-05
 
 ### Added
