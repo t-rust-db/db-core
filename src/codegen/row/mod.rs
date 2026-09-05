@@ -26,12 +26,20 @@
 //! [`TableSchema`] here is a placeholder: just enough (declared column
 //! types, one optional rowid-alias column) for [`value::compile_value`]'s
 //! column-read/affinity logic to be correct. It is not a real catalog --
-//! #92/#95 are expected to replace it with one once joins/subqueries
-//! need multi-table resolution.
+//! #101/#102 are expected to replace it with one once a real join needs
+//! multi-table resolution.
+//!
+//! [`select::compile_select`] (db-core#92) covers a single-table scan
+//! plus projection (bare columns, `SELECT *`) plus `WHERE` plus
+//! `LIMIT`. Joins and `ORDER BY` are deferred to #102 (mechanical
+//! single-join/sorter execution); the join-order/access-path chooser
+//! and `FULL OUTER` to #101 (needs `planner::Stats`, which db-core
+//! doesn't have yet); `GROUP BY`/aggregation to #93.
 
 #![forbid(unsafe_code)]
 
 pub mod cond;
+pub mod select;
 pub mod value;
 
 use std::collections::HashMap;
@@ -40,6 +48,7 @@ use std::fmt;
 use crate::vm::row::{Instruction, Opcode, P4};
 
 pub use cond::compile_cond;
+pub use select::compile_select;
 pub use value::compile_value;
 
 /// The nesting bound this compiler enforces while walking an [`Expr`]
