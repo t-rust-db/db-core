@@ -19,6 +19,31 @@
 
 use super::value::Collation;
 
+/// `BEGIN`'s locking mode, carried through `Opcode::Transaction`'s `p1`
+/// (db-core#97, mirroring sqlite-rs's `vdbe::control` constants).
+pub const TRANSACTION_MODE_DEFERRED: i32 = 0;
+/// `BEGIN IMMEDIATE`.
+pub const TRANSACTION_MODE_IMMEDIATE: i32 = 1;
+/// `BEGIN EXCLUSIVE`.
+pub const TRANSACTION_MODE_EXCLUSIVE: i32 = 2;
+
+/// `PRAGMA journal_mode`'s two supported values, carried through
+/// `Opcode::SetJournalMode`'s `p1` (db-core#97).
+pub const JOURNAL_MODE_DELETE: i32 = 0;
+/// `PRAGMA journal_mode = WAL`.
+pub const JOURNAL_MODE_WAL: i32 = 1;
+
+/// `PRAGMA synchronous`'s supported levels, carried through
+/// `Opcode::Synchronous`'s `p1` (db-core#97).
+pub const SYNCHRONOUS_OFF: i32 = 0;
+/// `PRAGMA synchronous = NORMAL`.
+pub const SYNCHRONOUS_NORMAL: i32 = 1;
+/// `PRAGMA synchronous = FULL`.
+pub const SYNCHRONOUS_FULL: i32 = 2;
+/// Sentinel `p1` for the bare `PRAGMA synchronous` query form (no
+/// level to set, just report the current one).
+pub const SYNCHRONOUS_QUERY: i32 = -1;
+
 /// sqlite-rs's VDBE opcode set, by category. See sqlite-rs's
 /// `src/vdbe/program.rs` for the authoritative per-opcode semantics
 /// this is ported from.
@@ -322,6 +347,86 @@ pub enum P4 {
     /// for multi-key sort; this ticket narrows to one column, per its
     /// own scope note. Multi-key is a follow-up.
     SortKey(SortKeyColumn),
+    /// `CreateTable` (db-core#97): the new table's name and verbatim
+    /// `sqlite_master.sql` text.
+    CreateTable {
+        /// The new table's name.
+        name: String,
+        /// The verbatim `sqlite_master.sql` text.
+        sql: String,
+    },
+    /// `CreateView` (db-core#97): same shape as `CreateTable`'s payload,
+    /// its own variant so a `Program`'s P4 operand names the DDL kind
+    /// it actually came from.
+    CreateView {
+        /// The new view's name.
+        name: String,
+        /// The verbatim `sqlite_master.sql` text.
+        sql: String,
+    },
+    /// `DropTable` (db-core#97): the target table's name/root page,
+    /// plus every index on it (`(name, root_page)`) to cascade-drop.
+    DropTable {
+        /// The target table's name.
+        name: String,
+        /// The target table's root page.
+        root_page: u32,
+        /// Every index on the table, as `(name, root_page)`.
+        indexes: Vec<(String, u32)>,
+    },
+    /// `CreateIndex` (db-core#97): the new index's name, its target
+    /// table's name/root page, verbatim `sqlite_master.sql` text, the
+    /// indexed columns' 0-based positions, and the `UNIQUE` flag.
+    CreateIndex {
+        /// The new index's name.
+        name: String,
+        /// The target table's name.
+        table_name: String,
+        /// The target table's root page.
+        table_root_page: u32,
+        /// The verbatim `sqlite_master.sql` text.
+        sql: String,
+        /// The indexed columns' 0-based positions in table-column order.
+        column_indices: Vec<usize>,
+        /// Whether the index enforces a `UNIQUE` constraint.
+        unique: bool,
+    },
+    /// `DropIndex` (db-core#97): the target index's name/root page.
+    DropIndex {
+        /// The target index's name.
+        name: String,
+        /// The target index's root page.
+        root_page: u32,
+    },
+    /// `Analyze` (db-core#97): every table `ANALYZE` should populate
+    /// stats for -- baked at codegen time from the schema catalog.
+    Analyze {
+        /// Every table (and its indexes) `ANALYZE` should populate
+        /// stats for.
+        targets: Vec<AnalyzeTarget>,
+    },
+}
+
+/// One table `ANALYZE` (db-core#97) populates `sqlite_stat1` for: its
+/// name and table-b-tree root page, plus every index on it (name + root
+/// page) to walk for index-level stats.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnalyzeTarget {
+    /// The table's name.
+    pub table_name: String,
+    /// The table b-tree's root page.
+    pub table_root_page: u32,
+    /// The table's indexes, each walked for index-level stats.
+    pub indexes: Vec<AnalyzeIndexTarget>,
+}
+
+/// One index `ANALYZE` (db-core#97) walks to compute `avg_eq` for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnalyzeIndexTarget {
+    /// The index's name.
+    pub index_name: String,
+    /// The index b-tree's root page.
+    pub root_page: u32,
 }
 
 /// One `ORDER BY` sort key: which record column to compare, its

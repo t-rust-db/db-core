@@ -35,11 +35,44 @@
 //! single-join/sorter execution); the join-order/access-path chooser
 //! and `FULL OUTER` to #101 (needs `planner::Stats`, which db-core
 //! doesn't have yet); `GROUP BY`/aggregation to #93.
+//!
+//! **#97 adds the DDL/transaction/PRAGMA/ANALYZE slice**: [`ddl`]
+//! (`CREATE`/`DROP TABLE`/`INDEX`/`VIEW`), [`transaction`]
+//! (`BEGIN`/`COMMIT`/`ROLLBACK`), [`pragma`] (`journal_mode`/
+//! `integrity_check`/`synchronous`), [`analyze`] (`ANALYZE` into
+//! `sqlite_stat1`), and [`dispatch`] (the statement dispatcher). Each of
+//! these compiles to a single procedural opcode at exec time -- no
+//! per-row cursor work, unlike the expression-driven DML codegen #91
+//! started -- so [`TableSchema`] grows `root_page`/`indexes` here
+//! (via the new [`IndexSchema`]) purely to bake root pages/names into
+//! `P4` at codegen time, the same way sqlite-rs's schema catalog does.
+//!
+//! [`dispatch::compile_statement`] only routes the statement kinds this
+//! module (and #91's expr slice) actually have codegen for --
+//! `BEGIN`/`COMMIT`/`ROLLBACK`/`PRAGMA`/`ANALYZE`/`CREATE TABLE`/
+//! `CREATE INDEX`/`CREATE VIEW`/`DROP TABLE`/`DROP INDEX`. sqlite-rs's
+//! own `dispatch.rs` also routes `INSERT`/`UPDATE`/`DELETE`/`SELECT`,
+//! but those have no codegen counterpart in `db-core` yet, so routing
+//! them is deferred to whichever sub-ticket of #20 ports that codegen.
+//!
+//! **`planner.rs` (sqlite-rs's 386-line cost model) is deliberately not
+//! ported here yet**, even though `codegen::row::planner` is its
+//! natural home (per #97's own note): it decodes `sqlite_stat1` via
+//! real b-tree/page-source types (`crate::btree`/`crate::vfs` in
+//! sqlite-rs) and feeds a join-access chooser (`join_access`) that
+//! db-core has neither of yet (storage integration is #18's `vm-row`
+//! feature; joins are #92). Porting it now would mean vendoring dead
+//! code with no caller. Tracked as a follow-up once both land.
 
 #![forbid(unsafe_code)]
 
+pub mod analyze;
 pub mod cond;
+pub mod ddl;
+pub mod dispatch;
+pub mod pragma;
 pub mod select;
+pub mod transaction;
 pub mod value;
 
 use std::collections::HashMap;
@@ -47,8 +80,15 @@ use std::fmt;
 
 use crate::vm::row::{Instruction, Opcode, P4};
 
+pub use analyze::compile_analyze;
 pub use cond::compile_cond;
+pub use ddl::{
+    compile_create_index, compile_create_table, compile_create_view, compile_drop_index,
+    compile_drop_table,
+};
+pub use pragma::compile_pragma;
 pub use select::compile_select;
+pub use transaction::{compile_begin, compile_commit, compile_rollback};
 pub use value::compile_value;
 
 /// The nesting bound this compiler enforces while walking an [`Expr`]
@@ -284,6 +324,12 @@ pub struct TableSchema {
     /// it must emit `Opcode::Rowid` rather than `Opcode::Column` (see
     /// [`value::emit_column_read`]'s doc comment).
     pub rowid_alias: Option<usize>,
+    /// The table b-tree's root page (db-core#97's DDL/ANALYZE slice
+    /// needs this to bake root pages into `P4` at codegen time; the
+    /// expr-only slice from #91 never read it).
+    pub root_page: u32,
+    /// Every index on this table (db-core#97).
+    pub indexes: Vec<IndexSchema>,
 }
 
 impl TableSchema {
@@ -292,6 +338,17 @@ impl TableSchema {
             .iter()
             .position(|c| c.eq_ignore_ascii_case(name))
     }
+}
+
+/// A placeholder index descriptor (db-core#97) -- just enough
+/// (`name`/`root_page`) for `ddl`/`analyze` to bake index identity into
+/// `P4` at codegen time. Not a real catalog entry: no column list,
+/// collation, or partial-index predicate, since nothing here needs to
+/// resolve those yet.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct IndexSchema {
+    pub name: String,
+    pub root_page: u32,
 }
 
 /// The single table a query's column references resolve against --
@@ -363,6 +420,8 @@ mod tests {
             columns: vec!["a".into(), "b".into()],
             column_types: vec![String::new(), String::new()],
             rowid_alias: None,
+            root_page: 0,
+            indexes: vec![],
         };
         let scope = Scope::single(schema, 3);
         assert_eq!(scope.resolve("b"), Ok((3, 1)));
