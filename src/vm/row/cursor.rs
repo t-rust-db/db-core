@@ -7,11 +7,13 @@
 //! `db-storage::row::btree::TableCursor` wiring is a follow-up (the
 //! largest remaining sqlite-rs VDBE file, `cursor.rs`, 4,498 lines).
 
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
 use super::aggregate::{AggState, AggregateError};
 use super::program::{GroupKeyColumn, SortKeyColumn};
-use super::record::{decode_column, decode_record};
+use super::record::{decode_column, decode_record, encode_record};
 use super::value::{Collation, TextEncoding, Value};
 
 /// A forward-scanning, row-at-a-time cursor over a table's rows.
@@ -184,7 +186,12 @@ pub trait Cursor {
     /// join plan builds over one side's rows in memory, never touching
     /// storage. Returns `false` if this cursor kind isn't an
     /// automatic-index cursor.
-    fn auto_index_insert(&mut self, _key: Vec<Value>, _rowid: i64) -> bool {
+    fn auto_index_insert(
+        &mut self,
+        _key: Vec<Value>,
+        _collations: &[Collation],
+        _rowid: i64,
+    ) -> bool {
         false
     }
 
@@ -192,7 +199,7 @@ pub trait Cursor {
     /// `key` (`Opcode::AutoIndexSeek`). Returns `false` (and leaves no
     /// current entry) on a miss, or if this cursor kind isn't an
     /// automatic-index cursor.
-    fn auto_index_seek(&mut self, _key: &[Value]) -> bool {
+    fn auto_index_seek(&mut self, _key: &[Value], _collations: &[Collation]) -> bool {
         false
     }
 
@@ -208,7 +215,7 @@ pub trait Cursor {
     /// `key` exactly (`Opcode::SeekIndexEq`/`Found`/`NoConflict`,
     /// db-core#126). Returns `false` (and leaves no current entry) on a
     /// miss, or if this cursor kind isn't an index cursor.
-    fn seek_index_eq(&mut self, _key: &[Value]) -> bool {
+    fn seek_index_eq(&mut self, _key: &[Value], _collations: &[Collation]) -> bool {
         false
     }
 
@@ -216,14 +223,14 @@ pub trait Cursor {
     /// `key` (`Opcode::SeekIndexGE`, db-core#126). Returns `false` (and
     /// leaves no current entry) if no such entry exists, or this cursor
     /// kind isn't an index cursor.
-    fn seek_index_ge(&mut self, _key: &[Value]) -> bool {
+    fn seek_index_ge(&mut self, _key: &[Value], _collations: &[Collation]) -> bool {
         false
     }
 
     /// Compares this index cursor's current entry's key against `key`
     /// (`Opcode::IdxCompareGT`/`IdxLE`, db-core#126). `None` if this
     /// cursor kind isn't an index cursor, or there is no current entry.
-    fn idx_compare(&self, _key: &[Value]) -> Option<std::cmp::Ordering> {
+    fn idx_compare(&self, _key: &[Value], _collations: &[Collation]) -> Option<std::cmp::Ordering> {
         None
     }
 
@@ -235,6 +242,49 @@ pub trait Cursor {
     /// cursor, or there is no current entry.
     fn idx_rowid(&self) -> Option<i64> {
         None
+    }
+
+    /// `Found`/`NoConflict` on an ephemeral index (sqlite-rs
+    /// `CursorSlot::Ephemeral`): membership of the normalized, encoded
+    /// key, remembering it as the cursor's `last_key`. `None` means "not
+    /// an ephemeral index" and the dispatcher falls back to
+    /// [`Self::seek_index_eq`] (#134).
+    fn found(&mut self, _key: &[Value], _collations: &[Collation]) -> Option<bool> {
+        None
+    }
+
+    /// `IdxInsert` on an ephemeral index: store `stored` (the key columns
+    /// plus `p5` trailing payload columns) under the normalized, encoded
+    /// `key`. `None` means "not an ephemeral index" and the dispatcher
+    /// falls back to [`Self::idx_insert`] (#134).
+    fn ephemeral_idx_insert(
+        &mut self,
+        _key: &[Value],
+        _collations: &[Collation],
+        _stored: Vec<Value>,
+    ) -> Option<bool> {
+        None
+    }
+
+    /// `Insert` with the exact record bytes `MakeRecord` produced, so a
+    /// storage-backed cursor writes them byte-for-byte instead of
+    /// re-encoding decoded values. `None` means "decode and use
+    /// [`Self::insert`]" (the in-memory cursors) (#134).
+    fn insert_payload(&mut self, _rowid: i64, _payload: &Rc<[u8]>) -> Option<bool> {
+        None
+    }
+
+    /// `OpenDup`: a second cursor over the same underlying rows with a
+    /// fresh position (sqlite-rs: ephemeral tables only). `None` means
+    /// the dispatcher re-opens through the cursor factory instead (#134).
+    fn dup(&self) -> Option<Box<dyn Cursor>> {
+        None
+    }
+
+    /// First value `Sequence` hands out for this cursor kind — 1 for an
+    /// ephemeral table, 0 otherwise (sqlite-rs) (#134).
+    fn sequence_base(&self) -> i64 {
+        0
     }
 }
 
@@ -363,15 +413,31 @@ impl Cursor for InMemoryCursor {
 /// already-updated one. Tracking `current_rowid` instead and searching
 /// for "the smallest stored rowid greater than this" on every `next()`
 /// reproduces the b-tree cursor's actual invariant with a `Vec`.
-#[derive(Default)]
+/// One materialized row of an ephemeral table: `(rowid, values)`.
+type EphemeralRow = (i64, Vec<Value>);
+/// Rows shared between an ephemeral table and its `OpenDup` siblings.
+type SharedRows = Rc<RefCell<Vec<EphemeralRow>>>;
+
 pub struct EphemeralTableCursor {
-    /// Sorted ascending by rowid (the first element of each tuple).
-    rows: Vec<(i64, Vec<Value>)>,
+    /// Sorted ascending by rowid (the first element of each tuple);
+    /// shared with any `OpenDup` sibling (sqlite-rs
+    /// `EphemeralTableState::rows`, #134).
+    rows: SharedRows,
     /// The rowid last positioned at, kept even after that row is
     /// deleted (a fence-post `next()`/`prev()` resume from) --
     /// [`Self::at_row`] says whether it still names a live row.
     current_rowid: Option<i64>,
     at_row: bool,
+}
+
+impl Default for EphemeralTableCursor {
+    fn default() -> Self {
+        EphemeralTableCursor {
+            rows: Rc::new(RefCell::new(Vec::new())),
+            current_rowid: None,
+            at_row: false,
+        }
+    }
 }
 
 impl EphemeralTableCursor {
@@ -380,67 +446,64 @@ impl EphemeralTableCursor {
     }
 
     fn row_index(&self, rowid: i64) -> Option<usize> {
-        self.rows.binary_search_by_key(&rowid, |(r, _)| *r).ok()
+        self.rows
+            .borrow()
+            .binary_search_by_key(&rowid, |(r, _)| *r)
+            .ok()
+    }
+
+    fn position_at(&mut self, rowid: Option<i64>) -> bool {
+        match rowid {
+            Some(rowid) => {
+                self.current_rowid = Some(rowid);
+                self.at_row = true;
+                true
+            }
+            None => {
+                self.at_row = false;
+                false
+            }
+        }
     }
 }
 
 impl Cursor for EphemeralTableCursor {
     fn rewind(&mut self) -> bool {
-        match self.rows.first() {
-            Some((rowid, _)) => {
-                self.current_rowid = Some(*rowid);
-                self.at_row = true;
-                true
-            }
-            None => {
-                self.current_rowid = None;
-                self.at_row = false;
-                false
-            }
+        let first = self.rows.borrow().first().map(|(r, _)| *r);
+        if first.is_none() {
+            self.current_rowid = None;
         }
+        self.position_at(first)
     }
 
     fn next(&mut self) -> bool {
         let after = self.current_rowid.unwrap_or(i64::MIN);
-        let pos = self.rows.partition_point(|(r, _)| *r <= after);
-        match self.rows.get(pos) {
-            Some((rowid, _)) => {
-                self.current_rowid = Some(*rowid);
-                self.at_row = true;
-                true
-            }
-            None => {
-                self.at_row = false;
-                false
-            }
-        }
+        let found = {
+            let rows = self.rows.borrow();
+            let pos = rows.partition_point(|(r, _)| *r <= after);
+            rows.get(pos).map(|(r, _)| *r)
+        };
+        self.position_at(found)
     }
 
     fn last(&mut self) -> bool {
-        match self.rows.last() {
-            Some((rowid, _)) => {
-                self.current_rowid = Some(*rowid);
-                self.at_row = true;
-                true
-            }
-            None => {
-                self.current_rowid = None;
-                self.at_row = false;
-                false
-            }
+        let last = self.rows.borrow().last().map(|(r, _)| *r);
+        if last.is_none() {
+            self.current_rowid = None;
         }
+        self.position_at(last)
     }
 
     fn prev(&mut self) -> bool {
         let before = self.current_rowid.unwrap_or(i64::MAX);
-        let pos = self.rows.partition_point(|(r, _)| *r < before);
-        if pos == 0 {
-            self.at_row = false;
-            return false;
-        }
-        self.current_rowid = Some(self.rows[pos - 1].0);
-        self.at_row = true;
-        true
+        let found = {
+            let rows = self.rows.borrow();
+            let pos = rows.partition_point(|(r, _)| *r < before);
+            pos.checked_sub(1)
+                .and_then(|p| rows.get(p))
+                .map(|(r, _)| *r)
+        };
+        self.position_at(found)
     }
 
     fn column(&self, col: usize) -> Value {
@@ -455,7 +518,12 @@ impl Cursor for EphemeralTableCursor {
             reason = "at_row true implies current_rowid still names a live row"
         )]
         let idx = self.row_index(rowid).expect("current row vanished");
-        self.rows[idx].1.get(col).cloned().unwrap_or(Value::Null)
+        self.rows
+            .borrow()
+            .get(idx)
+            .and_then(|(_, values)| values.get(col))
+            .cloned()
+            .unwrap_or(Value::Null)
     }
 
     fn rowid(&self) -> i64 {
@@ -468,25 +536,20 @@ impl Cursor for EphemeralTableCursor {
     }
 
     fn seek(&mut self, rowid: i64) -> bool {
-        match self.row_index(rowid) {
-            Some(_) => {
-                self.current_rowid = Some(rowid);
-                self.at_row = true;
-                true
-            }
-            None => {
-                self.at_row = false;
-                false
-            }
-        }
+        let hit = self.row_index(rowid).map(|_| rowid);
+        self.position_at(hit)
     }
 
     fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
-        let pos = self.rows.partition_point(|(r, _)| *r < rowid);
-        if self.rows.get(pos).is_some_and(|(r, _)| *r == rowid) {
-            self.rows[pos].1 = values;
+        let mut rows = self.rows.borrow_mut();
+        let pos = rows.partition_point(|(r, _)| *r < rowid);
+        if let Some(existing) = rows.get_mut(pos).filter(|(r, _)| *r == rowid) {
+            existing.1 = values;
         } else {
-            self.rows.insert(pos, (rowid, values));
+            if rows.len() >= MAX_EPHEMERAL_ROWS {
+                return false;
+            }
+            rows.insert(pos, (rowid, values));
         }
         true
     }
@@ -503,35 +566,156 @@ impl Cursor for EphemeralTableCursor {
         let Some(idx) = self.row_index(rowid) else {
             return false;
         };
-        self.rows.remove(idx);
+        self.rows.borrow_mut().remove(idx);
         self.at_row = false;
         true
     }
 
     fn next_rowid(&self) -> i64 {
         self.rows
+            .borrow()
             .last()
             .map_or(0, |(rowid, _)| *rowid)
             .saturating_add(1)
     }
 
-    /// Doubles as an index cursor for `db-core#96`'s secondary-index
-    /// maintenance: `key` (indexed columns + rowid) is appended as an
-    /// ordinary row under a placeholder rowid of `0`, bypassing the
-    /// rowid-sort/positioning machinery above entirely -- index
-    /// cursors are never scanned (`rewind`/`next`) in this ticket's
-    /// scope (that's `#94`'s index-scan codegen), only inserted into
-    /// and deleted from by key equality.
     fn idx_insert(&mut self, key: Vec<Value>) -> bool {
-        self.rows.push((0, key));
+        self.rows.borrow_mut().push((0, key));
         true
     }
 
     fn idx_delete(&mut self, key: &[Value]) -> bool {
-        let Some(pos) = self.rows.iter().position(|(_, values)| values == key) else {
+        let mut rows = self.rows.borrow_mut();
+        let Some(pos) = rows.iter().position(|(_, values)| values == key) else {
             return false;
         };
-        self.rows.remove(pos);
+        rows.remove(pos);
+        true
+    }
+
+    fn dup(&self) -> Option<Box<dyn Cursor>> {
+        Some(Box::new(EphemeralTableCursor {
+            rows: Rc::clone(&self.rows),
+            current_rowid: None,
+            at_row: false,
+        }))
+    }
+
+    fn sequence_base(&self) -> i64 {
+        1
+    }
+}
+
+/// Row-count ceiling on an in-memory ephemeral table/index (sqlite-rs
+/// #269): neither spills to disk, so an unbounded subquery could otherwise
+/// grow memory without limit.
+pub const MAX_EPHEMERAL_ROWS: usize = 1_000_000;
+
+/// Folds `values` under `collations` the way sqlite-rs does before
+/// encoding an ephemeral-index or auto-index key, so NOCASE/RTRIM keys
+/// compare equal by byte comparison of the encoded record (#134).
+pub fn normalize_key_values(values: &[Value], collations: &[Collation]) -> Vec<Value> {
+    values
+        .iter()
+        .zip(
+            collations
+                .iter()
+                .chain(std::iter::repeat(&Collation::Binary)),
+        )
+        .map(|(v, collation)| match (v, collation) {
+            (Value::Text(s), Collation::NoCase) => {
+                Value::Text(Rc::from(s.to_ascii_lowercase().as_str()))
+            }
+            (Value::Text(s), Collation::RTrim) => Value::Text(Rc::from(s.trim_end_matches(' '))),
+            _ => v.clone(),
+        })
+        .collect()
+}
+
+fn encode_key(values: &[Value], collations: &[Collation]) -> Vec<u8> {
+    encode_record(
+        &normalize_key_values(values, collations),
+        TextEncoding::Utf8,
+    )
+}
+
+/// sqlite-rs's `CursorSlot::Ephemeral` (`OpenEphemeral p5 = 0`, #134): the
+/// in-memory index behind DISTINCT and `IN (SELECT …)` — entries keyed by
+/// the encoded, collation-normalized key record, each holding the stored
+/// values (key columns plus any trailing payload columns `IdxInsert`'s
+/// `p5` asked for). `Found`/`IdxInsert` remember the key they touched so
+/// a following `Delete` or `Column` acts on it.
+#[derive(Default)]
+pub struct EphemeralIndexCursor {
+    entries: BTreeMap<Vec<u8>, Vec<Value>>,
+    last_key: Option<Vec<u8>>,
+}
+
+impl EphemeralIndexCursor {
+    pub fn new() -> Self {
+        EphemeralIndexCursor::default()
+    }
+}
+
+impl Cursor for EphemeralIndexCursor {
+    // Never scanned: sqlite-rs drives this kind only through
+    // Found/IdxInsert/IdxDelete/Delete/Column/Sequence.
+    fn rewind(&mut self) -> bool {
+        false
+    }
+
+    fn next(&mut self) -> bool {
+        false
+    }
+
+    fn column(&self, col: usize) -> Value {
+        self.last_key
+            .as_ref()
+            .and_then(|k| self.entries.get(k))
+            .and_then(|values| values.get(col))
+            .cloned()
+            .unwrap_or(Value::Null)
+    }
+
+    fn rowid(&self) -> i64 {
+        0
+    }
+
+    fn found(&mut self, key: &[Value], collations: &[Collation]) -> Option<bool> {
+        let encoded = encode_key(key, collations);
+        let present = self.entries.contains_key(&encoded);
+        self.last_key = Some(encoded);
+        Some(present)
+    }
+
+    fn ephemeral_idx_insert(
+        &mut self,
+        key: &[Value],
+        collations: &[Collation],
+        stored: Vec<Value>,
+    ) -> Option<bool> {
+        let encoded = encode_key(key, collations);
+        if !self.entries.contains_key(&encoded) && self.entries.len() >= MAX_EPHEMERAL_ROWS {
+            return Some(false);
+        }
+        self.entries.insert(encoded.clone(), stored);
+        self.last_key = Some(encoded);
+        Some(true)
+    }
+
+    fn idx_delete(&mut self, key: &[Value]) -> bool {
+        let encoded = encode_record(key, TextEncoding::Utf8);
+        self.entries.remove(&encoded);
+        if self.last_key.as_ref() == Some(&encoded) {
+            self.last_key = None;
+        }
+        true
+    }
+
+    fn delete(&mut self) -> bool {
+        if let Some(key) = self.last_key.take() {
+            self.entries.remove(&key);
+        }
         true
     }
 }
@@ -944,22 +1128,11 @@ impl Cursor for PseudoCursor {
 /// (`auto_index_next`'s "next entry sharing this key" walk).
 #[derive(Default)]
 pub struct AutoIndexCursor {
-    /// Sorted ascending by key (`Binary` collation -- an automatic
-    /// index has no `COLLATE` clause of its own to honor).
-    entries: Vec<(Vec<Value>, i64)>,
-    pos: Option<usize>,
-}
-
-/// Lexicographic, `Binary`-collation comparison of two automatic-index
-/// keys, column by column.
-fn compare_auto_index_key(a: &[Value], b: &[Value]) -> std::cmp::Ordering {
-    for (x, y) in a.iter().zip(b.iter()) {
-        let ord = super::compare::compare(x, y, Collation::Binary);
-        if ord != std::cmp::Ordering::Equal {
-            return ord;
-        }
-    }
-    a.len().cmp(&b.len())
+    /// Encoded, collation-normalized key -> rowids in insertion order
+    /// (sqlite-rs `AutoIndexState::entries`, #134).
+    entries: HashMap<Vec<u8>, Vec<i64>>,
+    /// `(key, position within that key's rowid list)` after a hit.
+    current: Option<(Vec<u8>, usize)>,
 }
 
 impl AutoIndexCursor {
@@ -985,46 +1158,42 @@ impl Cursor for AutoIndexCursor {
     }
 
     fn rowid(&self) -> i64 {
-        #[allow(
-            clippy::expect_used,
-            reason = "Cursor contract: rowid is only read after a successful positioning call"
-        )]
-        let pos = self.pos.expect("rowid read with no current entry");
-        self.entries[pos].1
+        self.current
+            .as_ref()
+            .and_then(|(key, pos)| self.entries.get(key).and_then(|r| r.get(*pos)))
+            .copied()
+            .unwrap_or(0)
     }
 
-    fn auto_index_insert(&mut self, key: Vec<Value>, rowid: i64) -> bool {
-        let pos = self
-            .entries
-            .partition_point(|(k, _)| compare_auto_index_key(k, &key) == std::cmp::Ordering::Less);
-        self.entries.insert(pos, (key, rowid));
+    fn auto_index_insert(&mut self, key: Vec<Value>, collations: &[Collation], rowid: i64) -> bool {
+        self.entries
+            .entry(encode_key(&key, collations))
+            .or_default()
+            .push(rowid);
         true
     }
 
-    fn auto_index_seek(&mut self, key: &[Value]) -> bool {
-        match self.entries.iter().position(|(k, _)| k.as_slice() == key) {
-            Some(pos) => {
-                self.pos = Some(pos);
-                true
-            }
-            None => {
-                self.pos = None;
-                false
-            }
-        }
+    fn auto_index_seek(&mut self, key: &[Value], collations: &[Collation]) -> bool {
+        let encoded = encode_key(key, collations);
+        let has_match = self
+            .entries
+            .get(&encoded)
+            .is_some_and(|rowids| !rowids.is_empty());
+        self.current = has_match.then_some((encoded, 0));
+        has_match
     }
 
     fn auto_index_next(&mut self) -> bool {
-        let Some(pos) = self.pos else {
+        let Some((key, pos)) = self.current.take() else {
             return false;
         };
-        let key = &self.entries[pos].0;
-        match self.entries.get(pos + 1) {
-            Some((next_key, _)) if next_key == key => {
-                self.pos = Some(pos + 1);
-                true
-            }
-            _ => false,
+        let len = self.entries.get(&key).map_or(0, Vec::len);
+        let next_pos = pos.saturating_add(1);
+        if next_pos < len {
+            self.current = Some((key, next_pos));
+            true
+        } else {
+            false
         }
     }
 }
@@ -1135,7 +1304,7 @@ impl Cursor for InMemoryIndexCursor {
         true
     }
 
-    fn seek_index_eq(&mut self, key: &[Value]) -> bool {
+    fn seek_index_eq(&mut self, key: &[Value], _collations: &[Collation]) -> bool {
         let pos = self.entries.partition_point(|(k, _)| {
             compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Less
         });
@@ -1151,7 +1320,7 @@ impl Cursor for InMemoryIndexCursor {
         }
     }
 
-    fn seek_index_ge(&mut self, key: &[Value]) -> bool {
+    fn seek_index_ge(&mut self, key: &[Value], _collations: &[Collation]) -> bool {
         let pos = self.entries.partition_point(|(k, _)| {
             compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Less
         });
@@ -1164,7 +1333,7 @@ impl Cursor for InMemoryIndexCursor {
         }
     }
 
-    fn idx_compare(&self, key: &[Value]) -> Option<std::cmp::Ordering> {
+    fn idx_compare(&self, key: &[Value], _collations: &[Collation]) -> Option<std::cmp::Ordering> {
         let pos = self.pos?;
         let (current, _) = self.entries.get(pos)?;
         Some(compare_keys(current, key, &self.key_cols))
@@ -1553,9 +1722,9 @@ mod tests {
         let mut c = InMemoryIndexCursor::new(vec![asc_key(0)]);
         c.insert(1, vec![Value::Integer(10)]);
         c.insert(2, vec![Value::Integer(20)]);
-        assert!(c.seek_index_eq(&[Value::Integer(20)]));
+        assert!(c.seek_index_eq(&[Value::Integer(20)], &[]));
         assert_eq!(c.idx_rowid(), Some(2));
-        assert!(!c.seek_index_eq(&[Value::Integer(99)]));
+        assert!(!c.seek_index_eq(&[Value::Integer(99)], &[]));
     }
 
     #[test]
@@ -1563,9 +1732,9 @@ mod tests {
         let mut c = InMemoryIndexCursor::new(vec![asc_key(0)]);
         c.insert(1, vec![Value::Integer(10)]);
         c.insert(2, vec![Value::Integer(30)]);
-        assert!(c.seek_index_ge(&[Value::Integer(20)]));
+        assert!(c.seek_index_ge(&[Value::Integer(20)], &[]));
         assert_eq!(c.column(0), Value::Integer(30));
-        assert!(!c.seek_index_ge(&[Value::Integer(999)]));
+        assert!(!c.seek_index_ge(&[Value::Integer(999)], &[]));
     }
 
     #[test]
@@ -1574,15 +1743,15 @@ mod tests {
         c.insert(1, vec![Value::Integer(10)]);
         c.rewind();
         assert_eq!(
-            c.idx_compare(&[Value::Integer(5)]),
+            c.idx_compare(&[Value::Integer(5)], &[]),
             Some(std::cmp::Ordering::Greater)
         );
         assert_eq!(
-            c.idx_compare(&[Value::Integer(10)]),
+            c.idx_compare(&[Value::Integer(10)], &[]),
             Some(std::cmp::Ordering::Equal)
         );
         assert_eq!(
-            c.idx_compare(&[Value::Integer(15)]),
+            c.idx_compare(&[Value::Integer(15)], &[]),
             Some(std::cmp::Ordering::Less)
         );
     }
@@ -1597,20 +1766,20 @@ mod tests {
     #[test]
     fn auto_index_cursor_seeks_and_reads_rowid() {
         let mut c = AutoIndexCursor::new();
-        assert!(c.auto_index_insert(vec![Value::Integer(1)], 100));
-        assert!(c.auto_index_insert(vec![Value::Integer(2)], 200));
-        assert!(c.auto_index_seek(&[Value::Integer(2)]));
+        assert!(c.auto_index_insert(vec![Value::Integer(1)], &[], 100));
+        assert!(c.auto_index_insert(vec![Value::Integer(2)], &[], 200));
+        assert!(c.auto_index_seek(&[Value::Integer(2)], &[]));
         assert_eq!(c.rowid(), 200);
-        assert!(!c.auto_index_seek(&[Value::Integer(99)]));
+        assert!(!c.auto_index_seek(&[Value::Integer(99)], &[]));
     }
 
     #[test]
     fn auto_index_cursor_next_walks_duplicate_keys_only() {
         let mut c = AutoIndexCursor::new();
-        assert!(c.auto_index_insert(vec![Value::Integer(1)], 100));
-        assert!(c.auto_index_insert(vec![Value::Integer(1)], 200));
-        assert!(c.auto_index_insert(vec![Value::Integer(2)], 300));
-        assert!(c.auto_index_seek(&[Value::Integer(1)]));
+        assert!(c.auto_index_insert(vec![Value::Integer(1)], &[], 100));
+        assert!(c.auto_index_insert(vec![Value::Integer(1)], &[], 200));
+        assert!(c.auto_index_insert(vec![Value::Integer(2)], &[], 300));
+        assert!(c.auto_index_seek(&[Value::Integer(1)], &[]));
         let first = c.rowid();
         assert!(c.auto_index_next());
         let second = c.rowid();

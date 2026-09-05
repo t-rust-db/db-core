@@ -330,6 +330,14 @@ pub enum P4 {
     },
     /// An affinity byte string, one byte per column, for `MakeRecord`.
     Affinity(Vec<u8>),
+    /// Per-key-column collations for the index-key opcodes
+    /// (`SeekIndexEq`/`GE`, `IdxCompareGT`, `IdxLE`, `Found`,
+    /// `NoConflict`, `IdxInsert`, `AutoIndexInsert`/`Seek`); the key
+    /// column count is the vector's length. `P4::Int(n)` on the same
+    /// opcodes means `n` BINARY-collated columns (#134).
+    SeekKey(Vec<Collation>),
+    /// A boolean flag operand (#134).
+    Bool(bool),
     /// `AggStep`'s `"name(arity)"` descriptor plus the collation
     /// `min`/`max` compares under -- `AggFinal` has no comparison to
     /// perform, so it keeps the plain `Str` descriptor.
@@ -527,6 +535,21 @@ impl Program {
     pub fn push(&mut self, instr: Instruction) -> &mut Self {
         self.instructions.push(instr);
         self
+    }
+
+    /// The instruction at `pc`, if any.
+    pub fn get(&self, pc: usize) -> Option<&Instruction> {
+        self.instructions.get(pc)
+    }
+
+    /// Number of instructions.
+    pub fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
+    /// `true` for a program with no instructions.
+    pub fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
     }
 }
 

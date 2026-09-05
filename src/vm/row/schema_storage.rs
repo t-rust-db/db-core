@@ -59,6 +59,23 @@ pub trait SchemaStorage {
     /// walk them itself; `db-core` has no way to compute a real stat
     /// row without depending on storage (ADR 0008).
     fn write_stat1(&mut self, target: &AnalyzeTarget) -> Result<(), SchemaStorageError>;
+
+    /// `NewRowid` with `p5 != 0` (AUTOINCREMENT, `P4::Str(table)`): the
+    /// next rowid for `table` given the table's current maximum rowid,
+    /// honouring and updating `sqlite_sequence` so rowids are never
+    /// reused (sqlite-rs `vdbe::cursor::new_rowid`, #134). The default
+    /// refuses, since db-core has no schema storage of its own.
+    fn autoincrement_rowid(
+        &mut self,
+        table: &str,
+        max_from_table: i64,
+    ) -> Result<i64, SchemaStorageError> {
+        let _ = (table, max_from_table);
+        Err(SchemaStorageError(
+            "AUTOINCREMENT requires a SchemaStorage that implements autoincrement_rowid"
+                .to_string(),
+        ))
+    }
 }
 
 /// Why a [`SchemaStorage`] call failed -- deliberately just a carried

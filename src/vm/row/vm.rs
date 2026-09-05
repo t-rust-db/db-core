@@ -258,7 +258,10 @@ pub struct Vm {
     /// (db-core#127) -- parallel to `cursors`, though `Sequence` never
     /// requires the slot to actually hold an open cursor (it's purely a
     /// counter identified by `p1`).
-    sequences: Vec<i64>,
+    sequences: Vec<Option<i64>>,
+    /// The database's text encoding, for decoding `Insert` payloads into
+    /// in-memory cursors; `Utf8` unless a consumer sets it (#134).
+    text_encoding: TextEncoding,
 }
 
 impl Default for Vm {
@@ -277,6 +280,7 @@ impl Default for Vm {
             schema_storage: None,
             null_rows: Vec::new(),
             sequences: Vec::new(),
+            text_encoding: TextEncoding::Utf8,
         }
     }
 }
@@ -324,6 +328,12 @@ impl Vm {
         self.autocommit = autocommit;
     }
 
+    /// The database's text encoding (header byte 56); decoded `Insert`
+    /// payloads use it. Default `Utf8` (#134).
+    pub fn set_text_encoding(&mut self, encoding: TextEncoding) {
+        self.text_encoding = encoding;
+    }
+
     pub fn set_schema_storage(&mut self, storage: Box<dyn SchemaStorage>) {
         self.schema_storage = Some(storage);
     }
@@ -362,14 +372,17 @@ impl Vm {
     /// as needed, same policy as `open_cursor`/`set_agg_context`.
     fn next_sequence(&mut self, slot: i32) -> Result<i64, ExecError> {
         let idx = Self::index("sequence slot", slot)?;
+        // Seeded from the cursor kind: 1 for an ephemeral table, 0
+        // otherwise (sqlite-rs, #134).
+        let base = self.cursor(slot).map(|c| c.sequence_base()).unwrap_or(0);
         if idx >= self.sequences.len() {
-            self.sequences.resize(idx.saturating_add(1), 0);
+            self.sequences.resize(idx.saturating_add(1), None);
         }
         let Some(cell) = self.sequences.get_mut(idx) else {
-            return Ok(0);
+            return Ok(base);
         };
-        let value = *cell;
-        *cell = value.saturating_add(1);
+        let value = cell.unwrap_or(base);
+        *cell = Some(value.saturating_add(1));
         Ok(value)
     }
 
@@ -661,27 +674,59 @@ fn register_as_i64(vm: &Vm, reg: i32) -> Result<i64, ExecError> {
 /// `IdxCompareGT`/`NoConflict`'s docs describe as "a key from registers
 /// `p3..p3+p4`" (db-core#126), mirroring `IdxInsert`/`IdxDelete`'s
 /// existing identical read.
+/// The per-column collations an index-key opcode's `P4` names (sqlite-rs
+/// `cursor::seek_key_collations`, #134): `P4::SeekKey(c)` is `c`;
+/// `P4::Int(n)` is `n` BINARY columns.
+fn seek_key_collations(opcode: &'static str, p4: &P4) -> Result<Vec<Collation>, ExecError> {
+    match p4 {
+        P4::SeekKey(collations) => Ok(collations.clone()),
+        P4::Int(n) => {
+            let count = Vm::bounded_count(
+                opcode,
+                i32::try_from(*n).map_err(|_| ExecError::MalformedInstruction {
+                    opcode,
+                    reason: format!("key count {n} does not fit in p4"),
+                })?,
+            )?;
+            Ok(vec![Collation::Binary; count])
+        }
+        other => Err(ExecError::MalformedInstruction {
+            opcode,
+            reason: format!("expected a SeekKey or Int P4 (key columns), got {other:?}"),
+        }),
+    }
+}
+
+/// `count` consecutive registers starting at `first_reg`.
+fn register_range(
+    vm: &Vm,
+    opcode: &'static str,
+    first_reg: i32,
+    count: usize,
+) -> Result<Vec<Value>, ExecError> {
+    let mut values = Vec::with_capacity(count);
+    for i in 0..count {
+        let reg = first_reg
+            .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+            .ok_or(ExecError::RegisterOutOfRange {
+                opcode,
+                index: first_reg,
+            })?;
+        values.push(vm.register(reg)?.clone());
+    }
+    Ok(values)
+}
+
+/// An index-key operand: the key values from `first_reg` plus the
+/// collations `p4` names (one per key column).
 fn key_from_registers(
     vm: &Vm,
     opcode: &'static str,
     first_reg: i32,
     p4: &P4,
-) -> Result<Vec<Value>, ExecError> {
-    let count = match p4 {
-        P4::Int(n) => Vm::bounded_count(
-            opcode,
-            i32::try_from(*n).map_err(|_| ExecError::MalformedInstruction {
-                opcode,
-                reason: format!("key count {n} does not fit in p4"),
-            })?,
-        )?,
-        other => {
-            return Err(ExecError::MalformedInstruction {
-                opcode,
-                reason: format!("expected an Int P4 (key count), got {other:?}"),
-            })
-        }
-    };
+) -> Result<(Vec<Value>, Vec<Collation>), ExecError> {
+    let collations = seek_key_collations(opcode, p4)?;
+    let count = collations.len();
     let mut key = Vec::with_capacity(count);
     for i in 0..count {
         let reg = first_reg
@@ -692,7 +737,7 @@ fn key_from_registers(
             })?;
         key.push(vm.register(reg)?.clone());
     }
-    Ok(key)
+    Ok((key, collations))
 }
 
 fn in_i64_range(r: f64) -> bool {
@@ -1069,15 +1114,16 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::AutoIndexInsert => {
-            let key = match vm.register(instr.p2)? {
-                Value::Blob(bytes) => decode_record(bytes, TextEncoding::Utf8).unwrap_or_default(),
-                other => vec![other.clone()],
-            };
+            // sqlite-rs: p2 = first key register (count/collations from P4),
+            // p3 = rowid register.
+            let (key, collations) = key_from_registers(vm, "AutoIndexInsert", instr.p2, &instr.p4)?;
             let rowid = register_as_i64(vm, instr.p3)?;
             if vm.cursor(instr.p1).is_err() {
                 vm.open_cursor(instr.p1, Box::new(super::cursor::AutoIndexCursor::new()))?;
             }
-            let ok = vm.cursor_mut(instr.p1)?.auto_index_insert(key, rowid);
+            let ok = vm
+                .cursor_mut(instr.p1)?
+                .auto_index_insert(key, &collations, rowid);
             if !ok {
                 return Err(ExecError::MalformedInstruction {
                     opcode: "AutoIndexInsert",
@@ -1087,11 +1133,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::AutoIndexSeek => {
-            let key = match vm.register(instr.p3)? {
-                Value::Blob(bytes) => decode_record(bytes, TextEncoding::Utf8).unwrap_or_default(),
-                other => vec![other.clone()],
-            };
-            let found = vm.cursor_mut(instr.p1)?.auto_index_seek(&key);
+            let (key, collations) = key_from_registers(vm, "AutoIndexSeek", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.auto_index_seek(&key, &collations);
             Ok(if found {
                 Step::Next
             } else {
@@ -1124,9 +1167,12 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             };
             #[allow(clippy::cast_sign_loss)]
             let root = instr.p2 as u32;
-            let cursor = match (&instr.p4, instr.opcode) {
-                (P4::SortKey(key), _) => factory.open_index(root, key),
-                (_, Opcode::OpenWrite) => factory.open_write(root),
+            // sqlite-rs flags an index cursor with `p5 != 0` (no key
+            // descriptor); a `P4::SortKey` carries one when the planner has it.
+            let cursor = match (&instr.p4, instr.p5, instr.opcode) {
+                (P4::SortKey(key), _, _) => factory.open_index(root, key),
+                (_, p5, _) if p5 != 0 => factory.open_index(root, &[]),
+                (_, _, Opcode::OpenWrite) => factory.open_write(root),
                 _ => factory.open_read(root),
             }
             .map_err(ExecError::CursorFactoryFailed)?;
@@ -1135,6 +1181,11 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::OpenDup => {
+            // sqlite-rs: a second cursor sharing an ephemeral table's rows.
+            if let Some(dup) = vm.cursor(instr.p2)?.dup() {
+                vm.open_cursor(instr.p1, dup)?;
+                return Ok(Step::Next);
+            }
             let root = vm.cursor_root(instr.p2)?;
             let factory =
                 vm.cursor_factory
@@ -1163,7 +1214,15 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::OpenEphemeral => {
-            vm.open_cursor(instr.p1, Box::new(EphemeralTableCursor::new()))?;
+            // sqlite-rs `cursor::open_ephemeral`: p5 = 0 -> ephemeral index
+            // (DISTINCT / IN-subquery), 1 -> ephemeral table (materialized
+            // rows by rowid), 2 -> automatic join index.
+            let cursor: Box<dyn Cursor> = match instr.p5 {
+                0 => Box::new(super::cursor::EphemeralIndexCursor::new()),
+                2 => Box::new(super::cursor::AutoIndexCursor::new()),
+                _ => Box::new(EphemeralTableCursor::new()),
+            };
+            vm.open_cursor(instr.p1, cursor)?;
             Ok(Step::Next)
         }
         Opcode::SorterOpen => {
@@ -1351,13 +1410,22 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     })
                 }
             };
-            let values = decode_record(&payload, TextEncoding::Utf8).map_err(|e| {
-                ExecError::MalformedInstruction {
-                    opcode: "Insert",
-                    reason: e.to_string(),
+            let encoding = vm.text_encoding;
+            let cursor = vm.cursor_mut(instr.p1)?;
+            // A storage-backed cursor takes the record bytes as they are
+            // (byte-exact with MakeRecord); in-memory ones decode them.
+            let inserted = match cursor.insert_payload(rowid, &payload) {
+                Some(ok) => ok,
+                None => {
+                    let values = decode_record(&payload, encoding).map_err(|e| {
+                        ExecError::MalformedInstruction {
+                            opcode: "Insert",
+                            reason: e.to_string(),
+                        }
+                    })?;
+                    cursor.insert(rowid, values)
                 }
-            })?;
-            let inserted = vm.cursor_mut(instr.p1)?.insert(rowid, values);
+            };
             if !inserted {
                 return Err(ExecError::MalformedInstruction {
                     opcode: "Insert",
@@ -1522,45 +1590,62 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::NewRowid => {
-            let rowid = vm.cursor(instr.p1)?.next_rowid();
+            let next = vm.cursor(instr.p1)?.next_rowid();
+            // sqlite-rs: p5 != 0 with P4::Str(table) is AUTOINCREMENT —
+            // the schema hook consults/updates sqlite_sequence so a rowid
+            // is never reused after a delete.
+            let rowid = if instr.p5 != 0 {
+                let table = match &instr.p4 {
+                    P4::Str(name) => name.clone(),
+                    other => {
+                        return Err(ExecError::MalformedInstruction {
+                            opcode: "NewRowid",
+                            reason: format!(
+                                "AUTOINCREMENT requested (P5 nonzero) but P4 is not a table-name string, got {other:?}"
+                            ),
+                        })
+                    }
+                };
+                let max_from_table = next.saturating_sub(1);
+                vm.schema_storage
+                    .as_deref_mut()
+                    .ok_or(ExecError::SchemaStorageMissing { opcode: "NewRowid" })?
+                    .autoincrement_rowid(&table, max_from_table)
+                    .map_err(ExecError::SchemaStorageFailed)?
+            } else {
+                next
+            };
             vm.set_register(instr.p2, Value::Integer(rowid))?;
             Ok(Step::Next)
         }
         Opcode::IdxInsert | Opcode::IdxDelete => {
-            let count = match &instr.p4 {
-                P4::Int(n) => Vm::bounded_count(
-                    "IdxInsert/IdxDelete",
-                    i32::try_from(*n).map_err(|_| ExecError::MalformedInstruction {
-                        opcode: "IdxInsert/IdxDelete",
-                        reason: format!("key count {n} does not fit in p4"),
-                    })?,
-                )?,
-                other => {
-                    return Err(ExecError::MalformedInstruction {
-                        opcode: "IdxInsert/IdxDelete",
-                        reason: format!("expected an Int P4 (key count), got {other:?}"),
-                    })
-                }
+            let opcode = if instr.opcode == Opcode::IdxInsert {
+                "IdxInsert"
+            } else {
+                "IdxDelete"
             };
-            let mut key = Vec::with_capacity(count);
-            for i in 0..count {
-                let reg = instr
-                    .p2
-                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-                    .ok_or(ExecError::RegisterOutOfRange {
-                        opcode: "IdxInsert/IdxDelete",
-                        index: instr.p2,
-                    })?;
-                key.push(vm.register(reg)?.clone());
-            }
+            let (key, collations) = key_from_registers(vm, opcode, instr.p2, &instr.p4)?;
             let ok = if instr.opcode == Opcode::IdxInsert {
-                vm.cursor_mut(instr.p1)?.idx_insert(key)
+                // sqlite-rs: on an ephemeral index the stored row is the key
+                // columns plus `p5` trailing payload columns.
+                let total = key.len().checked_add(usize::from(instr.p5)).ok_or(
+                    ExecError::RegisterRangeTooLarge {
+                        opcode,
+                        count: i32::from(instr.p5),
+                    },
+                )?;
+                let stored = register_range(vm, opcode, instr.p2, total)?;
+                let cursor = vm.cursor_mut(instr.p1)?;
+                match cursor.ephemeral_idx_insert(&key, &collations, stored) {
+                    Some(ok) => ok,
+                    None => cursor.idx_insert(key),
+                }
             } else {
                 vm.cursor_mut(instr.p1)?.idx_delete(&key)
             };
             if !ok {
                 return Err(ExecError::MalformedInstruction {
-                    opcode: "IdxInsert/IdxDelete",
+                    opcode,
                     reason:
                         "cursor slot does not support this index operation, or no matching entry"
                             .to_string(),
@@ -1739,8 +1824,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::SeekIndexEq => {
-            let key = key_from_registers(vm, "SeekIndexEq", instr.p3, &instr.p4)?;
-            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key);
+            let (key, collations) = key_from_registers(vm, "SeekIndexEq", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key, &collations);
             Ok(if found {
                 Step::Next
             } else {
@@ -1748,8 +1833,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
         Opcode::SeekIndexGE => {
-            let key = key_from_registers(vm, "SeekIndexGE", instr.p3, &instr.p4)?;
-            let found = vm.cursor_mut(instr.p1)?.seek_index_ge(&key);
+            let (key, collations) = key_from_registers(vm, "SeekIndexGE", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_ge(&key, &collations);
             Ok(if found {
                 Step::Next
             } else {
@@ -1757,15 +1842,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
         Opcode::IdxCompareGT => {
-            let key = key_from_registers(vm, "IdxCompareGT", instr.p3, &instr.p4)?;
-            let cmp =
-                vm.cursor(instr.p1)?
-                    .idx_compare(&key)
-                    .ok_or(ExecError::MalformedInstruction {
-                        opcode: "IdxCompareGT",
-                        reason: "cursor slot is not an index cursor, or has no current entry"
-                            .to_string(),
-                    })?;
+            let (key, collations) = key_from_registers(vm, "IdxCompareGT", instr.p3, &instr.p4)?;
+            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(
+                ExecError::MalformedInstruction {
+                    opcode: "IdxCompareGT",
+                    reason: "cursor slot is not an index cursor, or has no current entry"
+                        .to_string(),
+                },
+            )?;
             Ok(if cmp == Ordering::Greater {
                 Step::Jump(to_pc(instr.p2))
             } else {
@@ -1773,15 +1857,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
         Opcode::IdxLE => {
-            let key = key_from_registers(vm, "IdxLE", instr.p3, &instr.p4)?;
-            let cmp =
-                vm.cursor(instr.p1)?
-                    .idx_compare(&key)
-                    .ok_or(ExecError::MalformedInstruction {
-                        opcode: "IdxLE",
-                        reason: "cursor slot is not an index cursor, or has no current entry"
-                            .to_string(),
-                    })?;
+            let (key, collations) = key_from_registers(vm, "IdxLE", instr.p3, &instr.p4)?;
+            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(
+                ExecError::MalformedInstruction {
+                    opcode: "IdxLE",
+                    reason: "cursor slot is not an index cursor, or has no current entry"
+                        .to_string(),
+                },
+            )?;
             Ok(if cmp != Ordering::Greater {
                 Step::Jump(to_pc(instr.p2))
             } else {
@@ -1789,8 +1872,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
         Opcode::Found => {
-            let key = key_from_registers(vm, "Found", instr.p3, &instr.p4)?;
-            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key);
+            let (key, collations) = key_from_registers(vm, "Found", instr.p3, &instr.p4)?;
+            let cursor = vm.cursor_mut(instr.p1)?;
+            // Ephemeral index (DISTINCT / IN-subquery): membership of the
+            // normalized key; real index: a seek.
+            let found = match cursor.found(&key, &collations) {
+                Some(present) => present,
+                None => cursor.seek_index_eq(&key, &collations),
+            };
             Ok(if found {
                 Step::Jump(to_pc(instr.p2))
             } else {
@@ -1798,8 +1887,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
         Opcode::NoConflict => {
-            let key = key_from_registers(vm, "NoConflict", instr.p3, &instr.p4)?;
-            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key);
+            let (key, collations) = key_from_registers(vm, "NoConflict", instr.p3, &instr.p4)?;
+            let cursor = vm.cursor_mut(instr.p1)?;
+            // Ephemeral index (DISTINCT / IN-subquery): membership of the
+            // normalized key; real index: a seek.
+            let found = match cursor.found(&key, &collations) {
+                Some(present) => present,
+                None => cursor.seek_index_eq(&key, &collations),
+            };
             Ok(if found {
                 Step::Next
             } else {
@@ -2311,7 +2406,7 @@ mod tests {
         // storage-agnostic.
         let mut vm = Vm::new();
         let program = Program::new(vec![
-            /* 0 */ Instruction::new(Opcode::OpenEphemeral, 0, 0, 0), // cursor 0
+            /* 0 */ open_ephemeral_table(0), // cursor 0
             // Row 1: (rowid=1, "a")
             /* 1 */
             Instruction::with_p4(Opcode::String8, 0, 1, 0, P4::Str("a".to_string())),
@@ -2385,7 +2480,7 @@ mod tests {
             collation: Collation::Binary,
         };
         let program = Program::new(vec![
-            /* 0 */ Instruction::new(Opcode::OpenEphemeral, 0, 0, 0),
+            /* 0 */ open_ephemeral_table(0),
             // Row 1: (rowid=1, 10)
             /* 1 */
             Instruction::new(Opcode::Integer, 10, 1, 0),
@@ -3150,8 +3245,8 @@ mod tests {
         let program = Program::new(vec![
             Instruction::new(Opcode::Integer, 42, 1, 0),
             Instruction::new(Opcode::Integer, 99, 2, 0),
-            Instruction::new(Opcode::AutoIndexInsert, 0, 1, 2),
-            Instruction::new(Opcode::AutoIndexSeek, 0, 6, 1),
+            Instruction::with_p4(Opcode::AutoIndexInsert, 0, 1, 2, P4::Int(1)),
+            Instruction::with_p4(Opcode::AutoIndexSeek, 0, 6, 1, P4::Int(1)),
             Instruction::new(Opcode::AutoIndexRowid, 0, 3, 0),
             Instruction::new(Opcode::ResultRow, 3, 1, 0),
             Instruction::new(Opcode::Halt, 0, 0, 0),
@@ -3166,9 +3261,9 @@ mod tests {
         let program = Program::new(vec![
             Instruction::new(Opcode::Integer, 42, 1, 0),
             Instruction::new(Opcode::Integer, 99, 2, 0),
-            Instruction::new(Opcode::AutoIndexInsert, 0, 1, 2),
+            Instruction::with_p4(Opcode::AutoIndexInsert, 0, 1, 2, P4::Int(1)),
             Instruction::new(Opcode::Integer, 7, 1, 0),
-            Instruction::new(Opcode::AutoIndexSeek, 0, 7, 1),
+            Instruction::with_p4(Opcode::AutoIndexSeek, 0, 7, 1, P4::Int(1)),
             Instruction::new(Opcode::Integer, 1, 0, 0),
             Instruction::new(Opcode::Halt, 0, 0, 0),
             Instruction::new(Opcode::Integer, 0, 0, 0),
@@ -3350,5 +3445,258 @@ mod tests {
             Instruction::new(Opcode::Halt, 0, 0, 0),
         ]);
         execute(&mut vm, &program).unwrap();
+    }
+
+    /// `OpenEphemeral` with `p5 = 1`: sqlite-rs's ephemeral *table* (rows by
+    /// rowid); `p5 = 0` is the ephemeral index (#134).
+    fn open_ephemeral_table(slot: i32) -> Instruction {
+        let mut i = Instruction::new(Opcode::OpenEphemeral, slot, 0, 0);
+        i.p5 = 1;
+        i
+    }
+
+    #[test]
+    fn ephemeral_index_found_idx_insert_delete_and_column_follow_sqlite_rs() {
+        // DISTINCT dance: Found misses, IdxInsert (1 key + 1 payload col),
+        // Found hits, Column reads the stored payload, Delete removes it.
+        let mut vm = Vm::new();
+        let mut idx_insert = Instruction::with_p4(Opcode::IdxInsert, 0, 1, 0, P4::Int(1));
+        idx_insert.p5 = 1;
+        let program = Program::new(vec![
+            /* 0 */ Instruction::new(Opcode::OpenEphemeral, 0, 0, 0),
+            /* 1 */ Instruction::new(Opcode::Integer, 7, 1, 0),
+            /* 2 */ Instruction::new(Opcode::Integer, 70, 2, 0),
+            /* 3 */
+            Instruction::with_p4(Opcode::Found, 0, 99, 1, P4::Int(1)), // miss: fall through
+            /* 4 */ idx_insert,
+            /* 5 */
+            Instruction::with_p4(Opcode::Found, 0, 7, 1, P4::Int(1)), // hit: jump to 7
+            /* 6 */ Instruction::new(Opcode::Halt, 1, 0, 0),
+            /* 7 */ Instruction::new(Opcode::Column, 0, 1, 3), // payload col -> r3
+            /* 8 */ Instruction::new(Opcode::Delete, 0, 0, 0),
+            /* 9 */
+            Instruction::with_p4(Opcode::Found, 0, 99, 1, P4::Int(1)), // gone: fall through
+            /* 10 */ Instruction::new(Opcode::ResultRow, 3, 1, 0),
+            /* 11 */ Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(70)]]);
+    }
+
+    #[test]
+    fn seek_key_collations_normalize_ephemeral_index_keys() {
+        // NOCASE: 'Abc' and 'ABC' are the same key.
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::OpenEphemeral, 0, 0, 0),
+            Instruction::with_p4(Opcode::String8, 0, 1, 0, P4::Str("Abc".to_string())),
+            Instruction::with_p4(
+                Opcode::IdxInsert,
+                0,
+                1,
+                0,
+                P4::SeekKey(vec![Collation::NoCase]),
+            ),
+            Instruction::with_p4(Opcode::String8, 0, 1, 0, P4::Str("ABC".to_string())),
+            Instruction::with_p4(Opcode::Found, 0, 6, 1, P4::SeekKey(vec![Collation::NoCase])),
+            Instruction::new(Opcode::Halt, 1, 0, 0),
+            Instruction::new(Opcode::Integer, 1, 2, 0),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn open_dup_shares_an_ephemeral_tables_rows_with_a_fresh_position() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            open_ephemeral_table(0),
+            Instruction::new(Opcode::Integer, 5, 1, 0),
+            Instruction::with_p4(Opcode::MakeRecord, 1, 1, 2, P4::None),
+            Instruction::new(Opcode::Integer, 1, 3, 0),
+            Instruction::new(Opcode::Insert, 0, 3, 2),
+            Instruction::new(Opcode::OpenDup, 1, 0, 0),
+            Instruction::new(Opcode::Rewind, 1, 9, 0),
+            Instruction::new(Opcode::Column, 1, 0, 4),
+            Instruction::new(Opcode::ResultRow, 4, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(5)]]);
+    }
+
+    #[test]
+    fn sequence_starts_at_one_for_ephemeral_tables_and_zero_for_indexes() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            open_ephemeral_table(0),
+            Instruction::new(Opcode::OpenEphemeral, 1, 0, 0),
+            Instruction::new(Opcode::Sequence, 0, 1, 0),
+            Instruction::new(Opcode::Sequence, 0, 2, 0),
+            Instruction::new(Opcode::Sequence, 1, 3, 0),
+            Instruction::new(Opcode::ResultRow, 1, 3, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            rows,
+            vec![vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(0)
+            ]]
+        );
+    }
+
+    #[test]
+    fn open_read_with_p5_flag_asks_the_factory_for_an_index_cursor() {
+        struct Factory;
+        impl super::super::cursor_factory::CursorFactory for Factory {
+            fn open_read(
+                &mut self,
+                _root: u32,
+            ) -> Result<Box<dyn Cursor>, super::super::cursor_factory::CursorFactoryError>
+            {
+                panic!("p5 = 1 must route to open_index");
+            }
+            fn open_index(
+                &mut self,
+                root: u32,
+                key: &[super::super::program::SortKeyColumn],
+            ) -> Result<Box<dyn Cursor>, super::super::cursor_factory::CursorFactoryError>
+            {
+                assert_eq!(root, 3);
+                assert!(key.is_empty());
+                Ok(Box::new(super::super::cursor::InMemoryCursor::new(vec![])))
+            }
+        }
+        let mut vm = Vm::new();
+        vm.set_cursor_factory(Box::new(Factory));
+        let mut open = Instruction::new(Opcode::OpenRead, 0, 3, 0);
+        open.p5 = 1;
+        let program = Program::new(vec![open, Instruction::new(Opcode::Halt, 0, 0, 0)]);
+        execute(&mut vm, &program).unwrap();
+    }
+
+    #[test]
+    fn insert_payload_hands_a_storage_cursor_the_exact_record_bytes() {
+        use std::rc::Rc;
+        type Seen = Rc<std::cell::RefCell<Option<(i64, Rc<[u8]>)>>>;
+        struct Sink(Seen);
+        impl Cursor for Sink {
+            fn rewind(&mut self) -> bool {
+                false
+            }
+            fn next(&mut self) -> bool {
+                false
+            }
+            fn column(&self, _: usize) -> Value {
+                Value::Null
+            }
+            fn rowid(&self) -> i64 {
+                0
+            }
+            fn insert_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
+                *self.0.borrow_mut() = Some((rowid, Rc::clone(payload)));
+                Some(true)
+            }
+        }
+        let seen = Rc::new(std::cell::RefCell::new(None));
+        let mut vm = Vm::new();
+        vm.open_cursor(0, Box::new(Sink(Rc::clone(&seen)))).unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 5, 1, 0),
+            Instruction::with_p4(Opcode::MakeRecord, 1, 1, 2, P4::None),
+            Instruction::new(Opcode::Integer, 9, 3, 0),
+            Instruction::new(Opcode::Insert, 0, 3, 2),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        let (rowid, payload) = seen.borrow().clone().expect("insert_payload called");
+        assert_eq!(rowid, 9);
+        assert_eq!(
+            &*payload,
+            &super::super::record::encode_record(&[Value::Integer(5)], TextEncoding::Utf8)[..]
+        );
+    }
+
+    #[test]
+    fn new_rowid_with_p5_uses_the_autoincrement_hook() {
+        struct Seq;
+        impl super::super::schema_storage::SchemaStorage for Seq {
+            fn create_table_root(
+                &mut self,
+            ) -> Result<u32, super::super::schema_storage::SchemaStorageError> {
+                unreachable!()
+            }
+            fn create_index_root(
+                &mut self,
+            ) -> Result<u32, super::super::schema_storage::SchemaStorageError> {
+                unreachable!()
+            }
+            fn populate_index(
+                &mut self,
+                _: u32,
+                _: u32,
+                _: &[usize],
+            ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+                unreachable!()
+            }
+            fn free_root(
+                &mut self,
+                _: u32,
+            ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+                unreachable!()
+            }
+            fn insert_master_row(
+                &mut self,
+                _: &str,
+                _: &str,
+                _: u32,
+            ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+                unreachable!()
+            }
+            fn delete_master_row(
+                &mut self,
+                _: &str,
+            ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+                unreachable!()
+            }
+            fn bump_schema_cookie(
+                &mut self,
+            ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+                unreachable!()
+            }
+            fn write_stat1(
+                &mut self,
+                _: &super::super::program::AnalyzeTarget,
+            ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
+                unreachable!()
+            }
+            fn autoincrement_rowid(
+                &mut self,
+                table: &str,
+                max_from_table: i64,
+            ) -> Result<i64, super::super::schema_storage::SchemaStorageError> {
+                assert_eq!(table, "t");
+                // sqlite_sequence remembers 10 even though the table is empty.
+                Ok(max_from_table.max(10) + 1)
+            }
+        }
+        let mut vm = Vm::new();
+        vm.set_schema_storage(Box::new(Seq));
+        let mut new_rowid =
+            Instruction::with_p4(Opcode::NewRowid, 0, 1, 0, P4::Str("t".to_string()));
+        new_rowid.p5 = 1;
+        let program = Program::new(vec![
+            open_ephemeral_table(0),
+            new_rowid,
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(11)]]);
     }
 }

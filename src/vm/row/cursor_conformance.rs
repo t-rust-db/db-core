@@ -116,7 +116,7 @@ pub fn assert_seek_index_eq_finds_an_exact_key<C: Cursor>(mut make: impl FnMut()
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert!(cursor.seek_index_eq(&[Value::Integer(2)]));
+    assert!(cursor.seek_index_eq(&[Value::Integer(2)], &[]));
     assert_eq!(cursor.column(0), Value::Integer(2));
     assert_eq!(cursor.idx_rowid(), Some(20));
 }
@@ -127,7 +127,7 @@ pub fn assert_seek_index_eq_misses_an_absent_key<C: Cursor>(mut make: impl FnMut
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert!(!cursor.seek_index_eq(&[Value::Integer(999)]));
+    assert!(!cursor.seek_index_eq(&[Value::Integer(999)], &[]));
 }
 
 /// `seek_index_ge` positions at the first entry whose key is not less
@@ -139,7 +139,7 @@ pub fn assert_seek_index_ge_positions_at_the_first_not_less_key<C: Cursor>(
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert!(cursor.seek_index_ge(&[Value::Integer(2)]));
+    assert!(cursor.seek_index_ge(&[Value::Integer(2)], &[]));
     assert_eq!(cursor.column(0), Value::Integer(3));
 }
 
@@ -154,11 +154,11 @@ pub fn assert_idx_compare_orders_the_current_entry_against_a_key<C: Cursor>(
 
     assert!(cursor.rewind());
     assert_eq!(
-        cursor.idx_compare(&[Value::Integer(1)]),
+        cursor.idx_compare(&[Value::Integer(1)], &[]),
         Some(std::cmp::Ordering::Greater)
     );
     assert_eq!(
-        cursor.idx_compare(&[Value::Integer(9)]),
+        cursor.idx_compare(&[Value::Integer(9)], &[]),
         Some(std::cmp::Ordering::Less)
     );
 }
