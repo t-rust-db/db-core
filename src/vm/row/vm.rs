@@ -999,6 +999,13 @@ pub fn execute(vm: &mut Vm, program: &Program) -> Result<Vec<Vec<Value>>, ExecEr
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::super::cursor::InMemoryCursor;
     use super::super::program::{Instruction, Opcode, Program, P4};

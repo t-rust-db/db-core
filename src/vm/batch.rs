@@ -441,12 +441,17 @@ fn run_morsels<T: Send>(len: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
                     break;
                 }
                 let result = f(idx);
-                results.lock().unwrap().push((idx, result));
+                results
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((idx, result));
             });
         }
     });
 
-    let mut results = results.into_inner().unwrap();
+    let mut results = results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     results.sort_unstable_by_key(|(idx, _)| *idx);
     results.into_iter().map(|(_, result)| result).collect()
 }
@@ -1182,6 +1187,10 @@ fn compute_window(
             }
             WindowFunc::Lag | WindowFunc::Lead => {
                 let offset = offset.unwrap_or(1);
+                #[allow(
+                    clippy::expect_used,
+                    reason = "codegen guarantees the argument column for this window function"
+                )]
                 let arg = arg_col.expect("Lag/Lead always have an argument column");
                 let n = indices.len() as i64;
                 for (pos, &row) in indices.iter().enumerate() {
@@ -1198,6 +1207,10 @@ fn compute_window(
                 }
             }
             WindowFunc::FirstValue => {
+                #[allow(
+                    clippy::expect_used,
+                    reason = "codegen guarantees the argument column for this window function"
+                )]
                 let arg = arg_col.expect("FirstValue always has an argument column");
                 if let Some(&first) = indices.first() {
                     let v = arg[first].clone();
@@ -1207,6 +1220,10 @@ fn compute_window(
                 }
             }
             WindowFunc::LastValue => {
+                #[allow(
+                    clippy::expect_used,
+                    reason = "codegen guarantees the argument column for this window function"
+                )]
                 let arg = arg_col.expect("LastValue always has an argument column");
                 for &row in &indices {
                     output[row] = arg[row].clone();
@@ -1408,6 +1425,13 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::*;
 

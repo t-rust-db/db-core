@@ -442,6 +442,10 @@ pub fn split_qualified(name: &str) -> (Option<&str>, &str) {
 /// side: every left-table column is loaded, then the hash table is probed,
 /// landing the right side's payload right after the left columns.
 pub fn compile_join(query: &Query) -> Result<JoinProgram> {
+    #[allow(
+        clippy::expect_used,
+        reason = "dispatch only routes here for queries with a JOIN clause"
+    )]
     let join = query
         .joins
         .first()
@@ -624,6 +628,10 @@ pub fn compile_window(query: &Query) -> Program {
 
     // `needed[i]` is loaded into register `i`; each `Opcode::Window`
     // writes its result into a fresh register past those.
+    #[allow(
+        clippy::expect_used,
+        reason = "`needed` is built from the same window specs a few lines above"
+    )]
     let column_reg = |name: &str| {
         needed
             .iter()
@@ -1298,6 +1306,13 @@ fn referenced_columns(query: &Query) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::*;
     use crate::parser as sql;

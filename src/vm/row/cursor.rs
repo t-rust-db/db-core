@@ -130,6 +130,10 @@ impl Cursor for InMemoryCursor {
     }
 
     fn column(&self, col: usize) -> Value {
+        #[allow(
+            clippy::expect_used,
+            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
+        )]
         let pos = self.pos.expect("column read with no current row");
         self.rows
             .get(pos)
@@ -139,6 +143,10 @@ impl Cursor for InMemoryCursor {
     }
 
     fn rowid(&self) -> i64 {
+        #[allow(
+            clippy::expect_used,
+            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
+        )]
         let pos = self.pos.expect("rowid read with no current row");
         #[allow(clippy::cast_possible_wrap)]
         {
@@ -217,6 +225,10 @@ impl Cursor for EphemeralTableCursor {
     }
 
     fn column(&self, col: usize) -> Value {
+        #[allow(
+            clippy::expect_used,
+            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
+        )]
         let pos = self.pos.expect("column read with no current row");
         self.rows
             .get(pos)
@@ -226,6 +238,10 @@ impl Cursor for EphemeralTableCursor {
     }
 
     fn rowid(&self) -> i64 {
+        #[allow(
+            clippy::expect_used,
+            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
+        )]
         let pos = self.pos.expect("rowid read with no current row");
         self.rows.get(pos).map_or(0, |(rowid, _)| *rowid)
     }
@@ -339,6 +355,10 @@ impl Cursor for SorterCursor {
     }
 
     fn column(&self, col: usize) -> Value {
+        #[allow(
+            clippy::expect_used,
+            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
+        )]
         let pos = self.pos.expect("column read with no current row");
         self.buffer
             .get(pos)
@@ -368,6 +388,13 @@ impl Cursor for SorterCursor {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
 mod tests {
     use super::*;
 

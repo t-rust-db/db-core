@@ -48,3 +48,16 @@ codegen-stream = []
 emit-batch = ["codegen-batch"]
 emit-row = []
 emit-stream = []
+
+# sqlite-rs's lint bar (#82). mod_module_files deliberately absent: the tree
+# still has mod.rs module roots (src/codegen/row/mod.rs, ...).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+let_underscore_must_use = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+arithmetic_side_effects = "deny"
