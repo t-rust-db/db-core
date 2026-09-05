@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.37.0] - 2026-09-05
+
+### Added
+
+- **`vm::row` multi-key and `LIMIT`-bounded sorter** (#87) -- `cursor::SorterCursor` extends from single-key to multi-key `ORDER BY` (`P4::SortKey` now carries `Vec<SortKeyColumn>`, compared left-to-right) and an optional top-K bound driven by `SorterOpen`'s `P5`/`P2` (mirroring sqlite-rs's `OffsetLimit`-derived `LIMIT` bound): once the buffer exceeds the bound, it is re-sorted and truncated to keep only the best-so-far rows -- a correctness-equivalent, simpler stand-in for sqlite-rs's heap-ordered eviction.
+
 ## [0.36.0] - 2026-09-05
 
 ### Added
