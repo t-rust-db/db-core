@@ -25,6 +25,20 @@ pub trait Cursor {
     /// Advances to the next row. Returns `true` if there was one.
     fn next(&mut self) -> bool;
 
+    /// Positions the cursor at the last row. Returns `true` if a row
+    /// exists (matches sqlite-rs's `Last`). Default `false` so cursor
+    /// kinds that don't support backward positioning yet don't each
+    /// have to repeat the same stub.
+    fn last(&mut self) -> bool {
+        false
+    }
+
+    /// Moves to the previous row. Returns `true` if there was one.
+    /// Default `false`, same rationale as [`Cursor::last`].
+    fn prev(&mut self) -> bool {
+        false
+    }
+
     /// Reads column `col` of the current row. Panics if the cursor has
     /// no current row (`rewind`/`next` last returned `false`) -- callers
     /// (the dispatch loop) never call this except right after a
@@ -56,6 +70,13 @@ pub trait Cursor {
     /// current row (unsorted, empty, or exhausted).
     fn current_blob(&self) -> Option<Value> {
         None
+    }
+
+    /// Deletes the row at the current position. Returns `false` if this
+    /// cursor kind doesn't support deletion. Default no-op, same
+    /// rationale as [`Cursor::insert`].
+    fn delete(&mut self) -> bool {
+        false
     }
 }
 
@@ -90,6 +111,24 @@ impl Cursor for InMemoryCursor {
         }
     }
 
+    fn last(&mut self) -> bool {
+        self.pos = self.rows.len().checked_sub(1);
+        self.pos.is_some()
+    }
+
+    fn prev(&mut self) -> bool {
+        match self.pos {
+            Some(0) | None => {
+                self.pos = None;
+                false
+            }
+            Some(p) => {
+                self.pos = Some(p - 1);
+                true
+            }
+        }
+    }
+
     fn column(&self, col: usize) -> Value {
         let pos = self.pos.expect("column read with no current row");
         self.rows
@@ -105,6 +144,18 @@ impl Cursor for InMemoryCursor {
         {
             (pos as i64).saturating_add(1)
         }
+    }
+
+    fn delete(&mut self) -> bool {
+        let Some(pos) = self.pos else {
+            return false;
+        };
+        if pos >= self.rows.len() {
+            return false;
+        }
+        self.rows.remove(pos);
+        self.pos = None;
+        true
     }
 }
 
@@ -147,6 +198,24 @@ impl Cursor for EphemeralTableCursor {
         }
     }
 
+    fn last(&mut self) -> bool {
+        self.pos = self.rows.len().checked_sub(1);
+        self.pos.is_some()
+    }
+
+    fn prev(&mut self) -> bool {
+        match self.pos {
+            Some(0) | None => {
+                self.pos = None;
+                false
+            }
+            Some(p) => {
+                self.pos = Some(p - 1);
+                true
+            }
+        }
+    }
+
     fn column(&self, col: usize) -> Value {
         let pos = self.pos.expect("column read with no current row");
         self.rows
@@ -163,6 +232,18 @@ impl Cursor for EphemeralTableCursor {
 
     fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
         self.rows.push((rowid, values));
+        true
+    }
+
+    fn delete(&mut self) -> bool {
+        let Some(pos) = self.pos else {
+            return false;
+        };
+        if pos >= self.rows.len() {
+            return false;
+        }
+        self.rows.remove(pos);
+        self.pos = None;
         true
     }
 }
@@ -327,6 +408,43 @@ mod tests {
     }
 
     #[test]
+    fn last_then_prev_walks_every_row_in_reverse() {
+        let mut c = InMemoryCursor::new(vec![
+            vec![Value::Integer(1)],
+            vec![Value::Integer(2)],
+            vec![Value::Integer(3)],
+        ]);
+        assert!(c.last());
+        assert_eq!(c.column(0), Value::Integer(3));
+        assert!(c.prev());
+        assert_eq!(c.column(0), Value::Integer(2));
+        assert!(c.prev());
+        assert_eq!(c.column(0), Value::Integer(1));
+        assert!(!c.prev());
+    }
+
+    #[test]
+    fn empty_cursor_last_reports_no_row() {
+        let mut c = InMemoryCursor::new(vec![]);
+        assert!(!c.last());
+    }
+
+    #[test]
+    fn delete_removes_current_row_and_clears_position() {
+        let mut c = InMemoryCursor::new(vec![vec![Value::Integer(1)], vec![Value::Integer(2)]]);
+        c.rewind();
+        assert!(c.delete());
+        assert!(c.rewind());
+        assert_eq!(c.column(0), Value::Integer(2));
+    }
+
+    #[test]
+    fn delete_with_no_current_row_returns_false() {
+        let mut c = InMemoryCursor::new(vec![vec![Value::Integer(1)]]);
+        assert!(!c.delete());
+    }
+
+    #[test]
     fn ephemeral_table_cursor_starts_empty() {
         let mut c = EphemeralTableCursor::new();
         assert!(!c.rewind());
@@ -411,5 +529,28 @@ mod tests {
         c.sorter_insert(blob.clone().into());
         c.rewind();
         assert_eq!(c.current_blob(), Some(Value::Blob(blob.into())));
+    }
+
+    #[test]
+    fn ephemeral_table_cursor_last_then_prev_walks_in_reverse() {
+        let mut c = EphemeralTableCursor::new();
+        c.insert(10, vec![Value::Integer(1)]);
+        c.insert(20, vec![Value::Integer(2)]);
+        assert!(c.last());
+        assert_eq!(c.rowid(), 20);
+        assert!(c.prev());
+        assert_eq!(c.rowid(), 10);
+        assert!(!c.prev());
+    }
+
+    #[test]
+    fn ephemeral_table_cursor_delete_removes_current_row() {
+        let mut c = EphemeralTableCursor::new();
+        c.insert(10, vec![Value::Integer(1)]);
+        c.insert(20, vec![Value::Integer(2)]);
+        c.rewind();
+        assert!(c.delete());
+        assert!(c.rewind());
+        assert_eq!(c.rowid(), 20);
     }
 }
