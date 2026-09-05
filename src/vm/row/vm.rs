@@ -36,7 +36,7 @@ use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, PseudoCursor, S
 use super::cursor_factory::{CursorFactory, CursorFactoryError};
 use super::functions;
 use super::program::{Instruction, Opcode, Program, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY};
-use super::record::{decode_record, encode_record};
+use super::record::{decode_column, decode_record, encode_record};
 use super::schema_storage::{SchemaStorage, SchemaStorageError};
 use super::transaction::Transaction;
 use super::value::{Collation, TextEncoding, Value};
@@ -258,6 +258,9 @@ pub struct Vm {
     /// root to hand the factory for a second cursor onto the same
     /// table (db-core#125).
     cursor_roots: Vec<Option<u32>>,
+    /// Per-slot register an `OpenPseudo` cursor reads its row from, lazily
+    /// at `Column` time (sqlite-rs `CursorSlot::Pseudo`, #134).
+    pseudo_regs: Vec<Option<i32>>,
     /// A consumer's schema-write hook, installed via
     /// [`Self::set_schema_storage`] (db-core#128). `None` (the
     /// default) means `CreateTable`/`CreateIndex`/`DropTable`/
@@ -292,6 +295,7 @@ impl Default for Vm {
             transaction_hook: None,
             cursor_factory: None,
             cursor_roots: Vec::new(),
+            pseudo_regs: Vec::new(),
             schema_storage: None,
             null_rows: Vec::new(),
             sequences: Vec::new(),
@@ -488,7 +492,46 @@ impl Vm {
     /// semantics are future work (`cursor.rs`'s db-storage wiring); a
     /// caller sets a program's cursors up via this method before
     /// running it.
+    fn set_pseudo_reg(&mut self, slot: i32, reg: Option<i32>) -> Result<(), ExecError> {
+        let idx = Self::index("cursor slot write", slot)?;
+        if idx >= self.pseudo_regs.len() {
+            self.pseudo_regs.resize(idx.saturating_add(1), None);
+        }
+        if let Some(cell) = self.pseudo_regs.get_mut(idx) {
+            *cell = reg;
+        }
+        Ok(())
+    }
+
+    fn pseudo_reg(&self, slot: i32) -> Option<i32> {
+        usize::try_from(slot)
+            .ok()
+            .and_then(|idx| self.pseudo_regs.get(idx).copied().flatten())
+    }
+
+    /// `Column` on a pseudo cursor: decode `col` out of the bound
+    /// register's current record blob (re-read on every call, since the
+    /// register is rewritten between rows — `SorterData`/`MakeRecord`).
+    fn pseudo_column(
+        &self,
+        reg: i32,
+        col: usize,
+        opcode: &'static str,
+    ) -> Result<Value, ExecError> {
+        match self.register(reg)? {
+            Value::Blob(bytes) => {
+                Ok(decode_column(bytes, col, self.text_encoding).unwrap_or(Value::Null))
+            }
+            Value::Null => Ok(Value::Null),
+            other => Err(ExecError::MalformedInstruction {
+                opcode,
+                reason: format!("pseudo-cursor register holds {other:?}, not a record blob"),
+            }),
+        }
+    }
+
     pub fn open_cursor(&mut self, slot: i32, cursor: Box<dyn Cursor>) -> Result<(), ExecError> {
+        self.set_pseudo_reg(slot, None)?;
         let idx = Self::index("cursor slot write", slot)?;
         if idx >= self.cursors.len() {
             self.cursors.resize_with(idx.saturating_add(1), || None);
@@ -671,6 +714,20 @@ fn bit_not(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
     };
     vm.set_register(instr.p2, result)?;
     Ok(Step::Next)
+}
+
+/// `Count`: the cursor's own count when it has one, else a full scan.
+fn count_rows(cursor: &mut dyn Cursor) -> i64 {
+    if let Some(n) = cursor.count() {
+        return n;
+    }
+    let mut n: i64 = 0;
+    let mut has_row = cursor.rewind();
+    while has_row {
+        n = n.saturating_add(1);
+        has_row = cursor.next();
+    }
+    n
 }
 
 fn register_as_i64(vm: &Vm, reg: i32) -> Result<i64, ExecError> {
@@ -1077,6 +1134,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             let col = instr.p2 as usize;
             let value = if vm.is_null_row(instr.p1)? {
                 Value::Null
+            } else if let Some(reg) = vm.pseudo_reg(instr.p1) {
+                vm.pseudo_column(reg, col, "Column")?
             } else {
                 vm.cursor(instr.p1)?.column(col)
             };
@@ -1112,18 +1171,18 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::Count => {
-            let count = match vm.cursor(instr.p1)?.count() {
-                Some(n) => n,
-                None => {
-                    let cursor = vm.cursor_mut(instr.p1)?;
-                    let mut n: i64 = 0;
-                    let mut has_row = cursor.rewind();
-                    while has_row {
-                        n = n.saturating_add(1);
-                        has_row = cursor.next();
-                    }
-                    n
-                }
+            // sqlite-rs: p1 is the *root page* of the table to count (the
+            // `SELECT count(*)` fast path opens its own cursor); with no
+            // cursor factory (in-memory programs) p1 names an open slot.
+            let count = if let Some(factory) = vm.cursor_factory.as_deref_mut() {
+                #[allow(clippy::cast_sign_loss)]
+                let root = instr.p1 as u32;
+                let mut cursor = factory
+                    .open_read(root)
+                    .map_err(ExecError::CursorFactoryFailed)?;
+                count_rows(cursor.as_mut())
+            } else {
+                count_rows(vm.cursor_mut(instr.p1)?.as_mut())
             };
             vm.set_register(instr.p2, Value::Integer(count))?;
             Ok(Step::Next)
@@ -1216,16 +1275,11 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::OpenPseudo => {
-            let blob = match vm.register(instr.p2)? {
-                Value::Blob(bytes) => bytes.clone(),
-                other => {
-                    return Err(ExecError::TypeMismatch {
-                        opcode: "OpenPseudo",
-                        found: value_kind(other),
-                    })
-                }
-            };
-            vm.open_cursor(instr.p1, Box::new(PseudoCursor::new(&blob)))?;
+            // sqlite-rs: the cursor reads register p2 *lazily* — codegen
+            // opens it before the register holds a row (`SorterData` /
+            // `MakeRecord` fill it later, and rewrite it between rows).
+            vm.open_cursor(instr.p1, Box::new(PseudoCursor::new(&[])))?;
+            vm.set_pseudo_reg(instr.p1, Some(instr.p2))?;
             Ok(Step::Next)
         }
         Opcode::OpenEphemeral => {
