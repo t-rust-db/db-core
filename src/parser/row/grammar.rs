@@ -2348,13 +2348,7 @@ impl Parser {
             return self
                 .unsupported("FILTER clause on aggregates/window functions not yet supported");
         }
-        let over = if self.eat_kw(Keyword::OVER) {
-            let (def, over_end) = self.window_def()?;
-            end = over_end;
-            Some(def)
-        } else {
-            None
-        };
+        let over = self.over_clause(&mut end)?;
         let span = join_span(start, {
             end.len = end.len.max(1);
             end
@@ -2368,6 +2362,22 @@ impl Parser {
             },
             span,
         })
+    }
+
+    /// `function_call`'s optional `OVER` tail, kept out of that function's
+    /// own frame: `function_call` sits on the stack once per nesting level
+    /// of `f(f(f(...)))`, and inlining the window-spec temporaries into it
+    /// pushed the 200-level `MAX_EXPR_DEPTH` probe past a default debug
+    /// thread stack (see `deeply_nested_expressions_hit_the_depth_guard_
+    /// instead_of_the_stack`). Only a real `OVER` pays for this frame.
+    #[inline(never)]
+    fn over_clause(&mut self, end: &mut Span) -> PResult<Option<Box<WindowDef>>> {
+        if !self.eat_kw(Keyword::OVER) {
+            return Ok(None);
+        }
+        let (def, over_end) = self.window_def()?;
+        *end = over_end;
+        Ok(Some(Box::new(def)))
     }
 
     /// The inline window spec after `OVER`: `([PARTITION BY expr, ...]
@@ -3180,5 +3190,29 @@ mod tests {
                 }
             )
             .is_err());
+    }
+
+    /// sqlite-rs's corpus harness runs this exact probe
+    /// (`tests/corpus/extracted_sql_test.rs`): 61 levels must parse, 200
+    /// and 5,000 must hit `MAX_EXPR_DEPTH` as `Invalid` — on a default
+    /// test-thread stack. Growing `ExprKind` (e.g. an unboxed `WindowDef`)
+    /// turns the 200 case into a stack overflow instead.
+    #[test]
+    fn deeply_nested_expressions_hit_the_depth_guard_instead_of_the_stack() {
+        let ok = format!("SELECT {}1{}", "abs(".repeat(61), ")".repeat(61));
+        assert!(!matches!(
+            crate::parser::row::parse_select(&ok),
+            crate::parser::row::ParseOutcome::Invalid { .. }
+        ));
+        for depth in [200usize, 5_000] {
+            let deep = format!("SELECT {}1{}", "abs(".repeat(depth), ")".repeat(depth));
+            assert!(
+                matches!(
+                    crate::parser::row::parse_select(&deep),
+                    crate::parser::row::ParseOutcome::Invalid { .. }
+                ),
+                "{depth} levels must be rejected by the depth guard"
+            );
+        }
     }
 }
