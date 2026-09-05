@@ -44,6 +44,85 @@ pub const SYNCHRONOUS_FULL: i32 = 2;
 /// level to set, just report the current one).
 pub const SYNCHRONOUS_QUERY: i32 = -1;
 
+impl Opcode {
+    /// The oracle-harvested opcode inventory sqlite-rs's
+    /// `tests/unit/vdbe_opcode_completeness_test.rs` checks against
+    /// `tools/opcodes-v2.json` — sqlite-rs `program.rs::Opcode::ALL`,
+    /// verbatim (#134). Excludes sqlite-rs's own additions (`AutoCommit`,
+    /// `SetJournalMode`, `Synchronous`, `IntegrityCheck`, the index-scan
+    /// and DDL families), which the harvested set does not name.
+    pub const ALL: [Opcode; 68] = [
+        Opcode::Init,
+        Opcode::Goto,
+        Opcode::Once,
+        Opcode::BeginSubrtn,
+        Opcode::Return,
+        Opcode::Halt,
+        Opcode::Transaction,
+        Opcode::IfNot,
+        Opcode::IfNotZero,
+        Opcode::IfPos,
+        Opcode::DecrJumpZero,
+        Opcode::IsNull,
+        Opcode::NotNull,
+        Opcode::MustBeInt,
+        Opcode::OffsetLimit,
+        Opcode::OpenRead,
+        Opcode::OpenEphemeral,
+        Opcode::OpenPseudo,
+        Opcode::Rewind,
+        Opcode::Last,
+        Opcode::Next,
+        Opcode::Column,
+        Opcode::Rowid,
+        Opcode::SeekRowid,
+        Opcode::NullRow,
+        Opcode::Sequence,
+        Opcode::Found,
+        Opcode::IdxInsert,
+        Opcode::IdxLE,
+        Opcode::Delete,
+        Opcode::Eq,
+        Opcode::Ge,
+        Opcode::Gt,
+        Opcode::Le,
+        Opcode::Lt,
+        Opcode::RealAffinity,
+        Opcode::Add,
+        Opcode::Subtract,
+        Opcode::Multiply,
+        Opcode::Divide,
+        Opcode::Remainder,
+        Opcode::Not,
+        Opcode::BitAnd,
+        Opcode::BitOr,
+        Opcode::ShiftLeft,
+        Opcode::ShiftRight,
+        Opcode::BitNot,
+        Opcode::Concat,
+        Opcode::Cast,
+        Opcode::Function,
+        Opcode::AggStep,
+        Opcode::AggFinal,
+        Opcode::Copy,
+        Opcode::Integer,
+        Opcode::Int64,
+        Opcode::Real,
+        Opcode::Blob,
+        Opcode::Null,
+        Opcode::String8,
+        Opcode::Variable,
+        Opcode::MakeRecord,
+        Opcode::ResultRow,
+        Opcode::SorterOpen,
+        Opcode::SorterInsert,
+        Opcode::SorterSort,
+        Opcode::SorterNext,
+        Opcode::SorterData,
+        Opcode::Sort,
+    ];
+}
+
 /// sqlite-rs's VDBE opcode set, by category. See sqlite-rs's
 /// `src/vdbe/program.rs` for the authoritative per-opcode semantics
 /// this is ported from.
@@ -330,6 +409,14 @@ pub enum P4 {
     },
     /// An affinity byte string, one byte per column, for `MakeRecord`.
     Affinity(Vec<u8>),
+    /// Per-key-column collations for the index-key opcodes
+    /// (`SeekIndexEq`/`GE`, `IdxCompareGT`, `IdxLE`, `Found`,
+    /// `NoConflict`, `IdxInsert`, `AutoIndexInsert`/`Seek`); the key
+    /// column count is the vector's length. `P4::Int(n)` on the same
+    /// opcodes means `n` BINARY-collated columns (#134).
+    SeekKey(Vec<Collation>),
+    /// A boolean flag operand (#134).
+    Bool(bool),
     /// `AggStep`'s `"name(arity)"` descriptor plus the collation
     /// `min`/`max` compares under -- `AggFinal` has no comparison to
     /// perform, so it keeps the plain `Str` descriptor.
@@ -527,6 +614,21 @@ impl Program {
     pub fn push(&mut self, instr: Instruction) -> &mut Self {
         self.instructions.push(instr);
         self
+    }
+
+    /// The instruction at `pc`, if any.
+    pub fn get(&self, pc: usize) -> Option<&Instruction> {
+        self.instructions.get(pc)
+    }
+
+    /// Number of instructions.
+    pub fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
+    /// `true` for a program with no instructions.
+    pub fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
     }
 }
 

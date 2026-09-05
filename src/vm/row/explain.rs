@@ -83,6 +83,12 @@ fn render_p4(p4: &P4) -> String {
         P4::SortKey(cols) => render_sort_key(cols),
         P4::GroupKey(cols) => render_group_key(cols),
         P4::Affinity(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        P4::SeekKey(collations) => collations
+            .iter()
+            .map(|c| format!("{c:?}").to_ascii_uppercase())
+            .collect::<Vec<_>>()
+            .join(","),
+        P4::Bool(b) => i32::from(*b).to_string(),
         P4::CreateTable { name, sql } => format!("{name}: {sql}"),
         P4::CreateView { name, sql } => format!("{name}: {sql}"),
         P4::DropTable { name, .. } => name.clone(),

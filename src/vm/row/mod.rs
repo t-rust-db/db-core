@@ -178,8 +178,9 @@ pub use aggregate::{AggState, AggregateError};
 pub use cast::cast_to;
 pub use compare::compare;
 pub use cursor::{
-    AutoIndexCursor, Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor,
-    InMemoryIndexCursor, PseudoCursor, SorterCursor,
+    normalize_key_values, AutoIndexCursor, Cursor, EphemeralIndexCursor, EphemeralTableCursor,
+    HashAggCursor, InMemoryCursor, InMemoryIndexCursor, PseudoCursor, SorterCursor,
+    MAX_EPHEMERAL_ROWS,
 };
 pub use cursor_factory::{CursorFactory, CursorFactoryError};
 pub use explain::{explain, ExplainRow};

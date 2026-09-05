@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.44.2"
+version = "0.45.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/db-core"
