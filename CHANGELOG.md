@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.30.0] - 2026-09-05
+
+### Fixed
+
+- **`SELECT` mixing a bare column with an aggregate crashed at runtime instead of being rejected** (#99) -- `SELECT active, MAX(id) FROM t` (no `GROUP BY`) compiled the bare column as a full-length register and the aggregate as a single collapsed value; `Opcode::Emit` then indexed both as if the same length and panicked ("index out of bounds") once it reached the aggregate's. A related, non-crashing bug also existed with `GROUP BY` present: `compile` emits non-aggregated SELECT columns via `GROUP BY`'s own key registers in `GROUP BY`'s stated order, never checking each SELECT column against `group_by` -- so a column that wasn't a group key, or `GROUP BY` keys listed in a different order than `GROUP BY` itself, silently produced wrong/misaligned results. Both are now rejected at parse time (`parser::column::convert_select`): every non-aggregated SELECT column must appear, in the same order, as `GROUP BY`. Window functions remain exempt (no `GROUP BY` requirement).
+
 ## [0.29.0] - 2026-09-05
 
 ### Added
