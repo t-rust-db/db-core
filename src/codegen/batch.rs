@@ -187,7 +187,10 @@ fn compile_expr(expr: &Expr, ctx: &mut Ctx) -> usize {
             });
             reg
         }
-        Expr::InSubquery { .. } => {
+        // `EXISTS (SELECT ...)` has no batch-planner counterpart either
+        // (db-core#95 implements it for `codegen::row` only) -- compile
+        // to the same always-false predicate.
+        Expr::InSubquery { .. } | Expr::Exists { .. } => {
             // `compile_semi_join` handles `IN (subquery)` itself and strips
             // it from `where_clause` before ever calling `compile` --
             // reaching this arm means `IN (subquery)` was used via the
@@ -468,7 +471,7 @@ pub fn compile_join(query: &Query) -> Result<JoinProgram> {
         let (prefix, _) = split_qualified(name);
         match prefix {
             None => left_columns.push(name.clone()),
-            Some(p) if p == query.from => left_columns.push(name.clone()),
+            Some(p) if p == query.from.name() => left_columns.push(name.clone()),
             Some(p) if p == join.table => right_columns.push(name.clone()),
             Some(_) => return Err(PlanError::UnknownColumn(name.clone())),
         }
@@ -831,7 +834,7 @@ pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNod
     let mut main_cols: Vec<String> = match (&columns_to_load, join) {
         (Some(cols), Some(_)) => cols
             .iter()
-            .filter(|n| split_qualified(n).0.is_none_or(|t| t == query.from))
+            .filter(|n| split_qualified(n).0.is_none_or(|t| t == query.from.name()))
             .cloned()
             .collect(),
         (Some(cols), None) => cols.clone(),
@@ -845,14 +848,17 @@ pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNod
             push_unique(&mut main_cols, col_name.clone());
         }
     }
-    let scan = b.push(0, scan_detail(&query.from, stats(&query.from)));
+    let scan = b.push(0, scan_detail(query.from.name(), stats(query.from.name())));
     if !main_cols.is_empty() {
         b.push(scan, format!("LOAD COLUMNS: {}", main_cols.join(", ")));
     }
 
     if is_semi_join {
         if let Some(Expr::InSubquery { expr, subquery }) = &query.where_clause {
-            let sub_scan = b.push(0, scan_detail(&subquery.from, stats(&subquery.from)));
+            let sub_scan = b.push(
+                0,
+                scan_detail(subquery.from.name(), stats(subquery.from.name())),
+            );
             let sub_cols = referenced_columns(subquery);
             if !sub_cols.is_empty() {
                 b.push(sub_scan, format!("LOAD COLUMNS: {}", sub_cols.join(", ")));
@@ -864,7 +870,7 @@ pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNod
                     "SEMI JOIN: {} IN (SELECT {} FROM {})",
                     expr_to_string(expr),
                     sub_select.join(", "),
-                    subquery.from
+                    subquery.from.name()
                 ),
             );
         }
@@ -1085,7 +1091,8 @@ pub fn explain_opcodes(query: &Query) -> Result<Vec<OpcodeSection>> {
         Ok(vec![OpcodeSection {
             label: format!(
                 "SEMI JOIN body ({} IN (SELECT ... FROM {}))",
-                semi.key_column, semi.subquery.from
+                semi.key_column,
+                semi.subquery.from.name()
             ),
             rows: render_program(&semi.body),
         }])
@@ -1233,7 +1240,12 @@ fn expr_to_string(expr: &Expr) -> String {
         Expr::InSubquery { expr, subquery } => format!(
             "{} IN (SELECT ... FROM {})",
             expr_to_string(expr),
-            subquery.from
+            subquery.from.name()
+        ),
+        Expr::Exists { subquery, negated } => format!(
+            "{}EXISTS (SELECT ... FROM {})",
+            if *negated { "NOT " } else { "" },
+            subquery.from.name()
         ),
         Expr::Not(inner) => format!("NOT {}", expr_to_string(inner)),
         Expr::Neg(inner) => format!("-{}", expr_to_string(inner)),
@@ -1260,6 +1272,7 @@ fn collect_expr_columns(expr: &Expr, out: &mut Vec<String>) {
             collect_expr_columns(rhs, out);
         }
         Expr::InSubquery { expr, .. } => collect_expr_columns(expr, out),
+        Expr::Exists { .. } => {}
         Expr::Not(inner) => collect_expr_columns(inner, out),
         Expr::Neg(inner) => collect_expr_columns(inner, out),
         Expr::IsNull { expr, .. } => collect_expr_columns(expr, out),
@@ -1551,7 +1564,7 @@ mod tests {
                 .unwrap();
         let plan = compile_semi_join(&query).unwrap();
         assert_eq!(plan.key_column, "region_key");
-        assert_eq!(plan.subquery.from, "regions");
+        assert_eq!(plan.subquery.from.name(), "regions");
         assert!(!plan
             .body
             .opcodes()

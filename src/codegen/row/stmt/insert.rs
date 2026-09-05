@@ -181,7 +181,7 @@ mod tests {
 
         let query = Query {
             columns: vec![SelectItem::Star],
-            from: schema.name.clone(),
+            from: schema.name.clone().into(),
             joins: vec![],
             where_clause: None,
             distinct: false,

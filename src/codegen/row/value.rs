@@ -186,9 +186,12 @@ pub(crate) fn compile_value_depth(
 
         Expr::IsNull { .. } => compile_bool_to_value(em, reg, scope, expr, depth),
 
-        Expr::InSubquery { .. } => Err(CodegenError::Unsupported {
-            reason: "InSubquery codegen is deferred to #95 (subquery materialization)".to_string(),
-        }),
+        // Both are conditions used in a value context (db-core#95):
+        // `compile_bool_to_value` runs the subquery's jump-mode codegen
+        // twice, the same way it does for any three-valued condition.
+        Expr::InSubquery { .. } | Expr::Exists { .. } => {
+            compile_bool_to_value(em, reg, scope, expr, depth)
+        }
 
         // Unreachable: the three `BinaryOp` guards above jointly cover
         // every `BinOp` variant. Kept as a defensive fallback rather
@@ -411,7 +414,7 @@ mod tests {
     }
 
     #[test]
-    fn in_subquery_is_unsupported() {
+    fn in_subquery_without_a_catalog_is_unsupported() {
         let scope = Scope::single(schema(&[]), 0);
         let inner = crate::expr::Query {
             columns: vec![crate::expr::SelectItem::Column("x".into())],
@@ -425,6 +428,8 @@ mod tests {
             limit: None,
             offset: None,
         };
+        // db-core#95 compiles `InSubquery` in a value context, but a
+        // scope with no catalog can't resolve the subquery's own table.
         let expr = Expr::InSubquery {
             expr: Box::new(Expr::Literal(Literal::Int(1))),
             subquery: Box::new(inner),

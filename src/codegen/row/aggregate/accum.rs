@@ -125,7 +125,7 @@ fn find_aggregates(expr: &Expr, out: &mut Vec<(AggFunc, Option<String>)>) {
         Expr::Not(inner) | Expr::Neg(inner) | Expr::IsNull { expr: inner, .. } => {
             find_aggregates(inner, out);
         }
-        Expr::Literal(_) | Expr::InSubquery { .. } => {}
+        Expr::Literal(_) | Expr::InSubquery { .. } | Expr::Exists { .. } => {}
     }
 }
 

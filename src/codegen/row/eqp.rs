@@ -144,7 +144,7 @@ mod tests {
     fn query() -> Query {
         Query {
             columns: vec![SelectItem::Column("a".to_string())],
-            from: "t".to_string(),
+            from: "t".into(),
             joins: vec![],
             where_clause: None,
             distinct: false,

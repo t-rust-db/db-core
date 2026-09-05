@@ -26,7 +26,7 @@ use super::{index_scan, range_scan};
 use super::{
     CodegenError, CondTargets, Emitter, Label, RegAlloc, Result, Scope, TableSchema, Target,
 };
-use crate::expr::{BinOp, Expr, Join, JoinKind, Query, SelectItem};
+use crate::expr::{BinOp, Expr, FromClause, Join, JoinKind, Query, SelectItem};
 use crate::vm::row::{Collation, Instruction, Opcode, Program, SortKeyColumn, P4};
 
 /// Compiles `query` (a single-table `SELECT`, no `JOIN`) against
@@ -39,7 +39,7 @@ pub fn compile_select(schema: &TableSchema, cursor: i32, query: &Query) -> Resul
             reason: "SELECT with a JOIN must be compiled via compile_select_join".to_string(),
         });
     }
-    compile_select_inner(schema, cursor, None, query)
+    compile_select_inner(schema, cursor, None, query, &[], None)
 }
 
 /// Compiles `query` (a `SELECT` with a single `INNER`/`LEFT`/`FULL`
@@ -57,7 +57,40 @@ pub fn compile_select_join(
     right_cursor: i32,
     query: &Query,
 ) -> Result<Program> {
-    compile_select_inner(schema, cursor, Some((right_schema, right_cursor)), query)
+    compile_select_inner(
+        schema,
+        cursor,
+        Some((right_schema, right_cursor)),
+        query,
+        &[],
+        None,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+/// Compiles `query` against a `catalog` of every table it (or any
+/// subquery inside it) may name, wiring the cursors itself -- the entry
+/// point db-core#95's subqueries need, since a subquery's own `FROM`
+/// table can't be pre-wired by a caller that hasn't parsed it.
+/// Equivalent to [`compile_select`] for a plain single-table `FROM` with
+/// no subquery anywhere.
+///
+/// Applies [`super::subquery::push_down_where_predicates`] and
+/// [`super::subquery::flatten_from_subquery`] to `query` first, in that
+/// order -- the same order the reference runs them (a predicate is
+/// pushed into a subquery that flattening may then dissolve entirely,
+/// leaving the predicate exactly where it would have ended up anyway).
+pub fn compile_select_with_catalog(catalog: &[TableSchema], query: &Query) -> Result<Program> {
+    let mut query = query.clone();
+    super::subquery::push_down_where_predicates(&mut query);
+    super::subquery::flatten_from_subquery(&mut query);
+
+    let schema = super::subquery::resolve_from_table_schema(&query.from, catalog)?;
+    let from_subquery = match &query.from {
+        FromClause::Table(_) => None,
+        FromClause::Subquery(subquery, _) => Some(subquery.as_ref().clone()),
+    };
+    compile_select_inner(&schema, 0, None, &query, catalog, from_subquery.as_ref())
 }
 
 fn compile_select_inner(
@@ -65,6 +98,8 @@ fn compile_select_inner(
     cursor: i32,
     right: Option<(&TableSchema, i32)>,
     query: &Query,
+    catalog: &[TableSchema],
+    from_subquery: Option<&Query>,
 ) -> Result<Program> {
     if query.distinct {
         return Err(CodegenError::Unsupported {
@@ -105,7 +140,8 @@ chooser is deferred to #117, N-way joins to #118"
             Scope::join(schema.clone(), cursor, right_schema.clone(), right_cursor)
         }
         None => Scope::single(schema.clone(), cursor),
-    };
+    }
+    .with_catalog(catalog.to_vec());
 
     if !query.group_by.is_empty() || super::aggregate::query_has_aggregate(query) {
         return compile_aggregate_select(schema, cursor, right, query, &scope);
@@ -161,14 +197,25 @@ chooser is deferred to #117, N-way joins to #118"
     let mut em = Emitter::new();
     let mut reg = RegAlloc::new();
 
-    let limit = limit_scan::compile_limit_setup(&mut em, &mut reg, query)?;
-
     // The sorter cursor uses a slot past every cursor the caller wired
     // up -- `Opcode::SorterOpen` opens it itself at runtime, so it needs
     // no caller-side wiring, just an id that can't collide. The index
     // cursor the #94 fast paths below open takes the slot after it.
     let sorter_cursor = right.map_or(cursor, |(_, c)| cursor.max(c)) + 1;
     let index_cursor = sorter_cursor + 1;
+    // Every cursor above was picked by arithmetic rather than through
+    // `RegAlloc`, so the subquery cursors #95 allocates must start past
+    // them.
+    reg.reserve_cursors_through(index_cursor);
+
+    // db-core#95: `FROM (SELECT ...) alias` -- run the subquery into an
+    // ephemeral table on `cursor` first, so everything below scans it
+    // exactly like a real table.
+    if let Some(subquery) = from_subquery {
+        super::subquery::materialize_from_subquery(&mut em, &mut reg, subquery, catalog, cursor)?;
+    }
+
+    let limit = limit_scan::compile_limit_setup(&mut em, &mut reg, query)?;
 
     // An index-ordered scan produces the requested order straight out of
     // the b-tree, so it replaces the sorter entirely rather than feeding
