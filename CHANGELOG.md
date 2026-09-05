@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.34.0] - 2026-09-05
+
+### Added
+
+- **`codegen::row` gains `INSERT`/`UPDATE`/`DELETE` and secondary-index maintenance** (#96) -- ports sqlite-rs's `codegen/stmt.rs` + `codegen/stmt/{insert,update,delete}.rs` + `codegen/index_maintenance.rs`, scoped down like #91/#92's precedent: single-table only, no `INSERT ... SELECT`/`ON CONFLICT`/upsert/`RETURNING`, no `UPDATE ... FROM` or rowid-alias reassignment, no `DELETE` rowid-seek fast path (full scan only, deferred alongside #94's index-scan codegen). Adds `crate::expr::{Insert, Assignment, Update, Delete}` and extends `TableSchema`/`IndexSchema` with the column lists index maintenance needs. Also implements the write-path VM opcodes these programs execute (`Delete`/`NewRowid`/`IdxInsert`/`IdxDelete`), previously listed in `vm::row::Opcode` but unimplemented, and reworks `EphemeralTableCursor` to position by rowid (kept sorted) instead of `Vec` index so `DELETE`/`UPDATE`'s mid-scan cursor mutation can't skip or revisit rows.
+
 ## [0.33.0] - 2026-09-05
 
 ### Added
