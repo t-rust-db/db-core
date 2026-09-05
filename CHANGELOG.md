@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.29.0] - 2026-09-05
+
+### Added
+
+- **`vm::row::Cursor` gains `prev`/`last`/`delete`** (#76), matching the shape a real db-storage-backed cursor will need. `InMemoryCursor` and `EphemeralTableCursor` implement them; defaults preserve prior behavior for other cursor kinds.
+- **`Opcode::OpenRead`/`OpenWrite` are now dispatched** (#76) -- previously unhandled in the exec loop. For now this only asserts the cursor slot was pre-wired via `Vm::open_cursor`; real root-page/pager semantics against `db-storage` remain blocked on t-rust-db/db-storage#8, which adds the read-only `TableCursor` this trait's eventual adapter will wrap.
+
 ## [0.28.1] - 2026-09-05
 
 ### Changed
