@@ -823,6 +823,53 @@ impl Cursor for HashAggCursor {
     }
 }
 
+/// A one-row cursor over an already-`MakeRecord`-encoded blob
+/// (`Opcode::OpenPseudo`, db-core#125) -- sqlite-rs's `PseudoCursor`,
+/// used to run a subquery's/join's inner side's result row back through
+/// ordinary `Column` reads without a real table backing it.
+///
+/// **Simplification**: sqlite-rs's pseudo-cursor re-reads its content
+/// register live on every `Column`, so it reflects whatever that
+/// register holds *at read time* (the register is typically
+/// overwritten once per outer-loop iteration by a preceding
+/// `MakeRecord`). This type instead decodes the blob once, at
+/// `OpenPseudo` time, and serves that same row for as long as the
+/// cursor stays open -- correct for `OpenPseudo`'s common one-shot use
+/// (open, read once, done) but not for a pseudo-cursor a codegen
+/// re-populates across loop iterations without re-opening it. A real
+/// live-register pseudo-cursor needs `Vm` access `Cursor` doesn't have;
+/// revisit if a corpus test needs it.
+pub struct PseudoCursor {
+    values: Vec<Value>,
+}
+
+impl PseudoCursor {
+    /// Builds a pseudo-cursor over `blob`'s already-`MakeRecord`-encoded
+    /// row, decoded once up front (see this type's own doc).
+    pub fn new(blob: &[u8]) -> Self {
+        let values = decode_record(blob, TextEncoding::Utf8).unwrap_or_default();
+        PseudoCursor { values }
+    }
+}
+
+impl Cursor for PseudoCursor {
+    fn rewind(&mut self) -> bool {
+        true
+    }
+
+    fn next(&mut self) -> bool {
+        false
+    }
+
+    fn column(&self, col: usize) -> Value {
+        self.values.get(col).cloned().unwrap_or(Value::Null)
+    }
+
+    fn rowid(&self) -> i64 {
+        0
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -1184,6 +1231,21 @@ mod tests {
         let mut c = HashAggCursor::new(vec![group_key(0)]);
         assert!(!c.rewind());
         assert!(c.current_blob().is_none());
+    }
+
+    #[test]
+    fn pseudo_cursor_serves_the_decoded_row_repeatedly() {
+        let blob = super::super::record::encode_record(
+            &[Value::Integer(7), Value::Text("x".to_string().into())],
+            TextEncoding::Utf8,
+        );
+        let mut c = PseudoCursor::new(&blob);
+        assert!(c.rewind());
+        assert_eq!(c.column(0), Value::Integer(7));
+        assert_eq!(c.column(1), Value::Text("x".to_string().into()));
+        assert!(!c.next());
+        assert!(c.rewind());
+        assert_eq!(c.column(0), Value::Integer(7));
     }
 
     #[test]

@@ -96,12 +96,20 @@
 //!   conformance checks (db-core#81), public so a real adapter can run
 //!   the same checks this crate runs against its own fixtures.
 //!
+//! - [`cursor_factory`] -- the [`cursor_factory::CursorFactory`] hook
+//!   (db-core#125) a consumer's pager installs via [`vm::Vm::
+//!   set_cursor_factory`] to resolve `OpenRead`/`OpenWrite`'s `p2` root
+//!   page to a real cursor at run time; `OpenDup` re-opens an
+//!   already-open slot's root a second time, and `OpenPseudo` opens
+//!   [`cursor::PseudoCursor`] over an already-`MakeRecord`-encoded
+//!   register. With no factory installed, `OpenRead`/`OpenWrite` keep
+//!   the earlier pre-wired-slot fallback.
+//!
 //! **Not yet ported**: real `db-storage` cursor wiring (`cursor.rs`'s
-//! largest file, real `OpenRead`/`OpenWrite`), `OpenDup`/`OpenPseudo`
-//! and index-mode ephemeral cursors, DDL, `IntegrityCheck`. `Opcode`
-//! already lists every variant sqlite-rs has (parity of identity);
-//! dispatch for the rest lands in later phases (tracked against
-//! db-core#18).
+//! largest file), index-mode cursors, `AutoIndex*`/`Count`/`Last`/
+//! `NullRow`/`Sequence`, DDL, `IntegrityCheck`. `Opcode` already lists
+//! every variant sqlite-rs has (parity of identity); dispatch for the
+//! rest lands in later phases (tracked against db-core#18).
 //!
 //! [`super::batch`] is a *structural* reference only (module layout,
 //! doc density, in-module tests) -- its typed-operand `Opcode` design
@@ -116,6 +124,7 @@ pub mod coerce;
 pub mod compare;
 pub mod cursor;
 pub mod cursor_conformance;
+pub mod cursor_factory;
 pub mod explain;
 pub mod functions;
 pub mod logic;
@@ -129,7 +138,10 @@ pub use affinity::{affinity_of, apply_affinity, comparison_affinity, Affinity};
 pub use aggregate::{AggState, AggregateError};
 pub use cast::cast_to;
 pub use compare::compare;
-pub use cursor::{Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor, SorterCursor};
+pub use cursor::{
+    Cursor, EphemeralTableCursor, HashAggCursor, InMemoryCursor, PseudoCursor, SorterCursor,
+};
+pub use cursor_factory::{CursorFactory, CursorFactoryError};
 pub use explain::{explain, ExplainRow};
 pub use functions::FunctionError;
 pub use program::{

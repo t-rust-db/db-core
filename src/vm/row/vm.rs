@@ -32,7 +32,8 @@ use super::aggregate::{self, AggState};
 use super::cast::cast_to;
 use super::coerce;
 use super::compare::compare;
-use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, SorterCursor};
+use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, PseudoCursor, SorterCursor};
+use super::cursor_factory::{CursorFactory, CursorFactoryError};
 use super::functions;
 use super::program::{Instruction, Opcode, Program, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY};
 use super::record::{decode_record, encode_record};
@@ -88,6 +89,13 @@ pub enum ExecError {
     /// `rollback` failed (`Opcode::Transaction`/`AutoCommit`,
     /// db-core#81).
     TransactionFailed(super::transaction::TransactionError),
+    /// `OpenRead`/`OpenWrite` named a nonzero `p3` (attached-database
+    /// index) -- db-core has no notion of attached databases
+    /// (db-core#125).
+    AttachedDatabasesUnsupported,
+    /// A [`super::cursor_factory::CursorFactory`] call failed
+    /// (db-core#125).
+    CursorFactoryFailed(CursorFactoryError),
 }
 
 impl std::fmt::Display for ExecError {
@@ -137,6 +145,10 @@ impl std::fmt::Display for ExecError {
                 "SetJournalMode: cannot change journal mode within a transaction"
             ),
             ExecError::TransactionFailed(err) => write!(f, "transaction hook failed: {err}"),
+            ExecError::AttachedDatabasesUnsupported => {
+                write!(f, "attached databases are not supported")
+            }
+            ExecError::CursorFactoryFailed(err) => write!(f, "cursor factory failed: {err}"),
         }
     }
 }
@@ -209,6 +221,17 @@ pub struct Vm {
     /// run (db-core#81). `None` (the default) means those opcodes only
     /// toggle [`Self::autocommit`].
     transaction_hook: Option<Box<dyn Transaction>>,
+    /// A consumer's cursor-opening hook, installed via
+    /// [`Self::set_cursor_factory`] (db-core#125). `None` (the default)
+    /// means `OpenRead`/`OpenWrite` fall back to the pre-wired path:
+    /// asserting the caller already opened the slot via
+    /// [`Self::open_cursor`] before running the program.
+    cursor_factory: Option<Box<dyn CursorFactory>>,
+    /// The root page each open cursor slot was last opened against,
+    /// parallel to `cursors` -- `OpenDup`'s only way to re-derive which
+    /// root to hand the factory for a second cursor onto the same
+    /// table (db-core#125).
+    cursor_roots: Vec<Option<u32>>,
 }
 
 impl Default for Vm {
@@ -222,6 +245,8 @@ impl Default for Vm {
             params: Vec::new(),
             autocommit: true,
             transaction_hook: None,
+            cursor_factory: None,
+            cursor_roots: Vec::new(),
         }
     }
 }
@@ -241,6 +266,36 @@ impl Vm {
     /// those opcodes only toggle [`Vm::autocommit`].
     pub fn set_transaction_hook(&mut self, hook: Box<dyn Transaction>) {
         self.transaction_hook = Some(hook);
+    }
+
+    /// Installs `factory` to resolve `OpenRead`/`OpenWrite`'s `p2` root
+    /// page to a real cursor (db-core#125). With none installed (the
+    /// default), those opcodes fall back to asserting the slot was
+    /// pre-wired via [`Self::open_cursor`].
+    pub fn set_cursor_factory(&mut self, factory: Box<dyn CursorFactory>) {
+        self.cursor_factory = Some(factory);
+    }
+
+    /// Records `root` as the root page cursor slot `slot` was last
+    /// opened against -- `OpenDup`'s lookup key (db-core#125).
+    fn set_cursor_root(&mut self, slot: i32, root: u32) -> Result<(), ExecError> {
+        let idx = Self::index("cursor slot write", slot)?;
+        if idx >= self.cursor_roots.len() {
+            self.cursor_roots.resize(idx.saturating_add(1), None);
+        }
+        if let Some(cell) = self.cursor_roots.get_mut(idx) {
+            *cell = Some(root);
+        }
+        Ok(())
+    }
+
+    fn cursor_root(&self, slot: i32) -> Result<u32, ExecError> {
+        let idx = Self::index("cursor slot read", slot)?;
+        self.cursor_roots
+            .get(idx)
+            .copied()
+            .flatten()
+            .ok_or(ExecError::CursorNotOpen { slot })
     }
 
     fn param(&self, index: i32) -> Option<&Value> {
@@ -822,11 +877,54 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
         Opcode::OpenRead | Opcode::OpenWrite => {
-            // Real root-page/pager semantics (`db-storage` wiring) are
-            // future work -- see `cursor.rs`'s doc comment. For now this
-            // just asserts the caller already wired this slot via
-            // `open_cursor` before running the program.
-            vm.cursor(instr.p1)?;
+            if instr.p3 != 0 {
+                return Err(ExecError::AttachedDatabasesUnsupported);
+            }
+            let Some(factory) = vm.cursor_factory.as_deref_mut() else {
+                // No factory installed -- fall back to the pre-wired
+                // path: assert the caller already wired this slot via
+                // `open_cursor` before running the program.
+                vm.cursor(instr.p1)?;
+                return Ok(Step::Next);
+            };
+            #[allow(clippy::cast_sign_loss)]
+            let root = instr.p2 as u32;
+            let cursor = match (&instr.p4, instr.opcode) {
+                (P4::SortKey(key), _) => factory.open_index(root, key),
+                (_, Opcode::OpenWrite) => factory.open_write(root),
+                _ => factory.open_read(root),
+            }
+            .map_err(ExecError::CursorFactoryFailed)?;
+            vm.open_cursor(instr.p1, cursor)?;
+            vm.set_cursor_root(instr.p1, root)?;
+            Ok(Step::Next)
+        }
+        Opcode::OpenDup => {
+            let root = vm.cursor_root(instr.p2)?;
+            let factory =
+                vm.cursor_factory
+                    .as_deref_mut()
+                    .ok_or(ExecError::CursorFactoryFailed(CursorFactoryError(
+                        "OpenDup requires a cursor factory".to_string(),
+                    )))?;
+            let cursor = factory
+                .open_read(root)
+                .map_err(ExecError::CursorFactoryFailed)?;
+            vm.open_cursor(instr.p1, cursor)?;
+            vm.set_cursor_root(instr.p1, root)?;
+            Ok(Step::Next)
+        }
+        Opcode::OpenPseudo => {
+            let blob = match vm.register(instr.p2)? {
+                Value::Blob(bytes) => bytes.clone(),
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "OpenPseudo",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            vm.open_cursor(instr.p1, Box::new(PseudoCursor::new(&blob)))?;
             Ok(Step::Next)
         }
         Opcode::OpenEphemeral => {
@@ -1533,11 +1631,11 @@ mod tests {
     #[test]
     fn unimplemented_opcode_errors_by_name() {
         let mut vm = Vm::new();
-        let program = Program::new(vec![Instruction::new(Opcode::OpenDup, 0, 0, 0)]);
+        let program = Program::new(vec![Instruction::new(Opcode::IntegrityCheck, 0, 0, 0)]);
         assert!(matches!(
             execute(&mut vm, &program),
             Err(ExecError::Unimplemented {
-                opcode: Opcode::OpenDup
+                opcode: Opcode::IntegrityCheck
             })
         ));
     }
@@ -2127,5 +2225,91 @@ mod tests {
             execute(&mut vm, &program),
             Err(ExecError::CursorNotOpen { slot: 0 })
         ));
+    }
+
+    /// A minimal [`super::super::cursor_factory::CursorFactory`] over a
+    /// fixed table of `root -> rows` -- this suite's stand-in for a
+    /// real consumer pager.
+    struct TestCursorFactory {
+        tables: std::collections::HashMap<u32, Vec<Vec<Value>>>,
+    }
+
+    impl super::super::cursor_factory::CursorFactory for TestCursorFactory {
+        fn open_read(
+            &mut self,
+            root: u32,
+        ) -> Result<Box<dyn Cursor>, super::super::cursor_factory::CursorFactoryError> {
+            let rows = self.tables.get(&root).cloned().unwrap_or_default();
+            Ok(Box::new(super::super::cursor::InMemoryCursor::new(rows)))
+        }
+    }
+
+    #[test]
+    fn cursor_factory_opens_two_different_roots_by_p2() {
+        let mut vm = Vm::new();
+        vm.set_cursor_factory(Box::new(TestCursorFactory {
+            tables: std::collections::HashMap::from([
+                (10, vec![vec![Value::Integer(1)]]),
+                (20, vec![vec![Value::Integer(2)]]),
+            ]),
+        }));
+        let program = Program::new(vec![
+            Instruction::new(Opcode::OpenRead, 0, 10, 0),
+            Instruction::new(Opcode::OpenRead, 1, 20, 0),
+            Instruction::new(Opcode::Rewind, 0, 4, 0),
+            Instruction::new(Opcode::Column, 0, 0, 2),
+            Instruction::new(Opcode::Rewind, 1, 6, 0),
+            Instruction::new(Opcode::Column, 1, 0, 3),
+            Instruction::new(Opcode::ResultRow, 2, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn open_read_with_nonzero_p3_errors_attached_databases_unsupported() {
+        let mut vm = Vm::new();
+        let mut instr = Instruction::new(Opcode::OpenRead, 0, 0, 0);
+        instr.p3 = 1;
+        let program = Program::new(vec![instr]);
+        assert!(matches!(
+            execute(&mut vm, &program),
+            Err(ExecError::AttachedDatabasesUnsupported)
+        ));
+    }
+
+    #[test]
+    fn open_dup_opens_a_second_cursor_onto_the_same_root() {
+        let mut vm = Vm::new();
+        vm.set_cursor_factory(Box::new(TestCursorFactory {
+            tables: std::collections::HashMap::from([(10, vec![vec![Value::Integer(1)]])]),
+        }));
+        let program = Program::new(vec![
+            Instruction::new(Opcode::OpenRead, 0, 10, 0),
+            Instruction::new(Opcode::OpenDup, 1, 0, 0),
+            Instruction::new(Opcode::Rewind, 1, 4, 0),
+            Instruction::new(Opcode::Column, 1, 0, 1),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn open_pseudo_reads_columns_from_the_makerecord_blob_in_p2() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 42, 0, 0),
+            Instruction::new(Opcode::MakeRecord, 0, 1, 1),
+            Instruction::new(Opcode::OpenPseudo, 0, 1, 0),
+            Instruction::new(Opcode::Rewind, 0, 6, 0),
+            Instruction::new(Opcode::Column, 0, 0, 2),
+            Instruction::new(Opcode::ResultRow, 2, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(42)]]);
     }
 }
