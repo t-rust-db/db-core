@@ -377,8 +377,13 @@ pub enum ExprKind {
         distinct: bool,
         /// The argument list.
         args: FunctionArgs,
-        /// `Some` for a window function's `OVER (...)` tail.
-        over: Option<WindowDef>,
+        /// `Some` for a window function's `OVER (...)` tail. Boxed so the
+        /// rare window case doesn't grow every `ExprKind` by two `Vec`s:
+        /// expression parsing recurses one frame per nesting level, and
+        /// `MAX_EXPR_DEPTH` (200) has to be reachable within a debug
+        /// build's default thread stack (t-rust-db/sqlite-rs#17 hit the
+        /// overflow through its corpus depth-guard test).
+        over: Option<Box<WindowDef>>,
     },
     /// A unary operator applied to an expression, e.g. `-x`, `NOT x`.
     Unary {
