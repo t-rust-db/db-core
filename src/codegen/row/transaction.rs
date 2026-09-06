@@ -6,7 +6,7 @@
 //! SQLite's convention). `TransactionMode` (DEFERRED/IMMEDIATE/
 //! EXCLUSIVE) is carried through `Transaction`'s `p1`.
 
-use crate::parser::row::ast::{Begin, Commit, Rollback, TransactionMode};
+use crate::parser::ast::{Begin, Commit, Rollback, TransactionMode};
 use crate::vm::row::{
     Instruction, Opcode, Program, TRANSACTION_MODE_DEFERRED, TRANSACTION_MODE_EXCLUSIVE,
     TRANSACTION_MODE_IMMEDIATE,
