@@ -45,7 +45,7 @@ impl Segment for InMemorySegment {
 /// - `ORDER BY ... LIMIT ...` without aggregates runs as a bounded top-N
 ///   per segment and at the merge (#109) instead of materializing every
 ///   row before the final sort.
-pub fn run<'s>(segments: &[Box<dyn Segment + 's>], program: &Program) -> Result<Vec<Vec<Value>>> {
+pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<Vec<Vec<Value>>> {
     let (body, fin) = program.split_finalize();
     let Some(Opcode::Finalize {
         agg_parts,
@@ -112,8 +112,8 @@ pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
 /// one's freshly-loaded batch, stopping (and truncating to exactly `limit`
 /// rows) as soon as enough have been collected -- segments past that
 /// point are never loaded.
-fn bounded_scan<'s>(
-    segments: &[Box<dyn Segment + 's>],
+fn bounded_scan<S: Segment>(
+    segments: &[S],
     body: &[Opcode],
     limit: usize,
 ) -> Result<Vec<Vec<Value>>> {
@@ -296,7 +296,7 @@ pub fn run_join(left: &Batch, right: &Batch, plan: &JoinProgram) -> Result<Vec<V
             .insert(name.clone(), vm.register(reg)?.to_vec());
     }
 
-    let segments: Vec<Box<dyn Segment>> = vec![Box::new(InMemorySegment(joined))];
+    let segments = [InMemorySegment(joined)];
     run(&segments, &plan.body)
 }
 
@@ -338,11 +338,11 @@ mod tests {
     use crate::vm::batch::AggFunc;
     use crate::vm::batch::Instruction;
 
-    fn seg(rows: &[(i64, i64)]) -> Box<dyn Segment> {
+    fn seg(rows: &[(i64, i64)]) -> InMemorySegment {
         let batch = Batch::new(rows.len())
             .with_column("k", rows.iter().map(|(k, _)| Value::Int(*k)).collect())
             .with_column("v", rows.iter().map(|(_, v)| Value::Int(*v)).collect());
-        Box::new(InMemorySegment(batch))
+        InMemorySegment(batch)
     }
 
     fn group_sum_program(fin: Opcode) -> Program {
@@ -487,10 +487,8 @@ mod tests {
                 self.0.clone()
             }
         }
-        let mk = |n: i64| -> Box<dyn Segment> {
-            Box::new(Counting(
-                Batch::new(2).with_column("k", vec![Value::Int(n), Value::Int(n + 1)]),
-            ))
+        let mk = |n: i64| -> Counting {
+            Counting(Batch::new(2).with_column("k", vec![Value::Int(n), Value::Int(n + 1)]))
         };
         let segments = vec![mk(0), mk(10), mk(20)];
         let program = Program::new(vec![

@@ -760,8 +760,25 @@ pub fn compile(select: &Select) -> Program {
     for (i, item) in items.iter().enumerate() {
         if let Item::Agg(func, arg) = item {
             let src = arg.as_ref().map(|_| agg_srcs[i]);
-            match func {
-                AggFunc::Avg => {
+            // Resolved up front so the dispatch below has no "can't happen"
+            // arm: `None` *is* the `Avg` case (the only aggregate that
+            // needs two partials), not a wildcard hiding one.
+            let simple_part = match func {
+                AggFunc::Sum => Some(AggPart::Sum),
+                AggFunc::Count => Some(AggPart::Count),
+                AggFunc::Min => Some(AggPart::Min),
+                AggFunc::Max => Some(AggPart::Max),
+                AggFunc::Avg => None,
+            };
+            match simple_part {
+                Some(part) => {
+                    let dst = ctx.alloc();
+                    aggs.push((*func, src));
+                    agg_dst.push(dst);
+                    agg_parts.push(part);
+                    emit_regs.push(dst);
+                }
+                None => {
                     let sum_dst = ctx.alloc();
                     let count_dst = ctx.alloc();
                     aggs.push((AggFunc::Sum, src));
@@ -771,19 +788,6 @@ pub fn compile(select: &Select) -> Program {
                     agg_parts.push(AggPart::Avg(emit_regs.len(), emit_regs.len() + 1));
                     emit_regs.push(sum_dst);
                     emit_regs.push(count_dst);
-                }
-                other => {
-                    let dst = ctx.alloc();
-                    aggs.push((*other, src));
-                    agg_dst.push(dst);
-                    agg_parts.push(match other {
-                        AggFunc::Sum => AggPart::Sum,
-                        AggFunc::Count => AggPart::Count,
-                        AggFunc::Min => AggPart::Min,
-                        AggFunc::Max => AggPart::Max,
-                        AggFunc::Avg => unreachable!(),
-                    });
-                    emit_regs.push(dst);
                 }
             }
         } else if let Item::Column(name) = item {
@@ -952,10 +956,13 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
     let payload_dst: Vec<usize> = (0..right_columns.len())
         .map(|i| left_columns.len() + i)
         .collect();
+    // Already rejected at the top of `compile_join`; returning the same
+    // error here keeps this match total without an `unreachable!` the
+    // qualified subset (`make check-mvl-limit`) forbids.
     let join_kind = match join.op {
         JoinOp::Inner => crate::vm::batch::JoinKind::Inner,
         JoinOp::Left => crate::vm::batch::JoinKind::Left,
-        _ => unreachable!("checked at the top of compile_join"),
+        other => return Err(PlanError::UnsupportedJoinKind(other)),
     };
     let probe = Program::from_opcodes(
         left_columns
@@ -989,17 +996,21 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
 /// [`crate::vm::engine::semi_filter`]), and runs `body` over the survivors.
 /// `body` is the main query compiled with the `IN` clause stripped -- the
 /// subquery isn't a VM predicate.
+/// Owns `subquery` (cloned out of the `IN` clause's already-boxed
+/// `Select`) rather than borrowing it -- this codebase's qualified
+/// subset (`make check-mvl-limit`) forbids the explicit lifetime a
+/// borrowing `SemiJoinProgram<'q>` would need.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SemiJoinProgram<'q> {
+pub struct SemiJoinProgram {
     pub key_column: String,
-    pub subquery: &'q Select,
+    pub subquery: Box<Select>,
     pub body: Program,
 }
 
 /// Plan a query whose entire `WHERE` clause is `col IN (SELECT ...)`.
 /// Combining the `IN` clause with other conditions via `AND`/`OR` isn't
 /// supported -- the semi-join must be the whole `WHERE` clause.
-pub fn compile_semi_join(select: &Select) -> Result<SemiJoinProgram<'_>> {
+pub fn compile_semi_join(select: &Select) -> Result<SemiJoinProgram> {
     let Some(AstExpr {
         kind:
             ExprKind::InSubquery {
@@ -1022,7 +1033,7 @@ pub fn compile_semi_join(select: &Select) -> Result<SemiJoinProgram<'_>> {
     stripped.where_clause = None;
     Ok(SemiJoinProgram {
         key_column,
-        subquery,
+        subquery: subquery.clone(),
         body: compile(&stripped),
     })
 }
@@ -1263,7 +1274,7 @@ impl PlanBuilder {
 /// (#99). Mirrors the executor's dispatch (semi-join, join, windowed, or
 /// plain single-table) over the same planning decisions [`compile`] makes;
 /// `stats` supplies each referenced table's `SCAN` detail.
-pub fn explain(select: &Select, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNode> {
+pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Vec<PlanNode> {
     let mut b = PlanBuilder::new("QUERY PLAN");
 
     let items = classify_items(select).unwrap_or_default();
@@ -2150,7 +2161,7 @@ mod tests {
     #[test]
     fn explain_plain_filter_group_by_aggregate() {
         let query = sql::parse("SELECT region, SUM(amount), COUNT(*) FROM production WHERE id > 1000 GROUP BY region ORDER BY region").unwrap();
-        let nodes = explain(&query, &stats);
+        let nodes = explain(&query, stats);
 
         assert_eq!(nodes[0].detail, "QUERY PLAN");
         assert!(nodes[0].parent == nodes[0].id);
@@ -2182,7 +2193,7 @@ mod tests {
     #[test]
     fn explain_join_and_semi_join_and_window() {
         let query = sql::parse("SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.rkey ORDER BY orders.id").unwrap();
-        let nodes = explain(&query, &stats);
+        let nodes = explain(&query, stats);
         assert!(details(&nodes).contains(&"LOAD COLUMNS: orders.id, orders.region_key"));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: regions.budget, regions.rkey"));
         assert!(details(&nodes).contains(&"HASH JOIN: orders.region_key = regions.rkey"));
@@ -2191,7 +2202,7 @@ mod tests {
             "SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions) ORDER BY id",
         )
         .unwrap();
-        let nodes = explain(&query, &stats);
+        let nodes = explain(&query, stats);
         assert!(details(&nodes).contains(&"SEMI JOIN: region_key IN (SELECT rkey FROM regions)"));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: id, region_key"));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: rkey"));
@@ -2202,7 +2213,7 @@ mod tests {
              FROM orders ORDER BY id",
         )
         .unwrap();
-        let nodes = explain(&query, &stats);
+        let nodes = explain(&query, stats);
         assert!(details(&nodes)
             .contains(&"WINDOW: ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id)"));
         assert_eq!(
@@ -2214,7 +2225,7 @@ mod tests {
     #[test]
     fn explain_shows_distinct_node_for_plain_select_distinct() {
         let query = sql::parse("SELECT DISTINCT region FROM production").unwrap();
-        let nodes = explain(&query, &stats);
+        let nodes = explain(&query, stats);
         assert!(details(&nodes).contains(&"DISTINCT"));
         assert_eq!(nodes.last().unwrap().detail, "EMIT: region");
     }
@@ -2224,7 +2235,7 @@ mod tests {
         let query =
             sql::parse("SELECT DISTINCT region, SUM(amount) FROM production GROUP BY region")
                 .unwrap();
-        let nodes = explain(&query, &stats);
+        let nodes = explain(&query, stats);
         assert!(details(&nodes).contains(&"GROUP BY: region"));
         assert!(details(&nodes).contains(&"AGGREGATE: SUM(amount)"));
         assert!(details(&nodes).contains(&"DISTINCT"));
@@ -2246,7 +2257,7 @@ mod tests {
     #[test]
     fn explain_omits_distinct_node_for_non_distinct_query() {
         let query = sql::parse("SELECT region FROM production").unwrap();
-        let nodes = explain(&query, &stats);
+        let nodes = explain(&query, stats);
         assert!(!details(&nodes).contains(&"DISTINCT"));
     }
 

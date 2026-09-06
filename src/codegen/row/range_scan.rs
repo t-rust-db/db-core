@@ -91,10 +91,13 @@ pub(super) fn find_leading_index(schema: &TableSchema, col_name: &str) -> Option
 }
 
 /// One end of a seek range: the column bounded, the literal bounding it,
-/// and whether the bound itself qualifies.
-struct Bound<'a> {
-    column: &'a str,
-    operand: &'a Expr,
+/// and whether the bound itself qualifies. Owns `column`/`operand`
+/// (cloned out of the `WHERE` clause) rather than borrowing them -- this
+/// codebase's qualified subset (`make check-mvl-limit`) forbids the
+/// explicit lifetime a borrowing `Bound<'a>` would need.
+struct Bound {
+    column: String,
+    operand: Expr,
     inclusive: bool,
 }
 
@@ -104,7 +107,7 @@ struct Bound<'a> {
 /// walking those forward from a low-bound seek would need a *backward*
 /// walk from the top of the index, which needs a stop-check opcode this
 /// codegen doesn't have.
-fn as_lower_bound(expr: &Expr) -> Option<Bound<'_>> {
+fn as_lower_bound(expr: &Expr) -> Option<Bound> {
     let ExprKind::Binary { op, lhs, rhs } = &expr.kind else {
         return None;
     };
@@ -116,15 +119,15 @@ fn as_lower_bound(expr: &Expr) -> Option<Bound<'_>> {
         _ => return None,
     };
     Some(Bound {
-        column,
-        operand,
+        column: column.to_string(),
+        operand: operand.clone(),
         inclusive,
     })
 }
 
 /// `col < lit`/`col <= lit`/`lit > col`/`lit >= col` -- the shapes that
 /// can stop a forward walk.
-fn as_upper_bound(expr: &Expr) -> Option<Bound<'_>> {
+fn as_upper_bound(expr: &Expr) -> Option<Bound> {
     let ExprKind::Binary { op, lhs, rhs } = &expr.kind else {
         return None;
     };
@@ -136,8 +139,8 @@ fn as_upper_bound(expr: &Expr) -> Option<Bound<'_>> {
         _ => return None,
     };
     Some(Bound {
-        column,
-        operand,
+        column: column.to_string(),
+        operand: operand.clone(),
         inclusive,
     })
 }
@@ -147,7 +150,7 @@ fn as_upper_bound(expr: &Expr) -> Option<Bound<'_>> {
 /// column (`col >= lo AND col <= hi` -- how db-core's `Expr` spells
 /// sqlite-rs's `BETWEEN`), or an equality (both bounds, both inclusive,
 /// the same literal).
-fn as_seek_bounds(where_expr: &Expr) -> Option<(Bound<'_>, Option<Bound<'_>>)> {
+fn as_seek_bounds(where_expr: &Expr) -> Option<(Bound, Option<Bound>)> {
     if let ExprKind::Binary {
         op: BinaryOp::And,
         lhs,
@@ -156,7 +159,7 @@ fn as_seek_bounds(where_expr: &Expr) -> Option<(Bound<'_>, Option<Bound<'_>>)> {
     {
         let lo = as_lower_bound(lhs)?;
         let hi = as_upper_bound(rhs)?;
-        if !lo.column.eq_ignore_ascii_case(hi.column) {
+        if !lo.column.eq_ignore_ascii_case(&hi.column) {
             return None;
         }
         return Some((lo, Some(hi)));
@@ -172,12 +175,12 @@ fn as_seek_bounds(where_expr: &Expr) -> Option<(Bound<'_>, Option<Bound<'_>>)> {
             (None, Some(column)) => (column, lhs.as_ref()),
             (None, None) => return None,
         };
-        let bound = |operand| Bound {
-            column,
-            operand,
+        let bound = |column: &str, operand: &Expr| Bound {
+            column: column.to_string(),
+            operand: operand.clone(),
             inclusive: true,
         };
-        return Some((bound(operand), Some(bound(operand))));
+        return Some((bound(column, operand), Some(bound(column, operand))));
     }
     Some((as_lower_bound(where_expr)?, None))
 }
@@ -188,10 +191,7 @@ fn as_seek_bounds(where_expr: &Expr) -> Option<(Bound<'_>, Option<Bound<'_>>)> {
 /// inclusive and exclusive into the same `(col>?)` wording), or `None`
 /// when no fast path applies. Factored out so [`super::eqp`] can
 /// inspect the decision without emitting anything.
-pub(super) fn seek_detail<'a>(
-    query: &'a Select,
-    schema: &TableSchema,
-) -> Option<(&'a str, &'static str)> {
+pub(super) fn seek_detail(query: &Select, schema: &TableSchema) -> Option<(String, &'static str)> {
     if super::is_distinct(query) || !super::joins_of(query).is_empty() {
         return None;
     }
@@ -199,14 +199,14 @@ pub(super) fn seek_detail<'a>(
     if hi.as_ref().is_some_and(|b| !b.inclusive) {
         return None;
     }
-    if !is_supported_operand(lo.operand) {
+    if !is_supported_operand(&lo.operand) {
         return None;
     }
-    let affinity = column_affinity(schema, lo.column);
-    if !operand_matches_column_affinity(lo.operand, affinity) {
+    let affinity = column_affinity(schema, &lo.column);
+    if !operand_matches_column_affinity(&lo.operand, affinity) {
         return None;
     }
-    find_leading_index(schema, lo.column)?;
+    find_leading_index(schema, &lo.column)?;
     let is_equality = matches!(
         query.where_clause.as_ref()?.kind,
         ExprKind::Binary {
@@ -254,22 +254,22 @@ pub(super) fn try_compile_range_seek(
     if hi.as_ref().is_some_and(|b| !b.inclusive) {
         return Ok(false);
     }
-    if !is_supported_operand(lo.operand)
+    if !is_supported_operand(&lo.operand)
         || hi
             .as_ref()
-            .is_some_and(|b| !is_supported_operand(b.operand))
+            .is_some_and(|b| !is_supported_operand(&b.operand))
     {
         return Ok(false);
     }
-    let affinity = column_affinity(&scope.schema, lo.column);
-    if !operand_matches_column_affinity(lo.operand, affinity)
+    let affinity = column_affinity(&scope.schema, &lo.column);
+    if !operand_matches_column_affinity(&lo.operand, affinity)
         || hi
             .as_ref()
-            .is_some_and(|b| !operand_matches_column_affinity(b.operand, affinity))
+            .is_some_and(|b| !operand_matches_column_affinity(&b.operand, affinity))
     {
         return Ok(false);
     }
-    let Some(index_position) = find_leading_index(&scope.schema, lo.column) else {
+    let Some(index_position) = find_leading_index(&scope.schema, &lo.column) else {
         return Ok(false);
     };
     let Some(index) = scope.schema.indexes.get(index_position) else {
@@ -278,9 +278,9 @@ pub(super) fn try_compile_range_seek(
     let key_p4 = P4::SeekKey(vec![Collation::Binary]);
 
     open_index_cursor(em, index, index_cursor)?;
-    let lo_reg = super::compile_value(em, reg, scope, lo.operand)?;
+    let lo_reg = super::compile_value(em, reg, scope, &lo.operand)?;
     let hi_reg = match &hi {
-        Some(b) => Some(super::compile_value(em, reg, scope, b.operand)?),
+        Some(b) => Some(super::compile_value(em, reg, scope, &b.operand)?),
         None => None,
     };
 

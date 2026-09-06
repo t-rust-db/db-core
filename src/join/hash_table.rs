@@ -133,8 +133,21 @@ impl<K: Hash + Eq, V, S: BuildHasher> JoinHashTable<K, V, S> {
     /// First matching value for `key`, if any. For a build side with
     /// unique keys (the common dimension-table case) this is the only
     /// lookup you need; for duplicate build keys use [`Self::get_all`].
-    pub fn get<'a>(&'a self, key: &'a K) -> Option<&'a V> {
-        self.probe(key).next()
+    pub fn get(&self, key: &K) -> Option<&V> {
+        let mask = self.entries.len() - 1;
+        let cap = self.entries.len();
+        let mut idx = (self.hash_of(key) as usize) & mask;
+        let mut steps = 0;
+        while steps < cap {
+            // empty slot proves no further match
+            let entry = self.entries[idx].as_ref()?;
+            if &entry.key == key {
+                return Some(&entry.value);
+            }
+            idx = (idx + 1) & mask;
+            steps += 1;
+        }
+        None
     }
 
     /// True if any entry matches `key`.
@@ -144,56 +157,36 @@ impl<K: Hash + Eq, V, S: BuildHasher> JoinHashTable<K, V, S> {
 
     /// All values matching `key`, in insertion order. Stops at the first
     /// empty slot along the probe sequence, which proves no further match
-    /// exists (see module docs).
-    pub fn get_all<'a>(&'a self, key: &'a K) -> impl Iterator<Item = &'a V> + 'a {
-        self.probe(key)
-    }
-
-    fn probe<'a>(&'a self, key: &'a K) -> Probe<'a, K, V> {
+    /// exists (see module docs). Collects eagerly rather than returning a
+    /// lazy iterator -- a custom iterator struct here would have to borrow
+    /// `self`/`key`, and this codebase's qualified subset (`make
+    /// check-mvl-limit`) forbids the explicit struct lifetime that would
+    /// require.
+    pub fn get_all(&self, key: &K) -> Vec<&V> {
         let mask = self.entries.len() - 1;
-        let start = (self.hash_of(key) as usize) & mask;
-        Probe {
-            entries: &self.entries,
-            key,
-            idx: start,
-            steps: 0,
-            cap: self.entries.len(),
+        let cap = self.entries.len();
+        let mut idx = (self.hash_of(key) as usize) & mask;
+        let mut steps = 0;
+        let mut matches = Vec::new();
+        while steps < cap {
+            let Some(entry) = self.entries[idx].as_ref() else {
+                break; // empty slot proves no further match
+            };
+            if &entry.key == key {
+                matches.push(&entry.value);
+            }
+            idx = (idx + 1) & mask;
+            steps += 1;
         }
+        matches
     }
 
     /// Batch probe, first match only per key -- a straightforward loop
     /// over [`Self::get`] for now; a real SIMD-batched probe (hash many
     /// keys at once, gather matches) is future work, tracked as the next
     /// step after this lands (see `t-rust-db/db-core` README).
-    pub fn probe_batch<'a>(&'a self, keys: &'a [K]) -> Vec<Option<&'a V>> {
+    pub fn probe_batch(&self, keys: &[K]) -> Vec<Option<&V>> {
         keys.iter().map(|k| self.get(k)).collect()
-    }
-}
-
-struct Probe<'a, K, V> {
-    entries: &'a [Option<Entry<K, V>>],
-    key: &'a K,
-    idx: usize,
-    steps: usize,
-    cap: usize,
-}
-
-impl<'a, K: Hash + Eq, V> Iterator for Probe<'a, K, V> {
-    type Item = &'a V;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mask = self.cap - 1;
-        while self.steps < self.cap {
-            // empty slot proves no further match
-            let entry = self.entries[self.idx].as_ref()?;
-            let matched = &entry.key == self.key;
-            self.idx = (self.idx + 1) & mask;
-            self.steps += 1;
-            if matched {
-                return Some(&entry.value);
-            }
-        }
-        None
     }
 }
 
@@ -225,7 +218,7 @@ mod tests {
         ht.insert(1, "a");
         ht.insert(1, "b");
         ht.insert(1, "c");
-        let mut matches: Vec<&&str> = ht.get_all(&1).collect();
+        let mut matches: Vec<&&str> = ht.get_all(&1);
         matches.sort();
         assert_eq!(matches, vec![&"a", &"b", &"c"]);
         assert_eq!(ht.len(), 3);
@@ -285,7 +278,7 @@ mod tests {
         for i in 0..50 {
             ht.insert(1, i);
         }
-        assert_eq!(ht.get_all(&1).count(), 50);
+        assert_eq!(ht.get_all(&1).len(), 50);
         assert_eq!(ht.get(&2), None);
     }
 }
