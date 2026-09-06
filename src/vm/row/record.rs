@@ -17,16 +17,32 @@ use std::rc::Rc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordError {
     /// The record buffer ended before decoding could complete.
-    UnexpectedEof { offset: usize },
+    UnexpectedEof {
+        /// Byte offset into the record where the read past the end started.
+        offset: usize,
+    },
     /// The declared header length is too small to contain the
     /// header-length varint itself.
-    HeaderTooShort { declared: usize, varint_len: usize },
+    HeaderTooShort {
+        /// The header length declared by the header-length varint.
+        declared: usize,
+        /// The size in bytes of the header-length varint itself.
+        varint_len: usize,
+    },
     /// A serial-type varint in the header read past the declared header
     /// length.
-    HeaderOverrun { offset: usize, header_len: usize },
+    HeaderOverrun {
+        /// Byte offset of the header entry that overran.
+        offset: usize,
+        /// The declared total header length.
+        header_len: usize,
+    },
     /// Bytes remained in the buffer after all header-declared columns
     /// were decoded.
-    TrailingData { trailing: usize },
+    TrailingData {
+        /// Number of unconsumed trailing bytes.
+        trailing: usize,
+    },
     /// A text value's bytes were not valid UTF-8 under a UTF-8
     /// `TextEncoding`.
     InvalidUtf8,

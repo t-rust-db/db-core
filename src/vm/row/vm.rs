@@ -54,34 +54,62 @@ pub const MAX_STEPS: u64 = 1 << 24;
 pub enum ExecError {
     /// `opcode` addressed register `index`, which lies outside the
     /// register file.
-    RegisterOutOfRange { opcode: &'static str, index: i32 },
+    RegisterOutOfRange {
+        /// The opcode that made the out-of-range access.
+        opcode: &'static str,
+        /// The offending register index.
+        index: i32,
+    },
     /// `opcode` requested a register range of `count` registers, more
     /// than [`MAX_REGISTERS`] allows.
-    RegisterRangeTooLarge { opcode: &'static str, count: i32 },
+    RegisterRangeTooLarge {
+        /// The opcode that requested the range.
+        opcode: &'static str,
+        /// The requested register count.
+        count: i32,
+    },
     /// `opcode` required a register to hold a particular [`Value`]
     /// variant but found `found` instead.
     TypeMismatch {
+        /// The opcode that performed the check.
         opcode: &'static str,
+        /// The value's actual runtime type.
         found: &'static str,
     },
     /// `MustBeInt`'s coercion failed.
     MustBeInt,
     /// `opcode`'s operands are structurally invalid for `reason`.
     MalformedInstruction {
+        /// The opcode whose operands failed validation.
         opcode: &'static str,
+        /// Human-readable explanation of what was wrong.
         reason: String,
     },
     /// `opcode` is a recognized opcode with no dispatch arm yet.
-    Unimplemented { opcode: Opcode },
+    Unimplemented {
+        /// The opcode with no implementation.
+        opcode: Opcode,
+    },
     /// `slot` was referenced but has no cursor open in it.
-    CursorNotOpen { slot: i32 },
+    CursorNotOpen {
+        /// The cursor-slot table index that was empty.
+        slot: i32,
+    },
     /// A jump or fall-through moved the program counter past the end of
     /// the program's instructions.
-    ProgramCounterOutOfRange { pc: usize },
+    ProgramCounterOutOfRange {
+        /// The out-of-range program counter value.
+        pc: usize,
+    },
     /// The program executed [`MAX_STEPS`] instructions without halting.
     StepLimitExceeded,
     /// The program executed `Halt` with a non-success result `code`.
-    Halted { code: i32, message: Option<String> },
+    Halted {
+        /// The SQLite result code the program halted with.
+        code: i32,
+        /// An optional human-readable error message.
+        message: Option<String>,
+    },
     /// `SetJournalMode` ran while a transaction was open
     /// (`!Vm::autocommit`) -- stock SQLite refuses to change journal
     /// mode mid-transaction.
@@ -105,7 +133,10 @@ pub enum ExecError {
     CursorFactoryFailed(CursorFactoryError),
     /// `opcode` needs a [`super::schema_storage::SchemaStorage`] hook
     /// but none is installed (db-core#128).
-    SchemaStorageMissing { opcode: &'static str },
+    SchemaStorageMissing {
+        /// The opcode that needed the schema-storage hook.
+        opcode: &'static str,
+    },
     /// A [`super::schema_storage::SchemaStorage`] call failed
     /// (db-core#128).
     SchemaStorageFailed(SchemaStorageError),
@@ -185,9 +216,18 @@ impl std::error::Error for ExecError {}
 /// to an explicit target, or halt the program.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
+    /// Continue at the instruction immediately after the one just run.
     Next,
+    /// Jump to the given program-counter value.
     Jump(usize),
-    Halt { code: i32, message: Option<String> },
+    /// Stop the program with an SQLite result `code` and optional
+    /// `message`.
+    Halt {
+        /// The SQLite result code to halt with.
+        code: i32,
+        /// An optional human-readable error message.
+        message: Option<String>,
+    },
 }
 
 #[allow(clippy::cast_sign_loss)]
@@ -305,6 +345,9 @@ impl Default for Vm {
 }
 
 impl Vm {
+    /// Builds a `Vm` with no database attached -- suitable for programs
+    /// that never open a real cursor (arithmetic/control tests,
+    /// sorter/ephemeral-only tests).
     pub fn new() -> Self {
         Vm::default()
     }
@@ -353,6 +396,8 @@ impl Vm {
         self.text_encoding = encoding;
     }
 
+    /// Installs the [`SchemaStorage`] hook that schema-mutating opcodes
+    /// (`CreateTable`/`DropTable`/...) write through (db-core#128).
     pub fn set_schema_storage(&mut self, storage: Box<dyn SchemaStorage>) {
         self.schema_storage = Some(storage);
     }
@@ -530,6 +575,9 @@ impl Vm {
         }
     }
 
+    /// Places `cursor` in cursor slot `slot` (growing the slot table as
+    /// needed), replacing any cursor already open there; fails only if
+    /// `slot` is negative.
     pub fn open_cursor(&mut self, slot: i32, cursor: Box<dyn Cursor>) -> Result<(), ExecError> {
         self.set_pseudo_reg(slot, None)?;
         let idx = Self::index("cursor slot write", slot)?;
@@ -2057,14 +2105,13 @@ pub fn execute(vm: &mut Vm, program: &Program) -> Result<Vec<Vec<Value>>, ExecEr
     let mut pc = 0usize;
     let mut steps = 0u64;
     loop {
-        if pc >= program.instructions.len() {
+        let Some(instr) = program.instructions.get(pc) else {
             return Err(ExecError::ProgramCounterOutOfRange { pc });
-        }
+        };
         steps = steps.saturating_add(1);
         if steps > MAX_STEPS {
             return Err(ExecError::StepLimitExceeded);
         }
-        let instr = &program.instructions[pc];
         match step(vm, pc, instr)? {
             Step::Next => pc = pc.saturating_add(1),
             Step::Jump(target) => pc = target,

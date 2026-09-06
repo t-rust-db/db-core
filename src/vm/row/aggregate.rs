@@ -24,7 +24,10 @@ use super::value::{Collation, Value};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AggregateError {
     /// No registered aggregate matches `name`.
-    Unknown { name: String },
+    Unknown {
+        /// The aggregate name that failed to resolve.
+        name: String,
+    },
     /// A `sum()` accumulation overflowed `i64` in a way that can't be
     /// represented (should not occur in practice: overflow promotes to
     /// REAL during `step`, matching sqlite-rs's own `checked_add`-style
@@ -72,18 +75,26 @@ pub enum AggState {
     /// (an all-integer sum stays exact; one REAL input makes the
     /// result REAL).
     Sum {
+        /// Exact running total while every input has been an integer.
         int_total: i128,
+        /// Running total once promoted to REAL.
         real_total: f64,
+        /// Whether a REAL input has been seen (running total lives in `real_total`).
         saw_real: bool,
+        /// Whether any non-NULL input has been seen (`sum()` of no rows is NULL).
         saw_any: bool,
     },
     /// `avg(x)`: same integer/real promotion as `Sum`, plus a row
     /// count so `finalize` can divide -- `avg()` is always REAL (or
     /// NULL on zero non-null rows), never an exact integer.
     Avg {
+        /// Exact running total while every input has been an integer.
         int_total: i128,
+        /// Running total once promoted to REAL.
         real_total: f64,
+        /// Whether a REAL input has been seen (running total lives in `real_total`).
         saw_real: bool,
+        /// Number of non-NULL rows seen, the divisor for `finalize`.
         count: i64,
     },
     /// `min(x)`/`max(x)`: the running extremum, compared under
@@ -91,6 +102,8 @@ pub enum AggState {
     /// BLOB). NULL args are skipped, matching `count(x)`'s NULL
     /// handling.
     Min(Option<Value>),
+    /// `max(x)`: see `Min` -- the same running extremum, keeping the
+    /// largest value seen so far instead of the smallest.
     Max(Option<Value>),
 }
 

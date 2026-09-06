@@ -559,11 +559,17 @@ pub struct GroupKeyColumn {
 /// reshaping.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instruction {
+    /// The instruction's opcode tag.
     pub opcode: Opcode,
+    /// First integer operand.
     pub p1: i32,
+    /// Second integer operand.
     pub p2: i32,
+    /// Third integer operand.
     pub p3: i32,
+    /// Dynamically-typed fourth operand.
     pub p4: P4,
+    /// Flags operand.
     pub p5: u16,
     /// Optional `EXPLAIN` comment (ADR 0007's convention, kept for
     /// `vm::row` too).
@@ -597,6 +603,7 @@ impl Instruction {
         }
     }
 
+    /// Attaches an `EXPLAIN` comment to this instruction.
     pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = Some(comment.into());
         self
@@ -608,6 +615,7 @@ impl Instruction {
 /// redirects it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Program {
+    /// The program's instructions, in execution order.
     pub instructions: Vec<Instruction>,
     /// Slot-indexed (0 = bind-parameter slot 1) names for every
     /// `Opcode::Variable` slot this program's compile allocated --
@@ -621,6 +629,7 @@ pub struct Program {
 }
 
 impl Program {
+    /// Builds a program from its instruction sequence.
     pub fn new(instructions: Vec<Instruction>) -> Self {
         Program {
             instructions,
@@ -636,6 +645,7 @@ impl Program {
         self
     }
 
+    /// Appends `instr` to the end of the program, returning `self` for chaining.
     pub fn push(&mut self, instr: Instruction) -> &mut Self {
         self.instructions.push(instr);
         self

@@ -60,8 +60,11 @@ use crate::vm::batch::{AggFunc, AggPart, MapOp, Opcode, Program, Value};
 use std::fmt::Write as _;
 
 #[derive(Debug)]
+/// Failures when emitting a batch [`Program`] from SQL text.
 pub enum EmitError {
+    /// The SQL text did not parse.
     Parse(ParseError),
+    /// The query parsed but uses a construct this emitter does not handle yet.
     Unsupported(&'static str),
 }
 
@@ -82,6 +85,7 @@ impl From<ParseError> for EmitError {
     }
 }
 
+/// Result alias for emitter operations, with [`EmitError`] as the error type.
 pub type Result<T> = std::result::Result<T, EmitError>;
 
 /// Whether `select`'s `SELECT` list contains a window-function call
@@ -964,7 +968,7 @@ fn render_value(value: &Value) -> String {
 /// Render `s` as a Rust string literal, escaping characters that would
 /// otherwise break out of it.
 fn rust_str_literal(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+    let mut out = String::with_capacity(s.len().saturating_add(2));
     out.push('"');
     for c in s.chars() {
         match c {

@@ -297,6 +297,7 @@ pub struct InMemoryCursor {
 }
 
 impl InMemoryCursor {
+    /// Builds a cursor over `rows`, unpositioned until the first `rewind`/`last`.
     pub fn new(rows: Vec<Vec<Value>>) -> Self {
         InMemoryCursor { rows, pos: None }
     }
@@ -325,16 +326,10 @@ impl Cursor for InMemoryCursor {
     }
 
     fn prev(&mut self) -> bool {
-        match self.pos {
-            Some(0) | None => {
-                self.pos = None;
-                false
-            }
-            Some(p) => {
-                self.pos = Some(p - 1);
-                true
-            }
-        }
+        // `checked_sub` folds the "already at the first entry" case into
+        // the "not positioned" one: both leave the cursor off the table.
+        self.pos = self.pos.and_then(|p| p.checked_sub(1));
+        self.pos.is_some()
     }
 
     fn column(&self, col: usize) -> Value {
@@ -389,6 +384,11 @@ impl Cursor for InMemoryCursor {
     }
 }
 
+/// One materialized row of an ephemeral table: `(rowid, values)`.
+type EphemeralRow = (i64, Vec<Value>);
+/// Rows shared between an ephemeral table and its `OpenDup` siblings.
+type SharedRows = Rc<RefCell<Vec<EphemeralRow>>>;
+
 /// An in-memory table materialized by `Opcode::Insert` -- backs
 /// `Opcode::OpenEphemeral`'s table-mode cursor (db-core#59), ported
 /// from sqlite-rs's `cursor::EphemeralTableState`. Unlike
@@ -413,11 +413,6 @@ impl Cursor for InMemoryCursor {
 /// already-updated one. Tracking `current_rowid` instead and searching
 /// for "the smallest stored rowid greater than this" on every `next()`
 /// reproduces the b-tree cursor's actual invariant with a `Vec`.
-/// One materialized row of an ephemeral table: `(rowid, values)`.
-type EphemeralRow = (i64, Vec<Value>);
-/// Rows shared between an ephemeral table and its `OpenDup` siblings.
-type SharedRows = Rc<RefCell<Vec<EphemeralRow>>>;
-
 pub struct EphemeralTableCursor {
     /// Sorted ascending by rowid (the first element of each tuple);
     /// shared with any `OpenDup` sibling (sqlite-rs
@@ -441,6 +436,7 @@ impl Default for EphemeralTableCursor {
 }
 
 impl EphemeralTableCursor {
+    /// Creates an empty ephemeral table with its own (unshared) row store.
     pub fn new() -> Self {
         EphemeralTableCursor::default()
     }
@@ -652,6 +648,7 @@ pub struct EphemeralIndexCursor {
 }
 
 impl EphemeralIndexCursor {
+    /// Creates an empty ephemeral index.
     pub fn new() -> Self {
         EphemeralIndexCursor::default()
     }
@@ -758,6 +755,8 @@ pub struct SorterCursor {
 }
 
 impl SorterCursor {
+    /// Creates an empty sorter ordering by `keys`, retaining at most
+    /// `bound` rows when a `LIMIT` bound is known.
     pub fn new(keys: Vec<SortKeyColumn>, bound: Option<usize>) -> Self {
         SorterCursor {
             keys,
@@ -810,8 +809,8 @@ fn compare_key(a: &Value, b: &Value, key: &SortKeyColumn) -> std::cmp::Ordering 
 /// Multi-key comparison: the first non-equal key column decides the
 /// order, matching `ORDER BY col1, col2, ...`'s left-to-right tie-break.
 fn compare_keys(a: &[Value], b: &[Value], keys: &[SortKeyColumn]) -> std::cmp::Ordering {
-    for (i, key) in keys.iter().enumerate() {
-        let ord = compare_key(&a[i], &b[i], key);
+    for ((va, vb), key) in a.iter().zip(b).zip(keys) {
+        let ord = compare_key(va, vb, key);
         if ord != std::cmp::Ordering::Equal {
             return ord;
         }
@@ -936,6 +935,7 @@ pub struct HashAggCursor {
 }
 
 impl HashAggCursor {
+    /// Creates an empty hash aggregator grouping by `keys`.
     pub fn new(keys: Vec<GroupKeyColumn>) -> Self {
         HashAggCursor {
             keys,
@@ -969,20 +969,18 @@ impl Cursor for HashAggCursor {
     /// positions at the first -- `HashAggRewind`'s dispatch target.
     fn rewind(&mut self) -> bool {
         if !self.frozen {
-            let mut order: Vec<usize> = (0..self.groups.len()).collect();
             let keys = &self.keys;
-            let groups = &self.groups;
-            order.sort_by(|&a, &b| {
-                let (ka, kb) = (&groups[a].key_values, &groups[b].key_values);
-                for (i, key) in keys.iter().enumerate() {
-                    let ord = super::compare::compare(&ka[i], &kb[i], key.collation);
+            let mut order: Vec<(usize, &GroupSlot)> = self.groups.iter().enumerate().collect();
+            order.sort_by(|(_, ga), (_, gb)| {
+                for ((va, vb), key) in ga.key_values.iter().zip(&gb.key_values).zip(keys) {
+                    let ord = super::compare::compare(va, vb, key.collation);
                     if ord != std::cmp::Ordering::Equal {
                         return ord;
                     }
                 }
                 std::cmp::Ordering::Equal
             });
-            self.order = order;
+            self.order = order.into_iter().map(|(idx, _)| idx).collect();
             self.frozen = true;
         }
         self.pos = if self.order.is_empty() { None } else { Some(0) };
@@ -1041,12 +1039,13 @@ impl Cursor for HashAggCursor {
         let idx = match self.find_group(&key_values) {
             Some(idx) => idx,
             None => {
+                let idx = self.groups.len();
                 self.groups.push(GroupSlot {
                     row: blob,
                     key_values,
                     accumulators: Vec::new(),
                 });
-                self.groups.len() - 1
+                idx
             }
         };
         self.current_group = Some(idx);
@@ -1067,11 +1066,13 @@ impl Cursor for HashAggCursor {
             return Ok(false);
         };
         if group.accumulators.len() <= slot {
-            group.accumulators.resize(slot + 1, None);
+            group.accumulators.resize(slot.saturating_add(1), None);
         }
-        let current = group.accumulators[slot].take();
-        let updated = super::aggregate::step(name, current, args, collation)?;
-        group.accumulators[slot] = Some(updated);
+        let Some(acc) = group.accumulators.get_mut(slot) else {
+            return Ok(false);
+        };
+        let updated = super::aggregate::step(name, acc.take(), args, collation)?;
+        *acc = Some(updated);
         Ok(true)
     }
 
@@ -1154,6 +1155,7 @@ pub struct AutoIndexCursor {
 }
 
 impl AutoIndexCursor {
+    /// Creates an empty automatic index.
     pub fn new() -> Self {
         AutoIndexCursor::default()
     }
@@ -1231,6 +1233,7 @@ pub struct InMemoryIndexCursor {
 }
 
 impl InMemoryIndexCursor {
+    /// Creates an empty index keyed by `key_cols`.
     pub fn new(key_cols: Vec<SortKeyColumn>) -> Self {
         InMemoryIndexCursor {
             key_cols,
@@ -1274,16 +1277,10 @@ impl Cursor for InMemoryIndexCursor {
     }
 
     fn prev(&mut self) -> bool {
-        match self.pos {
-            Some(0) | None => {
-                self.pos = None;
-                false
-            }
-            Some(p) => {
-                self.pos = Some(p - 1);
-                true
-            }
-        }
+        // `checked_sub` folds the "already at the first entry" case into
+        // the "not positioned" one: both leave the cursor off the table.
+        self.pos = self.pos.and_then(|p| p.checked_sub(1));
+        self.pos.is_some()
     }
 
     fn column(&self, col: usize) -> Value {
@@ -1304,8 +1301,11 @@ impl Cursor for InMemoryIndexCursor {
             clippy::expect_used,
             reason = "Cursor contract: column/rowid are only read after a successful positioning call"
         )]
-        let pos = self.pos.expect("rowid read with no current entry");
-        self.entries[pos].1
+        let (_, rowid) = self
+            .pos
+            .and_then(|pos| self.entries.get(pos))
+            .expect("rowid read with no current entry");
+        *rowid
     }
 
     /// Inserts `values` (the row's indexed columns; extra columns

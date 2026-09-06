@@ -23,6 +23,15 @@
 //! `Remainder`/`BitAnd`/`BitOr`/`ShiftLeft`/`ShiftRight`/`Concat`/
 //! `Not`/`BitNot`).
 
+// Every `args[n]` index below is provably in-bounds, as in sqlite-rs's
+// `vdbe::functions`: `call()`'s registry match arms gate on exact arity
+// before dispatching, so each function body only indexes positions its
+// own arm guarantees are present.
+#![allow(
+    clippy::indexing_slicing,
+    reason = "`call()` matches on exact arity before dispatching, so each body only indexes argument positions its arm guarantees"
+)]
+
 use std::cmp::Ordering;
 
 use super::compare::compare;
@@ -32,7 +41,12 @@ use super::value::{Collation, Value};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionError {
     /// No registered function matches `name` at the given `arity`.
-    Unknown { name: String, arity: usize },
+    Unknown {
+        /// The unrecognized function name.
+        name: String,
+        /// The argument count it was called with.
+        arity: usize,
+    },
     /// An arithmetic result overflowed `i64`.
     IntegerOverflow,
 }

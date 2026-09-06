@@ -95,7 +95,9 @@ pub(crate) fn compile_cond_depth(
     match &expr.kind {
         // Parentheses are pure grouping; the tree shape already records
         // what they meant.
-        ExprKind::Paren(inner) => compile_cond_depth(em, reg, scope, inner, targets, depth + 1),
+        ExprKind::Paren(inner) => {
+            compile_cond_depth(em, reg, scope, inner, targets, depth.saturating_add(1))
+        }
 
         // Swapping the targets is right, but only once `on_null` comes
         // along for the ride -- flipping it keeps the unknown outcome
@@ -103,7 +105,14 @@ pub(crate) fn compile_cond_depth(
         ExprKind::Unary {
             op: UnaryOp::Not,
             expr: inner,
-        } => compile_cond_depth(em, reg, scope, inner, targets.negate(), depth + 1),
+        } => compile_cond_depth(
+            em,
+            reg,
+            scope,
+            inner,
+            targets.negate(),
+            depth.saturating_add(1),
+        ),
 
         ExprKind::Binary {
             op: BinaryOp::And,
@@ -123,9 +132,9 @@ pub(crate) fn compile_cond_depth(
                 scope,
                 first,
                 operand.with_true(Target::Fallthrough),
-                depth + 1,
+                depth.saturating_add(1),
             )?;
-            compile_cond_depth(em, reg, scope, second, operand, depth + 1)?;
+            compile_cond_depth(em, reg, scope, second, operand, depth.saturating_add(1))?;
             if is_new {
                 em.place(false_label);
             }
@@ -150,9 +159,9 @@ pub(crate) fn compile_cond_depth(
                 scope,
                 first,
                 operand.with_false(Target::Fallthrough),
-                depth + 1,
+                depth.saturating_add(1),
             )?;
-            compile_cond_depth(em, reg, scope, second, operand, depth + 1)?;
+            compile_cond_depth(em, reg, scope, second, operand, depth.saturating_add(1))?;
             if is_new {
                 em.place(true_label);
             }
@@ -175,8 +184,8 @@ pub(crate) fn compile_cond_depth(
             let collation = resolve_collation(lhs)?
                 .or(resolve_collation(rhs)?)
                 .unwrap_or(Collation::Binary);
-            let l = compile_value_depth(em, reg, scope, lhs, depth + 1)?;
-            let r = compile_value_depth(em, reg, scope, rhs, depth + 1)?;
+            let l = compile_value_depth(em, reg, scope, lhs, depth.saturating_add(1))?;
+            let r = compile_value_depth(em, reg, scope, rhs, depth.saturating_add(1))?;
             emit_compare_false_jump(em, *op, l, r, affinity, collation, targets)
         }
 
@@ -184,7 +193,7 @@ pub(crate) fn compile_cond_depth(
             expr: inner,
             negated,
         } => {
-            let r = compile_value_depth(em, reg, scope, inner, depth + 1)?;
+            let r = compile_value_depth(em, reg, scope, inner, depth.saturating_add(1))?;
             // negated=false (IS NULL): condition true iff NULL, so its
             // false-jump primitive fires when NOT null -> `NotNull`.
             // negated=true (IS NOT NULL): condition true iff not NULL,
@@ -237,8 +246,8 @@ pub(crate) fn compile_cond_depth(
             } else {
                 (targets.on_true, targets.on_false)
             };
-            let l = compile_value_depth(em, reg, scope, lhs, depth + 1)?;
-            let r = compile_value_depth(em, reg, scope, rhs, depth + 1)?;
+            let l = compile_value_depth(em, reg, scope, lhs, depth.saturating_add(1))?;
+            let r = compile_value_depth(em, reg, scope, rhs, depth.saturating_add(1))?;
             let result = reg.alloc();
             let both_null = em.new_label();
             let done = em.new_label();
@@ -304,9 +313,9 @@ pub(crate) fn compile_cond_depth(
                     scope,
                     &lt_lo,
                     arm.with_false(Target::Fallthrough),
-                    depth + 1,
+                    depth.saturating_add(1),
                 )?;
-                compile_cond_depth(em, reg, scope, &gt_hi, arm, depth + 1)?;
+                compile_cond_depth(em, reg, scope, &gt_hi, arm, depth.saturating_add(1))?;
                 if t_is_new {
                     em.place(t_label);
                 }
@@ -321,9 +330,9 @@ pub(crate) fn compile_cond_depth(
                     scope,
                     &ge_lo,
                     arm.with_true(Target::Fallthrough),
-                    depth + 1,
+                    depth.saturating_add(1),
                 )?;
-                compile_cond_depth(em, reg, scope, &le_hi, arm, depth + 1)?;
+                compile_cond_depth(em, reg, scope, &le_hi, arm, depth.saturating_add(1))?;
                 if f_is_new {
                     em.place(f_label);
                 }
@@ -363,7 +372,7 @@ pub(crate) fn compile_cond_depth(
                 return Ok(());
             }
 
-            let l = compile_value_depth(em, reg, scope, inner, depth + 1)?;
+            let l = compile_value_depth(em, reg, scope, inner, depth.saturating_add(1))?;
             let saw_null = reg.alloc();
             em.emit(Instruction::new(Opcode::Integer, 0, saw_null, 0));
 
@@ -387,7 +396,7 @@ pub(crate) fn compile_cond_depth(
                 let affinity =
                     comparison_affinity(expr_affinity(scope, inner), expr_affinity(scope, item));
                 let p4 = p4_coll_seq(collation.unwrap_or(Collation::Binary), affinity);
-                let r = compile_value_depth(em, reg, scope, item, depth + 1)?;
+                let r = compile_value_depth(em, reg, scope, item, depth.saturating_add(1))?;
 
                 let item_null_label = em.new_label();
                 let skip_label = em.new_label();
@@ -428,7 +437,7 @@ pub(crate) fn compile_cond_depth(
         // Any other expression used in boolean context (a bare column,
         // arithmetic, etc.): evaluate to a value and test truthiness.
         _ => {
-            let r = compile_value_depth(em, reg, scope, expr, depth + 1)?;
+            let r = compile_value_depth(em, reg, scope, expr, depth.saturating_add(1))?;
             finish_truthy(em, r, targets);
             Ok(())
         }

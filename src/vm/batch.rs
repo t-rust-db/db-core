@@ -27,10 +27,15 @@ pub const BATCH_SIZE: usize = 1024;
 /// execution operand, shared by the batch and row VMs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AggFunc {
+    /// `COUNT(x)` / `COUNT(*)`: number of non-null values (or rows).
     Count,
+    /// `SUM(x)`: sum of the non-null values.
     Sum,
+    /// `AVG(x)`: arithmetic mean of the non-null values.
     Avg,
+    /// `MIN(x)`: smallest non-null value.
     Min,
+    /// `MAX(x)`: largest non-null value.
     Max,
 }
 
@@ -51,6 +56,8 @@ impl AggFunc {
         }
     }
 
+    /// Parses a SQL aggregate name case-insensitively (the inverse of
+    /// [`AggFunc::name`]); `None` for anything that isn't one of the five.
     pub fn from_name(name: &str) -> Option<Self> {
         match name.to_ascii_uppercase().as_str() {
             "COUNT" => Some(AggFunc::Count),
@@ -71,10 +78,15 @@ impl AggFunc {
 /// `Cow::Owned`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// A 64-bit signed integer.
     Int(i64),
+    /// A 64-bit IEEE float.
     Float(f64),
+    /// A boolean (the result of comparisons and predicates).
     Bool(bool),
+    /// A string; borrowed for baked-in literals, owned for runtime column data.
     Str(Cow<'static, str>),
+    /// SQL `NULL`.
     Null,
 }
 
@@ -91,6 +103,8 @@ impl fmt::Display for Value {
 }
 
 impl Value {
+    /// The numeric value as `f64` (`Int` widened, `Float` as-is); `None` for
+    /// `Bool`/`Str`/`Null`.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Int(v) => Some(*v as f64),
@@ -104,11 +118,14 @@ impl Value {
 /// length) — the VM's input for one segment/row-group of a table.
 #[derive(Debug, Default, Clone)]
 pub struct Batch {
+    /// Column values by column name; every `Vec` has exactly `num_rows` entries.
     pub columns: HashMap<String, Vec<Value>>,
+    /// Number of rows in this batch (the length of every column).
     pub num_rows: usize,
 }
 
 impl Batch {
+    /// An empty batch of `num_rows` rows with no columns yet.
     pub fn new(num_rows: usize) -> Self {
         Batch {
             columns: HashMap::new(),
@@ -116,6 +133,7 @@ impl Batch {
         }
     }
 
+    /// Builder-style: adds (or replaces) the column `name` with `values`.
     pub fn with_column(mut self, name: impl Into<String>, values: Vec<Value>) -> Self {
         self.columns.insert(name.into(), values);
         self
@@ -123,18 +141,33 @@ impl Batch {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Elementwise operation applied by [`Opcode::Map`] to two registers `a` and
+/// `b` (unary ops ignore `b`). Unless a variant's docs say otherwise, a `NULL`
+/// operand yields `NULL`.
 pub enum MapOp {
+    /// `a + b` numeric addition.
     Add,
+    /// `a - b` numeric subtraction.
     Sub,
+    /// `a * b` numeric multiplication.
     Mul,
+    /// `a / b` numeric division.
     Div,
+    /// `a = b` equality comparison.
     Eq,
+    /// `a <> b` inequality comparison.
     Ne,
+    /// `a < b` less-than comparison.
     Lt,
+    /// `a <= b` less-than-or-equal comparison.
     Le,
+    /// `a > b` greater-than comparison.
     Gt,
+    /// `a >= b` greater-than-or-equal comparison.
     Ge,
+    /// `a AND b` logical conjunction.
     And,
+    /// `a OR b` logical disjunction.
     Or,
     /// `NOT a` -- unary; `b` is unused (callers pass the same register as
     /// `a`). `NOT NULL` is `NULL`, per the general null-propagation rule
@@ -162,15 +195,28 @@ pub enum MapOp {
 /// [`AggFunc`]'s flat/`GROUP BY` reductions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowFunc {
+    /// `ROW_NUMBER()`: 1-based position of the row within its sorted partition.
     RowNumber,
+    /// `RANK()`: 1-based rank with gaps after ties.
     Rank,
+    /// `DENSE_RANK()`: 1-based rank without gaps after ties.
     DenseRank,
+    /// `LAG(arg, offset)`: `arg` from the row `offset` places earlier in the
+    /// partition, `NULL` if none.
     Lag,
+    /// `LEAD(arg, offset)`: `arg` from the row `offset` places later in the
+    /// partition, `NULL` if none.
     Lead,
+    /// `FIRST_VALUE(arg)`: `arg` from the first row of the partition.
     FirstValue,
+    /// `LAST_VALUE(arg)`: `arg` from the last row of the partition.
     LastValue,
+    /// `SUM(arg) OVER (...)`: running (with `ORDER BY`) or whole-partition sum.
     Sum,
+    /// `AVG(arg) OVER (...)`: running (with `ORDER BY`) or whole-partition mean.
     Avg,
+    /// `COUNT(arg) OVER (...)`: running or whole-partition count of non-null
+    /// `arg` values (or of rows when `arg` is `None`).
     Count,
 }
 
@@ -182,41 +228,65 @@ pub enum WindowFunc {
 /// an AOT-emitted `const PROGRAM` can hold a `Cow::Borrowed(&[AggPart])`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AggPart {
+    /// A `GROUP BY` key column: identifies the group, never merged.
     GroupKey,
+    /// A partial `SUM`: merged by adding across segments.
     Sum,
+    /// A partial `COUNT`: merged by adding across segments.
     Count,
+    /// A partial `MIN`: merged by keeping the smaller value.
     Min,
+    /// A partial `MAX`: merged by keeping the larger value.
     Max,
     /// `(sum_index, count_index)` into the emitted row, combined at the end.
     Avg(usize, usize),
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// One instruction of the batch VM. Register operands are indices into the
+/// VM's register map; each register holds one column of the current batch.
 pub enum Opcode {
     /// Load a named column from the current batch into a register.
     LoadColumn {
+        /// Destination register.
         reg: usize,
+        /// Name of the column to load from the batch.
         column: Cow<'static, str>,
     },
     /// Broadcast a constant value to every row of the current batch into a
     /// register.
-    LoadConst { reg: usize, value: Value },
+    LoadConst {
+        /// Destination register.
+        reg: usize,
+        /// The value broadcast to every row.
+        value: Value,
+    },
     /// Apply a binary op elementwise: `registers[dst] = op(registers[a], registers[b])`.
     Map {
+        /// Destination register.
         dst: usize,
+        /// The operation to apply.
         op: MapOp,
+        /// Left (or sole, for unary ops) operand register.
         a: usize,
+        /// Right operand register; ignored by unary ops.
         b: usize,
     },
     /// Keep only the rows where `predicate` register holds `Value::Bool(true)`,
     /// applied to every currently-live register (in place).
-    Filter { predicate: usize },
+    Filter {
+        /// Register holding one `Bool` per row; `true` keeps the row.
+        predicate: usize,
+    },
     /// Aggregate a whole register down to a single value (skipping nulls).
     /// `COUNT` counts non-null values, or all rows when `src` is `None`
     /// (`COUNT(*)`).
     Reduce {
+        /// The aggregate to compute.
         func: AggFunc,
+        /// Source register, or `None` for `COUNT(*)`.
         src: Option<usize>,
+        /// Destination register (one value).
         dst: usize,
     },
     /// Hash-aggregate: partition rows by the tuple of values in `group_by`
@@ -224,8 +294,11 @@ pub enum Opcode {
     /// row per distinct group into `group_by` registers (deduplicated) plus
     /// one output register per aggregate, in `aggs` order.
     GroupReduce {
+        /// Registers whose value tuple identifies a group.
         group_by: Cow<'static, [usize]>,
+        /// `(aggregate, source register)` pairs; `None` source is `COUNT(*)`.
         aggs: Cow<'static, [(AggFunc, Option<usize>)]>,
+        /// Destination register for each entry of `aggs`, in order.
         agg_dst: Cow<'static, [usize]>,
     },
     /// Build a hash table for an equi-join from the current live registers:
@@ -233,8 +306,11 @@ pub enum Opcode {
     /// `payload_cols` (columns carried through to the probe side), keyed by
     /// `table` so a later [`Opcode::HashProbe`] can find it.
     HashBuild {
+        /// Registers forming the compound join key.
         key_cols: Cow<'static, [usize]>,
+        /// Registers carried through to the probe side as payload.
         payload_cols: Cow<'static, [usize]>,
+        /// Identifier a later [`Opcode::HashProbe`] uses to find this table.
         table: usize,
     },
     /// Probe the hash table built by the [`Opcode::HashBuild`] that wrote
@@ -246,9 +322,13 @@ pub enum Opcode {
     /// regardless of how many build-side rows match, with `payload_dst`
     /// left NULL (semi-joins never surface the build side's columns).
     HashProbe {
+        /// Probe-side registers forming the compound join key.
         key_cols: Cow<'static, [usize]>,
+        /// Identifier of the table built by [`Opcode::HashBuild`].
         table: usize,
+        /// Destination register for each build-side payload column, in order.
         payload_dst: Cow<'static, [usize]>,
+        /// Which rows to emit for matches/non-matches.
         kind: JoinKind,
     },
     /// `func(...) OVER (PARTITION BY ... ORDER BY ...)`: partitions the
@@ -264,11 +344,17 @@ pub enum Opcode {
     /// whole partition (broadcast to every row in it) when empty --
     /// matching SQL's default frame for each case.
     Window {
+        /// The window function to compute.
         func: WindowFunc,
+        /// Value register for functions that take an argument.
         arg: Option<usize>,
+        /// Row shift for `Lag`/`Lead` (default 1).
         offset: Option<i64>,
+        /// Registers whose value tuple identifies a partition (empty = one).
         partition_by: Cow<'static, [usize]>,
+        /// `(register, descending)` sort keys within each partition.
         order_by: Cow<'static, [(usize, bool)]>,
+        /// Destination register (one value per row).
         dst: usize,
     },
     /// Marks the top of the per-segment loop; a no-op on its own (the
@@ -276,11 +362,17 @@ pub enum Opcode {
     Scan,
     /// Append the current values of `registers` (transposed row-major) to
     /// the VM's output.
-    Emit { registers: Cow<'static, [usize]> },
+    Emit {
+        /// Registers forming the output columns, in order.
+        registers: Cow<'static, [usize]>,
+    },
     /// If the source has another segment, load it and jump back to
     /// `loop_start` (the instruction index right after [`Opcode::Scan`]);
     /// otherwise fall through.
-    NextSegment { loop_start: usize },
+    NextSegment {
+        /// Instruction index to jump back to when another segment exists.
+        loop_start: usize,
+    },
     /// Stop execution.
     Halt,
     /// Terminal opcode of a planned flat program (ADR 0007): the
@@ -293,10 +385,15 @@ pub enum Opcode {
     /// over the concatenated output. Encodes what used to be sidecar
     /// plan fields so the instruction stream is the whole plan.
     Finalize {
+        /// Shape of each emitted row, for merging partial aggregates.
         agg_parts: Cow<'static, [AggPart]>,
+        /// How many leading emitted columns are `GROUP BY` keys.
         num_group_keys: usize,
+        /// Deduplicate identical output rows (`SELECT DISTINCT`).
         distinct: bool,
+        /// `(output column index, descending)` final sort, if any.
         order_by: Option<(usize, bool)>,
+        /// Maximum number of rows to keep, if any.
         limit: Option<usize>,
     },
 }
@@ -335,7 +432,9 @@ impl Opcode {
 /// type safety).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instruction {
+    /// The instruction to execute.
     pub opcode: Opcode,
+    /// Optional human-readable note shown in `EXPLAIN` listings.
     pub comment: Option<String>,
 }
 
@@ -364,6 +463,7 @@ impl Instruction {
 /// trailing [`Opcode::Finalize`] -- no sidecar plan struct (ADR 0007).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Program {
+    /// The instructions, executed in order from index 0.
     pub instructions: Vec<Instruction>,
 }
 
@@ -419,20 +519,14 @@ impl Program {
     /// Finalize)`. A program without one returns all its opcodes and
     /// `None`, and executes as a plain per-segment concatenation.
     pub fn split_finalize(&self) -> (Vec<Opcode>, Option<&Opcode>) {
-        match self.instructions.last() {
-            Some(Instruction {
-                opcode: fin @ Opcode::Finalize { .. },
-                ..
-            }) => {
-                let n = self.instructions.len() - 1;
-                (
-                    self.instructions[..n]
-                        .iter()
-                        .map(|i| i.opcode.clone())
-                        .collect(),
-                    Some(fin),
-                )
-            }
+        match self.instructions.split_last() {
+            Some((
+                Instruction {
+                    opcode: fin @ Opcode::Finalize { .. },
+                    ..
+                },
+                body,
+            )) => (body.iter().map(|i| i.opcode.clone()).collect(), Some(fin)),
             _ => (self.opcodes().cloned().collect(), None),
         }
     }
@@ -441,12 +535,14 @@ impl Program {
 /// Supplies successive batches (row-group segments) of a table to
 /// [`Vm::run`].
 pub trait Source {
+    /// The next batch, or `None` once the source is exhausted.
     fn next_batch(&mut self) -> Option<Batch>;
 }
 
 /// One independently-loadable unit of work for [`run_parallel`] — typically
 /// a single row group's worth of columns.
 pub trait Segment: Send + Sync {
+    /// Loads this segment's columns into a [`Batch`].
     fn load(&self) -> Batch;
 }
 
@@ -457,10 +553,11 @@ pub trait Segment: Send + Sync {
 /// sitting on a statically pre-assigned share -- the morsel-driven property
 /// `run_parallel`/`run_parallel_top_n`'s doc comments require, without a
 /// work-stealing dependency.
-fn run_morsels<T: Send>(len: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
+fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
+    let len = items.len();
     if len == 0 {
         return Vec::new();
     }
@@ -476,10 +573,10 @@ fn run_morsels<T: Send>(len: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
         for _ in 0..num_threads {
             scope.spawn(|| loop {
                 let idx = next.fetch_add(1, Ordering::Relaxed);
-                if idx >= len {
+                let Some(item) = items.get(idx) else {
                     break;
-                }
-                let result = f(idx);
+                };
+                let result = f(item);
                 results
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -504,8 +601,8 @@ fn run_morsels<T: Send>(len: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
 /// `GroupReduce`/`Reduce` results are per-segment only — merging partial
 /// aggregates across segments is not performed here.
 pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
-    let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments.len(), |idx| {
-        let batch = segments[idx].load();
+    let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments, |segment| {
+        let batch = segment.load();
         let mut vm = Vm::new();
         vm.execute(&batch, program)?;
         Ok(std::mem::take(&mut vm.output))
@@ -523,8 +620,11 @@ pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<Ve
 /// keep.
 #[derive(Debug, Clone, Copy)]
 pub struct TopN {
+    /// Index of the emitted output column to order by.
     pub col: usize,
+    /// Sort descending when `true`, ascending otherwise.
     pub descending: bool,
+    /// Number of rows to keep.
     pub limit: usize,
 }
 
@@ -571,6 +671,10 @@ impl PartialOrd for TopNItem {
     }
 }
 impl Ord for TopNItem {
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "`col` is the ORDER BY register codegen resolved against the row width; `Ord` has no error path"
+    )]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         compare_for_order(&self.row[self.col], &other.row[self.col], self.descending)
     }
@@ -587,7 +691,8 @@ fn top_n_reduce(rows: Vec<Vec<Value>>, spec: &TopN) -> Vec<Vec<Value>> {
         return Vec::new();
     }
 
-    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(spec.limit.min(rows.len()) + 1);
+    let mut heap: BinaryHeap<TopNItem> =
+        BinaryHeap::with_capacity(spec.limit.min(rows.len()).saturating_add(1));
     for row in rows {
         let item = TopNItem {
             row,
@@ -619,8 +724,8 @@ pub fn run_parallel_top_n<S: Segment>(
     program: &[Opcode],
     spec: &TopN,
 ) -> Result<Vec<Vec<Value>>> {
-    let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments.len(), |idx| {
-        let batch = segments[idx].load();
+    let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments, |segment| {
+        let batch = segment.load();
         let mut vm = Vm::new();
         vm.execute(&batch, program)?;
         Ok(top_n_reduce(std::mem::take(&mut vm.output), spec))
@@ -647,31 +752,46 @@ pub const MAX_STEPS: usize = 10_000_000;
 /// specific instruction that failed.
 #[derive(Debug, PartialEq)]
 pub enum VmError {
+    /// [`Opcode::LoadColumn`] named a column the batch doesn't have.
     UnknownColumn {
+        /// Name of the [`Opcode`] variant that failed.
         opcode: &'static str,
+        /// The column name that was not found.
         column: String,
     },
+    /// An opcode read a register that has not been written.
     UnknownRegister {
+        /// Name of the [`Opcode`] variant that failed.
         opcode: &'static str,
+        /// The register index that was not found.
         register: usize,
     },
+    /// Two registers combined by one opcode hold different numbers of rows.
     RegisterLengthMismatch {
+        /// Name of the [`Opcode`] variant that failed.
         opcode: &'static str,
     },
+    /// [`Opcode::HashProbe`] referenced a table no [`Opcode::HashBuild`] built.
     UnknownJoinTable {
+        /// Name of the [`Opcode`] variant that failed.
         opcode: &'static str,
+        /// The join table identifier that was not found.
         table: usize,
     },
     /// `Vm::step` was about to execute past [`MAX_STEPS`] instructions.
     StepLimitExceeded {
+        /// Name of the [`Opcode`] variant that failed.
         opcode: &'static str,
+        /// The step limit that was exceeded ([`MAX_STEPS`]).
         limit: usize,
     },
     /// An opcode named an operation its kernel has no dispatch for -- a
     /// planner bug, surfaced to the caller as an error rather than a
     /// panic mid-query.
     UnsupportedOp {
+        /// Name of the [`Opcode`] variant that failed.
         opcode: &'static str,
+        /// The operation (e.g. a `MapOp` or function name) with no dispatch.
         op: String,
     },
 }
@@ -703,6 +823,7 @@ impl fmt::Display for VmError {
 
 impl std::error::Error for VmError {}
 
+/// Result type of every fallible VM operation, erroring with [`VmError`].
 pub type Result<T> = std::result::Result<T, VmError>;
 
 /// A compound join key built from a probe/build row's key columns.
@@ -776,10 +897,13 @@ impl fmt::Debug for Vm {
 }
 
 impl Vm {
+    /// A fresh VM with no registers, no join tables and no output.
     pub fn new() -> Self {
         Vm::default()
     }
 
+    /// The current contents of register `reg`, or
+    /// [`VmError::UnknownRegister`] if it has never been written.
     pub fn register(&self, reg: usize) -> Result<&[Value]> {
         self.reg(reg, "register")
     }
@@ -800,7 +924,7 @@ impl Vm {
     /// exceeded so a pathological or buggy compiled program can't run
     /// forever.
     fn check_step_limit(&mut self, opcode: &'static str) -> Result<()> {
-        self.steps += 1;
+        self.steps = self.steps.saturating_add(1);
         if self.steps > MAX_STEPS {
             return Err(VmError::StepLimitExceeded {
                 opcode,
@@ -810,6 +934,9 @@ impl Vm {
         Ok(())
     }
 
+    /// Runs every opcode of `program` against `batch` in order, stopping at
+    /// the first error. Unlike [`Vm::run`], this executes a single batch and
+    /// does no segment looping.
     pub fn execute(&mut self, batch: &Batch, program: &[Opcode]) -> Result<()> {
         for op in program {
             self.check_step_limit(op.name())?;
@@ -850,26 +977,31 @@ impl Vm {
             None => return Ok(Vec::new()),
         };
         let mut pc = 0usize;
-        while pc < program.len() {
-            self.check_step_limit(program[pc].name())?;
-            match &program[pc] {
+        while let Some(op) = program.get(pc) {
+            self.check_step_limit(op.name())?;
+            match op {
                 Opcode::NextSegment { loop_start } => match source.next_batch() {
                     Some(next) => {
                         batch = next;
                         pc = *loop_start;
                     }
-                    None => pc += 1,
+                    None => pc = pc.saturating_add(1),
                 },
                 Opcode::Halt => break,
                 other => {
                     self.step(&batch, other)?;
-                    pc += 1;
+                    pc = pc.saturating_add(1);
                 }
             }
         }
         Ok(std::mem::take(&mut self.output))
     }
 
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push"
+    )]
     fn step(&mut self, batch: &Batch, op: &Opcode) -> Result<()> {
         let opcode = op.name();
         match op {
@@ -1171,6 +1303,11 @@ impl Vm {
 /// (stringified, same non-NULL-safe convention as [`Opcode::GroupReduce`]'s
 /// grouping), sorts each partition by `order_cols` via [`compare_for_order`],
 /// then computes `func` per row within its partition.
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "every column slice holds `num_rows` values and every index in `indices`/`partitions` was drawn from `0..num_rows`; `pos + 1` and the running counters are bounded by `num_rows`"
+)]
 fn compute_window(
     func: WindowFunc,
     offset: Option<i64>,
@@ -1335,6 +1472,10 @@ fn compute_window(
 /// `SUM`/`AVG`/`COUNT OVER (PARTITION BY ...)` with no `ORDER BY`: the
 /// default frame is the whole partition, so every row in it gets the same
 /// aggregate value.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`indices` was drawn from `0..num_rows` by `compute_window`, and `arg_col` holds `num_rows` values"
+)]
 fn whole_partition_aggregate(
     func: WindowFunc,
     arg_col: Option<&[Value]>,
@@ -1440,7 +1581,11 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
         MapOp::Not => Value::Bool(!as_bool(a)),
         MapOp::Concat => Value::Str(Cow::Owned(format!("{a}{b}"))),
         MapOp::Neg => match a {
-            Value::Int(v) => Value::Int(-v),
+            // `-i64::MIN` has no integer representation; SQLite promotes
+            // that one case to REAL rather than overflowing.
+            Value::Int(v) => v
+                .checked_neg()
+                .map_or(Value::Float(-(*v as f64)), Value::Int),
             Value::Float(v) => Value::Float(-v),
             _ => Value::Null,
         },
@@ -1926,6 +2071,9 @@ mod tests {
         for (input, expected) in [
             (Value::Int(5), Value::Int(-5)),
             (Value::Float(2.5), Value::Float(-2.5)),
+            // `-i64::MIN` has no integer representation: promoted to REAL
+            // (SQLite's behaviour) instead of overflowing.
+            (Value::Int(i64::MIN), Value::Float(-(i64::MIN as f64))),
         ] {
             vm.execute(
                 &batch,
@@ -2983,10 +3131,10 @@ mod tests {
         let concurrent_now = AtomicUsize::new(0);
 
         let start = Instant::now();
-        run_morsels(costs_ms.len(), |idx| {
+        run_morsels(&costs_ms, |&cost_ms| {
             let n = concurrent_now.fetch_add(1, Ordering::SeqCst) + 1;
             concurrent_peak.fetch_max(n, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(costs_ms[idx]));
+            std::thread::sleep(Duration::from_millis(cost_ms));
             concurrent_now.fetch_sub(1, Ordering::SeqCst);
         });
         let elapsed = start.elapsed();

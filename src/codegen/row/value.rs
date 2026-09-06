@@ -155,10 +155,12 @@ pub(crate) fn compile_value_depth(
 
         // Parentheses affect only parse-time grouping, which the tree
         // shape already records; there is nothing to emit.
-        ExprKind::Paren(inner) => compile_value_depth(em, reg, scope, inner, depth + 1),
+        ExprKind::Paren(inner) => {
+            compile_value_depth(em, reg, scope, inner, depth.saturating_add(1))
+        }
 
         ExprKind::Unary { op, expr: inner } => {
-            let r = compile_value_depth(em, reg, scope, inner, depth + 1)?;
+            let r = compile_value_depth(em, reg, scope, inner, depth.saturating_add(1))?;
             match op {
                 // Unary `+` is a no-op on the value.
                 UnaryOp::Plus => Ok(r),
@@ -236,7 +238,7 @@ pub(crate) fn compile_value_depth(
         // (`resolve_collation`); silently ignoring it there, rather
         // than here, would be the actual bug.
         ExprKind::Collate { expr: inner, .. } => {
-            compile_value_depth(em, reg, scope, inner, depth + 1)
+            compile_value_depth(em, reg, scope, inner, depth.saturating_add(1))
         }
 
         ExprKind::Param(kind) => {
@@ -285,7 +287,7 @@ pub(crate) fn compile_value_depth(
             expr: inner,
             type_name,
         } => {
-            let r = compile_value_depth(em, reg, scope, inner, depth + 1)?;
+            let r = compile_value_depth(em, reg, scope, inner, depth.saturating_add(1))?;
             let dest = reg.alloc();
             em.emit(Instruction::new(Opcode::Copy, r, dest, 0));
             let affinity = affinity_of(type_name);
@@ -411,14 +413,14 @@ fn compile_case(
             &effective_cond,
             CondTargets::null_is_false(Target::Fallthrough, Target::Jump(next_label)),
         )?;
-        let r = compile_value_depth(em, reg, scope, result, depth + 1)?;
+        let r = compile_value_depth(em, reg, scope, result, depth.saturating_add(1))?;
         em.emit(Instruction::new(Opcode::Copy, r, dest, 0));
         em.goto(end_label);
         em.place(next_label);
     }
     match else_ {
         Some(else_) => {
-            let r = compile_value_depth(em, reg, scope, else_, depth + 1)?;
+            let r = compile_value_depth(em, reg, scope, else_, depth.saturating_add(1))?;
             em.emit(Instruction::new(Opcode::Copy, r, dest, 0));
         }
         None => {
@@ -470,8 +472,8 @@ fn compile_binary(
         | BinaryOp::Or => return compile_bool_to_value(em, reg, scope, whole, depth),
     };
 
-    let l = compile_value_depth(em, reg, scope, lhs, depth + 1)?;
-    let r = compile_value_depth(em, reg, scope, rhs, depth + 1)?;
+    let l = compile_value_depth(em, reg, scope, lhs, depth.saturating_add(1))?;
+    let r = compile_value_depth(em, reg, scope, rhs, depth.saturating_add(1))?;
     let dest = reg.alloc();
     if reversed {
         em.emit(Instruction::new(opcode, r, l, dest));
@@ -520,7 +522,7 @@ fn compile_bool_to_value(
             scope,
             expr,
             CondTargets::null_is_false(Target::Jump(true_label), Target::Fallthrough),
-            depth + 1,
+            depth.saturating_add(1),
         )?;
         em.emit(Instruction::new(Opcode::Integer, 0, dest, 0));
         em.goto(end_label);

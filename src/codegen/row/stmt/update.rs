@@ -55,7 +55,10 @@ pub fn compile_update(schema: &TableSchema, update: &Update) -> Result<Program> 
                 reason: format!("UPDATE of the rowid-alias column {column} is not supported yet"),
             });
         }
-        assigned[idx] = Some(&assignment.value);
+        let slot = assigned
+            .get_mut(idx)
+            .ok_or_else(|| CodegenError::UnknownColumn(column.clone()))?;
+        *slot = Some(&assignment.value);
     }
 
     let mut em = Emitter::new();
@@ -110,8 +113,7 @@ pub fn compile_update(schema: &TableSchema, update: &Update) -> Result<Program> 
     // in between and break that contiguity. A single assigned column
     // never triggered this; two or more (e.g. a tuple assignment) did.
     let col_regs: Vec<i32> = (0..schema.columns.len()).map(|_| reg.alloc()).collect();
-    for (idx, expr) in assigned.iter().enumerate() {
-        let dest = col_regs[idx];
+    for (idx, (expr, &dest)) in assigned.iter().zip(&col_regs).enumerate() {
         if Some(idx) == schema.rowid_alias {
             em.emit(Instruction::new(Opcode::Null, 0, dest, dest));
         } else if let Some(expr) = expr {
@@ -122,10 +124,16 @@ pub fn compile_update(schema: &TableSchema, update: &Update) -> Result<Program> 
         }
     }
 
+    let first_col_reg = col_regs
+        .first()
+        .copied()
+        .ok_or_else(|| CodegenError::Unsupported {
+            reason: format!("UPDATE of table {} which has no columns", schema.name),
+        })?;
     let record_reg = reg.alloc();
     em.emit(Instruction::new(
         Opcode::MakeRecord,
-        col_regs[0],
+        first_col_reg,
         i32::try_from(col_regs.len()).map_err(|_| CodegenError::Unsupported {
             reason: format!(
                 "UPDATE row of {} columns does not fit in a p2 operand",

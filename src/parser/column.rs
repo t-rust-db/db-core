@@ -52,9 +52,20 @@ use crate::parser::row::ParseOutcome;
 use crate::parser::Span;
 
 #[derive(Debug, PartialEq)]
+/// Errors from the column-oriented (`codegen-batch`) query validator/parser.
 pub enum ParseError {
-    UnexpectedEof { span: Span },
-    Unexpected { message: String, span: Span },
+    /// The query ended before a complete statement was read.
+    UnexpectedEof {
+        /// Where the input ended.
+        span: Span,
+    },
+    /// A token or construct that is not accepted at this position.
+    Unexpected {
+        /// What was expected or why the token is rejected.
+        message: String,
+        /// Where the offending token is.
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -89,6 +100,7 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// Result alias for this parser, with [`ParseError`] as the error type.
 pub type Result<T> = std::result::Result<T, ParseError>;
 
 fn unsupported(span: Span, message: String) -> ParseError {

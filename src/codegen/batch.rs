@@ -51,19 +51,30 @@ use std::fmt;
 /// doesn't depend on the VM's execution-operand enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowFunc {
+    /// `ROW_NUMBER()`: 1-based position within the partition.
     RowNumber,
+    /// `RANK()`: rank with gaps after ties.
     Rank,
+    /// `DENSE_RANK()`: rank without gaps after ties.
     DenseRank,
+    /// `LAG(col[, offset])`: the value `offset` rows before the current one.
     Lag,
+    /// `LEAD(col[, offset])`: the value `offset` rows after the current one.
     Lead,
+    /// `FIRST_VALUE(col)`: the value in the first row of the frame.
     FirstValue,
+    /// `LAST_VALUE(col)`: the value in the last row of the frame.
     LastValue,
+    /// `SUM(col) OVER (...)`: running sum over the frame.
     Sum,
+    /// `AVG(col) OVER (...)`: running average over the frame.
     Avg,
+    /// `COUNT(col) OVER (...)`: running count over the frame.
     Count,
 }
 
 impl WindowFunc {
+    /// Resolves a (case-insensitive) SQL function name to its window kind, if any.
     pub fn from_name(name: &str) -> Option<Self> {
         match name.to_ascii_uppercase().as_str() {
             "ROW_NUMBER" => Some(WindowFunc::RowNumber),
@@ -95,10 +106,15 @@ impl WindowFunc {
 /// is only used by `LAG`/`LEAD` (default 1 when omitted).
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowSpec {
+    /// Which window function to evaluate.
     pub func: WindowFunc,
+    /// The argument column, if the function takes one.
     pub arg: Option<String>,
+    /// Row offset for `LAG`/`LEAD`; `None` means the default of 1.
     pub offset: Option<i64>,
+    /// `PARTITION BY` column names.
     pub partition_by: Vec<String>,
+    /// `ORDER BY` terms as `(column, descending)` pairs.
     pub order_by: Vec<(String, bool)>,
 }
 
@@ -107,7 +123,9 @@ pub struct WindowSpec {
 /// unreadable file) are the caller's, not the planner's.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlanError {
+    /// A referenced column that resolves to no table.
     UnknownColumn(String),
+    /// A `WHERE col IN (SELECT ...)` shape [`compile_semi_join`] cannot plan.
     UnsupportedSemiJoin(String),
     /// `Right`/`Full`/`Cross` are parseable but only `Inner`/`Left` hash-
     /// join execution exists so far.
@@ -144,6 +162,7 @@ impl fmt::Display for PlanError {
 
 impl std::error::Error for PlanError {}
 
+/// Result alias for planner operations, with [`PlanError`] as the error type.
 pub type Result<T> = std::result::Result<T, PlanError>;
 
 // ---------------------------------------------------------------------
@@ -474,7 +493,7 @@ pub fn expand_star(select: &Select, schema: &[String]) -> Result<Select> {
     if has_aggregation {
         return Err(PlanError::StarWithAggregation);
     }
-    let mut columns = Vec::with_capacity(select.columns.len() + schema.len());
+    let mut columns = Vec::with_capacity(select.columns.len().saturating_add(schema.len()));
     for (col, item) in select.columns.iter().zip(&items) {
         match item {
             Item::Star => columns.extend(schema.iter().map(|name| ResultColumn::Expr {
@@ -532,7 +551,7 @@ struct Ctx {
 impl Ctx {
     fn alloc(&mut self) -> usize {
         let reg = self.next_reg;
-        self.next_reg += 1;
+        self.next_reg = self.next_reg.saturating_add(1);
         reg
     }
 
@@ -757,9 +776,9 @@ pub fn compile(select: &Select) -> Program {
     let mut agg_dst = Vec::new();
     let mut emit_regs = group_by_regs.clone();
 
-    for (i, item) in items.iter().enumerate() {
+    for (item, &agg_src) in items.iter().zip(&agg_srcs) {
         if let Item::Agg(func, arg) = item {
-            let src = arg.as_ref().map(|_| agg_srcs[i]);
+            let src = arg.as_ref().map(|_| agg_src);
             // Resolved up front so the dispatch below has no "can't happen"
             // arm: `None` *is* the `Avg` case (the only aggregate that
             // needs two partials), not a wildcard hiding one.
@@ -785,7 +804,8 @@ pub fn compile(select: &Select) -> Program {
                     agg_dst.push(sum_dst);
                     aggs.push((AggFunc::Count, src));
                     agg_dst.push(count_dst);
-                    agg_parts.push(AggPart::Avg(emit_regs.len(), emit_regs.len() + 1));
+                    let sum_pos = emit_regs.len();
+                    agg_parts.push(AggPart::Avg(sum_pos, sum_pos.saturating_add(1)));
                     emit_regs.push(sum_dst);
                     emit_regs.push(count_dst);
                 }
@@ -876,8 +896,8 @@ fn finalize_comment(select: &Select) -> String {
 
 /// Split a (possibly qualified) column name into `(table_prefix, column)`.
 pub fn split_qualified(name: &str) -> (Option<&str>, &str) {
-    match name.find('.') {
-        Some(idx) => (Some(&name[..idx]), &name[idx + 1..]),
+    match name.split_once('.') {
+        Some((table, column)) => (Some(table), column),
         None => (None, name),
     }
 }
@@ -954,7 +974,7 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
         .position(|n| n == &join.left_col)
         .ok_or_else(|| PlanError::UnknownColumn(join.left_col.clone()))?;
     let payload_dst: Vec<usize> = (0..right_columns.len())
-        .map(|i| left_columns.len() + i)
+        .map(|i| left_columns.len().saturating_add(i))
         .collect();
     // Already rejected at the top of `compile_join`; returning the same
     // error here keeps this match total without an `unreachable!` the
@@ -1002,8 +1022,11 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
 /// borrowing `SemiJoinProgram<'q>` would need.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemiJoinProgram {
+    /// The main-table column tested by the `IN` clause.
     pub key_column: String,
+    /// The `IN (SELECT ...)` subquery, to be compiled and run by the caller.
     pub subquery: Box<Select>,
+    /// The main query with the `IN` clause stripped, run over the filtered rows.
     pub body: Program,
 }
 
@@ -1113,7 +1136,7 @@ pub fn compile_window(select: &Select) -> Program {
             Item::Column(name) => emit_regs.push(column_reg(name)),
             Item::Window(spec) => {
                 let dst = next_reg;
-                next_reg += 1;
+                next_reg = next_reg.saturating_add(1);
                 program.push(Instruction::with_comment(
                     Opcode::Window {
                         func: map_window_func(spec.func),
@@ -1140,7 +1163,7 @@ pub fn compile_window(select: &Select) -> Program {
             Item::Agg(..) | Item::Star => {
                 let reg = *null_reg.get_or_insert_with(|| {
                     let reg = next_reg;
-                    next_reg += 1;
+                    next_reg = next_reg.saturating_add(1);
                     program.push(Instruction::new(Opcode::LoadConst {
                         reg,
                         value: Value::Null,
@@ -1224,8 +1247,11 @@ pub fn output_column_names(select: &Select) -> Vec<String> {
 /// One node in an [`explain`] plan tree: `parent == id` marks the root.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanNode {
+    /// This node's identifier, unique within the plan.
     pub id: u32,
+    /// The parent node's `id`; equal to `id` for the root.
     pub parent: u32,
+    /// Human-readable description of the plan step.
     pub detail: String,
 }
 
@@ -1233,7 +1259,9 @@ pub struct PlanNode {
 /// the planner needs from storage, supplied by the caller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableStats {
+    /// Number of row groups (segments) in the table.
     pub row_groups: usize,
+    /// Total row count of the table.
     pub rows: i64,
 }
 
@@ -1256,7 +1284,7 @@ impl PlanBuilder {
 
     fn push(&mut self, parent: u32, detail: impl Into<String>) -> u32 {
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id = self.next_id.saturating_add(1);
         self.nodes.push(PlanNode {
             id,
             parent,
@@ -1456,9 +1484,13 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Vec<PlanN
 /// far as the batch executor's typed operands allow (ADR 0007).
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpcodeRow {
+    /// Instruction address within its program.
     pub addr: usize,
+    /// Opcode name.
     pub opcode: &'static str,
+    /// Rendered operands.
     pub operands: String,
+    /// Explanatory comment for the instruction.
     pub comment: String,
     /// Whether this row is the [`Opcode::Finalize`] barrier: the boundary
     /// between the parallel per-segment phase and the sequential
@@ -1472,7 +1504,9 @@ pub struct OpcodeRow {
 /// -- see [`compile_semi_join`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpcodeSection {
+    /// Section name (e.g. `build`, `probe`, `body`).
     pub label: String,
+    /// The section's instructions, in address order.
     pub rows: Vec<OpcodeRow>,
 }
 
