@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.54.0] - 2026-09-06
+
+### Added
+
+- **`codegen::row` compiles `IS`/`IS NOT`, `BETWEEN`, `IN (list)`, `LIKE`/`GLOB`, `CASE`, `CAST`, `COLLATE`, and general scalar function calls** (#150) -- constructs `parser::ast` could express since #147/#152's retarget but `codegen::row` still returned `Unsupported` for. `IS`/`BETWEEN`/`IN` are ported directly from sqlite-rs's own `codegen/expr/cond.rs` (single evaluation of the tested expression; `NOT BETWEEN`/`NOT IN` correctly distinguish a definite non-match from an unknown one via a `saw_null` register, rather than a naive true/false swap). `LIKE`/`GLOB` and general function calls dispatch into `vm::row::functions`' existing registry (`upper`/`substr`/`coalesce`/`like`/`glob`/...) via `Opcode::Function` -- no VM changes needed. An explicit `expr COLLATE name` on a comparison operand now selects the real collation (`BINARY`/`NOCASE`/`RTRIM`) instead of always defaulting to `Binary`; an unrecognized name is rejected rather than silently ignored. Validated against a real `sqlite3` CLI oracle (`examples/oracle_check.rs`, kept as a manual dev tool): 24/24 match, including `IN`/`BETWEEN`'s NULL-propagation edge cases. Bind parameters (#162) and scalar subqueries in value position (#163) remain `Unsupported`, split into their own tickets since they need new VM/codegen machinery rather than mechanical wiring.
+
 ## [0.53.0] - 2026-09-06
 
 ### Added
