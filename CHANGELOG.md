@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.59.0] - 2026-09-06
+
+### Added
+
+- **`codegen::row` compiles arbitrary expressions in SELECT-list position** (#168) -- `ProjectedColumn` (`Name`|`Expr`) replaces the SELECT-list's `Vec<String>`, mirroring the `OrderByTarget` split #167 established: a bare column keeps the existing fast path, anything else (arithmetic, function calls, scalar subqueries, `CASE`, ...) compiles through `compile_value`, reusing the same contiguity/`Copy`-consolidation and null-extension logic already in place for `ORDER BY`'s own expression columns. `index_scan`/`range_scan`'s fast paths fall back to the generic scan when any SELECT-list item is a non-bare-column expression -- a safe, no-regression fallback since such queries errored outright before. This unblocks #163's own literal example, `SELECT (SELECT x FROM t WHERE ...) FROM outer`.
+
 ## [0.58.0] - 2026-09-06
 
 ### Added
