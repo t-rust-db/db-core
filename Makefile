@@ -75,7 +75,13 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # are ADR 0008's storage-agnostic extension point, implemented by
 # *downstream* crates (sqlite-rs over its own b-tree) that db-core cannot
 # name at compile time -- an open implementor set generics can't express.
-# Everything above that boundary stays in the qualified subset.
+# The exclude list names the files that actually hold a `dyn` over that
+# boundary: the Cursor and CursorFactory trait files, `vm.rs` (which owns
+# the boxed cursors) and the `cursor_conformance.rs` harness that checks
+# implementors through `&dyn Cursor`. `transaction.rs` and
+# `schema_storage.rs` define boundary traits too, but contain no `dyn`
+# themselves and so pass the gate unexempted. Everything above the
+# boundary stays in the qualified subset.
 MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs
 
 check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
