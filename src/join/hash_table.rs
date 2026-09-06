@@ -31,6 +31,8 @@ const MAX_LOAD_NUM: usize = 7;
 const MAX_LOAD_DEN: usize = 10;
 const DEFAULT_CAPACITY: usize = 16;
 
+/// An open-addressing hash table keyed on join keys, holding one `V`
+/// payload per inserted key (duplicates are kept as separate entries).
 pub struct JoinHashTable<K, V, S = RandomState> {
     entries: Vec<Option<Entry<K, V>>>,
     hasher: S,
@@ -38,6 +40,7 @@ pub struct JoinHashTable<K, V, S = RandomState> {
 }
 
 impl<K: Hash + Eq, V> JoinHashTable<K, V, RandomState> {
+    /// An empty table with [`DEFAULT_CAPACITY`] slots and a random hasher.
     pub fn new() -> Self {
         Self::with_capacity(DEFAULT_CAPACITY)
     }
@@ -56,7 +59,13 @@ impl<K: Hash + Eq, V> Default for JoinHashTable<K, V, RandomState> {
     }
 }
 
+#[allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    reason = "open addressing over a power-of-two table: `entries.len()` is never zero so `mask = len - 1` is valid, and `idx & mask` always names a live slot; `len + 1`, `steps + 1` and the doubling in `grow` are bounded by the table's own allocation"
+)]
 impl<K: Hash + Eq, V, S: BuildHasher> JoinHashTable<K, V, S> {
+    /// Like [`JoinHashTable::with_capacity`], but with a caller-supplied hasher.
     pub fn with_capacity_and_hasher(cap: usize, hasher: S) -> Self {
         let cap = cap.next_power_of_two().max(DEFAULT_CAPACITY);
         let mut entries = Vec::with_capacity(cap);
@@ -68,14 +77,17 @@ impl<K: Hash + Eq, V, S: BuildHasher> JoinHashTable<K, V, S> {
         }
     }
 
+    /// Number of entries stored.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Whether no entries are stored.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// Number of slots currently allocated (always a power of two).
     pub fn capacity(&self) -> usize {
         self.entries.len()
     }

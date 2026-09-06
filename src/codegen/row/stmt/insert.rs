@@ -86,10 +86,20 @@ pub fn compile_insert(schema: &TableSchema, insert: &Insert) -> Result<Program> 
         let mut provided: Vec<Option<i32>> = vec![None; schema.columns.len()];
         for (value_expr, &col_idx) in row.iter().zip(&target_columns) {
             let r = super::super::compile_value(&mut em, &mut reg, &scope, value_expr)?;
-            provided[col_idx] = Some(r);
+            let slot = provided
+                .get_mut(col_idx)
+                .ok_or_else(|| CodegenError::Unsupported {
+                    reason: format!(
+                        "INSERT column index {col_idx} is out of range for table {}",
+                        schema.name
+                    ),
+                })?;
+            *slot = Some(r);
         }
 
-        let explicit_rowid = schema.rowid_alias.and_then(|idx| provided[idx]);
+        let explicit_rowid = schema
+            .rowid_alias
+            .and_then(|idx| provided.get(idx).copied().flatten());
 
         let mut col_regs = Vec::with_capacity(schema.columns.len());
         for (idx, src) in provided.iter().enumerate() {
@@ -109,10 +119,16 @@ pub fn compile_insert(schema: &TableSchema, insert: &Insert) -> Result<Program> 
             col_regs.push(dest);
         }
 
+        let first_col_reg = col_regs
+            .first()
+            .copied()
+            .ok_or_else(|| CodegenError::Unsupported {
+                reason: format!("INSERT into table {} which has no columns", schema.name),
+            })?;
         let record_reg = reg.alloc();
         em.emit(Instruction::new(
             Opcode::MakeRecord,
-            col_regs[0],
+            first_col_reg,
             i32::try_from(col_regs.len()).map_err(|_| CodegenError::Unsupported {
                 reason: format!(
                     "INSERT row of {} columns does not fit in a p2 operand",

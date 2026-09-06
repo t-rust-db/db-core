@@ -244,8 +244,9 @@ chooser is deferred to #117, N-way joins to #118"
                 .iter()
                 .position(|c| c.eq_ignore_ascii_case(name))
                 .unwrap_or_else(|| {
+                    let idx = columns.len();
                     columns.push(name.clone());
-                    columns.len() - 1
+                    idx
                 });
             let descending = term.desc.unwrap_or(false);
             // SQLite's default (unstated `NULLS FIRST`/`LAST`) is NULLS
@@ -269,8 +270,10 @@ chooser is deferred to #117, N-way joins to #118"
     // up -- `Opcode::SorterOpen` opens it itself at runtime, so it needs
     // no caller-side wiring, just an id that can't collide. The index
     // cursor the #94 fast paths below open takes the slot after it.
-    let sorter_cursor = right.map_or(cursor, |(_, c)| cursor.max(c)) + 1;
-    let index_cursor = sorter_cursor + 1;
+    let sorter_cursor = right
+        .map_or(cursor, |(_, c)| cursor.max(c))
+        .saturating_add(1);
+    let index_cursor = sorter_cursor.saturating_add(1);
     // Every cursor above was picked by arithmetic rather than through
     // `RegAlloc`, so the subquery cursors #95 allocates must start past
     // them.
@@ -496,10 +499,10 @@ fn finish_scan(
             ));
             regs.push(r);
         }
-        if output_count > 0 {
+        if let Some(&first) = regs.first() {
             em.emit(Instruction::new(
                 Opcode::ResultRow,
-                regs[0],
+                first,
                 i32::try_from(output_count).map_err(|_| CodegenError::Unsupported {
                     reason: format!(
                         "SELECT list of {output_count} columns does not fit in a p2 operand"
@@ -618,10 +621,7 @@ fn emit_result_row(em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: usiz
 
 /// Strips an optional `table.` qualifier off `name`.
 fn unqualified(name: &str) -> &str {
-    match name.find('.') {
-        Some(idx) => &name[idx + 1..],
-        None => name,
-    }
+    name.split_once('.').map_or(name, |(_, rest)| rest)
 }
 
 /// The condition `join` matches on, as an [`Expr`].
@@ -970,9 +970,6 @@ fn compile_row_values(
     names: &[String],
     null_cursor: Option<i32>,
 ) -> Result<(i32, usize)> {
-    if names.is_empty() {
-        return Ok((reg.alloc(), 0));
-    }
     let mut regs = Vec::with_capacity(names.len());
     for name in names {
         let (cursor, idx) = scope.resolve(name)?;
@@ -988,7 +985,10 @@ fn compile_row_values(
         }
         regs.push(r);
     }
-    let first = regs[0];
+    // An empty SELECT list still needs one register for `ResultRow` to name.
+    let Some(&first) = regs.first() else {
+        return Ok((reg.alloc(), 0));
+    };
     let already_contiguous = regs
         .iter()
         .enumerate()
@@ -996,11 +996,15 @@ fn compile_row_values(
     if already_contiguous {
         return Ok((first, regs.len()));
     }
-    let dests: Vec<i32> = (0..regs.len()).map(|_| reg.alloc()).collect();
-    for (&r, &dest) in regs.iter().zip(&dests) {
+    // `Copy` never allocates, so alloc-then-emit per column still yields
+    // one contiguous block of destination registers.
+    let first_dest = reg.alloc();
+    em.emit(Instruction::new(Opcode::Copy, first, first_dest, 0));
+    for &r in regs.iter().skip(1) {
+        let dest = reg.alloc();
         em.emit(Instruction::new(Opcode::Copy, r, dest, 0));
     }
-    Ok((dests[0], dests.len()))
+    Ok((first_dest, regs.len()))
 }
 
 #[cfg(test)]

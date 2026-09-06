@@ -135,6 +135,10 @@ fn bounded_scan<S: Segment>(
 /// sharing a group key per `agg_parts`, then `ORDER BY`, then `LIMIT`.
 /// Shared by every execution path, and callable directly with `const`
 /// data by an AOT-emitted binary.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`num_group_keys`, `order_by` and `agg_parts` positions were resolved by codegen against the same row width every emitted row carries; `groups[i]` indices come from `index`, which only stores positions already pushed"
+)]
 pub fn finalize(
     agg_parts: &[AggPart],
     num_group_keys: usize,
@@ -202,6 +206,10 @@ pub fn finalize(
 
 /// Combine two emitted rows for the same group key, applying the
 /// associative merge appropriate to each [`AggPart`].
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`parts` has one entry per emitted column, so `i` indexes both rows in range"
+)]
 fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) {
     for (i, part) in parts.iter().enumerate() {
         match part {
@@ -229,6 +237,10 @@ fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) {
     }
 }
 
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`parts` has one entry per emitted column and `Avg`'s sum/count positions were assigned by codegen within that width"
+)]
 fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Vec<Value> {
     let mut out = Vec::with_capacity(parts.len());
     let mut skip: Option<usize> = None;
@@ -262,11 +274,17 @@ fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Vec<Value> {
 /// flat body (ending in [`Opcode::Finalize`]) to run over the joined batch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JoinProgram {
+    /// Left (probe-side) column names, in the register order the probe program loads them.
     pub left_columns: Vec<String>,
+    /// Right (build-side) column names carried as join payload, in `payload_dst` order.
     pub right_columns: Vec<String>,
+    /// Program run over the right table to populate the hash table.
     pub build: Program,
+    /// Program run over the left table to probe the hash table and emit matches.
     pub probe: Program,
+    /// Register per `right_columns` entry into which the probe writes that payload column.
     pub payload_dst: Vec<usize>,
+    /// The flat query body (ending in `Finalize`) run over the joined batch.
     pub body: Program,
 }
 
@@ -303,6 +321,10 @@ pub fn run_join(left: &Batch, right: &Batch, plan: &JoinProgram) -> Result<Vec<V
 /// Keep only the rows of `batch` whose `key_column` value (stringified)
 /// appears in `allowed` -- the `WHERE col IN (SELECT ...)` semi-join
 /// filter, applied before the flat body runs over the survivors.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "every column in a `Batch` holds `num_rows` values and `keep` was drawn from `0..num_rows`"
+)]
 pub fn semi_filter(batch: &Batch, key_column: &str, allowed: &HashSet<String>) -> Result<Batch> {
     let key = batch
         .columns
@@ -312,7 +334,7 @@ pub fn semi_filter(batch: &Batch, key_column: &str, allowed: &HashSet<String>) -
             column: key_column.to_string(),
         })?;
     let keep: Vec<usize> = (0..batch.num_rows)
-        .filter(|&i| allowed.contains(&key[i].to_string()))
+        .filter(|&i| key.get(i).is_some_and(|v| allowed.contains(&v.to_string())))
         .collect();
 
     let mut filtered = Batch::new(keep.len());

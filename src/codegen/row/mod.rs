@@ -150,9 +150,15 @@ pub const MAX_EXPR_DEPTH: usize = 200;
 /// implement yet (see this module's doc comment).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CodegenError {
+    /// A column reference the current [`Scope`] cannot resolve.
     UnknownColumn(String),
+    /// The expression tree nests deeper than [`MAX_EXPR_DEPTH`].
     TooDeep,
-    Unsupported { reason: String },
+    /// A construct this compiler does not implement yet.
+    Unsupported {
+        /// What is unsupported, for the error message.
+        reason: String,
+    },
 }
 
 impl fmt::Display for CodegenError {
@@ -169,6 +175,7 @@ impl fmt::Display for CodegenError {
 
 impl std::error::Error for CodegenError {}
 
+/// Result alias for codegen operations, with [`CodegenError`] as the error type.
 pub type Result<T> = std::result::Result<T, CodegenError>;
 
 /// A not-yet-resolved jump target, placed later via [`Emitter::place`].
@@ -182,7 +189,9 @@ pub struct Label(usize);
 /// intermediate boolean register.
 #[derive(Debug, Clone, Copy)]
 pub enum Target {
+    /// Jump to `Label` (resolved when the label is placed).
     Jump(Label),
+    /// Continue with the next emitted instruction.
     Fallthrough,
 }
 
@@ -206,8 +215,11 @@ pub enum NullTarget {
 /// sqlite-rs's #134 bug.
 #[derive(Debug, Clone, Copy)]
 pub struct CondTargets {
+    /// Where execution continues when the condition is true.
     pub on_true: Target,
+    /// Where execution continues when the condition is false.
     pub on_false: Target,
+    /// Which of the two targets the NULL (unknown) outcome follows.
     pub on_null: NullTarget,
 }
 
@@ -246,10 +258,12 @@ impl CondTargets {
         }
     }
 
+    /// A copy with `on_true` replaced.
     pub fn with_true(self, on_true: Target) -> Self {
         CondTargets { on_true, ..self }
     }
 
+    /// A copy with `on_false` replaced.
     pub fn with_false(self, on_false: Target) -> Self {
         CondTargets { on_false, ..self }
     }
@@ -269,19 +283,23 @@ pub struct Emitter {
 }
 
 impl Emitter {
+    /// An empty emitter.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Appends `instr` and returns its address.
     pub fn emit(&mut self, instr: Instruction) -> usize {
         self.instructions.push(instr);
         self.instructions.len().saturating_sub(1)
     }
 
+    /// The address the next emitted instruction will get.
     pub fn here(&self) -> usize {
         self.instructions.len()
     }
 
+    /// Allocates a fresh, not-yet-placed label.
     pub fn new_label(&mut self) -> Label {
         let label = Label(self.next_label);
         self.next_label = self.next_label.saturating_add(1);
@@ -293,6 +311,8 @@ impl Emitter {
         self.labels.insert(label, self.here());
     }
 
+    /// Records that the instruction at `addr` must have its `p2` set to
+    /// `label`'s address when [`Emitter::finish`] runs.
     pub fn patch_p2(&mut self, addr: usize, label: Label) {
         self.patches.push((addr, label));
     }
@@ -356,6 +376,7 @@ pub struct RegAlloc {
 }
 
 impl RegAlloc {
+    /// A fresh allocator starting at register 0 and cursor 0.
     pub fn new() -> Self {
         Self {
             next_param: 1,
@@ -363,6 +384,7 @@ impl RegAlloc {
         }
     }
 
+    /// Allocates the next free register.
     pub fn alloc(&mut self) -> i32 {
         let r = self.next;
         self.next = self.next.saturating_add(1);
@@ -874,7 +896,9 @@ pub(crate) fn p4_coll_seq(
 /// for why it isn't a real catalog yet.
 #[derive(Debug, Clone, Default)]
 pub struct TableSchema {
+    /// Table name.
     pub name: String,
+    /// Column names, in declaration order.
     pub columns: Vec<String>,
     /// Declared type string per column, parallel to `columns` -- used
     /// only for [`crate::vm::row::affinity_of`]. A missing/short entry
@@ -896,6 +920,7 @@ pub struct TableSchema {
 }
 
 impl TableSchema {
+    /// The position of `name` in `columns` (case-insensitive), if present.
     pub fn column_index(&self, name: &str) -> Option<usize> {
         self.columns
             .iter()
@@ -912,8 +937,11 @@ impl TableSchema {
 /// either).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct IndexSchema {
+    /// Index name.
     pub name: String,
+    /// The index b-tree's root page.
     pub root_page: u32,
+    /// Indexed column names, in key order (ascending only).
     pub columns: Vec<String>,
 }
 
@@ -927,7 +955,9 @@ pub struct IndexSchema {
 /// resolution (N-way joins) is still deferred to #101.
 #[derive(Debug, Clone)]
 pub struct Scope {
+    /// The primary (left-hand or only) table.
     pub schema: TableSchema,
+    /// The cursor opened on `schema`.
     pub cursor: i32,
     /// The join's right-hand table, when this scope covers a join.
     pub right: Option<(TableSchema, i32)>,
@@ -946,6 +976,7 @@ pub struct Scope {
 }
 
 impl Scope {
+    /// A scope over exactly one table opened on `cursor`.
     pub fn single(schema: TableSchema, cursor: i32) -> Self {
         Scope {
             schema,
@@ -956,11 +987,13 @@ impl Scope {
         }
     }
 
+    /// Sets the tables nested subqueries may name in their `FROM`.
     pub fn with_catalog(mut self, catalog: Vec<TableSchema>) -> Self {
         self.catalog = catalog;
         self
     }
 
+    /// Sets the enclosing scope for correlated-subquery resolution.
     pub fn with_outer(mut self, outer: Scope) -> Self {
         self.outer = Some(Box::new(outer));
         self
@@ -992,8 +1025,8 @@ impl Scope {
     /// Splits an optional `table.column` qualifier off `name`, mirroring
     /// `codegen::batch::split_qualified`'s convention.
     fn split_qualified(name: &str) -> (Option<&str>, &str) {
-        match name.find('.') {
-            Some(idx) => (Some(&name[..idx]), &name[idx + 1..]),
+        match name.split_once('.') {
+            Some((table, column)) => (Some(table), column),
             None => (None, name),
         }
     }

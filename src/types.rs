@@ -8,17 +8,26 @@
 #![forbid(unsafe_code)]
 
 #[derive(Debug, Clone, PartialEq)]
+/// A literal as it appears in SQL text; unlike [`Value`] it can never be NULL.
 pub enum Literal {
+    /// A 64-bit integer literal.
     Int(i64),
+    /// A 64-bit floating-point literal.
     Float(f64),
+    /// A string literal.
     Str(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// A runtime value produced by execution: a [`Literal`]'s payload or SQL NULL.
 pub enum Value {
+    /// A 64-bit integer.
     Int(i64),
+    /// A 64-bit float.
     Float(f64),
+    /// A string.
     Str(String),
+    /// SQL NULL: the absence of a value.
     Null,
 }
 

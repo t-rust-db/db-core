@@ -41,6 +41,7 @@ impl Span {
         len: 0,
     };
 
+    /// Whether this span is [`Span::UNKNOWN`], i.e. carries no real location.
     pub fn is_unknown(&self) -> bool {
         *self == Span::UNKNOWN
     }

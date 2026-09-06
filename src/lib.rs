@@ -31,14 +31,6 @@
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
-// Three lints allowed crate-wide until #105 burns them down site by site;
-// unwrap/expect/panic/let-underscore are held to the bar now (#82).
-#![allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "lint burn-down tracked in #105"
-)]
 
 /// This crate's version, as embedded in `emit`'s generated-source headers.
 ///
