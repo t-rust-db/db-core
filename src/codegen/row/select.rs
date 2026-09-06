@@ -55,6 +55,25 @@ pub(super) struct OrderByPlan {
     pub(super) nulls_first: bool,
 }
 
+/// One `SELECT`-list item, as resolved for [`compile_row_values`]: a bare
+/// column, read straight off a cursor via the existing
+/// [`emit_column_read`] fast path (also how `ORDER BY`'s extra sort-key
+/// column -- appended when its term isn't already in the projection --
+/// is represented, since that trick only ever resolves by name), or an
+/// arbitrary expression, compiled through [`compile_value`] like any
+/// other value position (db-core#168).
+#[derive(Debug, Clone)]
+pub(super) enum ProjectedColumn {
+    Name(String),
+    Expr(Expr),
+}
+
+impl ProjectedColumn {
+    fn name_eq(&self, other: &str) -> bool {
+        matches!(self, ProjectedColumn::Name(n) if n.eq_ignore_ascii_case(other))
+    }
+}
+
 /// Compiles `query` (a single-table `SELECT`, no `JOIN`) against
 /// `schema`, scanning the pre-wired cursor slot `cursor`. A query with a
 /// `JOIN` must use [`compile_select_join`] instead, since resolving it
@@ -200,34 +219,30 @@ chooser is deferred to #117, N-way joins to #118"
     for item in &query.columns {
         match item {
             // `ResultColumn::Expr` covers what `SelectItem::Column` did
-            // and much more; this scan path projects columns by name,
-            // so only a bare column reference resolves here. An alias
-            // is accepted and ignored -- it renames the output, which
-            // this planner does not model yet.
+            // and much more; a bare column reference still resolves by
+            // name (the fast `emit_column_read` path), and anything else
+            // compiles through the general expression compiler
+            // (db-core#168). An alias is accepted and ignored -- it
+            // renames the output, which this planner does not model yet.
             ResultColumn::Expr { expr, .. } => match &expr.kind {
                 ExprKind::Column {
                     table: None, name, ..
-                } => columns.push(name.clone()),
+                } => columns.push(ProjectedColumn::Name(name.clone())),
                 ExprKind::Column {
                     table: Some(table),
                     name,
                     ..
-                } => columns.push(format!("{table}.{name}")),
-                _ => {
-                    return Err(CodegenError::Unsupported {
-                        reason: "only bare column references are supported in this SELECT list"
-                            .to_string(),
-                    });
-                }
+                } => columns.push(ProjectedColumn::Name(format!("{table}.{name}"))),
+                _ => columns.push(ProjectedColumn::Expr(expr.clone())),
             },
             ResultColumn::Star => {
-                columns.extend(schema.columns.iter().cloned());
+                columns.extend(schema.columns.iter().cloned().map(ProjectedColumn::Name));
                 if let Some((right_schema, _)) = right {
                     columns.extend(
                         right_schema
                             .columns
                             .iter()
-                            .map(|c| format!("{}.{c}", right_schema.name)),
+                            .map(|c| ProjectedColumn::Name(format!("{}.{c}", right_schema.name))),
                     );
                 }
             }
@@ -238,6 +253,16 @@ chooser is deferred to #117, N-way joins to #118"
             }
         }
     }
+    // A `SELECT`-list expression makes the index-ordered-scan/range-seek
+    // fast paths' `columns: &[ProjectedColumn]` no longer purely
+    // name-based; both already fall back to the ordinary scan whenever
+    // their own shape doesn't match; treating "any projected expression"
+    // the same way is a safe, no-regression fallback -- such queries
+    // were rejected outright before #168, so the slower generic path is
+    // strictly better, not a loss.
+    let has_projected_expr = columns
+        .iter()
+        .any(|c| matches!(c, ProjectedColumn::Expr(_)));
 
     // When there's an `ORDER BY`, rows are buffered into a sorter instead
     // of being emitted directly, and `LIMIT` applies to the sorted
@@ -265,10 +290,10 @@ chooser is deferred to #117, N-way joins to #118"
                 } => OrderByTarget::Column(
                     columns
                         .iter()
-                        .position(|c| c.eq_ignore_ascii_case(name))
+                        .position(|c| c.name_eq(name))
                         .unwrap_or_else(|| {
                             let idx = columns.len();
-                            columns.push(name.clone());
+                            columns.push(ProjectedColumn::Name(name.clone()));
                             idx
                         }),
                 ),
@@ -281,10 +306,10 @@ chooser is deferred to #117, N-way joins to #118"
                     OrderByTarget::Column(
                         columns
                             .iter()
-                            .position(|c| c.eq_ignore_ascii_case(&qualified))
+                            .position(|c| c.name_eq(&qualified))
                             .unwrap_or_else(|| {
                                 let idx = columns.len();
-                                columns.push(qualified);
+                                columns.push(ProjectedColumn::Name(qualified));
                                 idx
                             }),
                     )
@@ -333,7 +358,7 @@ chooser is deferred to #117, N-way joins to #118"
     // An index-ordered scan produces the requested order straight out of
     // the b-tree, so it replaces the sorter entirely rather than feeding
     // it -- hence it is tried before `SorterOpen` is ever emitted.
-    if right.is_none() {
+    if right.is_none() && !has_projected_expr {
         let index_end_label = em.new_label();
         if index_scan::try_compile_index_ordered_scan(
             &mut em,
@@ -376,6 +401,7 @@ chooser is deferred to #117, N-way joins to #118"
     // unlike the index-ordered scan it slots in where the sequential
     // scan would go.
     let seeked = right.is_none()
+        && !has_projected_expr
         && range_scan::try_compile_range_seek(
             &mut em,
             &mut reg,
@@ -750,7 +776,7 @@ fn compile_join_body(
     join: &Join,
     right_cursor: i32,
     query: &Select,
-    columns: &[String],
+    columns: &[ProjectedColumn],
     sort_key: Option<Vec<OrderByPlan>>,
     sorter_open_addr: Option<usize>,
     sorter_cursor: i32,
@@ -865,7 +891,7 @@ fn compile_full_outer_right_pass(
     join: &Join,
     left_cursor: i32,
     right_cursor: i32,
-    columns: &[String],
+    columns: &[ProjectedColumn],
     sort_key: Option<Vec<OrderByPlan>>,
     sorter_open_addr: Option<usize>,
     sorter_cursor: i32,
@@ -1090,7 +1116,7 @@ pub(super) fn emit_row(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     scope: &Scope,
-    columns: &[String],
+    columns: &[ProjectedColumn],
     null_cursor: Option<i32>,
     sort_key: Option<Vec<OrderByPlan>>,
     sorter_open_addr: Option<usize>,
@@ -1189,11 +1215,13 @@ pub(super) fn emit_limit_guard(em: &mut Emitter, limit_reg: i32, end_label: supe
 }
 
 /// Compiles each of `names` into a register, returning the contiguous
-/// `(first_register, count)` window `Opcode::ResultRow` reads. Columns
-/// land in freshly allocated, and therefore already-adjacent, registers
-/// by construction -- the contiguity check/`Copy`-based fallback mirrors
-/// [`super::value::compile_value_depth`]'s `FunctionCall` handling
-/// defensively rather than assuming it can never trip.
+/// `(first_register, count)` window `Opcode::ResultRow` reads. A
+/// [`ProjectedColumn::Name`] lands in a freshly allocated, and therefore
+/// already-adjacent, register by construction; a
+/// [`ProjectedColumn::Expr`] compiles through [`compile_value`] instead
+/// (db-core#168), which may allocate more than one register internally
+/// -- the contiguity check/`Copy`-based fallback below handles both
+/// cases uniformly rather than assuming registers always land adjacent.
 ///
 /// `null_cursor`, when set, null-fills every column resolved to that
 /// cursor instead of reading it -- `LEFT` join's unmatched-row
@@ -1202,22 +1230,36 @@ fn compile_row_values(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     scope: &Scope,
-    names: &[String],
+    names: &[ProjectedColumn],
     null_cursor: Option<i32>,
 ) -> Result<(i32, usize)> {
     let mut regs = Vec::with_capacity(names.len());
-    for name in names {
-        let (cursor, idx) = scope.resolve(name)?;
-        let r = reg.alloc();
-        if Some(cursor) == null_cursor {
-            em.emit(Instruction::new(Opcode::Null, 0, r, 0));
-        } else {
-            let table_schema = match &scope.right {
-                Some((right_schema, right_cursor)) if cursor == *right_cursor => right_schema,
-                _ => &scope.schema,
-            };
-            emit_column_read(em, table_schema, cursor, idx, r)?;
-        }
+    for column in names {
+        let r = match column {
+            ProjectedColumn::Name(name) => {
+                let (cursor, idx) = scope.resolve(name)?;
+                let r = reg.alloc();
+                if Some(cursor) == null_cursor {
+                    em.emit(Instruction::new(Opcode::Null, 0, r, 0));
+                } else {
+                    let table_schema = match &scope.right {
+                        Some((right_schema, right_cursor)) if cursor == *right_cursor => {
+                            right_schema
+                        }
+                        _ => &scope.schema,
+                    };
+                    emit_column_read(em, table_schema, cursor, idx, r)?;
+                }
+                r
+            }
+            ProjectedColumn::Expr(expr) => {
+                let expr = match null_cursor {
+                    Some(null_cursor) => null_extend(scope, null_cursor, expr),
+                    None => expr.clone(),
+                };
+                compile_value(em, reg, scope, &expr)?
+            }
+        };
         regs.push(r);
     }
     // An empty SELECT list still needs one register for `ResultRow` to name.
@@ -1310,6 +1352,101 @@ mod tests {
             rows,
             vec![vec![Value::Integer(10)], vec![Value::Integer(20)]]
         );
+    }
+
+    #[test]
+    fn select_list_arithmetic_expression_compiles_and_executes() {
+        let schema = schema(&["a"]);
+        let query = query("SELECT a + 1 FROM t");
+        let rows = run(
+            &schema,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)], vec![Value::Integer(3)]]);
+    }
+
+    #[test]
+    fn select_list_function_call_compiles_and_executes() {
+        let schema = schema(&["name"]);
+        let query = query("SELECT upper(name) FROM t");
+        let rows = run(
+            &schema,
+            &query,
+            vec![vec![Value::Text("abc".to_string().into())]],
+        );
+        assert_eq!(rows, vec![vec![Value::Text("ABC".to_string().into())]]);
+    }
+
+    #[test]
+    fn select_list_mixes_bare_column_and_expression() {
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT a, b + 1 FROM t");
+        let rows = run(
+            &schema,
+            &query,
+            vec![vec![Value::Integer(1), Value::Integer(10)]],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(11)]]);
+    }
+
+    #[test]
+    fn select_list_expression_composes_with_order_by_on_a_bare_column() {
+        let schema = schema(&["a"]);
+        let query = query("SELECT a + 1 FROM t ORDER BY a DESC");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(3)],
+                vec![Value::Integer(2)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(4)],
+                vec![Value::Integer(3)],
+                vec![Value::Integer(2)],
+            ]
+        );
+    }
+
+    #[test]
+    fn select_list_scalar_subquery_compiles_and_executes() {
+        // The literal example from #163's own acceptance criteria,
+        // previously blocked by this ticket's bare-column-only
+        // restriction: a scalar subquery directly in the SELECT list.
+        let outer_schema = schema_named("t", &["a"]);
+        let mut inner_schema = schema_named("s", &["x"]);
+        inner_schema.root_page = 3;
+        let catalog = vec![outer_schema.clone(), inner_schema];
+        let sql = "SELECT (SELECT x FROM s) FROM t";
+        let ast_query = query(sql);
+        let program = compile_select_with_catalog(&catalog, &ast_query).unwrap();
+
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(InMemoryCursor::new(vec![vec![Value::Integer(1)]])),
+        )
+        .unwrap();
+        let sub_slot = match program
+            .instructions
+            .iter()
+            .find(|i| i.opcode == Opcode::OpenRead && i.p1 != 0)
+        {
+            Some(instr) => instr.p1,
+            None => panic!("compiled program opens a subquery cursor"),
+        };
+        vm.open_cursor(
+            sub_slot,
+            Box::new(InMemoryCursor::new(vec![vec![Value::Integer(42)]])),
+        )
+        .unwrap();
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(42)]]);
     }
 
     #[test]
