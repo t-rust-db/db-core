@@ -1143,4 +1143,60 @@ mod tests {
             Err(CodegenError::UnknownColumn("z".to_string()))
         );
     }
+
+    /// A single-table scope named `name` whose only column is `x`, so a
+    /// column shared between an inner and an outer scope can only be
+    /// told apart by its qualifier.
+    fn scope_named(name: &str, cursor: i32) -> Scope {
+        Scope::single(
+            TableSchema {
+                name: name.into(),
+                columns: vec!["x".into()],
+                column_types: vec![String::new()],
+                rowid_alias: None,
+                root_page: 0,
+                indexes: vec![],
+            },
+            cursor,
+        )
+    }
+
+    /// MC/DC vector (obligation `mod_1077`, `Scope::resolve_local`'s
+    /// "foreign qualifier under an enclosing scope" guard): both leaves
+    /// true -- the scope has an outer and the qualifier names a table
+    /// other than its own, so the local lookup yields nothing and
+    /// `resolve` reaches the enclosing scope's cursor instead.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__mod_1077__v1_foreign_qualifier_with_outer_defers_to_outer() {
+        let scope = scope_named("inner", 1).with_outer(scope_named("outer", 7));
+        assert_eq!(scope.resolve_local("outer.x"), None);
+        assert_eq!(scope.resolve("outer.x"), Ok((7, 0)));
+    }
+
+    /// MC/DC vector (obligation `mod_1077`): leaf B (qualifier differs
+    /// from own name) false while leaf A (outer present) stays true --
+    /// the qualifier is the scope's own table, so it resolves locally.
+    /// Pairs against
+    /// `mcdc__mod_1077__v1_foreign_qualifier_with_outer_defers_to_outer`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__mod_1077__v2_own_qualifier_with_outer_resolves_locally() {
+        let scope = scope_named("inner", 1).with_outer(scope_named("outer", 7));
+        assert_eq!(scope.resolve_local("INNER.x"), Some((1, 0)));
+        assert_eq!(scope.resolve("inner.x"), Ok((1, 0)));
+    }
+
+    /// MC/DC vector (obligation `mod_1077`): leaf A (outer present) false
+    /// while leaf B (foreign qualifier) stays true -- with no enclosing
+    /// scope the qualifier is stripped and the column still resolves
+    /// against this scope's own table. Pairs against
+    /// `mcdc__mod_1077__v1_foreign_qualifier_with_outer_defers_to_outer`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__mod_1077__v3_foreign_qualifier_without_outer_resolves_locally() {
+        let scope = scope_named("inner", 1);
+        assert_eq!(scope.resolve_local("other.x"), Some((1, 0)));
+        assert_eq!(scope.resolve("other.x"), Ok((1, 0)));
+    }
 }

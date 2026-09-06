@@ -2101,27 +2101,32 @@ mod tests {
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
     }
 
+    /// MC/DC vector (obligation `batch_869`, `Combine`'s comment choice
+    /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_401__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__batch_869__v1_group_by_without_agg_column_merges_partial_aggregates() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query);
         let fin = program.instructions.last().unwrap();
         assert_eq!(fin.comment.as_deref(), Some("merge partial aggregates"));
     }
 
+    /// MC/DC vector (obligation `batch_869`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_401__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__batch_869__v2_agg_column_without_group_by_merges_partial_aggregates() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query);
         let fin = program.instructions.last().unwrap();
         assert_eq!(fin.comment.as_deref(), Some("merge partial aggregates"));
     }
 
+    /// MC/DC vector (obligation `batch_869`): both leaves false --
+    /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_401__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__batch_869__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query);
         let fin = program.instructions.last().unwrap();

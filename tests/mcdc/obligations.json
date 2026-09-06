@@ -4968,18 +4968,18 @@
     "compiler_void": true
   },
   {
-    "id": "column_1397",
+    "id": "column_1404",
     "file": "src/parser/column.rs",
-    "line": 1397,
+    "line": 1404,
     "decision": "match &where_expr(&q).kind {\n            ExprKind::IsNull { negated, .. } => assert!(!negated),\n            ExprKind::Is { negated, .. } => assert!(!negated),\n            other => panic!(\"expected IsNull-shaped expr, found {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "column_1407",
+    "id": "column_1414",
     "file": "src/parser/column.rs",
-    "line": 1407,
+    "line": 1414,
     "decision": "match &where_expr(&q).kind {\n            ExprKind::IsNull { negated, .. } => assert!(negated),\n            ExprKind::Is { negated, .. } => assert!(negated),\n            other => panic!(\"expected IsNull-shaped expr, found {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8233,6 +8233,15 @@
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
+  },
+  {
+    "id": "value_1074",
+    "file": "src/codegen/row/value.rs",
+    "line": 1074,
+    "decision": "glob",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
   },
   {
     "id": "limit_scan_45",

@@ -1067,4 +1067,52 @@ mod tests {
             Value::Text("abc".into())
         );
     }
+
+    fn like_expr(glob: bool, escape: Option<Expr>) -> Expr {
+        e(ExprKind::Like {
+            expr: Box::new(str_lit("abc")),
+            pattern: Box::new(str_lit(if glob { "a*" } else { "a%" })),
+            glob,
+            negated: false,
+            escape: escape.map(Box::new),
+        })
+    }
+
+    fn compile_like_expr(expr: &Expr) -> Result<i32> {
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        let scope = Scope::single(schema(&["a"]), 0);
+        compile_value(&mut em, &mut reg, &scope, expr)
+    }
+
+    /// MC/DC vector (obligation `value_358`, `compile_like`'s decision
+    /// `glob && escape.is_some()`): both leaves true -- `GLOB ... ESCAPE`
+    /// is rejected as unsupported.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__value_358__v1_glob_with_escape_is_rejected() {
+        let err = compile_like_expr(&like_expr(true, Some(str_lit("\\")))).unwrap_err();
+        assert!(matches!(
+            err,
+            CodegenError::Unsupported { reason } if reason == "GLOB does not take an ESCAPE clause"
+        ));
+    }
+
+    /// MC/DC vector (obligation `value_358`): leaf B (`escape.is_some()`)
+    /// false -- a bare `GLOB` compiles; flips against
+    /// `mcdc__value_358__v1_glob_with_escape_is_rejected`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__value_358__v2_glob_without_escape_compiles() {
+        assert!(compile_like_expr(&like_expr(true, None)).is_ok());
+    }
+
+    /// MC/DC vector (obligation `value_358`): leaf A (`glob`) false --
+    /// `LIKE ... ESCAPE` compiles; flips against
+    /// `mcdc__value_358__v1_glob_with_escape_is_rejected`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__value_358__v3_like_with_escape_compiles() {
+        assert!(compile_like_expr(&like_expr(false, Some(str_lit("\\")))).is_ok());
+    }
 }

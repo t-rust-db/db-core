@@ -2942,4 +2942,89 @@ mod tests {
             ]
         );
     }
+
+    /// MC/DC vector (obligation `select_210`, `compile_select_inner`'s
+    /// aggregate-dispatch decision `!group_by.is_empty() ||
+    /// query_has_aggregate`): both leaves false -- a plain projection
+    /// stays on the row-scan path and emits no aggregate opcodes.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__select_210__v1_no_group_by_no_aggregate_scans_rows() {
+        let schema = schema(&["a"]);
+        let ops = opcodes(&schema, &query("SELECT a FROM t"));
+        assert!(!ops.contains(&Opcode::AggStep));
+        assert!(!ops.contains(&Opcode::OpenPseudo));
+    }
+
+    /// MC/DC vector (obligation `select_210`): leaf A (`GROUP BY`
+    /// present) true with no aggregate function -- flips the outcome
+    /// against `mcdc__select_210__v1_no_group_by_no_aggregate_scans_rows`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__select_210__v2_group_by_alone_takes_aggregate_path() {
+        let schema = schema(&["a"]);
+        let ops = opcodes(&schema, &query("SELECT a FROM t GROUP BY a"));
+        // A `GROUP BY` without an aggregate function has no `AggStep`,
+        // but the aggregate path alone reads its group rows back through
+        // an `OpenPseudo` cursor -- the row-scan path never emits one.
+        assert!(ops.contains(&Opcode::OpenPseudo));
+    }
+
+    /// MC/DC vector (obligation `select_210`): leaf B (an aggregate
+    /// function) true with no `GROUP BY` -- flips the outcome against
+    /// `mcdc__select_210__v1_no_group_by_no_aggregate_scans_rows`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__select_210__v3_aggregate_alone_takes_aggregate_path() {
+        let schema = schema(&["a"]);
+        let ops = opcodes(&schema, &query("SELECT COUNT(*) FROM t"));
+        assert!(ops.contains(&Opcode::AggStep));
+        assert!(ops.contains(&Opcode::AggFinal));
+    }
+
+    /// MC/DC vector (obligation `select_399`, the index-ordered-scan
+    /// gate `right.is_none() && !has_projected_expr`): both leaves true
+    /// -- a single-table, bare-column `ORDER BY` on an indexed column
+    /// walks the index and never opens a sorter.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__select_399__v1_single_table_bare_columns_walks_index() {
+        let schema = indexed_schema(&["a"], "a");
+        let ops = opcodes(&schema, &query("SELECT a FROM t ORDER BY a"));
+        assert!(ops.contains(&Opcode::IdxRewind));
+        assert!(!ops.contains(&Opcode::SorterOpen));
+    }
+
+    /// MC/DC vector (obligation `select_399`): leaf A (`right.is_none()`)
+    /// false -- a `JOIN` supplies a right cursor, so the gate declines
+    /// and the sorter is used; flips against
+    /// `mcdc__select_399__v1_single_table_bare_columns_walks_index`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__select_399__v2_join_declines_index_ordered_scan() {
+        let schema = indexed_schema(&["a"], "a");
+        let right = schema_named("u", &["a"]);
+        let query = query("SELECT t.a FROM t JOIN u ON t.a = u.a ORDER BY t.a");
+        let ops: Vec<Opcode> = compile_select_join(&schema, 0, &right, 1, &query)
+            .unwrap()
+            .instructions
+            .iter()
+            .map(|i| i.opcode)
+            .collect();
+        assert!(ops.contains(&Opcode::SorterOpen));
+        assert!(!ops.contains(&Opcode::IdxRewind));
+    }
+
+    /// MC/DC vector (obligation `select_399`): leaf B
+    /// (`!has_projected_expr`) false -- a computed SELECT-list item
+    /// declines the gate on a single table; flips against
+    /// `mcdc__select_399__v1_single_table_bare_columns_walks_index`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__select_399__v3_projected_expression_declines_index_ordered_scan() {
+        let schema = indexed_schema(&["a"], "a");
+        let ops = opcodes(&schema, &query("SELECT a + 1 FROM t ORDER BY a"));
+        assert!(ops.contains(&Opcode::SorterOpen));
+        assert!(!ops.contains(&Opcode::IdxRewind));
+    }
 }

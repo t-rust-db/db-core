@@ -197,6 +197,72 @@ mod tests {
         assert_eq!(find_ordering_index(&schema, "b"), None);
     }
 
+    fn ops_of(program: &crate::vm::row::Program) -> Vec<Opcode> {
+        program.instructions.iter().map(|i| i.opcode).collect()
+    }
+
+    /// Compiles `sql` against a single indexed table and reports whether
+    /// the index-ordered walk was taken (`IdxRewind` emitted).
+    fn walks_index(sql: &str) -> bool {
+        let query = crate::codegen::row::testutil::select(sql);
+        let program =
+            super::super::select::compile_select(&schema_with_index(vec!["a"], 3), 0, &query)
+                .unwrap();
+        ops_of(&program).contains(&Opcode::IdxRewind)
+    }
+
+    /// MC/DC vector (obligation `index_scan_97`,
+    /// `try_compile_index_ordered_scan`'s `where_clause.is_some() ||
+    /// is_distinct || !joins.is_empty()` gate): all three leaves false --
+    /// a bare `ORDER BY` over the indexed column walks the index.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__index_scan_97__v1_bare_order_by_walks_index() {
+        assert!(walks_index("SELECT a FROM t ORDER BY a"));
+    }
+
+    /// MC/DC vector (obligation `index_scan_97`): leaf A (a `WHERE`
+    /// clause) alone declines the index walk against `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__index_scan_97__v2_where_clause_declines_index_walk() {
+        assert!(!walks_index("SELECT a FROM t WHERE b > 1 ORDER BY a"));
+    }
+
+    /// MC/DC vector (obligation `index_scan_97`): leaf B (`DISTINCT`)
+    /// alone declines the index walk against `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__index_scan_97__v3_distinct_declines_index_walk() {
+        assert!(!walks_index("SELECT DISTINCT a FROM t ORDER BY a"));
+    }
+
+    /// MC/DC vector (obligation `index_scan_97`): leaf C (a `JOIN`)
+    /// alone declines the index walk against `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__index_scan_97__v4_join_declines_index_walk() {
+        let query =
+            crate::codegen::row::testutil::select("SELECT a FROM t JOIN u ON t.a = u.x ORDER BY a");
+        let right = TableSchema {
+            name: "u".to_string(),
+            columns: vec!["x".to_string()],
+            column_types: vec!["INTEGER".to_string()],
+            rowid_alias: None,
+            root_page: 4,
+            indexes: vec![],
+        };
+        let program = super::super::select::compile_select_join(
+            &schema_with_index(vec!["a"], 3),
+            0,
+            &right,
+            1,
+            &query,
+        )
+        .unwrap();
+        assert!(!ops_of(&program).contains(&Opcode::IdxRewind));
+    }
+
     #[test]
     fn zero_root_page_is_rejected() {
         let schema = schema_with_index(vec!["a"], 0);

@@ -469,6 +469,142 @@ mod tests {
         assert!(hi.unwrap().inclusive);
     }
 
+    fn ops_of(program: &crate::vm::row::Program) -> Vec<Opcode> {
+        program.instructions.iter().map(|i| i.opcode).collect()
+    }
+
+    /// Compiles `sql` against [`schema`] alone and reports whether the
+    /// range-seek fast path was taken (`SeekIndexGE` emitted).
+    fn seeks(sql: &str) -> bool {
+        let query = crate::codegen::row::testutil::select(sql);
+        let program = super::super::select::compile_select(&schema(), 0, &query).unwrap();
+        ops_of(&program).contains(&Opcode::SeekIndexGE)
+    }
+
+    fn right_schema() -> TableSchema {
+        TableSchema {
+            name: "u".to_string(),
+            columns: vec!["x".to_string()],
+            column_types: vec!["INTEGER".to_string()],
+            rowid_alias: None,
+            root_page: 4,
+            indexes: vec![],
+        }
+    }
+
+    /// MC/DC vector (obligation `range_scan_195`, `seek_detail`'s
+    /// `is_distinct || !joins.is_empty()` gate): both leaves false -- a
+    /// plain bounded query reports its seek column and operator.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_195__v1_plain_bounded_query_reports_seek() {
+        let query = crate::codegen::row::testutil::select("SELECT a FROM t WHERE a >= 2");
+        assert_eq!(seek_detail(&query, &schema()), Some(("a".to_string(), ">")));
+    }
+
+    /// MC/DC vector (obligation `range_scan_195`): leaf A (`DISTINCT`)
+    /// alone flips the outcome to `None` against `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_195__v2_distinct_reports_no_seek() {
+        let query = crate::codegen::row::testutil::select("SELECT DISTINCT a FROM t WHERE a >= 2");
+        assert_eq!(seek_detail(&query, &schema()), None);
+    }
+
+    /// MC/DC vector (obligation `range_scan_195`): leaf B (a `JOIN`)
+    /// alone flips the outcome to `None` against `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_195__v3_join_reports_no_seek() {
+        let query = crate::codegen::row::testutil::select(
+            "SELECT a FROM t JOIN u ON t.a = u.x WHERE a >= 2",
+        );
+        assert_eq!(seek_detail(&query, &schema()), None);
+    }
+
+    /// MC/DC vector (obligation `range_scan_240`,
+    /// `try_compile_range_seek`'s `is_distinct || !joins.is_empty()`
+    /// gate): both leaves false -- the fast path is taken.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_240__v1_plain_bounded_query_takes_fast_path() {
+        assert!(seeks("SELECT a FROM t WHERE a >= 2"));
+    }
+
+    /// MC/DC vector (obligation `range_scan_240`): leaf A (`DISTINCT`)
+    /// alone declines the fast path against `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_240__v2_distinct_declines_fast_path() {
+        assert!(!seeks("SELECT DISTINCT a FROM t WHERE a >= 2"));
+    }
+
+    /// MC/DC vector (obligation `range_scan_240`): leaf B (a `JOIN`)
+    /// alone declines the fast path against `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_240__v3_join_declines_fast_path() {
+        let query = crate::codegen::row::testutil::select(
+            "SELECT a FROM t JOIN u ON t.a = u.x WHERE a >= 2",
+        );
+        let program =
+            super::super::select::compile_select_join(&schema(), 0, &right_schema(), 1, &query)
+                .unwrap();
+        assert!(!ops_of(&program).contains(&Opcode::SeekIndexGE));
+    }
+
+    /// MC/DC vector (obligation `range_scan_258`, the
+    /// `!is_supported_operand(lo) || hi..!is_supported_operand` gate):
+    /// both leaves false -- literal bounds on both ends seek.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_258__v1_literal_bounds_take_fast_path() {
+        assert!(seeks("SELECT a FROM t WHERE a >= 1 AND a <= 9"));
+    }
+
+    /// MC/DC vector (obligation `range_scan_258`): leaf A -- a
+    /// non-literal lower bound (a column) alone declines against `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_258__v2_column_lower_bound_declines_fast_path() {
+        assert!(!seeks("SELECT a FROM t WHERE a >= b AND a <= 9"));
+    }
+
+    /// MC/DC vector (obligation `range_scan_258`): leaf B -- a literal
+    /// lower bound but a non-literal upper bound alone declines against
+    /// `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_258__v3_column_upper_bound_declines_fast_path() {
+        assert!(!seeks("SELECT a FROM t WHERE a >= 1 AND a <= b"));
+    }
+
+    /// MC/DC vector (obligation `range_scan_266`, the
+    /// `!operand_matches_column_affinity(lo) || hi..!matches` gate):
+    /// both leaves false -- integer bounds on an `INTEGER` column seek.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_266__v1_affinity_matched_bounds_take_fast_path() {
+        assert!(seeks("SELECT a FROM t WHERE a >= 1 AND a <= 9"));
+    }
+
+    /// MC/DC vector (obligation `range_scan_266`): leaf A -- a text
+    /// lower bound against the `INTEGER` column alone declines against
+    /// `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_266__v2_text_lower_bound_declines_fast_path() {
+        assert!(!seeks("SELECT a FROM t WHERE a >= 'x' AND a <= 9"));
+    }
+
+    /// MC/DC vector (obligation `range_scan_266`): leaf B -- a matching
+    /// lower bound but a text upper bound alone declines against `v1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__range_scan_266__v3_text_upper_bound_declines_fast_path() {
+        assert!(!seeks("SELECT a FROM t WHERE a >= 1 AND a <= 'x'"));
+    }
+
     #[test]
     fn a_text_bound_against_an_integer_column_is_rejected() {
         let schema = schema();

@@ -1309,16 +1309,21 @@ mod tests {
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
+    /// MC/DC vector (obligation `column_662`, the CROSS JOIN LIMIT rule
+    /// `has_cross_join && select.limit.is_none()`): both leaves true --
+    /// the query is rejected.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_592__v1_cross_join_without_limit_is_rejected() {
+    fn mcdc__column_662__v1_cross_join_without_limit_is_rejected() {
         let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
+    /// MC/DC vector (obligation `column_662`): leaf B (`limit.is_none()`)
+    /// false with a CROSS JOIN present -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_592__v2_cross_join_with_limit_is_accepted() {
+    fn mcdc__column_662__v2_cross_join_with_limit_is_accepted() {
         let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();
         assert!(matches!(
             q.limit.as_ref().unwrap().limit.kind,
@@ -1326,9 +1331,11 @@ mod tests {
         ));
     }
 
+    /// MC/DC vector (obligation `column_662`): leaf A (`has_cross_join`)
+    /// false with no LIMIT -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_592__v3_non_cross_join_without_limit_is_accepted() {
+    fn mcdc__column_662__v3_non_cross_join_without_limit_is_accepted() {
         let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
         assert!(q.limit.is_none());
     }
