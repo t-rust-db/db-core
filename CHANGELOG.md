@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.53.0] - 2026-09-06
+
+### Added
+
+- **`codegen::row` non-recursive `WITH`-clause / CTE support** (#143) -- ports sqlite-rs's `src/codegen/subquery/cte.rs` into `codegen::row::subquery::cte`, near-verbatim: `parser::ast` is sqlite-rs's own AST post-#147/#153, so this needed no AST-level scoping down. `expand_with_clause` rewrites every `FROM`/`JOIN` table reference naming a CTE into a `TableRefKind::Subquery` wrapping that CTE's query, reusing the existing FROM-subquery materialization machinery -- handles a later CTE referencing an earlier one, an inline derived table referencing a CTE in its own `FROM`, and an explicit `WITH cte(a, b) AS (...)` column-rename list. Hooked into `compile_select_with_catalog` ahead of predicate pushdown/flattening, so a flattenable CTE body never pays for an ephemeral table. `RegAlloc` grows a structural-equality `cte_cache` (`cached_cte`/`cache_cte`), and `materialize_from_subquery` `OpenDup`-reuses a structurally identical subquery instead of re-materializing it. `WITH RECURSIVE` remains unsupported, mirroring the parser's own rejection.
+
 ## [0.52.1] - 2026-09-06
 
 ### Changed
