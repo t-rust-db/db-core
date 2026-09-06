@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.56.0] - 2026-09-06
+
+### Added
+
+- **`codegen::row` compiles scalar subqueries in value position** (#163) -- adds `compile_scalar_subquery`, reusing `open_subquery_scan`/`single_result_column` from the existing `IN (SELECT ...)` machinery: scans the subquery correlated to the outer scope, applies its `WHERE` filter per row, stops at the first matching row and copies its single projected column into a register, or loads `NULL` if the scan exhausts with no match. More than one column is rejected at compile time via the same `single_result_column` check `IN (SELECT ...)` uses. `SELECT`-list expression projection (needed for the ticket's own literal example, `SELECT (SELECT x FROM t WHERE ...) FROM outer`) remains a separate, pre-existing limitation -- filed as #168.
+
 ## [0.55.0] - 2026-09-06
 
 ### Added
