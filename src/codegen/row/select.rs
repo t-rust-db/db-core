@@ -2676,14 +2676,43 @@ mod tests {
     }
 
     #[test]
-    fn having_combined_with_a_join_is_unsupported() {
+    fn having_over_an_inner_join_filters_groups_by_their_aggregate() {
         let left = schema(&["a"]);
-        let right = schema_named("u", &["b"]);
-        let query = query("SELECT a, COUNT(*) FROM t JOIN u ON t.a = u.b GROUP BY a HAVING 1");
-        assert!(matches!(
-            compile_select_join(&left, 0, &right, 1, &query),
-            Err(CodegenError::Unsupported { .. })
-        ));
+        let right = schema_named("u", &["b", "c"]);
+        let query = query(
+            "SELECT a, COUNT(*) FROM t JOIN u ON t.a = u.b GROUP BY a HAVING \"COUNT(*)\" > 1",
+        );
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(1), Value::Integer(50)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn having_over_a_join_may_reference_either_sides_column() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let query =
+            query("SELECT a, COUNT(*) FROM t JOIN u ON t.a = u.b GROUP BY a HAVING u.c > 30");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(1)]]);
     }
 
     #[test]
