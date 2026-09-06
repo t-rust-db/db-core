@@ -106,8 +106,8 @@ for `SELECT` are the same language parsed twice.
 - New SQL surface is added once, to `parser::row` + `parser::ast`, then
   each planner opts in. A construct the row engine gains but batch does
   not is a batch limitation, tracked against the batch planner.
-- The batch subset validator (today `parser::column::convert_select`)
-  is the authoritative, executable statement of what batch accepts. Its
+- The batch subset validator (`parser::column::validate_select`) is
+  the authoritative, executable statement of what batch accepts. Its
   rejection list is preserved verbatim through refactors (`#153`) and
   gated by the downstream DuckDB oracle suite: a front-end change must
   produce byte-identical batch output.
