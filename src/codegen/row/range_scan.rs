@@ -229,7 +229,7 @@ pub(super) fn try_compile_range_seek(
     query: &Select,
     scope: &Scope,
     columns: &[String],
-    sort_key: Option<SortKeyColumn>,
+    sort_key: Option<Vec<SortKeyColumn>>,
     sorter_cursor: i32,
     table_cursor: i32,
     index_cursor: i32,

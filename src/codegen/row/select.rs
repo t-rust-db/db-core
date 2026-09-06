@@ -223,22 +223,23 @@ chooser is deferred to #117, N-way joins to #118"
     // isn't already part of the projection; `output_count` stays at the
     // original projection width so the drain loop never emits it.
     let output_count = columns.len();
-    // The sorter takes a single key column, so only a one-term
-    // `ORDER BY` over a bare column compiles today. Multi-term and
-    // expression ordering, and explicit NULLS placement, are #149.
-    let sort_key = match query.order_by.as_slice() {
-        [] => None,
-        [term] => {
+    // Every `ORDER BY` term becomes one `SortKeyColumn`, in source order
+    // -- the sorter (`P4::SortKey(Vec<SortKeyColumn>)`) has always taken
+    // a vector; only codegen's own plumbing capped it at one (#149).
+    // Each term must still resolve to a bare column -- ordering by a
+    // computed expression would need `columns`/the row-value builder to
+    // carry compiled expressions rather than plain names, which is a
+    // larger change this ticket doesn't take on.
+    let sort_key = if query.order_by.is_empty() {
+        None
+    } else {
+        let mut keys = Vec::with_capacity(query.order_by.len());
+        for term in &query.order_by {
             let ExprKind::Column { name, .. } = &term.expr.kind else {
                 return Err(CodegenError::Unsupported {
-                    reason: "ORDER BY an expression is not supported yet (#149)".to_string(),
+                    reason: "ORDER BY an expression is not supported yet".to_string(),
                 });
             };
-            if term.nulls_last.is_some() {
-                return Err(CodegenError::Unsupported {
-                    reason: "ORDER BY ... NULLS FIRST/LAST is not supported yet (#149)".to_string(),
-                });
-            }
             let index = columns
                 .iter()
                 .position(|c| c.eq_ignore_ascii_case(name))
@@ -246,18 +247,19 @@ chooser is deferred to #117, N-way joins to #118"
                     columns.push(name.clone());
                     columns.len() - 1
                 });
-            Some(SortKeyColumn {
+            let descending = term.desc.unwrap_or(false);
+            // SQLite's default (unstated `NULLS FIRST`/`LAST`) is NULLS
+            // FIRST for a `DESC` term and NULLS LAST for `ASC`; an
+            // explicit clause overrides that default either way.
+            let nulls_first = term.nulls_last.map_or(descending, |last| !last);
+            keys.push(SortKeyColumn {
                 index,
-                descending: term.desc.unwrap_or(false),
+                descending,
                 collation: Collation::Binary,
-                nulls_first: false,
-            })
-        }
-        _ => {
-            return Err(CodegenError::Unsupported {
-                reason: "a multi-term ORDER BY is not supported yet (#149)".to_string(),
+                nulls_first,
             });
         }
+        Some(keys)
     };
 
     let mut em = Emitter::new();
@@ -281,7 +283,7 @@ chooser is deferred to #117, N-way joins to #118"
         super::subquery::materialize_from_subquery(&mut em, &mut reg, subquery, catalog, cursor)?;
     }
 
-    let limit = limit_scan::compile_limit_setup(&mut em, &mut reg, query)?;
+    let limit = limit_scan::compile_limit_setup(&mut em, &mut reg, &scope, query)?;
 
     // An index-ordered scan produces the requested order straight out of
     // the b-tree, so it replaces the sorter entirely rather than feeding
@@ -305,13 +307,13 @@ chooser is deferred to #117, N-way joins to #118"
         }
     }
 
-    if let Some(key) = sort_key {
+    if let Some(keys) = sort_key.clone() {
         em.emit(Instruction::with_p4(
             Opcode::SorterOpen,
             sorter_cursor,
             0,
             0,
-            P4::SortKey(vec![key]),
+            P4::SortKey(keys),
         ));
     }
 
@@ -329,7 +331,7 @@ chooser is deferred to #117, N-way joins to #118"
             query,
             &scope,
             &columns,
-            sort_key,
+            sort_key.clone(),
             sorter_cursor,
             cursor,
             index_cursor,
@@ -341,7 +343,7 @@ chooser is deferred to #117, N-way joins to #118"
         return finish_scan(
             em,
             reg,
-            sort_key,
+            sort_key.clone(),
             sorter_cursor,
             output_count,
             limit,
@@ -377,7 +379,7 @@ chooser is deferred to #117, N-way joins to #118"
                 right_cursor,
                 query,
                 &columns,
-                sort_key,
+                sort_key.clone(),
                 sorter_cursor,
                 limit,
                 final_label,
@@ -403,7 +405,7 @@ chooser is deferred to #117, N-way joins to #118"
                 &scope,
                 &columns,
                 None,
-                sort_key,
+                sort_key.clone(),
                 sorter_cursor,
                 limit,
                 outer_row_skip,
@@ -428,7 +430,7 @@ chooser is deferred to #117, N-way joins to #118"
                 cursor,
                 right_cursor,
                 &columns,
-                sort_key,
+                sort_key.clone(),
                 sorter_cursor,
                 limit,
                 final_label,
@@ -456,7 +458,7 @@ chooser is deferred to #117, N-way joins to #118"
 fn finish_scan(
     mut em: Emitter,
     mut reg: RegAlloc,
-    sort_key: Option<SortKeyColumn>,
+    sort_key: Option<Vec<SortKeyColumn>>,
     sorter_cursor: i32,
     output_count: usize,
     limit: Option<LimitState>,
@@ -548,7 +550,7 @@ fn compile_aggregate_select(
 
     let mut em = Emitter::new();
     let mut reg = RegAlloc::new();
-    let limit_reg = compile_limit_setup(&mut em, &mut reg, query)?;
+    let limit_reg = compile_limit_setup(&mut em, &mut reg, scope, query)?;
     let end_label = em.new_label();
 
     let highest = right.map_or(cursor, |(_, c)| cursor.max(c));
@@ -584,24 +586,18 @@ fn compile_aggregate_select(
 fn compile_limit_setup(
     em: &mut Emitter,
     reg: &mut RegAlloc,
+    scope: &Scope,
     query: &Select,
 ) -> Result<Option<i32>> {
     let Some(limit) = &query.limit else {
         return Ok(None);
     };
-    // Only an integer-literal bound compiles to an `Integer` immediate;
-    // an expression `LIMIT` needs a computed counter (#149).
-    let ExprKind::Literal(crate::parser::ast::Literal::Integer(count)) = &limit.limit.kind else {
-        return Err(CodegenError::Unsupported {
-            reason: "a non-literal LIMIT expression is not supported yet (#149)".to_string(),
-        });
-    };
-    let p1 = i32::try_from(*count).map_err(|_| CodegenError::Unsupported {
-        reason: format!("LIMIT {count} does not fit in a p1 operand"),
-    })?;
-    let r = reg.alloc();
-    em.emit(Instruction::new(Opcode::Integer, p1, r, 0));
-    Ok(Some(r))
+    Ok(Some(super::value::compile_value(
+        em,
+        reg,
+        scope,
+        &limit.limit,
+    )?))
 }
 
 fn emit_result_row(em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: usize) -> Result<()> {
@@ -703,7 +699,7 @@ fn compile_join_body(
     right_cursor: i32,
     query: &Select,
     columns: &[String],
-    sort_key: Option<SortKeyColumn>,
+    sort_key: Option<Vec<SortKeyColumn>>,
     sorter_cursor: i32,
     limit: Option<LimitState>,
     end_label: Label,
@@ -758,7 +754,7 @@ fn compile_join_body(
         scope,
         columns,
         None,
-        sort_key,
+        sort_key.clone(),
         sorter_cursor,
         limit,
         inner_row_skip,
@@ -815,7 +811,7 @@ fn compile_full_outer_right_pass(
     left_cursor: i32,
     right_cursor: i32,
     columns: &[String],
-    sort_key: Option<SortKeyColumn>,
+    sort_key: Option<Vec<SortKeyColumn>>,
     sorter_cursor: i32,
     limit: Option<LimitState>,
     final_label: Label,
@@ -897,7 +893,7 @@ pub(super) fn emit_row(
     scope: &Scope,
     columns: &[String],
     null_cursor: Option<i32>,
-    sort_key: Option<SortKeyColumn>,
+    sort_key: Option<Vec<SortKeyColumn>>,
     sorter_cursor: i32,
     limit: Option<LimitState>,
     row_skip: Label,
@@ -1610,6 +1606,117 @@ mod tests {
             rows,
             vec![vec![Value::Integer(10)], vec![Value::Integer(20)]]
         );
+    }
+
+    #[test]
+    fn multi_term_order_by_sorts_by_every_term_in_order() {
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT a, b FROM t ORDER BY a, b DESC");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(2), Value::Integer(2)],
+                vec![Value::Integer(1), Value::Integer(2)],
+                vec![Value::Integer(2), Value::Integer(1)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(2)],
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(2), Value::Integer(2)],
+                vec![Value::Integer(2), Value::Integer(1)],
+            ]
+        );
+    }
+
+    #[test]
+    fn order_by_nulls_last_sorts_nulls_after_values_ascending() {
+        let schema = schema(&["a"]);
+        let query = query("SELECT a FROM t ORDER BY a NULLS LAST");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(2)],
+                vec![Value::Null],
+                vec![Value::Integer(1)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Null],
+            ]
+        );
+    }
+
+    #[test]
+    fn order_by_nulls_first_sorts_nulls_before_values_ascending() {
+        let schema = schema(&["a"]);
+        let query = query("SELECT a FROM t ORDER BY a NULLS FIRST");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(2)],
+                vec![Value::Null],
+                vec![Value::Integer(1)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Null],
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+            ]
+        );
+    }
+
+    #[test]
+    fn order_by_desc_defaults_to_nulls_first() {
+        let schema = schema(&["a"]);
+        let query = query("SELECT a FROM t ORDER BY a DESC");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Null],
+                vec![Value::Integer(2)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Null],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(1)],
+            ]
+        );
+    }
+
+    #[test]
+    fn expression_limit_and_offset_are_computed_at_runtime() {
+        let schema = schema(&["a"]);
+        let query = query("SELECT a FROM t ORDER BY a LIMIT 1 + 1 OFFSET 3 - 2");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(3)],
+                vec![Value::Integer(4)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)], vec![Value::Integer(3)]]);
     }
 
     #[test]
