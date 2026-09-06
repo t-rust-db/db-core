@@ -1,8 +1,11 @@
 //! Value-mode expression compilation -- see `super`'s module doc.
 
 use super::cond::compile_cond;
-use super::{CodegenError, CondTargets, Emitter, RegAlloc, Result, Scope, Target, MAX_EXPR_DEPTH};
-use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, UnaryOp};
+use super::{
+    compile_contiguous_values, eq_expr, CodegenError, CondTargets, Emitter, RegAlloc, Result,
+    Scope, Target, MAX_EXPR_DEPTH,
+};
+use crate::parser::ast::{BinaryOp, Expr, ExprKind, FunctionArgs, Literal, UnaryOp};
 use crate::vm::row::{affinity_of, Affinity, Instruction, Opcode, P4};
 
 /// Rebuilds the `"table.column"` string [`Scope::resolve`] expects.
@@ -192,34 +195,235 @@ pub(crate) fn compile_value_depth(
         | ExprKind::Is { .. }
         | ExprKind::Between { .. }
         | ExprKind::In { .. }
-        | ExprKind::Like { .. }
         | ExprKind::InSubquery { .. }
         | ExprKind::InSubqueryMulti { .. }
         | ExprKind::Exists { .. } => compile_bool_to_value(em, reg, scope, expr, depth),
 
-        // Reachable now that `codegen::row` consumes the full AST
-        // rather than `expr::Query`'s subset (#147). Each is a real
-        // feature with its own follow-up, not an oversight: failing
-        // soft with the construct named beats a panic mid-query.
+        // `LIKE`/`GLOB` compute their own three-valued answer directly
+        // (`vm::row::functions::like`/`glob` already propagate NULL),
+        // so unlike the conditions above there is no cheaper/definite
+        // split to make -- `compile_like` is the whole story.
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            glob,
+            negated,
+            escape,
+        } => {
+            let r = compile_like(
+                em,
+                reg,
+                scope,
+                inner,
+                pattern,
+                escape.as_deref(),
+                *glob,
+                depth,
+            )?;
+            if *negated {
+                let dest = reg.alloc();
+                em.emit(Instruction::new(Opcode::Not, r, dest, 0));
+                Ok(dest)
+            } else {
+                Ok(r)
+            }
+        }
+
+        // Parentheses affect grouping; `COLLATE` affects how a *later*
+        // comparison treats this value, never the value itself -- both
+        // are transparent here. `cond`'s comparison arm is where an
+        // explicit `COLLATE` on an operand actually takes effect
+        // (`resolve_collation`); silently ignoring it there, rather
+        // than here, would be the actual bug.
+        ExprKind::Collate { expr: inner, .. } => {
+            compile_value_depth(em, reg, scope, inner, depth + 1)
+        }
+
         ExprKind::Param(_) => Err(CodegenError::Unsupported {
-            reason: "bind parameters are not supported by codegen::row yet".to_string(),
+            reason: "bind parameters are not supported by codegen::row yet (#162)".to_string(),
         }),
-        ExprKind::FunctionCall { name, .. } => Err(CodegenError::Unsupported {
-            reason: format!("function call `{name}` is not supported by codegen::row yet"),
-        }),
-        ExprKind::Case { .. } => Err(CodegenError::Unsupported {
-            reason: "CASE is not supported by codegen::row yet".to_string(),
-        }),
-        ExprKind::Cast { .. } => Err(CodegenError::Unsupported {
-            reason: "CAST is not supported by codegen::row yet".to_string(),
-        }),
-        ExprKind::Collate { .. } => Err(CodegenError::Unsupported {
-            reason: "COLLATE is not supported by codegen::row yet".to_string(),
-        }),
+        ExprKind::FunctionCall {
+            name,
+            distinct,
+            args,
+            over,
+        } => {
+            if over.is_some() {
+                return Err(CodegenError::Unsupported {
+                    reason: format!("window function `{name}` is not supported by codegen::row"),
+                });
+            }
+            if *distinct {
+                return Err(CodegenError::Unsupported {
+                    reason: format!("{name}(DISTINCT ...) is not supported outside an aggregate"),
+                });
+            }
+            let FunctionArgs::List(args) = args else {
+                return Err(CodegenError::Unsupported {
+                    reason: format!("{name}(*) is only valid inside an aggregate call"),
+                });
+            };
+            compile_function_call(em, reg, scope, name, args, depth)
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => compile_case(
+            em,
+            reg,
+            scope,
+            operand.as_deref(),
+            whens,
+            else_.as_deref(),
+            depth,
+        ),
+        ExprKind::Cast {
+            expr: inner,
+            type_name,
+        } => {
+            let r = compile_value_depth(em, reg, scope, inner, depth + 1)?;
+            let dest = reg.alloc();
+            em.emit(Instruction::new(Opcode::Copy, r, dest, 0));
+            let affinity = affinity_of(type_name);
+            em.emit(Instruction::new(
+                Opcode::Cast,
+                dest,
+                i32::from(affinity.to_p4_byte()),
+                0,
+            ));
+            Ok(dest)
+        }
         ExprKind::Subquery(_) => Err(CodegenError::Unsupported {
-            reason: "scalar subqueries are not supported in value position yet".to_string(),
+            reason: "scalar subqueries are not supported in value position yet (#163)".to_string(),
         }),
     }
+}
+
+/// Compiles a `name(args...)` scalar call via `Opcode::Function`,
+/// dispatching into [`crate::vm::row::functions::call`]'s registry
+/// (`upper`/`substr`/`coalesce`/`like`/... -- the same registry
+/// [`compile_like`] uses for `LIKE`/`GLOB`). An unknown name or arity
+/// is a runtime [`crate::vm::row::ExecError`] naming the call, not a
+/// compile-time rejection -- this planner has no static copy of the
+/// registry to check against ahead of time.
+fn compile_function_call(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    scope: &Scope,
+    name: &str,
+    args: &[Expr],
+    depth: usize,
+) -> Result<i32> {
+    if depth > MAX_EXPR_DEPTH {
+        return Err(CodegenError::TooDeep);
+    }
+    let arg_refs: Vec<&Expr> = args.iter().collect();
+    let first = compile_contiguous_values(em, reg, scope, &arg_refs)?;
+    let dest = reg.alloc();
+    let descriptor = format!("{}({})", name.to_ascii_lowercase(), args.len());
+    em.emit(Instruction::with_p4(
+        Opcode::Function,
+        0,
+        first,
+        dest,
+        P4::Str(descriptor),
+    ));
+    Ok(dest)
+}
+
+/// Compiles `expr [NOT] LIKE/GLOB pattern [ESCAPE escape]` via the same
+/// `Opcode::Function` dispatch as a general call -- `LIKE`/`GLOB` are
+/// syntactic sugar over the `like`/`glob` registry entries, not a
+/// distinct VM primitive.
+#[allow(clippy::too_many_arguments)]
+fn compile_like(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    scope: &Scope,
+    text: &Expr,
+    pattern: &Expr,
+    escape: Option<&Expr>,
+    glob: bool,
+    depth: usize,
+) -> Result<i32> {
+    if depth > MAX_EXPR_DEPTH {
+        return Err(CodegenError::TooDeep);
+    }
+    if glob && escape.is_some() {
+        return Err(CodegenError::Unsupported {
+            reason: "GLOB does not take an ESCAPE clause".to_string(),
+        });
+    }
+    // `vm::row::functions::like`/`glob` take (pattern, text[, escape]) --
+    // the reverse of `text LIKE pattern`'s surface order.
+    let args: Vec<&Expr> = match escape {
+        Some(escape) => vec![pattern, text, escape],
+        None => vec![pattern, text],
+    };
+    let first = compile_contiguous_values(em, reg, scope, &args)?;
+    let dest = reg.alloc();
+    let descriptor = format!("{}({})", if glob { "glob" } else { "like" }, args.len());
+    em.emit(Instruction::with_p4(
+        Opcode::Function,
+        0,
+        first,
+        dest,
+        P4::Str(descriptor),
+    ));
+    Ok(dest)
+}
+
+/// Compiles `CASE [operand] WHEN cond THEN result ... [ELSE else_] END`
+/// into a single destination register, materializing each branch's
+/// result there in turn -- the simple form (`operand` given) is
+/// desugared to the searched form's `operand = cond` per `WHEN`
+/// (db-core#150), since a `NULL` operand then never matches any `WHEN`
+/// via ordinary `=`'s NULL propagation, matching SQL's own simple-CASE
+/// semantics for free.
+fn compile_case(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    scope: &Scope,
+    operand: Option<&Expr>,
+    whens: &[(Expr, Expr)],
+    else_: Option<&Expr>,
+    depth: usize,
+) -> Result<i32> {
+    if depth > MAX_EXPR_DEPTH {
+        return Err(CodegenError::TooDeep);
+    }
+    let dest = reg.alloc();
+    let end_label = em.new_label();
+    for (cond, result) in whens {
+        let next_label = em.new_label();
+        let effective_cond = match operand {
+            Some(operand) => eq_expr(operand.clone(), cond.clone()),
+            None => cond.clone(),
+        };
+        compile_cond(
+            em,
+            reg,
+            scope,
+            &effective_cond,
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(next_label)),
+        )?;
+        let r = compile_value_depth(em, reg, scope, result, depth + 1)?;
+        em.emit(Instruction::new(Opcode::Copy, r, dest, 0));
+        em.goto(end_label);
+        em.place(next_label);
+    }
+    match else_ {
+        Some(else_) => {
+            let r = compile_value_depth(em, reg, scope, else_, depth + 1)?;
+            em.emit(Instruction::new(Opcode::Copy, r, dest, 0));
+        }
+        None => {
+            em.emit(Instruction::new(Opcode::Null, 0, dest, 0));
+        }
+    }
+    em.place(end_label);
+    Ok(dest)
 }
 
 /// Value-mode codegen for a binary operator. Split out of
@@ -275,12 +479,14 @@ fn compile_binary(
 }
 
 /// Whether a condition's outcome is always definitely true or
-/// definitely false -- never SQL's unknown. `IS NULL`/`IS NOT NULL` is
-/// the only such condition `codegen::row` compiles today; `IS`/`IS NOT`
-/// shares the property but is not supported yet (see `cond`).
+/// definitely false -- never SQL's unknown. `IS NULL`/`IS NOT NULL` and
+/// `IS`/`IS NOT` both have this property: `cond`'s `Is` arm desugars to
+/// `(both NULL) OR (both non-NULL AND equal)`, which by construction
+/// never reaches `=`'s unknown case (the guarding `IS [NOT] NULL`
+/// checks already ensure neither side is NULL by the time `=` runs).
 fn is_definite(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::IsNull { .. } => true,
+        ExprKind::IsNull { .. } | ExprKind::Is { .. } => true,
         ExprKind::Paren(inner) => is_definite(inner),
         _ => false,
     }
@@ -589,8 +795,11 @@ mod tests {
     /// Constructs that the AST can express but `codegen::row` cannot
     /// compile yet must fail soft, naming the construct -- never panic
     /// mid-query (#147).
+    /// Bind parameters and scalar subqueries remain genuinely
+    /// unsupported (own follow-up tickets, #162/#163) -- everything
+    /// else `#150` listed is exercised for real below.
     #[test]
-    fn unsupported_constructs_fail_soft_and_name_themselves() {
+    fn params_and_scalar_subqueries_fail_soft_and_name_themselves() {
         let scope = Scope::single(schema(&["a"]), 0);
         let cases = [
             (
@@ -598,26 +807,8 @@ mod tests {
                 "bind parameter",
             ),
             (
-                e(ExprKind::Cast {
-                    expr: Box::new(int(1)),
-                    type_name: "TEXT".into(),
-                }),
-                "CAST",
-            ),
-            (
-                e(ExprKind::Collate {
-                    expr: Box::new(str_lit("a")),
-                    collation: "NOCASE".into(),
-                }),
-                "COLLATE",
-            ),
-            (
-                e(ExprKind::Case {
-                    operand: None,
-                    whens: vec![(int(1), int(2))],
-                    else_: None,
-                }),
-                "CASE",
+                crate::codegen::row::testutil::expr("(SELECT a FROM t)"),
+                "scalar subquery",
             ),
         ];
         for (expr, label) in cases {
@@ -631,5 +822,137 @@ mod tests {
                 "{label} should be reported as unsupported, not panic"
             );
         }
+    }
+
+    /// A window-function call and `DISTINCT`/`*` outside an aggregate
+    /// are also rejected, distinctly from an unknown scalar function --
+    /// see [`unknown_function_is_a_runtime_error`].
+    #[test]
+    fn window_calls_and_bare_star_are_unsupported_in_value_position() {
+        let scope = Scope::single(schema(&["a"]), 0);
+        for sql in ["COUNT(*) OVER (ORDER BY a)", "COUNT(DISTINCT a)"] {
+            let expr = crate::codegen::row::testutil::expr(sql);
+            let mut em = Emitter::new();
+            let mut reg = RegAlloc::new();
+            assert!(
+                matches!(
+                    compile_value(&mut em, &mut reg, &scope, &expr),
+                    Err(CodegenError::Unsupported { .. })
+                ),
+                "{sql:?} should be reported as unsupported"
+            );
+        }
+    }
+
+    #[test]
+    fn function_call_dispatches_into_the_vm_row_functions_registry() {
+        let scope = Scope::single(schema(&[]), 0);
+        assert_eq!(
+            run_value(&crate::codegen::row::testutil::expr("UPPER('abc')"), &scope),
+            Value::Text("ABC".into())
+        );
+        assert_eq!(
+            run_value(&crate::codegen::row::testutil::expr("ABS(-5)"), &scope),
+            Value::Integer(5)
+        );
+        assert_eq!(
+            run_value(
+                &crate::codegen::row::testutil::expr("SUBSTR('hello', 2, 3)"),
+                &scope
+            ),
+            Value::Text("ell".into())
+        );
+    }
+
+    /// An unknown function name/arity has no static registry to check
+    /// against at compile time, so it surfaces as a runtime error --
+    /// still a clear error naming the call, not a panic.
+    #[test]
+    fn unknown_function_is_a_runtime_error() {
+        let scope = Scope::single(schema(&[]), 0);
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        let dest = compile_value(
+            &mut em,
+            &mut reg,
+            &scope,
+            &crate::codegen::row::testutil::expr("NOPE(1)"),
+        )
+        .unwrap();
+        em.emit(Instruction::new(Opcode::ResultRow, dest, 1, 0));
+        em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+        let mut vm = crate::vm::row::Vm::new();
+        assert!(crate::vm::row::execute(&mut vm, &em.finish()).is_err());
+    }
+
+    #[test]
+    fn case_searched_and_simple_forms() {
+        let scope = Scope::single(schema(&[]), 0);
+        assert_eq!(
+            run_value(
+                &crate::codegen::row::testutil::expr(
+                    "CASE WHEN 1 = 2 THEN 'a' WHEN 1 = 1 THEN 'b' ELSE 'c' END"
+                ),
+                &scope
+            ),
+            Value::Text("b".into())
+        );
+        assert_eq!(
+            run_value(
+                &crate::codegen::row::testutil::expr("CASE WHEN 1 = 2 THEN 'a' END"),
+                &scope
+            ),
+            Value::Null,
+            "no WHEN matched and there's no ELSE"
+        );
+        assert_eq!(
+            run_value(
+                &crate::codegen::row::testutil::expr("CASE 2 WHEN 1 THEN 'a' WHEN 2 THEN 'b' END"),
+                &scope
+            ),
+            Value::Text("b".into()),
+            "simple form: operand = each WHEN value"
+        );
+        assert_eq!(
+            run_value(
+                &crate::codegen::row::testutil::expr("CASE NULL WHEN NULL THEN 'a' ELSE 'b' END"),
+                &scope
+            ),
+            Value::Text("b".into()),
+            "a NULL operand never matches any WHEN via ordinary ="
+        );
+    }
+
+    #[test]
+    fn cast_applies_the_named_affinity() {
+        let scope = Scope::single(schema(&[]), 0);
+        assert_eq!(
+            run_value(
+                &crate::codegen::row::testutil::expr("CAST('5' AS INTEGER)"),
+                &scope
+            ),
+            Value::Integer(5)
+        );
+        assert_eq!(
+            run_value(
+                &crate::codegen::row::testutil::expr("CAST(5 AS TEXT)"),
+                &scope
+            ),
+            Value::Text("5".into())
+        );
+    }
+
+    /// `COLLATE` doesn't change the value itself -- only how a later
+    /// comparison treats it (`cond`'s `resolve_collation`).
+    #[test]
+    fn collate_is_transparent_to_the_raw_value() {
+        let scope = Scope::single(schema(&[]), 0);
+        assert_eq!(
+            run_value(
+                &crate::codegen::row::testutil::expr("'abc' COLLATE NOCASE"),
+                &scope
+            ),
+            Value::Text("abc".into())
+        );
     }
 }
