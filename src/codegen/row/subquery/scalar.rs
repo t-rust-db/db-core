@@ -346,33 +346,35 @@ mod tests {
         assert!(matches!(err, CodegenError::Unsupported { .. }), "{err:?}");
     }
 
-    struct TableFactory {
-        tables: std::collections::HashMap<u32, Vec<Vec<crate::vm::row::Value>>>,
-    }
-
-    impl crate::vm::row::CursorFactory for TableFactory {
-        fn open_read(
-            &mut self,
-            root: u32,
-        ) -> std::result::Result<Box<dyn crate::vm::row::Cursor>, crate::vm::row::CursorFactoryError>
-        {
-            let rows = self.tables.get(&root).cloned().unwrap_or_default();
-            Ok(Box::new(crate::vm::row::InMemoryCursor::new(rows)))
-        }
-    }
-
     fn run(sql: &str, t_rows: Vec<Vec<crate::vm::row::Value>>) -> Vec<Vec<crate::vm::row::Value>> {
         let program = compile(sql).unwrap();
         let mut vm = crate::vm::row::Vm::new();
         // `t` (cursor 0) is the outer table `compile_select_with_catalog`
         // always leaves pre-wired by the caller, exactly like
-        // `compile_select`'s own tests -- only the subquery's `OpenRead`
-        // (cursor `s`, root 3) actually runs through the factory.
+        // `compile_select`'s own tests. No `CursorFactory` is installed
+        // here (implementing that trait outside the VM's own dyn
+        // boundary -- see `MVL_LIMIT_EXCLUDE` in the Makefile -- would
+        // put a `Box<dyn Cursor>`-returning fn signature outside the
+        // qualified subset), so the subquery's own cursor slot is
+        // pre-wired the same way: find its `OpenRead`'s slot (the one
+        // that isn't `t`'s) and wire it directly via `open_cursor`,
+        // exactly like `Opcode::OpenRead`'s own pre-wired fallback path
+        // expects when no factory is installed.
         vm.open_cursor(0, Box::new(crate::vm::row::InMemoryCursor::new(t_rows)))
             .unwrap();
-        vm.set_cursor_factory(Box::new(TableFactory {
-            tables: std::collections::HashMap::from([(3, s_rows())]),
-        }));
+        let sub_slot = match program
+            .instructions
+            .iter()
+            .find(|i| i.opcode == Opcode::OpenRead && i.p1 != 0)
+        {
+            Some(instr) => instr.p1,
+            None => panic!("compiled program opens a subquery cursor"),
+        };
+        vm.open_cursor(
+            sub_slot,
+            Box::new(crate::vm::row::InMemoryCursor::new(s_rows())),
+        )
+        .unwrap();
         crate::vm::row::execute(&mut vm, &program).unwrap()
     }
 
