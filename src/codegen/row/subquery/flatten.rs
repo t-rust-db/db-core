@@ -318,4 +318,42 @@ mod tests {
         let mut query = parse("SELECT a FROM (SELECT b FROM t) x");
         assert!(!flatten_from_subquery(&mut query));
     }
+
+    /// MC/DC vector (obligation `flatten_44`, the "star over a narrowing
+    /// subquery" guard): both leaves true -- the subquery exposes a
+    /// column subset *and* the enclosing query is `SELECT *`, so
+    /// flattening is declined.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__flatten_44__v1_subset_projection_and_outer_star_declines() {
+        let mut query = parse("SELECT * FROM (SELECT b FROM t) x");
+        assert!(!flatten_from_subquery(&mut query));
+        assert!(!is_table(query.from.as_ref(), "t"));
+    }
+
+    /// MC/DC vector (obligation `flatten_44`): leaf B (outer `SELECT *`)
+    /// false while leaf A (exposed subset) stays true -- the enclosing
+    /// query names its columns, so flattening proceeds. Pairs against
+    /// `mcdc__flatten_44__v1_subset_projection_and_outer_star_declines`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__flatten_44__v2_subset_projection_with_named_outer_columns_flattens() {
+        let mut query = parse("SELECT b FROM (SELECT b FROM t) x");
+        assert!(flatten_from_subquery(&mut query));
+        assert!(is_table(query.from.as_ref(), "t"));
+    }
+
+    /// MC/DC vector (obligation `flatten_44`): leaf A (`exposed.is_some()`)
+    /// false while leaf B (outer `SELECT *`) stays true -- the subquery
+    /// is itself a bare `SELECT *` (`exposed_columns` yields `Some(None)`,
+    /// i.e. an exposed set of `None`), so the star widens nothing and
+    /// flattening proceeds. Pairs against
+    /// `mcdc__flatten_44__v1_subset_projection_and_outer_star_declines`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__flatten_44__v3_inner_star_with_outer_star_flattens() {
+        let mut query = parse("SELECT * FROM (SELECT * FROM t) x");
+        assert!(flatten_from_subquery(&mut query));
+        assert!(is_table(query.from.as_ref(), "t"));
+    }
 }

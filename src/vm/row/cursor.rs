@@ -1847,7 +1847,7 @@ mod tests {
         assert!(!c.next());
     }
 
-    /// MC/DC vector (obligation `cursor_698`, `EphemeralIndexCursor::
+    /// MC/DC vector (obligation `cursor_695`, `EphemeralIndexCursor::
     /// ephemeral_idx_insert`'s decision `!entries.contains_key(&encoded)
     /// && entries.len() >= MAX_EPHEMERAL_ROWS`): both leaves true --
     /// a genuinely new key once the table is already at capacity is
@@ -1857,7 +1857,7 @@ mod tests {
     /// matters here, not the entries' actual content.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_698__v1_new_key_at_capacity_is_rejected() {
+    fn mcdc__cursor_695__v1_new_key_at_capacity_is_rejected() {
         let mut c = EphemeralIndexCursor {
             entries: (0..MAX_EPHEMERAL_ROWS)
                 .map(|i| (i.to_le_bytes().to_vec(), Vec::new()))
@@ -1872,13 +1872,13 @@ mod tests {
         );
     }
 
-    /// MC/DC vector (obligation `cursor_698`): leaf A (`!contains_key`)
+    /// MC/DC vector (obligation `cursor_695`): leaf A (`!contains_key`)
     /// true, leaf B (`len() >= MAX_EPHEMERAL_ROWS`) false -- an ordinary
     /// insert under capacity succeeds. Independence pair for B against
-    /// `mcdc__cursor_698__v1_new_key_at_capacity_is_rejected`.
+    /// `mcdc__cursor_695__v1_new_key_at_capacity_is_rejected`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_698__v2_new_key_under_capacity_is_accepted() {
+    fn mcdc__cursor_695__v2_new_key_under_capacity_is_accepted() {
         let mut c = EphemeralIndexCursor::new();
         let key = [Value::Integer(1)];
         let collations = [Collation::Binary];
@@ -1888,14 +1888,14 @@ mod tests {
         );
     }
 
-    /// MC/DC vector (obligation `cursor_698`): leaf A false -- an
+    /// MC/DC vector (obligation `cursor_695`): leaf A false -- an
     /// already-present key is accepted (an update, not a new row) even
     /// with the table at capacity, since leaf B is never reached.
     /// Independence pair for A against
-    /// `mcdc__cursor_698__v1_new_key_at_capacity_is_rejected`.
+    /// `mcdc__cursor_695__v1_new_key_at_capacity_is_rejected`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_698__v3_existing_key_at_capacity_is_still_accepted() {
+    fn mcdc__cursor_695__v3_existing_key_at_capacity_is_still_accepted() {
         let key = [Value::Integer(-1)];
         let collations = [Collation::Binary];
         let encoded = encode_key(&key, &collations);

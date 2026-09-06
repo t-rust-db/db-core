@@ -422,4 +422,109 @@ mod tests {
         let q = crate::codegen::row::testutil::select("SELECT c FROM (SELECT COUNT(*) FROM t) x");
         assert!(resolve_from_table_schema(q.from.as_ref(), &catalog()).is_err());
     }
+
+    /// The all-leaves-false baseline for `reject_unsupported_shape`'s
+    /// seven-way post-scan-clause disjunction: a plain single-table
+    /// scan. Each `mcdc__from_clause_24__*` vector flips exactly one
+    /// field on this shape, so the leaf under test is the only one that
+    /// differs from the baseline.
+    fn plain_scan() -> Select {
+        crate::codegen::row::testutil::select("SELECT b FROM t")
+    }
+
+    fn is_unsupported(result: Result<()>) -> bool {
+        matches!(result, Err(CodegenError::Unsupported { .. }))
+    }
+
+    /// MC/DC vector (obligation `from_clause_24`, the seven-leaf
+    /// DISTINCT/GROUP BY/HAVING/ORDER BY/LIMIT/WITH/compound disjunction):
+    /// every leaf false -- a plain scan passes.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__from_clause_24__v1_plain_scan_passes() {
+        assert!(reject_unsupported_shape(&plain_scan(), "a subquery").is_ok());
+    }
+
+    /// MC/DC vector (obligation `from_clause_24`): leaf 1 (`DISTINCT`)
+    /// true alone.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__from_clause_24__v2_distinct_alone_rejects() {
+        let mut q = plain_scan();
+        q.distinct = Some(crate::parser::ast::Distinctness::Distinct);
+        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
+    }
+
+    /// MC/DC vector (obligation `from_clause_24`): leaf 2 (`GROUP BY`)
+    /// true alone.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__from_clause_24__v3_group_by_alone_rejects() {
+        let mut q = plain_scan();
+        q.group_by = crate::codegen::row::testutil::select("SELECT b FROM t GROUP BY b").group_by;
+        assert!(!q.group_by.is_empty());
+        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
+    }
+
+    /// MC/DC vector (obligation `from_clause_24`): leaf 3 (`HAVING`) true
+    /// alone. The grammar only accepts `HAVING` alongside `GROUP BY`, so
+    /// the predicate is lifted from a `WHERE` onto the baseline's
+    /// `having` slot to keep `group_by` empty.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__from_clause_24__v4_having_alone_rejects() {
+        let mut q = plain_scan();
+        q.having =
+            crate::codegen::row::testutil::select("SELECT b FROM t WHERE b > 1").where_clause;
+        assert!(q.having.is_some());
+        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
+    }
+
+    /// MC/DC vector (obligation `from_clause_24`): leaf 4 (`ORDER BY`)
+    /// true alone.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__from_clause_24__v5_order_by_alone_rejects() {
+        let mut q = plain_scan();
+        q.order_by = crate::codegen::row::testutil::select("SELECT b FROM t ORDER BY b").order_by;
+        assert!(!q.order_by.is_empty());
+        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
+    }
+
+    /// MC/DC vector (obligation `from_clause_24`): leaf 5 (`LIMIT`) true
+    /// alone.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__from_clause_24__v6_limit_alone_rejects() {
+        let mut q = plain_scan();
+        q.limit = crate::codegen::row::testutil::select("SELECT b FROM t LIMIT 1").limit;
+        assert!(q.limit.is_some());
+        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
+    }
+
+    /// MC/DC vector (obligation `from_clause_24`): leaf 6 (`WITH`) true
+    /// alone.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__from_clause_24__v7_with_clause_alone_rejects() {
+        let mut q = plain_scan();
+        q.with_clause =
+            crate::codegen::row::testutil::select("WITH c AS (SELECT b FROM t) SELECT b FROM t")
+                .with_clause;
+        assert!(q.with_clause.is_some());
+        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
+    }
+
+    /// MC/DC vector (obligation `from_clause_24`): leaf 7 (compound
+    /// `UNION ALL` arms) true alone.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__from_clause_24__v8_compound_alone_rejects() {
+        let mut q = plain_scan();
+        q.compound =
+            crate::codegen::row::testutil::select("SELECT b FROM t UNION ALL SELECT b FROM t")
+                .compound;
+        assert!(!q.compound.is_empty());
+        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
+    }
 }

@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_102__v1_distinct_disqualifies_bounded_scan() {
+    fn mcdc__engine_114__v1_distinct_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_102__v2_non_empty_agg_parts_disqualifies_bounded_scan() {
+    fn mcdc__engine_114__v2_non_empty_agg_parts_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_102__v3_filter_in_body_disqualifies_bounded_scan() {
+    fn mcdc__engine_114__v3_filter_in_body_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_102__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan() {
+    fn mcdc__engine_114__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {

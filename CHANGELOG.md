@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.61.1] - 2026-09-06
+
+### Fixed
+
+- **MC/DC coverage gate restored** (db-core#111 follow-up). `tests/mcdc/obligations.json` had not been regenerated since #111; obligation ids embed line numbers, so every feature merged since orphaned its tagged vectors and `make test-mcdc` reported 42 of 70 multi-leaf obligations undischarged. Regenerated the snapshot, re-tagged the drifted vectors, and added vectors for the 13 decisions introduced by #149/#163/#167/#168/#175 that had none (`range_scan`/`index_scan` fast-path eligibility, `FROM`-subquery shape rejection and flattening, `Scope::resolve_local`'s outer-qualifier check, `GLOB ... ESCAPE` rejection, `CROSS JOIN` `LIMIT` rule, and the batch `Combine` comment). `Cargo.lock` catches up to the crate version.
+
 ## [0.61.0] - 2026-09-06
 
 ### Added
