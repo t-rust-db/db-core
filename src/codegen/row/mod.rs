@@ -429,18 +429,6 @@ pub(crate) fn column_expr(name: impl Into<String>) -> Expr {
     }
 }
 
-/// Builds `lhs OR rhs`.
-pub(crate) fn or_expr(lhs: Expr, rhs: Expr) -> Expr {
-    Expr {
-        kind: ExprKind::Binary {
-            op: BinaryOp::Or,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-        },
-        span: crate::parser::Span::UNKNOWN,
-    }
-}
-
 /// Builds `lhs = rhs`.
 pub(crate) fn eq_expr(lhs: Expr, rhs: Expr) -> Expr {
     Expr {
@@ -448,17 +436,6 @@ pub(crate) fn eq_expr(lhs: Expr, rhs: Expr) -> Expr {
             op: BinaryOp::Eq,
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
-        },
-        span: crate::parser::Span::UNKNOWN,
-    }
-}
-
-/// Builds `expr IS NULL` (or `IS NOT NULL` when `negated`).
-pub(crate) fn is_null_expr(expr: Expr, negated: bool) -> Expr {
-    Expr {
-        kind: ExprKind::IsNull {
-            expr: Box::new(expr),
-            negated,
         },
         span: crate::parser::Span::UNKNOWN,
     }
