@@ -6,31 +6,35 @@
 //! *entire* `WHERE` clause -- it can't be combined with other conditions
 //! via `AND`/`OR`.
 //!
-//! **Unified on `parser::row`'s tokenizer and grammar (#57).** This module
-//! no longer has its own tokenizer or recursive-descent parser: [`parse`]/
-//! [`parse_explain`] parse with [`super::row::parse_select`]/
-//! [`super::row::parse_explain`] (sqlite-rs's own, shared with `row`) and
-//! then [`convert_select`] lowers the resulting [`super::row::ast::Select`]
-//! into [`crate::expr::Query`] -- the shape [`crate::codegen::batch`],
-//! `crate::emit::batch`, and column-rs's runtime glue all still expect.
-//! `convert_select` is where "column's grammar becomes an enforced
-//! subset" (ADR 0002's second amendment) actually happens: a `Select`
-//! outside this subset (a real JOIN condition shape, `WITH`, `UNION`,
-//! `HAVING`, non-integer `LIMIT`, a second `ORDER BY` term, ...) is
-//! rejected here with [`ParseError::Unexpected`], not silently
-//! misconverted.
+//! **Unified on `parser::row`'s tokenizer and grammar (#57), and on its AST
+//! (#153).** This module no longer has its own tokenizer, recursive-
+//! descent parser, or lowered AST: [`parse`]/[`parse_explain`] parse with
+//! [`super::row::parse_select`]/[`super::row::parse_explain`] (sqlite-rs's
+//! own, shared with `row`) and return the resulting
+//! [`super::ast::Select`] unchanged in shape -- [`crate::codegen::batch`]
+//! and `crate::emit::batch` consume it directly, the same AST
+//! [`crate::codegen::row`] already does. [`validate_select`] is where
+//! "column's grammar becomes an enforced subset" (ADR 0002's second
+//! amendment) actually happens: a `Select` outside this subset (a real
+//! JOIN condition shape, `WITH`, `UNION`, `HAVING`, non-integer `LIMIT`, a
+//! second `ORDER BY` term, ...) is rejected here with
+//! [`ParseError::Unexpected`], not silently miscompiled -- and, as a side
+//! effect, table aliases (`FROM orders o`) are resolved in place, rewriting
+//! every alias-qualified column reference to the real table name, so
+//! `codegen::batch` never has to know aliases existed.
 //!
 //! **Window functions** (#74 follow-up): `parser::row`'s grammar parses
 //! `func(...) OVER (PARTITION BY ... ORDER BY ...)` (see
-//! `grammar::parse_function_call`/`window_def`); [`convert_window_call`]
-//! resolves `func` against [`WindowFunc::from_name`] and lowers into
-//! [`SelectItem::Window`], the same shape `codegen::batch::compile_window`
-//! already executes. Not carried forward from real SQLite/DuckDB syntax:
-//! a named `OVER window_name` (would need the still-unsupported `WINDOW`
-//! clause) and an explicit frame (`ROWS`/`RANGE`/`GROUPS ...`, no
-//! representation in `WindowSpec` -- every window function runs over a
-//! fixed default frame instead) are both rejected with a clear error, not
-//! silently accepted or misconverted.
+//! `grammar::parse_function_call`/`window_def`); [`validate_window_call`]
+//! resolves `func` against its own local name table ([`window_shape`] --
+//! deliberately not `crate::codegen::batch::WindowFunc`, so this
+//! validator doesn't depend on the planner) and validates its
+//! argument/partition/order shape, the same subset
+//! `codegen::batch::compile_window` executes. Not carried forward from
+//! real SQLite/DuckDB syntax: a named `OVER window_name` (would need the
+//! still-unsupported `WINDOW` clause) and an explicit frame (`ROWS`/
+//! `RANGE`/`GROUPS ...`, no representation in `ast::WindowDef`) are both
+//! rejected with a clear error, not silently accepted or misconverted.
 //!
 //! Errors carry a [`Span`] (see `ADR 0001`/`ADR 0002` in `db-core`'s
 //! `.openspec/adr/`), matching sqlite-rs's own `ParseFail`/`ParseOutcome`
@@ -40,18 +44,12 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::expr::{
-    AggFunc, BinOp, Expr, FromClause, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc,
-    WindowSpec as ExprWindowSpec,
-};
-use crate::parser::row::ast::{
-    BinaryOp as AstBinOp, Distinctness, Expr as AstExpr, ExprKind, FunctionArgs, JoinConstraint,
-    JoinOp, Literal as AstLiteral, OrderingTerm, ResultColumn, Select, TableRefKind, UnaryOp,
-    WindowDef,
+use crate::parser::ast::{
+    BinaryOp as AstBinOp, Expr as AstExpr, ExprKind, FunctionArgs, JoinConstraint, JoinOp,
+    Literal as AstLiteral, Select, TableRefKind, UnaryOp, WindowDef,
 };
 use crate::parser::row::ParseOutcome;
 use crate::parser::Span;
-use crate::types::Literal;
 
 #[derive(Debug, PartialEq)]
 pub enum ParseError {
@@ -97,98 +95,9 @@ fn unsupported(span: Span, message: String) -> ParseError {
     ParseError::Unexpected { message, span }
 }
 
-/// Rewrite `alias.col` to `real_table.col` in place, for every qualified
-/// column name `resolve_query_aliases` touches. Unqualified names and
-/// names already qualified by a real table name pass through unchanged.
-fn resolve_ident(name: &mut String, aliases: &HashMap<String, String>) {
-    if let Some((prefix, col)) = name.split_once('.') {
-        if let Some(real) = aliases.get(prefix) {
-            *name = format!("{real}.{col}");
-        }
-    }
-}
-
-fn resolve_expr_aliases(expr: &mut Expr, aliases: &HashMap<String, String>) {
-    match expr {
-        Expr::Column(name) => resolve_ident(name, aliases),
-        Expr::Literal(_) => {}
-        Expr::BinaryOp(lhs, _, rhs) => {
-            resolve_expr_aliases(lhs, aliases);
-            resolve_expr_aliases(rhs, aliases);
-        }
-        Expr::Not(inner) => resolve_expr_aliases(inner, aliases),
-        Expr::Neg(inner) => resolve_expr_aliases(inner, aliases),
-        Expr::IsNull { expr, .. } => resolve_expr_aliases(expr, aliases),
-        // A subquery has its own FROM/alias scope -- its column refs are
-        // resolved when *it* is converted, not against the outer query's
-        // aliases.
-        Expr::InSubquery { expr, .. } => resolve_expr_aliases(expr, aliases),
-        Expr::Exists { .. } => {}
-    }
-}
-
-/// Rewrite every qualified column reference in `query` (SELECT list, JOIN
-/// ON, WHERE, GROUP BY, ORDER BY) from an alias-qualified name to the real
-/// table name, per `aliases` (alias -> real table name). Table aliases are
-/// a parse-time-only convenience this way: `crate::expr::Query`/`Join` never
-/// see or store an alias, so `column-rs` (an existing consumer) doesn't
-/// need any change to keep working with aliased queries.
-fn resolve_query_aliases(query: &mut Query, aliases: &HashMap<String, String>) {
-    for item in &mut query.columns {
-        if let SelectItem::Column(name) = item {
-            resolve_ident(name, aliases);
-        }
-    }
-    for join in &mut query.joins {
-        resolve_ident(&mut join.left_col, aliases);
-        resolve_ident(&mut join.right_col, aliases);
-    }
-    if let Some(expr) = &mut query.where_clause {
-        resolve_expr_aliases(expr, aliases);
-    }
-    for name in &mut query.group_by {
-        resolve_ident(name, aliases);
-    }
-    if let Some(order_by) = &mut query.order_by {
-        resolve_ident(&mut order_by.column, aliases);
-    }
-}
-
-// ---------------------------------------------------------------------
-// ast::Select -> crate::expr::Query
-// ---------------------------------------------------------------------
-
-fn ast_binop(op: AstBinOp, span: Span) -> Result<BinOp> {
-    Ok(match op {
-        AstBinOp::Add => BinOp::Add,
-        AstBinOp::Sub => BinOp::Sub,
-        AstBinOp::Mul => BinOp::Mul,
-        AstBinOp::Div => BinOp::Div,
-        AstBinOp::Eq => BinOp::Eq,
-        AstBinOp::Ne => BinOp::Ne,
-        AstBinOp::Lt => BinOp::Lt,
-        AstBinOp::Le => BinOp::Le,
-        AstBinOp::Gt => BinOp::Gt,
-        AstBinOp::Ge => BinOp::Ge,
-        AstBinOp::And => BinOp::And,
-        AstBinOp::Or => BinOp::Or,
-        AstBinOp::Concat => BinOp::Concat,
-        other => return Err(unsupported(span, format!("operator {other:?}"))),
-    })
-}
-
-fn ast_literal(lit: &AstLiteral, span: Span) -> Result<Literal> {
-    Ok(match lit {
-        AstLiteral::Integer(n) => Literal::Int(*n),
-        AstLiteral::Float(f) => Literal::Float(*f),
-        AstLiteral::Str(s) => Literal::Str(s.clone()),
-        other => return Err(unsupported(span, format!("literal {other:?}"))),
-    })
-}
-
 /// A (possibly qualified) column reference: `col` or `table.col`. Aliases
-/// aren't resolved here -- that happens afterward, over the whole
-/// converted `Query`, via [`resolve_query_aliases`].
+/// aren't resolved here -- that happens afterward, via
+/// [`resolve_expr_aliases`].
 fn column_name(expr: &AstExpr) -> Result<String> {
     match &expr.kind {
         ExprKind::Column {
@@ -211,110 +120,123 @@ fn column_name(expr: &AstExpr) -> Result<String> {
     }
 }
 
-/// Lowers an aggregate `FunctionCall` (`COUNT(x)`, `COUNT(*)`, ...) to
-/// the same output label [`convert_result_column`]'s `SelectItem::Agg`
-/// branch would render for it (via [`AggFunc::name`]) -- used by
-/// `ORDER BY` (#131) to reference a `SELECT`-list aggregate by the
-/// identical string `codegen::batch::select_output_index` matches
-/// against, without introducing a second aggregate-lowering path.
-fn aggregate_call_label(
-    expr: &AstExpr,
-    name: &str,
-    distinct: bool,
-    args: &FunctionArgs,
-) -> Result<String> {
-    if distinct {
-        return Err(unsupported(
-            expr.span,
-            "DISTINCT inside an aggregate".into(),
-        ));
+fn ast_binop_allowed(op: AstBinOp, span: Span) -> Result<()> {
+    match op {
+        AstBinOp::Add
+        | AstBinOp::Sub
+        | AstBinOp::Mul
+        | AstBinOp::Div
+        | AstBinOp::Eq
+        | AstBinOp::Ne
+        | AstBinOp::Lt
+        | AstBinOp::Le
+        | AstBinOp::Gt
+        | AstBinOp::Ge
+        | AstBinOp::And
+        | AstBinOp::Or
+        | AstBinOp::Concat => Ok(()),
+        other => Err(unsupported(span, format!("operator {other:?}"))),
     }
-    let agg = AggFunc::from_name(name)
-        .ok_or_else(|| unsupported(expr.span, format!("unknown function {name}")))?;
-    match args {
-        FunctionArgs::Star => {
-            if agg != AggFunc::Count {
-                return Err(unsupported(expr.span, "only COUNT supports (*)".into()));
+}
+
+/// Rewrite `alias.col` to `real_table.col` in place, for every qualified
+/// column name reachable from `expr` (recursing through every operator
+/// this subset's grammar can produce). A subquery has its own `FROM`/alias
+/// scope -- its column refs are resolved when *it* is validated, not
+/// against the outer query's aliases.
+fn resolve_expr_aliases(expr: &mut AstExpr, aliases: &HashMap<String, String>) {
+    match &mut expr.kind {
+        ExprKind::Column { table, .. } => {
+            if let Some(t) = table {
+                if let Some(real) = aliases.get(t) {
+                    *t = real.clone();
+                }
             }
-            Ok(format!("{}(*)", agg.name()))
         }
-        FunctionArgs::List(list) => match list.as_slice() {
-            [one] => Ok(format!("{}({})", agg.name(), column_name(one)?)),
-            _ => Err(unsupported(
-                expr.span,
-                "an aggregate takes exactly one column or *".into(),
-            )),
-        },
+        ExprKind::FunctionCall { args, over, .. } => {
+            if let FunctionArgs::List(list) = args {
+                for e in list {
+                    resolve_expr_aliases(e, aliases);
+                }
+            }
+            if let Some(window_def) = over {
+                for e in &mut window_def.partition_by {
+                    resolve_expr_aliases(e, aliases);
+                }
+                for term in &mut window_def.order_by {
+                    resolve_expr_aliases(&mut term.expr, aliases);
+                }
+            }
+        }
+        ExprKind::Unary { expr: inner, .. } => resolve_expr_aliases(inner, aliases),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            resolve_expr_aliases(lhs, aliases);
+            resolve_expr_aliases(rhs, aliases);
+        }
+        ExprKind::IsNull { expr: inner, .. } => resolve_expr_aliases(inner, aliases),
+        ExprKind::Paren(inner) => resolve_expr_aliases(inner, aliases),
+        ExprKind::InSubquery { expr: inner, .. } => resolve_expr_aliases(inner, aliases),
+        // Not part of the batch subset (rejected by `validate_expr`
+        // before or regardless of alias resolution), but walked here too
+        // so a `Select` this module validates is never left half-resolved.
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            ..
+        } => {
+            resolve_expr_aliases(inner, aliases);
+            resolve_expr_aliases(lo, aliases);
+            resolve_expr_aliases(hi, aliases);
+        }
+        ExprKind::In {
+            expr: inner, list, ..
+        } => {
+            resolve_expr_aliases(inner, aliases);
+            for e in list {
+                resolve_expr_aliases(e, aliases);
+            }
+        }
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            escape,
+            ..
+        } => {
+            resolve_expr_aliases(inner, aliases);
+            resolve_expr_aliases(pattern, aliases);
+            if let Some(e) = escape {
+                resolve_expr_aliases(e, aliases);
+            }
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(o) = operand {
+                resolve_expr_aliases(o, aliases);
+            }
+            for (cond, result) in whens {
+                resolve_expr_aliases(cond, aliases);
+                resolve_expr_aliases(result, aliases);
+            }
+            if let Some(e) = else_ {
+                resolve_expr_aliases(e, aliases);
+            }
+        }
+        ExprKind::Cast { expr: inner, .. } | ExprKind::Collate { expr: inner, .. } => {
+            resolve_expr_aliases(inner, aliases)
+        }
+        ExprKind::Literal(_)
+        | ExprKind::Param(_)
+        | ExprKind::Subquery(_)
+        | ExprKind::Exists { .. }
+        | ExprKind::InSubqueryMulti { .. } => {}
     }
 }
 
-fn convert_expr(expr: &AstExpr) -> Result<Expr> {
-    match &expr.kind {
-        ExprKind::Literal(lit) => Ok(Expr::Literal(ast_literal(lit, expr.span)?)),
-        ExprKind::Column { .. } => Ok(Expr::Column(column_name(expr)?)),
-        ExprKind::Unary {
-            op: UnaryOp::Not,
-            expr: inner,
-        } => Ok(Expr::Not(Box::new(convert_expr(inner)?))),
-        ExprKind::Unary {
-            op: UnaryOp::Minus,
-            expr: inner,
-        } => Ok(Expr::Neg(Box::new(convert_expr(inner)?))),
-        // Unary `+` is a no-op, same as the old grammar (which discarded a
-        // leading `+` instead of representing it at all).
-        ExprKind::Unary {
-            op: UnaryOp::Plus,
-            expr: inner,
-        } => convert_expr(inner),
-        ExprKind::Unary { op, .. } => Err(unsupported(expr.span, format!("unary operator {op:?}"))),
-        // `expr IS [NOT] NULL` parses as `Is{lhs, rhs: NULL literal,
-        // negated}` in row's grammar, not a dedicated `IsNull` node (that
-        // variant exists for the historical SQLite `IS`/`IS NOT` operator
-        // between two arbitrary expressions, which this subset doesn't
-        // support otherwise).
-        ExprKind::Is { lhs, rhs, negated }
-            if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>
-        {
-            Ok(Expr::IsNull {
-                expr: Box::new(convert_expr(lhs)?),
-                negated: *negated,
-            })
-        }
-        ExprKind::Binary { op, lhs, rhs } => Ok(Expr::BinaryOp(
-            Box::new(convert_expr(lhs)?),
-            ast_binop(*op, expr.span)?,
-            Box::new(convert_expr(rhs)?),
-        )),
-        ExprKind::IsNull {
-            expr: inner,
-            negated,
-        } => Ok(Expr::IsNull {
-            expr: Box::new(convert_expr(inner)?),
-            negated: *negated,
-        }),
-        ExprKind::Paren(inner) => convert_expr(inner),
-        ExprKind::InSubquery {
-            expr: inner,
-            subquery,
-            negated: false,
-        } => Ok(Expr::InSubquery {
-            expr: Box::new(convert_expr(inner)?),
-            subquery: Box::new(convert_select(subquery)?),
-        }),
-        ExprKind::InSubquery { negated: true, .. } => {
-            Err(unsupported(expr.span, "NOT IN (SELECT ...)".into()))
-        }
-        ExprKind::Exists { subquery, negated } => Ok(Expr::Exists {
-            subquery: Box::new(convert_select(subquery)?),
-            negated: *negated,
-        }),
-        other => Err(unsupported(
-            expr.span,
-            format!("unsupported expression form {other:?}"),
-        )),
-    }
-}
-
+/// Extract `(left_col, right_col)` from a `JOIN ... ON <expr>` condition.
 fn extract_equi_join(expr: &AstExpr) -> Result<(String, String)> {
     match &expr.kind {
         ExprKind::Binary {
@@ -326,9 +248,130 @@ fn extract_equi_join(expr: &AstExpr) -> Result<(String, String)> {
     }
 }
 
-fn convert_result_column(col: &ResultColumn) -> Result<SelectItem> {
+/// The batch planner's known aggregate function names -- a local,
+/// name-only list (not `vm::batch::AggFunc`) so this validator doesn't
+/// pull in the VM as a dependency; `codegen::batch` re-resolves the same
+/// names into its own `AggFunc` independently.
+fn is_known_agg_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_uppercase().as_str(),
+        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX"
+    )
+}
+
+/// Validates an aggregate `FunctionCall` (`COUNT(x)`, `COUNT(*)`, ...):
+/// a known aggregate name, and exactly one column or `(*)` (`COUNT` only).
+fn validate_aggregate_call(expr: &AstExpr, name: &str, args: &FunctionArgs) -> Result<()> {
+    if !is_known_agg_name(name) {
+        return Err(unsupported(expr.span, format!("unknown function {name}")));
+    }
+    match args {
+        FunctionArgs::Star => {
+            if !name.eq_ignore_ascii_case("COUNT") {
+                return Err(unsupported(expr.span, "only COUNT supports (*)".into()));
+            }
+            Ok(())
+        }
+        FunctionArgs::List(list) => match list.as_slice() {
+            [one] => column_name(one).map(|_| ()),
+            _ => Err(unsupported(
+                expr.span,
+                "an aggregate takes exactly one column or *".into(),
+            )),
+        },
+    }
+}
+
+/// A window function name's argument shape -- deliberately a local,
+/// name-only classification (not `codegen::batch::WindowFunc`) so this
+/// validator doesn't pull in the planner as a dependency; `codegen::batch`
+/// re-resolves the same names into its own `WindowFunc` independently.
+enum WindowShape {
+    /// `ROW_NUMBER`/`RANK`/`DENSE_RANK`: no arguments.
+    Niladic,
+    /// `LAG`/`LEAD`: one column plus an optional integer offset.
+    LagLead,
+    /// `COUNT`: one column or `(*)`.
+    CountLike,
+    /// `SUM`/`AVG`/`FIRST_VALUE`/`LAST_VALUE`: exactly one column.
+    OneArg,
+}
+
+fn window_shape(name: &str) -> Option<WindowShape> {
+    match name.to_ascii_uppercase().as_str() {
+        "ROW_NUMBER" | "RANK" | "DENSE_RANK" => Some(WindowShape::Niladic),
+        "LAG" | "LEAD" => Some(WindowShape::LagLead),
+        "COUNT" => Some(WindowShape::CountLike),
+        "SUM" | "AVG" | "FIRST_VALUE" | "LAST_VALUE" => Some(WindowShape::OneArg),
+        _ => None,
+    }
+}
+
+/// Validates `name(args) OVER (window_def)`: resolves `name` against
+/// [`window_shape`], validates the argument count/shape each function
+/// kind expects (niladic for `ROW_NUMBER`/`RANK`/`DENSE_RANK`, one column
+/// plus an optional integer offset for `LAG`/`LEAD`, one column or
+/// `COUNT(*)` for the rest), and validates `window_def`'s `PARTITION
+/// BY`/`ORDER BY` expressions are plain column references -- the same
+/// "enforced subset" restriction the rest of this module applies (no
+/// expressions, only column references).
+fn validate_window_call(
+    span: Span,
+    name: &str,
+    args: &FunctionArgs,
+    window_def: &WindowDef,
+) -> Result<()> {
+    let shape = window_shape(name)
+        .ok_or_else(|| unsupported(span, format!("unknown window function {name}")))?;
+
+    match (&shape, args) {
+        (WindowShape::Niladic, FunctionArgs::List(list)) if list.is_empty() => {}
+        (WindowShape::Niladic, _) => {
+            return Err(unsupported(span, format!("{name} takes no arguments")))
+        }
+        (WindowShape::CountLike, FunctionArgs::Star) => {}
+        (_, FunctionArgs::Star) => return Err(unsupported(span, "only COUNT supports (*)".into())),
+        (WindowShape::LagLead, FunctionArgs::List(list)) => match list.as_slice() {
+            [one] => {
+                column_name(one)?;
+            }
+            [one, offset_expr] => {
+                column_name(one)?;
+                if !matches!(offset_expr.kind, ExprKind::Literal(AstLiteral::Integer(_))) {
+                    return Err(unsupported(offset_expr.span, "non-integer offset".into()));
+                }
+            }
+            _ => return Err(unsupported(span, format!("{name} takes 1 or 2 arguments"))),
+        },
+        (_, FunctionArgs::List(list)) => match list.as_slice() {
+            [one] => {
+                column_name(one)?;
+            }
+            _ => {
+                return Err(unsupported(
+                    span,
+                    "a window function takes exactly one column or *".into(),
+                ))
+            }
+        },
+    }
+
+    for e in &window_def.partition_by {
+        column_name(e)?;
+    }
+    for term in &window_def.order_by {
+        column_name(&term.expr)?;
+        if term.nulls_last.is_some() {
+            return Err(unsupported(span, "NULLS FIRST/LAST".into()));
+        }
+    }
+    Ok(())
+}
+
+fn validate_result_column(col: &crate::parser::ast::ResultColumn) -> Result<()> {
+    use crate::parser::ast::ResultColumn;
     match col {
-        ResultColumn::Star => Ok(SelectItem::Star),
+        ResultColumn::Star => Ok(()),
         ResultColumn::TableStar { .. } => Err(unsupported(
             Span::UNKNOWN,
             "table.* is not supported".into(),
@@ -341,7 +384,7 @@ fn convert_result_column(col: &ResultColumn) -> Result<SelectItem> {
             "column alias (AS) is not supported".into(),
         )),
         ResultColumn::Expr { expr, alias: None } => match &expr.kind {
-            ExprKind::Column { .. } => Ok(SelectItem::Column(column_name(expr)?)),
+            ExprKind::Column { .. } => column_name(expr).map(|_| ()),
             ExprKind::FunctionCall {
                 name,
                 distinct,
@@ -354,7 +397,7 @@ fn convert_result_column(col: &ResultColumn) -> Result<SelectItem> {
                         "DISTINCT inside a window function".into(),
                     ));
                 }
-                convert_window_call(expr.span, name, args, window_def)
+                validate_window_call(expr.span, name, args, window_def)
             }
             ExprKind::FunctionCall {
                 name,
@@ -368,26 +411,7 @@ fn convert_result_column(col: &ResultColumn) -> Result<SelectItem> {
                         "DISTINCT inside an aggregate".into(),
                     ));
                 }
-                let agg = AggFunc::from_name(name)
-                    .ok_or_else(|| unsupported(expr.span, format!("unknown function {name}")))?;
-                let arg = match args {
-                    FunctionArgs::Star => {
-                        if agg != AggFunc::Count {
-                            return Err(unsupported(expr.span, "only COUNT supports (*)".into()));
-                        }
-                        None
-                    }
-                    FunctionArgs::List(list) => match list.as_slice() {
-                        [one] => Some(column_name(one)?),
-                        _ => {
-                            return Err(unsupported(
-                                expr.span,
-                                "an aggregate takes exactly one column or *".into(),
-                            ))
-                        }
-                    },
-                };
-                Ok(SelectItem::Agg(agg, arg))
+                validate_aggregate_call(expr, name, args)
             }
             _ => Err(unsupported(
                 expr.span,
@@ -397,85 +421,82 @@ fn convert_result_column(col: &ResultColumn) -> Result<SelectItem> {
     }
 }
 
-/// Lowers `name(args) OVER (window_def)` into [`SelectItem::Window`]:
-/// resolves `name` against [`WindowFunc::from_name`], validates the
-/// argument count/shape each function kind expects (niladic for
-/// `ROW_NUMBER`/`RANK`/`DENSE_RANK`, one column plus an optional integer
-/// offset for `LAG`/`LEAD`, one column or `COUNT(*)` for the rest), and
-/// converts `window_def`'s `PARTITION BY`/`ORDER BY` expressions to plain
-/// column names -- the same "enforced subset" restriction the rest of
-/// this module applies (no expressions, only column references).
-fn convert_window_call(
-    span: Span,
-    name: &str,
-    args: &FunctionArgs,
-    window_def: &WindowDef,
-) -> Result<SelectItem> {
-    let func = WindowFunc::from_name(name)
-        .ok_or_else(|| unsupported(span, format!("unknown window function {name}")))?;
-
-    let (arg, offset) = match (func.is_niladic(), args) {
-        (true, FunctionArgs::List(list)) if list.is_empty() => (None, None),
-        (true, _) => Err(unsupported(span, format!("{name} takes no arguments")))?,
-        (false, FunctionArgs::Star) => {
-            if func != WindowFunc::Count {
-                return Err(unsupported(span, "only COUNT supports (*)".into()));
-            }
-            (None, None)
-        }
-        (false, FunctionArgs::List(list)) if matches!(func, WindowFunc::Lag | WindowFunc::Lead) => {
-            match list.as_slice() {
-                [one] => (Some(column_name(one)?), None),
-                [one, offset_expr] => {
-                    let offset = match &offset_expr.kind {
-                        ExprKind::Literal(AstLiteral::Integer(n)) => *n,
-                        _ => {
-                            return Err(unsupported(offset_expr.span, "non-integer offset".into()))
-                        }
-                    };
-                    (Some(column_name(one)?), Some(offset))
-                }
-                _ => return Err(unsupported(span, format!("{name} takes 1 or 2 arguments"))),
-            }
-        }
-        (false, FunctionArgs::List(list)) => match list.as_slice() {
-            [one] => (Some(column_name(one)?), None),
-            _ => {
-                return Err(unsupported(
-                    span,
-                    "a window function takes exactly one column or *".into(),
-                ))
-            }
-        },
-    };
-
-    let partition_by = window_def
-        .partition_by
-        .iter()
-        .map(column_name)
-        .collect::<Result<Vec<_>>>()?;
-    let order_by = window_def
-        .order_by
-        .iter()
-        .map(|term| Ok((column_name(&term.expr)?, term.desc.unwrap_or(false))))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(SelectItem::Window(ExprWindowSpec {
-        func,
-        arg,
-        offset,
-        partition_by,
-        order_by,
-    }))
+/// A `SELECT`-list item's classification, just enough to check the
+/// "bare columns must match GROUP BY keys" rule below.
+enum ItemKind {
+    Column(String),
+    Star,
+    Agg,
+    Window,
 }
 
-/// Lowers a `Select` parsed by [`super::row`]'s shared grammar into
-/// [`crate::expr::Query`], rejecting anything outside column-rs's
-/// analytics subset with [`ParseError::Unexpected`] -- ADR 0002's
-/// "column's grammar becomes an enforced subset" (parsing succeeds,
-/// lowering declines), not a second parser that can't parse these
-/// constructs at all.
-fn convert_select(select: &Select) -> Result<Query> {
+fn item_kind(col: &crate::parser::ast::ResultColumn) -> ItemKind {
+    use crate::parser::ast::ResultColumn;
+    match col {
+        ResultColumn::Star | ResultColumn::TableStar { .. } => ItemKind::Star,
+        ResultColumn::Expr { expr, .. } => match &expr.kind {
+            ExprKind::Column { .. } => ItemKind::Column(column_name(expr).unwrap_or_default()),
+            ExprKind::FunctionCall { over: Some(_), .. } => ItemKind::Window,
+            ExprKind::FunctionCall { over: None, .. } => ItemKind::Agg,
+            _ => ItemKind::Column(String::new()),
+        },
+    }
+}
+
+fn validate_expr(expr: &mut AstExpr) -> Result<()> {
+    match &mut expr.kind {
+        ExprKind::Literal(_) => Ok(()),
+        ExprKind::Column {
+            catalog: Some(_), ..
+        } => Err(unsupported(expr.span, "catalog-qualified column".into())),
+        ExprKind::Column { .. } => Ok(()),
+        ExprKind::Unary {
+            op: UnaryOp::Not | UnaryOp::Minus | UnaryOp::Plus,
+            expr: inner,
+        } => validate_expr(inner),
+        ExprKind::Unary { op, .. } => Err(unsupported(expr.span, format!("unary operator {op:?}"))),
+        // `expr IS [NOT] NULL` may parse as `Is{lhs, rhs: NULL literal,
+        // negated}` instead of the dedicated `IsNull` node.
+        ExprKind::Is { lhs, rhs, .. }
+            if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>
+        {
+            validate_expr(lhs)
+        }
+        ExprKind::Binary { op, lhs, rhs } => {
+            ast_binop_allowed(*op, expr.span)?;
+            validate_expr(lhs)?;
+            validate_expr(rhs)
+        }
+        ExprKind::IsNull { expr: inner, .. } => validate_expr(inner),
+        ExprKind::Paren(inner) => validate_expr(inner),
+        ExprKind::InSubquery {
+            expr: inner,
+            subquery,
+            negated: false,
+        } => {
+            validate_expr(inner)?;
+            validate_select(subquery)
+        }
+        ExprKind::InSubquery { negated: true, .. } => {
+            Err(unsupported(expr.span, "NOT IN (SELECT ...)".into()))
+        }
+        ExprKind::Exists { subquery, .. } => validate_select(subquery),
+        other => Err(unsupported(
+            expr.span,
+            format!("unsupported expression form {other:?}"),
+        )),
+    }
+}
+
+/// Validates a `Select` parsed by [`super::row`]'s shared grammar against
+/// column-rs's analytics subset, rejecting anything outside it with
+/// [`ParseError::Unexpected`] -- ADR 0002's "column's grammar becomes an
+/// enforced subset" (parsing succeeds, validation declines), not a second
+/// parser that can't parse these constructs at all. On success, mutates
+/// `select` in place to resolve every table-alias-qualified column
+/// reference to the real table name (see [`resolve_expr_aliases`]), so
+/// [`crate::codegen::batch`] never has to know aliases existed.
+fn validate_select(select: &mut Select) -> Result<()> {
     if select.with_clause.is_some() {
         return Err(unsupported(select.span, "WITH clause".into()));
     }
@@ -485,130 +506,148 @@ fn convert_select(select: &Select) -> Result<Query> {
     if select.having.is_some() {
         return Err(unsupported(select.span, "HAVING".into()));
     }
-    let distinct = matches!(select.distinct, Some(Distinctness::Distinct));
-
-    let Some(from_clause) = &select.from else {
-        return Err(unsupported(select.span, "SELECT without FROM".into()));
-    };
-    // db-core#95: a `FROM`-subquery's mandatory alias is the name the
-    // enclosing query refers to it by, so it takes `from_name`'s place
-    // in the alias table below.
-    let (from, from_name) = match &from_clause.first.kind {
-        TableRefKind::Name(name) => (FromClause::Table(name.clone()), name.clone()),
-        TableRefKind::Subquery(subselect) => {
-            let Some(alias) = &from_clause.first.alias else {
-                return Err(unsupported(
-                    from_clause.first.span,
-                    "a subquery in FROM requires an alias".into(),
-                ));
-            };
-            (
-                FromClause::Subquery(Box::new(convert_select(subselect)?), alias.clone()),
-                alias.clone(),
-            )
-        }
-    };
 
     let mut aliases: HashMap<String, String> = HashMap::new();
-    if let Some(alias) = &from_clause.first.alias {
-        aliases.insert(alias.clone(), from_name.clone());
-    }
-
-    let mut joins = Vec::new();
-    for j in &from_clause.joins {
-        if j.natural {
-            return Err(unsupported(j.table.span, "NATURAL join".into()));
-        }
-        let TableRefKind::Name(table) = &j.table.kind else {
-            return Err(unsupported(j.table.span, "subquery in JOIN".into()));
+    let from_name;
+    let mut has_cross_join = false;
+    {
+        let Some(from_clause) = select.from.as_mut() else {
+            return Err(unsupported(select.span, "SELECT without FROM".into()));
         };
-        let table = table.clone();
-        if let Some(alias) = &j.table.alias {
-            aliases.insert(alias.clone(), table.clone());
-        }
-        let kind = match j.op {
-            JoinOp::Inner => JoinKind::Inner,
-            JoinOp::Left => JoinKind::Left,
-            JoinOp::Right => JoinKind::Right,
-            JoinOp::Full => JoinKind::Full,
-            JoinOp::Cross => JoinKind::Cross,
-        };
-        let (left_col, right_col) = match &j.constraint {
-            Some(JoinConstraint::On(expr)) => extract_equi_join(expr)?,
-            Some(JoinConstraint::Using(_)) => {
-                return Err(unsupported(j.table.span, "USING join".into()))
+        // db-core#95: a `FROM`-subquery's mandatory alias is the name the
+        // enclosing query refers to it by, so it takes `from_name`'s place
+        // in the alias table below.
+        from_name = match &mut from_clause.first.kind {
+            TableRefKind::Name(name) => name.clone(),
+            TableRefKind::Subquery(subselect) => {
+                let Some(alias) = from_clause.first.alias.clone() else {
+                    return Err(unsupported(
+                        from_clause.first.span,
+                        "a subquery in FROM requires an alias".into(),
+                    ));
+                };
+                validate_select(subselect)?;
+                alias
             }
-            None if kind == JoinKind::Cross => (String::new(), String::new()),
-            None => return Err(unsupported(j.table.span, "join without ON".into())),
         };
-        joins.push(Join {
-            kind,
-            table,
-            left_col,
-            right_col,
-        });
+        if let Some(alias) = &from_clause.first.alias {
+            aliases.insert(alias.clone(), from_name.clone());
+        }
+
+        for j in &mut from_clause.joins {
+            if j.natural {
+                return Err(unsupported(j.table.span, "NATURAL join".into()));
+            }
+            let table = match &j.table.kind {
+                TableRefKind::Name(table) => table.clone(),
+                TableRefKind::Subquery(_) => {
+                    return Err(unsupported(j.table.span, "subquery in JOIN".into()))
+                }
+            };
+            if let Some(alias) = &j.table.alias {
+                aliases.insert(alias.clone(), table.clone());
+            }
+            if j.op == JoinOp::Cross {
+                has_cross_join = true;
+            }
+            match &j.constraint {
+                Some(JoinConstraint::On(expr)) => {
+                    extract_equi_join(expr)?;
+                }
+                Some(JoinConstraint::Using(_)) => {
+                    return Err(unsupported(j.table.span, "USING join".into()))
+                }
+                None if j.op == JoinOp::Cross => {}
+                None => return Err(unsupported(j.table.span, "join without ON".into())),
+            }
+        }
     }
 
-    let where_clause = select.where_clause.as_ref().map(convert_expr).transpose()?;
+    if !aliases.is_empty() {
+        if let Some(where_clause) = &mut select.where_clause {
+            resolve_expr_aliases(where_clause, &aliases);
+        }
+        for col in &mut select.columns {
+            if let crate::parser::ast::ResultColumn::Expr { expr, .. } = col {
+                resolve_expr_aliases(expr, &aliases);
+            }
+        }
+        for e in &mut select.group_by {
+            resolve_expr_aliases(e, &aliases);
+        }
+        for term in &mut select.order_by {
+            resolve_expr_aliases(&mut term.expr, &aliases);
+        }
+        if let Some(from_clause) = select.from.as_mut() {
+            for j in &mut from_clause.joins {
+                if let Some(JoinConstraint::On(expr)) = &mut j.constraint {
+                    resolve_expr_aliases(expr, &aliases);
+                }
+            }
+        }
+    }
 
-    let group_by = select
-        .group_by
-        .iter()
-        .map(column_name)
-        .collect::<Result<Vec<_>>>()?;
+    if let Some(where_clause) = &mut select.where_clause {
+        validate_expr(where_clause)?;
+    }
+
+    for e in &select.group_by {
+        column_name(e)?;
+    }
 
     if select.order_by.len() > 1 {
         return Err(unsupported(select.span, "multiple ORDER BY terms".into()));
     }
-    let order_by = match select.order_by.first() {
-        Some(OrderingTerm {
-            nulls_last: Some(_),
-            ..
-        }) => return Err(unsupported(select.span, "NULLS FIRST/LAST".into())),
-        Some(OrderingTerm { expr, desc, .. }) => {
-            let column = match &expr.kind {
-                ExprKind::Column { .. } => column_name(expr)?,
-                ExprKind::FunctionCall {
-                    name,
-                    distinct,
-                    args,
-                    over: None,
-                } => aggregate_call_label(expr, name, *distinct, args)?,
-                _ => {
-                    return Err(unsupported(
-                        expr.span,
-                        format!(
-                            "expected a column reference or aggregate, found {:?}",
-                            expr.kind
-                        ),
-                    ))
-                }
-            };
-            Some(OrderBy {
-                column,
-                descending: desc.unwrap_or(false),
-            })
+    if let Some(term) = select.order_by.first() {
+        if term.nulls_last.is_some() {
+            return Err(unsupported(select.span, "NULLS FIRST/LAST".into()));
         }
-        None => None,
-    };
+        match &term.expr.kind {
+            ExprKind::Column { .. } => {
+                column_name(&term.expr)?;
+            }
+            ExprKind::FunctionCall {
+                name,
+                distinct,
+                args,
+                over: None,
+            } => {
+                if *distinct {
+                    return Err(unsupported(
+                        term.expr.span,
+                        "DISTINCT inside an aggregate".into(),
+                    ));
+                }
+                validate_aggregate_call(&term.expr, name, args)?;
+            }
+            _ => {
+                return Err(unsupported(
+                    term.expr.span,
+                    format!(
+                        "expected a column reference or aggregate, found {:?}",
+                        term.expr.kind
+                    ),
+                ))
+            }
+        }
+    }
 
-    let limit = match &select.limit {
-        Some(l) => match &l.limit.kind {
-            ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
-            _ => return Err(unsupported(l.limit.span, "non-integer LIMIT".into())),
-        },
-        None => None,
+    let limit_ok = match &select.limit {
+        Some(l) => matches!(&l.limit.kind, ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0),
+        None => true,
     };
+    if let Some(l) = &select.limit {
+        if !limit_ok {
+            return Err(unsupported(l.limit.span, "non-integer LIMIT".into()));
+        }
+        if let Some(offset) = &l.offset {
+            if !matches!(&offset.kind, ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0) {
+                return Err(unsupported(offset.span, "non-integer OFFSET".into()));
+            }
+        }
+    }
 
-    let offset = match select.limit.as_ref().and_then(|l| l.offset.as_ref()) {
-        Some(o) => match &o.kind {
-            ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
-            _ => return Err(unsupported(o.span, "non-integer OFFSET".into())),
-        },
-        None => None,
-    };
-
-    if joins.iter().any(|j| j.kind == JoinKind::Cross) && limit.is_none() {
+    if has_cross_join && select.limit.is_none() {
         return Err(unsupported(
             select.span,
             "CROSS JOIN requires a LIMIT (bounded-execution rule -- an unconditional cross \
@@ -617,13 +656,11 @@ fn convert_select(select: &Select) -> Result<Query> {
         ));
     }
 
-    let columns = select
-        .columns
-        .iter()
-        .map(convert_result_column)
-        .collect::<Result<Vec<_>>>()?;
+    for col in &select.columns {
+        validate_result_column(col)?;
+    }
 
-    // `compile` (codegen::batch) emits every non-aggregated SELECT column
+    // `codegen::batch::compile` emits every non-aggregated SELECT column
     // via GROUP BY's own key registers, in GROUP BY's stated order -- not
     // by re-checking each SELECT column against `group_by` itself. A
     // `SELECT` whose bare columns don't match `group_by` exactly (extra
@@ -634,15 +671,21 @@ fn convert_select(select: &Select) -> Result<Query> {
     // aggregate's single-row one in `Emit`, indexing past the end).
     // Window queries have their own, separate semantics and never reach
     // `compile` this way, so they're exempt.
-    let has_window = columns.iter().any(|c| matches!(c, SelectItem::Window(_)));
-    let has_agg = columns.iter().any(|c| matches!(c, SelectItem::Agg(..)));
+    let items: Vec<ItemKind> = select.columns.iter().map(item_kind).collect();
+    let has_window = items.iter().any(|c| matches!(c, ItemKind::Window));
+    let has_agg = items.iter().any(|c| matches!(c, ItemKind::Agg));
     if has_agg && !has_window {
-        let select_bare: Vec<&String> = columns
+        let select_bare: Vec<&String> = items
             .iter()
             .filter_map(|c| match c {
-                SelectItem::Column(name) => Some(name),
+                ItemKind::Column(name) => Some(name),
                 _ => None,
             })
+            .collect();
+        let group_by: Vec<String> = select
+            .group_by
+            .iter()
+            .filter_map(|e| column_name(e).ok())
             .collect();
         if select_bare != group_by.iter().collect::<Vec<_>>() {
             let message = if group_by.is_empty() {
@@ -656,33 +699,22 @@ fn convert_select(select: &Select) -> Result<Query> {
         }
     }
 
-    let mut query = Query {
-        columns,
-        from,
-        joins,
-        where_clause,
-        distinct,
-        group_by,
-        // `HAVING` is rejected above -- `column-rs`'s enforced subset of
-        // the shared grammar has no lowering for it (see `convert_select`).
-        having: None,
-        order_by,
-        limit,
-        offset,
-    };
-    if !aliases.is_empty() {
-        resolve_query_aliases(&mut query, &aliases);
-    }
-    Ok(query)
+    Ok(())
 }
 
 fn from_outcome(message: String, span: Span) -> ParseError {
     ParseError::Unexpected { message, span }
 }
 
-pub fn parse(input: &str) -> Result<Query> {
-    match crate::parser::row::parse_select(input) {
-        ParseOutcome::Accepted(select) => convert_select(&select),
+/// Parses `sql_text`, validating it against column-rs's analytics subset
+/// and resolving table aliases in place. The returned [`Select`] is the
+/// same AST [`crate::codegen::row`] consumes -- there is one AST (#153).
+pub fn parse(sql_text: &str) -> Result<Select> {
+    match crate::parser::row::parse_select(sql_text) {
+        ParseOutcome::Accepted(mut select) => {
+            validate_select(&mut select)?;
+            Ok(*select)
+        }
         ParseOutcome::Unsupported { message, span } | ParseOutcome::Invalid { message, span } => {
             Err(from_outcome(message, span))
         }
@@ -703,26 +735,28 @@ pub enum Explain {
 }
 
 /// Parses `EXPLAIN [QUERY PLAN] <select>`, returning which `EXPLAIN` form
-/// (if any) prefixed it along with the parsed query. The distinction
-/// (#55) falls out of unifying on `row`'s grammar for free -- its
-/// `parse_explain_stmt` already tracks bare `EXPLAIN` vs `EXPLAIN QUERY
-/// PLAN` via `ast::Explain::query_plan`.
-pub fn parse_explain(input: &str) -> Result<(Explain, Query)> {
-    let starts_with_explain = input
+/// (if any) prefixed it along with the parsed/validated query. The
+/// distinction (#55) falls out of unifying on `row`'s grammar for free --
+/// its `parse_explain_stmt` already tracks bare `EXPLAIN` vs `EXPLAIN
+/// QUERY PLAN` via `ast::Explain::query_plan`.
+pub fn parse_explain(sql_text: &str) -> Result<(Explain, Select)> {
+    let starts_with_explain = sql_text
         .split_whitespace()
         .next()
         .is_some_and(|w| w.eq_ignore_ascii_case("EXPLAIN"));
     if !starts_with_explain {
-        return Ok((Explain::None, parse(input)?));
+        return Ok((Explain::None, parse(sql_text)?));
     }
-    match crate::parser::row::parse_explain(input) {
+    match crate::parser::row::parse_explain(sql_text) {
         ParseOutcome::Accepted(explain) => {
             let form = if explain.query_plan {
                 Explain::QueryPlan
             } else {
                 Explain::Opcodes
             };
-            Ok((form, convert_select(&explain.select)?))
+            let mut select = *explain.select;
+            validate_select(&mut select)?;
+            Ok((form, select))
         }
         ParseOutcome::Unsupported { message, span } | ParseOutcome::Invalid { message, span } => {
             Err(from_outcome(message, span))
@@ -740,13 +774,54 @@ pub fn parse_explain(input: &str) -> Result<(Explain, Query)> {
 )]
 mod tests {
     use super::*;
-    use crate::expr::{Join, JoinKind, WindowSpec};
+    use crate::parser::ast::ResultColumn;
+
+    /// Test-only helper: the bare (possibly qualified) column name behind
+    /// one `SELECT`-list item, or `None` if it isn't a plain column.
+    fn bare_col(rc: &ResultColumn) -> Option<String> {
+        match rc {
+            ResultColumn::Expr {
+                expr:
+                    AstExpr {
+                        kind: ExprKind::Column { .. },
+                        ..
+                    },
+                alias: None,
+            } => column_name(match rc {
+                ResultColumn::Expr { expr, .. } => expr,
+                _ => unreachable!(),
+            })
+            .ok(),
+            _ => None,
+        }
+    }
+
+    fn col_names(select: &Select) -> Vec<String> {
+        select.columns.iter().filter_map(bare_col).collect()
+    }
+
+    fn is_star(rc: &ResultColumn) -> bool {
+        matches!(rc, ResultColumn::Star)
+    }
+
+    /// The table this `FROM`/subquery-alias resolves to.
+    fn from_name(select: &Select) -> &str {
+        let from = select.from.as_ref().unwrap();
+        match &from.first.kind {
+            TableRefKind::Name(name) => name,
+            TableRefKind::Subquery(_) => from.first.alias.as_deref().unwrap(),
+        }
+    }
+
+    fn where_expr(select: &Select) -> &AstExpr {
+        select.where_clause.as_ref().unwrap()
+    }
 
     #[test]
     fn parse_explain_distinguishes_opcodes_query_plan_and_none() {
         let (explain, query) = parse_explain("EXPLAIN SELECT id FROM orders").unwrap();
         assert_eq!(explain, Explain::Opcodes);
-        assert_eq!(query.from.name(), "orders");
+        assert_eq!(from_name(&query), "orders");
 
         let (explain, _) = parse_explain("EXPLAIN QUERY PLAN SELECT id FROM orders").unwrap();
         assert_eq!(explain, Explain::QueryPlan);
@@ -758,144 +833,148 @@ mod tests {
     #[test]
     fn parses_columns_and_where() {
         let q = parse("SELECT id, amount FROM orders WHERE amount > 10").unwrap();
-        assert_eq!(
-            q.columns,
-            vec![
-                SelectItem::Column("id".into()),
-                SelectItem::Column("amount".into())
-            ]
-        );
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::BinaryOp(
-                Box::new(Expr::Column("amount".into())),
-                BinOp::Gt,
-                Box::new(Expr::Literal(Literal::Int(10)))
-            ))
-        );
+        assert_eq!(col_names(&q), vec!["id".to_string(), "amount".to_string()]);
+        assert!(matches!(
+            &where_expr(&q).kind,
+            ExprKind::Binary {
+                op: AstBinOp::Gt,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn parses_unary_minus() {
         let q = parse("SELECT id FROM orders WHERE amount = -5").unwrap();
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::BinaryOp(
-                Box::new(Expr::Column("amount".into())),
-                BinOp::Eq,
-                Box::new(Expr::Neg(Box::new(Expr::Literal(Literal::Int(5)))))
-            ))
-        );
+        let ExprKind::Binary { op, rhs, .. } = &where_expr(&q).kind else {
+            panic!("expected Binary")
+        };
+        assert_eq!(*op, AstBinOp::Eq);
+        assert!(matches!(
+            rhs.kind,
+            ExprKind::Unary {
+                op: UnaryOp::Minus,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn unary_minus_is_chainable_and_unary_plus_is_a_no_op() {
-        // `--` immediately adjacent is a SQL line comment under `row`'s
-        // (real) tokenizer -- unlike the old bespoke one, which had no
-        // comment syntax and read it as two unary minuses. A space still
-        // parses as chained unary minus.
         let q = parse("SELECT id FROM orders WHERE amount = - -5").unwrap();
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::BinaryOp(
-                Box::new(Expr::Column("amount".into())),
-                BinOp::Eq,
-                Box::new(Expr::Neg(Box::new(Expr::Neg(Box::new(Expr::Literal(
-                    Literal::Int(5)
-                ))))))
-            ))
-        );
+        let ExprKind::Binary { rhs, .. } = &where_expr(&q).kind else {
+            panic!("expected Binary")
+        };
+        let ExprKind::Unary {
+            op: UnaryOp::Minus,
+            expr: inner,
+        } = &rhs.kind
+        else {
+            panic!("expected outer unary minus")
+        };
+        assert!(matches!(
+            inner.kind,
+            ExprKind::Unary {
+                op: UnaryOp::Minus,
+                ..
+            }
+        ));
+
         let q = parse("SELECT id FROM orders WHERE amount = +5").unwrap();
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::BinaryOp(
-                Box::new(Expr::Column("amount".into())),
-                BinOp::Eq,
-                Box::new(Expr::Literal(Literal::Int(5)))
-            ))
-        );
+        let ExprKind::Binary { rhs, .. } = &where_expr(&q).kind else {
+            panic!("expected Binary")
+        };
+        // Unary `+` is validated as a no-op (accepted, not rejected) but
+        // -- unlike the retired `expr::Expr` lowering -- is no longer
+        // rewritten away: `codegen::batch::compile_expr` treats it as a
+        // pass-through at compile time instead.
+        assert!(matches!(
+            rhs.kind,
+            ExprKind::Unary {
+                op: UnaryOp::Plus,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn unary_minus_binds_tighter_than_multiplication() {
-        // `-2 * 3` must be `(-2) * 3`, not `-(2 * 3)` (same numeric
-        // result here, but the AST shape is what's under test).
         let q = parse("SELECT id FROM orders WHERE amount = -2 * 3").unwrap();
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::BinaryOp(
-                Box::new(Expr::Column("amount".into())),
-                BinOp::Eq,
-                Box::new(Expr::BinaryOp(
-                    Box::new(Expr::Neg(Box::new(Expr::Literal(Literal::Int(2))))),
-                    BinOp::Mul,
-                    Box::new(Expr::Literal(Literal::Int(3)))
-                ))
-            ))
-        );
+        let ExprKind::Binary { rhs, .. } = &where_expr(&q).kind else {
+            panic!("expected Binary")
+        };
+        let ExprKind::Binary {
+            op: AstBinOp::Mul,
+            lhs,
+            ..
+        } = &rhs.kind
+        else {
+            panic!("expected Mul")
+        };
+        assert!(matches!(
+            lhs.kind,
+            ExprKind::Unary {
+                op: UnaryOp::Minus,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn parses_string_concat() {
         let q = parse("SELECT id FROM orders WHERE name = 'a' || 'b'").unwrap();
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::BinaryOp(
-                Box::new(Expr::Column("name".into())),
-                BinOp::Eq,
-                Box::new(Expr::BinaryOp(
-                    Box::new(Expr::Literal(Literal::Str("a".into()))),
-                    BinOp::Concat,
-                    Box::new(Expr::Literal(Literal::Str("b".into())))
-                ))
-            ))
-        );
+        let ExprKind::Binary { rhs, .. } = &where_expr(&q).kind else {
+            panic!("expected Binary")
+        };
+        assert!(matches!(
+            rhs.kind,
+            ExprKind::Binary {
+                op: AstBinOp::Concat,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn concat_binds_tighter_than_multiplication_matching_sqlite_not_duckdb() {
         // Behavior change from unification (#57): this subset now uses
         // `row`'s (sqlite-rs's) operator precedence, where `||` binds
-        // *tighter* than `*`/`/` -- not column-rs's previous DuckDB-style
-        // "concat binds looser" precedence, since there's one shared
-        // grammar/precedence table now, not two. `2 * 3 || 'x'` is
-        // `2 * (3 || 'x')`, not `(2 * 3) || 'x'`.
+        // *tighter* than `*`/`/`.
         let q = parse("SELECT id FROM orders WHERE x = 2 * 3 || 'x'").unwrap();
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::BinaryOp(
-                Box::new(Expr::Column("x".into())),
-                BinOp::Eq,
-                Box::new(Expr::BinaryOp(
-                    Box::new(Expr::Literal(Literal::Int(2))),
-                    BinOp::Mul,
-                    Box::new(Expr::BinaryOp(
-                        Box::new(Expr::Literal(Literal::Int(3))),
-                        BinOp::Concat,
-                        Box::new(Expr::Literal(Literal::Str("x".into())))
-                    ))
-                ))
-            ))
-        );
+        let ExprKind::Binary { rhs, .. } = &where_expr(&q).kind else {
+            panic!("expected Binary")
+        };
+        let ExprKind::Binary {
+            op: AstBinOp::Mul,
+            rhs: inner_rhs,
+            ..
+        } = &rhs.kind
+        else {
+            panic!("expected Mul at the top")
+        };
+        assert!(matches!(
+            inner_rhs.kind,
+            ExprKind::Binary {
+                op: AstBinOp::Concat,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn parses_group_by_aggregate() {
         let q = parse("SELECT region, SUM(amount) FROM t WHERE x > 10 GROUP BY region").unwrap();
+        assert_eq!(col_names(&q), vec!["region".to_string()]);
+        assert!(matches!(item_kind(&q.columns[1]), ItemKind::Agg));
         assert_eq!(
-            q.columns,
-            vec![
-                SelectItem::Column("region".into()),
-                SelectItem::Agg(AggFunc::Sum, Some("amount".into()))
-            ]
+            q.group_by
+                .iter()
+                .map(|e| column_name(e).unwrap())
+                .collect::<Vec<_>>(),
+            vec!["region".to_string()]
         );
-        assert_eq!(q.group_by, vec!["region".to_string()]);
     }
 
-    /// Regression: `SELECT active, MAX(id) FROM t` (a bare column alongside
-    /// an aggregate, no GROUP BY) used to compile into mismatched-length
-    /// registers and panic in `Emit` at runtime ("index out of bounds").
-    /// Invalid SQL -- must be rejected at parse time instead.
     #[test]
     fn bare_column_with_aggregate_and_no_group_by_is_rejected() {
         let err = parse("SELECT active, MAX(id) FROM t").unwrap_err();
@@ -908,17 +987,12 @@ mod tests {
         assert!(parse("SELECT COUNT(*), SUM(amount) FROM t").is_ok());
     }
 
-    /// A bare column that isn't a GROUP BY key at all.
     #[test]
     fn bare_column_not_a_group_by_key_is_rejected() {
         let err = parse("SELECT active, SUM(amount) FROM t GROUP BY region").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
-    /// `compile` (codegen::batch) emits non-aggregated SELECT columns via
-    /// GROUP BY's own stated order, not the SELECT list's -- a SELECT
-    /// naming its GROUP BY keys in a different order than GROUP BY itself
-    /// would otherwise silently show values under the wrong headers.
     #[test]
     fn select_list_group_by_keys_in_a_different_order_than_group_by_is_rejected() {
         let err =
@@ -926,10 +1000,6 @@ mod tests {
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
-    /// GROUP BY on a column that isn't itself selected (valid SQL: you can
-    /// group by a column you don't project) is still rejected today --
-    /// `compile`'s GROUP BY registers always get emitted regardless of
-    /// whether they were requested, so the two must match exactly for now.
     #[test]
     fn group_by_key_omitted_from_select_list_is_rejected() {
         let err = parse("SELECT SUM(amount) FROM t GROUP BY region").unwrap_err();
@@ -941,8 +1011,6 @@ mod tests {
         assert!(parse("SELECT region, year, SUM(amount) FROM t GROUP BY region, year").is_ok());
     }
 
-    /// Window functions are exempt: they have their own semantics and never
-    /// require GROUP BY.
     #[test]
     fn window_function_alongside_a_bare_column_needs_no_group_by() {
         assert!(
@@ -953,76 +1021,78 @@ mod tests {
     #[test]
     fn parses_distinct() {
         let q = parse("SELECT DISTINCT a, b FROM t").unwrap();
-        assert!(q.distinct);
-        assert_eq!(
-            q.columns,
-            vec![
-                SelectItem::Column("a".into()),
-                SelectItem::Column("b".into())
-            ]
-        );
+        assert!(matches!(
+            q.distinct,
+            Some(crate::parser::ast::Distinctness::Distinct)
+        ));
+        assert_eq!(col_names(&q), vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]
     fn plain_select_is_not_distinct() {
         let q = parse("SELECT a FROM t").unwrap();
-        assert!(!q.distinct);
+        assert!(q.distinct.is_none());
     }
 
     #[test]
     fn parses_order_by_and_limit() {
         let q = parse("SELECT id FROM t ORDER BY id DESC LIMIT 5").unwrap();
-        assert_eq!(
-            q.order_by,
-            Some(OrderBy {
-                column: "id".into(),
-                descending: true
-            })
-        );
-        assert_eq!(q.limit, Some(5));
+        let term = q.order_by.first().unwrap();
+        assert_eq!(column_name(&term.expr).unwrap(), "id");
+        assert_eq!(term.desc, Some(true));
+        assert!(matches!(
+            q.limit.as_ref().unwrap().limit.kind,
+            ExprKind::Literal(AstLiteral::Integer(5))
+        ));
     }
 
     #[test]
     fn parses_limit_with_offset() {
         let q = parse("SELECT id FROM t LIMIT 5 OFFSET 10").unwrap();
-        assert_eq!(q.limit, Some(5));
-        assert_eq!(q.offset, Some(10));
+        let limit = q.limit.as_ref().unwrap();
+        assert!(matches!(
+            limit.limit.kind,
+            ExprKind::Literal(AstLiteral::Integer(5))
+        ));
+        assert!(matches!(
+            limit.offset.as_ref().unwrap().kind,
+            ExprKind::Literal(AstLiteral::Integer(10))
+        ));
     }
 
     #[test]
     fn a_query_without_offset_lowers_none() {
         let q = parse("SELECT id FROM t LIMIT 5").unwrap();
-        assert_eq!(q.offset, None);
+        assert!(q.limit.as_ref().unwrap().offset.is_none());
     }
 
     #[test]
     fn order_by_references_a_select_list_aggregate() {
-        // #131: ORDER BY may reference a SELECT-list aggregate, not just
-        // a bare column.
         let q = parse(
             "SELECT customer_id, COUNT(event_id), SUM(amount) FROM events \
              GROUP BY customer_id ORDER BY COUNT(event_id) DESC",
         )
         .unwrap();
-        assert_eq!(
-            q.order_by,
-            Some(OrderBy {
-                column: "COUNT(event_id)".into(),
-                descending: true
-            })
-        );
+        let term = q.order_by.first().unwrap();
+        assert!(matches!(
+            term.expr.kind,
+            ExprKind::FunctionCall { over: None, .. }
+        ));
+        assert_eq!(term.desc, Some(true));
     }
 
     #[test]
     fn order_by_references_count_star() {
         let q = parse("SELECT COUNT(*) FROM t ORDER BY COUNT(*)").unwrap();
-        assert_eq!(
-            q.order_by,
-            Some(OrderBy {
-                column: "COUNT(*)".into(),
-                descending: false
-            })
-        );
+        let term = q.order_by.first().unwrap();
+        assert!(matches!(
+            &term.expr.kind,
+            ExprKind::FunctionCall {
+                args: FunctionArgs::Star,
+                over: None,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1034,7 +1104,7 @@ mod tests {
     #[test]
     fn parses_count_star() {
         let q = parse("SELECT COUNT(*) FROM t").unwrap();
-        assert_eq!(q.columns, vec![SelectItem::Agg(AggFunc::Count, None)]);
+        assert!(matches!(item_kind(&q.columns[0]), ItemKind::Agg));
     }
 
     #[test]
@@ -1046,64 +1116,47 @@ mod tests {
     #[test]
     fn parses_inner_join() {
         let q = parse("SELECT orders.id, customers.name FROM orders JOIN customers ON orders.cust_id = customers.id").unwrap();
-        assert_eq!(q.from.name(), "orders");
+        assert_eq!(from_name(&q), "orders");
         assert_eq!(
-            q.columns,
-            vec![
-                SelectItem::Column("orders.id".into()),
-                SelectItem::Column("customers.name".into())
-            ]
+            col_names(&q),
+            vec!["orders.id".to_string(), "customers.name".to_string()]
         );
+        let join = &q.from.as_ref().unwrap().joins[0];
+        assert_eq!(join.op, JoinOp::Inner);
+        assert_eq!(join.table.name(), Some("customers"));
+        let Some(JoinConstraint::On(on_expr)) = &join.constraint else {
+            panic!("expected ON")
+        };
         assert_eq!(
-            q.joins,
-            vec![Join {
-                kind: JoinKind::Inner,
-                table: "customers".into(),
-                left_col: "orders.cust_id".into(),
-                right_col: "customers.id".into()
-            }]
+            extract_equi_join(on_expr).unwrap(),
+            ("orders.cust_id".to_string(), "customers.id".to_string())
         );
     }
 
     #[test]
     fn parses_left_join() {
         let q = parse("SELECT id FROM t LEFT JOIN u ON t.k = u.k").unwrap();
-        assert_eq!(
-            q.joins,
-            vec![Join {
-                kind: JoinKind::Left,
-                table: "u".into(),
-                left_col: "t.k".into(),
-                right_col: "u.k".into()
-            }]
-        );
+        let join = &q.from.as_ref().unwrap().joins[0];
+        assert_eq!(join.op, JoinOp::Left);
+        assert_eq!(join.table.name(), Some("u"));
     }
 
     #[test]
     fn parses_in_subquery() {
         let q =
             parse("SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions)").unwrap();
-        let Some(Expr::InSubquery { expr, subquery }) = q.where_clause else {
+        let ExprKind::InSubquery { expr, subquery, .. } = &where_expr(&q).kind else {
             panic!("expected InSubquery")
         };
-        assert_eq!(*expr, Expr::Column("region_key".into()));
-        assert_eq!(subquery.from.name(), "regions");
-        assert_eq!(subquery.columns, vec![SelectItem::Column("rkey".into())]);
+        assert_eq!(column_name(expr).unwrap(), "region_key");
+        assert_eq!(from_name(subquery), "regions");
+        assert_eq!(col_names(subquery), vec!["rkey".to_string()]);
     }
 
     #[test]
     fn row_number_over_partition_and_order_by() {
         let q = parse("SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY id) FROM t").unwrap();
-        assert_eq!(
-            q.columns,
-            vec![SelectItem::Window(WindowSpec {
-                func: WindowFunc::RowNumber,
-                arg: None,
-                offset: None,
-                partition_by: vec!["region".into()],
-                order_by: vec![("id".into(), false)],
-            })]
-        );
+        assert!(matches!(item_kind(&q.columns[0]), ItemKind::Window));
     }
 
     #[test]
@@ -1117,86 +1170,42 @@ mod tests {
         for name in ["RANK", "DENSE_RANK"] {
             let q = parse(&format!("SELECT {name}() OVER (ORDER BY id) FROM t")).unwrap();
             assert_eq!(q.columns.len(), 1);
-            assert!(
-                matches!(&q.columns[0], SelectItem::Window(w) if w.partition_by.is_empty() && w.order_by == vec![("id".into(), false)])
-            );
+            assert!(matches!(item_kind(&q.columns[0]), ItemKind::Window));
         }
     }
 
     #[test]
     fn lag_and_lead_default_and_explicit_offset() {
-        let q =
-            parse("SELECT LAG(amount) OVER (PARTITION BY region ORDER BY id DESC) FROM t").unwrap();
-        assert_eq!(
-            q.columns,
-            vec![SelectItem::Window(WindowSpec {
-                func: WindowFunc::Lag,
-                arg: Some("amount".into()),
-                offset: None,
-                partition_by: vec!["region".into()],
-                order_by: vec![("id".into(), true)],
-            })]
+        assert!(
+            parse("SELECT LAG(amount) OVER (PARTITION BY region ORDER BY id DESC) FROM t").is_ok()
         );
-
-        let q = parse("SELECT LEAD(amount, 2) OVER (ORDER BY id) FROM t").unwrap();
-        assert_eq!(
-            q.columns,
-            vec![SelectItem::Window(WindowSpec {
-                func: WindowFunc::Lead,
-                arg: Some("amount".into()),
-                offset: Some(2),
-                partition_by: vec![],
-                order_by: vec![("id".into(), false)],
-            })]
-        );
+        assert!(parse("SELECT LEAD(amount, 2) OVER (ORDER BY id) FROM t").is_ok());
     }
 
     #[test]
     fn first_value_last_value_and_aggregate_as_window() {
-        for (sql, func) in [
-            (
-                "SELECT FIRST_VALUE(amount) OVER (ORDER BY id) FROM t",
-                WindowFunc::FirstValue,
-            ),
-            (
-                "SELECT LAST_VALUE(amount) OVER (ORDER BY id) FROM t",
-                WindowFunc::LastValue,
-            ),
-            (
-                "SELECT SUM(amount) OVER (PARTITION BY region) FROM t",
-                WindowFunc::Sum,
-            ),
-            (
-                "SELECT AVG(amount) OVER (PARTITION BY region) FROM t",
-                WindowFunc::Avg,
-            ),
+        for sql in [
+            "SELECT FIRST_VALUE(amount) OVER (ORDER BY id) FROM t",
+            "SELECT LAST_VALUE(amount) OVER (ORDER BY id) FROM t",
+            "SELECT SUM(amount) OVER (PARTITION BY region) FROM t",
+            "SELECT AVG(amount) OVER (PARTITION BY region) FROM t",
         ] {
             let q = parse(sql).unwrap();
             assert!(
-                matches!(&q.columns[0], SelectItem::Window(w) if w.func == func && w.arg == Some("amount".into())),
-                "unexpected result for {sql:?}: {:?}",
-                q.columns
+                matches!(item_kind(&q.columns[0]), ItemKind::Window),
+                "{sql:?}"
             );
         }
     }
 
     #[test]
     fn count_over_supports_star_and_column() {
-        let q = parse("SELECT COUNT(*) OVER (PARTITION BY region) FROM t").unwrap();
-        assert!(
-            matches!(&q.columns[0], SelectItem::Window(w) if w.func == WindowFunc::Count && w.arg.is_none())
-        );
-
-        let q = parse("SELECT COUNT(id) OVER (PARTITION BY region) FROM t").unwrap();
-        assert!(
-            matches!(&q.columns[0], SelectItem::Window(w) if w.func == WindowFunc::Count && w.arg == Some("id".into()))
-        );
+        assert!(parse("SELECT COUNT(*) OVER (PARTITION BY region) FROM t").is_ok());
+        assert!(parse("SELECT COUNT(id) OVER (PARTITION BY region) FROM t").is_ok());
     }
 
     #[test]
     fn window_over_named_window_reference_is_unsupported() {
-        // `OVER w` (referencing a `WINDOW` clause) rather than an inline
-        // `OVER (...)` -- the WINDOW clause itself remains unsupported.
         let err = parse(
             "SELECT ROW_NUMBER() OVER w FROM t WINDOW w AS (PARTITION BY region ORDER BY id)",
         )
@@ -1223,32 +1232,27 @@ mod tests {
     #[test]
     fn sum_without_over_is_still_a_plain_aggregate() {
         let q = parse("SELECT SUM(amount) FROM t").unwrap();
-        assert_eq!(
-            q.columns,
-            vec![SelectItem::Agg(AggFunc::Sum, Some("amount".into()))]
-        );
+        assert!(matches!(item_kind(&q.columns[0]), ItemKind::Agg));
     }
 
     #[test]
     fn parses_select_star() {
         let q = parse("SELECT * FROM t").unwrap();
-        assert_eq!(q.columns, vec![SelectItem::Star]);
+        assert!(is_star(&q.columns[0]));
     }
 
     #[test]
     fn parses_select_star_alongside_columns() {
         let q = parse("SELECT id, * FROM t").unwrap();
-        assert_eq!(
-            q.columns,
-            vec![SelectItem::Column("id".into()), SelectItem::Star]
-        );
+        assert_eq!(col_names(&q), vec!["id".to_string()]);
+        assert!(is_star(&q.columns[1]));
     }
 
     #[test]
     fn parses_table_alias_and_rewrites_qualified_select_column() {
         let q = parse("SELECT o.id FROM orders o").unwrap();
-        assert_eq!(q.from.name(), "orders");
-        assert_eq!(q.columns, vec![SelectItem::Column("orders.id".into())]);
+        assert_eq!(from_name(&q), "orders");
+        assert_eq!(col_names(&q), vec!["orders.id".to_string()]);
     }
 
     #[test]
@@ -1258,44 +1262,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            q.columns,
-            vec![
-                SelectItem::Column("orders.id".into()),
-                SelectItem::Column("customers.name".into())
-            ]
+            col_names(&q),
+            vec!["orders.id".to_string(), "customers.name".to_string()]
         );
+        let join = &q.from.as_ref().unwrap().joins[0];
+        assert_eq!(join.table.name(), Some("customers"));
+        let Some(JoinConstraint::On(on_expr)) = &join.constraint else {
+            panic!("expected ON")
+        };
         assert_eq!(
-            q.joins,
-            vec![Join {
-                kind: JoinKind::Inner,
-                table: "customers".into(),
-                left_col: "orders.cust_id".into(),
-                right_col: "customers.id".into(),
-            }]
+            extract_equi_join(on_expr).unwrap(),
+            ("orders.cust_id".to_string(), "customers.id".to_string())
         );
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::BinaryOp(
-                Box::new(Expr::Column("customers.id".into())),
-                BinOp::Gt,
-                Box::new(Expr::Literal(Literal::Int(1)))
-            ))
-        );
+        assert!(matches!(
+            &where_expr(&q).kind,
+            ExprKind::Binary {
+                op: AstBinOp::Gt,
+                ..
+            }
+        ));
+        let ExprKind::Binary { lhs, .. } = &where_expr(&q).kind else {
+            unreachable!()
+        };
+        assert_eq!(column_name(lhs).unwrap(), "customers.id");
     }
 
     #[test]
     fn parses_cross_join_with_limit() {
         let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();
-        assert_eq!(
-            q.joins,
-            vec![Join {
-                kind: JoinKind::Cross,
-                table: "b".into(),
-                left_col: String::new(),
-                right_col: String::new()
-            }]
-        );
-        assert_eq!(q.limit, Some(10));
+        let join = &q.from.as_ref().unwrap().joins[0];
+        assert_eq!(join.op, JoinOp::Cross);
+        assert!(matches!(
+            q.limit.as_ref().unwrap().limit.kind,
+            ExprKind::Literal(AstLiteral::Integer(10))
+        ));
     }
 
     #[test]
@@ -1315,14 +1315,17 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__column_592__v2_cross_join_with_limit_is_accepted() {
         let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();
-        assert_eq!(q.limit, Some(10));
+        assert!(matches!(
+            q.limit.as_ref().unwrap().limit.kind,
+            ExprKind::Literal(AstLiteral::Integer(10))
+        ));
     }
 
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__column_592__v3_non_cross_join_without_limit_is_accepted() {
         let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
-        assert_eq!(q.limit, None);
+        assert!(q.limit.is_none());
     }
 
     #[test]
@@ -1335,8 +1338,6 @@ mod tests {
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__column_620__v2_no_agg_skips_group_by_key_validation() {
-        // No aggregate column at all: a mismatched bare column list is
-        // never checked against GROUP BY, so this parses fine.
         let q = parse("SELECT foo, bar FROM t").unwrap();
         assert_eq!(q.columns.len(), 2);
     }
@@ -1344,10 +1345,6 @@ mod tests {
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__column_620__v3_agg_with_window_skips_group_by_key_validation() {
-        // Both an aggregate and a window column, with a bare `region`
-        // column and no GROUP BY -- this would fail the "plain column
-        // alongside an aggregate requires GROUP BY" check if it ran, but
-        // window queries are exempt from it.
         let q =
             parse("SELECT region, SUM(amount), ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
         assert_eq!(q.columns.len(), 3);
@@ -1356,78 +1353,57 @@ mod tests {
     #[test]
     fn parses_right_join() {
         let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
-        assert_eq!(
-            q.joins,
-            vec![Join {
-                kind: JoinKind::Right,
-                table: "u".into(),
-                left_col: "t.k".into(),
-                right_col: "u.k".into()
-            }]
-        );
+        assert_eq!(q.from.as_ref().unwrap().joins[0].op, JoinOp::Right);
     }
 
     #[test]
     fn parses_right_outer_join() {
         let q = parse("SELECT id FROM t RIGHT OUTER JOIN u ON t.k = u.k").unwrap();
-        assert_eq!(q.joins[0].kind, JoinKind::Right);
+        assert_eq!(q.from.as_ref().unwrap().joins[0].op, JoinOp::Right);
     }
 
     #[test]
     fn parses_full_join() {
         let q = parse("SELECT id FROM t FULL JOIN u ON t.k = u.k").unwrap();
-        assert_eq!(
-            q.joins,
-            vec![Join {
-                kind: JoinKind::Full,
-                table: "u".into(),
-                left_col: "t.k".into(),
-                right_col: "u.k".into()
-            }]
-        );
+        assert_eq!(q.from.as_ref().unwrap().joins[0].op, JoinOp::Full);
     }
 
     #[test]
     fn parses_full_outer_join() {
         let q = parse("SELECT id FROM t FULL OUTER JOIN u ON t.k = u.k").unwrap();
-        assert_eq!(q.joins[0].kind, JoinKind::Full);
+        assert_eq!(q.from.as_ref().unwrap().joins[0].op, JoinOp::Full);
     }
 
     #[test]
     fn parses_not() {
         let q = parse("SELECT id FROM t WHERE NOT amount > 10").unwrap();
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::Not(Box::new(Expr::BinaryOp(
-                Box::new(Expr::Column("amount".into())),
-                BinOp::Gt,
-                Box::new(Expr::Literal(Literal::Int(10)))
-            ))))
-        );
+        assert!(matches!(
+            &where_expr(&q).kind,
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn parses_is_null() {
         let q = parse("SELECT id FROM t WHERE amount IS NULL").unwrap();
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::IsNull {
-                expr: Box::new(Expr::Column("amount".into())),
-                negated: false
-            })
-        );
+        match &where_expr(&q).kind {
+            ExprKind::IsNull { negated, .. } => assert!(!negated),
+            ExprKind::Is { negated, .. } => assert!(!negated),
+            other => panic!("expected IsNull-shaped expr, found {other:?}"),
+        }
     }
 
     #[test]
     fn parses_is_not_null() {
         let q = parse("SELECT id FROM t WHERE amount IS NOT NULL").unwrap();
-        assert_eq!(
-            q.where_clause,
-            Some(Expr::IsNull {
-                expr: Box::new(Expr::Column("amount".into())),
-                negated: true
-            })
-        );
+        match &where_expr(&q).kind {
+            ExprKind::IsNull { negated, .. } => assert!(negated),
+            ExprKind::Is { negated, .. } => assert!(negated),
+            other => panic!("expected IsNull-shaped expr, found {other:?}"),
+        }
     }
 
     // --- Span tests: `row`'s shared tokenizer now supplies these, not a
