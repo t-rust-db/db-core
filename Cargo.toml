@@ -34,6 +34,10 @@ path = "tests/spike/001_neon_batch_kernels/04_adjusted.rs"
 name = "01_groupreduce_key_hashing"
 path = "tests/spike/002_arrow_optimization/01_groupreduce_key_hashing.rs"
 
+[[test]]
+name = "02_groupreduce_key_hashing_adjusted"
+path = "tests/spike/002_arrow_optimization/02_groupreduce_key_hashing_adjusted.rs"
+
 [dependencies]
 
 [features]

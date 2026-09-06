@@ -4,10 +4,24 @@ Research spike for [#183](https://github.com/t-rust-db/db-core/issues/183),
 the "cheap proof" child of [#130](https://github.com/t-rust-db/db-core/issues/130)
 (arrow-style typed columnar `Batch` epic). No production code changes.
 
+Two tests, run in order:
+
+- **`01_groupreduce_key_hashing.rs`** — the initial spike: stringify-vs-typed
+  key across three row counts and three cardinalities.
+- **`02_groupreduce_key_hashing_adjusted.rs`** — supersedes 01 for drawing
+  conclusions on the high-cardinality result. 01 found a real ~2-3x win at
+  low/medium cardinality but an unexpected regression (0.71x) at the
+  highest cardinality tested (1M rows, unique groups) with only 3
+  iterations at that scale. Round 2 re-measures just that case with a
+  warm-up pass plus 20 iterations (vs. 3), and adds a 5M-row unique-key
+  case to see whether the regression widens, narrows, or reverses. 01 is
+  kept as-is rather than edited in place, so the review comment that
+  motivated round 2 stays legible against the code it was about.
+
 ```sh
-make help   # list targets
-make check  # correctness test (debug, fast)
-make run    # perf spike (release) -- prints timings + speedup
+make help      # list targets
+make check     # both correctness tests (debug, fast) -- or check-01 / check-02
+make run       # both perf spikes (release) -- or run-01 / run-02
 ```
 
 ## Question
@@ -58,30 +72,44 @@ typed key is a real, consistent **~2-3x** win at low/medium group
 cardinality across every row count tested -- welcome, but well short of
 the hypothesized 5x-20x. At the highest cardinality tested (every row its
 own group, 1M distinct groups), the typed key is **slower**, not faster
-(0.71x) -- the opposite of the hypothesis's direction. Only 3 iterations
-were run at the 1M-row scale to keep the whole spike fast; the
-low/medium-cardinality results are stable across 10-50 iterations and
-consistently landed in the same 2.3x-2.4x band, so that pattern is
-trustworthy, but the high-cardinality regression at 1M rows deserves a
-rerun with more iterations before treating it as settled rather than
-noise from `HashMap` resize amortization interacting badly with the
-typed key's larger `Vec<Value>`-of-2 allocation compared to a single
-already-built `String`.
+(0.71x) -- the opposite of the hypothesis's direction.
+
+**Round 2** (`02_groupreduce_key_hashing_adjusted.rs`) re-checked the
+high-cardinality case with a 3-iteration warm-up plus 20 timed iterations
+(vs. round 1's 3, untimed cold start), and added a 5M-row unique-key case:
+
+| rows | cardinality | iterations | stringify (avg/iter) | typed (avg/iter) | speedup |
+|------|-------------|------------|------------------------|--------------------|---------|
+| 1,000,000 | unique | 20 | 10.05 ms | 12.83 ms | **0.78x** |
+| 5,000,000 | unique | 20 | 63.95 ms | 86.43 ms | **0.74x** |
+
+**The regression is real, not noise.** It holds at both 1M and 5M rows
+under a properly warmed-up, 20-iteration measurement, and if anything
+widens slightly as cardinality grows (0.78x → 0.74x). The likely cause:
+at near-unique cardinality the `HashMap` itself (not the key
+construction) dominates -- both strategies pay the same growth/rehash
+cost, but the typed key's `Eq` compares a `Vec<Value>` element-by-element
+(a `Str` variant among them) while equal-length interned-shape `String`
+comparison in the stringify path may be cheaper per probe at this
+specific string shape (`"group-N"`, short and numeric-suffixed). This is
+a hypothesis, not confirmed further here -- worth profiling if the
+follow-up ticket below wants to chase the last bit of this case.
 
 ## Go/no-go
 
-**Conditional go.** The typed key is a real, low-risk win (~2-3x, no new
-dependencies, `JoinKey`'s pattern already proven in production for
-`HashBuild`/`HashProbe`) for the common case -- `GROUP BY` over a
-bounded/moderate number of groups, which is the overwhelming majority of
-real `GROUP BY` queries. It should be ported into `Opcode::GroupReduce`'s
-real implementation as its own follow-up ticket.
+**Conditional go, scoped to bounded cardinality.** The typed key is a
+real, low-risk win (~2-3x, no new dependencies, `JoinKey`'s pattern
+already proven in production for `HashBuild`/`HashProbe`) for the common
+case -- `GROUP BY` over a bounded/moderate number of groups, which is the
+overwhelming majority of real `GROUP BY` queries. It should be ported
+into `Opcode::GroupReduce`'s real implementation as its own follow-up
+ticket.
 
 It is **not** the 5x-20x #130's expectations table hypothesized, so #130
 should revise that row down to ~2-3x rather than treat this spike as
 confirming the original number. The high-cardinality (near-unique-key)
-regression should be investigated (more iterations, check allocator
-behavior/`HashMap` growth pattern) before the follow-up ticket claims a
-universal win -- worth a one-line caveat in that ticket rather than a
-blocker to starting it, since low/medium cardinality is what real
-workloads mostly look like.
+regression is confirmed real (round 2), not a measurement artifact -- the
+follow-up ticket should either accept a documented regression at that
+extreme (rare in practice: `GROUP BY` over a column with as many distinct
+values as rows is close to a no-op grouping-wise) or investigate the
+`Eq`/probe-cost hypothesis above before shipping unconditionally.
