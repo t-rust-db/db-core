@@ -336,11 +336,31 @@ pub struct RegAlloc {
     /// correlated variables, no volatile expression reaches this path
     /// yet) and what has to change the day that stops being true.
     cte_cache: Vec<(crate::parser::ast::Select, i32, TableSchema)>,
+    /// The next anonymous (`?`) bind-parameter slot to hand out,
+    /// 1-based -- matches `Opcode::Variable`'s `p1` convention
+    /// (db-core#162). `?NNN` bumps this past `NNN` so a later bare `?`
+    /// never collides with an explicit number, mirroring SQLite.
+    next_param: i32,
+    /// The highest bind-parameter slot allocated so far by any form
+    /// (anonymous, numbered, or named), so [`RegAlloc::param_names`]
+    /// knows how long a vec to build even when `?NNN` jumps ahead of
+    /// every name it tracks.
+    max_param: i32,
+    /// Named parameters seen so far this compile, keyed by the sigil
+    /// plus name (`:foo`/`@foo`/`$foo` are treated as three distinct
+    /// parameters, not aliases of one another -- a conservative
+    /// simplification, since nothing in this codebase asserts SQLite's
+    /// actual cross-sigil aliasing behavior either way). A repeated
+    /// occurrence of the same key within one statement reuses its slot.
+    named_params: Vec<(String, i32)>,
 }
 
 impl RegAlloc {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            next_param: 1,
+            ..Self::default()
+        }
     }
 
     pub fn alloc(&mut self) -> i32 {
@@ -396,6 +416,60 @@ impl RegAlloc {
         schema: TableSchema,
     ) {
         self.cte_cache.push((subquery, cursor, schema));
+    }
+
+    /// Resolves `kind` to its 1-based bind-parameter slot for
+    /// `Opcode::Variable`'s `p1` (db-core#162), allocating a new slot on
+    /// first occurrence and reusing it for a repeated named parameter
+    /// within the same compile.
+    pub fn alloc_param(&mut self, kind: &crate::parser::ast::ParamKind) -> i32 {
+        use crate::parser::ast::ParamKind;
+        match kind {
+            ParamKind::Anonymous => {
+                let slot = self.next_param;
+                self.next_param = self.next_param.saturating_add(1);
+                self.max_param = self.max_param.max(slot);
+                slot
+            }
+            ParamKind::Numbered(n) => {
+                let slot = i32::try_from(*n).unwrap_or(i32::MAX);
+                self.next_param = self.next_param.max(slot.saturating_add(1));
+                self.max_param = self.max_param.max(slot);
+                slot
+            }
+            ParamKind::Colon(name) => self.alloc_named_param(format!(":{name}")),
+            ParamKind::At(name) => self.alloc_named_param(format!("@{name}")),
+            ParamKind::Dollar(name) => self.alloc_named_param(format!("${name}")),
+        }
+    }
+
+    fn alloc_named_param(&mut self, key: String) -> i32 {
+        if let Some((_, slot)) = self.named_params.iter().find(|(k, _)| *k == key) {
+            return *slot;
+        }
+        let slot = self.next_param;
+        self.next_param = self.next_param.saturating_add(1);
+        self.max_param = self.max_param.max(slot);
+        self.named_params.push((key, slot));
+        slot
+    }
+
+    /// Slot-indexed (0 = slot 1) bind-parameter names for every slot
+    /// this compile allocated, `None` for an anonymous/numbered slot
+    /// with no name -- the shape [`crate::vm::row::Program`] carries so
+    /// a caller can bind `:name`/`@name`/`$name` forms by name rather
+    /// than only positionally.
+    pub fn param_names(&self) -> Vec<Option<String>> {
+        let len = usize::try_from(self.max_param).unwrap_or(0);
+        let mut names = vec![None; len];
+        for (key, slot) in &self.named_params {
+            if let Some(idx) = usize::try_from(*slot).ok().and_then(|s| s.checked_sub(1)) {
+                if let Some(entry) = names.get_mut(idx) {
+                    *entry = Some(key.clone());
+                }
+            }
+        }
+        names
     }
 }
 
