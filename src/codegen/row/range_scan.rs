@@ -26,7 +26,7 @@
 
 use super::index_scan::open_index_cursor;
 use super::limit_scan::LimitState;
-use super::select::emit_row;
+use super::select::{emit_row, ProjectedColumn};
 use super::{Emitter, Instruction, Label, Opcode, RegAlloc, Result, Scope, TableSchema};
 use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, Select};
 use crate::vm::row::{affinity_of, Affinity, Collation, P4};
@@ -228,7 +228,7 @@ pub(super) fn try_compile_range_seek(
     reg: &mut RegAlloc,
     query: &Select,
     scope: &Scope,
-    columns: &[String],
+    columns: &[ProjectedColumn],
     sort_key: Option<Vec<super::select::OrderByPlan>>,
     sorter_open_addr: Option<usize>,
     sorter_cursor: i32,

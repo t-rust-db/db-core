@@ -21,7 +21,7 @@
 //! non-empty prefix of it can never exist.
 
 use super::limit_scan::LimitState;
-use super::select::emit_row;
+use super::select::{emit_row, ProjectedColumn};
 use super::{
     CodegenError, Emitter, IndexSchema, Instruction, Label, Opcode, RegAlloc, Result, Scope,
     TableSchema,
@@ -88,7 +88,7 @@ pub(super) fn try_compile_index_ordered_scan(
     reg: &mut RegAlloc,
     query: &Select,
     scope: &Scope,
-    columns: &[String],
+    columns: &[ProjectedColumn],
     table_cursor: i32,
     index_cursor: i32,
     limit: Option<LimitState>,
