@@ -612,13 +612,12 @@ mod tests {
         /// compile yet must fail with a clear error naming it, not a
         /// panic -- the same contract #147's `Unsupported` stubs promise,
         /// now proven from the dispatcher entry point a real caller uses.
+        /// `DISTINCT` stands in for this today; a `WITH`-clause query
+        /// used to (until #143 added CTE support), so this test can't
+        /// use that construct as its example anymore.
         #[test]
         fn unsupported_select_construct_fails_clearly_through_dispatch() {
-            let err = compile_statement(
-                "WITH x AS (SELECT a FROM t) SELECT a FROM x",
-                &[schema(&["a"])],
-            )
-            .unwrap_err();
+            let err = compile_statement("SELECT DISTINCT a FROM t", &[schema(&["a"])]).unwrap_err();
             assert!(matches!(
                 err,
                 DispatchError::Codegen(CodegenError::Unsupported { .. })

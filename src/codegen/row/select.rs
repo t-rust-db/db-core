@@ -84,6 +84,7 @@ pub fn compile_select_join(
 /// leaving the predicate exactly where it would have ended up anyway).
 pub fn compile_select_with_catalog(catalog: &[TableSchema], query: &Select) -> Result<Program> {
     let mut query = query.clone();
+    super::subquery::expand_with_clause(&mut query)?;
     super::subquery::push_down_where_predicates(&mut query);
     super::subquery::flatten_from_subquery(&mut query);
 
@@ -111,14 +112,19 @@ fn compile_select_inner(
             reason: "DISTINCT is not yet supported".to_string(),
         });
     }
-    // Constructs `expr::Query` could not represent at all, so no
-    // codegen for them has ever existed (#147). CTEs are #143; compound
-    // SELECT has no ticket yet.
+    // `compile_select_with_catalog` already expanded `with_clause` away
+    // via `super::subquery::expand_with_clause` before reaching here --
+    // a `Some` this far in means the caller went through the pre-wired
+    // `compile_select`/`compile_select_join` entry points instead, which
+    // have no catalog to resolve a CTE's materialization against.
     if query.with_clause.is_some() {
         return Err(CodegenError::Unsupported {
-            reason: "WITH / common table expressions are not supported yet (#143)".to_string(),
+            reason: "WITH / common table expressions require the compile_select_with_catalog \
+                     entry point"
+                .to_string(),
         });
     }
+    // Compound SELECT has no ticket yet.
     if !query.compound.is_empty() {
         return Err(CodegenError::Unsupported {
             reason: "compound SELECT (UNION/INTERSECT/EXCEPT) is not supported yet".to_string(),
