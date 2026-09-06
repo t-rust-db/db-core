@@ -13,7 +13,7 @@ use super::super::{
     CodegenError, CondTargets, Emitter, RegAlloc, Result, Scope, TableSchema, Target,
 };
 use super::{FIRST_INDEX_CURSOR, TABLE_CURSOR};
-use crate::expr::Delete;
+use crate::parser::ast::Delete;
 use crate::vm::row::{Instruction, Opcode, Program};
 
 /// Compiles `delete` against `schema` (the resolved target table) into
@@ -87,9 +87,8 @@ pub fn compile_delete(schema: &TableSchema, delete: &Delete) -> Result<Program> 
 )]
 mod tests {
     use super::*;
+    use crate::codegen::row::testutil::{delete, insert, select};
     use crate::codegen::row::{compile_select, IndexSchema};
-    use crate::expr::{BinOp, Delete, Expr, Query, SelectItem};
-    use crate::types::Literal;
     use crate::vm::row::{execute, Cursor, EphemeralTableCursor, Value, Vm};
 
     fn schema(columns: &[&str]) -> TableSchema {
@@ -119,18 +118,7 @@ mod tests {
     }
 
     fn scan_all(schema: &TableSchema, vm: &mut Vm) -> Vec<Vec<Value>> {
-        let query = Query {
-            columns: vec![SelectItem::Star],
-            from: schema.name.clone().into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        };
+        let query = select(&format!("SELECT * FROM {}", schema.name));
         let program = compile_select(schema, 0, &query).unwrap();
         execute(vm, &program).unwrap()
     }
@@ -138,15 +126,8 @@ mod tests {
     #[test]
     fn deletes_rows_matching_where_clause() {
         let schema = schema(&["a"]);
-        let delete = Delete {
-            table: "t".into(),
-            where_clause: Some(Expr::BinaryOp(
-                Box::new(Expr::Column("a".into())),
-                BinOp::Eq,
-                Box::new(Expr::Literal(Literal::Int(2))),
-            )),
-        };
-        let program = compile_delete(&schema, &delete).unwrap();
+        let stmt = delete("DELETE FROM t WHERE a = 2");
+        let program = compile_delete(&schema, &stmt).unwrap();
         let mut vm = Vm::new();
         seed(
             &schema,
@@ -167,11 +148,8 @@ mod tests {
     #[test]
     fn no_where_clause_deletes_every_row() {
         let schema = schema(&["a"]);
-        let delete = Delete {
-            table: "t".into(),
-            where_clause: None,
-        };
-        let program = compile_delete(&schema, &delete).unwrap();
+        let stmt = delete("DELETE FROM t");
+        let program = compile_delete(&schema, &stmt).unwrap();
         let mut vm = Vm::new();
         seed(
             &schema,
@@ -185,7 +163,6 @@ mod tests {
     #[test]
     fn removes_secondary_index_entries() {
         use crate::codegen::row::compile_insert;
-        use crate::expr::Insert;
 
         let mut schema = schema(&["a", "b"]);
         schema.indexes.push(IndexSchema {
@@ -194,25 +171,9 @@ mod tests {
             columns: vec!["b".into()],
         });
 
-        let insert = Insert {
-            table: "t".into(),
-            columns: vec![],
-            values: vec![vec![
-                Expr::Literal(Literal::Int(1)),
-                Expr::Literal(Literal::Int(10)),
-            ]],
-        };
-        let insert_program = compile_insert(&schema, &insert).unwrap();
-
-        let delete = Delete {
-            table: "t".into(),
-            where_clause: Some(Expr::BinaryOp(
-                Box::new(Expr::Column("a".into())),
-                BinOp::Eq,
-                Box::new(Expr::Literal(Literal::Int(1))),
-            )),
-        };
-        let delete_program = compile_delete(&schema, &delete).unwrap();
+        let insert_program =
+            compile_insert(&schema, &insert("INSERT INTO t VALUES (1, 10)")).unwrap();
+        let delete_program = compile_delete(&schema, &delete("DELETE FROM t WHERE a = 1")).unwrap();
 
         let mut vm = Vm::new();
         seed(&schema, &mut vm, vec![]);
@@ -227,10 +188,7 @@ mod tests {
     #[test]
     fn wrong_table_name_is_rejected() {
         let schema = schema(&["a"]);
-        let delete = Delete {
-            table: "other".into(),
-            where_clause: None,
-        };
-        assert!(compile_delete(&schema, &delete).is_err());
+        let stmt = delete("DELETE FROM other");
+        assert!(compile_delete(&schema, &stmt).is_err());
     }
 }

@@ -120,6 +120,7 @@ pub mod value;
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::parser::ast::{BinaryOp, Distinctness, Expr, ExprKind, FunctionArgs, Join, Select};
 use crate::vm::row::{Instruction, Opcode, P4};
 
 pub use analyze::compile_analyze;
@@ -364,6 +365,356 @@ impl RegAlloc {
     /// without allocating it.
     pub fn peek(&self) -> i32 {
         self.next
+    }
+}
+
+/// Whether `select` asks for `DISTINCT`. The AST spells distinctness
+/// as an `Option<Distinctness>` (`None` = neither keyword given, which
+/// is `ALL`), where `expr::Query` had a bare `bool` (#147).
+pub(crate) fn is_distinct(select: &Select) -> bool {
+    matches!(select.distinct, Some(Distinctness::Distinct))
+}
+
+/// The join chain of `select`'s `FROM`, or empty when it has no `FROM`
+/// at all. `expr::Query` kept `from` and `joins` as sibling fields;
+/// the AST nests `joins` inside an optional [`FromClause`] (#147),
+/// which is the shape a `SELECT` with no `FROM` needs.
+pub(crate) fn joins_of(select: &Select) -> &[Join] {
+    select.from.as_ref().map_or(&[], |from| &from.joins)
+}
+
+/// Builds an unqualified column reference. Codegen synthesizes these
+/// when it needs to name a column it just materialized (an aggregate
+/// output, a join key); they never come from source text, so they carry
+/// [`Span::UNKNOWN`].
+pub(crate) fn column_expr(name: impl Into<String>) -> Expr {
+    Expr {
+        kind: ExprKind::Column {
+            table: None,
+            catalog: None,
+            name: name.into(),
+        },
+        span: crate::parser::Span::UNKNOWN,
+    }
+}
+
+/// Visits every column reference in `expr`, in source order.
+///
+/// Does **not** descend into a nested `SELECT` (a scalar subquery,
+/// `EXISTS`, or `IN (SELECT ...)`): those resolve against their own
+/// scope, so their column names are not this expression's to read or
+/// rewrite. Callers that need the subquery's columns walk it separately.
+///
+/// Centralized here because `expr::Expr` had 8 variants and the AST has
+/// 20 (#147) -- open-coding the match in each caller made every new AST
+/// node a multi-file change, and a missed arm silently skips columns
+/// rather than failing to compile.
+pub(crate) fn walk_columns(expr: &Expr, f: &mut impl FnMut(&str)) {
+    match &expr.kind {
+        ExprKind::Column { name, .. } => f(name),
+        ExprKind::Literal(_) | ExprKind::Param(_) => {}
+        ExprKind::Paren(inner)
+        | ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Collate { expr: inner, .. }
+        | ExprKind::InSubquery { expr: inner, .. } => walk_columns(inner, f),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            walk_columns(lhs, f);
+            walk_columns(rhs, f);
+        }
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            ..
+        } => {
+            walk_columns(inner, f);
+            walk_columns(lo, f);
+            walk_columns(hi, f);
+        }
+        ExprKind::In {
+            expr: inner, list, ..
+        } => {
+            walk_columns(inner, f);
+            for item in list {
+                walk_columns(item, f);
+            }
+        }
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            escape,
+            ..
+        } => {
+            walk_columns(inner, f);
+            walk_columns(pattern, f);
+            if let Some(escape) = escape {
+                walk_columns(escape, f);
+            }
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(operand) = operand {
+                walk_columns(operand, f);
+            }
+            for (cond, result) in whens {
+                walk_columns(cond, f);
+                walk_columns(result, f);
+            }
+            if let Some(else_) = else_ {
+                walk_columns(else_, f);
+            }
+        }
+        ExprKind::FunctionCall { args, .. } => {
+            if let FunctionArgs::List(args) = args {
+                for arg in args {
+                    walk_columns(arg, f);
+                }
+            }
+        }
+        ExprKind::InSubqueryMulti { exprs, .. } => {
+            for e in exprs {
+                walk_columns(e, f);
+            }
+        }
+        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}
+    }
+}
+
+/// [`walk_columns`], but able to rename each column reference in place.
+pub(crate) fn walk_columns_mut(expr: &mut Expr, f: &mut impl FnMut(&mut String)) {
+    match &mut expr.kind {
+        ExprKind::Column { name, .. } => f(name),
+        ExprKind::Literal(_) | ExprKind::Param(_) => {}
+        ExprKind::Paren(inner)
+        | ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Collate { expr: inner, .. }
+        | ExprKind::InSubquery { expr: inner, .. } => walk_columns_mut(inner, f),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            walk_columns_mut(lhs, f);
+            walk_columns_mut(rhs, f);
+        }
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            ..
+        } => {
+            walk_columns_mut(inner, f);
+            walk_columns_mut(lo, f);
+            walk_columns_mut(hi, f);
+        }
+        ExprKind::In {
+            expr: inner, list, ..
+        } => {
+            walk_columns_mut(inner, f);
+            for item in list {
+                walk_columns_mut(item, f);
+            }
+        }
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            escape,
+            ..
+        } => {
+            walk_columns_mut(inner, f);
+            walk_columns_mut(pattern, f);
+            if let Some(escape) = escape {
+                walk_columns_mut(escape, f);
+            }
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(operand) = operand {
+                walk_columns_mut(operand, f);
+            }
+            for (cond, result) in whens {
+                walk_columns_mut(cond, f);
+                walk_columns_mut(result, f);
+            }
+            if let Some(else_) = else_ {
+                walk_columns_mut(else_, f);
+            }
+        }
+        ExprKind::FunctionCall { args, .. } => {
+            if let FunctionArgs::List(args) = args {
+                for arg in args {
+                    walk_columns_mut(arg, f);
+                }
+            }
+        }
+        ExprKind::InSubqueryMulti { exprs, .. } => {
+            for e in exprs {
+                walk_columns_mut(e, f);
+            }
+        }
+        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}
+    }
+}
+
+/// Whether `expr` contains a nested `SELECT` anywhere.
+pub(crate) fn contains_subquery(expr: &Expr) -> bool {
+    let mut found = false;
+    walk_subexprs(expr, &mut |e| {
+        if matches!(
+            e.kind,
+            ExprKind::Subquery(_)
+                | ExprKind::Exists { .. }
+                | ExprKind::InSubquery { .. }
+                | ExprKind::InSubqueryMulti { .. }
+        ) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Visits `expr` and every sub-expression below it, outermost first.
+pub(crate) fn walk_subexprs(expr: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(expr);
+    let mut recurse = |e: &Expr| walk_subexprs(e, f);
+    match &expr.kind {
+        ExprKind::Column { .. } | ExprKind::Literal(_) | ExprKind::Param(_) => {}
+        ExprKind::Paren(inner)
+        | ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Collate { expr: inner, .. }
+        | ExprKind::InSubquery { expr: inner, .. } => recurse(inner),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            recurse(lhs);
+            recurse(rhs);
+        }
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            ..
+        } => {
+            recurse(inner);
+            recurse(lo);
+            recurse(hi);
+        }
+        ExprKind::In {
+            expr: inner, list, ..
+        } => {
+            recurse(inner);
+            list.iter().for_each(recurse);
+        }
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            escape,
+            ..
+        } => {
+            recurse(inner);
+            recurse(pattern);
+            if let Some(escape) = escape {
+                recurse(escape);
+            }
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(operand) = operand {
+                recurse(operand);
+            }
+            for (cond, result) in whens {
+                recurse(cond);
+                recurse(result);
+            }
+            if let Some(else_) = else_ {
+                recurse(else_);
+            }
+        }
+        ExprKind::FunctionCall { args, .. } => {
+            if let FunctionArgs::List(args) = args {
+                args.iter().for_each(recurse);
+            }
+        }
+        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().for_each(recurse),
+        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}
+    }
+}
+
+/// Builds `lhs AND rhs`.
+pub(crate) fn and_expr(lhs: Expr, rhs: Expr) -> Expr {
+    Expr {
+        kind: ExprKind::Binary {
+            op: BinaryOp::And,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        },
+        span: crate::parser::Span::UNKNOWN,
+    }
+}
+
+/// Test-only AST constructors.
+///
+/// These parse real SQL through the crate's only grammar rather than
+/// hand-building planner structs. Before #147 the tests had no choice
+/// but to build `expr::Query` literals, because no parser produced that
+/// type -- which meant they could assert on shapes the parser could
+/// never actually deliver. Parsing closes that gap.
+#[cfg(test)]
+#[allow(clippy::panic)]
+pub(crate) mod testutil {
+    use crate::parser::ast::{Expr, ResultColumn, Select};
+    use crate::parser::row::{parse_select, ParseOutcome};
+
+    /// Parses a complete `SELECT`, panicking with the parse failure if
+    /// `sql` does not parse.
+    pub(crate) fn select(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("expected {sql:?} to parse as a SELECT, got {other:?}"),
+        }
+    }
+
+    /// Parses a bare expression, by parsing it as a one-column
+    /// `SELECT` list and taking that column back out.
+    pub(crate) fn expr(sql: &str) -> Expr {
+        let select = select(&format!("SELECT {sql} FROM t"));
+        match select.columns.into_iter().next() {
+            Some(ResultColumn::Expr { expr, .. }) => expr,
+            other => panic!("expected {sql:?} to parse as one expression, got {other:?}"),
+        }
+    }
+
+    /// Parses a complete `INSERT`.
+    pub(crate) fn insert(sql: &str) -> crate::parser::ast::Insert {
+        match crate::parser::row::parse_insert(sql) {
+            ParseOutcome::Accepted(insert) => *insert,
+            other => panic!("expected {sql:?} to parse as an INSERT, got {other:?}"),
+        }
+    }
+
+    /// Parses a complete `UPDATE`.
+    pub(crate) fn update(sql: &str) -> crate::parser::ast::Update {
+        match crate::parser::row::parse_update(sql) {
+            ParseOutcome::Accepted(update) => *update,
+            other => panic!("expected {sql:?} to parse as an UPDATE, got {other:?}"),
+        }
+    }
+
+    /// Parses a complete `DELETE`.
+    pub(crate) fn delete(sql: &str) -> crate::parser::ast::Delete {
+        match crate::parser::row::parse_delete(sql) {
+            ParseOutcome::Accepted(delete) => *delete,
+            other => panic!("expected {sql:?} to parse as a DELETE, got {other:?}"),
+        }
     }
 }
 

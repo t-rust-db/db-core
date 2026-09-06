@@ -41,7 +41,7 @@ mod hash;
 mod join;
 
 use super::{CodegenError, Emitter, Label, RegAlloc, Result, Scope, TableSchema};
-use crate::expr::{Expr, Query};
+use crate::parser::ast::{ExprKind, Select};
 use crate::vm::row::{Collation, Instruction, Opcode, SortKeyColumn, P4};
 
 use accum::{
@@ -79,15 +79,35 @@ impl ScanCursors {
     }
 }
 
-/// Resolves every `GROUP BY` term to its column index in `schema`.
-fn group_column_indices(query: &Query, schema: &TableSchema) -> Result<Vec<usize>> {
+/// The column each `GROUP BY` term names.
+///
+/// `expr::Query` typed `group_by` as `Vec<String>`, so a term could
+/// only ever be a bare column. The AST types it as `Vec<Expr>` (#147),
+/// which admits `GROUP BY a + b` and `GROUP BY 1` -- neither of which
+/// this planner can group by, since the boundary check compares record
+/// columns read straight out of the row. Rejected rather than
+/// misgrouped; grouping by an expression is follow-up work.
+pub(super) fn group_by_column_names(query: &Select) -> Result<Vec<&str>> {
     query
         .group_by
         .iter()
+        .map(|expr| match &expr.kind {
+            ExprKind::Column { name, .. } => Ok(name.as_str()),
+            _ => Err(CodegenError::Unsupported {
+                reason: "GROUP BY an expression is not supported by codegen::row yet".to_string(),
+            }),
+        })
+        .collect()
+}
+
+/// Resolves every `GROUP BY` term to its column index in `schema`.
+fn group_column_indices(query: &Select, schema: &TableSchema) -> Result<Vec<usize>> {
+    group_by_column_names(query)?
+        .into_iter()
         .map(|name| {
             schema
                 .column_index(name)
-                .ok_or_else(|| CodegenError::UnknownColumn(name.clone()))
+                .ok_or_else(|| CodegenError::UnknownColumn(name.to_string()))
         })
         .collect()
 }
@@ -98,7 +118,7 @@ fn group_column_indices(query: &Query, schema: &TableSchema) -> Result<Vec<usize
 /// [`accum::emit_agg_step`]'s note).
 fn group_key_p4(scope: &Scope, name: &str) -> P4 {
     let affinity = crate::vm::row::comparison_affinity(
-        super::value::expr_affinity(scope, &Expr::Column(name.to_string())),
+        super::value::expr_affinity(scope, &super::column_expr(name)),
         None,
     );
     super::p4_coll_seq(Collation::Binary, affinity)
@@ -156,7 +176,7 @@ fn emit_boundary_check(
 pub(super) fn compile_aggregate_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    query: &Query,
+    query: &Select,
     schema: &TableSchema,
     cursors: ScanCursors,
     limit_reg: Option<i32>,
@@ -203,7 +223,7 @@ where
 pub(super) fn compile_grouped_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    query: &Query,
+    query: &Select,
     schema: &TableSchema,
     cursors: ScanCursors,
     limit_reg: Option<i32>,
@@ -323,9 +343,8 @@ where
         read_pseudo_column(em, cursors.pseudo, idx, r)?;
         cur_key_regs.push(r);
     }
-    let key_p4s: Vec<P4> = query
-        .group_by
-        .iter()
+    let key_p4s: Vec<P4> = group_by_column_names(query)?
+        .into_iter()
         .map(|name| group_key_p4(&scope, name))
         .collect();
 
@@ -422,7 +441,7 @@ fn emit_where(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     scope: &Scope,
-    query: &Query,
+    query: &Select,
     skip: Label,
 ) -> Result<()> {
     if let Some(where_expr) = &query.where_clause {

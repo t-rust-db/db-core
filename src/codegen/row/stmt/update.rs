@@ -20,7 +20,7 @@ use super::super::{
     CodegenError, CondTargets, Emitter, RegAlloc, Result, Scope, TableSchema, Target,
 };
 use super::{FIRST_INDEX_CURSOR, TABLE_CURSOR};
-use crate::expr::Update;
+use crate::parser::ast::{Expr, Update};
 use crate::vm::row::{Instruction, Opcode, Program};
 
 /// Compiles `update` against `schema` (the resolved target table) into
@@ -35,17 +35,24 @@ pub fn compile_update(schema: &TableSchema, update: &Update) -> Result<Program> 
         });
     }
 
-    let mut assigned: Vec<Option<&crate::expr::Expr>> = vec![None; schema.columns.len()];
+    let mut assigned: Vec<Option<&Expr>> = vec![None; schema.columns.len()];
     for assignment in &update.assignments {
+        // `expr::Assignment` was one column per entry. The AST keeps a
+        // `Vec<String>` so the tuple form `(a, b) = (x, y)` can expand
+        // into one entry per column -- but each entry still pairs with
+        // a single RHS expression, so anything other than one column
+        // here is a shape this planner has no value to assign.
+        let [column] = assignment.columns.as_slice() else {
+            return Err(CodegenError::Unsupported {
+                reason: "a tuple assignment in UPDATE ... SET is not supported yet".to_string(),
+            });
+        };
         let idx = schema
-            .column_index(&assignment.column)
-            .ok_or_else(|| CodegenError::UnknownColumn(assignment.column.clone()))?;
+            .column_index(column)
+            .ok_or_else(|| CodegenError::UnknownColumn(column.clone()))?;
         if Some(idx) == schema.rowid_alias {
             return Err(CodegenError::Unsupported {
-                reason: format!(
-                    "UPDATE of the rowid-alias column {} is not supported yet",
-                    assignment.column
-                ),
+                reason: format!("UPDATE of the rowid-alias column {column} is not supported yet"),
             });
         }
         assigned[idx] = Some(&assignment.value);
@@ -96,9 +103,15 @@ pub fn compile_update(schema: &TableSchema, update: &Update) -> Result<Program> 
     let rowid_reg = reg.alloc();
     em.emit(Instruction::new(Opcode::Rowid, TABLE_CURSOR, rowid_reg, 0));
 
-    let mut col_regs = Vec::with_capacity(schema.columns.len());
+    // `MakeRecord` below reads `col_regs.len()` *contiguous* registers
+    // starting at `col_regs[0]` -- so every dest register is allocated
+    // up front, in one unbroken block, before any assigned expression's
+    // own (possibly multi-register) evaluation can allocate a register
+    // in between and break that contiguity. A single assigned column
+    // never triggered this; two or more (e.g. a tuple assignment) did.
+    let col_regs: Vec<i32> = (0..schema.columns.len()).map(|_| reg.alloc()).collect();
     for (idx, expr) in assigned.iter().enumerate() {
-        let dest = reg.alloc();
+        let dest = col_regs[idx];
         if Some(idx) == schema.rowid_alias {
             em.emit(Instruction::new(Opcode::Null, 0, dest, dest));
         } else if let Some(expr) = expr {
@@ -107,7 +120,6 @@ pub fn compile_update(schema: &TableSchema, update: &Update) -> Result<Program> 
         } else {
             super::super::value::emit_column_read(&mut em, schema, TABLE_CURSOR, idx, dest)?;
         }
-        col_regs.push(dest);
     }
 
     let record_reg = reg.alloc();
@@ -159,9 +171,8 @@ pub fn compile_update(schema: &TableSchema, update: &Update) -> Result<Program> 
 )]
 mod tests {
     use super::*;
+    use crate::codegen::row::testutil::{select, update};
     use crate::codegen::row::{compile_select, IndexSchema};
-    use crate::expr::{Assignment, BinOp, Expr, Query, SelectItem, Update};
-    use crate::types::Literal;
     use crate::vm::row::{execute, Cursor, EphemeralTableCursor, Value, Vm};
 
     fn schema(columns: &[&str]) -> TableSchema {
@@ -191,18 +202,7 @@ mod tests {
     }
 
     fn scan_all(schema: &TableSchema, vm: &mut Vm) -> Vec<Vec<Value>> {
-        let query = Query {
-            columns: vec![SelectItem::Star],
-            from: schema.name.clone().into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        };
+        let query = select(&format!("SELECT * FROM {}", schema.name));
         let program = compile_select(schema, 0, &query).unwrap();
         execute(vm, &program).unwrap()
     }
@@ -210,19 +210,8 @@ mod tests {
     #[test]
     fn updates_matching_rows_and_leaves_others_unchanged() {
         let schema = schema(&["a", "b"]);
-        let update = Update {
-            table: "t".into(),
-            assignments: vec![Assignment {
-                column: "b".into(),
-                value: Expr::Literal(Literal::Int(99)),
-            }],
-            where_clause: Some(Expr::BinaryOp(
-                Box::new(Expr::Column("a".into())),
-                BinOp::Eq,
-                Box::new(Expr::Literal(Literal::Int(1))),
-            )),
-        };
-        let program = compile_update(&schema, &update).unwrap();
+        let stmt = update("UPDATE t SET b = 99 WHERE a = 1");
+        let program = compile_update(&schema, &stmt).unwrap();
         let mut vm = Vm::new();
         seed(
             &schema,
@@ -245,19 +234,8 @@ mod tests {
     #[test]
     fn no_where_clause_updates_every_row_exactly_once() {
         let schema = schema(&["a"]);
-        let update = Update {
-            table: "t".into(),
-            assignments: vec![Assignment {
-                column: "a".into(),
-                value: Expr::BinaryOp(
-                    Box::new(Expr::Column("a".into())),
-                    BinOp::Add,
-                    Box::new(Expr::Literal(Literal::Int(100))),
-                ),
-            }],
-            where_clause: None,
-        };
-        let program = compile_update(&schema, &update).unwrap();
+        let stmt = update("UPDATE t SET a = a + 100");
+        let program = compile_update(&schema, &stmt).unwrap();
         let mut vm = Vm::new();
         seed(
             &schema,
@@ -279,30 +257,11 @@ mod tests {
             root_page: 0,
             columns: vec!["b".into()],
         });
-        let update = Update {
-            table: "t".into(),
-            assignments: vec![Assignment {
-                column: "b".into(),
-                value: Expr::Literal(Literal::Int(99)),
-            }],
-            where_clause: Some(Expr::BinaryOp(
-                Box::new(Expr::Column("a".into())),
-                BinOp::Eq,
-                Box::new(Expr::Literal(Literal::Int(1))),
-            )),
-        };
-        let program = compile_update(&schema, &update).unwrap();
+        let program = compile_update(&schema, &update("UPDATE t SET b = 99 WHERE a = 1")).unwrap();
 
         let insert_program = crate::codegen::row::compile_insert(
             &schema,
-            &crate::expr::Insert {
-                table: "t".into(),
-                columns: vec![],
-                values: vec![vec![
-                    Expr::Literal(Literal::Int(1)),
-                    Expr::Literal(Literal::Int(10)),
-                ]],
-            },
+            &crate::codegen::row::testutil::insert("INSERT INTO t VALUES (1, 10)"),
         )
         .unwrap();
 
@@ -323,25 +282,38 @@ mod tests {
     fn reassigning_the_rowid_alias_column_is_rejected() {
         let mut schema = schema(&["id", "b"]);
         schema.rowid_alias = Some(0);
-        let update = Update {
-            table: "t".into(),
-            assignments: vec![Assignment {
-                column: "id".into(),
-                value: Expr::Literal(Literal::Int(5)),
-            }],
-            where_clause: None,
-        };
-        assert!(compile_update(&schema, &update).is_err());
+        let stmt = update("UPDATE t SET id = 5");
+        assert!(compile_update(&schema, &stmt).is_err());
     }
 
     #[test]
     fn wrong_table_name_is_rejected() {
         let schema = schema(&["a"]);
-        let update = Update {
-            table: "other".into(),
-            assignments: vec![],
-            where_clause: None,
-        };
-        assert!(compile_update(&schema, &update).is_err());
+        let stmt = update("UPDATE other SET a = 1");
+        assert!(compile_update(&schema, &stmt).is_err());
+    }
+
+    /// A tuple assignment `(a, b) = (x, y)` looked like a shape
+    /// `expr::Assignment` (one column per entry) could never carry, but
+    /// the parser already expands it into one single-column `Assignment`
+    /// per tuple element (`ast::Assignment`'s own doc comment) -- so it
+    /// compiles through the same per-column loop as `SET a = x, b = y`
+    /// with no extra codegen needed.
+    #[test]
+    fn tuple_assignment_expands_to_one_assignment_per_column() {
+        let schema = schema(&["a", "b"]);
+        let stmt = update("UPDATE t SET (a, b) = (1, 2)");
+        let program = compile_update(&schema, &stmt).unwrap();
+        let mut vm = Vm::new();
+        seed(
+            &schema,
+            &mut vm,
+            vec![(1, vec![Value::Integer(9), Value::Integer(9)])],
+        );
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            scan_all(&schema, &mut vm),
+            vec![vec![Value::Integer(1), Value::Integer(2)]]
+        );
     }
 }

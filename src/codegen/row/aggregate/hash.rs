@@ -7,7 +7,7 @@ use super::accum::{
     collect_aggregates, count_operand, flush_group, read_row_columns_into, AggSlot,
 };
 use super::{compile_full_row, emit_where, group_column_indices};
-use crate::expr::{Expr, Query};
+use crate::parser::ast::Select;
 use crate::vm::row::{Collation, GroupKeyColumn, Instruction, Opcode, P4};
 
 /// Compiles an explicit `GROUP BY` as a single-pass hash aggregation:
@@ -34,7 +34,7 @@ use crate::vm::row::{Collation, GroupKeyColumn, Instruction, Opcode, P4};
 pub(super) fn try_compile_hash_grouped_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    query: &Query,
+    query: &Select,
     schema: &TableSchema,
     cursors: super::ScanCursors,
     limit_reg: Option<i32>,
@@ -57,15 +57,14 @@ where
     // The same collation and comparison affinity the sort strategy puts
     // on its group-boundary `Eq` -- hash equality has to agree with that
     // comparison exactly, or the two strategies would group differently.
-    let group_keys: Vec<GroupKeyColumn> = query
-        .group_by
-        .iter()
+    let group_keys: Vec<GroupKeyColumn> = super::group_by_column_names(query)?
+        .into_iter()
         .zip(&group_indices)
         .map(|(name, &index)| GroupKeyColumn {
             index,
             collation: Collation::Binary,
             affinity: crate::vm::row::comparison_affinity(
-                super::super::value::expr_affinity(&scope, &Expr::Column(name.clone())),
+                super::super::value::expr_affinity(&scope, &super::super::column_expr(name)),
                 None,
             )
             .to_p4_byte(),
@@ -179,7 +178,7 @@ fn emit_hash_agg_step(
                 em,
                 reg,
                 scope,
-                &Expr::Column(name.clone()),
+                &super::super::column_expr(name.clone()),
             )?),
             1usize,
         ),

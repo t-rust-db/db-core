@@ -26,7 +26,7 @@ use super::{
     CodegenError, Emitter, IndexSchema, Instruction, Label, Opcode, RegAlloc, Result, Scope,
     TableSchema,
 };
-use crate::expr::Query;
+use crate::parser::ast::{ExprKind, Select};
 
 /// The `schema.indexes` position of an index whose leading column
 /// satisfies `order_by`, plus whether producing that order needs a
@@ -86,7 +86,7 @@ pub(super) fn open_index_cursor(
 pub(super) fn try_compile_index_ordered_scan(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    query: &Query,
+    query: &Select,
     scope: &Scope,
     columns: &[String],
     table_cursor: i32,
@@ -94,13 +94,31 @@ pub(super) fn try_compile_index_ordered_scan(
     limit: Option<LimitState>,
     end_label: Label,
 ) -> Result<bool> {
-    if query.where_clause.is_some() || query.distinct || !query.joins.is_empty() {
+    if query.where_clause.is_some()
+        || super::is_distinct(query)
+        || !super::joins_of(query).is_empty()
+    {
         return Ok(false);
     }
-    let Some(order_by) = &query.order_by else {
+    // This fast path walks one index in key order, so it can serve a
+    // single ordering term over a bare column and nothing more. Every
+    // richer `ORDER BY` the AST now allows (a second term, an
+    // expression, explicit NULLS ordering -- #149) simply declines the
+    // fast path and falls back to the sorter, which is correct rather
+    // than merely safe.
+    let [order_by] = query.order_by.as_slice() else {
         return Ok(false);
     };
-    let Some(index_position) = find_ordering_index(&scope.schema, &order_by.column) else {
+    if order_by.nulls_last.is_some() {
+        return Ok(false);
+    }
+    let ExprKind::Column {
+        table: None, name, ..
+    } = &order_by.expr.kind
+    else {
+        return Ok(false);
+    };
+    let Some(index_position) = find_ordering_index(&scope.schema, name) else {
         return Ok(false);
     };
     let Some(index) = scope.schema.indexes.get(index_position) else {
@@ -108,7 +126,7 @@ pub(super) fn try_compile_index_ordered_scan(
     };
     open_index_cursor(em, index, index_cursor)?;
 
-    let (rewind_op, next_op) = if order_by.descending {
+    let (rewind_op, next_op) = if order_by.desc.unwrap_or(false) {
         (Opcode::IdxLast, Opcode::IdxPrev)
     } else {
         (Opcode::IdxRewind, Opcode::IdxNext)

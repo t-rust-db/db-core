@@ -18,7 +18,7 @@
 //! `ORDER BY` no index satisfies, matching the sorter that path opens.
 
 use super::{index_scan, range_scan, Result, TableSchema};
-use crate::expr::Query;
+use crate::parser::ast::{ExprKind, Select};
 
 /// One row of `EXPLAIN QUERY PLAN` output -- SQLite's own EQP shape
 /// (`id, parent, notused, detail`), distinct from plain `EXPLAIN`'s
@@ -53,7 +53,7 @@ impl EqpRow {
 /// (the `FROM` table) and `right_schema` (`query.joins[0].table`, when
 /// the query joins).
 pub fn explain_query_plan(
-    query: &Query,
+    query: &Select,
     schema: &TableSchema,
     right_schema: Option<&TableSchema>,
 ) -> Result<Vec<EqpRow>> {
@@ -81,11 +81,11 @@ pub fn explain_query_plan(
 
 /// The outermost table's access path: the index walk one of this
 /// module's fast paths would take, or a full scan.
-fn outer_access_detail(query: &Query, schema: &TableSchema) -> String {
+fn outer_access_detail(query: &Select, schema: &TableSchema) -> String {
     let name = &schema.name;
-    if query.joins.is_empty() && query.where_clause.is_none() && !query.distinct {
-        if let Some(order_by) = &query.order_by {
-            if let Some(position) = index_scan::find_ordering_index(schema, &order_by.column) {
+    if is_plain_scan(query) {
+        if let Some(name_of) = single_order_by_column(query) {
+            if let Some(position) = index_scan::find_ordering_index(schema, name_of) {
                 if let Some(index) = schema.indexes.get(position) {
                     return format!("SCAN {name} USING INDEX {}", index.name);
                 }
@@ -104,23 +104,45 @@ fn outer_access_detail(query: &Query, schema: &TableSchema) -> String {
 
 /// Whether the query's `ORDER BY` still needs the sorter -- i.e. it has
 /// one and no index-ordered scan satisfies it.
-fn uses_sorter_for_order_by(query: &Query, schema: &TableSchema) -> bool {
-    let Some(order_by) = &query.order_by else {
+fn uses_sorter_for_order_by(query: &Select, schema: &TableSchema) -> bool {
+    if query.order_by.is_empty() {
         return false;
-    };
-    if query.joins.is_empty() && query.where_clause.is_none() && !query.distinct {
-        return index_scan::find_ordering_index(schema, &order_by.column).is_none();
+    }
+    if is_plain_scan(query) {
+        // A multi-term or expression `ORDER BY` can't be served by the
+        // index-ordered scan, so it always falls to the sorter.
+        return match single_order_by_column(query) {
+            Some(name) => index_scan::find_ordering_index(schema, name).is_none(),
+            None => true,
+        };
     }
     true
+}
+
+/// Whether `query` is the shape the index-ordered fast path considers:
+/// one table, no `WHERE`, no `DISTINCT`.
+fn is_plain_scan(query: &Select) -> bool {
+    super::joins_of(query).is_empty() && query.where_clause.is_none() && !super::is_distinct(query)
+}
+
+/// The single bare column `query` orders by, or `None` for no `ORDER
+/// BY`, more than one term, or a term that isn't a plain column.
+fn single_order_by_column(query: &Select) -> Option<&str> {
+    let [term] = query.order_by.as_slice() else {
+        return None;
+    };
+    match &term.expr.kind {
+        ExprKind::Column { name, .. } => Some(name),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use crate::codegen::row::testutil::select;
     use crate::codegen::row::IndexSchema;
-    use crate::expr::{BinOp, Expr, OrderBy, SelectItem};
-    use crate::types::Literal;
 
     fn schema(indexes: Vec<IndexSchema>) -> TableSchema {
         TableSchema {
@@ -141,24 +163,9 @@ mod tests {
         }
     }
 
-    fn query() -> Query {
-        Query {
-            columns: vec![SelectItem::Column("a".to_string())],
-            from: "t".into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        }
-    }
-
     #[test]
     fn a_bare_select_reports_a_full_scan() {
-        let rows = explain_query_plan(&query(), &schema(vec![]), None).unwrap();
+        let rows = explain_query_plan(&select("SELECT a FROM t"), &schema(vec![]), None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].detail, "SCAN t");
         assert_eq!(rows[0].id, 1);
@@ -167,77 +174,87 @@ mod tests {
 
     #[test]
     fn an_indexed_order_by_reports_an_index_scan_and_no_temp_b_tree() {
-        let mut q = query();
-        q.order_by = Some(OrderBy {
-            column: "a".to_string(),
-            descending: false,
-        });
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), None).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t ORDER BY a"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].detail, "SCAN t USING INDEX t_a");
     }
 
     #[test]
     fn an_unindexed_order_by_reports_a_temp_b_tree() {
-        let mut q = query();
-        q.order_by = Some(OrderBy {
-            column: "b".to_string(),
-            descending: false,
-        });
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), None).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t ORDER BY b"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].detail, "SCAN t");
+        assert_eq!(rows[1].detail, "USE TEMP B-TREE FOR ORDER BY");
+    }
+
+    /// A multi-term `ORDER BY` cannot be served by the single-key
+    /// index-ordered scan, so it must fall to the sorter even when its
+    /// leading column is indexed. Not expressible before #147.
+    #[test]
+    fn a_multi_term_order_by_reports_a_temp_b_tree() {
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t ORDER BY a, b"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows[0].detail, "SCAN t");
         assert_eq!(rows[1].detail, "USE TEMP B-TREE FOR ORDER BY");
     }
 
     #[test]
     fn a_bounded_indexed_column_reports_a_search() {
-        let mut q = query();
-        q.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("a".to_string())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(5))),
-        ));
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), None).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t WHERE a > 5"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows[0].detail, "SEARCH t USING INDEX t_a (a>?)");
     }
 
     #[test]
     fn an_equality_on_an_indexed_column_reports_an_equality_search() {
-        let mut q = query();
-        q.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("a".to_string())),
-            BinOp::Eq,
-            Box::new(Expr::Literal(Literal::Int(5))),
-        ));
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), None).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t WHERE a = 5"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows[0].detail, "SEARCH t USING INDEX t_a (a=?)");
     }
 
     #[test]
     fn an_unindexed_where_clause_reports_a_full_scan() {
-        let mut q = query();
-        q.where_clause = Some(Expr::BinaryOp(
-            Box::new(Expr::Column("b".to_string())),
-            BinOp::Gt,
-            Box::new(Expr::Literal(Literal::Int(5))),
-        ));
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), None).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t WHERE b > 5"),
+            &schema(vec![index_on_a()]),
+            None,
+        )
+        .unwrap();
         assert_eq!(rows[0].detail, "SCAN t");
     }
 
     #[test]
     fn a_joined_query_reports_one_row_per_table() {
-        let mut q = query();
-        q.joins = vec![crate::expr::Join {
-            kind: crate::expr::JoinKind::Inner,
-            table: "u".to_string(),
-            left_col: "a".to_string(),
-            right_col: "x".to_string(),
-        }];
         let mut right = schema(vec![]);
         right.name = "u".to_string();
-        let rows = explain_query_plan(&q, &schema(vec![index_on_a()]), Some(&right)).unwrap();
+        let rows = explain_query_plan(
+            &select("SELECT a FROM t JOIN u ON t.a = u.x"),
+            &schema(vec![index_on_a()]),
+            Some(&right),
+        )
+        .unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].detail, "SCAN t");
         assert_eq!(rows[1].detail, "SCAN u");
