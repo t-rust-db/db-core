@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.57.0] - 2026-09-06
+
+### Added
+
+- **`codegen::row` compiles multi-term `ORDER BY`, `NULLS FIRST`/`LAST`, and expression `LIMIT`/`OFFSET`** (#149) -- threads `Vec<SortKeyColumn>` through the sort-key plumbing (the VM/opcode layer already supported multi-term sort keys via `P4::SortKey`) so every `ORDER BY` term participates in the sort, and wires `term.nulls_last` into `SortKeyColumn.nulls_first` with SQLite's default (`NULLS FIRST` for `DESC`, `NULLS LAST` for `ASC`) when unstated. `LIMIT`/`OFFSET` now compile through the general expression compiler instead of only accepting integer literals. `ORDER BY` over an arbitrary expression (not just a bare column) remains out of scope -- the current model threads extra sort columns as names, not compiled values; filed as #167.
+
 ## [0.56.0] - 2026-09-06
 
 ### Added
