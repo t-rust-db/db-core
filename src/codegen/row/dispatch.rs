@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__dispatch_174__v1_create_index_dispatches_via_index_keyword() {
+    fn mcdc__dispatch_179__v1_create_index_dispatches_via_index_keyword() {
         let sql = "CREATE INDEX idx_t_a ON t(a)";
         let schemas = vec![TableSchema {
             name: "t".to_string(),
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__dispatch_174__v2_create_unique_index_dispatches_via_unique_keyword() {
+    fn mcdc__dispatch_179__v2_create_unique_index_dispatches_via_unique_keyword() {
         let sql = "CREATE UNIQUE INDEX idx_t_a ON t(a)";
         let schemas = vec![TableSchema {
             name: "t".to_string(),
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__dispatch_174__v3_create_with_neither_keyword_is_unrecognized() {
+    fn mcdc__dispatch_179__v3_create_with_neither_keyword_is_unrecognized() {
         let sql = "CREATE SEQUENCE s";
         let err = compile_statement(sql, &[]).unwrap_err();
         assert!(matches!(err, DispatchError::Unrecognized(name) if name == "CREATE"));

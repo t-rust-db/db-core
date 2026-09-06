@@ -2070,7 +2070,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_355__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__batch_829__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query);
         let (body, ..) = program.split_finalize();
@@ -2081,7 +2081,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_355__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__batch_829__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query);
         let (body, ..) = program.split_finalize();
@@ -2092,7 +2092,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_355__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__batch_829__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query);
         let (body, ..) = program.split_finalize();

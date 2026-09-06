@@ -1880,7 +1880,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1361__v1_a_null_propagates() {
+    fn mcdc__batch_1628__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1908,7 +1908,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1361__v2_b_null_propagates() {
+    fn mcdc__batch_1628__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1936,7 +1936,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1361__v3_neither_null_computes_result() {
+    fn mcdc__batch_1628__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1964,7 +1964,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1377__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1671__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1992,7 +1992,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1377__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1671__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2020,7 +2020,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1377__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1671__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2048,7 +2048,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1377__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1671__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2743,7 +2743,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1202__v1_target_in_bounds_yields_source_value() {
+    fn mcdc__batch_1453__v1_target_in_bounds_yields_source_value() {
         let batch = Batch::new(3)
             .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
             .with_column(
@@ -2771,7 +2771,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1202__v2_target_below_zero_yields_null() {
+    fn mcdc__batch_1453__v2_target_below_zero_yields_null() {
         let batch = Batch::new(3)
             .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
             .with_column(
@@ -2799,7 +2799,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1202__v3_target_at_or_past_len_yields_null() {
+    fn mcdc__batch_1453__v3_target_at_or_past_len_yields_null() {
         let batch = Batch::new(3)
             .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
             .with_column(

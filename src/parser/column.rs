@@ -1335,21 +1335,21 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_620__v1_agg_without_window_validates_group_by_keys() {
+    fn mcdc__column_689__v1_agg_without_window_validates_group_by_keys() {
         let err = parse("SELECT foo, SUM(amount) FROM t").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_620__v2_no_agg_skips_group_by_key_validation() {
+    fn mcdc__column_689__v2_no_agg_skips_group_by_key_validation() {
         let q = parse("SELECT foo, bar FROM t").unwrap();
         assert_eq!(q.columns.len(), 2);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_620__v3_agg_with_window_skips_group_by_key_validation() {
+    fn mcdc__column_689__v3_agg_with_window_skips_group_by_key_validation() {
         let q =
             parse("SELECT region, SUM(amount), ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
         assert_eq!(q.columns.len(), 3);
