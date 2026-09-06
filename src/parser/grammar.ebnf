@@ -181,7 +181,7 @@ select-item     ::= "*"
                         has the schema) at compile time -- sql-parser has
                         no access to a table's schema itself, so `*` is
                         carried through as an AST-level marker
-                        (sql_expr::SelectItem::Star) rather than expanded
+                        (parser::ast::ResultColumn::Star) rather than expanded
                         here. No arbitrary expressions in the select list
                         beyond `*`, a bare column, an aggregate call, or a
                         window call *)
@@ -216,9 +216,10 @@ over-clause     ::= "(" [ "PARTITION" "BY" ident-list ]
  * Equi-joins only (except CROSS, which has no condition), one ON clause
  * per non-CROSS join. Table aliases are a bare trailing identifier (no
  * `AS`) resolved at parse time: `FROM orders o` lets `o.col` stand for
- * `orders.col` anywhere in the query, but the alias itself never appears
- * in the parsed AST (sql_expr::Query/Join only ever hold real table
- * names) -- it's rewritten away before the AST is built. No comma-join,
+ * `orders.col` anywhere in the query, but the alias itself never reaches
+ * codegen: `parser::column::validate_select` rewrites every
+ * alias-qualified column reference to the real table name in place, so
+ * the AST codegen consumes only ever holds real table names. No comma-join,
  * no NATURAL, no USING(...), no subqueries in FROM. Compare sqlite-rs's
  * own `from-clause`/`join-op` in section 3 -- a strictly larger chain
  * this is a narrow subset of; NOT shared (see the file header). *)

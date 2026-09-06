@@ -1,6 +1,6 @@
-//! Query planners -- AST ([`crate::expr::Query`]) to an executable
-//! [`crate::vm`] `Program` -- one per `vm` executor, mirroring `vm`'s own
-//! `batch`/`row`/`stream` split (ADR 0001).
+//! Query planners -- [`crate::parser::ast::Select`] (the crate's single
+//! AST, #153) to an executable [`crate::vm`] `Program` -- one per `vm`
+//! executor, mirroring `vm`'s own `batch`/`row`/`stream` split (ADR 0001).
 //!
 //! **Naming (ADR 0007):** *codegen* here means exactly what sqlite-rs's
 //! `src/codegen/*` means -- planning. The ahead-of-time *Rust-source*
@@ -11,10 +11,12 @@
 //!   ending in [`crate::vm::batch::Opcode::Finalize`], plus the join/
 //!   semi-join/window program assembly and `EXPLAIN` plan-tree
 //!   construction. **Implemented** -- moved from column-rs's `src/query.rs`,
-//!   which never touched Parquet in these parts.
-//! - [`row`] -- the eventual home for the sqlite-rs-style planner (AST to
-//!   VDBE-shaped bytecode). **Not yet implemented** -- see its own doc
-//!   comment for the port target.
+//!   which never touched Parquet in these parts. Consumes
+//!   [`crate::parser::ast::Select`] directly, the same AST [`row`] does
+//!   (#153 retired the private the retired `expr::Query` module it used to consume).
+//! - [`row`] -- the sqlite-rs-style planner (AST to VDBE-shaped bytecode).
+//!   **Implemented** (db-core#20/#91-#97) -- see its own doc comment for
+//!   what's ported and what's scoped down from the reference.
 //! - [`stream`] -- push-driven planner for live/unbounded sources. **Not
 //!   yet implemented.**
 //!

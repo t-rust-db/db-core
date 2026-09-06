@@ -2,13 +2,11 @@
 //! `ADR 0002` in `db-core`'s `.openspec/adr/`), mirroring how `sql-vm`
 //! already splits into `batch`/`row`/`stream` executors (ADR 0001):
 //!
-//! - [`ast`] -- the crate's AST, contributed by sqlite-rs. Lives here
-//!   rather than under [`row`] (#147) because it is not row's: ADR 0002
-//!   makes it the single AST. `crate::expr::Query` is a strict subset of
-//!   `ast::Select` being retired (#153) -- `codegen::row` is already off
-//!   it; `codegen::batch`/`emit::batch` still consume it via
-//!   [`column`]'s lowering until then. `parser::row::ast` remains as a
-//!   re-export for one release.
+//! - [`ast`] -- the crate's single AST, contributed by sqlite-rs. Lives
+//!   here rather than under [`row`] (#147) because it is not row's: ADR
+//!   0002 makes it the single AST, consumed directly by both
+//!   `codegen::row` and `codegen::batch` (#153 retargeted the latter,
+//!   retiring the the retired `expr::Query` module subset it used to lower into).
 //! - [`row`] -- sqlite-rs's full SQLite grammar (DDL, DML, transactions,
 //!   `PRAGMA`, ...), ~7,400 lines (`grammar`/`tokenizer`/`error`/
 //!   `printer`). Produces [`ast::Select`]. This is now the *only*
@@ -17,12 +15,12 @@
 //!   restricted to what the query VM executes). On by default. Has no
 //!   tokenizer or parser of its own: [`column::parse`]/
 //!   [`column::parse_explain`] parse with `row`'s ([`row::parse_select`]/
-//!   [`row::parse_explain`]) and then lower the resulting `ast::Select`
-//!   into `crate::expr::Query` -- the shape `codegen::batch`/`emit::batch`
-//!   still expect -- rejecting anything outside the analytics subset
-//!   (`WITH`, `UNION`, a real multi-way join, ...) at that lowering step
-//!   with `ParseError`. This is ADR 0002's second amendment: one grammar,
-//!   with `column`'s subset *enforced*, not parsed by a second grammar
+//!   [`row::parse_explain`]) and return the resulting `ast::Select`
+//!   unchanged in shape -- rejecting anything outside the analytics
+//!   subset (`WITH`, `UNION`, a real multi-way join, ...) with
+//!   `ParseError`, and resolving table aliases in place as a side effect.
+//!   This is ADR 0002's second amendment: one grammar, with `column`'s
+//!   subset *enforced* by a validator, not parsed by a second grammar
 //!   that simply can't recognize the rest.
 //!
 //! Because `column` is now a thin adapter over `row`, the `parser-column`

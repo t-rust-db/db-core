@@ -10,9 +10,10 @@
 //! equivalent step; column-rs's `codegen` CLI subcommand is the consumer.
 //!
 //! - [`batch`] -- renders a planned [`crate::codegen::batch`] program (or a
-//!   reconstructed [`crate::expr::Query`] literal, for the join/semi-join/
-//!   window shapes that bypass the flat program) to Rust source.
-//!   **Implemented** -- extracted from column-rs's private `src/codegen.rs`.
+//!   reconstructed [`crate::parser::ast::Select`] literal, for the
+//!   join/semi-join/window shapes that bypass the flat program) to Rust
+//!   source. **Implemented** -- extracted from column-rs's private
+//!   `src/codegen.rs`.
 //! - [`row`] -- emitter for a future `vm::row` program. **Not yet
 //!   implemented.**
 //! - [`stream`] -- emitter for a future `vm::stream` program. **Not yet

@@ -18,28 +18,28 @@ crate boundaries.
 
 - **`types`** — `Literal`/`Value`, the base value representation. No
   syntax, no evaluation. Always compiled.
-- **`expr`** — the expression/query AST: `Expr`, `Query`, `BinOp`,
-  `AggFunc`, `WindowFunc`, `JoinKind`, etc. `Expr` and `Query` are
-  mutually recursive, which is why they live together. Always compiled.
 - **`join`** — `JoinHashTable` (a flat open-addressing multimap) and
   join-kind emit semantics. Always compiled (small, no dependencies) —
   its only consumer today is `vm-batch`.
 - **`parser`** — tokenizer + recursive-descent parser, producing
-  `expr::Query`. Two Cargo-feature-gated sections: `parser-column`
-  (column-rs's analytics subset, default on) and `parser-row`
-  (sqlite-rs's full grammar — DDL/DML/transactions/`PRAGMA`). See
-  `src/parser/grammar.ebnf` for the actual EBNF both sections implement.
+  `parser::ast::Select` — the crate's single AST (ADR 0002), consumed
+  directly by both the batch and row planners. Two Cargo-feature-gated
+  sections: `parser-column` (column-rs's analytics subset, default on —
+  a validator over the same AST, enforcing which constructs the batch
+  planner accepts) and `parser-row` (sqlite-rs's full grammar —
+  DDL/DML/transactions/`PRAGMA`). See `src/parser/grammar.ebnf` for the
+  actual EBNF both sections implement.
 - **`vm`** — three execution engines over a compiled query: `vm-batch`
   (vectorized/columnar, default on — this is column-rs's VM), `vm-row`
-  (cursor-driven, sqlite-rs-style — not yet implemented, `#18`),
-  `vm-stream` (push-driven, live/unbounded sources — not yet
-  implemented). Each has its own opcode set; they are not expected to
-  converge into one.
+  (cursor-driven, sqlite-rs-style, default on), `vm-stream` (push-driven,
+  live/unbounded sources — not yet implemented). Each has its own opcode
+  set; they are not expected to converge into one. `vm::batch::AggFunc`
+  is shared by both the batch and row planners.
 - **`codegen`** — the planner, AST → executable `vm` `Program` (sqlite-rs's
   meaning of "codegen", [ADR 0007](.openspec/adr/0007-program-instruction-mirror-sqlite-rs.md)):
-  `codegen-batch` (default on, needs `vm-batch`; moved here from
-  column-rs's `query.rs`), `codegen-row`/`codegen-stream` (not yet
-  implemented).
+  `codegen-batch` (default on, needs `vm-batch` and `parser-column`;
+  moved here from column-rs's `query.rs`), `codegen-row` (default on,
+  the sqlite-rs-style planner), `codegen-stream` (not yet implemented).
 - **`emit`** — ahead-of-time Rust-source emitter: a planned `Program` →
   `const PROGRAM` source text for rustc (batch-only, no sqlite-rs
   equivalent). `emit-batch` (default on, needs `codegen-batch`),

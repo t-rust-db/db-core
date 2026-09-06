@@ -13,9 +13,8 @@
 //! table catalog, `ANALYZE` stats, join bindings, and correlated-
 //! subquery hoisting/memoization caches -- none of which db-core has
 //! yet (they belong to #92 joins / #95 subqueries), and none of which
-//! db-core's current [`crate::expr::Expr`] (no `Case`/`Cast`/`Like`/
-//! `Between`/`Exists`/qualified columns, unlike sqlite-rs's richer
-//! `parser::ast::Expr`) could exercise anyway. This module ports the
+//! the batch planner's narrower validated subset (no `Case`/`Cast`/
+//! `Like`/`Between`) could exercise anyway. This module ports the
 //! *mechanism* -- [`Label`]/[`Target`]/[`NullTarget`]/[`CondTargets`]/
 //! [`Emitter`], a plain-bump [`RegAlloc`] (no CTE cache, no
 //! subquery-cursor allocation), and a single-table [`Scope`] (bare
@@ -80,14 +79,13 @@
 //!
 //! **#95 adds subqueries**: [`subquery`], ported from sqlite-rs's
 //! `codegen/subquery.rs` and its `subquery/{scalar,from_clause,flatten,
-//! pushdown}.rs`. `Expr` grows an `Exists` variant and `Query.from`
-//! becomes a [`crate::expr::FromClause`] (a table name or a subquery
-//! plus its alias), and [`select::compile_select_with_catalog`] is the
-//! entry point that wires the cursors itself, since a subquery's own
-//! `FROM` table can't be pre-wired by the caller. See that module's own
-//! doc for what db-core's narrower `Expr`/`Query` scopes out of the
-//! reference -- notably CTEs and the correlated-subquery
-//! hoisting/memoization caches.
+//! pushdown}.rs`. Consumes `ast::ExprKind::Exists`/`ast::TableRefKind::
+//! Subquery` (a table name or a subquery plus its alias), and
+//! [`select::compile_select_with_catalog`] is the entry point that wires
+//! the cursors itself, since a subquery's own `FROM` table can't be
+//! pre-wired by the caller. See that module's own doc for what db-core
+//! scopes out of the reference -- notably CTEs and the correlated-
+//! subquery hoisting/memoization caches.
 //!
 //! **`planner.rs` (sqlite-rs's 386-line cost model) is deliberately not
 //! ported here yet**, even though `codegen::row::planner` is its
@@ -776,9 +774,10 @@ pub struct IndexSchema {
 }
 
 /// The table(s) a query's column references resolve against. Single-table
-/// queries never need to disambiguate, since db-core's current
-/// [`crate::expr::Expr::Column`] has no qualifier of its own -- qualifiers
-/// only ever arrive as a `"table.column"`-shaped plain string. #102 grows
+/// queries never need to disambiguate: this module's own [`Scope`]
+/// resolves a column by bare name, not by the AST's `table`/`catalog`
+/// qualifier fields -- a qualified reference only ever arrives here as a
+/// `"table.column"`-shaped plain string. #102 grows
 /// this to an optional second (right-side) binding for a single equi-join,
 /// and #95 a `catalog`/`outer` pair for subqueries; full multi-table
 /// resolution (N-way joins) is still deferred to #101.

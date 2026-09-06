@@ -17,7 +17,7 @@
 //! multi-index cost comparison: the first matching index wins.
 //! sqlite-rs's partial-prefix variant
 //! (`try_compile_partial_sorted_index_scan`, its #574) is not ported --
-//! db-core's [`crate::expr::OrderBy`] is a single term, so a strict
+//! this module's `ORDER BY` handling is a single term, so a strict
 //! non-empty prefix of it can never exist.
 
 use super::limit_scan::LimitState;
