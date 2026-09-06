@@ -46,7 +46,12 @@
 #![allow(
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
-    clippy::unwrap_used
+    clippy::unwrap_used,
+    // `chunks_exact_to_as_chunks` doesn't exist on every toolchain this
+    // repo's contributors run locally -- `unknown_lints` keeps this
+    // forward-compatible instead of erroring under an older clippy.
+    unknown_lints,
+    clippy::chunks_exact_to_as_chunks
 )]
 
 use db_core::vm::batch::Value;
