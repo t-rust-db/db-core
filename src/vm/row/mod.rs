@@ -8,26 +8,31 @@
 //! typed-operand design to `row`, which does not apply here). Ported
 //! so far:
 //!
-//! - [`value`] -- `Value`/`Collation`/`compare_text`/`format_real`.
-//! - [`compare`] -- cross-type ordering (NULL < numeric < text < blob).
+//! - [`value`] -- `Value`/`Collation`/`compare_text`/`format_real`,
+//!   re-exporting `db_core::value` (ADR 0010).
+//! - [`compare`] -- cross-type ordering (NULL < numeric < text < blob),
+//!   re-exporting `db_core::compare` (ADR 0011/#122).
 //! - [`logic`] -- three-valued logic / NULL propagation (codegen-side
 //!   helpers; not used by the exec loop itself, same as sqlite-rs).
 //! - [`affinity`] -- column type affinity.
 //! - [`cast`] -- `CAST` conversion.
-//! - [`coerce`] -- text-to-numeric coercion and checked arithmetic.
+//! - [`coerce`] -- text-to-numeric coercion and checked arithmetic,
+//!   re-exporting `db_core::coerce` (ADR 0011/#122).
 //! - [`aggregate`] -- `AggState`/`step`/`finalize` (`COUNT`/`SUM`/
 //!   `AVG`/`MIN`/`MAX`), backing `Opcode::AggStep`/`AggFinal` (single
 //!   accumulator per slot) and, via [`cursor::HashAggCursor`]
 //!   (db-core#86), `Opcode::HashAggStep`'s per-group accumulators.
 //! - [`functions`] -- scalar functions, backing `Opcode::Function`,
-//!   now closing the gap against sqlite-rs's `vdbe::functions`
-//!   entirely: `abs`/`length`/`upper`/`lower`/`coalesce`/`ifnull`/
-//!   `nullif`/`typeof` (db-core#64), `sign`/`zeroblob`/`iif`/scalar
+//!   closing the gap against sqlite-rs's `vdbe::functions` entirely:
+//!   `abs`/`length`/`upper`/`lower`/`coalesce`/`ifnull`/`nullif`/
+//!   `typeof` (db-core#64), `sign`/`zeroblob`/`iif`/scalar
 //!   `min`/`max`/`sqlite_version`/`round`/`hex`/`unhex`/`instr`/
 //!   `quote` (db-core#68), and `substr`/`trim`/`ltrim`/`rtrim`/
 //!   `replace`/`like`/`glob` (db-core#90, whose `like_match`/
 //!   `glob_match` are exposed for a future `LIKE`/`GLOB` operator to
-//!   call directly).
+//!   call directly). Re-exports `db_core::functions` (ADR 0011/#122) --
+//!   `vm::batch`/`vm::stream` can call the same registry directly once
+//!   either needs scalar functions of its own.
 //! - [`program`] -- `Opcode`/`Instruction`/`Program`, sqlite-rs's raw
 //!   `p1..p5` operand shape (not typed named fields).
 //! - [`cursor`] -- the storage-agnostic [`cursor::Cursor`] trait ADR

@@ -19,6 +19,14 @@
 //!   consumer today is `vm`'s `vm-batch` feature, but gating it
 //!   separately isn't worth the complexity for ~250 lines with zero
 //!   deps.
+//! - [`compare`]/[`coerce`]/[`functions`] -- always compiled, no feature
+//!   gate: cross-type ordering, text-to-numeric coercion, and the ~30
+//!   scalar functions (`substr`/`like`/`glob`/...), all pure `Value`-only
+//!   logic with one correct behavior regardless of which `vm` executor
+//!   calls it (db-core#122, mirroring [`value`]'s own ADR 0010 hoist).
+//!   `vm::row` re-exports all three today; `vm-batch`/`vm-stream` have a
+//!   documented path to call [`functions::call`] directly once either
+//!   needs scalar functions of its own.
 //! - [`parser`] -- `parser-column` (default) / `parser-row`.
 //! - [`vm`] -- `vm-batch` (default) / `vm-row` / `vm-stream`.
 //! - [`codegen`] -- the planner, AST -> executable `Program` (sqlite-rs's
@@ -40,6 +48,9 @@
 /// fails the build if the two drift, so bump both together on release.
 pub const VERSION: &str = "0.61.0";
 
+pub mod coerce;
+pub mod compare;
+pub mod functions;
 pub mod join;
 pub mod types;
 pub mod value;
