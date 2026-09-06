@@ -23,7 +23,7 @@
 //!
 //! ```sh
 //! cargo test --release --test 01_groupreduce_key_hashing -- --ignored --nocapture
-//! # or: make -C tests/spike/002_groupreduce_key_hashing run
+//! # or: make -C tests/spike/002_arrow_optimization run
 //! ```
 
 // This spike measures raw hashing/allocation cost (that's the entire
