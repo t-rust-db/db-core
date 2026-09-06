@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.58.0] - 2026-09-06
+
+### Added
+
+- **`codegen::row` compiles `ORDER BY` over an arbitrary expression** (#167) -- ports sqlite-rs's `OrderByTarget::Column(usize) | Expr(Expr)` split: a bare-column term still resolves to a plain `columns`-list index at plan time, but any other expression (`a + b`, `upper(name)`, etc.) now compiles into its own register via the general `compile_value` expression compiler, whose offset from the record's first register becomes its `SortKeyColumn.index`. `Opcode::SorterOpen`'s sort-key descriptor is now a patchable placeholder (`Emitter::patch_p4`), since an expression term's record position isn't known until the scan body that computes it has actually been emitted. Closes the stub #149/#166 left in place.
+
+### Fixed
+
+- **`codegen::row`'s `ORDER BY` expression compiler now null-substitutes a `LEFT`/`FULL` join's null-extended side** (#173) -- an `ORDER BY` expression referencing a column on a null-extended join row previously read whatever stale value that cursor's last real row left in its registers instead of `NULL`, sometimes crashing outright ("column read with no current row"). `null_extend` rewrites every such column reference into a `NULL` literal before compiling the sort expression, matching the existing null-fill behavior for a plain projected column.
+
 ## [0.57.0] - 2026-09-06
 
 ### Added
