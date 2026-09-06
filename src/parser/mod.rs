@@ -3,10 +3,12 @@
 //! already splits into `batch`/`row`/`stream` executors (ADR 0001):
 //!
 //! - [`ast`] -- the crate's AST, contributed by sqlite-rs. Lives here
-//!   rather than under [`row`] (#147) because it is not row's: ADR 0002's
-//!   second amendment makes it the single AST, with `crate::expr::Query`
-//!   retired as a strict subset of `ast::Select`. `parser::row::ast`
-//!   remains as a re-export for one release.
+//!   rather than under [`row`] (#147) because it is not row's: ADR 0002
+//!   makes it the single AST. `crate::expr::Query` is a strict subset of
+//!   `ast::Select` being retired (#153) -- `codegen::row` is already off
+//!   it; `codegen::batch`/`emit::batch` still consume it via
+//!   [`column`]'s lowering until then. `parser::row::ast` remains as a
+//!   re-export for one release.
 //! - [`row`] -- sqlite-rs's full SQLite grammar (DDL, DML, transactions,
 //!   `PRAGMA`, ...), ~7,400 lines (`grammar`/`tokenizer`/`error`/
 //!   `printer`). Produces [`ast::Select`]. This is now the *only*
