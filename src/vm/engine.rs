@@ -1,14 +1,16 @@
 //! Cross-segment orchestration over the batch executor (ADR 0007).
 //!
 //! [`super::batch::Vm`] executes a program against *one* segment's batch.
-//! A planned program's trailing [`Opcode::Finalize`] is a barrier: it
-//! merges per-segment partial aggregates, then applies the final `ORDER
-//! BY`/`LIMIT` -- so it cannot run inside the per-segment loop (where the
-//! VM treats it as a no-op control opcode). [`run`] is the entry point
-//! that splits a [`Program`] at that trailing `Finalize`, runs the body per
-//! segment via [`run_parallel`]/[`run_parallel_top_n`] (or a sequential
-//! bounded scan when the plan is a bare `LIMIT`), and applies the
-//! `Finalize` once over the concatenated output.
+//! A planned program's trailing `Combine [Sort] [Limit]` sequence
+//! (db-core#48; `Combine` merges per-segment partial aggregates,
+//! `Sort`/`Limit` apply the final `ORDER BY`/`LIMIT`) is a barrier: it
+//! needs every segment's output, so it cannot run inside the per-segment
+//! loop (where the VM treats each of those three as a no-op control
+//! opcode). [`run`] is the entry point that splits a [`Program`] at that
+//! trailing sequence, runs the body per segment via
+//! [`run_parallel`]/[`run_parallel_top_n`] (or a sequential bounded scan
+//! when the plan is a bare `LIMIT`), and applies the merge/sort/limit
+//! once over the concatenated output.
 //!
 //! The merge/sort/limit logic itself ([`finalize`]) is column-rs's former
 //! `query::post_process`, moved here unchanged -- it never touched storage.
@@ -33,8 +35,8 @@ impl Segment for InMemorySegment {
 }
 
 /// Run `program` over `segments`: body per segment, then the trailing
-/// [`Opcode::Finalize`] once (see module docs). A program with no
-/// `Finalize` is a plain per-segment concatenation, exactly like
+/// `Combine`/`Sort`/`Limit` sequence once (see module docs). A program
+/// with no `Combine` is a plain per-segment concatenation, exactly like
 /// [`run_parallel`].
 ///
 /// Two plan shapes short-circuit the general path, both decided from the
@@ -46,16 +48,22 @@ impl Segment for InMemorySegment {
 ///   per segment and at the merge (#109) instead of materializing every
 ///   row before the final sort.
 pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<Vec<Vec<Value>>> {
-    let (body, fin) = program.split_finalize();
-    let Some(Opcode::Finalize {
+    let (body, combine, sort, limit_op) = program.split_finalize();
+    let Some(Opcode::Combine {
         agg_parts,
         num_group_keys,
         distinct,
-        order_by,
-        limit,
-    }) = fin
+    }) = combine
     else {
         return run_parallel(segments, &body);
+    };
+    let order_by = match sort {
+        Some(Opcode::Sort { col, descending }) => Some((*col, *descending)),
+        _ => None,
+    };
+    let limit = match limit_op {
+        Some(Opcode::Limit { n }) => Some(*n),
+        _ => None,
     };
 
     if let Some(limit) = bounded_scan_limit(program) {
@@ -66,9 +74,9 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<Vec<Vec<Valu
             segments,
             &body,
             &TopN {
-                col: *col,
-                descending: *descending,
-                limit: *limit,
+                col,
+                descending,
+                limit,
             },
         )?,
         _ => run_parallel(segments, &body)?,
@@ -77,26 +85,30 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<Vec<Vec<Valu
         agg_parts,
         *num_group_keys,
         *distinct,
-        *order_by,
-        *limit,
+        order_by,
+        limit,
         rows,
     ))
 }
 
 /// The `LIMIT` when `program` can be satisfied by a sequential prefix scan
-/// (#108): a trailing [`Opcode::Finalize`] with no aggregates and no
-/// `ORDER BY`, and no [`Opcode::Filter`] in the body -- i.e. the first
+/// (#108): a trailing `Combine` with no aggregates and no `Sort`, followed
+/// by a `Limit`, and no [`Opcode::Filter`] in the body -- i.e. the first
 /// `limit` rows of the first however-many segments *are* the answer.
 pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
-    let (body, fin) = program.split_finalize();
-    let Some(Opcode::Finalize {
+    let (body, combine, sort, limit_op) = program.split_finalize();
+    let Some(Opcode::Combine {
         agg_parts,
         distinct,
-        order_by: None,
-        limit: Some(limit),
         ..
-    }) = fin
+    }) = combine
     else {
+        return None;
+    };
+    if sort.is_some() {
+        return None;
+    }
+    let Some(Opcode::Limit { n }) = limit_op else {
         return None;
     };
     if *distinct
@@ -105,7 +117,7 @@ pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
     {
         return None;
     }
-    Some(*limit)
+    Some(*n)
 }
 
 /// Sequentially scan `segments` in order, running `body` against each
@@ -131,8 +143,8 @@ fn bounded_scan<S: Segment>(
     Ok(rows)
 }
 
-/// Apply [`Opcode::Finalize`]'s semantics to a flat row list: merge rows
-/// sharing a group key per `agg_parts`, then `ORDER BY`, then `LIMIT`.
+/// Apply `Combine`/`Sort`/`Limit`'s semantics to a flat row list: merge
+/// rows sharing a group key per `agg_parts`, then `ORDER BY`, then `LIMIT`.
 /// Shared by every execution path, and callable directly with `const`
 /// data by an AOT-emitted binary.
 #[allow(
@@ -271,7 +283,8 @@ fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Vec<Value> {
 /// `crate::codegen::batch::compile_join` and driven by [`run_join`]: which
 /// columns each side must materialize (in register order), the build and
 /// probe programs, where the probe lands the build side's payload, and the
-/// flat body (ending in [`Opcode::Finalize`]) to run over the joined batch.
+/// flat body (ending in [`Opcode::Combine`], optionally followed by
+/// `Sort`/`Limit`) to run over the joined batch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JoinProgram {
     /// Left (probe-side) column names, in the register order the probe program loads them.
@@ -367,8 +380,13 @@ mod tests {
         InMemorySegment(batch)
     }
 
-    fn group_sum_program(fin: Opcode) -> Program {
-        Program::new(vec![
+    /// `tail` is the trailing sequential-phase opcode sequence (empty,
+    /// `[Combine]`, `[Combine, Sort]`, `[Combine, Limit]`, or `[Combine,
+    /// Sort, Limit]`) -- callers build it directly rather than through
+    /// `codegen::batch::compile`, since these tests exercise `engine::run`
+    /// in isolation from the planner.
+    fn group_sum_program(tail: Vec<Opcode>) -> Program {
+        let mut instructions = vec![
             Instruction::new(Opcode::LoadColumn {
                 reg: 0,
                 column: "k".into(),
@@ -385,20 +403,25 @@ mod tests {
             Instruction::new(Opcode::Emit {
                 registers: vec![0, 2].into(),
             }),
-            Instruction::new(fin),
-        ])
+        ];
+        instructions.extend(tail.into_iter().map(Instruction::new));
+        Program::new(instructions)
     }
 
     #[test]
     fn finalize_merges_partial_group_aggregates_across_segments() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
-        let program = group_sum_program(Opcode::Finalize {
-            agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
-            num_group_keys: 1,
-            distinct: false,
-            order_by: Some((0, false)),
-            limit: None,
-        });
+        let program = group_sum_program(vec![
+            Opcode::Combine {
+                agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
+                num_group_keys: 1,
+                distinct: false,
+            },
+            Opcode::Sort {
+                col: 0,
+                descending: false,
+            },
+        ]);
         let rows = run(&segments, &program).unwrap();
         assert_eq!(
             rows,
@@ -412,14 +435,13 @@ mod tests {
     #[test]
     fn program_without_finalize_is_plain_concatenation() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
-        let mut program = group_sum_program(Opcode::Halt);
-        program.instructions.pop();
+        let program = group_sum_program(vec![]);
         let rows = run(&segments, &program).unwrap();
         // Per-segment partials, unmerged: (1,10),(2,5) then (1,3).
         assert_eq!(rows.len(), 3);
     }
 
-    fn scan_program(fin: Opcode, with_filter: bool) -> Program {
+    fn scan_program(tail: Vec<Opcode>, with_filter: bool) -> Program {
         let mut instructions = vec![Instruction::new(Opcode::LoadColumn {
             reg: 0,
             column: "k".into(),
@@ -430,7 +452,7 @@ mod tests {
         instructions.push(Instruction::new(Opcode::Emit {
             registers: vec![0].into(),
         }));
-        instructions.push(Instruction::new(fin));
+        instructions.extend(tail.into_iter().map(Instruction::new));
         Program::new(instructions)
     }
 
@@ -438,13 +460,14 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__engine_102__v1_distinct_disqualifies_bounded_scan() {
         let program = scan_program(
-            Opcode::Finalize {
-                agg_parts: vec![].into(),
-                num_group_keys: 0,
-                distinct: true,
-                order_by: None,
-                limit: Some(5),
-            },
+            vec![
+                Opcode::Combine {
+                    agg_parts: vec![].into(),
+                    num_group_keys: 0,
+                    distinct: true,
+                },
+                Opcode::Limit { n: 5 },
+            ],
             false,
         );
         assert_eq!(bounded_scan_limit(&program), None);
@@ -454,13 +477,14 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__engine_102__v2_non_empty_agg_parts_disqualifies_bounded_scan() {
         let program = scan_program(
-            Opcode::Finalize {
-                agg_parts: vec![AggPart::Sum].into(),
-                num_group_keys: 0,
-                distinct: false,
-                order_by: None,
-                limit: Some(5),
-            },
+            vec![
+                Opcode::Combine {
+                    agg_parts: vec![AggPart::Sum].into(),
+                    num_group_keys: 0,
+                    distinct: false,
+                },
+                Opcode::Limit { n: 5 },
+            ],
             false,
         );
         assert_eq!(bounded_scan_limit(&program), None);
@@ -470,13 +494,14 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__engine_102__v3_filter_in_body_disqualifies_bounded_scan() {
         let program = scan_program(
-            Opcode::Finalize {
-                agg_parts: vec![].into(),
-                num_group_keys: 0,
-                distinct: false,
-                order_by: None,
-                limit: Some(5),
-            },
+            vec![
+                Opcode::Combine {
+                    agg_parts: vec![].into(),
+                    num_group_keys: 0,
+                    distinct: false,
+                },
+                Opcode::Limit { n: 5 },
+            ],
             true,
         );
         assert_eq!(bounded_scan_limit(&program), None);
@@ -486,13 +511,14 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__engine_102__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan() {
         let program = scan_program(
-            Opcode::Finalize {
-                agg_parts: vec![].into(),
-                num_group_keys: 0,
-                distinct: false,
-                order_by: None,
-                limit: Some(5),
-            },
+            vec![
+                Opcode::Combine {
+                    agg_parts: vec![].into(),
+                    num_group_keys: 0,
+                    distinct: false,
+                },
+                Opcode::Limit { n: 5 },
+            ],
             false,
         );
         assert_eq!(bounded_scan_limit(&program), Some(5));
@@ -521,13 +547,12 @@ mod tests {
             Instruction::new(Opcode::Emit {
                 registers: vec![0].into(),
             }),
-            Instruction::new(Opcode::Finalize {
+            Instruction::new(Opcode::Combine {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
                 distinct: false,
-                order_by: None,
-                limit: Some(3),
             }),
+            Instruction::new(Opcode::Limit { n: 3 }),
         ]);
         let rows = run(&segments, &program).unwrap();
         assert_eq!(rows.len(), 3);
@@ -551,12 +576,14 @@ mod tests {
             Instruction::new(Opcode::Emit {
                 registers: vec![0].into(),
             }),
-            Instruction::new(Opcode::Finalize {
+            Instruction::new(Opcode::Combine {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
                 distinct: true,
-                order_by: Some((0, false)),
-                limit: None,
+            }),
+            Instruction::new(Opcode::Sort {
+                col: 0,
+                descending: false,
             }),
         ]);
         let rows = run(&segments, &program).unwrap();
@@ -584,13 +611,16 @@ mod tests {
             Instruction::new(Opcode::Emit {
                 registers: vec![0].into(),
             }),
-            Instruction::new(Opcode::Finalize {
+            Instruction::new(Opcode::Combine {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
                 distinct: true,
-                order_by: Some((0, false)),
-                limit: Some(2),
             }),
+            Instruction::new(Opcode::Sort {
+                col: 0,
+                descending: false,
+            }),
+            Instruction::new(Opcode::Limit { n: 2 }),
         ]);
         let rows = run(&segments, &program).unwrap();
         assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
@@ -603,13 +633,17 @@ mod tests {
         // row per key (1 -> 13, 2 -> 5), and since those two output rows
         // aren't equal, DISTINCT's post-aggregate dedup pass must leave both.
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
-        let program = group_sum_program(Opcode::Finalize {
-            agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
-            num_group_keys: 1,
-            distinct: true,
-            order_by: Some((0, false)),
-            limit: None,
-        });
+        let program = group_sum_program(vec![
+            Opcode::Combine {
+                agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
+                num_group_keys: 1,
+                distinct: true,
+            },
+            Opcode::Sort {
+                col: 0,
+                descending: false,
+            },
+        ]);
         let rows = run(&segments, &program).unwrap();
         assert_eq!(
             rows,
@@ -631,13 +665,16 @@ mod tests {
             Instruction::new(Opcode::Emit {
                 registers: vec![0].into(),
             }),
-            Instruction::new(Opcode::Finalize {
+            Instruction::new(Opcode::Combine {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
                 distinct: false,
-                order_by: Some((0, true)),
-                limit: Some(2),
             }),
+            Instruction::new(Opcode::Sort {
+                col: 0,
+                descending: true,
+            }),
+            Instruction::new(Opcode::Limit { n: 2 }),
         ]);
         let rows = run(&segments, &program).unwrap();
         assert_eq!(rows, vec![vec![Value::Int(3)], vec![Value::Int(2)]]);
@@ -662,41 +699,48 @@ mod tests {
 
     #[test]
     fn program_derives_columns_to_load_and_splits_trailing_finalize() {
-        let program = group_sum_program(Opcode::Finalize {
+        let program = group_sum_program(vec![Opcode::Combine {
             agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
             num_group_keys: 1,
             distinct: false,
-            order_by: None,
-            limit: None,
-        });
+        }]);
         assert_eq!(program.columns_to_load(), vec!["k", "v"]);
-        let (body, fin) = program.split_finalize();
+        let (body, combine, sort, limit) = program.split_finalize();
         assert_eq!(body.len(), 4);
-        assert!(matches!(fin, Some(Opcode::Finalize { .. })));
+        assert!(matches!(combine, Some(Opcode::Combine { .. })));
+        assert!(sort.is_none());
+        assert!(limit.is_none());
         assert!(matches!(body.last(), Some(Opcode::Emit { .. })));
 
         let plain = Program::from_opcodes(body.clone());
-        let (body2, fin2) = plain.split_finalize();
+        let (body2, combine2, sort2, limit2) = plain.split_finalize();
         assert_eq!(body2, body);
-        assert!(fin2.is_none());
+        assert!(combine2.is_none());
+        assert!(sort2.is_none());
+        assert!(limit2.is_none());
         assert_eq!(plain.len(), 4);
         assert!(!plain.is_empty());
         assert!(plain.get(0).is_some() && plain.get(4).is_none());
     }
 
     #[test]
-    fn per_segment_vm_treats_finalize_as_a_no_op() {
+    fn per_segment_vm_treats_combine_sort_limit_as_no_ops() {
         let batch = Batch::new(1).with_column("k", vec![Value::Int(1)]);
         let mut vm = Vm::new();
         vm.execute(
             &batch,
-            &[Opcode::Finalize {
-                agg_parts: vec![].into(),
-                num_group_keys: 0,
-                distinct: false,
-                order_by: None,
-                limit: Some(0),
-            }],
+            &[
+                Opcode::Combine {
+                    agg_parts: vec![].into(),
+                    num_group_keys: 0,
+                    distinct: false,
+                },
+                Opcode::Sort {
+                    col: 0,
+                    descending: false,
+                },
+                Opcode::Limit { n: 0 },
+            ],
         )
         .unwrap();
         assert!(vm.take_output().is_empty());

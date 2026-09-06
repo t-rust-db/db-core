@@ -221,7 +221,7 @@ pub enum WindowFunc {
 }
 
 /// One `GROUP BY`/aggregate part of an emitted row, in emit order -- the
-/// per-segment `GroupReduce` output's shape, which [`Opcode::Finalize`]
+/// per-segment `GroupReduce` output's shape, which [`Opcode::Combine`]
 /// needs to merge partial aggregates across segments (`Sum`/`Count` add,
 /// `Min`/`Max` compare, `Avg` divides its `(sum_index, count_index)` pair
 /// at the very end). Pure planning metadata, storage-agnostic. `Copy` so
@@ -375,26 +375,46 @@ pub enum Opcode {
     },
     /// Stop execution.
     Halt,
-    /// Terminal opcode of a planned flat program (ADR 0007): the
-    /// cross-segment post-processing step -- merge per-segment partial
-    /// aggregates by group key (`agg_parts`/`num_group_keys`), then the
-    /// final `ORDER BY` (`(output column index, descending)`) and `LIMIT`.
+    /// Cross-segment merge step of a planned flat program (ADR 0007,
+    /// db-core#48): merges per-segment partial aggregates by group key
+    /// (`agg_parts`/`num_group_keys`), then finalizes them (e.g. `Avg` =
+    /// merged sum / merged count), then deduplicates if `distinct`.
+    /// Mirrors DuckDB's `Combine` (merge thread-local partial states) and
+    /// `Finalize` (compute the final value from the merged state) as one
+    /// opcode -- db-core's `merge_rows`/`finalize_row` are exactly those
+    /// two steps back to back with no observable boundary between them.
     /// A *barrier*: it needs every segment's output, so the per-segment
     /// [`Vm`] treats it as a no-op control opcode (like [`Opcode::Scan`]/
-    /// [`Opcode::Halt`]) and [`crate::vm::engine::run`] applies it once
-    /// over the concatenated output. Encodes what used to be sidecar
-    /// plan fields so the instruction stream is the whole plan.
-    Finalize {
+    /// [`Opcode::Halt`]), and [`crate::vm::engine::run`] applies it once
+    /// over the concatenated output before any [`Opcode::Sort`]/
+    /// [`Opcode::Limit`] that follows. Always the first of a program's
+    /// trailing sequential-phase opcodes, if any are present at all --
+    /// `Sort`/`Limit` alone, with no `Combine`, never appear (see
+    /// [`Program::split_finalize`]).
+    Combine {
         /// Shape of each emitted row, for merging partial aggregates.
         agg_parts: Cow<'static, [AggPart]>,
         /// How many leading emitted columns are `GROUP BY` keys.
         num_group_keys: usize,
         /// Deduplicate identical output rows (`SELECT DISTINCT`).
         distinct: bool,
-        /// `(output column index, descending)` final sort, if any.
-        order_by: Option<(usize, bool)>,
-        /// Maximum number of rows to keep, if any.
-        limit: Option<usize>,
+    },
+    /// Final `ORDER BY` over the whole (already merged) result: sorts by
+    /// output column `col`, `descending` or ascending. A sequential-phase
+    /// opcode, like [`Opcode::Combine`]/[`Opcode::Limit`] -- see
+    /// [`Program::split_finalize`].
+    Sort {
+        /// Output column index to sort by.
+        col: usize,
+        /// `true` for descending, `false` for ascending.
+        descending: bool,
+    },
+    /// Final `LIMIT`: keep only the first `n` rows of the whole
+    /// (already merged, and sorted if [`Opcode::Sort`] preceded this)
+    /// result. A sequential-phase opcode -- see [`Program::split_finalize`].
+    Limit {
+        /// Maximum number of rows to keep.
+        n: usize,
     },
 }
 
@@ -418,7 +438,9 @@ impl Opcode {
             Opcode::Emit { .. } => "Emit",
             Opcode::NextSegment { .. } => "NextSegment",
             Opcode::Halt => "Halt",
-            Opcode::Finalize { .. } => "Finalize",
+            Opcode::Combine { .. } => "Combine",
+            Opcode::Sort { .. } => "Sort",
+            Opcode::Limit { .. } => "Limit",
         }
     }
 }
@@ -460,7 +482,8 @@ impl Instruction {
 /// `vdbe::program::Program`. Everything the executor needs is *in* the
 /// instruction stream: the columns to load are the [`Opcode::LoadColumn`]
 /// operands, and the cross-segment merge/sort/limit metadata is the
-/// trailing [`Opcode::Finalize`] -- no sidecar plan struct (ADR 0007).
+/// trailing `Combine`/`Sort`/`Limit` sequence -- no sidecar plan struct
+/// (ADR 0007, db-core#48).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Program {
     /// The instructions, executed in order from index 0.
@@ -515,20 +538,55 @@ impl Program {
         out
     }
 
-    /// Splits off a trailing [`Opcode::Finalize`]: `(body opcodes, the
-    /// Finalize)`. A program without one returns all its opcodes and
-    /// `None`, and executes as a plain per-segment concatenation.
-    pub fn split_finalize(&self) -> (Vec<Opcode>, Option<&Opcode>) {
-        match self.instructions.split_last() {
-            Some((
-                Instruction {
-                    opcode: fin @ Opcode::Finalize { .. },
-                    ..
-                },
-                body,
-            )) => (body.iter().map(|i| i.opcode.clone()).collect(), Some(fin)),
-            _ => (self.opcodes().cloned().collect(), None),
+    /// Splits off a trailing `Combine [Sort] [Limit]` sequence (db-core#48):
+    /// `(body opcodes, the Combine, the Sort, the Limit)`. Tries the
+    /// longest shape first (`Combine, Sort, Limit`) so a genuine 3-opcode
+    /// tail is never mistaken for a shorter one that happens to end in an
+    /// opcode of the same kind. A program with no trailing `Combine` at
+    /// all -- `Sort`/`Limit` alone never appear, since [`super::super::codegen::batch::compile`]
+    /// always emits `Combine` when it emits either -- returns every
+    /// opcode and `(None, None, None)`, and executes as a plain
+    /// per-segment concatenation.
+    pub fn split_finalize(
+        &self,
+    ) -> (
+        Vec<Opcode>,
+        Option<&Opcode>,
+        Option<&Opcode>,
+        Option<&Opcode>,
+    ) {
+        let ops = &self.instructions;
+        let n = ops.len();
+        for tail_len in [3usize, 2, 1] {
+            let Some(split_at) = n.checked_sub(tail_len) else {
+                continue;
+            };
+            let Some(tail) = ops.get(split_at..) else {
+                continue;
+            };
+            let opcodes: Vec<&Opcode> = tail.iter().map(|i| &i.opcode).collect();
+            let matched = match opcodes.as_slice() {
+                [combine @ Opcode::Combine { .. }] => Some((Some(*combine), None, None)),
+                [combine @ Opcode::Combine { .. }, sort @ Opcode::Sort { .. }] => {
+                    Some((Some(*combine), Some(*sort), None))
+                }
+                [combine @ Opcode::Combine { .. }, limit @ Opcode::Limit { .. }] => {
+                    Some((Some(*combine), None, Some(*limit)))
+                }
+                [combine @ Opcode::Combine { .. }, sort @ Opcode::Sort { .. }, limit @ Opcode::Limit { .. }] => {
+                    Some((Some(*combine), Some(*sort), Some(*limit)))
+                }
+                _ => None,
+            };
+            if let Some((combine, sort, limit)) = matched {
+                let body = ops
+                    .get(..split_at)
+                    .map(|b| b.iter().map(|i| i.opcode.clone()).collect())
+                    .unwrap_or_default();
+                return (body, combine, sort, limit);
+            }
         }
+        (self.opcodes().cloned().collect(), None, None, None)
     }
 }
 
@@ -1290,9 +1348,15 @@ impl Vm {
                 self.output.extend(rows);
             }
             // Meaningful only as loop markers interpreted by `run` --
-            // and `Finalize` is a cross-segment barrier applied once by
-            // `crate::vm::engine::run`, never inside a single segment.
-            Opcode::Scan | Opcode::NextSegment { .. } | Opcode::Halt | Opcode::Finalize { .. } => {}
+            // and `Combine`/`Sort`/`Limit` are the cross-segment
+            // sequential phase applied once by `crate::vm::engine::run`,
+            // never inside a single segment.
+            Opcode::Scan
+            | Opcode::NextSegment { .. }
+            | Opcode::Halt
+            | Opcode::Combine { .. }
+            | Opcode::Sort { .. }
+            | Opcode::Limit { .. } => {}
         }
         Ok(())
     }

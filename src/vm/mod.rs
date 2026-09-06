@@ -24,7 +24,8 @@
 //!
 //! [`engine`] (gated with `vm-batch`) is the cross-segment orchestration
 //! layer over `batch`: it runs a `Program`'s body per segment in parallel
-//! and applies the trailing `Finalize` barrier once (ADR 0007), plus the
+//! and applies the trailing `Combine`/`Sort`/`Limit` barrier once (ADR
+//! 0007, db-core#48), plus the
 //! join/window drivers that materialize whole tables.
 //!
 //! Each executor has its own opcode set (`batch::Opcode` and a future

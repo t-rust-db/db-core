@@ -8,7 +8,8 @@
 //!
 //! - [`batch`] -- the columnar planner: `compile()` turns a flat/`GROUP
 //!   BY`/`ORDER BY`/`LIMIT` query into a [`crate::vm::batch::Program`]
-//!   ending in [`crate::vm::batch::Opcode::Finalize`], plus the join/
+//!   ending in [`crate::vm::batch::Opcode::Combine`] (plus an optional
+//!   trailing `Sort`/`Limit`, db-core#48), plus the join/
 //!   semi-join/window program assembly and `EXPLAIN` plan-tree
 //!   construction. **Implemented** -- moved from column-rs's `src/query.rs`,
 //!   which never touched Parquet in these parts. Consumes

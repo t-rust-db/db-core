@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.60.0] - 2026-09-06
+
+### Changed
+
+- **`vm::batch`'s `Opcode::Finalize` split into `Combine`/`Sort`/`Limit` sequential-phase opcodes** (#48) -- validated against DuckDB's execution model, which runs merge/finalize/`ORDER BY`/`LIMIT` as four staged operators rather than one bundled step. `Opcode::Combine{agg_parts, num_group_keys, distinct}` is the barrier (merge partial aggregates + finalize them -- no observable boundary between those two, so one opcode still covers both), with optional trailing `Opcode::Sort{col, descending}` and `Opcode::Limit{n}`. Uses the position-based split hook ADR 0007 already built for exactly this purpose -- no engine redesign. `#108`/`#109`'s bounded-scan/top-N eligibility checks re-derive their detection from the new opcode sequence, with no change to the conditions themselves. Not yet fully closing #48: column-rs's `codegen_e2e`/`oracle` test suites pin db-core via a git tag and need a coordinated follow-up bump + fixture update for the new 3-opcode AOT rendering shape.
+
 ## [0.59.0] - 2026-09-06
 
 ### Added

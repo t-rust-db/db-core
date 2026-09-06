@@ -165,7 +165,8 @@ select-stmt     ::= "SELECT" [ "DISTINCT" ] select-list
                      [ limit-clause ] ;
                      (* #47: `DISTINCT` dedups the fully-projected output
                         rows -- planned by setting a flag on the terminal
-                        `Finalize` step (ADR 0007) rather than a new opcode.
+                        `Combine` step (ADR 0007, db-core#48) rather than a
+                        new opcode.
                         Combined with `group-by-clause`, dedup runs *after*
                         the GROUP BY hash-aggregate merge, matching DuckDB's
                         semantics of DISTINCT as a post-aggregate dedup. *)

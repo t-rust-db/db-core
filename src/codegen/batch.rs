@@ -17,8 +17,9 @@
 //! Four entry points, one per query shape the executor distinguishes:
 //!
 //! - [`compile`] -- flat/`GROUP BY`/`ORDER BY`/`LIMIT` single-table
-//!   queries. The output [`Program`] ends in [`Opcode::Finalize`], which
-//!   carries the cross-segment merge/sort/limit metadata; the columns to
+//!   queries. The output [`Program`] always ends in [`Opcode::Combine`],
+//!   optionally followed by `Sort`/`Limit` (db-core#48) -- together they
+//!   carry the cross-segment merge/sort/limit metadata; the columns to
 //!   load are derivable via [`Program::columns_to_load`]. No sidecar plan
 //!   struct.
 //! - [`compile_join`] -- one `INNER`/`LEFT` equi-join: build and probe
@@ -29,7 +30,8 @@
 //!   the flat body over the filtered main table.
 //! - [`compile_window`] -- `SELECT`s containing window functions: a flat
 //!   program whose `Window` opcodes write one register per window item,
-//!   ending in `Emit` + `Finalize` like any other flat program.
+//!   ending in `Emit` + `Combine` (+ optional `Sort`/`Limit`) like any
+//!   other flat program.
 //!
 //! Plus [`explain`], the `EXPLAIN` plan-tree construction over the same
 //! planning decisions, and [`output_column_names`] for result headers.
@@ -714,8 +716,8 @@ fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
 }
 
 /// Compile a flat/`GROUP BY`/`ORDER BY`/`LIMIT` query into a [`Program`]
-/// ending in [`Opcode::Finalize`]. Compiled once, reused across every
-/// segment.
+/// ending in [`Opcode::Combine`], optionally followed by `Sort`/`Limit`
+/// (db-core#48). Compiled once, reused across every segment.
 pub fn compile(select: &Select) -> Program {
     let mut ctx = Ctx {
         next_reg: 0,
@@ -847,51 +849,48 @@ pub fn compile(select: &Select) -> Program {
         format!("SELECT {}", output_column_names(select).join(", ")),
     );
 
-    let order_by = select_order_by(select).and_then(|(column, descending)| {
+    let order_by_named = select_order_by(select);
+    let order_by = order_by_named.clone().and_then(|(column, descending)| {
         select_output_index(select, &column).map(|pos| (pos, descending))
     });
-
-    ctx.push_commented(
-        Opcode::Finalize {
-            agg_parts: agg_parts.into(),
-            num_group_keys: group_by.len(),
-            distinct: matches!(select.distinct, Some(Distinctness::Distinct)),
-            order_by,
-            limit: select_limit(select),
-        },
-        finalize_comment(select),
-    );
-
-    Program::new(ctx.program)
-}
-
-fn finalize_comment(select: &Select) -> String {
-    let mut parts = Vec::new();
-    let group_by: Vec<String> = select
-        .group_by
-        .iter()
-        .filter_map(expr_column_name)
-        .collect();
+    let limit = select_limit(select);
     let has_agg = classify_items(select)
         .map(|items| items.iter().any(|c| matches!(c, Item::Agg(..))))
         .unwrap_or(false);
-    if !group_by.is_empty() || has_agg {
-        parts.push("merge partial aggregates".to_string());
-    }
-    if let Some((column, descending)) = select_order_by(select) {
-        parts.push(format!(
-            "ORDER BY {column}{}",
-            if descending { " DESC" } else { "" }
-        ));
-    }
-    if let Some(limit) = select_limit(select) {
-        parts.push(format!("LIMIT {limit}"));
-    }
-    if parts.is_empty() {
-        "concatenate segments".to_string()
+    let group_by_present = !group_by.is_empty();
+
+    // `Combine` is always emitted, mirroring the old bundled `Finalize`
+    // (db-core#48): even a plain `SELECT` with no aggregate/`ORDER BY`/
+    // `LIMIT` goes through the merge phase, which is a no-op
+    // concatenation when `agg_parts` is empty. `Sort`/`Limit` follow
+    // only when the query actually has them, so a program with neither
+    // still ends in a bare `Combine`, not `Combine, Sort, Limit` with
+    // both absent.
+    let combine_comment = if group_by_present || has_agg {
+        "merge partial aggregates".to_string()
     } else {
-        parts.join("; ")
+        "concatenate segments".to_string()
+    };
+    ctx.push_commented(
+        Opcode::Combine {
+            agg_parts: agg_parts.into(),
+            num_group_keys: group_by.len(),
+            distinct: matches!(select.distinct, Some(Distinctness::Distinct)),
+        },
+        combine_comment,
+    );
+    if let Some((col, descending)) = order_by {
+        let column = order_by_named.map_or_else(String::new, |(c, _)| c);
+        ctx.push_commented(
+            Opcode::Sort { col, descending },
+            format!("ORDER BY {column}{}", if descending { " DESC" } else { "" }),
+        );
     }
+    if let Some(n) = limit {
+        ctx.push_commented(Opcode::Limit { n }, format!("LIMIT {n}"));
+    }
+
+    Program::new(ctx.program)
 }
 
 /// Split a (possibly qualified) column name into `(table_prefix, column)`.
@@ -1182,19 +1181,32 @@ pub fn compile_window(select: &Select) -> Program {
         format!("SELECT {}", output_column_names(select).join(", ")),
     ));
 
-    let order_by = select_order_by(select).and_then(|(column, descending)| {
+    let order_by_named = select_order_by(select);
+    let order_by = order_by_named.clone().and_then(|(column, descending)| {
         select_output_index(select, &column).map(|pos| (pos, descending))
     });
+    let limit = select_limit(select);
     program.push(Instruction::with_comment(
-        Opcode::Finalize {
+        Opcode::Combine {
             agg_parts: Vec::new().into(),
             num_group_keys: 0,
             distinct: matches!(select.distinct, Some(Distinctness::Distinct)),
-            order_by,
-            limit: select_limit(select),
         },
-        finalize_comment(select),
+        "concatenate segments".to_string(),
     ));
+    if let Some((col, descending)) = order_by {
+        let column = order_by_named.map_or_else(String::new, |(c, _)| c);
+        program.push(Instruction::with_comment(
+            Opcode::Sort { col, descending },
+            format!("ORDER BY {column}{}", if descending { " DESC" } else { "" }),
+        ));
+    }
+    if let Some(n) = limit {
+        program.push(Instruction::with_comment(
+            Opcode::Limit { n },
+            format!("LIMIT {n}"),
+        ));
+    }
 
     Program::new(program)
 }
@@ -1492,9 +1504,9 @@ pub struct OpcodeRow {
     pub operands: String,
     /// Explanatory comment for the instruction.
     pub comment: String,
-    /// Whether this row is the [`Opcode::Finalize`] barrier: the boundary
+    /// Whether this row is the [`Opcode::Combine`] barrier: the boundary
     /// between the parallel per-segment phase and the sequential
-    /// cross-segment merge phase (ADR 0007).
+    /// cross-segment merge phase (ADR 0007, db-core#48).
     pub is_finalize: bool,
 }
 
@@ -1520,7 +1532,7 @@ fn render_program(program: &Program) -> Vec<OpcodeRow> {
             opcode: instr.opcode.name(),
             operands: render_operands(&instr.opcode),
             comment: instr.comment.clone().unwrap_or_default(),
-            is_finalize: matches!(instr.opcode, Opcode::Finalize { .. }),
+            is_finalize: matches!(instr.opcode, Opcode::Combine { .. }),
         })
         .collect()
 }
@@ -1583,15 +1595,13 @@ fn render_operands(op: &Opcode) -> String {
         Opcode::Emit { registers } => format!("registers={registers:?}"),
         Opcode::NextSegment { loop_start } => format!("loop_start={loop_start}"),
         Opcode::Halt => String::new(),
-        Opcode::Finalize {
+        Opcode::Combine {
             agg_parts,
             num_group_keys,
             distinct,
-            order_by,
-            limit,
-        } => format!(
-            "agg_parts={agg_parts:?} num_group_keys={num_group_keys} distinct={distinct} order_by={order_by:?} limit={limit:?}"
-        ),
+        } => format!("agg_parts={agg_parts:?} num_group_keys={num_group_keys} distinct={distinct}"),
+        Opcode::Sort { col, descending } => format!("col={col} descending={descending}"),
+        Opcode::Limit { n } => format!("n={n}"),
     }
 }
 
@@ -1953,12 +1963,12 @@ mod tests {
         assert!(columns.contains(&"amount".to_string()));
         assert!(matches!(
             program.opcodes().last(),
-            Some(Opcode::Finalize {
+            Some(Opcode::Combine {
                 num_group_keys: 1,
                 ..
             })
         ));
-        let (body, _) = program.split_finalize();
+        let (body, ..) = program.split_finalize();
         assert!(matches!(body.last(), Some(Opcode::Emit { .. })));
         assert!(body
             .iter()
@@ -1972,13 +1982,13 @@ mod tests {
         let program = compile(&query);
         assert!(matches!(
             program.opcodes().last(),
-            Some(Opcode::Finalize {
+            Some(Opcode::Combine {
                 distinct: true,
                 num_group_keys: 0,
                 ..
             })
         ));
-        let (body, _) = program.split_finalize();
+        let (body, ..) = program.split_finalize();
         assert!(!body
             .iter()
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
@@ -1991,34 +2001,42 @@ mod tests {
         let program = compile(&query);
         assert!(matches!(
             program.opcodes().last(),
-            Some(Opcode::Finalize {
+            Some(Opcode::Combine {
                 distinct: true,
                 num_group_keys: 1,
                 ..
             })
         ));
-        let (body, _) = program.split_finalize();
+        let (body, ..) = program.split_finalize();
         assert!(body
             .iter()
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
     }
 
     #[test]
-    fn compile_encodes_order_by_and_limit_in_finalize_and_comments_instructions() {
+    fn compile_encodes_order_by_and_limit_as_sort_and_limit_and_comments_instructions() {
         let query = sql::parse("SELECT id, val FROM t ORDER BY val DESC LIMIT 5").unwrap();
         let program = compile(&query);
-        let fin = program.instructions.last().unwrap();
+        let tail: Vec<&Instruction> = program.instructions.iter().rev().take(3).rev().collect();
         assert_eq!(
-            fin.opcode,
-            Opcode::Finalize {
+            tail[0].opcode,
+            Opcode::Combine {
                 agg_parts: Vec::new().into(),
                 num_group_keys: 0,
                 distinct: false,
-                order_by: Some((1, true)),
-                limit: Some(5),
             }
         );
-        assert_eq!(fin.comment.as_deref(), Some("ORDER BY val DESC; LIMIT 5"));
+        assert_eq!(tail[0].comment.as_deref(), Some("concatenate segments"));
+        assert_eq!(
+            tail[1].opcode,
+            Opcode::Sort {
+                col: 1,
+                descending: true,
+            }
+        );
+        assert_eq!(tail[1].comment.as_deref(), Some("ORDER BY val DESC"));
+        assert_eq!(tail[2].opcode, Opcode::Limit { n: 5 });
+        assert_eq!(tail[2].comment.as_deref(), Some("LIMIT 5"));
         assert!(program.instructions.iter().all(|i| i.comment.is_some()));
     }
 
@@ -2032,15 +2050,20 @@ mod tests {
         )
         .unwrap();
         let program = compile(&query);
-        let fin = program.instructions.last().unwrap();
+        let tail: Vec<&Instruction> = program.instructions.iter().rev().take(2).rev().collect();
         assert_eq!(
-            fin.opcode,
-            Opcode::Finalize {
+            tail[0].opcode,
+            Opcode::Combine {
                 agg_parts: vec![AggPart::GroupKey, AggPart::Count, AggPart::Sum].into(),
                 num_group_keys: 1,
                 distinct: false,
-                order_by: Some((1, true)),
-                limit: None,
+            }
+        );
+        assert_eq!(
+            tail[1].opcode,
+            Opcode::Sort {
+                col: 1,
+                descending: true,
             }
         );
     }
@@ -2050,7 +2073,7 @@ mod tests {
     fn mcdc__batch_355__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query);
-        let (body, _) = program.split_finalize();
+        let (body, ..) = program.split_finalize();
         assert!(body
             .iter()
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
@@ -2061,7 +2084,7 @@ mod tests {
     fn mcdc__batch_355__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query);
-        let (body, _) = program.split_finalize();
+        let (body, ..) = program.split_finalize();
         assert!(body
             .iter()
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
@@ -2072,7 +2095,7 @@ mod tests {
     fn mcdc__batch_355__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query);
-        let (body, _) = program.split_finalize();
+        let (body, ..) = program.split_finalize();
         assert!(!body
             .iter()
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
@@ -2125,7 +2148,7 @@ mod tests {
         ));
         assert!(matches!(
             plan.body.opcodes().last(),
-            Some(Opcode::Finalize { .. })
+            Some(Opcode::Combine { .. })
         ));
 
         let bad = sql::parse("SELECT a.id FROM a JOIN b ON a.id = c.id").unwrap();
@@ -2164,14 +2187,16 @@ mod tests {
         .unwrap();
         let program = compile_window(&query);
         assert_eq!(program.columns_to_load(), vec!["id", "region_key"]);
-        let (body, fin) = program.split_finalize();
+        let (body, combine, sort, limit) = program.split_finalize();
+        assert!(matches!(combine, Some(Opcode::Combine { .. })));
         assert!(matches!(
-            fin,
-            Some(Opcode::Finalize {
-                order_by: Some((0, false)),
-                ..
+            sort,
+            Some(Opcode::Sort {
+                col: 0,
+                descending: false,
             })
         ));
+        assert!(limit.is_none());
         assert!(body
             .iter()
             .any(|op| matches!(op, Opcode::Window { dst: 2, .. })));
@@ -2314,7 +2339,7 @@ mod tests {
             program.opcodes().map(Opcode::name).collect::<Vec<_>>()
         );
         let finalize_row = sections[0].rows.iter().find(|r| r.is_finalize).unwrap();
-        assert_eq!(finalize_row.opcode, "Finalize");
+        assert_eq!(finalize_row.opcode, "Combine");
         assert!(sections[0].rows.iter().filter(|r| r.is_finalize).count() == 1);
     }
 
@@ -2329,8 +2354,12 @@ mod tests {
             opcodes(&sections[0].rows),
             program.opcodes().map(Opcode::name).collect::<Vec<_>>()
         );
-        let finalize_row = sections[0].rows.iter().find(|r| r.is_finalize).unwrap();
-        assert!(finalize_row.operands.contains("limit=Some(5)"));
+        let limit_row = sections[0]
+            .rows
+            .iter()
+            .find(|r| r.opcode == "Limit")
+            .unwrap();
+        assert!(limit_row.operands.contains("n=5"));
     }
 
     #[test]
