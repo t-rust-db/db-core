@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test test-lib build lint version
+.PHONY: help test test-lib build lint check-deny check-mvl-limit ci version
 
 help: ## Show this help
 	@echo ""
@@ -56,6 +56,35 @@ test-mcdc: mcdc-obligations ## MC/DC dashboard for all of src/; fails if any mul
 lint: ## Run clippy (deny warnings) and check formatting
 	cargo clippy --all-targets --all-features -- -D warnings
 	cargo fmt --all -- --check
+
+check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
+	@command -v cargo-deny >/dev/null 2>&1 || { \
+		echo "cargo-deny not found — install with: cargo install cargo-deny --locked"; \
+		exit 1; \
+	}
+	cargo deny check
+
+# cargo-mvl-limit is not published to crates.io; install from source at a
+# pinned rev (see .github/workflows/ci.yml for the version this repo gates
+# on). This is the "qualified subset" gate: it flags language features
+# (lifetimes, dyn dispatch, unsafe, ...) outside the subset this codebase
+# holds itself to.
+check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit); scans all of src/, same set as test-mcdc
+	@command -v cargo-mvl-limit >/dev/null 2>&1 || { \
+		echo "cargo-mvl-limit not found — install with:"; \
+		echo "  cargo install --git https://github.com/mvl-lang/mvl-rust rust-limit --bin cargo-mvl-limit --locked"; \
+		exit 1; \
+	}
+	cargo mvl-limit $(MCDC_FILES)
+
+# === CI ===
+
+ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
+	$(MAKE) lint
+	$(MAKE) check-deny
+	-$(MAKE) check-mvl-limit # non-blocking (db-core#156): reported, doesn't fail this target
+	$(MAKE) test
+	@echo "all blocking CI gates passed (see above for any non-blocking mvl-limit findings)"
 
 # === Release ===
 

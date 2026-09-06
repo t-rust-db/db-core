@@ -42,6 +42,16 @@
 //! otool -tV target/release/deps/02_neon_adjusted-* | rg -A40 'map_add_typed'
 //! ```
 
+// This spike measures raw indexed/arithmetic access patterns against the
+// autovectorizer (that's the entire point of the comparison) -- the
+// crate-wide `[lints.clippy]` bar (#82) would otherwise force bounds
+// checks and checked arithmetic that change the very thing being timed.
+#![allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used
+)]
+
 use db_core::vm::batch::Value;
 use std::borrow::Cow;
 use std::hint::black_box;

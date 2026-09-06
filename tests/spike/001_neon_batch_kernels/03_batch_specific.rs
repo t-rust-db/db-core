@@ -25,6 +25,16 @@
 //! # or: make -C tests/spike/001_neon_batch_kernels run-03
 //! ```
 
+// This spike measures raw indexed/arithmetic access patterns against the
+// autovectorizer (that's the entire point of the comparison) -- the
+// crate-wide `[lints.clippy]` bar (#82) would otherwise force bounds
+// checks and checked arithmetic that change the very thing being timed.
+#![allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::unwrap_used
+)]
+
 use db_core::expr::AggFunc;
 use db_core::vm::batch::{run_parallel, Batch, MapOp, Opcode, Segment, Value, Vm, BATCH_SIZE};
 use std::borrow::Cow;
