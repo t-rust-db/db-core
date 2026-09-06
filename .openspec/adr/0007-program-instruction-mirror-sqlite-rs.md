@@ -136,3 +136,50 @@ parsed log lines, not Parquet, so the adapter is inherently per-app.
 - Anyone porting sqlite-rs's `codegen/` into `db-core` (ticket #20) now
   has an unambiguous target: `db-core::codegen::row`, producing a
   row-flavoured `Program`, with no `emit::row` to build.
+
+## Addendum (db-core#48): `Finalize` split into `Combine`/`Sort`/`Limit`
+
+Validated against DuckDB's execution model (2026-09-06): DuckDB runs the
+four steps this ADR's single `Finalize` bundled — merge parallel
+partials, finalize them, `ORDER BY`, `LIMIT` — as **four staged
+operators** across pipeline boundaries: `Combine` → `Finalize` → a
+separate `Sort` operator → a separate `Limit` operator. The one-opcode
+bundling above was correct but coarser than that reference shape, and was
+the one real granularity divergence from it.
+
+**Split, not redesigned.** The barrier semantics this ADR already
+described — `engine::run` finds the barrier *by position*, not by
+asserting it is the program's last instruction, specifically so "a future
+planner can emit sequential-phase instructions after it without
+redesigning the engine" — is exactly the hook this split uses. No engine
+redesign was needed, only:
+- `Opcode::Finalize` → `Opcode::Combine { agg_parts, num_group_keys,
+  distinct }` (the barrier: merge + finalize, still one opcode — see
+  naming below) plus optional trailing `Opcode::Sort { col, descending }`
+  and `Opcode::Limit { n }`.
+- `Program::split_finalize` now recognizes the tail shape `Combine [Sort]
+  [Limit]` (trying the longest shape first) instead of a single opcode.
+- `codegen::batch::compile`/`compile_window` always emit `Combine`
+  (mirroring the old always-emitted `Finalize`), and emit `Sort`/`Limit`
+  only when the query actually has them.
+- `#108`/`#109`'s eligibility checks re-derive their plan-shape detection
+  from the `(Combine, Sort, Limit)` tuple `split_finalize` returns,
+  instead of one struct's fields — same conditions, same result.
+
+**Naming.** DuckDB itself uses *both* `Combine()` (merge thread-local
+partial states) and `Finalize()` (compute the final value from the
+merged state) as two distinct steps; db-core's `merge_rows`/
+`finalize_row` are those two steps back to back with no observable
+boundary between them (nothing needs to observe partially-merged,
+not-yet-finalized state), so one opcode named `Combine` covers both —
+matching DuckDB's first stage name, not inventing a third. `Sort`/`Limit`
+were checked against `vm::row::program::Opcode`'s own vocabulary (the
+sqlite-rs-mirroring VDBE opcode set, ADR 0002/db-core#18): `row` already
+has its own `Sort` (a different, standalone in-place sort primitive) and
+no `Limit`/`Combine`. Since `vm::batch::Opcode` and `vm::row::program::Opcode`
+are separate types in separate modules (this ADR's own "two opcode sets
+remain two types" above), there is no compile-time collision — and the
+vocabulary overlap on `Sort` is accepted rather than avoided: both name
+the same underlying operation (ordering rows), just in different
+executors' terms, the same way `Filter`/`Emit`/`Halt` already appear in
+spirit (if not name) on both sides.

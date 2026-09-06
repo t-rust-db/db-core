@@ -204,8 +204,9 @@ const EXPAND_PATH_HELPER: &str = r#"fn expand_path(pattern: &str) -> Vec<std::pa
 
 /// Render a flat/`GROUP BY`/`ORDER BY`/`LIMIT` query: a standalone `.rs`
 /// source file with `const PROGRAM` (the planned VM program, including its
-/// terminal `Opcode::Finalize` -- the instruction stream is the whole
-/// plan, so there are no sidecar `AGG_PARTS`/`ORDER_BY`/`LIMIT` consts and
+/// terminal `Combine`/`Sort`/`Limit` sequence (db-core#48) -- the
+/// instruction stream is the whole plan, so there are no sidecar
+/// `AGG_PARTS`/`ORDER_BY`/`LIMIT` consts and
 /// the columns to load are derived from it at runtime), `const COLUMNS`
 /// (the output column names), and a `main` that reads every Parquet file
 /// path given on the command line, runs `PROGRAM` against each via the
@@ -295,13 +296,6 @@ fn render_agg_part(part: &AggPart) -> String {
         AggPart::Min => "AggPart::Min".to_string(),
         AggPart::Max => "AggPart::Max".to_string(),
         AggPart::Avg(sum, count) => format!("AggPart::Avg({sum}, {count})"),
-    }
-}
-
-fn render_order_by(order_by: Option<(usize, bool)>) -> String {
-    match order_by {
-        Some((pos, desc)) => format!("Some(({pos}, {desc}))"),
-        None => "None".to_string(),
     }
 }
 
@@ -866,21 +860,21 @@ fn render_opcode(op: &Opcode) -> String {
             format!("Opcode::NextSegment {{ loop_start: {loop_start} }}")
         }
         Opcode::Halt => "Opcode::Halt".to_string(),
-        Opcode::Finalize {
+        Opcode::Combine {
             agg_parts,
             num_group_keys,
             distinct,
-            order_by,
-            limit,
         } => {
             let parts: Vec<String> = agg_parts.iter().map(render_agg_part).collect();
             format!(
-                "Opcode::Finalize {{ agg_parts: std::borrow::Cow::Borrowed(&[{}]), num_group_keys: {num_group_keys}, distinct: {distinct}, order_by: {}, limit: {} }}",
+                "Opcode::Combine {{ agg_parts: std::borrow::Cow::Borrowed(&[{}]), num_group_keys: {num_group_keys}, distinct: {distinct} }}",
                 parts.join(", "),
-                render_order_by(*order_by),
-                render_option_usize(*limit)
             )
         }
+        Opcode::Sort { col, descending } => {
+            format!("Opcode::Sort {{ col: {col}, descending: {descending} }}")
+        }
+        Opcode::Limit { n } => format!("Opcode::Limit {{ n: {n} }}"),
         // No caller-side planner emits these three yet -- the join/semi-
         // join/window bypass shapes ([`render_joined`]/
         // [`render_semi_join`]/[`render_windowed`]) still reconstruct a
@@ -1046,17 +1040,25 @@ mod tests {
     }
 
     #[test]
-    fn render_flat_renders_group_by_agg_parts_and_order_limit_inside_finalize() {
-        let program = Program::new(vec![Instruction::with_comment(
-            Opcode::Finalize {
-                agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
-                num_group_keys: 1,
-                distinct: false,
-                order_by: Some((0, true)),
-                limit: Some(10),
-            },
-            "merge; ORDER BY region DESC; LIMIT 10",
-        )]);
+    fn render_flat_renders_group_by_agg_parts_combine_sort_and_limit_as_separate_opcodes() {
+        let program = Program::new(vec![
+            Instruction::with_comment(
+                Opcode::Combine {
+                    agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
+                    num_group_keys: 1,
+                    distinct: false,
+                },
+                "merge partial aggregates",
+            ),
+            Instruction::with_comment(
+                Opcode::Sort {
+                    col: 0,
+                    descending: true,
+                },
+                "ORDER BY region DESC",
+            ),
+            Instruction::with_comment(Opcode::Limit { n: 10 }, "LIMIT 10"),
+        ]);
         let src = render_flat(
             "column_rs",
             "SELECT region, SUM(amount) FROM t GROUP BY region ORDER BY 1 DESC LIMIT 10",
@@ -1065,7 +1067,15 @@ mod tests {
             &["region".to_string(), "sum".to_string()],
         );
         assert!(
-            src.contains("Opcode::Finalize { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, distinct: false, order_by: Some((0, true)), limit: Some(10) }, // merge; ORDER BY region DESC; LIMIT 10"),
+            src.contains("Opcode::Combine { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, distinct: false }, // merge partial aggregates"),
+            "{src}"
+        );
+        assert!(
+            src.contains("Opcode::Sort { col: 0, descending: true }, // ORDER BY region DESC"),
+            "{src}"
+        );
+        assert!(
+            src.contains("Opcode::Limit { n: 10 }, // LIMIT 10"),
             "{src}"
         );
         assert!(!src.contains("const AGG_PARTS"), "{src}");
@@ -1154,7 +1164,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            src.contains("Opcode::Finalize { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, distinct: false, order_by: None, limit: None }"),
+            src.contains("Opcode::Combine { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, distinct: false }"),
             "{src}"
         );
         assert!(src.contains("Opcode::GroupReduce {"), "{src}");
@@ -1165,9 +1175,10 @@ mod tests {
     fn generates_const_program_for_order_by_and_limit() {
         let src = generate("column_rs", "SELECT id FROM t ORDER BY id DESC LIMIT 10").unwrap();
         assert!(
-            src.contains("order_by: Some((0, true)), limit: Some(10) }"),
+            src.contains("Opcode::Sort { col: 0, descending: true }"),
             "{src}"
         );
+        assert!(src.contains("Opcode::Limit { n: 10 }"), "{src}");
     }
 
     #[test]
@@ -1261,13 +1272,16 @@ mod tests {
             },
             Opcode::NextSegment { loop_start: 0 },
             Opcode::Halt,
-            Opcode::Finalize {
+            Opcode::Combine {
                 agg_parts: vec![AggPart::Avg(1, 2)].into(),
                 num_group_keys: 0,
                 distinct: false,
-                order_by: None,
-                limit: None,
             },
+            Opcode::Sort {
+                col: 0,
+                descending: false,
+            },
+            Opcode::Limit { n: 10 },
         ] {
             let rendered = render_opcode(&op);
             assert!(!rendered.is_empty());
