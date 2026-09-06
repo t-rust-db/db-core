@@ -429,6 +429,43 @@ pub(crate) fn column_expr(name: impl Into<String>) -> Expr {
     }
 }
 
+/// Builds `lhs = rhs`.
+pub(crate) fn eq_expr(lhs: Expr, rhs: Expr) -> Expr {
+    Expr {
+        kind: ExprKind::Binary {
+            op: BinaryOp::Eq,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        },
+        span: crate::parser::Span::UNKNOWN,
+    }
+}
+
+/// Compiles `args` into a fresh, *contiguous* block of registers --
+/// what `Opcode::Function`/`Opcode::MakeRecord` require (they read
+/// `arity` registers starting at one base). Each dest register is
+/// allocated up front, before any argument's own (possibly
+/// multi-register) evaluation runs, so an argument that needs scratch
+/// registers of its own can never land in the middle of the block and
+/// break contiguity -- the same bug `stmt::update::compile_update` had
+/// for two-or-more assigned columns (#147).
+pub(crate) fn compile_contiguous_values(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    scope: &Scope,
+    args: &[&Expr],
+) -> Result<i32> {
+    let dest_regs: Vec<i32> = (0..args.len()).map(|_| reg.alloc()).collect();
+    for (&dest, arg) in dest_regs.iter().zip(args) {
+        let value_reg = value::compile_value(em, reg, scope, arg)?;
+        em.emit(Instruction::new(Opcode::Copy, value_reg, dest, 0));
+    }
+    // `args` is never empty in any caller today, but a defensive
+    // `reg.alloc()` (an unused register, never read) keeps this total
+    // rather than panicking on a future empty-arg caller.
+    Ok(dest_regs.first().copied().unwrap_or_else(|| reg.alloc()))
+}
+
 /// Visits every column reference in `expr`, in source order.
 ///
 /// Does **not** descend into a nested `SELECT` (a scalar subquery,

@@ -172,9 +172,12 @@ pub(crate) fn compile_cond_depth(
         {
             let affinity =
                 comparison_affinity(expr_affinity(scope, lhs), expr_affinity(scope, rhs));
+            let collation = resolve_collation(lhs)?
+                .or(resolve_collation(rhs)?)
+                .unwrap_or(Collation::Binary);
             let l = compile_value_depth(em, reg, scope, lhs, depth + 1)?;
             let r = compile_value_depth(em, reg, scope, rhs, depth + 1)?;
-            emit_compare_false_jump(em, *op, l, r, affinity, targets)
+            emit_compare_false_jump(em, *op, l, r, affinity, collation, targets)
         }
 
         ExprKind::IsNull {
@@ -208,29 +211,218 @@ pub(crate) fn compile_cond_depth(
             super::subquery::compile_exists(em, reg, scope, subquery, *negated, targets)
         }
 
-        // Condition forms the AST can express but `expr::Expr` could
-        // not, so `codegen::row` has never compiled them (#147). Each
-        // is real follow-up work; failing soft with the construct named
-        // beats silently treating it as a truthy value, which the `_`
-        // arm below would otherwise do and get wrong.
-        ExprKind::Is { .. } => Err(CodegenError::Unsupported {
-            reason: "IS / IS NOT is not supported by codegen::row yet".to_string(),
-        }),
-        ExprKind::Between { .. } => Err(CodegenError::Unsupported {
-            reason: "BETWEEN is not supported by codegen::row yet".to_string(),
-        }),
-        ExprKind::In { .. } => Err(CodegenError::Unsupported {
-            reason: "IN (list) is not supported by codegen::row yet".to_string(),
-        }),
+        // `a IS [NOT] b` is NULL-safe equality: true if both sides are
+        // NULL, true if both are non-NULL and equal, false otherwise --
+        // never NULL itself (`value::is_definite` knows this). Desugared
+        // to `(a IS NULL AND b IS NULL) OR (a IS NOT NULL AND b IS NOT
+        // NULL AND a = b)` and delegated back through this same
+        // function: `Eq`'s own three-valued codegen never actually sees
+        // an unknown answer here, since both guarding NULL-checks have
+        // already ruled that out by construction. `negated` (`IS NOT`)
+        // flips the outer targets, the same trick `NOT` uses above.
+        // `a IS b`: true when both NULL, or both non-NULL and equal --
+        // unlike `=`, never propagates NULL to "unknown". No single
+        // opcode expresses this; compute it into a 0/1 register first,
+        // then test truthiness like any other value-mode boolean
+        // (`LIKE`/`GLOB` take the same shape). `on_null` is deliberately
+        // ignored here (as in `IsNull` above): this is one of the only
+        // two conditions in SQL that are always definitely true or
+        // definitely false, so swapping the targets for `negated` is
+        // sound without flipping it. Ported from sqlite-rs's
+        // `codegen/expr/cond.rs` `Is` arm, unchanged -- it deliberately
+        // uses a bare `Eq` (no COLLATE/affinity p4), which this matches.
+        ExprKind::Is { lhs, rhs, negated } => {
+            let (t, f) = if *negated {
+                (targets.on_false, targets.on_true)
+            } else {
+                (targets.on_true, targets.on_false)
+            };
+            let l = compile_value_depth(em, reg, scope, lhs, depth + 1)?;
+            let r = compile_value_depth(em, reg, scope, rhs, depth + 1)?;
+            let result = reg.alloc();
+            let both_null = em.new_label();
+            let done = em.new_label();
+            let addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));
+            em.patch_p2(addr, both_null);
+
+            let eq_true = em.new_label();
+            let addr = em.emit(Instruction::new(Opcode::Eq, l, 0, r));
+            em.patch_p2(addr, eq_true);
+            em.emit(Instruction::new(Opcode::Integer, 0, result, 0));
+            em.goto(done);
+            em.place(eq_true);
+            em.emit(Instruction::new(Opcode::Integer, 1, result, 0));
+            em.goto(done);
+
+            em.place(both_null);
+            let r_null = em.new_label();
+            let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));
+            em.patch_p2(addr, r_null);
+            em.emit(Instruction::new(Opcode::Integer, 0, result, 0));
+            em.goto(done);
+            em.place(r_null);
+            em.emit(Instruction::new(Opcode::Integer, 1, result, 0));
+
+            em.place(done);
+            finish_bool(em, t, f, |em, false_label| {
+                let addr = em.emit(Instruction::new(Opcode::IfNot, result, 0, 1));
+                em.patch_p2(addr, false_label);
+            });
+            Ok(())
+        }
+
+        // `x BETWEEN lo AND hi` is `x >= lo AND x <= hi`, and `x NOT
+        // BETWEEN lo AND hi` is `x < lo OR x > hi` -- NOT the same
+        // shape with true/false swapped. Swapping targets would make a
+        // NULL `x` (where neither comparison jumps at all, per
+        // `emit_compare_false_jump`'s three-valued contract) come out
+        // *true* for `NOT BETWEEN`, when the honest answer is
+        // "unknown", which `WHERE` excludes just like false. Ported
+        // from sqlite-rs's `codegen/expr/cond.rs` `Between` arm.
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            negated,
+        } => {
+            let cmp = |op, rhs: &Expr| Expr {
+                kind: ExprKind::Binary {
+                    op,
+                    lhs: inner.clone(),
+                    rhs: Box::new(rhs.clone()),
+                },
+                span: expr.span,
+            };
+            if *negated {
+                let lt_lo = cmp(BinaryOp::Lt, lo);
+                let gt_hi = cmp(BinaryOp::Gt, hi);
+                let (t_label, t_is_new) = ensure_label(em, targets.on_true);
+                let arm = targets.with_true(Target::Jump(t_label));
+                compile_cond_depth(
+                    em,
+                    reg,
+                    scope,
+                    &lt_lo,
+                    arm.with_false(Target::Fallthrough),
+                    depth + 1,
+                )?;
+                compile_cond_depth(em, reg, scope, &gt_hi, arm, depth + 1)?;
+                if t_is_new {
+                    em.place(t_label);
+                }
+            } else {
+                let ge_lo = cmp(BinaryOp::Ge, lo);
+                let le_hi = cmp(BinaryOp::Le, hi);
+                let (f_label, f_is_new) = ensure_label(em, targets.on_false);
+                let arm = targets.with_false(Target::Jump(f_label));
+                compile_cond_depth(
+                    em,
+                    reg,
+                    scope,
+                    &ge_lo,
+                    arm.with_true(Target::Fallthrough),
+                    depth + 1,
+                )?;
+                compile_cond_depth(em, reg, scope, &le_hi, arm, depth + 1)?;
+                if f_is_new {
+                    em.place(f_label);
+                }
+            }
+            Ok(())
+        }
+
+        // `IN`'s three outcomes -- a definite match, a definite
+        // non-match, or "unknown" (no match found, but `inner` or some
+        // list item was NULL along the way) -- don't collapse to a
+        // single true/false jump the way other comparisons do: `NOT
+        // IN`'s definite-non-match and unknown outcomes diverge (`NOT
+        // FALSE` = true, `NOT NULL` = still NULL), so a per-item
+        // comparison can't just swap targets. `saw_null` is a small
+        // exception to this module's "never an intermediate boolean
+        // register" rule, needed to remember that exception past the
+        // loop that discovers it. Ported from sqlite-rs's
+        // `codegen/expr/cond.rs` `In` arm, unchanged.
+        ExprKind::In {
+            expr: inner,
+            list,
+            negated,
+        } => {
+            if list.is_empty() {
+                // `x IN ()` is always false, even for a NULL `x` -- an
+                // empty list leaves nothing to be uncertain against.
+                // Not reachable through this grammar (it requires at
+                // least one element); kept for parity with the oracle.
+                let false_target = if *negated {
+                    targets.on_true
+                } else {
+                    targets.on_false
+                };
+                if let Target::Jump(label) = false_target {
+                    em.goto(label);
+                }
+                return Ok(());
+            }
+
+            let l = compile_value_depth(em, reg, scope, inner, depth + 1)?;
+            let saw_null = reg.alloc();
+            em.emit(Instruction::new(Opcode::Integer, 0, saw_null, 0));
+
+            let (true_label, true_is_new) = ensure_label(em, targets.on_true);
+            let (false_label, false_is_new) = ensure_label(em, targets.on_false);
+            let (found_label, unmatched_label) = if *negated {
+                (false_label, true_label)
+            } else {
+                (true_label, false_label)
+            };
+            let null_label = match targets.on_null {
+                NullTarget::True => true_label,
+                NullTarget::False => false_label,
+            };
+
+            let inner_null_addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));
+            em.patch_p2(inner_null_addr, null_label);
+
+            for item in list {
+                let collation = resolve_collation(inner)?.or(resolve_collation(item)?);
+                let affinity =
+                    comparison_affinity(expr_affinity(scope, inner), expr_affinity(scope, item));
+                let p4 = p4_coll_seq(collation.unwrap_or(Collation::Binary), affinity);
+                let r = compile_value_depth(em, reg, scope, item, depth + 1)?;
+
+                let item_null_label = em.new_label();
+                let skip_label = em.new_label();
+                let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));
+                em.patch_p2(addr, item_null_label);
+                let addr = em.emit(Instruction::with_p4(Opcode::Eq, l, 0, r, p4));
+                em.patch_p2(addr, found_label);
+                em.goto(skip_label);
+
+                em.place(item_null_label);
+                em.emit(Instruction::new(Opcode::Integer, 1, saw_null, 0));
+                em.place(skip_label);
+            }
+
+            // Exhausted the list without a match: route to
+            // `unmatched_label` only if every comparison was a clean
+            // non-match (`saw_null` still 0); otherwise at least one
+            // comparison was against NULL, so the honest answer is
+            // "unknown", which goes wherever `on_null` says.
+            let addr = em.emit(Instruction::new(Opcode::IfNot, saw_null, 0, 0));
+            em.patch_p2(addr, unmatched_label);
+            em.goto(null_label);
+
+            if false_is_new {
+                em.place(false_label);
+            }
+            if true_is_new {
+                em.place(true_label);
+            }
+            Ok(())
+        }
+
         ExprKind::InSubqueryMulti { .. } => Err(CodegenError::Unsupported {
             reason: "a multi-column IN (SELECT ...) is not supported by codegen::row yet"
                 .to_string(),
-        }),
-        ExprKind::Like { glob, .. } => Err(CodegenError::Unsupported {
-            reason: format!(
-                "{} is not supported by codegen::row yet",
-                if *glob { "GLOB" } else { "LIKE" }
-            ),
         }),
 
         // Any other expression used in boolean context (a bare column,
@@ -313,19 +505,45 @@ pub(super) fn finish_bool(
     }
 }
 
+/// The [`Collation`] an explicit `expr COLLATE name` names, if either
+/// comparison operand carries one -- `None` means "use the schema
+/// affinity default" (`Collation::Binary`, unchanged from before this
+/// existed). SQLite resolves a bare column's *declared* `COLLATE`
+/// here too; this crate's `TableSchema` carries no per-column
+/// collation yet, so only an explicit operand-level `COLLATE` is
+/// honored -- silently defaulting to `Binary` for one would be a
+/// wrong-answer bug, not a limitation, so an unrecognized name is
+/// rejected rather than ignored.
+fn resolve_collation(expr: &Expr) -> Result<Option<Collation>> {
+    match &expr.kind {
+        ExprKind::Paren(inner) => resolve_collation(inner),
+        ExprKind::Collate { collation, .. } => match collation.to_ascii_uppercase().as_str() {
+            "BINARY" => Ok(Some(Collation::Binary)),
+            "NOCASE" => Ok(Some(Collation::NoCase)),
+            "RTRIM" => Ok(Some(Collation::RTrim)),
+            other => Err(CodegenError::Unsupported {
+                reason: format!("unknown or unsupported collation {other:?}"),
+            }),
+        },
+        _ => Ok(None),
+    }
+}
+
 /// Emits the appropriate compare opcode as a "jump to `false_label` on
 /// false" primitive, then resolves `true_target`/`false_target` via
 /// [`finish_bool`]. `Ne` has no dedicated opcode -- it's `Eq`'s
 /// complement, so its false-jump primitive is a plain `Eq` jump.
+#[allow(clippy::too_many_arguments)]
 fn emit_compare_false_jump(
     em: &mut Emitter,
     op: BinaryOp,
     lhs: i32,
     rhs: i32,
     affinity: crate::vm::row::Affinity,
+    collation: Collation,
     targets: CondTargets,
 ) -> Result<()> {
-    let p4 = p4_coll_seq(Collation::Binary, affinity);
+    let p4 = p4_coll_seq(collation, affinity);
     let resolved = match op {
         BinaryOp::Ne => Some((Opcode::Eq, targets.negate())),
         BinaryOp::Eq => Some((Opcode::Eq, targets)),
@@ -556,27 +774,139 @@ mod tests {
     /// would fall through to the `_` arm and be compiled as a truthy
     /// *value*, which is simply wrong for a condition.
     #[test]
-    fn unsupported_condition_forms_fail_soft_and_name_themselves() {
-        let scope = Scope::single(schema(&["a"]), 0);
-        for sql in [
-            "a IS 1",
-            "a BETWEEN 1 AND 5",
-            "a IN (1, 2, 3)",
-            "a LIKE 'x%'",
-        ] {
-            let mut em = Emitter::new();
-            let mut reg = RegAlloc::new();
-            let result = compile_cond(
+    fn is_and_is_not_are_null_safe_equality() {
+        assert_eq!(run("1 IS 1"), 1);
+        assert_eq!(run("1 IS 2"), 0);
+        assert_eq!(run("NULL IS NULL"), 1);
+        assert_eq!(run("1 IS NULL"), 0);
+        assert_eq!(run("NULL IS 1"), 0);
+        assert_eq!(run("1 IS NOT 2"), 1);
+        assert_eq!(run("NULL IS NOT NULL"), 0);
+    }
+
+    #[test]
+    fn between_is_ge_lo_and_le_hi() {
+        assert_eq!(run("3 BETWEEN 1 AND 5"), 1);
+        assert_eq!(run("1 BETWEEN 1 AND 5"), 1);
+        assert_eq!(run("5 BETWEEN 1 AND 5"), 1);
+        assert_eq!(run("0 BETWEEN 1 AND 5"), 0);
+        assert_eq!(run("6 BETWEEN 1 AND 5"), 0);
+        assert_eq!(run("3 NOT BETWEEN 1 AND 5"), 0);
+        assert_eq!(run("0 NOT BETWEEN 1 AND 5"), 1);
+    }
+
+    /// A `NULL` bound makes `BETWEEN` unknown unless the other bound
+    /// already settles it -- exactly `AND`'s own short-circuit, since
+    /// `BETWEEN` desugars straight into one.
+    #[test]
+    fn between_with_a_null_bound_is_null_unless_the_other_bound_already_decides() {
+        let scope = Scope::single(schema(&[]), 0);
+        assert_eq!(
+            run_cond3(&expr("0 BETWEEN NULL AND 5"), &scope),
+            None,
+            "0 >= NULL is unknown, and 0 <= 5 doesn't rule BETWEEN out"
+        );
+        assert_eq!(
+            run_cond3(&expr("6 BETWEEN NULL AND 5"), &scope),
+            Some(false),
+            "6 <= 5 is definitely false regardless of the unknown lower bound"
+        );
+    }
+
+    #[test]
+    fn in_list_matches_membership() {
+        assert_eq!(run("2 IN (1, 2, 3)"), 1);
+        assert_eq!(run("4 IN (1, 2, 3)"), 0);
+        assert_eq!(run("2 NOT IN (1, 2, 3)"), 0);
+        assert_eq!(run("4 NOT IN (1, 2, 3)"), 1);
+    }
+
+    /// A `NULL` in the list can't rule a non-match out -- `IN` desugars
+    /// to `OR`, and `false OR unknown` is unknown, not false.
+    #[test]
+    fn in_list_with_an_unmatched_null_is_null() {
+        let scope = Scope::single(schema(&[]), 0);
+        assert_eq!(run_cond3(&expr("4 IN (1, NULL, 3)"), &scope), None);
+        assert_eq!(
+            run_cond3(&expr("2 IN (1, NULL, 2)"), &scope),
+            Some(true),
+            "a real match short-circuits the same way OR does"
+        );
+    }
+
+    #[test]
+    fn like_and_glob_match_and_propagate_null() {
+        assert_eq!(run("'abc' LIKE 'a%'"), 1);
+        assert_eq!(run("'abc' LIKE 'x%'"), 0);
+        assert_eq!(run("'abc' NOT LIKE 'x%'"), 1);
+        assert_eq!(run("'axc' GLOB 'a?c'"), 1);
+        let scope = Scope::single(schema(&[]), 0);
+        assert_eq!(run_cond3(&expr("'x' LIKE NULL"), &scope), None);
+    }
+
+    #[test]
+    fn an_explicit_collate_is_honored_in_a_comparison() {
+        // BINARY (the default) is case-sensitive; NOCASE folds ASCII
+        // case before comparing.
+        assert_eq!(run("'ABC' = 'abc'"), 0);
+        assert_eq!(run("'ABC' = 'abc' COLLATE NOCASE"), 1);
+        assert_eq!(run("'ABC' COLLATE NOCASE = 'abc'"), 1);
+    }
+
+    #[test]
+    fn an_unknown_collation_name_is_unsupported() {
+        let scope = Scope::single(schema(&[]), 0);
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        assert!(matches!(
+            compile_cond(
                 &mut em,
                 &mut reg,
                 &scope,
-                &expr(sql),
+                &expr("'a' = 'a' COLLATE FRENCH"),
                 CondTargets::null_is_false(Target::Fallthrough, Target::Fallthrough),
-            );
-            assert!(
-                matches!(result, Err(CodegenError::Unsupported { .. })),
-                "{sql:?} should be reported as unsupported"
-            );
+            ),
+            Err(CodegenError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn multi_column_in_subquery_is_unsupported() {
+        let scope = Scope::single(schema(&["a", "b"]), 0);
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        assert!(matches!(
+            compile_cond(
+                &mut em,
+                &mut reg,
+                &scope,
+                &expr("(a, b) IN (SELECT x, y FROM u)"),
+                CondTargets::null_is_false(Target::Fallthrough, Target::Fallthrough),
+            ),
+            Err(CodegenError::Unsupported { .. })
+        ));
+    }
+
+    /// Runs `expr` as a *value* (via `value::compile_value`, which
+    /// materializes a condition three-valued by compiling it twice --
+    /// see `compile_bool_to_value`) and returns its real answer, `None`
+    /// for SQL's unknown -- unlike [`run`], which folds unknown into
+    /// false the way `WHERE` does.
+    fn run_cond3(expr: &Expr, scope: &Scope) -> Option<bool> {
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        let dest =
+            crate::codegen::row::value::compile_value(&mut em, &mut reg, scope, expr).unwrap();
+        em.emit(Instruction::new(Opcode::ResultRow, dest, 1, 0));
+        em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+        let program = em.finish();
+        let mut vm = Vm::new();
+        let rows = execute(&mut vm, &program).unwrap();
+        match rows.into_iter().next().unwrap().into_iter().next().unwrap() {
+            Value::Integer(1) => Some(true),
+            Value::Integer(0) => Some(false),
+            Value::Null => None,
+            other => panic!("expected an integer or NULL, got {other:?}"),
         }
     }
 }
