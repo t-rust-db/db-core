@@ -17,7 +17,12 @@
 //! real test coverage -- all ported from sqlite-rs's existing parser
 //! test suite, unchanged.
 
-pub mod ast;
+/// Moved to [`crate::parser::ast`] (#147): the AST is the crate's, not
+/// `row`'s -- `codegen::batch` consumes it too (ADR 0002's second
+/// amendment). Re-exported here for one release so existing
+/// `parser::row::ast::...` paths keep working.
+pub use crate::parser::ast;
+
 pub mod error;
 pub mod grammar;
 pub mod printer;
