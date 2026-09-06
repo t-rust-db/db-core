@@ -247,9 +247,25 @@ chooser is deferred to #117, N-way joins to #118"
                 }
             }
             ResultColumn::TableStar { table } => {
-                return Err(CodegenError::Unsupported {
-                    reason: format!("`{table}.*` is not supported yet"),
-                });
+                if table.eq_ignore_ascii_case(&schema.name) {
+                    columns.extend(schema.columns.iter().cloned().map(ProjectedColumn::Name));
+                } else if let Some((right_schema, _)) = right {
+                    if table.eq_ignore_ascii_case(&right_schema.name) {
+                        columns.extend(
+                            right_schema.columns.iter().map(|c| {
+                                ProjectedColumn::Name(format!("{}.{c}", right_schema.name))
+                            }),
+                        );
+                    } else {
+                        return Err(CodegenError::Unsupported {
+                            reason: format!("`{table}.*` refers to an unknown table"),
+                        });
+                    }
+                } else {
+                    return Err(CodegenError::Unsupported {
+                        reason: format!("`{table}.*` refers to an unknown table"),
+                    });
+                }
             }
         }
     }
@@ -1411,6 +1427,45 @@ mod tests {
                 vec![Value::Integer(2)],
             ]
         );
+    }
+
+    #[test]
+    fn table_star_on_a_single_table_matches_bare_star() {
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT t.* FROM t");
+        let rows = run(
+            &schema,
+            &query,
+            vec![vec![Value::Integer(1), Value::Integer(10)]],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(10)]]);
+    }
+
+    #[test]
+    fn table_star_restricts_to_one_side_of_a_join() {
+        let left = schema_named("a", &["x"]);
+        let right = schema_named("b", &["y"]);
+        let query = query("SELECT a.*, b.* FROM a JOIN b ON a.x = b.y");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)]],
+            vec![vec![Value::Integer(1)]],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn table_star_over_an_unknown_table_is_unsupported() {
+        let schema = schema(&["a"]);
+        let err = compile_select(&schema, 0, &query("SELECT bogus.* FROM t")).unwrap_err();
+        match err {
+            CodegenError::Unsupported { reason } => {
+                assert!(reason.contains("unknown table"), "{reason}");
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
     }
 
     #[test]
