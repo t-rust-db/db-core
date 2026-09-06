@@ -7,10 +7,10 @@
 //! slice (`WithClause`/`CommonTableExpr`).
 //!
 //! **This is the crate's AST** (`parser::ast`, moved out of
-//! `parser::row` in #147), not `row`'s private one. ADR 0002's second
-//! amendment settles the direction that its first amendment had
-//! reversed: `row` leads, and `crate::expr::Query` is retired as a
-//! strict subset of [`Select`] rather than grown to meet it.
+//! `parser::row` in #147), not `row`'s private one. ADR 0002: `row`
+//! leads, and `crate::expr::Query` -- a strict subset of [`Select`] --
+//! is being retired (#153) rather than grown to meet it. `codegen::row`
+//! is already off it; the batch planner still consumes it until #153.
 //!
 //! The subset relationship is the whole point. `expr::Query` models
 //! `group_by: Vec<String>`, `limit: Option<usize>` and

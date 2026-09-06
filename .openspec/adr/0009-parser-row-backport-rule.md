@@ -1,7 +1,7 @@
 # ADR 0009: While two copies of the row parser exist, Lab271/sqlite-rs leads and `parser::row` back-ports
 
 > Source: `#84` — `parser::row` drifted ~200 lines ahead of the grammar
-> ADR 0005 calls canonical. Amends ADR 0005 (which stays accepted).
+> ADR 0002 calls canonical. Amends ADR 0002 (which stays accepted).
 
 ## Status
 
@@ -11,7 +11,7 @@ on there is one parser and no rule is needed.
 
 ## Context
 
-ADR 0005 makes sqlite-rs's grammar the canonical SQL surface for db-core.
+ADR 0002 makes sqlite-rs's grammar the canonical SQL surface for db-core.
 `parser::row` was ported from it mechanically (`#23`). Since then two
 features landed here first and never went back:
 
@@ -44,7 +44,7 @@ While both copies exist:
    The only tolerated difference is structural (`mod.rs`, `Span` living
    in `crate::parser` instead of `tokenizer.rs`). Anything else is either
    a pending Lab271 ticket or a bug.
-3. **ADR 0005's direction of convergence is unchanged**: `column`/`stream`
+3. **ADR 0002's direction of convergence is unchanged**: `column`/`stream`
    still converge toward `row`; this ADR only fixes which *copy* of `row`
    is authoritative while there are two.
 
