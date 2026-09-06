@@ -4,6 +4,20 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.52.1] - 2026-09-06
+
+### Changed
+
+- **`src/` is in the `cargo-mvl-limit` qualified subset, and the gate is blocking** (#156, #161) -- all 101 violations the gate reported when the CI pipeline landed (#157) are cleared: no explicit lifetimes, no `dyn` dispatch, no `unreachable!`/`env!` outside the designated boundary. `vm/row`'s `Cursor`/`Transaction`/`CursorFactory`/`SchemaStorage` remain `Box<dyn ..>` as ADR 0008's storage-agnostic extension point for downstream implementors, exempt via the Makefile's `MVL_LIMIT_EXCLUDE` -- the same convention sqlite-rs applies to its `src/vfs.rs`.
+- **Batch execution API is generic instead of boxed** -- `vm::engine::run`, `vm::batch::run_parallel`/`run_parallel_top_n` take `&[S: Segment]` (was `&[Box<dyn Segment>]`); `Vm::run` takes `&mut S: Source`; `codegen::batch::explain` takes `impl Fn(&str) -> TableStats`. Every call site was already monomorphic, so callers drop the boxing and `as Box<dyn Segment>` casts. Downstream adaptation tracked in column-rs#18.
+- **`SemiJoinProgram` owns its `subquery: Box<Select>`** (was a borrowed `&'q Select`), and `JoinHashTable::get_all` returns an eager `Vec<&V>` (was a lazy iterator).
+- **`VmError::UnsupportedOp`** -- a `Map`/`Window` opcode reaching a kernel with no dispatch for it is now a returned error for the caller to handle, not a panic mid-query. `emit::batch` renders a `compile_error!` into generated source for opcode/expression shapes no planner emits yet, instead of panicking in the emitter.
+- **Crate version is `db_core::VERSION`** (a plain constant; `env!` is outside the qualified subset). `tests/version.rs` fails the build if it drifts from `Cargo.toml` -- bump both on release.
+
+### Fixed
+
+- ADR 0002 referenced `convert_select` by its pre-#153 name (#160).
+
 ## [0.52.0] - 2026-09-06
 
 ### Added
