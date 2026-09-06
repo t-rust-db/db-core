@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.52.0] - 2026-09-06
+
+### Added
+
+- **`codegen::row`'s SELECT/DML planner is wired into `dispatch::compile_statement`** (#148) -- `SELECT` (including a `WITH`-prefixed one), `INSERT`, `UPDATE`, and `DELETE` are now routed and compiled end to end, alongside the existing DDL/`PRAGMA`/transaction statements. `codegen::row` goes from DDL-only to actually executing queries. A `SELECT` with a single `JOIN` resolves its right-hand table from the schema catalog and compiles via `compile_select_join`; anything else goes through `compile_select_with_catalog`. Unknown-table errors are reported consistently as `DispatchError::NoSuchTable` across every statement kind.
+
 ## [0.51.0] - 2026-09-05
 
 ### Added
