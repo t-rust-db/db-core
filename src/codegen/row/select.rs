@@ -21,13 +21,14 @@
 //! see each module's own doc for the exact scope.
 
 use super::limit_scan::{self, LimitState};
-use super::value::{compile_value, emit_column_read};
+use super::value::{compile_value, emit_column_read, qualified_name};
 use super::{index_scan, range_scan};
 use super::{
     CodegenError, CondTargets, Emitter, Label, RegAlloc, Result, Scope, TableSchema, Target,
 };
 use crate::parser::ast::{
-    BinaryOp, Expr, ExprKind, Join, JoinConstraint, JoinOp, ResultColumn, Select, TableRefKind,
+    BinaryOp, Expr, ExprKind, FunctionArgs, Join, JoinConstraint, JoinOp, Literal, ResultColumn,
+    Select, TableRefKind,
 };
 use crate::vm::row::{Collation, Instruction, Opcode, Program, SortKeyColumn, P4};
 
@@ -934,6 +935,148 @@ fn compile_full_outer_right_pass(
     Ok(())
 }
 
+/// Rewrites every column reference in `expr` that resolves to
+/// `null_cursor` into a `NULL` literal, so a compiled `ORDER BY`
+/// expression evaluates exactly as it would if that cursor's row were
+/// truly null-extended -- matching `compile_row_values`'s existing
+/// null-fill for a plain column, which `compile_value` alone has no
+/// way to apply (db-core#173). A nested subquery's own body is left
+/// untouched: a correlated reference to the null-extended side inside
+/// it is a separate, harder problem this narrow fix doesn't take on.
+fn null_extend(scope: &Scope, null_cursor: i32, expr: &Expr) -> Expr {
+    let kind = match &expr.kind {
+        ExprKind::Column { table, name, .. } => {
+            match scope.resolve(&qualified_name(table.as_deref(), name)) {
+                Ok((cursor, _)) if cursor == null_cursor => ExprKind::Literal(Literal::Null),
+                _ => expr.kind.clone(),
+            }
+        }
+        ExprKind::Literal(_)
+        | ExprKind::Param(_)
+        | ExprKind::Subquery(_)
+        | ExprKind::Exists { .. }
+        | ExprKind::InSubquery { .. }
+        | ExprKind::InSubqueryMulti { .. } => expr.kind.clone(),
+        ExprKind::FunctionCall {
+            name,
+            distinct,
+            args,
+            over,
+        } => ExprKind::FunctionCall {
+            name: name.clone(),
+            distinct: *distinct,
+            args: match args {
+                FunctionArgs::Star => FunctionArgs::Star,
+                FunctionArgs::List(list) => FunctionArgs::List(
+                    list.iter()
+                        .map(|e| null_extend(scope, null_cursor, e))
+                        .collect(),
+                ),
+            },
+            over: over.clone(),
+        },
+        ExprKind::Unary { op, expr: inner } => ExprKind::Unary {
+            op: *op,
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+        },
+        ExprKind::Binary { op, lhs, rhs } => ExprKind::Binary {
+            op: *op,
+            lhs: Box::new(null_extend(scope, null_cursor, lhs)),
+            rhs: Box::new(null_extend(scope, null_cursor, rhs)),
+        },
+        ExprKind::Is { lhs, rhs, negated } => ExprKind::Is {
+            lhs: Box::new(null_extend(scope, null_cursor, lhs)),
+            rhs: Box::new(null_extend(scope, null_cursor, rhs)),
+            negated: *negated,
+        },
+        ExprKind::IsNull {
+            expr: inner,
+            negated,
+        } => ExprKind::IsNull {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            negated: *negated,
+        },
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            negated,
+        } => ExprKind::Between {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            lo: Box::new(null_extend(scope, null_cursor, lo)),
+            hi: Box::new(null_extend(scope, null_cursor, hi)),
+            negated: *negated,
+        },
+        ExprKind::In {
+            expr: inner,
+            list,
+            negated,
+        } => ExprKind::In {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            list: list
+                .iter()
+                .map(|e| null_extend(scope, null_cursor, e))
+                .collect(),
+            negated: *negated,
+        },
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            glob,
+            negated,
+            escape,
+        } => ExprKind::Like {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            pattern: Box::new(null_extend(scope, null_cursor, pattern)),
+            glob: *glob,
+            negated: *negated,
+            escape: escape
+                .as_ref()
+                .map(|e| Box::new(null_extend(scope, null_cursor, e))),
+        },
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => ExprKind::Case {
+            operand: operand
+                .as_ref()
+                .map(|e| Box::new(null_extend(scope, null_cursor, e))),
+            whens: whens
+                .iter()
+                .map(|(cond, result)| {
+                    (
+                        null_extend(scope, null_cursor, cond),
+                        null_extend(scope, null_cursor, result),
+                    )
+                })
+                .collect(),
+            else_: else_
+                .as_ref()
+                .map(|e| Box::new(null_extend(scope, null_cursor, e))),
+        },
+        ExprKind::Cast {
+            expr: inner,
+            type_name,
+        } => ExprKind::Cast {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            type_name: type_name.clone(),
+        },
+        ExprKind::Collate {
+            expr: inner,
+            collation,
+        } => ExprKind::Collate {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            collation: collation.clone(),
+        },
+        ExprKind::Paren(inner) => ExprKind::Paren(Box::new(null_extend(scope, null_cursor, inner))),
+    };
+    Expr {
+        kind,
+        span: expr.span,
+    }
+}
+
 /// Emits one output row: either directly via `ResultRow` (no `ORDER BY`,
 /// applying the `LIMIT` guard first), or into the sorter via
 /// `MakeRecord`/`SorterInsert` (an `ORDER BY` is present, so `LIMIT`
@@ -969,7 +1112,11 @@ pub(super) fn emit_row(
             let index = match &plan.target {
                 OrderByTarget::Column(idx) => *idx,
                 OrderByTarget::Expr(expr) => {
-                    let r = compile_value(em, reg, scope, expr)?;
+                    let expr = match null_cursor {
+                        Some(null_cursor) => null_extend(scope, null_cursor, expr),
+                        None => expr.clone(),
+                    };
+                    let r = compile_value(em, reg, scope, &expr)?;
                     usize::try_from(r.saturating_sub(first)).unwrap_or(0)
                 }
             };
@@ -1918,6 +2065,38 @@ mod tests {
             vec![
                 vec![Value::Integer(2), Value::Integer(200)],
                 vec![Value::Null, Value::Integer(100)],
+            ]
+        );
+    }
+
+    #[test]
+    fn full_outer_join_order_by_expression_null_extends_the_left_side() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let query = query("SELECT a, u.c FROM t FULL JOIN u ON t.a = u.b ORDER BY a + 0");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(5)], vec![Value::Integer(1)]],
+            vec![
+                vec![Value::Integer(5), Value::Integer(500)],
+                vec![Value::Integer(9), Value::Integer(900)],
+            ],
+        );
+        // `b=9` matches no left row, so its `a` is null-extended in the
+        // second pass -- `a + 0` must evaluate against that NULL, not
+        // whatever real value the left cursor's last-visited row (a=1)
+        // still holds in its registers (db-core#173). If it read the
+        // stale value instead, this row's sort key would tie with the
+        // real `a=1` row instead of sorting last, and it would show up
+        // out of order below.
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Null],
+                vec![Value::Integer(5), Value::Integer(500)],
+                vec![Value::Null, Value::Integer(900)],
             ]
         );
     }

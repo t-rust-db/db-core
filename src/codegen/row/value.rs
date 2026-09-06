@@ -12,7 +12,7 @@ use crate::vm::row::{affinity_of, Affinity, Instruction, Opcode, P4};
 /// `ExprKind::Column` carries `table` and `name` as separate fields;
 /// `Scope::resolve` (unchanged since before #147) still takes one
 /// dotted string, matching how `expr::Expr::Column` stored it.
-fn qualified_name(table: Option<&str>, name: &str) -> String {
+pub(super) fn qualified_name(table: Option<&str>, name: &str) -> String {
     match table {
         Some(table) => format!("{table}.{name}"),
         None => name.to_string(),
