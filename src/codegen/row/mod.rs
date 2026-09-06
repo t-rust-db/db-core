@@ -322,12 +322,20 @@ impl Emitter {
 
 /// A monotonically-increasing register bump allocator -- the simplest
 /// correct scheme for this scoped-down compiler; a real allocator that
-/// reuses freed slots, and cursor/CTE-cache bookkeeping for subqueries,
-/// are deferred to whichever sub-ticket (#95) actually needs them.
+/// reuses freed slots is deferred to whichever sub-ticket actually
+/// needs it.
 #[derive(Debug, Default)]
 pub struct RegAlloc {
     next: i32,
     next_cursor: i32,
+    /// A structural-equality cache of every `FROM`-subquery this
+    /// compile has already materialized, keyed by the subquery's own
+    /// AST (db-core#143) -- mirrors sqlite-rs's `RegAlloc::cached_cte`.
+    /// See [`crate::codegen::row::subquery::materialize_from_subquery`]'s
+    /// doc for why raw structural equality is safe today (no
+    /// correlated variables, no volatile expression reaches this path
+    /// yet) and what has to change the day that stops being true.
+    cte_cache: Vec<(crate::parser::ast::Select, i32, TableSchema)>,
 }
 
 impl RegAlloc {
@@ -363,6 +371,31 @@ impl RegAlloc {
     /// without allocating it.
     pub fn peek(&self) -> i32 {
         self.next
+    }
+
+    /// Looks up an already-materialized subquery structurally equal to
+    /// `subquery`, returning the cursor it was materialized onto and its
+    /// synthetic schema, for the caller to `OpenDup` instead of
+    /// re-running the same query. Mirrors sqlite-rs's
+    /// `RegAlloc::cached_cte`.
+    pub fn cached_cte(&self, subquery: &crate::parser::ast::Select) -> Option<(i32, TableSchema)> {
+        self.cte_cache
+            .iter()
+            .find(|(q, _, _)| q == subquery)
+            .map(|(_, cursor, schema)| (*cursor, schema.clone()))
+    }
+
+    /// Records that `subquery` was materialized onto `cursor` with
+    /// `schema`, so a later structurally-identical occurrence can reuse
+    /// it via [`RegAlloc::cached_cte`]. Mirrors sqlite-rs's
+    /// `RegAlloc::cache_cte`.
+    pub fn cache_cte(
+        &mut self,
+        subquery: crate::parser::ast::Select,
+        cursor: i32,
+        schema: TableSchema,
+    ) {
+        self.cte_cache.push((subquery, cursor, schema));
     }
 }
 
