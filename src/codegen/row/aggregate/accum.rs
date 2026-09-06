@@ -6,8 +6,8 @@ use super::super::value::emit_column_read;
 use super::super::{
     CodegenError, CondTargets, Emitter, Label, RegAlloc, Result, Scope, TableSchema, Target,
 };
-use crate::expr::AggFunc;
 use crate::parser::ast::{Expr, ExprKind, FunctionArgs, ResultColumn, Select};
+use crate::vm::batch::AggFunc;
 use crate::vm::row::{Collation, Instruction, Opcode, P4};
 
 /// One aggregate call's `AggStep`/`AggFinal` binding: `func` selects the

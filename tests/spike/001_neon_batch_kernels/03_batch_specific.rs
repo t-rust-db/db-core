@@ -35,8 +35,9 @@
     clippy::unwrap_used
 )]
 
-use db_core::expr::AggFunc;
-use db_core::vm::batch::{run_parallel, Batch, MapOp, Opcode, Segment, Value, Vm, BATCH_SIZE};
+use db_core::vm::batch::{
+    run_parallel, AggFunc, Batch, MapOp, Opcode, Segment, Value, Vm, BATCH_SIZE,
+};
 use std::borrow::Cow;
 use std::hint::black_box;
 use std::time::{Duration, Instant};

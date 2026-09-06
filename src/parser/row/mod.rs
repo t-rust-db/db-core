@@ -2,26 +2,21 @@
 //! crate root docs and `ADR 0002`, as amended).
 //!
 //! **Fully implemented**, migrated in from sqlite-rs's own parser
-//! (`src/parser/*`) across #23's slices: [`tokenizer`], [`ast`] (its
-//! own AST, not `crate::expr::Query` -- see its doc comment and `ADR
-//! 0002`'s amendment for why), [`error`] (the three-way
+//! (`src/parser/*`) across #23's slices: [`crate::parser::ast`] (the
+//! crate's single AST -- see `ADR 0002`), [`error`] (the three-way
 //! [`ParseOutcome`] and internal [`error::ParseFail`]/[`error::PResult`]),
-//! [`grammar`] (the recursive-descent [`grammar::Parser`] itself), and
-//! [`printer`] (pretty-printing an [`ast`] node back to SQL text, for
-//! the parse -> print -> parse roundtrip sqlite-rs's own test suite
-//! relies on).
+//! [`grammar`] (the recursive-descent [`grammar::Parser`] itself),
+//! [`tokenizer`], and [`printer`] (pretty-printing a [`crate::parser::ast`]
+//! node back to SQL text, for the parse -> print -> parse roundtrip
+//! sqlite-rs's own test suite relies on).
 //!
 //! [`super::column`] is the reference for what "done" looks like: shares
 //! this crate's [`crate::parser::Span`], its own `ParseError` (`column`'s, not
 //! `row`'s [`ParseOutcome`]/[`error::ParseFail`] -- see `ADR 0002`), and
 //! real test coverage -- all ported from sqlite-rs's existing parser
-//! test suite, unchanged.
-
-/// Moved to [`crate::parser::ast`] (#147): the AST is the crate's, not
-/// `row`'s -- `codegen::batch` consumes it too (ADR 0002's second
-/// amendment). Re-exported here for one release so existing
-/// `parser::row::ast::...` paths keep working.
-pub use crate::parser::ast;
+//! test suite, unchanged. Since #153, both `codegen::batch` and
+//! `codegen::row` consume [`crate::parser::ast::Select`] directly -- there
+//! is one AST, with no `parser::row::ast` re-export needed any more.
 
 pub mod error;
 pub mod grammar;

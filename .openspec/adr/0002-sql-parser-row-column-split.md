@@ -119,11 +119,13 @@ for `SELECT` are the same language parsed twice.
 | Part | Status | Evidence |
 |---|---|---|
 | One grammar | **Done** (`#57`) | `parser::column` has no tokenizer or grammar; it parses via `parser::row::parse_select`. |
-| One AST — location | **Done** (`#151`) | `src/parser/ast.rs`; `parser::row::ast` is a one-release compatibility re-export. |
+| One AST — location | **Done** (`#151`) | `src/parser/ast.rs`; the one-release `parser::row::ast` compatibility re-export was removed in `#153`. |
 | One AST — row planner | **Done** (`#152`) | `codegen::row` (SELECT/DML/aggregate/subquery/DDL) consumes `parser::ast` exclusively. |
-| One AST — batch planner | **Open** (`#153`) | `codegen::batch::compile*` and `emit::batch` still take `crate::expr::Query`, produced only by `parser::column::convert_select`'s lowering. `src/expr.rs` (569 lines) survives solely for this; its `Insert`/`Update`/`Delete`/`Assignment` are already dead. `#153` retargets both onto `parser::ast::Select`, demotes `convert_select` to a validator with the same rejection list, relocates `AggFunc` and the window enums out of `expr`, deletes `src/expr.rs`, and fixes the feature graph (`codegen-batch` must imply `parser-column`; `emit-batch` today calls a `parser-column`-gated function without implying it). |
-| Cross-mode rejection | **Done** | Batch: `convert_select`. Row: `codegen::row` `Unsupported` arms (window functions, `IS`, `BETWEEN`, `IN (list)`, `LIKE`, `CASE`, `CAST`, parameters, `WITH`, compound — `#149`/`#150`). |
+| One AST — batch planner | **Done** (`#153`) | `codegen::batch::compile*` and `emit::batch` take `&parser::ast::Select` directly. `parser::column::validate_select` is a pure validator (`Result<(), ParseError>`, same rejection list, same `Span`s) that also resolves table aliases in place; it produces no intermediate type. `src/expr.rs` is deleted. `AggFunc` moved to `vm::batch` (shared by both engines); the window-function enums (`WindowFunc`/`WindowSpec`) are now local, planner-only types inside `codegen::batch`, built directly from `ast::ExprKind::FunctionCall`'s `over` tail. `codegen-batch` implies `parser-column`; `emit-batch` builds standalone (`--no-default-features --features emit-batch`). |
+| Cross-mode rejection | **Done** | Batch: `parser::column::validate_select`. Row: `codegen::row` `Unsupported` arms (window functions, `IS`, `BETWEEN`, `IN (list)`, `LIKE`, `CASE`, `CAST`, parameters, `WITH`, compound — `#149`/`#150`). |
 | Dedicated codegen | **Done** | `codegen::{row,batch,stream}`, `emit::batch`. |
 
-Until `#153` lands, the second row of this table is the only place in
-the crate where "one AST" is a target rather than a fact.
+Every row of this table is now **Done**: `parser::ast::Select` is the
+crate's single AST, consumed directly by both planners, with no
+`crate::expr::Query` (or any other intermediate lowering type) anywhere
+in the crate.

@@ -7,15 +7,15 @@
 //! from "actually malformed" — otherwise a not-yet-built feature reads
 //! identically to a typo.
 //!
-//! Uses this crate's own [`crate::parser::Span`], shared with [`super::ast`] and
+//! Uses this crate's own [`crate::parser::Span`], shared with [`crate::parser::ast`] and
 //! [`super::tokenizer`] -- not a duplicate `Span` type.
 
-use super::ast::{
+use super::grammar::Parser;
+use super::tokenizer::Tokenizer;
+use crate::parser::ast::{
     Analyze, Begin, Commit, CreateIndex, CreateTable, CreateView, Delete, DropIndex, DropTable,
     DropView, Explain, Insert, Pragma, Rollback, Select, Update,
 };
-use super::grammar::Parser;
-use super::tokenizer::Tokenizer;
 use crate::parser::Span;
 
 /// The three-way result of attempting to parse a statement: cleanly

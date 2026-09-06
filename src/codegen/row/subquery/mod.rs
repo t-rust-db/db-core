@@ -19,18 +19,19 @@
 //! expression is evaluated (once per outer row), the outer cursor is
 //! already positioned on the current row every time this code runs.
 //!
-//! **Scoped down from the reference**, in each case because db-core's
-//! narrower `Expr`/`Query` cannot express the input:
+//! **Scoped down from the reference**, in each case because this module
+//! doesn't yet compile the input, not because the AST can't express it
+//! (`parser::ast::ExprKind` already has `Subquery`/`InSubqueryMulti`
+//! variants for both of these):
 //!
 //! - **Scalar subqueries in value position** (the reference's
-//!   `compile_scalar_subquery`) have no [`crate::expr::Expr`] variant to
-//!   compile from -- db-core's `Expr` has `InSubquery`/`Exists` and no
-//!   bare `Subquery`. `InSubquery`/`Exists` in a *value* context still
-//!   work, via `value.rs`'s existing three-valued
+//!   `compile_scalar_subquery`, `ast::ExprKind::Subquery`) aren't
+//!   compiled here yet -- only `InSubquery`/`Exists` in a *value*
+//!   context work today, via `value.rs`'s existing three-valued
 //!   condition-to-register materialization.
-//! - **Multi-column `IN`** (`compile_in_subquery_multi`): `Expr::
-//!   InSubquery`'s left-hand side is a single `Expr`, so there is no
-//!   tuple form to compile.
+//! - **Multi-column `IN`** (`compile_in_subquery_multi`,
+//!   `ast::ExprKind::InSubqueryMulti`) isn't compiled here yet -- only
+//!   the single-column `ExprKind::InSubquery` form is.
 //! - **The `SeekRowid`/`SeekIndexEq` point-lookup fast path** the
 //!   reference takes for a correlated equality (its `choose_join_access`)
 //!   needs the join-access chooser db-core defers to #117 along with

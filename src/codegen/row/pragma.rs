@@ -4,7 +4,7 @@
 //! [`super::transaction`]'s shape: one control opcode per pragma,
 //! operands carrying whatever the executor needs.
 
-use crate::parser::row::ast::{Pragma, PragmaJournalMode, PragmaSynchronous};
+use crate::parser::ast::{Pragma, PragmaJournalMode, PragmaSynchronous};
 use crate::vm::row::{
     Instruction, Opcode, Program, JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, SYNCHRONOUS_FULL,
     SYNCHRONOUS_NORMAL, SYNCHRONOUS_OFF, SYNCHRONOUS_QUERY,

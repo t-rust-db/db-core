@@ -1,6 +1,6 @@
 //! `db-core`: the shared SQL language/execution layer for t-rust-db --
-//! types, expression AST, parser, join primitives, VM, planner (`codegen`)
-//! and AOT source emitter (`emit`), all
+//! types, parser (with its single AST, `parser::ast`), join primitives,
+//! VM, planner (`codegen`) and AOT source emitter (`emit`), all
 //! storage-agnostic (per ADR 0006 -- physical storage lives in
 //! `db-storage`, structured as `row`/`column`/`stream` there).
 //!
@@ -10,8 +10,11 @@
 //! `codegen` for their own `batch`/`row`/`stream` splits. See this
 //! crate's `CHANGELOG.md` for the migration.
 //!
-//! - [`types`] / [`expr`] -- always compiled, no feature gate (small,
-//!   no dependencies, needed by everything else).
+//! - [`types`] -- always compiled, no feature gate (small, no
+//!   dependencies, needed by everything else). The former `expr` module
+//!   (a private AST the batch planner alone consumed) was retired in
+//!   #153: `parser::ast::Select` is now the crate's single AST, consumed
+//!   directly by both `codegen::batch` and `codegen::row`.
 //! - [`join`] -- always compiled (small, no dependencies); its only
 //!   consumer today is `vm`'s `vm-batch` feature, but gating it
 //!   separately isn't worth the complexity for ~250 lines with zero
@@ -20,7 +23,7 @@
 //! - [`vm`] -- `vm-batch` (default) / `vm-row` / `vm-stream`.
 //! - [`codegen`] -- the planner, AST -> executable `Program` (sqlite-rs's
 //!   sense of "codegen", ADR 0007): `codegen-batch` (default, needs
-//!   `vm-batch`) / `codegen-row` / `codegen-stream`.
+//!   `vm-batch` and `parser-column`) / `codegen-row` / `codegen-stream`.
 //! - [`emit`] -- ahead-of-time Rust-source emitter (a planned `Program`
 //!   -> `const PROGRAM` source text; batch-only, no sqlite-rs
 //!   equivalent): `emit-batch` (default, needs `codegen-batch`) /
@@ -37,7 +40,6 @@
     reason = "lint burn-down tracked in #105"
 )]
 
-pub mod expr;
 pub mod join;
 pub mod types;
 pub mod value;

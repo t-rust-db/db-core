@@ -1,6 +1,6 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
-//! sqlite-rs's pretty-printer for [`super::ast`] (`src/parser/printer.rs`),
+//! sqlite-rs's pretty-printer for [`crate::parser::ast`] (`src/parser/printer.rs`),
 //! migrated in unchanged (see `#23`): used to verify the roundtrip
 //! requirement ("parse -> print -> parse gives identical AST"). Always
 //! emits explicit parentheses around `ExprKind::Paren` nodes and
@@ -9,10 +9,10 @@
 //! same AST.
 //!
 //! Independent of [`super::grammar`]/[`super::error`]/[`super::tokenizer`]
-//! -- only depends on [`super::ast`], so it ports without touching
+//! -- only depends on [`crate::parser::ast`], so it ports without touching
 //! `Span` at all.
 
-use super::ast::*;
+use crate::parser::ast::*;
 use std::fmt;
 
 impl fmt::Display for WithClause {

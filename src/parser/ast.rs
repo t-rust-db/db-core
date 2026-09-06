@@ -6,22 +6,17 @@
 //! the V4 GROUP BY/HAVING slice, and the V6 non-recursive `WITH`/CTE
 //! slice (`WithClause`/`CommonTableExpr`).
 //!
-//! **This is the crate's AST** (`parser::ast`, moved out of
+//! **This is the crate's single AST** (`parser::ast`, moved out of
 //! `parser::row` in #147), not `row`'s private one. ADR 0002: `row`
-//! leads, and `crate::expr::Query` -- a strict subset of [`Select`] --
-//! is being retired (#153) rather than grown to meet it. `codegen::row`
-//! is already off it; the batch planner still consumes it until #153.
+//! leads, and both `codegen::row` and `codegen::batch` consume
+//! [`Select`] directly (#153 retired the retired `expr::Query` module, the narrow
+//! subset type `codegen::batch` used to consume instead).
 //!
-//! The subset relationship is the whole point. `expr::Query` models
-//! `group_by: Vec<String>`, `limit: Option<usize>` and
-//! `SelectItem::{Column, Star, ...}`; this module models `group_by:
-//! Vec<Expr>`, [`Limit`] (expressions, so parameters bind) and
-//! [`ResultColumn::Expr`] (arbitrary expressions with aliases), plus
-//! [`WithClause`], compound `UNION` and a real join chain that
-//! `expr::Query` cannot express at all. Backporting those into
-//! `expr::Query` was the drift #147 corrects; features are added here,
-//! and `column`/`batch` enforce their executable subset at lowering
-//! (`parser::column::convert_select`) rather than by parsing less.
+//! `column`/`batch` enforce their executable subset by validating
+//! (`parser::column::validate_select`) rather than by parsing less: a
+//! `Select` outside that subset (`WITH`, compound `UNION`, a real
+//! multi-way join, expression `LIMIT`, column aliases, ...) is rejected
+//! with a `Span`-carrying `ParseError`, not silently misplanned.
 //!
 //! Scoped to `.openspec/grammar/sqlite.ebnf`'s `(* V2 *)`/`(* V3 *)`/
 //! `(* V4 *)`-tagged rules: SELECT with an INNER/LEFT [OUTER]/CROSS join
@@ -325,11 +320,13 @@ pub struct OrderingTerm {
 /// carried -- a base window name (`OVER (base_name ...)`, requiring the
 /// still-unsupported `WINDOW` clause) and an explicit frame
 /// (`ROWS`/`RANGE`/`GROUPS BETWEEN ...`) are rejected during parsing with
-/// a clear "not yet supported" error rather than silently dropped, since
-/// [`crate::expr::WindowSpec`] (what this converts to) has no frame
-/// representation -- every window function runs over the fixed default
-/// frame its kind implies (cumulative when `ORDER BY` is present, whole
-/// partition otherwise; see `vm::batch`'s window execution).
+/// a clear "not yet supported" error rather than silently dropped: no
+/// frame is representable here, so every window function runs over the
+/// fixed default frame its kind implies (cumulative when `ORDER BY` is
+/// present, whole partition otherwise; see `vm::batch`'s window
+/// execution). Adding a real frame representation is tracked as a
+/// currently-unsupported feature (#67), not a consequence of any other
+/// type's shape.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowDef {
     /// `PARTITION BY expr, ...`.

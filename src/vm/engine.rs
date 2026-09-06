@@ -335,7 +335,7 @@ pub fn semi_filter(batch: &Batch, key_column: &str, allowed: &HashSet<String>) -
 )]
 mod tests {
     use super::*;
-    use crate::expr::AggFunc;
+    use crate::vm::batch::AggFunc;
     use crate::vm::batch::Instruction;
 
     fn seg(rows: &[(i64, i64)]) -> Box<dyn Segment> {

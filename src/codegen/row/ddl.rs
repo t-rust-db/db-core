@@ -8,7 +8,7 @@
 //! function here is a few dozen lines; db-core has no `#[allow(unused)]`
 //! multi-thousand-line file to split up yet.
 
-use crate::parser::row::ast::{CreateIndex, CreateTable, CreateView, DropIndex, DropTable};
+use crate::parser::ast::{CreateIndex, CreateTable, CreateView, DropIndex, DropTable};
 use crate::vm::row::{Instruction, Opcode, Program, P4};
 
 use super::{CodegenError, Emitter, Result, TableSchema};
@@ -149,7 +149,7 @@ pub fn compile_create_index(
                 ),
             });
         }
-        let crate::parser::row::ast::ExprKind::Column { name, .. } = &col.expr.kind else {
+        let crate::parser::ast::ExprKind::Column { name, .. } = &col.expr.kind else {
             return Err(CodegenError::Unsupported {
                 reason: format!(
                     "index {} indexes an expression, not a plain column; not supported yet",

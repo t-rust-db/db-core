@@ -13,7 +13,6 @@
 //! (`Vec<Value>`, one entry per row). Opcodes operate on whole registers at
 //! once rather than row-by-row.
 
-use crate::expr::AggFunc;
 pub use crate::join::JoinKind;
 use crate::join::{should_emit, JoinHashTable};
 use std::borrow::Cow;
@@ -23,6 +22,46 @@ use std::hash::{Hash, Hasher};
 
 /// Rows per batch that opcodes operate on at once.
 pub const BATCH_SIZE: usize = 1024;
+
+/// A SQL aggregate function kind: [`Opcode::Reduce`]/[`Opcode::GroupReduce`]'s
+/// execution operand, shared by the batch and row VMs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggFunc {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+impl AggFunc {
+    /// The canonical uppercase SQL name (`"COUNT"`, `"SUM"`, ...) -- the
+    /// single source of truth [`AggFunc::from_name`] parses and
+    /// `codegen::batch`'s `select_item_label`/`agg_func_name` and
+    /// `parser::column`'s `ORDER BY` lowering (#131) both render back,
+    /// so a SELECT-list aggregate and an `ORDER BY` reference to it
+    /// produce byte-identical labels.
+    pub fn name(self) -> &'static str {
+        match self {
+            AggFunc::Count => "COUNT",
+            AggFunc::Sum => "SUM",
+            AggFunc::Avg => "AVG",
+            AggFunc::Min => "MIN",
+            AggFunc::Max => "MAX",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_uppercase().as_str() {
+            "COUNT" => Some(AggFunc::Count),
+            "SUM" => Some(AggFunc::Sum),
+            "AVG" => Some(AggFunc::Avg),
+            "MIN" => Some(AggFunc::Min),
+            "MAX" => Some(AggFunc::Max),
+            _ => None,
+        }
+    }
+}
 
 /// A runtime row value, or a `SELECT`-list literal baked into an
 /// [`Opcode::LoadConst`] -- `Str` uses `Cow<'static, str>` so an emitted
@@ -1434,6 +1473,32 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agg_func_from_name_valid_case_insensitive() {
+        for (name, expected) in [
+            ("count", AggFunc::Count),
+            ("COUNT", AggFunc::Count),
+            ("Count", AggFunc::Count),
+            ("sum", AggFunc::Sum),
+            ("SUM", AggFunc::Sum),
+            ("avg", AggFunc::Avg),
+            ("AVG", AggFunc::Avg),
+            ("min", AggFunc::Min),
+            ("MIN", AggFunc::Min),
+            ("max", AggFunc::Max),
+            ("MAX", AggFunc::Max),
+        ] {
+            assert_eq!(AggFunc::from_name(name), Some(expected), "name = {name}");
+        }
+    }
+
+    #[test]
+    fn agg_func_from_name_invalid() {
+        assert_eq!(AggFunc::from_name("bogus"), None);
+        assert_eq!(AggFunc::from_name(""), None);
+        assert_eq!(AggFunc::from_name("counter"), None);
+    }
 
     #[test]
     fn load_column_copies_batch_values_into_register() {
