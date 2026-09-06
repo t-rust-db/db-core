@@ -2411,6 +2411,44 @@ mod tests {
     }
 
     #[test]
+    fn group_by_over_an_arithmetic_expression_groups_by_its_computed_value() {
+        // The SELECT-list itself stays bare-column/aggregate-only here
+        // (a computed, non-aggregate result column is a separate,
+        // still-open limitation, db-core#175) -- this only exercises
+        // `GROUP BY`'s own key, via `COUNT(*)` per group.
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT COUNT(*) FROM t GROUP BY a + b");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(0), Value::Integer(2)],
+                vec![Value::Integer(3), Value::Integer(4)],
+            ],
+        );
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows.contains(&vec![Value::Integer(1)]), "{rows:?}");
+        assert!(rows.contains(&vec![Value::Integer(2)]), "{rows:?}");
+    }
+
+    #[test]
+    fn group_by_expression_composes_with_having() {
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT COUNT(*) FROM t GROUP BY a + b HAVING \"COUNT(*)\" > 1");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(0), Value::Integer(2)],
+                vec![Value::Integer(3), Value::Integer(4)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)]]);
+    }
+
+    #[test]
     fn group_by_over_an_empty_table_emits_no_rows() {
         let schema = schema(&["g", "v"]);
         let query = query("SELECT g, COUNT(*) FROM t GROUP BY g");

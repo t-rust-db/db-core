@@ -14,16 +14,20 @@
 //!
 //! **Scoped down from a byte-faithful port**, exactly as
 //! [`super`]'s module doc records for the rest of `codegen::row`.
-//! db-core's [`Query`] carries `group_by: Vec<String>` (bare column
-//! names, never computed expressions) and `SelectItem::Agg(AggFunc,
-//! Option<String>)` (one bare-column argument, never a nested
-//! expression, never `DISTINCT`), where sqlite-rs's `Select` carries
-//! full `Expr`s. So the reference's computed-`GROUP BY`-expression sort
-//! keys, its `DISTINCT`-aggregate ephemeral dedup cursors, its
-//! aggregate-nested-in-an-expression rewriting, and its `#506`/`#665`
-//! sort-record column pruning (a projection analysis over an `Expr`
-//! tree db-core has no equivalent of) all have nothing here to act on
-//! and are left out rather than ported as dead machinery.
+//! `GROUP BY` over an arbitrary expression is supported for the
+//! single-table strategies below (mirroring `select`'s
+//! `OrderByTarget`/`ProjectedColumn` split, db-core#177) but not yet
+//! for [`join::compile_joined_grouped_scan`]'s own grouping (a join
+//! aggregation, separately, still can't combine with `HAVING`,
+//! db-core#178). `SelectItem::Agg(AggFunc, Option<String>)` (one
+//! bare-column argument, never a nested expression, never `DISTINCT`)
+//! is a real, still-open restriction, where sqlite-rs's `Select`
+//! carries full `Expr`s. So the reference's `DISTINCT`-aggregate
+//! ephemeral dedup cursors, its aggregate-nested-in-an-expression
+//! rewriting, and its `#506`/`#665` sort-record column pruning (a
+//! projection analysis over an `Expr` tree db-core has no equivalent
+//! of) all have nothing here to act on and are left out rather than
+//! ported as dead machinery.
 //!
 //! `HAVING` references an aggregate by its `SELECT`-item label
 //! (`"COUNT(*)"`) rather than by repeating the call, since [`Expr`] has
@@ -41,7 +45,7 @@ mod hash;
 mod join;
 
 use super::{CodegenError, Emitter, Label, RegAlloc, Result, Scope, TableSchema};
-use crate::parser::ast::{ExprKind, Select};
+use crate::parser::ast::{Expr, ExprKind, Select};
 use crate::vm::row::{Collation, Instruction, Opcode, SortKeyColumn, P4};
 
 use accum::{
@@ -82,11 +86,11 @@ impl ScanCursors {
 /// The column each `GROUP BY` term names.
 ///
 /// `expr::Query` typed `group_by` as `Vec<String>`, so a term could
-/// only ever be a bare column. The AST types it as `Vec<Expr>` (#147),
-/// which admits `GROUP BY a + b` and `GROUP BY 1` -- neither of which
-/// this planner can group by, since the boundary check compares record
-/// columns read straight out of the row. Rejected rather than
-/// misgrouped; grouping by an expression is follow-up work.
+/// only ever be a bare column. The AST types it as `Vec<Expr>` (#147).
+/// Still used by [`join::compile_joined_grouped_scan`], whose own
+/// grouping stays bare-column-only (grouping by an expression over a
+/// join is separate follow-up work, db-core#178); the single-table
+/// strategies below use [`group_by_targets`] instead (db-core#177).
 pub(super) fn group_by_column_names(query: &Select) -> Result<Vec<&str>> {
     query
         .group_by
@@ -100,16 +104,45 @@ pub(super) fn group_by_column_names(query: &Select) -> Result<Vec<&str>> {
         .collect()
 }
 
-/// Resolves every `GROUP BY` term to its column index in `schema`.
-fn group_column_indices(query: &Select, schema: &TableSchema) -> Result<Vec<usize>> {
-    group_by_column_names(query)?
-        .into_iter()
-        .map(|name| {
-            schema
-                .column_index(name)
-                .ok_or_else(|| CodegenError::UnknownColumn(name.to_string()))
+/// Where one `GROUP BY` term comes from: a bare column (resolved to a
+/// schema index directly), or an arbitrary expression, compiled into an
+/// extra column appended after the row's own -- mirrors `select`'s
+/// `OrderByTarget`/`ProjectedColumn` split (db-core#149/#167/#168).
+#[derive(Debug, Clone)]
+pub(super) enum GroupByTarget {
+    Column(String),
+    Expr(Expr),
+}
+
+/// Every `GROUP BY` term, never rejecting an expression (db-core#177) --
+/// unlike [`group_by_column_names`], which [`join::compile_joined_grouped_scan`]
+/// still relies on staying bare-column-only.
+pub(super) fn group_by_targets(query: &Select) -> Vec<GroupByTarget> {
+    query
+        .group_by
+        .iter()
+        .map(|expr| match &expr.kind {
+            ExprKind::Column { name, .. } => GroupByTarget::Column(name.clone()),
+            _ => GroupByTarget::Expr(expr.clone()),
         })
         .collect()
+}
+
+/// The comparison affinity one `GROUP BY` target's boundary/hash-key
+/// comparison uses -- a bare column's declared affinity, or an
+/// expression's (usually none, since only a column reference itself
+/// carries one -- see [`super::value::expr_affinity`]).
+pub(super) fn group_target_affinity(
+    scope: &Scope,
+    target: &GroupByTarget,
+) -> crate::vm::row::Affinity {
+    let raw = match target {
+        GroupByTarget::Column(name) => {
+            super::value::expr_affinity(scope, &super::column_expr(name))
+        }
+        GroupByTarget::Expr(expr) => super::value::expr_affinity(scope, expr),
+    };
+    crate::vm::row::comparison_affinity(raw, None)
 }
 
 /// The `P4` a group-boundary `Eq` compares one key column under: the
@@ -122,6 +155,11 @@ fn group_key_p4(scope: &Scope, name: &str) -> P4 {
         None,
     );
     super::p4_coll_seq(Collation::Binary, affinity)
+}
+
+/// [`group_key_p4`], generalized to a [`GroupByTarget`] (db-core#177).
+fn group_key_p4_for_target(scope: &Scope, target: &GroupByTarget) -> P4 {
+    super::p4_coll_seq(Collation::Binary, group_target_affinity(scope, target))
 }
 
 /// Emits the group-boundary test, ported verbatim from sqlite-rs: the
@@ -235,28 +273,23 @@ where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, usize) -> Result<()>,
 {
     let scope = Scope::single(schema.clone(), cursors.table);
-    let group_indices = group_column_indices(query, schema)?;
+    let group_targets = group_by_targets(query);
     let agg_slots = collect_aggregates(query)?;
 
     // Pass 1: buffer every WHERE-matching row, sorted by the GROUP BY
-    // key. The record is every schema column in declared order -- db-core
-    // has no computed `GROUP BY` expression to append a trailing key
-    // register for, so a key's record index is just its column index.
-    let sort_keys: Vec<SortKeyColumn> = group_indices
-        .iter()
-        .map(|&index| SortKeyColumn {
-            index,
-            descending: false,
-            collation: Collation::Binary,
-            nulls_first: true,
-        })
-        .collect();
-    em.emit(Instruction::with_p4(
+    // key. A bare-column term's record index is its schema column index,
+    // fixed here; an expression term's isn't known until it's actually
+    // compiled below (its final register depends on how many registers
+    // the expression itself allocates), so `SorterOpen` takes a
+    // placeholder `P4` here, patched once the loop body resolves the
+    // real indices -- mirrors `select`'s identical `OrderByTarget::Expr`
+    // trick (db-core#177).
+    let sorter_open_addr = em.emit(Instruction::with_p4(
         Opcode::SorterOpen,
         cursors.sort,
         0,
         0,
-        P4::SortKey(sort_keys),
+        P4::SortKey(Vec::new()),
     ));
 
     let scan_rewind = em.emit(Instruction::new(Opcode::Rewind, cursors.table, 0, 0));
@@ -269,11 +302,40 @@ where
     emit_where(em, reg, &scope, query, scan_skip)?;
 
     let first = compile_full_row(em, reg, schema, cursors.table)?;
+    let mut group_indices = Vec::with_capacity(group_targets.len());
+    for target in &group_targets {
+        let index = match target {
+            GroupByTarget::Column(name) => schema
+                .column_index(name)
+                .ok_or_else(|| CodegenError::UnknownColumn(name.clone()))?,
+            GroupByTarget::Expr(expr) => {
+                let r = super::value::compile_value(em, reg, &scope, expr)?;
+                usize::try_from(r.saturating_sub(first)).unwrap_or(0)
+            }
+        };
+        group_indices.push(index);
+    }
+    let sort_keys: Vec<SortKeyColumn> = group_indices
+        .iter()
+        .map(|&index| SortKeyColumn {
+            index,
+            descending: false,
+            collation: Collation::Binary,
+            nulls_first: true,
+        })
+        .collect();
+    em.patch_p4(sorter_open_addr, P4::SortKey(sort_keys));
+
+    // The record spans every schema column plus any `GROUP BY`
+    // expression registers appended past them -- `reg`'s watermark is
+    // the authoritative span, mirroring `emit_row`'s identical widening
+    // for `ORDER BY` expression columns.
+    let count = usize::try_from(reg.peek().saturating_sub(first)).unwrap_or(schema.columns.len());
     let record_reg = reg.alloc();
     em.emit(Instruction::new(
         Opcode::MakeRecord,
         first,
-        count_operand(schema.columns.len())?,
+        count_operand(count)?,
         record_reg,
     ));
     em.emit(Instruction::new(
@@ -343,9 +405,9 @@ where
         read_pseudo_column(em, cursors.pseudo, idx, r)?;
         cur_key_regs.push(r);
     }
-    let key_p4s: Vec<P4> = group_by_column_names(query)?
-        .into_iter()
-        .map(|name| group_key_p4(&scope, name))
+    let key_p4s: Vec<P4> = group_targets
+        .iter()
+        .map(|target| group_key_p4_for_target(&scope, target))
         .collect();
 
     let (boundary_label, not_boundary_label) = emit_boundary_check(
