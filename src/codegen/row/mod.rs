@@ -317,6 +317,17 @@ impl Emitter {
         self.patches.push((addr, label));
     }
 
+    /// Overwrites the `p4` operand of the instruction at `addr` --
+    /// used to fill in `Opcode::SorterOpen`'s sort-key descriptor once
+    /// its final form (with every `ORDER BY` expression's compiled
+    /// register offset) is known, which is only after the scan body
+    /// that computes those registers has been emitted.
+    pub fn patch_p4(&mut self, addr: usize, p4: crate::vm::row::P4) {
+        if let Some(instr) = self.instructions.get_mut(addr) {
+            instr.p4 = p4;
+        }
+    }
+
     /// Resolves every pending patch against its placed label's address,
     /// consuming the emitter into a finished [`crate::vm::row::Program`].
     pub fn finish(mut self) -> crate::vm::row::Program {

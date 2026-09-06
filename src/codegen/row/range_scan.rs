@@ -29,7 +29,7 @@ use super::limit_scan::LimitState;
 use super::select::emit_row;
 use super::{Emitter, Instruction, Label, Opcode, RegAlloc, Result, Scope, TableSchema};
 use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, Select};
-use crate::vm::row::{affinity_of, Affinity, Collation, SortKeyColumn, P4};
+use crate::vm::row::{affinity_of, Affinity, Collation, P4};
 
 /// The column name a `WHERE`-clause operand names, or `None` for
 /// anything that isn't a bare (unqualified) column reference.
@@ -229,7 +229,8 @@ pub(super) fn try_compile_range_seek(
     query: &Select,
     scope: &Scope,
     columns: &[String],
-    sort_key: Option<Vec<SortKeyColumn>>,
+    sort_key: Option<Vec<super::select::OrderByPlan>>,
+    sorter_open_addr: Option<usize>,
     sorter_cursor: i32,
     table_cursor: i32,
     index_cursor: i32,
@@ -352,6 +353,7 @@ pub(super) fn try_compile_range_seek(
         columns,
         None,
         sort_key,
+        sorter_open_addr,
         sorter_cursor,
         limit,
         row_skip,

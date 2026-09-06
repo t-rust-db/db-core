@@ -21,15 +21,39 @@
 //! see each module's own doc for the exact scope.
 
 use super::limit_scan::{self, LimitState};
-use super::value::emit_column_read;
+use super::value::{compile_value, emit_column_read, qualified_name};
 use super::{index_scan, range_scan};
 use super::{
     CodegenError, CondTargets, Emitter, Label, RegAlloc, Result, Scope, TableSchema, Target,
 };
 use crate::parser::ast::{
-    BinaryOp, Expr, ExprKind, Join, JoinConstraint, JoinOp, ResultColumn, Select, TableRefKind,
+    BinaryOp, Expr, ExprKind, FunctionArgs, Join, JoinConstraint, JoinOp, Literal, ResultColumn,
+    Select, TableRefKind,
 };
 use crate::vm::row::{Collation, Instruction, Opcode, Program, SortKeyColumn, P4};
+
+/// Where an `ORDER BY` term's sort key comes from: a raw column
+/// already resolved into `columns` (index into that vector), or a
+/// genuine expression that must be compiled into its own register and
+/// appended after the row's other columns -- its final record
+/// position isn't known until that compile actually happens, since it
+/// depends on how many registers the expression itself allocates
+/// (mirrors sqlite-rs's `OrderByTarget`, db-core#167).
+#[derive(Debug, Clone)]
+pub(super) enum OrderByTarget {
+    Column(usize),
+    Expr(Expr),
+}
+
+/// One `ORDER BY` term's resolved sort direction/nulls-ordering, kept
+/// separate from the eventual [`SortKeyColumn`] because an
+/// [`OrderByTarget::Expr`]'s `index` isn't known at plan time.
+#[derive(Debug, Clone)]
+pub(super) struct OrderByPlan {
+    pub(super) target: OrderByTarget,
+    pub(super) descending: bool,
+    pub(super) nulls_first: bool,
+}
 
 /// Compiles `query` (a single-table `SELECT`, no `JOIN`) against
 /// `schema`, scanning the pre-wired cursor slot `cursor`. A query with a
@@ -223,40 +247,58 @@ chooser is deferred to #117, N-way joins to #118"
     // isn't already part of the projection; `output_count` stays at the
     // original projection width so the drain loop never emits it.
     let output_count = columns.len();
-    // Every `ORDER BY` term becomes one `SortKeyColumn`, in source order
+    // Every `ORDER BY` term becomes one `OrderByPlan`, in source order
     // -- the sorter (`P4::SortKey(Vec<SortKeyColumn>)`) has always taken
-    // a vector; only codegen's own plumbing capped it at one (#149).
-    // Each term must still resolve to a bare column -- ordering by a
-    // computed expression would need `columns`/the row-value builder to
-    // carry compiled expressions rather than plain names, which is a
-    // larger change this ticket doesn't take on.
+    // a vector; only codegen's own plumbing capped it at one (#149). A
+    // bare column resolves to a `columns` index right here; anything
+    // else becomes an `OrderByTarget::Expr` whose final record position
+    // is resolved later, once `emit_row` actually compiles it into a
+    // register (db-core#167).
     let sort_key = if query.order_by.is_empty() {
         None
     } else {
         let mut keys = Vec::with_capacity(query.order_by.len());
         for term in &query.order_by {
-            let ExprKind::Column { name, .. } = &term.expr.kind else {
-                return Err(CodegenError::Unsupported {
-                    reason: "ORDER BY an expression is not supported yet".to_string(),
-                });
+            let target = match &term.expr.kind {
+                ExprKind::Column {
+                    table: None, name, ..
+                } => OrderByTarget::Column(
+                    columns
+                        .iter()
+                        .position(|c| c.eq_ignore_ascii_case(name))
+                        .unwrap_or_else(|| {
+                            let idx = columns.len();
+                            columns.push(name.clone());
+                            idx
+                        }),
+                ),
+                ExprKind::Column {
+                    table: Some(table),
+                    name,
+                    ..
+                } => {
+                    let qualified = format!("{table}.{name}");
+                    OrderByTarget::Column(
+                        columns
+                            .iter()
+                            .position(|c| c.eq_ignore_ascii_case(&qualified))
+                            .unwrap_or_else(|| {
+                                let idx = columns.len();
+                                columns.push(qualified);
+                                idx
+                            }),
+                    )
+                }
+                _ => OrderByTarget::Expr(term.expr.clone()),
             };
-            let index = columns
-                .iter()
-                .position(|c| c.eq_ignore_ascii_case(name))
-                .unwrap_or_else(|| {
-                    let idx = columns.len();
-                    columns.push(name.clone());
-                    idx
-                });
             let descending = term.desc.unwrap_or(false);
             // SQLite's default (unstated `NULLS FIRST`/`LAST`) is NULLS
             // FIRST for a `DESC` term and NULLS LAST for `ASC`; an
             // explicit clause overrides that default either way.
             let nulls_first = term.nulls_last.map_or(descending, |last| !last);
-            keys.push(SortKeyColumn {
-                index,
+            keys.push(OrderByPlan {
+                target,
                 descending,
-                collation: Collation::Binary,
                 nulls_first,
             });
         }
@@ -310,15 +352,21 @@ chooser is deferred to #117, N-way joins to #118"
         }
     }
 
-    if let Some(keys) = sort_key.clone() {
+    // The sort key's final indices aren't known until the scan body
+    // below actually compiles each `OrderByTarget::Expr` into a
+    // register (its record position depends on how many registers the
+    // expression itself allocates), so `SorterOpen` is emitted with a
+    // placeholder `P4` here and patched once that body resolves the
+    // real `Vec<SortKeyColumn>` (db-core#167).
+    let sorter_open_addr = sort_key.is_some().then(|| {
         em.emit(Instruction::with_p4(
             Opcode::SorterOpen,
             sorter_cursor,
             0,
             0,
-            P4::SortKey(keys),
-        ));
-    }
+            P4::SortKey(Vec::new()),
+        ))
+    });
 
     let end_label = em.new_label();
 
@@ -335,6 +383,7 @@ chooser is deferred to #117, N-way joins to #118"
             &scope,
             &columns,
             sort_key.clone(),
+            sorter_open_addr,
             sorter_cursor,
             cursor,
             index_cursor,
@@ -346,7 +395,7 @@ chooser is deferred to #117, N-way joins to #118"
         return finish_scan(
             em,
             reg,
-            sort_key.clone(),
+            sort_key.is_some(),
             sorter_cursor,
             output_count,
             limit,
@@ -383,6 +432,7 @@ chooser is deferred to #117, N-way joins to #118"
                 query,
                 &columns,
                 sort_key.clone(),
+                sorter_open_addr,
                 sorter_cursor,
                 limit,
                 final_label,
@@ -409,6 +459,7 @@ chooser is deferred to #117, N-way joins to #118"
                 &columns,
                 None,
                 sort_key.clone(),
+                sorter_open_addr,
                 sorter_cursor,
                 limit,
                 outer_row_skip,
@@ -434,6 +485,7 @@ chooser is deferred to #117, N-way joins to #118"
                 right_cursor,
                 &columns,
                 sort_key.clone(),
+                sorter_open_addr,
                 sorter_cursor,
                 limit,
                 final_label,
@@ -444,7 +496,7 @@ chooser is deferred to #117, N-way joins to #118"
     finish_scan(
         em,
         reg,
-        sort_key,
+        sort_key.is_some(),
         sorter_cursor,
         output_count,
         limit,
@@ -461,7 +513,7 @@ chooser is deferred to #117, N-way joins to #118"
 fn finish_scan(
     mut em: Emitter,
     mut reg: RegAlloc,
-    sort_key: Option<Vec<SortKeyColumn>>,
+    has_sort_key: bool,
     sorter_cursor: i32,
     output_count: usize,
     limit: Option<LimitState>,
@@ -472,7 +524,7 @@ fn finish_scan(
     // the drain loop's address.
     let _ = end_label;
 
-    if sort_key.is_some() {
+    if has_sort_key {
         let sorter_end_label = em.new_label();
         let sort_addr = em.emit(Instruction::new(Opcode::SorterSort, sorter_cursor, 0, 0));
         em.patch_p2(sort_addr, sorter_end_label);
@@ -699,7 +751,8 @@ fn compile_join_body(
     right_cursor: i32,
     query: &Select,
     columns: &[String],
-    sort_key: Option<Vec<SortKeyColumn>>,
+    sort_key: Option<Vec<OrderByPlan>>,
+    sorter_open_addr: Option<usize>,
     sorter_cursor: i32,
     limit: Option<LimitState>,
     end_label: Label,
@@ -755,6 +808,7 @@ fn compile_join_body(
         columns,
         None,
         sort_key.clone(),
+        sorter_open_addr,
         sorter_cursor,
         limit,
         inner_row_skip,
@@ -782,6 +836,7 @@ fn compile_join_body(
             columns,
             Some(right_cursor),
             sort_key,
+            sorter_open_addr,
             sorter_cursor,
             limit,
             outer_row_skip,
@@ -811,7 +866,8 @@ fn compile_full_outer_right_pass(
     left_cursor: i32,
     right_cursor: i32,
     columns: &[String],
-    sort_key: Option<Vec<SortKeyColumn>>,
+    sort_key: Option<Vec<OrderByPlan>>,
+    sorter_open_addr: Option<usize>,
     sorter_cursor: i32,
     limit: Option<LimitState>,
     final_label: Label,
@@ -864,6 +920,7 @@ fn compile_full_outer_right_pass(
         columns,
         Some(left_cursor),
         sort_key,
+        sorter_open_addr,
         sorter_cursor,
         limit,
         pass_row_skip,
@@ -876,6 +933,148 @@ fn compile_full_outer_right_pass(
     em.place(final_label);
 
     Ok(())
+}
+
+/// Rewrites every column reference in `expr` that resolves to
+/// `null_cursor` into a `NULL` literal, so a compiled `ORDER BY`
+/// expression evaluates exactly as it would if that cursor's row were
+/// truly null-extended -- matching `compile_row_values`'s existing
+/// null-fill for a plain column, which `compile_value` alone has no
+/// way to apply (db-core#173). A nested subquery's own body is left
+/// untouched: a correlated reference to the null-extended side inside
+/// it is a separate, harder problem this narrow fix doesn't take on.
+fn null_extend(scope: &Scope, null_cursor: i32, expr: &Expr) -> Expr {
+    let kind = match &expr.kind {
+        ExprKind::Column { table, name, .. } => {
+            match scope.resolve(&qualified_name(table.as_deref(), name)) {
+                Ok((cursor, _)) if cursor == null_cursor => ExprKind::Literal(Literal::Null),
+                _ => expr.kind.clone(),
+            }
+        }
+        ExprKind::Literal(_)
+        | ExprKind::Param(_)
+        | ExprKind::Subquery(_)
+        | ExprKind::Exists { .. }
+        | ExprKind::InSubquery { .. }
+        | ExprKind::InSubqueryMulti { .. } => expr.kind.clone(),
+        ExprKind::FunctionCall {
+            name,
+            distinct,
+            args,
+            over,
+        } => ExprKind::FunctionCall {
+            name: name.clone(),
+            distinct: *distinct,
+            args: match args {
+                FunctionArgs::Star => FunctionArgs::Star,
+                FunctionArgs::List(list) => FunctionArgs::List(
+                    list.iter()
+                        .map(|e| null_extend(scope, null_cursor, e))
+                        .collect(),
+                ),
+            },
+            over: over.clone(),
+        },
+        ExprKind::Unary { op, expr: inner } => ExprKind::Unary {
+            op: *op,
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+        },
+        ExprKind::Binary { op, lhs, rhs } => ExprKind::Binary {
+            op: *op,
+            lhs: Box::new(null_extend(scope, null_cursor, lhs)),
+            rhs: Box::new(null_extend(scope, null_cursor, rhs)),
+        },
+        ExprKind::Is { lhs, rhs, negated } => ExprKind::Is {
+            lhs: Box::new(null_extend(scope, null_cursor, lhs)),
+            rhs: Box::new(null_extend(scope, null_cursor, rhs)),
+            negated: *negated,
+        },
+        ExprKind::IsNull {
+            expr: inner,
+            negated,
+        } => ExprKind::IsNull {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            negated: *negated,
+        },
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            negated,
+        } => ExprKind::Between {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            lo: Box::new(null_extend(scope, null_cursor, lo)),
+            hi: Box::new(null_extend(scope, null_cursor, hi)),
+            negated: *negated,
+        },
+        ExprKind::In {
+            expr: inner,
+            list,
+            negated,
+        } => ExprKind::In {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            list: list
+                .iter()
+                .map(|e| null_extend(scope, null_cursor, e))
+                .collect(),
+            negated: *negated,
+        },
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            glob,
+            negated,
+            escape,
+        } => ExprKind::Like {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            pattern: Box::new(null_extend(scope, null_cursor, pattern)),
+            glob: *glob,
+            negated: *negated,
+            escape: escape
+                .as_ref()
+                .map(|e| Box::new(null_extend(scope, null_cursor, e))),
+        },
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => ExprKind::Case {
+            operand: operand
+                .as_ref()
+                .map(|e| Box::new(null_extend(scope, null_cursor, e))),
+            whens: whens
+                .iter()
+                .map(|(cond, result)| {
+                    (
+                        null_extend(scope, null_cursor, cond),
+                        null_extend(scope, null_cursor, result),
+                    )
+                })
+                .collect(),
+            else_: else_
+                .as_ref()
+                .map(|e| Box::new(null_extend(scope, null_cursor, e))),
+        },
+        ExprKind::Cast {
+            expr: inner,
+            type_name,
+        } => ExprKind::Cast {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            type_name: type_name.clone(),
+        },
+        ExprKind::Collate {
+            expr: inner,
+            collation,
+        } => ExprKind::Collate {
+            expr: Box::new(null_extend(scope, null_cursor, inner)),
+            collation: collation.clone(),
+        },
+        ExprKind::Paren(inner) => ExprKind::Paren(Box::new(null_extend(scope, null_cursor, inner))),
+    };
+    Expr {
+        kind,
+        span: expr.span,
+    }
 }
 
 /// Emits one output row: either directly via `ResultRow` (no `ORDER BY`,
@@ -893,14 +1092,50 @@ pub(super) fn emit_row(
     scope: &Scope,
     columns: &[String],
     null_cursor: Option<i32>,
-    sort_key: Option<Vec<SortKeyColumn>>,
+    sort_key: Option<Vec<OrderByPlan>>,
+    sorter_open_addr: Option<usize>,
     sorter_cursor: i32,
     limit: Option<LimitState>,
     row_skip: Label,
     end_label: Label,
 ) -> Result<()> {
-    if sort_key.is_some() {
+    if let Some(plans) = sort_key {
         let (first, count) = compile_row_values(em, reg, scope, columns, null_cursor)?;
+        // Every `OrderByTarget::Expr` compiles into its own register,
+        // appended after the row's own columns; its record position is
+        // that register's offset from `first`, resolved only now since
+        // it depends on how many registers the expression itself
+        // allocates. A `Column` target's index is already fixed at
+        // plan time -- it's a position within `columns` above.
+        let mut sort_keys = Vec::with_capacity(plans.len());
+        for plan in &plans {
+            let index = match &plan.target {
+                OrderByTarget::Column(idx) => *idx,
+                OrderByTarget::Expr(expr) => {
+                    let expr = match null_cursor {
+                        Some(null_cursor) => null_extend(scope, null_cursor, expr),
+                        None => expr.clone(),
+                    };
+                    let r = compile_value(em, reg, scope, &expr)?;
+                    usize::try_from(r.saturating_sub(first)).unwrap_or(0)
+                }
+            };
+            sort_keys.push(SortKeyColumn {
+                index,
+                descending: plan.descending,
+                collation: Collation::Binary,
+                nulls_first: plan.nulls_first,
+            });
+        }
+        if let Some(addr) = sorter_open_addr {
+            em.patch_p4(addr, P4::SortKey(sort_keys));
+        }
+        // Widen the record to cover any expression registers appended
+        // past the original `count` columns -- `reg`'s watermark is the
+        // authoritative span since an expression's own final register
+        // need not be its highest allocated one (e.g. `CASE` allocates
+        // its destination before its branches).
+        let count = usize::try_from(reg.peek().saturating_sub(first)).unwrap_or(count);
         let blob_reg = reg.alloc();
         em.emit(Instruction::new(
             Opcode::MakeRecord,
@@ -1638,6 +1873,75 @@ mod tests {
     }
 
     #[test]
+    fn order_by_over_an_arithmetic_expression_sorts_by_its_computed_value() {
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT a, b FROM t ORDER BY a + b");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(5)], // sum 6
+                vec![Value::Integer(2), Value::Integer(1)], // sum 3
+                vec![Value::Integer(3), Value::Integer(0)], // sum 3
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(2), Value::Integer(1)],
+                vec![Value::Integer(3), Value::Integer(0)],
+                vec![Value::Integer(1), Value::Integer(5)],
+            ]
+        );
+    }
+
+    #[test]
+    fn order_by_over_a_function_call_sorts_by_its_computed_value() {
+        let schema = schema(&["name"]);
+        let query = query("SELECT name FROM t ORDER BY upper(name)");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Text("banana".to_string().into())],
+                vec![Value::Text("Apple".to_string().into())],
+                vec![Value::Text("cherry".to_string().into())],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Text("Apple".to_string().into())],
+                vec![Value::Text("banana".to_string().into())],
+                vec![Value::Text("cherry".to_string().into())],
+            ]
+        );
+    }
+
+    #[test]
+    fn multi_term_order_by_composes_a_bare_column_and_an_expression() {
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT a, b FROM t ORDER BY a, b + 1 DESC");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(1), Value::Integer(2)],
+                vec![Value::Integer(2), Value::Integer(5)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(2)],
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(2), Value::Integer(5)],
+            ]
+        );
+    }
+
+    #[test]
     fn order_by_nulls_last_sorts_nulls_after_values_ascending() {
         let schema = schema(&["a"]);
         let query = query("SELECT a FROM t ORDER BY a NULLS LAST");
@@ -1761,6 +2065,38 @@ mod tests {
             vec![
                 vec![Value::Integer(2), Value::Integer(200)],
                 vec![Value::Null, Value::Integer(100)],
+            ]
+        );
+    }
+
+    #[test]
+    fn full_outer_join_order_by_expression_null_extends_the_left_side() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let query = query("SELECT a, u.c FROM t FULL JOIN u ON t.a = u.b ORDER BY a + 0");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(5)], vec![Value::Integer(1)]],
+            vec![
+                vec![Value::Integer(5), Value::Integer(500)],
+                vec![Value::Integer(9), Value::Integer(900)],
+            ],
+        );
+        // `b=9` matches no left row, so its `a` is null-extended in the
+        // second pass -- `a + 0` must evaluate against that NULL, not
+        // whatever real value the left cursor's last-visited row (a=1)
+        // still holds in its registers (db-core#173). If it read the
+        // stale value instead, this row's sort key would tie with the
+        // real `a=1` row instead of sorting last, and it would show up
+        // out of order below.
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Null],
+                vec![Value::Integer(5), Value::Integer(500)],
+                vec![Value::Null, Value::Integer(900)],
             ]
         );
     }
