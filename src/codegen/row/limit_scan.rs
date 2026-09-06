@@ -11,14 +11,17 @@
 //! so those stay unported rather than being stubbed with a fabricated
 //! cost.
 
-use super::{CodegenError, Emitter, Instruction, Label, Opcode, RegAlloc, Result};
-use crate::parser::ast::{Expr, ExprKind, Literal, Select};
+use super::{Emitter, Instruction, Label, Opcode, RegAlloc, Result, Scope};
+use crate::parser::ast::Select;
 
 /// The `LIMIT`/`OFFSET` counter registers, set up once before a scan
 /// loop starts. Mirrors sqlite-rs's own `LimitState`, holding plain
 /// register numbers rather than compiled `Expr`s. The AST spells
 /// `LIMIT`/`OFFSET` as expressions ([`crate::parser::ast::Limit`]);
-/// only integer literals are compiled today -- see [`literal_count`].
+/// any expression `compile_value` supports is compiled straight into
+/// the counter register (db-core#149) -- integer literals still emit
+/// a bare `Opcode::Integer` immediate since that's what `compile_value`
+/// itself emits for them.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct LimitState {
     pub limit_reg: Option<i32>,
@@ -30,6 +33,7 @@ pub(super) struct LimitState {
 pub(super) fn compile_limit_setup(
     em: &mut Emitter,
     reg: &mut RegAlloc,
+    scope: &Scope,
     query: &Select,
 ) -> Result<Option<LimitState>> {
     // The AST nests `OFFSET` inside `LIMIT` (SQLite's grammar has no
@@ -37,52 +41,15 @@ pub(super) fn compile_limit_setup(
     let Some(limit) = &query.limit else {
         return Ok(None);
     };
-    let limit_reg = Some(emit_counter(
-        em,
-        reg,
-        literal_count(&limit.limit, "LIMIT")?,
-        "LIMIT",
-    )?);
+    let limit_reg = Some(super::value::compile_value(em, reg, scope, &limit.limit)?);
     let offset_reg = match &limit.offset {
-        Some(offset) => Some(emit_counter(
-            em,
-            reg,
-            literal_count(offset, "OFFSET")?,
-            "OFFSET",
-        )?),
+        Some(offset) => Some(super::value::compile_value(em, reg, scope, offset)?),
         None => None,
     };
     Ok(Some(LimitState {
         limit_reg,
         offset_reg,
     }))
-}
-
-/// A `LIMIT`/`OFFSET` bound as a plain count. `expr::Query` typed these
-/// as `Option<usize>`, so only an integer literal could ever appear;
-/// the AST allows any expression (`LIMIT ?`, `LIMIT n + 1`), which
-/// needs register-computed counters rather than an `Integer` immediate.
-/// Deferred to #149 -- rejected here rather than silently mis-limiting.
-fn literal_count(expr: &Expr, what: &str) -> Result<usize> {
-    match &expr.kind {
-        ExprKind::Literal(Literal::Integer(i)) => {
-            usize::try_from(*i).map_err(|_| CodegenError::Unsupported {
-                reason: format!("negative {what} {i}"),
-            })
-        }
-        _ => Err(CodegenError::Unsupported {
-            reason: format!("a non-literal {what} expression is not supported yet"),
-        }),
-    }
-}
-
-fn emit_counter(em: &mut Emitter, reg: &mut RegAlloc, value: usize, what: &str) -> Result<i32> {
-    let p1 = i32::try_from(value).map_err(|_| CodegenError::Unsupported {
-        reason: format!("{what} {value} does not fit in a p1 operand"),
-    })?;
-    let r = reg.alloc();
-    em.emit(Instruction::new(Opcode::Integer, p1, r, 0));
-    Ok(r)
 }
 
 /// Emits the `OFFSET` skip-guard (jumping to `row_skip` while
@@ -110,13 +77,28 @@ pub(super) fn emit_limit_guard(em: &mut Emitter, limit: &LimitState, end_label: 
 mod tests {
     use super::*;
     use crate::codegen::row::testutil::select;
+    use crate::codegen::row::TableSchema;
+
+    fn scope() -> Scope {
+        Scope::single(
+            TableSchema {
+                name: "t".into(),
+                columns: vec!["a".into()],
+                column_types: vec![String::new()],
+                rowid_alias: None,
+                root_page: 0,
+                indexes: vec![],
+            },
+            0,
+        )
+    }
 
     #[test]
     fn no_limit_sets_up_nothing() {
         let mut em = Emitter::new();
         let mut reg = RegAlloc::new();
         assert!(
-            compile_limit_setup(&mut em, &mut reg, &select("SELECT a FROM t"))
+            compile_limit_setup(&mut em, &mut reg, &scope(), &select("SELECT a FROM t"))
                 .unwrap()
                 .is_none()
         );
@@ -135,6 +117,7 @@ mod tests {
         let state = compile_limit_setup(
             &mut em,
             &mut reg,
+            &scope(),
             &select("SELECT a FROM t LIMIT 3 OFFSET 7"),
         )
         .unwrap()
@@ -155,9 +138,14 @@ mod tests {
     fn limit_alone_sets_up_only_the_limit_counter() {
         let mut em = Emitter::new();
         let mut reg = RegAlloc::new();
-        let state = compile_limit_setup(&mut em, &mut reg, &select("SELECT a FROM t LIMIT 5"))
-            .unwrap()
-            .unwrap();
+        let state = compile_limit_setup(
+            &mut em,
+            &mut reg,
+            &scope(),
+            &select("SELECT a FROM t LIMIT 5"),
+        )
+        .unwrap()
+        .unwrap();
         assert!(state.offset_reg.is_none());
         let program = em.finish();
         assert_eq!(program.instructions.len(), 1);
@@ -165,17 +153,25 @@ mod tests {
         assert_eq!(program.instructions[0].p1, 5);
     }
 
-    /// An expression bound needs a computed counter rather than an
-    /// `Integer` immediate; rejected until #149 rather than silently
-    /// mis-limiting.
+    /// The AST allows any expression as a `LIMIT`/`OFFSET` bound (`LIMIT
+    /// n + 1`); it's compiled through the same expression compiler as
+    /// `WHERE`/projections rather than requiring an integer literal
+    /// (db-core#149).
     #[test]
-    fn a_non_literal_limit_is_unsupported() {
+    fn a_non_literal_limit_compiles_via_the_expression_compiler() {
         let mut em = Emitter::new();
         let mut reg = RegAlloc::new();
-        assert!(matches!(
-            compile_limit_setup(&mut em, &mut reg, &select("SELECT a FROM t LIMIT 2 + 3")),
-            Err(CodegenError::Unsupported { .. })
-        ));
+        let state = compile_limit_setup(
+            &mut em,
+            &mut reg,
+            &scope(),
+            &select("SELECT a FROM t LIMIT 2 + 3"),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(state.limit_reg.is_some());
+        let program = em.finish();
+        assert!(program.instructions.iter().any(|i| i.opcode == Opcode::Add));
     }
 
     #[test]
@@ -185,6 +181,7 @@ mod tests {
         let state = compile_limit_setup(
             &mut em,
             &mut reg,
+            &scope(),
             &select("SELECT a FROM t LIMIT 3 OFFSET 2"),
         )
         .unwrap()
