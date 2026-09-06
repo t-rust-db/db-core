@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.55.0] - 2026-09-06
+
+### Added
+
+- **`codegen::row` compiles bind parameters** (#162) -- `?`/`?NNN`/`:name`/`@name`/`$name` all compile via `Opcode::Variable` (VM-side execution already existed). `RegAlloc` tracks per-compile parameter slots: `?`/`?NNN` get positional slots (a numbered claim bumps the anonymous counter past itself, matching SQLite); `:name`/`@name`/`$name` get a slot on first occurrence and reuse it on repeat within the same statement. `Program` exposes `param_names` (slot -> optional name) so a caller can bind by name; positional binding continues via the existing `Vm::bind_params`. `:foo`/`@foo`/`$foo` are treated as three distinct named parameters (keyed by sigil+name), not aliases sharing one slot -- a conservative reading pending confirmation against real SQLite's cross-sigil behavior.
+
 ## [0.54.0] - 2026-09-06
 
 ### Added
