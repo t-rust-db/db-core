@@ -24,11 +24,6 @@
 //! (`parser::ast::ExprKind` already has `Subquery`/`InSubqueryMulti`
 //! variants for both of these):
 //!
-//! - **Scalar subqueries in value position** (the reference's
-//!   `compile_scalar_subquery`, `ast::ExprKind::Subquery`) aren't
-//!   compiled here yet -- only `InSubquery`/`Exists` in a *value*
-//!   context work today, via `value.rs`'s existing three-valued
-//!   condition-to-register materialization.
 //! - **Multi-column `IN`** (`compile_in_subquery_multi`,
 //!   `ast::ExprKind::InSubqueryMulti`) isn't compiled here yet -- only
 //!   the single-column `ExprKind::InSubquery` form is.
@@ -65,4 +60,4 @@ pub use cte::expand_with_clause;
 pub use flatten::flatten_from_subquery;
 pub use from_clause::{materialize_from_subquery, resolve_from_table_schema};
 pub use pushdown::push_down_where_predicates;
-pub use scalar::{compile_exists, compile_in_subquery};
+pub use scalar::{compile_exists, compile_in_subquery, compile_scalar_subquery};
