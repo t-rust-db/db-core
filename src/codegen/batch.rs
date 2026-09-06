@@ -1,8 +1,18 @@
-//! Columnar query planner: [`crate::expr::Query`] to an executable
+//! Columnar query planner: [`parser::ast::Select`] to an executable
 //! [`Program`] for the batch executor -- what sqlite-rs's `src/codegen/*`
 //! does for its VDBE (ADR 0007). Moved here from column-rs's `src/query.rs`
 //! verbatim in behavior: nothing in this module ever touched Parquet, so
 //! it never belonged in the storage glue.
+//!
+//! **Consumes `parser::ast::Select` directly (#153)** -- the same AST
+//! [`crate::codegen::row`] consumes, not a private lowered type. The
+//! caller is expected to hand this module a `Select` that already passed
+//! [`crate::parser::column`]'s validator (the batch planner's analytics
+//! subset -- one `FROM` table plus at most one equi-join, no `WITH`/
+//! `UNION`/`HAVING`, a single `ORDER BY` term, ...): this module doesn't
+//! re-run those checks, it plans. [`WindowFunc`]/[`WindowSpec`] are this
+//! module's own local types (mirroring `ast::ExprKind::FunctionCall`'s
+//! `OVER` tail), not shared with `parser`/`emit`.
 //!
 //! Four entry points, one per query shape the executor distinguishes:
 //!
@@ -24,14 +34,73 @@
 //! Plus [`explain`], the `EXPLAIN` plan-tree construction over the same
 //! planning decisions, and [`output_column_names`] for result headers.
 
-use crate::expr::{
-    AggFunc, BinOp, Expr, JoinKind, OrderBy, Query, SelectItem, WindowFunc, WindowSpec,
+use crate::parser::ast::{
+    BinaryOp as AstBinOp, Distinctness, Expr as AstExpr, ExprKind, FromClause as AstFromClause,
+    FunctionArgs, JoinConstraint, JoinOp, Literal as AstLiteral, ResultColumn, Select,
+    TableRefKind,
 };
-use crate::types::Literal;
-use crate::vm::batch::{AggPart, Instruction, MapOp, Opcode, Program, Value};
+use crate::vm::batch::{AggFunc, AggPart, Instruction, MapOp, Opcode, Program, Value};
 use crate::vm::engine::JoinProgram;
 use std::collections::HashMap;
 use std::fmt;
+
+/// A window function kind (#74 follow-up), local to this planner --
+/// mirrors `ast::ExprKind::FunctionCall`'s `OVER (...)` tail once resolved
+/// by name, the same shape [`crate::vm::batch::WindowFunc`] executes but
+/// kept as a separate type (same variants) so the planner's own vocabulary
+/// doesn't depend on the VM's execution-operand enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowFunc {
+    RowNumber,
+    Rank,
+    DenseRank,
+    Lag,
+    Lead,
+    FirstValue,
+    LastValue,
+    Sum,
+    Avg,
+    Count,
+}
+
+impl WindowFunc {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_uppercase().as_str() {
+            "ROW_NUMBER" => Some(WindowFunc::RowNumber),
+            "RANK" => Some(WindowFunc::Rank),
+            "DENSE_RANK" => Some(WindowFunc::DenseRank),
+            "LAG" => Some(WindowFunc::Lag),
+            "LEAD" => Some(WindowFunc::Lead),
+            "FIRST_VALUE" => Some(WindowFunc::FirstValue),
+            "LAST_VALUE" => Some(WindowFunc::LastValue),
+            "SUM" => Some(WindowFunc::Sum),
+            "AVG" => Some(WindowFunc::Avg),
+            "COUNT" => Some(WindowFunc::Count),
+            _ => None,
+        }
+    }
+
+    /// Whether this window function takes no argument (`ROW_NUMBER()`,
+    /// `RANK()`, `DENSE_RANK()`).
+    pub fn is_niladic(self) -> bool {
+        matches!(
+            self,
+            WindowFunc::RowNumber | WindowFunc::Rank | WindowFunc::DenseRank
+        )
+    }
+}
+
+/// `func(...) OVER (PARTITION BY ... ORDER BY ...)`, built directly from
+/// an `ast::ExprKind::FunctionCall`'s `over: Some(WindowDef)` tail. `offset`
+/// is only used by `LAG`/`LEAD` (default 1 when omitted).
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowSpec {
+    pub func: WindowFunc,
+    pub arg: Option<String>,
+    pub offset: Option<i64>,
+    pub partition_by: Vec<String>,
+    pub order_by: Vec<(String, bool)>,
+}
 
 /// Planning failures: a column that resolves to no table, or a query shape
 /// the executor doesn't implement. Storage-level failures (unknown table,
@@ -42,12 +111,17 @@ pub enum PlanError {
     UnsupportedSemiJoin(String),
     /// `Right`/`Full`/`Cross` are parseable but only `Inner`/`Left` hash-
     /// join execution exists so far.
-    UnsupportedJoinKind(JoinKind),
+    UnsupportedJoinKind(JoinOp),
     /// `SELECT *` (or a mixed `SELECT col, *`) combined with `GROUP BY`, an
     /// aggregate, or a window function -- standard SQL rejects this too,
     /// since there's no well-defined column list to expand `*` into once
     /// the row shape is collapsed/reordered by those clauses.
     StarWithAggregation,
+    /// A `SELECT`-list item this planner doesn't recognize -- reached only
+    /// when `select` didn't pass `parser::column`'s validator first (that
+    /// validator rejects every one of these with a `Span`-carrying error
+    /// before this module ever sees the query).
+    UnsupportedSelectItem(String),
 }
 
 impl fmt::Display for PlanError {
@@ -63,16 +137,324 @@ impl fmt::Display for PlanError {
                 f,
                 "SELECT * cannot be combined with GROUP BY, an aggregate, or a window function"
             ),
+            PlanError::UnsupportedSelectItem(msg) => write!(f, "unsupported SELECT item: {msg}"),
         }
     }
 }
 
-/// Expand every [`SelectItem::Star`] in `query.columns` into a
-/// [`SelectItem::Column`] per entry of `schema` (in `schema`'s order),
-/// leaving every other select item untouched -- so `SELECT id, * FROM t`
-/// keeps `id` first and expands `*` after it. `schema` is the resolved
-/// table's column names; `sql-parser` never sees these (see
-/// [`SelectItem::Star`]'s docs), so this is the caller's (the executor
+impl std::error::Error for PlanError {}
+
+pub type Result<T> = std::result::Result<T, PlanError>;
+
+// ---------------------------------------------------------------------
+// ast::Select helpers -- classify/extract what the planner needs without
+// building an intermediate AST type.
+// ---------------------------------------------------------------------
+
+/// One classified `SELECT`-list item.
+#[derive(Debug, Clone, PartialEq)]
+enum Item {
+    Column(String),
+    Star,
+    Agg(AggFunc, Option<String>),
+    Window(WindowSpec),
+}
+
+/// A (possibly qualified) column reference: `col` or `table.col`. Table
+/// aliases are resolved by `parser::column` before this module ever sees
+/// the query, so a qualifier here is always a real table name.
+fn expr_column_name(expr: &AstExpr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Column {
+            table: None,
+            catalog: None,
+            name,
+        } => Some(name.clone()),
+        ExprKind::Column {
+            table: Some(table),
+            catalog: None,
+            name,
+        } => Some(format!("{table}.{name}")),
+        _ => None,
+    }
+}
+
+fn agg_arg(_expr: &AstExpr, agg: AggFunc, args: &FunctionArgs) -> Result<Option<String>> {
+    match args {
+        FunctionArgs::Star => {
+            if agg != AggFunc::Count {
+                return Err(PlanError::UnsupportedSelectItem(
+                    "only COUNT supports (*)".into(),
+                ));
+            }
+            Ok(None)
+        }
+        FunctionArgs::List(list) => match list.as_slice() {
+            [one] => expr_column_name(one).map(Some).ok_or_else(|| {
+                PlanError::UnsupportedSelectItem("expected a column reference".into())
+            }),
+            _ => Err(PlanError::UnsupportedSelectItem(
+                "an aggregate takes exactly one column or *".into(),
+            )),
+        },
+    }
+}
+
+/// Lowers `name(args) OVER (window_def)` into a [`WindowSpec`]: resolves
+/// `name` against [`WindowFunc::from_name`] and converts `window_def`'s
+/// `PARTITION BY`/`ORDER BY` expressions to plain column names.
+fn window_spec(
+    name: &str,
+    args: &FunctionArgs,
+    window_def: &crate::parser::ast::WindowDef,
+) -> Result<WindowSpec> {
+    let func = WindowFunc::from_name(name).ok_or_else(|| {
+        PlanError::UnsupportedSelectItem(format!("unknown window function {name}"))
+    })?;
+
+    let (arg, offset) = match (func.is_niladic(), args) {
+        (true, FunctionArgs::List(list)) if list.is_empty() => (None, None),
+        (true, _) => {
+            return Err(PlanError::UnsupportedSelectItem(format!(
+                "{name} takes no arguments"
+            )))
+        }
+        (false, FunctionArgs::Star) => {
+            if func != WindowFunc::Count {
+                return Err(PlanError::UnsupportedSelectItem(
+                    "only COUNT supports (*)".into(),
+                ));
+            }
+            (None, None)
+        }
+        (false, FunctionArgs::List(list)) if matches!(func, WindowFunc::Lag | WindowFunc::Lead) => {
+            match list.as_slice() {
+                [one] => (expr_column_name(one), None),
+                [one, offset_expr] => {
+                    let offset = match &offset_expr.kind {
+                        ExprKind::Literal(AstLiteral::Integer(n)) => Some(*n),
+                        _ => {
+                            return Err(PlanError::UnsupportedSelectItem(
+                                "non-integer offset".into(),
+                            ))
+                        }
+                    };
+                    (expr_column_name(one), offset)
+                }
+                _ => {
+                    return Err(PlanError::UnsupportedSelectItem(format!(
+                        "{name} takes 1 or 2 arguments"
+                    )))
+                }
+            }
+        }
+        (false, FunctionArgs::List(list)) => match list.as_slice() {
+            [one] => (expr_column_name(one), None),
+            _ => {
+                return Err(PlanError::UnsupportedSelectItem(
+                    "a window function takes exactly one column or *".into(),
+                ))
+            }
+        },
+    };
+
+    let partition_by = window_def
+        .partition_by
+        .iter()
+        .map(|e| {
+            expr_column_name(e).ok_or_else(|| {
+                PlanError::UnsupportedSelectItem("expected a column reference".into())
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let order_by = window_def
+        .order_by
+        .iter()
+        .map(|term| {
+            expr_column_name(&term.expr)
+                .map(|c| (c, term.desc.unwrap_or(false)))
+                .ok_or_else(|| {
+                    PlanError::UnsupportedSelectItem("expected a column reference".into())
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(WindowSpec {
+        func,
+        arg,
+        offset,
+        partition_by,
+        order_by,
+    })
+}
+
+fn classify_item(col: &ResultColumn) -> Result<Item> {
+    match col {
+        ResultColumn::Star => Ok(Item::Star),
+        ResultColumn::TableStar { .. } => Err(PlanError::UnsupportedSelectItem(
+            "table.* is not supported".into(),
+        )),
+        ResultColumn::Expr {
+            expr: _,
+            alias: Some(_),
+        } => Err(PlanError::UnsupportedSelectItem(
+            "column alias (AS) is not supported".into(),
+        )),
+        ResultColumn::Expr { expr, alias: None } => match &expr.kind {
+            ExprKind::Column { .. } => expr_column_name(expr).map(Item::Column).ok_or_else(|| {
+                PlanError::UnsupportedSelectItem("expected a column reference".into())
+            }),
+            ExprKind::FunctionCall {
+                name,
+                distinct: _,
+                args,
+                over: Some(window_def),
+            } => Ok(Item::Window(window_spec(name, args, window_def)?)),
+            ExprKind::FunctionCall {
+                name,
+                distinct: _,
+                args,
+                over: None,
+            } => {
+                let agg = AggFunc::from_name(name).ok_or_else(|| {
+                    PlanError::UnsupportedSelectItem(format!("unknown function {name}"))
+                })?;
+                let arg = agg_arg(expr, agg, args)?;
+                Ok(Item::Agg(agg, arg))
+            }
+            _ => Err(PlanError::UnsupportedSelectItem(
+                "unsupported SELECT expression".into(),
+            )),
+        },
+    }
+}
+
+fn classify_items(select: &Select) -> Result<Vec<Item>> {
+    select.columns.iter().map(classify_item).collect()
+}
+
+/// The table this `FROM` clause is scanned/joined against: a real table's
+/// name, or a `FROM`-subquery's mandatory alias.
+fn table_name(from: &AstFromClause) -> &str {
+    match &from.first.kind {
+        TableRefKind::Name(name) => name,
+        TableRefKind::Subquery(_) => from.first.alias.as_deref().unwrap_or(""),
+    }
+}
+
+/// Extract `(left_col, right_col)` from a `JOIN ... ON <expr>` condition;
+/// `Cross` with no constraint is the only join kind with no condition.
+fn extract_equi_join(expr: &AstExpr) -> Option<(String, String)> {
+    match &expr.kind {
+        ExprKind::Binary {
+            op: AstBinOp::Eq,
+            lhs,
+            rhs,
+        } => Some((expr_column_name(lhs)?, expr_column_name(rhs)?)),
+        _ => None,
+    }
+}
+
+/// One equi-join step, extracted from an `ast::Join`.
+struct JoinStep {
+    op: JoinOp,
+    table: String,
+    left_col: String,
+    right_col: String,
+}
+
+fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
+    from.joins
+        .iter()
+        .map(|j| {
+            let TableRefKind::Name(table) = &j.table.kind else {
+                return Err(PlanError::UnknownColumn(
+                    "subquery in JOIN is not supported by the batch planner".into(),
+                ));
+            };
+            let (left_col, right_col) = match &j.constraint {
+                Some(JoinConstraint::On(expr)) => extract_equi_join(expr)
+                    .ok_or_else(|| PlanError::UnknownColumn("JOIN ON must be col = col".into()))?,
+                None if j.op == JoinOp::Cross => (String::new(), String::new()),
+                _ => {
+                    return Err(PlanError::UnknownColumn(
+                        "unsupported JOIN condition".into(),
+                    ))
+                }
+            };
+            Ok(JoinStep {
+                op: j.op,
+                table: table.clone(),
+                left_col,
+                right_col,
+            })
+        })
+        .collect()
+}
+
+fn literal_value(lit: &AstLiteral) -> Value {
+    match lit {
+        AstLiteral::Integer(v) => Value::Int(*v),
+        AstLiteral::Float(v) => Value::Float(*v),
+        AstLiteral::Str(v) => Value::Str(v.clone().into()),
+        // Blob/Null/True/False aren't part of the batch planner's literal
+        // subset (`parser::column`'s validator rejects them before this
+        // module ever runs) -- fall back to NULL rather than panicking.
+        AstLiteral::Blob(_) | AstLiteral::Null | AstLiteral::True | AstLiteral::False => {
+            Value::Null
+        }
+    }
+}
+
+fn select_limit(select: &Select) -> Option<usize> {
+    let limit = select.limit.as_ref()?;
+    match &limit.limit.kind {
+        ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
+        _ => None,
+    }
+}
+
+/// Lowers an aggregate `FunctionCall` (`COUNT(x)`, `COUNT(*)`, ...) to
+/// the same output label [`select_item_label`] would render for it (via
+/// [`AggFunc::name`]) -- used to resolve an `ORDER BY` reference to a
+/// `SELECT`-list aggregate (#131) against that same label.
+fn aggregate_call_label(name: &str, args: &FunctionArgs) -> Option<String> {
+    let agg = AggFunc::from_name(name)?;
+    match args {
+        FunctionArgs::Star if agg == AggFunc::Count => Some(format!("{}(*)", agg.name())),
+        FunctionArgs::Star => None,
+        FunctionArgs::List(list) => match list.as_slice() {
+            [one] => expr_column_name(one).map(|col| format!("{}({col})", agg.name())),
+            _ => None,
+        },
+    }
+}
+
+/// The single `ORDER BY` term's resolved output-column reference (a bare
+/// column name or a `SELECT`-list aggregate's rendered label), and whether
+/// it's descending. `select.order_by` has at most one term once `select`
+/// has passed `parser::column`'s validator.
+fn select_order_by(select: &Select) -> Option<(String, bool)> {
+    let term = select.order_by.first()?;
+    let column = match &term.expr.kind {
+        ExprKind::Column { .. } => expr_column_name(&term.expr)?,
+        ExprKind::FunctionCall {
+            name,
+            args,
+            over: None,
+            ..
+        } => aggregate_call_label(name, args)?,
+        _ => return None,
+    };
+    Some((column, term.desc.unwrap_or(false)))
+}
+
+/// Expand every `SELECT *` in `select.columns` into one plain column
+/// reference per entry of `schema` (in `schema`'s order), leaving every
+/// other select item untouched -- so `SELECT id, * FROM t` keeps `id`
+/// first and expands `*` after it. `schema` is the resolved table's
+/// column names; `sql-parser` never sees these (`ResultColumn::Star` is
+/// left as an AST-level marker), so this is the caller's (the executor
 /// with Parquet/table schema access) job to run once, before handing the
 /// query to [`compile`]/[`compile_join`]/[`compile_semi_join`]/
 /// [`compile_window`].
@@ -80,58 +462,63 @@ impl fmt::Display for PlanError {
 /// Returns [`PlanError::StarWithAggregation`] if `*` is combined with
 /// `GROUP BY` or an aggregate/window select item. A query with no `Star`
 /// item is returned unchanged (cloned).
-pub fn expand_star(query: &Query, schema: &[String]) -> Result<Query> {
-    if !query.columns.iter().any(|c| matches!(c, SelectItem::Star)) {
-        return Ok(query.clone());
+pub fn expand_star(select: &Select, schema: &[String]) -> Result<Select> {
+    let items = classify_items(select)?;
+    if !items.iter().any(|c| matches!(c, Item::Star)) {
+        return Ok(select.clone());
     }
-    let has_aggregation = !query.group_by.is_empty()
-        || query
-            .columns
+    let has_aggregation = !select.group_by.is_empty()
+        || items
             .iter()
-            .any(|c| matches!(c, SelectItem::Agg(..) | SelectItem::Window(_)));
+            .any(|c| matches!(c, Item::Agg(..) | Item::Window(_)));
     if has_aggregation {
         return Err(PlanError::StarWithAggregation);
     }
-    let mut columns = Vec::with_capacity(query.columns.len() + schema.len());
-    for item in &query.columns {
+    let mut columns = Vec::with_capacity(select.columns.len() + schema.len());
+    for (col, item) in select.columns.iter().zip(&items) {
         match item {
-            SelectItem::Star => columns.extend(schema.iter().cloned().map(SelectItem::Column)),
-            other => columns.push(other.clone()),
+            Item::Star => columns.extend(schema.iter().map(|name| ResultColumn::Expr {
+                expr: crate::parser::ast::Expr {
+                    kind: ExprKind::Column {
+                        table: None,
+                        catalog: None,
+                        name: name.clone(),
+                    },
+                    span: crate::parser::Span::UNKNOWN,
+                },
+                alias: None,
+            })),
+            _ => columns.push(col.clone()),
         }
     }
-    Ok(Query {
+    Ok(Select {
         columns,
-        ..query.clone()
+        ..select.clone()
     })
 }
 
-impl std::error::Error for PlanError {}
-
-pub type Result<T> = std::result::Result<T, PlanError>;
-
-fn map_bin_op(op: BinOp) -> MapOp {
+fn map_bin_op(op: AstBinOp) -> MapOp {
     match op {
-        BinOp::Add => MapOp::Add,
-        BinOp::Sub => MapOp::Sub,
-        BinOp::Mul => MapOp::Mul,
-        BinOp::Div => MapOp::Div,
-        BinOp::Eq => MapOp::Eq,
-        BinOp::Ne => MapOp::Ne,
-        BinOp::Lt => MapOp::Lt,
-        BinOp::Le => MapOp::Le,
-        BinOp::Gt => MapOp::Gt,
-        BinOp::Ge => MapOp::Ge,
-        BinOp::And => MapOp::And,
-        BinOp::Or => MapOp::Or,
-        BinOp::Concat => MapOp::Concat,
-    }
-}
-
-fn literal_value(lit: &Literal) -> Value {
-    match lit {
-        Literal::Int(v) => Value::Int(*v),
-        Literal::Float(v) => Value::Float(*v),
-        Literal::Str(v) => Value::Str(v.clone().into()),
+        AstBinOp::Add => MapOp::Add,
+        AstBinOp::Sub => MapOp::Sub,
+        AstBinOp::Mul => MapOp::Mul,
+        AstBinOp::Div => MapOp::Div,
+        AstBinOp::Eq => MapOp::Eq,
+        AstBinOp::Ne => MapOp::Ne,
+        AstBinOp::Lt => MapOp::Lt,
+        AstBinOp::Le => MapOp::Le,
+        AstBinOp::Gt => MapOp::Gt,
+        AstBinOp::Ge => MapOp::Ge,
+        AstBinOp::And => MapOp::And,
+        AstBinOp::Or => MapOp::Or,
+        AstBinOp::Concat => MapOp::Concat,
+        // `parser::column`'s validator rejects every other operator
+        // (bitwise/shift/modulo) before this module ever sees the query --
+        // reaching here means an unvalidated `Select` was compiled
+        // directly. Fall back to `Eq` rather than panicking.
+        AstBinOp::BitAnd | AstBinOp::BitOr | AstBinOp::Shl | AstBinOp::Shr | AstBinOp::Mod => {
+            MapOp::Eq
+        }
     }
 }
 
@@ -176,10 +563,20 @@ impl Ctx {
     }
 }
 
-fn compile_expr(expr: &Expr, ctx: &mut Ctx) -> usize {
-    match expr {
-        Expr::Column(name) => ctx.load_column(name),
-        Expr::Literal(lit) => {
+fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
+    match &expr.kind {
+        ExprKind::Column { .. } => match expr_column_name(expr) {
+            Some(name) => ctx.load_column(&name),
+            None => {
+                let reg = ctx.alloc();
+                ctx.push(Opcode::LoadConst {
+                    reg,
+                    value: Value::Null,
+                });
+                reg
+            }
+        },
+        ExprKind::Literal(lit) => {
             let reg = ctx.alloc();
             ctx.push(Opcode::LoadConst {
                 reg,
@@ -187,16 +584,13 @@ fn compile_expr(expr: &Expr, ctx: &mut Ctx) -> usize {
             });
             reg
         }
-        // `EXISTS (SELECT ...)` has no batch-planner counterpart either
-        // (db-core#95 implements it for `codegen::row` only) -- compile
-        // to the same always-false predicate.
-        Expr::InSubquery { .. } | Expr::Exists { .. } => {
-            // `compile_semi_join` handles `IN (subquery)` itself and strips
-            // it from `where_clause` before ever calling `compile` --
-            // reaching this arm means `IN (subquery)` was used via the
-            // regular single-table path, which can't run a subquery.
-            // Compile to an always-false predicate (no rows) rather than
-            // panicking.
+        ExprKind::Paren(inner) => compile_expr(inner, ctx),
+        // `compile_semi_join` handles `IN (subquery)` itself and strips it
+        // from `where_clause` before ever calling `compile` -- reaching
+        // this arm means `IN (subquery)`/`EXISTS` was used via the regular
+        // single-table path, which can't run a subquery. Compile to an
+        // always-false predicate (no rows) rather than panicking.
+        ExprKind::InSubquery { .. } | ExprKind::Exists { .. } => {
             let reg = ctx.alloc();
             ctx.push(Opcode::LoadConst {
                 reg,
@@ -204,7 +598,7 @@ fn compile_expr(expr: &Expr, ctx: &mut Ctx) -> usize {
             });
             reg
         }
-        Expr::BinaryOp(lhs, op, rhs) => {
+        ExprKind::Binary { op, lhs, rhs } => {
             let a = compile_expr(lhs, ctx);
             let b = compile_expr(rhs, ctx);
             let dst = ctx.alloc();
@@ -216,7 +610,10 @@ fn compile_expr(expr: &Expr, ctx: &mut Ctx) -> usize {
             });
             dst
         }
-        Expr::Not(inner) => {
+        ExprKind::Unary {
+            op: crate::parser::ast::UnaryOp::Not,
+            expr: inner,
+        } => {
             let a = compile_expr(inner, ctx);
             let dst = ctx.alloc();
             ctx.push(Opcode::Map {
@@ -227,7 +624,10 @@ fn compile_expr(expr: &Expr, ctx: &mut Ctx) -> usize {
             });
             dst
         }
-        Expr::Neg(inner) => {
+        ExprKind::Unary {
+            op: crate::parser::ast::UnaryOp::Minus,
+            expr: inner,
+        } => {
             let a = compile_expr(inner, ctx);
             let dst = ctx.alloc();
             ctx.push(Opcode::Map {
@@ -238,8 +638,17 @@ fn compile_expr(expr: &Expr, ctx: &mut Ctx) -> usize {
             });
             dst
         }
-        Expr::IsNull { expr, negated } => {
-            let a = compile_expr(expr, ctx);
+        // Unary `+` is a no-op.
+        ExprKind::Unary {
+            op: crate::parser::ast::UnaryOp::Plus,
+            expr: inner,
+        } => compile_expr(inner, ctx),
+        ExprKind::Unary { expr: inner, .. } => compile_expr(inner, ctx),
+        ExprKind::IsNull {
+            expr: inner,
+            negated,
+        } => {
+            let a = compile_expr(inner, ctx);
             let dst = ctx.alloc();
             ctx.push(Opcode::Map {
                 dst,
@@ -253,31 +662,67 @@ fn compile_expr(expr: &Expr, ctx: &mut Ctx) -> usize {
             });
             dst
         }
+        // `expr IS [NOT] NULL` may also parse as `Is{lhs, rhs: NULL
+        // literal, negated}`.
+        ExprKind::Is { lhs, rhs, negated }
+            if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>
+        {
+            let a = compile_expr(lhs, ctx);
+            let dst = ctx.alloc();
+            ctx.push(Opcode::Map {
+                dst,
+                op: if *negated {
+                    MapOp::IsNotNull
+                } else {
+                    MapOp::IsNull
+                },
+                a,
+                b: a,
+            });
+            dst
+        }
+        // Anything else is outside the validated batch subset -- fall
+        // back to NULL rather than panicking.
+        _ => {
+            let reg = ctx.alloc();
+            ctx.push(Opcode::LoadConst {
+                reg,
+                value: Value::Null,
+            });
+            reg
+        }
     }
 }
 
 /// Compile a flat/`GROUP BY`/`ORDER BY`/`LIMIT` query into a [`Program`]
 /// ending in [`Opcode::Finalize`]. Compiled once, reused across every
 /// segment.
-pub fn compile(query: &Query) -> Program {
+pub fn compile(select: &Select) -> Program {
     let mut ctx = Ctx {
         next_reg: 0,
         column_regs: HashMap::new(),
         program: Vec::new(),
     };
 
+    let items = classify_items(select).unwrap_or_default();
+    let group_by: Vec<String> = select
+        .group_by
+        .iter()
+        .filter_map(expr_column_name)
+        .collect();
+
     // Load every column the group-by keys and select-list aggregates need
     // *before* compiling WHERE/Filter: Filter only shrinks registers that
     // are already live, so anything loaded afterwards would keep the
     // batch's full (pre-filter) length and desync from filtered registers.
     let mut group_by_regs = Vec::new();
-    for name in &query.group_by {
+    for name in &group_by {
         group_by_regs.push(ctx.load_column(name));
     }
     let mut agg_srcs = Vec::new();
-    for item in &query.columns {
+    for item in &items {
         match item {
-            SelectItem::Agg(_, Some(name)) => {
+            Item::Agg(_, Some(name)) => {
                 agg_srcs.push(ctx.load_column(name));
             }
             // Plain projected columns are emitted (not aggregated), but they
@@ -287,7 +732,7 @@ pub fn compile(query: &Query) -> Program {
             // indexes past the end of the short ones. `load_column` memoizes,
             // so the projection code further down reuses these registers
             // instead of emitting a second LoadColumn.
-            SelectItem::Column(name) if query.group_by.is_empty() => {
+            Item::Column(name) if group_by.is_empty() => {
                 ctx.load_column(name);
                 agg_srcs.push(0);
             }
@@ -295,7 +740,7 @@ pub fn compile(query: &Query) -> Program {
         }
     }
 
-    if let Some(where_clause) = &query.where_clause {
+    if let Some(where_clause) = &select.where_clause {
         let predicate = compile_expr(where_clause, &mut ctx);
         ctx.push_commented(
             Opcode::Filter { predicate },
@@ -304,7 +749,7 @@ pub fn compile(query: &Query) -> Program {
     }
 
     let mut agg_parts = Vec::new();
-    for _ in &query.group_by {
+    for _ in &group_by {
         agg_parts.push(AggPart::GroupKey);
     }
 
@@ -312,8 +757,8 @@ pub fn compile(query: &Query) -> Program {
     let mut agg_dst = Vec::new();
     let mut emit_regs = group_by_regs.clone();
 
-    for (i, item) in query.columns.iter().enumerate() {
-        if let SelectItem::Agg(func, arg) = item {
+    for (i, item) in items.iter().enumerate() {
+        if let Item::Agg(func, arg) = item {
             let src = arg.as_ref().map(|_| agg_srcs[i]);
             match func {
                 AggFunc::Avg => {
@@ -341,14 +786,14 @@ pub fn compile(query: &Query) -> Program {
                     emit_regs.push(dst);
                 }
             }
-        } else if let SelectItem::Column(name) = item {
+        } else if let Item::Column(name) = item {
             // A plain column in the SELECT list: if there's no GROUP BY,
             // it isn't loaded/emitted anywhere else yet, so load and emit
             // it directly here. With a GROUP BY, it's expected to already
             // be one of the group-by columns (already in `emit_regs` via
             // `group_by_regs` above) -- SQL requires non-aggregated SELECT
             // columns to be group-by keys, so this doesn't double-emit.
-            if query.group_by.is_empty() {
+            if group_by.is_empty() {
                 let reg = ctx.load_column(name);
                 emit_regs.push(reg);
             }
@@ -356,10 +801,10 @@ pub fn compile(query: &Query) -> Program {
     }
 
     if !aggs.is_empty() || !group_by_regs.is_empty() {
-        let comment = if query.group_by.is_empty() {
+        let comment = if group_by.is_empty() {
             "aggregate".to_string()
         } else {
-            format!("GROUP BY {}", query.group_by.join(", "))
+            format!("GROUP BY {}", group_by.join(", "))
         };
         ctx.push_commented(
             Opcode::GroupReduce {
@@ -375,47 +820,47 @@ pub fn compile(query: &Query) -> Program {
         Opcode::Emit {
             registers: emit_regs.into(),
         },
-        format!("SELECT {}", output_column_names(query).join(", ")),
+        format!("SELECT {}", output_column_names(select).join(", ")),
     );
 
-    let order_by = query
-        .order_by
-        .as_ref()
-        .and_then(|OrderBy { column, descending }| {
-            select_output_index(query, column).map(|pos| (pos, *descending))
-        });
+    let order_by = select_order_by(select).and_then(|(column, descending)| {
+        select_output_index(select, &column).map(|pos| (pos, descending))
+    });
 
     ctx.push_commented(
         Opcode::Finalize {
             agg_parts: agg_parts.into(),
-            num_group_keys: query.group_by.len(),
-            distinct: query.distinct,
+            num_group_keys: group_by.len(),
+            distinct: matches!(select.distinct, Some(Distinctness::Distinct)),
             order_by,
-            limit: query.limit,
+            limit: select_limit(select),
         },
-        finalize_comment(query),
+        finalize_comment(select),
     );
 
     Program::new(ctx.program)
 }
 
-fn finalize_comment(query: &Query) -> String {
+fn finalize_comment(select: &Select) -> String {
     let mut parts = Vec::new();
-    if !query.group_by.is_empty()
-        || query
-            .columns
-            .iter()
-            .any(|c| matches!(c, SelectItem::Agg(..)))
-    {
+    let group_by: Vec<String> = select
+        .group_by
+        .iter()
+        .filter_map(expr_column_name)
+        .collect();
+    let has_agg = classify_items(select)
+        .map(|items| items.iter().any(|c| matches!(c, Item::Agg(..))))
+        .unwrap_or(false);
+    if !group_by.is_empty() || has_agg {
         parts.push("merge partial aggregates".to_string());
     }
-    if let Some(OrderBy { column, descending }) = &query.order_by {
+    if let Some((column, descending)) = select_order_by(select) {
         parts.push(format!(
             "ORDER BY {column}{}",
-            if *descending { " DESC" } else { "" }
+            if descending { " DESC" } else { "" }
         ));
     }
-    if let Some(limit) = query.limit {
+    if let Some(limit) = select_limit(select) {
         parts.push(format!("LIMIT {limit}"));
     }
     if parts.is_empty() {
@@ -444,19 +889,22 @@ pub fn split_qualified(name: &str) -> (Option<&str>, &str) {
 /// `LEFT JOIN` probe row, same as any other right-table column). Probe
 /// side: every left-table column is loaded, then the hash table is probed,
 /// landing the right side's payload right after the left columns.
-pub fn compile_join(query: &Query) -> Result<JoinProgram> {
+pub fn compile_join(select: &Select) -> Result<JoinProgram> {
+    let Some(from) = &select.from else {
+        return Err(PlanError::UnknownColumn("SELECT without FROM".into()));
+    };
+    let joins = extract_joins(from)?;
     #[allow(
         clippy::expect_used,
         reason = "dispatch only routes here for queries with a JOIN clause"
     )]
-    let join = query
-        .joins
+    let join = joins
         .first()
         .expect("compile_join requires at least one join");
-    if !matches!(join.kind, JoinKind::Inner | JoinKind::Left) {
-        return Err(PlanError::UnsupportedJoinKind(join.kind));
+    if !matches!(join.op, JoinOp::Inner | JoinOp::Left) {
+        return Err(PlanError::UnsupportedJoinKind(join.op));
     }
-    let body = compile(query);
+    let body = compile(select);
 
     let mut needed: Vec<String> = body.columns_to_load();
     for extra in [&join.left_col, &join.right_col] {
@@ -465,13 +913,14 @@ pub fn compile_join(query: &Query) -> Result<JoinProgram> {
         }
     }
 
+    let from_name = table_name(from);
     let mut left_columns = Vec::new();
     let mut right_columns = Vec::new();
     for name in &needed {
         let (prefix, _) = split_qualified(name);
         match prefix {
             None => left_columns.push(name.clone()),
-            Some(p) if p == query.from.name() => left_columns.push(name.clone()),
+            Some(p) if p == from_name => left_columns.push(name.clone()),
             Some(p) if p == join.table => right_columns.push(name.clone()),
             Some(_) => return Err(PlanError::UnknownColumn(name.clone())),
         }
@@ -503,9 +952,9 @@ pub fn compile_join(query: &Query) -> Result<JoinProgram> {
     let payload_dst: Vec<usize> = (0..right_columns.len())
         .map(|i| left_columns.len() + i)
         .collect();
-    let join_kind = match join.kind {
-        JoinKind::Inner => crate::vm::batch::JoinKind::Inner,
-        JoinKind::Left => crate::vm::batch::JoinKind::Left,
+    let join_kind = match join.op {
+        JoinOp::Inner => crate::vm::batch::JoinKind::Inner,
+        JoinOp::Left => crate::vm::batch::JoinKind::Left,
         _ => unreachable!("checked at the top of compile_join"),
     };
     let probe = Program::from_opcodes(
@@ -542,53 +991,40 @@ pub fn compile_join(query: &Query) -> Result<JoinProgram> {
 /// subquery isn't a VM predicate.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemiJoinProgram<'q> {
-    pub key_column: &'q str,
-    pub subquery: &'q Query,
+    pub key_column: String,
+    pub subquery: &'q Select,
     pub body: Program,
 }
 
 /// Plan a query whose entire `WHERE` clause is `col IN (SELECT ...)`.
 /// Combining the `IN` clause with other conditions via `AND`/`OR` isn't
 /// supported -- the semi-join must be the whole `WHERE` clause.
-pub fn compile_semi_join(query: &Query) -> Result<SemiJoinProgram<'_>> {
-    let Some(Expr::InSubquery { expr, subquery }) = &query.where_clause else {
+pub fn compile_semi_join(select: &Select) -> Result<SemiJoinProgram<'_>> {
+    let Some(AstExpr {
+        kind:
+            ExprKind::InSubquery {
+                expr,
+                subquery,
+                negated: false,
+            },
+        ..
+    }) = &select.where_clause
+    else {
         return Err(PlanError::UnsupportedSemiJoin(
             "WHERE clause must be exactly `col IN (SELECT ...)`".to_string(),
         ));
     };
-    let Expr::Column(key_column) = expr.as_ref() else {
-        return Err(PlanError::UnsupportedSemiJoin(
-            "IN's left-hand side must be a bare column".to_string(),
-        ));
-    };
+    let key_column = expr_column_name(expr).ok_or_else(|| {
+        PlanError::UnsupportedSemiJoin("IN's left-hand side must be a bare column".to_string())
+    })?;
 
-    let mut stripped = query.clone();
+    let mut stripped = select.clone();
     stripped.where_clause = None;
     Ok(SemiJoinProgram {
         key_column,
         subquery,
         body: compile(&stripped),
     })
-}
-
-/// `crate::expr::WindowFunc` and `crate::vm::batch::WindowFunc` are
-/// separate types (same variants) so that `expr` (AST) doesn't depend on
-/// `vm` (execution) -- convert at the point the planner hands a spec to
-/// the VM.
-fn map_window_func(func: WindowFunc) -> crate::vm::batch::WindowFunc {
-    use crate::vm::batch::WindowFunc as Vm;
-    match func {
-        WindowFunc::RowNumber => Vm::RowNumber,
-        WindowFunc::Rank => Vm::Rank,
-        WindowFunc::DenseRank => Vm::DenseRank,
-        WindowFunc::Lag => Vm::Lag,
-        WindowFunc::Lead => Vm::Lead,
-        WindowFunc::FirstValue => Vm::FirstValue,
-        WindowFunc::LastValue => Vm::LastValue,
-        WindowFunc::Sum => Vm::Sum,
-        WindowFunc::Avg => Vm::Avg,
-        WindowFunc::Count => Vm::Count,
-    }
 }
 
 /// Plan a query whose `SELECT` list contains one or more window functions
@@ -604,17 +1040,19 @@ fn map_window_func(func: WindowFunc) -> crate::vm::batch::WindowFunc {
 /// ROW`, per the SQL standard when `ORDER BY` is present in `OVER`) makes
 /// it return the *current* row's value, not the partition's true last row
 /// -- that's implemented literally, ignoring `RANGE` peer-group ties.
-pub fn compile_window(query: &Query) -> Program {
+pub fn compile_window(select: &Select) -> Program {
+    let items = classify_items(select).unwrap_or_default();
+
     let mut needed: Vec<String> = Vec::new();
     let push_needed = |name: &str, needed: &mut Vec<String>| {
         if !needed.iter().any(|n| n == name) {
             needed.push(name.to_string());
         }
     };
-    for item in &query.columns {
+    for item in &items {
         match item {
-            SelectItem::Column(name) => push_needed(name, &mut needed),
-            SelectItem::Window(spec) => {
+            Item::Column(name) => push_needed(name, &mut needed),
+            Item::Window(spec) => {
                 if let Some(arg) = &spec.arg {
                     push_needed(arg, &mut needed);
                 }
@@ -625,7 +1063,7 @@ pub fn compile_window(query: &Query) -> Program {
                     push_needed(o, &mut needed);
                 }
             }
-            SelectItem::Agg(..) | SelectItem::Star => {}
+            Item::Agg(..) | Item::Star => {}
         }
     }
 
@@ -658,11 +1096,11 @@ pub fn compile_window(query: &Query) -> Program {
 
     let mut next_reg = needed.len();
     let mut null_reg: Option<usize> = None;
-    let mut emit_regs = Vec::with_capacity(query.columns.len());
-    for item in &query.columns {
+    let mut emit_regs = Vec::with_capacity(items.len());
+    for item in &items {
         match item {
-            SelectItem::Column(name) => emit_regs.push(column_reg(name)),
-            SelectItem::Window(spec) => {
+            Item::Column(name) => emit_regs.push(column_reg(name)),
+            Item::Window(spec) => {
                 let dst = next_reg;
                 next_reg += 1;
                 program.push(Instruction::with_comment(
@@ -688,7 +1126,7 @@ pub fn compile_window(query: &Query) -> Program {
                 ));
                 emit_regs.push(dst);
             }
-            SelectItem::Agg(..) | SelectItem::Star => {
+            Item::Agg(..) | Item::Star => {
                 let reg = *null_reg.get_or_insert_with(|| {
                     let reg = next_reg;
                     next_reg += 1;
@@ -707,38 +1145,55 @@ pub fn compile_window(query: &Query) -> Program {
         Opcode::Emit {
             registers: emit_regs.into(),
         },
-        format!("SELECT {}", output_column_names(query).join(", ")),
+        format!("SELECT {}", output_column_names(select).join(", ")),
     ));
 
-    let order_by = query
-        .order_by
-        .as_ref()
-        .and_then(|OrderBy { column, descending }| {
-            select_output_index(query, column).map(|pos| (pos, *descending))
-        });
+    let order_by = select_order_by(select).and_then(|(column, descending)| {
+        select_output_index(select, &column).map(|pos| (pos, descending))
+    });
     program.push(Instruction::with_comment(
         Opcode::Finalize {
             agg_parts: Vec::new().into(),
             num_group_keys: 0,
-            distinct: query.distinct,
+            distinct: matches!(select.distinct, Some(Distinctness::Distinct)),
             order_by,
-            limit: query.limit,
+            limit: select_limit(select),
         },
-        finalize_comment(query),
+        finalize_comment(select),
     ));
 
     Program::new(program)
 }
 
+/// `crate::codegen::batch::WindowFunc` and `crate::vm::batch::WindowFunc`
+/// are separate types (same variants) so that the planner's own vocabulary
+/// doesn't depend on the VM's execution-operand enum -- convert at the
+/// point the planner hands a spec to the VM.
+fn map_window_func(func: WindowFunc) -> crate::vm::batch::WindowFunc {
+    use crate::vm::batch::WindowFunc as Vm;
+    match func {
+        WindowFunc::RowNumber => Vm::RowNumber,
+        WindowFunc::Rank => Vm::Rank,
+        WindowFunc::DenseRank => Vm::DenseRank,
+        WindowFunc::Lag => Vm::Lag,
+        WindowFunc::Lead => Vm::Lead,
+        WindowFunc::FirstValue => Vm::FirstValue,
+        WindowFunc::LastValue => Vm::LastValue,
+        WindowFunc::Sum => Vm::Sum,
+        WindowFunc::Avg => Vm::Avg,
+        WindowFunc::Count => Vm::Count,
+    }
+}
+
 /// Resolves an `ORDER BY` reference to its position in the `SELECT`
 /// list, matching against each item's rendered output label -- not just
-/// [`SelectItem::Column`] -- so `ORDER BY COUNT(x)` resolves to a
-/// `SELECT COUNT(x)` item the same way `ORDER BY x` resolves to `SELECT
-/// x` (#131: `parser::column`'s `ORDER BY` lowering renders an
-/// aggregate reference through the identical [`select_item_label`]
-/// format for exactly this reason).
-fn select_output_index(query: &Query, column: &str) -> Option<usize> {
-    query
+/// a bare column -- so `ORDER BY COUNT(x)` resolves to a `SELECT
+/// COUNT(x)` item the same way `ORDER BY x` resolves to `SELECT x`
+/// (#131: `parser::column`'s `ORDER BY` validation renders an aggregate
+/// reference through the identical [`select_item_label`] format for
+/// exactly this reason).
+fn select_output_index(select: &Select, column: &str) -> Option<usize> {
+    select
         .columns
         .iter()
         .position(|item| select_item_label(item) == column)
@@ -747,8 +1202,8 @@ fn select_output_index(query: &Query, column: &str) -> Option<usize> {
 /// Derive each `SELECT`-list item's output column header (e.g. `SUM(amount)`,
 /// `ROW_NUMBER()`) -- shared by the interpreter and the AOT emitter, which
 /// both need the same naming for a compiled query's results.
-pub fn output_column_names(query: &Query) -> Vec<String> {
-    query.columns.iter().map(select_item_label).collect()
+pub fn output_column_names(select: &Select) -> Vec<String> {
+    select.columns.iter().map(select_item_label).collect()
 }
 
 // ---------------------------------------------------------------------
@@ -804,61 +1259,76 @@ impl PlanBuilder {
     }
 }
 
-/// Build a human-readable execution plan for `query` without running it
+/// Build a human-readable execution plan for `select` without running it
 /// (#99). Mirrors the executor's dispatch (semi-join, join, windowed, or
 /// plain single-table) over the same planning decisions [`compile`] makes;
 /// `stats` supplies each referenced table's `SCAN` detail.
-pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNode> {
+pub fn explain(select: &Select, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNode> {
     let mut b = PlanBuilder::new("QUERY PLAN");
 
-    let has_window = query
-        .columns
-        .iter()
-        .any(|c| matches!(c, SelectItem::Window(_)));
-    let is_semi_join = matches!(query.where_clause, Some(Expr::InSubquery { .. }));
-    let join = query.joins.first();
+    let items = classify_items(select).unwrap_or_default();
+    let has_window = items.iter().any(|c| matches!(c, Item::Window(_)));
+    let is_semi_join = matches!(
+        &select.where_clause,
+        Some(AstExpr {
+            kind: ExprKind::InSubquery { .. },
+            ..
+        })
+    );
+    let from = select.from.as_ref();
+    let from_name = from.map(table_name).unwrap_or_default();
+    let joins = from
+        .map(|f| extract_joins(f).unwrap_or_default())
+        .unwrap_or_default();
+    let join = joins.first();
 
     // Semi-joins compile with `where_clause` stripped, mirroring
     // `compile_semi_join` (the `IN` subquery isn't a VM predicate).
     let program = if has_window {
         None
     } else if is_semi_join {
-        let mut stripped = query.clone();
+        let mut stripped = select.clone();
         stripped.where_clause = None;
         Some(compile(&stripped))
     } else {
-        Some(compile(query))
+        Some(compile(select))
     };
     let columns_to_load = program.as_ref().map(Program::columns_to_load);
 
     let mut main_cols: Vec<String> = match (&columns_to_load, join) {
         (Some(cols), Some(_)) => cols
             .iter()
-            .filter(|n| split_qualified(n).0.is_none_or(|t| t == query.from.name()))
+            .filter(|n| split_qualified(n).0.is_none_or(|t| t == from_name))
             .cloned()
             .collect(),
         (Some(cols), None) => cols.clone(),
-        (None, _) => referenced_columns(query),
+        (None, _) => referenced_columns(select),
     };
     if let Some(j) = join {
         push_unique(&mut main_cols, j.left_col.clone());
     }
-    if let Some(Expr::InSubquery { expr, .. }) = &query.where_clause {
-        if let Expr::Column(col_name) = expr.as_ref() {
-            push_unique(&mut main_cols, col_name.clone());
+    if let Some(AstExpr {
+        kind: ExprKind::InSubquery { expr, .. },
+        ..
+    }) = &select.where_clause
+    {
+        if let Some(col_name) = expr_column_name(expr) {
+            push_unique(&mut main_cols, col_name);
         }
     }
-    let scan = b.push(0, scan_detail(query.from.name(), stats(query.from.name())));
+    let scan = b.push(0, scan_detail(from_name, stats(from_name)));
     if !main_cols.is_empty() {
         b.push(scan, format!("LOAD COLUMNS: {}", main_cols.join(", ")));
     }
 
     if is_semi_join {
-        if let Some(Expr::InSubquery { expr, subquery }) = &query.where_clause {
-            let sub_scan = b.push(
-                0,
-                scan_detail(subquery.from.name(), stats(subquery.from.name())),
-            );
+        if let Some(AstExpr {
+            kind: ExprKind::InSubquery { expr, subquery, .. },
+            ..
+        }) = &select.where_clause
+        {
+            let sub_from = subquery.from.as_ref().map(table_name).unwrap_or_default();
+            let sub_scan = b.push(0, scan_detail(sub_from, stats(sub_from)));
             let sub_cols = referenced_columns(subquery);
             if !sub_cols.is_empty() {
                 b.push(sub_scan, format!("LOAD COLUMNS: {}", sub_cols.join(", ")));
@@ -870,7 +1340,7 @@ pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNod
                     "SEMI JOIN: {} IN (SELECT {} FROM {})",
                     expr_to_string(expr),
                     sub_select.join(", "),
-                    subquery.from.name()
+                    sub_from
                 ),
             );
         }
@@ -892,19 +1362,19 @@ pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNod
                 format!("LOAD COLUMNS: {}", right_cols.join(", ")),
             );
         }
-        let kind = match join.kind {
-            JoinKind::Inner => "HASH JOIN",
-            JoinKind::Left => "LEFT HASH JOIN",
-            JoinKind::Right => "RIGHT HASH JOIN",
-            JoinKind::Full => "FULL HASH JOIN",
-            JoinKind::Cross => "CROSS JOIN",
+        let kind = match join.op {
+            JoinOp::Inner => "HASH JOIN",
+            JoinOp::Left => "LEFT HASH JOIN",
+            JoinOp::Right => "RIGHT HASH JOIN",
+            JoinOp::Full => "FULL HASH JOIN",
+            JoinOp::Cross => "CROSS JOIN",
         };
         b.push(0, format!("{kind}: {} = {}", join.left_col, join.right_col));
     }
 
     if has_window {
-        for item in &query.columns {
-            if let SelectItem::Window(spec) = item {
+        for item in &items {
+            if let Item::Window(spec) = item {
                 b.push(0, format!("WINDOW: {}", window_detail(spec)));
             }
         }
@@ -913,14 +1383,19 @@ pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNod
             .opcodes()
             .any(|op| matches!(op, Opcode::Filter { .. }))
         {
-            if let Some(where_clause) = &query.where_clause {
+            if let Some(where_clause) = &select.where_clause {
                 b.push(0, format!("FILTER: {}", expr_to_string(where_clause)));
             }
         }
-        if !query.group_by.is_empty() {
-            let group_node = b.push(0, format!("GROUP BY: {}", query.group_by.join(", ")));
-            for item in &query.columns {
-                if matches!(item, SelectItem::Agg(..)) {
+        let group_by: Vec<String> = select
+            .group_by
+            .iter()
+            .filter_map(expr_column_name)
+            .collect();
+        if !group_by.is_empty() {
+            let group_node = b.push(0, format!("GROUP BY: {}", group_by.join(", ")));
+            for item in &select.columns {
+                if matches!(classify_item(item), Ok(Item::Agg(..))) {
                     b.push(
                         group_node,
                         format!("AGGREGATE: {}", select_item_label(item)),
@@ -928,8 +1403,8 @@ pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNod
                 }
             }
         } else {
-            for item in &query.columns {
-                if matches!(item, SelectItem::Agg(..)) {
+            for item in &select.columns {
+                if matches!(classify_item(item), Ok(Item::Agg(..))) {
                     b.push(0, format!("AGGREGATE: {}", select_item_label(item)));
                 }
             }
@@ -937,25 +1412,25 @@ pub fn explain(query: &Query, stats: &dyn Fn(&str) -> TableStats) -> Vec<PlanNod
         // DISTINCT runs as a post-Finalize dedup pass, after GROUP BY's
         // hash-aggregate merge and before ORDER BY/LIMIT (see
         // `compile`'s `distinct` handling) -- the plan reflects that order.
-        if query.distinct {
+        if matches!(select.distinct, Some(Distinctness::Distinct)) {
             b.push(0, "DISTINCT".to_string());
         }
     }
 
-    if let Some(OrderBy { column, descending }) = &query.order_by {
+    if let Some((column, descending)) = select_order_by(select) {
         b.push(
             0,
             format!(
                 "ORDER BY: {column}{}",
-                if *descending { " DESC" } else { "" }
+                if descending { " DESC" } else { "" }
             ),
         );
     }
-    if let Some(limit) = query.limit {
+    if let Some(limit) = select_limit(select) {
         b.push(0, format!("LIMIT: {limit}"));
     }
 
-    let emit_labels: Vec<String> = query.columns.iter().map(select_item_label).collect();
+    let emit_labels: Vec<String> = select.columns.iter().map(select_item_label).collect();
     b.push(0, format!("EMIT: {}", emit_labels.join(", ")));
 
     b.finish()
@@ -1075,32 +1550,48 @@ fn render_operands(op: &Opcode) -> String {
     }
 }
 
-/// Build a bare `EXPLAIN`'s opcode listing for `query` (#55): the compiled
+/// Build a bare `EXPLAIN`'s opcode listing for `select` (#55): the compiled
 /// [`Program`]'s instructions, one section per phase the executor actually
 /// runs -- mirrors [`explain`]'s shape dispatch (semi-join, join, windowed,
 /// or plain single-table) but over the real compiled opcodes instead of a
 /// hand-built plan tree.
-pub fn explain_opcodes(query: &Query) -> Result<Vec<OpcodeSection>> {
-    let has_window = query
-        .columns
-        .iter()
-        .any(|c| matches!(c, SelectItem::Window(_)));
+pub fn explain_opcodes(select: &Select) -> Result<Vec<OpcodeSection>> {
+    let items = classify_items(select).unwrap_or_default();
+    let has_window = items.iter().any(|c| matches!(c, Item::Window(_)));
 
-    if matches!(query.where_clause, Some(Expr::InSubquery { .. })) {
-        let semi = compile_semi_join(query)?;
+    if matches!(
+        &select.where_clause,
+        Some(AstExpr {
+            kind: ExprKind::InSubquery { .. },
+            ..
+        })
+    ) {
+        let semi = compile_semi_join(select)?;
+        let sub_from = semi
+            .subquery
+            .from
+            .as_ref()
+            .map(table_name)
+            .unwrap_or_default();
         Ok(vec![OpcodeSection {
             label: format!(
                 "SEMI JOIN body ({} IN (SELECT ... FROM {}))",
-                semi.key_column,
-                semi.subquery.from.name()
+                semi.key_column, sub_from
             ),
             rows: render_program(&semi.body),
         }])
-    } else if !query.joins.is_empty() {
-        let join = compile_join(query)?;
+    } else if select.from.as_ref().is_some_and(|f| !f.joins.is_empty()) {
+        let join = compile_join(select)?;
+        let table = select
+            .from
+            .as_ref()
+            .and_then(|f| f.joins.first())
+            .and_then(|j| j.table.name())
+            .unwrap_or_default()
+            .to_string();
         Ok(vec![
             OpcodeSection {
-                label: format!("JOIN build ({})", query.joins[0].table),
+                label: format!("JOIN build ({table})"),
                 rows: render_program(&join.build),
             },
             OpcodeSection {
@@ -1115,12 +1606,12 @@ pub fn explain_opcodes(query: &Query) -> Result<Vec<OpcodeSection>> {
     } else if has_window {
         Ok(vec![OpcodeSection {
             label: "body".to_string(),
-            rows: render_program(&compile_window(query)),
+            rows: render_program(&compile_window(select)),
         }])
     } else {
         Ok(vec![OpcodeSection {
             label: "body".to_string(),
-            rows: render_program(&compile(query)),
+            rows: render_program(&compile(select)),
         }])
     }
 }
@@ -1155,15 +1646,16 @@ fn window_func_name(func: WindowFunc) -> &'static str {
 
 /// Output column label for one `SELECT` item, e.g. `amount`, `SUM(amount)`,
 /// `COUNT(*)`, or `ROW_NUMBER()`.
-fn select_item_label(item: &SelectItem) -> String {
-    match item {
-        SelectItem::Column(name) => name.clone(),
-        SelectItem::Star => "*".to_string(),
-        SelectItem::Agg(func, arg) => match arg {
-            Some(col) => format!("{}({col})", agg_func_name(*func)),
-            None => format!("{}(*)", agg_func_name(*func)),
+fn select_item_label(item: &ResultColumn) -> String {
+    match classify_item(item) {
+        Ok(Item::Column(name)) => name,
+        Ok(Item::Star) => "*".to_string(),
+        Ok(Item::Agg(func, arg)) => match arg {
+            Some(col) => format!("{}({col})", agg_func_name(func)),
+            None => format!("{}(*)", agg_func_name(func)),
         },
-        SelectItem::Window(spec) => format!("{}()", window_func_name(spec.func)),
+        Ok(Item::Window(spec)) => format!("{}()", window_func_name(spec.func)),
+        Err(_) => String::new(),
     }
 }
 
@@ -1199,61 +1691,93 @@ fn window_detail(spec: &WindowSpec) -> String {
     detail
 }
 
-fn literal_to_string(lit: &Literal) -> String {
+fn literal_to_string(lit: &AstLiteral) -> String {
     match lit {
-        Literal::Int(v) => v.to_string(),
-        Literal::Float(v) => v.to_string(),
-        Literal::Str(v) => format!("'{v}'"),
+        AstLiteral::Integer(v) => v.to_string(),
+        AstLiteral::Float(v) => v.to_string(),
+        AstLiteral::Str(v) => format!("'{v}'"),
+        AstLiteral::Blob(_) => "x'...'".to_string(),
+        AstLiteral::Null => "NULL".to_string(),
+        AstLiteral::True => "TRUE".to_string(),
+        AstLiteral::False => "FALSE".to_string(),
     }
 }
 
-fn bin_op_str(op: BinOp) -> &'static str {
+fn bin_op_str(op: AstBinOp) -> &'static str {
     match op {
-        BinOp::Add => "+",
-        BinOp::Sub => "-",
-        BinOp::Mul => "*",
-        BinOp::Div => "/",
-        BinOp::Eq => "=",
-        BinOp::Ne => "!=",
-        BinOp::Lt => "<",
-        BinOp::Le => "<=",
-        BinOp::Gt => ">",
-        BinOp::Ge => ">=",
-        BinOp::And => "AND",
-        BinOp::Or => "OR",
-        BinOp::Concat => "||",
+        AstBinOp::Add => "+",
+        AstBinOp::Sub => "-",
+        AstBinOp::Mul => "*",
+        AstBinOp::Div => "/",
+        AstBinOp::Eq => "=",
+        AstBinOp::Ne => "!=",
+        AstBinOp::Lt => "<",
+        AstBinOp::Le => "<=",
+        AstBinOp::Gt => ">",
+        AstBinOp::Ge => ">=",
+        AstBinOp::And => "AND",
+        AstBinOp::Or => "OR",
+        AstBinOp::Concat => "||",
+        AstBinOp::BitAnd => "&",
+        AstBinOp::BitOr => "|",
+        AstBinOp::Shl => "<<",
+        AstBinOp::Shr => ">>",
+        AstBinOp::Mod => "%",
     }
 }
 
 /// Renders an `Expr` back to SQL-ish text for plan details, e.g.
 /// `amount > 100`.
-fn expr_to_string(expr: &Expr) -> String {
-    match expr {
-        Expr::Column(name) => name.clone(),
-        Expr::Literal(lit) => literal_to_string(lit),
-        Expr::BinaryOp(lhs, op, rhs) => format!(
-            "{} {} {}",
-            expr_to_string(lhs),
-            bin_op_str(*op),
-            expr_to_string(rhs)
-        ),
-        Expr::InSubquery { expr, subquery } => format!(
-            "{} IN (SELECT ... FROM {})",
-            expr_to_string(expr),
-            subquery.from.name()
-        ),
-        Expr::Exists { subquery, negated } => format!(
-            "{}EXISTS (SELECT ... FROM {})",
-            if *negated { "NOT " } else { "" },
-            subquery.from.name()
-        ),
-        Expr::Not(inner) => format!("NOT {}", expr_to_string(inner)),
-        Expr::Neg(inner) => format!("-{}", expr_to_string(inner)),
-        Expr::IsNull { expr, negated } => format!(
-            "{} IS {}NULL",
-            expr_to_string(expr),
-            if *negated { "NOT " } else { "" }
-        ),
+fn expr_to_string(expr: &AstExpr) -> String {
+    match &expr.kind {
+        ExprKind::Column { .. } => expr_column_name(expr).unwrap_or_default(),
+        ExprKind::Literal(lit) => literal_to_string(lit),
+        ExprKind::Paren(inner) => expr_to_string(inner),
+        ExprKind::Binary { op, lhs, rhs } => {
+            format!(
+                "{} {} {}",
+                expr_to_string(lhs),
+                bin_op_str(*op),
+                expr_to_string(rhs)
+            )
+        }
+        ExprKind::InSubquery { expr, subquery, .. } => {
+            let from = subquery.from.as_ref().map(table_name).unwrap_or_default();
+            format!("{} IN (SELECT ... FROM {from})", expr_to_string(expr))
+        }
+        ExprKind::Exists { subquery, negated } => {
+            let from = subquery.from.as_ref().map(table_name).unwrap_or_default();
+            format!(
+                "{}EXISTS (SELECT ... FROM {from})",
+                if *negated { "NOT " } else { "" }
+            )
+        }
+        ExprKind::Unary {
+            op: crate::parser::ast::UnaryOp::Not,
+            expr: inner,
+        } => format!("NOT {}", expr_to_string(inner)),
+        ExprKind::Unary {
+            op: crate::parser::ast::UnaryOp::Minus,
+            expr: inner,
+        } => format!("-{}", expr_to_string(inner)),
+        ExprKind::Unary { expr: inner, .. } => expr_to_string(inner),
+        ExprKind::IsNull { expr, negated } => {
+            format!(
+                "{} IS {}NULL",
+                expr_to_string(expr),
+                if *negated { "NOT " } else { "" }
+            )
+        }
+        ExprKind::Is { lhs, rhs, negated }
+            if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>
+        {
+            format!(
+                "{} IS {}NULL",
+                expr_to_string(lhs),
+                if *negated { "NOT " } else { "" }
+            )
+        }
+        _ => String::new(),
     }
 }
 
@@ -1263,37 +1787,44 @@ fn push_unique(out: &mut Vec<String>, name: String) {
     }
 }
 
-fn collect_expr_columns(expr: &Expr, out: &mut Vec<String>) {
-    match expr {
-        Expr::Column(name) => push_unique(out, name.clone()),
-        Expr::Literal(_) => {}
-        Expr::BinaryOp(lhs, _, rhs) => {
+fn collect_expr_columns(expr: &AstExpr, out: &mut Vec<String>) {
+    match &expr.kind {
+        ExprKind::Column { .. } => {
+            if let Some(name) = expr_column_name(expr) {
+                push_unique(out, name);
+            }
+        }
+        ExprKind::Literal(_) => {}
+        ExprKind::Paren(inner) => collect_expr_columns(inner, out),
+        ExprKind::Binary { lhs, rhs, .. } => {
             collect_expr_columns(lhs, out);
             collect_expr_columns(rhs, out);
         }
-        Expr::InSubquery { expr, .. } => collect_expr_columns(expr, out),
-        Expr::Exists { .. } => {}
-        Expr::Not(inner) => collect_expr_columns(inner, out),
-        Expr::Neg(inner) => collect_expr_columns(inner, out),
-        Expr::IsNull { expr, .. } => collect_expr_columns(expr, out),
+        ExprKind::InSubquery { expr, .. } => collect_expr_columns(expr, out),
+        ExprKind::Exists { .. } => {}
+        ExprKind::Unary { expr: inner, .. } => collect_expr_columns(inner, out),
+        ExprKind::IsNull { expr, .. } => collect_expr_columns(expr, out),
+        ExprKind::Is { lhs, .. } => collect_expr_columns(lhs, out),
+        _ => {}
     }
 }
 
-/// Every column name `query` references, in first-seen order (used for the
+/// Every column name `select` references, in first-seen order (used for the
 /// `EXPLAIN` `LOAD COLUMNS` detail on paths that don't go through
 /// [`compile`], namely windowed queries).
-fn referenced_columns(query: &Query) -> Vec<String> {
+fn referenced_columns(select: &Select) -> Vec<String> {
     let mut out = Vec::new();
-    for name in &query.group_by {
-        push_unique(&mut out, name.clone());
+    for name in select.group_by.iter().filter_map(expr_column_name) {
+        push_unique(&mut out, name);
     }
-    for item in &query.columns {
+    let items = classify_items(select).unwrap_or_default();
+    for item in &items {
         match item {
-            SelectItem::Column(name) => push_unique(&mut out, name.clone()),
-            SelectItem::Star => {}
-            SelectItem::Agg(_, Some(name)) => push_unique(&mut out, name.clone()),
-            SelectItem::Agg(_, None) => {}
-            SelectItem::Window(spec) => {
+            Item::Column(name) => push_unique(&mut out, name.clone()),
+            Item::Star => {}
+            Item::Agg(_, Some(name)) => push_unique(&mut out, name.clone()),
+            Item::Agg(_, None) => {}
+            Item::Window(spec) => {
                 if let Some(arg) = &spec.arg {
                     push_unique(&mut out, arg.clone());
                 }
@@ -1306,26 +1837,28 @@ fn referenced_columns(query: &Query) -> Vec<String> {
             }
         }
     }
-    if let Some(where_clause) = &query.where_clause {
+    if let Some(where_clause) = &select.where_clause {
         collect_expr_columns(where_clause, &mut out);
     }
-    for join in &query.joins {
-        push_unique(&mut out, join.left_col.clone());
-        push_unique(&mut out, join.right_col.clone());
+    if let Some(from) = &select.from {
+        for join in extract_joins(from).unwrap_or_default() {
+            push_unique(&mut out, join.left_col.clone());
+            push_unique(&mut out, join.right_col.clone());
+        }
     }
-    if let Some(order_by) = &query.order_by {
+    if let Some((column, _)) = select_order_by(select) {
         // #131: an `ORDER BY` referencing a SELECT-list aggregate carries
         // that aggregate's rendered label (e.g. `COUNT(x)`), not a real
         // column name -- its underlying column, if any, is already
-        // covered above via that item's own `SelectItem::Agg` arm, so
-        // only push here when the label isn't itself a `SELECT`-list
-        // item (i.e. it's a genuine bare-column reference).
-        let is_select_item_label = query
+        // covered above via that item's own aggregate item, so only push
+        // here when the label isn't itself a `SELECT`-list item (i.e.
+        // it's a genuine bare-column reference).
+        let is_select_item_label = select
             .columns
             .iter()
-            .any(|item| select_item_label(item) == order_by.column);
+            .any(|item| select_item_label(item) == column);
         if !is_select_item_label {
-            push_unique(&mut out, order_by.column.clone());
+            push_unique(&mut out, column);
         }
     }
     out
@@ -1564,7 +2097,7 @@ mod tests {
                 .unwrap();
         let plan = compile_semi_join(&query).unwrap();
         assert_eq!(plan.key_column, "region_key");
-        assert_eq!(plan.subquery.from.name(), "regions");
+        assert_eq!(plan.subquery.from.as_ref().map(table_name), Some("regions"));
         assert!(!plan
             .body
             .opcodes()
@@ -1579,36 +2112,11 @@ mod tests {
 
     #[test]
     fn compile_window_emits_columns_and_window_registers_in_select_order() {
-        // Constructed directly rather than via `sql::parse`: window
-        // functions (`OVER`/`FILTER`) aren't parseable through the shared
-        // `parser::row` grammar this crate unified on (#57) -- tracked as
-        // follow-up (extend `row`'s grammar, then give `compile_window` an
-        // `ast::Select` input too). `compile_window` itself is untouched.
-        let query = Query {
-            columns: vec![
-                SelectItem::Column("id".into()),
-                SelectItem::Window(WindowSpec {
-                    func: WindowFunc::RowNumber,
-                    arg: None,
-                    offset: None,
-                    partition_by: vec!["region_key".into()],
-                    order_by: vec![("id".into(), false)],
-                }),
-                SelectItem::Column("region_key".into()),
-            ],
-            from: "orders".into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: Some(OrderBy {
-                column: "id".into(),
-                descending: false,
-            }),
-            limit: None,
-            offset: None,
-        };
+        let query = sql::parse(
+            "SELECT id, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id), region_key \
+             FROM orders ORDER BY id",
+        )
+        .unwrap();
         let program = compile_window(&query);
         assert_eq!(program.columns_to_load(), vec!["id", "region_key"]);
         let (body, fin) = program.split_finalize();
@@ -1689,33 +2197,11 @@ mod tests {
         assert!(details(&nodes).contains(&"LOAD COLUMNS: rkey"));
         assert!(!details(&nodes).iter().any(|d| d.starts_with("FILTER")));
 
-        // Constructed directly: window functions aren't parseable through
-        // the shared `parser::row` grammar (#57 follow-up).
-        let query = Query {
-            columns: vec![
-                SelectItem::Column("id".into()),
-                SelectItem::Column("region_key".into()),
-                SelectItem::Window(WindowSpec {
-                    func: WindowFunc::RowNumber,
-                    arg: None,
-                    offset: None,
-                    partition_by: vec!["region_key".into()],
-                    order_by: vec![("id".into(), false)],
-                }),
-            ],
-            from: "orders".into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: Some(OrderBy {
-                column: "id".into(),
-                descending: false,
-            }),
-            limit: None,
-            offset: None,
-        };
+        let query = sql::parse(
+            "SELECT id, region_key, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id) \
+             FROM orders ORDER BY id",
+        )
+        .unwrap();
         let nodes = explain(&query, &stats);
         assert!(details(&nodes)
             .contains(&"WINDOW: ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id)"));
@@ -1850,31 +2336,11 @@ mod tests {
 
     #[test]
     fn explain_opcodes_window_matches_compiled_program() {
-        // Constructed directly: window functions aren't parseable through
-        // the shared `parser::row` grammar this crate unified on (#57
-        // follow-up: #67).
-        let query = Query {
-            columns: vec![
-                SelectItem::Column("id".into()),
-                SelectItem::Column("region_key".into()),
-                SelectItem::Window(WindowSpec {
-                    func: WindowFunc::RowNumber,
-                    arg: None,
-                    offset: None,
-                    partition_by: vec!["region_key".into()],
-                    order_by: vec![("id".into(), false)],
-                }),
-            ],
-            from: "orders".into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        };
+        let query = sql::parse(
+            "SELECT id, region_key, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id) \
+             FROM orders",
+        )
+        .unwrap();
         let program = compile_window(&query);
         let sections = explain_opcodes(&query).unwrap();
 
@@ -1895,12 +2361,8 @@ mod tests {
         let schema = vec!["id".to_string(), "name".to_string(), "amount".to_string()];
         let expanded = expand_star(&query, &schema).unwrap();
         assert_eq!(
-            expanded.columns,
-            vec![
-                SelectItem::Column("id".to_string()),
-                SelectItem::Column("name".to_string()),
-                SelectItem::Column("amount".to_string()),
-            ]
+            output_column_names(&expanded),
+            vec!["id".to_string(), "name".to_string(), "amount".to_string()]
         );
     }
 
@@ -1910,12 +2372,8 @@ mod tests {
         let schema = vec!["id".to_string(), "name".to_string()];
         let expanded = expand_star(&query, &schema).unwrap();
         assert_eq!(
-            expanded.columns,
-            vec![
-                SelectItem::Column("id".to_string()),
-                SelectItem::Column("id".to_string()),
-                SelectItem::Column("name".to_string()),
-            ]
+            output_column_names(&expanded),
+            vec!["id".to_string(), "id".to_string(), "name".to_string()]
         );
     }
 
@@ -1946,29 +2404,7 @@ mod tests {
 
     #[test]
     fn expand_star_rejects_window() {
-        // Constructed directly: window functions aren't parseable through
-        // the shared `parser::row` grammar (#57 follow-up).
-        let query = Query {
-            columns: vec![
-                SelectItem::Star,
-                SelectItem::Window(WindowSpec {
-                    func: WindowFunc::RowNumber,
-                    arg: None,
-                    offset: None,
-                    partition_by: vec![],
-                    order_by: vec![("id".into(), false)],
-                }),
-            ],
-            from: "t".into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        };
+        let query = sql::parse("SELECT *, ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
         assert_eq!(
             expand_star(&query, &["id".to_string()]),
             Err(PlanError::StarWithAggregation)
