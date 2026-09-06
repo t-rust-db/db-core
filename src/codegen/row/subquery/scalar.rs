@@ -1,6 +1,6 @@
-//! `EXISTS`/`IN` subquery-expression compilation -- see `super`'s module
-//! doc, including why the reference's scalar-subquery and
-//! multi-column-`IN` entry points have no db-core counterpart.
+//! `EXISTS`/`IN`/scalar subquery-expression compilation -- see `super`'s
+//! module doc, including why the reference's multi-column-`IN` entry
+//! point has no db-core counterpart.
 
 use super::from_clause::resolve_subquery_schema;
 use crate::codegen::row::cond::{compile_cond, ensure_label};
@@ -11,9 +11,10 @@ use crate::codegen::row::{
 use crate::parser::ast::{Expr, ExprKind, ResultColumn, Select};
 use crate::vm::row::{Instruction, Opcode, P4};
 
-/// A subquery's single projected result column -- `IN (SELECT ...)`
-/// needs exactly one (`SELECT *`, an aggregate, or more than one column
-/// is `Unsupported`), mirroring the reference's `single_result_expr`.
+/// A subquery's single projected result column -- `IN (SELECT ...)` and
+/// a scalar `(SELECT ...)` in value position both need exactly one
+/// (`SELECT *`, an aggregate, or more than one column is `Unsupported`),
+/// mirroring the reference's `single_result_expr`.
 fn single_result_column(subquery: &Select) -> Result<&str> {
     match subquery.columns.as_slice() {
         [ResultColumn::Expr {
@@ -25,7 +26,7 @@ fn single_result_column(subquery: &Select) -> Result<&str> {
             ..
         }] => Ok(name),
         _ => Err(CodegenError::Unsupported {
-            reason: "an IN subquery must project exactly one plain column".to_string(),
+            reason: "a subquery in this position must project exactly one plain column".to_string(),
         }),
     }
 }
@@ -201,6 +202,55 @@ pub fn compile_in_subquery(
     Ok(())
 }
 
+/// Compiles a scalar `(SELECT ...)` used in value position: the first
+/// row's single projected column, or `NULL` if the subquery produces no
+/// rows. A second or later row is simply never reached -- unlike
+/// [`compile_in_subquery`], which drains the whole scan into an
+/// ephemeral index, this stops at the first match, matching SQLite's
+/// behaviour for a scalar subquery.
+pub fn compile_scalar_subquery(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    outer_scope: &Scope,
+    subquery: &Select,
+) -> Result<i32> {
+    let col_name = single_result_column(subquery)?;
+
+    let (sub_cursor, sub_scope) = open_subquery_scan(em, reg, outer_scope, subquery)?;
+
+    let dest = reg.alloc();
+    let no_rows = em.new_label();
+    let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
+    em.patch_p2(rewind_addr, no_rows);
+    let loop_start = em.new_label();
+    em.place(loop_start);
+
+    let skip = em.new_label();
+    if let Some(where_expr) = &subquery.where_clause {
+        compile_cond(
+            em,
+            reg,
+            &sub_scope,
+            where_expr,
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip)),
+        )?;
+    }
+    let v = compile_value(em, reg, &sub_scope, &super::super::column_expr(col_name))?;
+    em.emit(Instruction::new(Opcode::Copy, v, dest, 0));
+    let done = em.new_label();
+    em.goto(done);
+
+    em.place(skip);
+    let next_addr = em.emit(Instruction::new(Opcode::Next, sub_cursor, 0, 0));
+    em.patch_p2(next_addr, loop_start);
+
+    em.place(no_rows);
+    em.emit(Instruction::new(Opcode::Null, 0, dest, 0));
+
+    em.place(done);
+    Ok(dest)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
@@ -294,6 +344,109 @@ mod tests {
     fn subquery_with_limit_is_unsupported() {
         let err = compile("SELECT a FROM t WHERE a IN (SELECT x FROM s LIMIT 1)").unwrap_err();
         assert!(matches!(err, CodegenError::Unsupported { .. }), "{err:?}");
+    }
+
+    fn run(sql: &str, t_rows: Vec<Vec<crate::vm::row::Value>>) -> Vec<Vec<crate::vm::row::Value>> {
+        let program = compile(sql).unwrap();
+        let mut vm = crate::vm::row::Vm::new();
+        // `t` (cursor 0) is the outer table `compile_select_with_catalog`
+        // always leaves pre-wired by the caller, exactly like
+        // `compile_select`'s own tests. No `CursorFactory` is installed
+        // here (implementing that trait outside the VM's own dyn
+        // boundary -- see `MVL_LIMIT_EXCLUDE` in the Makefile -- would
+        // put a `Box<dyn Cursor>`-returning fn signature outside the
+        // qualified subset), so the subquery's own cursor slot is
+        // pre-wired the same way: find its `OpenRead`'s slot (the one
+        // that isn't `t`'s) and wire it directly via `open_cursor`,
+        // exactly like `Opcode::OpenRead`'s own pre-wired fallback path
+        // expects when no factory is installed.
+        vm.open_cursor(0, Box::new(crate::vm::row::InMemoryCursor::new(t_rows)))
+            .unwrap();
+        let sub_slot = match program
+            .instructions
+            .iter()
+            .find(|i| i.opcode == Opcode::OpenRead && i.p1 != 0)
+        {
+            Some(instr) => instr.p1,
+            None => panic!("compiled program opens a subquery cursor"),
+        };
+        vm.open_cursor(
+            sub_slot,
+            Box::new(crate::vm::row::InMemoryCursor::new(s_rows())),
+        )
+        .unwrap();
+        crate::vm::row::execute(&mut vm, &program).unwrap()
+    }
+
+    fn s_rows() -> Vec<Vec<crate::vm::row::Value>> {
+        use crate::vm::row::Value;
+        vec![
+            vec![Value::Integer(10), Value::Integer(1)],
+            vec![Value::Integer(20), Value::Integer(2)],
+        ]
+    }
+
+    // `compile_select`'s plain projection path only resolves bare
+    // columns by name in the SELECT list (see `select.rs`'s
+    // `only bare column references are supported` check) -- a scalar
+    // subquery in *that* position is therefore blocked by a
+    // pre-existing, unrelated limitation, not anything from #163. `WHERE`
+    // is the value position this planner already compiles arbitrary
+    // expressions in (it's how `a IN (SELECT ...)` above is exercised
+    // too), so these tests exercise the scalar subquery there instead.
+
+    #[test]
+    fn scalar_subquery_returns_the_first_rows_column() {
+        use crate::vm::row::Value;
+        let rows = run(
+            "SELECT a FROM t WHERE (SELECT x FROM s) = 10",
+            vec![vec![Value::Integer(1), Value::Integer(2)]],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn scalar_subquery_over_zero_rows_is_null() {
+        use crate::vm::row::Value;
+        let rows = run(
+            "SELECT a FROM t WHERE (SELECT x FROM s WHERE x = 999) IS NULL",
+            vec![vec![Value::Integer(1), Value::Integer(2)]],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn scalar_subquery_ignores_rows_after_the_first_match() {
+        use crate::vm::row::Value;
+        let rows = run(
+            "SELECT a FROM t WHERE (SELECT x FROM s WHERE x > 5) = 10",
+            vec![vec![Value::Integer(1), Value::Integer(2)]],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn scalar_subquery_is_correlated_against_the_outer_row() {
+        use crate::vm::row::Value;
+        let rows = run(
+            "SELECT a FROM t WHERE (SELECT x FROM s WHERE y = a) = 20",
+            vec![
+                vec![Value::Integer(1), Value::Integer(0)],
+                vec![Value::Integer(2), Value::Integer(0)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn scalar_subquery_star_projection_is_unsupported() {
+        let err = compile("SELECT a FROM t WHERE (SELECT * FROM s) = 10").unwrap_err();
+        match err {
+            CodegenError::Unsupported { reason } => {
+                assert!(reason.contains("exactly one plain column"), "{reason}");
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
     }
 
     #[test]

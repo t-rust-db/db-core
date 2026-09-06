@@ -297,9 +297,9 @@ pub(crate) fn compile_value_depth(
             ));
             Ok(dest)
         }
-        ExprKind::Subquery(_) => Err(CodegenError::Unsupported {
-            reason: "scalar subqueries are not supported in value position yet (#163)".to_string(),
-        }),
+        ExprKind::Subquery(subquery) => {
+            super::subquery::compile_scalar_subquery(em, reg, scope, subquery)
+        }
     }
 }
 
