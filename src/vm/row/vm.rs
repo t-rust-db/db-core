@@ -3857,12 +3857,16 @@ mod tests {
             fn create_table_root(
                 &mut self,
             ) -> Result<u32, super::super::schema_storage::SchemaStorageError> {
-                unreachable!()
+                Err(super::super::schema_storage::SchemaStorageError(
+                    "not exercised by this test".into(),
+                ))
             }
             fn create_index_root(
                 &mut self,
             ) -> Result<u32, super::super::schema_storage::SchemaStorageError> {
-                unreachable!()
+                Err(super::super::schema_storage::SchemaStorageError(
+                    "not exercised by this test".into(),
+                ))
             }
             fn populate_index(
                 &mut self,
@@ -3870,13 +3874,17 @@ mod tests {
                 _: u32,
                 _: &[usize],
             ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
-                unreachable!()
+                Err(super::super::schema_storage::SchemaStorageError(
+                    "not exercised by this test".into(),
+                ))
             }
             fn free_root(
                 &mut self,
                 _: u32,
             ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
-                unreachable!()
+                Err(super::super::schema_storage::SchemaStorageError(
+                    "not exercised by this test".into(),
+                ))
             }
             fn insert_master_row(
                 &mut self,
@@ -3886,24 +3894,32 @@ mod tests {
                 _: u32,
                 _: &str,
             ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
-                unreachable!()
+                Err(super::super::schema_storage::SchemaStorageError(
+                    "not exercised by this test".into(),
+                ))
             }
             fn delete_master_row(
                 &mut self,
                 _: &str,
             ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
-                unreachable!()
+                Err(super::super::schema_storage::SchemaStorageError(
+                    "not exercised by this test".into(),
+                ))
             }
             fn bump_schema_cookie(
                 &mut self,
             ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
-                unreachable!()
+                Err(super::super::schema_storage::SchemaStorageError(
+                    "not exercised by this test".into(),
+                ))
             }
             fn write_stat1(
                 &mut self,
                 _: &super::super::program::AnalyzeTarget,
             ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
-                unreachable!()
+                Err(super::super::schema_storage::SchemaStorageError(
+                    "not exercised by this test".into(),
+                ))
             }
             fn autoincrement_rowid(
                 &mut self,
