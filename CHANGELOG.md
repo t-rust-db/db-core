@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.61.0] - 2026-09-06
+
+### Added
+
+- **`codegen::row` compiles `DISTINCT`, `GROUP BY` over an arbitrary expression, `HAVING` combined with a `JOIN`, and qualified `table.*`** (#176, #177, #178, #179, split from #175, a #20 sub-ticket). `table.*` restricts the existing `*` expansion to one side of a scan/join. `GROUP BY` gains a `GroupByTarget { Column | Expr }` split mirroring `ORDER BY`'s own `OrderByTarget` (#149/#167): a non-column term compiles into an extra appended record column, keyed by index in both the sorted and hash grouping strategies (the JOIN-side grouping path stays bare-column-only, separately out of scope). `HAVING` over a joined+grouped scan reuses the same `compile_cond` evaluation the non-join path already had, against a synthetic schema spanning both sides. `DISTINCT` reuses the `ORDER BY` sorter machinery: the sort key is forced to cover every output column so duplicates land adjacent, and the drain loop skips a duplicate straight to the next sorted row (NULL-safe comparison, mirroring the aggregate module's own group-boundary check) before it can consume `OFFSET`/`LIMIT` -- composes with both. `DISTINCT` combined with `GROUP BY`/aggregation remains unsupported.
+
 ## [0.60.0] - 2026-09-06
 
 ### Changed

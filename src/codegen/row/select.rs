@@ -150,11 +150,7 @@ fn compile_select_inner(
     catalog: &[TableSchema],
     from_subquery: Option<&Select>,
 ) -> Result<Program> {
-    if super::is_distinct(query) {
-        return Err(CodegenError::Unsupported {
-            reason: "DISTINCT is not yet supported".to_string(),
-        });
-    }
+    let is_distinct = super::is_distinct(query);
     // `compile_select_with_catalog` already expanded `with_clause` away
     // via `super::subquery::expand_with_clause` before reaching here --
     // a `Some` this far in means the caller went through the pre-wired
@@ -212,6 +208,12 @@ chooser is deferred to #117, N-way joins to #118"
     .with_catalog(catalog.to_vec());
 
     if !query.group_by.is_empty() || super::aggregate::query_has_aggregate(query) {
+        if is_distinct {
+            return Err(CodegenError::Unsupported {
+                reason: "DISTINCT combined with GROUP BY/aggregation is not yet supported"
+                    .to_string(),
+            });
+        }
         return compile_aggregate_select(schema, cursor, right, query, &scope);
     }
 
@@ -247,9 +249,25 @@ chooser is deferred to #117, N-way joins to #118"
                 }
             }
             ResultColumn::TableStar { table } => {
-                return Err(CodegenError::Unsupported {
-                    reason: format!("`{table}.*` is not supported yet"),
-                });
+                if table.eq_ignore_ascii_case(&schema.name) {
+                    columns.extend(schema.columns.iter().cloned().map(ProjectedColumn::Name));
+                } else if let Some((right_schema, _)) = right {
+                    if table.eq_ignore_ascii_case(&right_schema.name) {
+                        columns.extend(
+                            right_schema.columns.iter().map(|c| {
+                                ProjectedColumn::Name(format!("{}.{c}", right_schema.name))
+                            }),
+                        );
+                    } else {
+                        return Err(CodegenError::Unsupported {
+                            reason: format!("`{table}.*` refers to an unknown table"),
+                        });
+                    }
+                } else {
+                    return Err(CodegenError::Unsupported {
+                        reason: format!("`{table}.*` refers to an unknown table"),
+                    });
+                }
             }
         }
     }
@@ -328,6 +346,26 @@ chooser is deferred to #117, N-way joins to #118"
             });
         }
         Some(keys)
+    };
+    // `DISTINCT` (db-core#176) reuses the sorter: every output column
+    // joins the sort key (appended after any `ORDER BY` terms, harmless
+    // duplication when a term already names one) so two rows compile to
+    // the same projection if and only if they sort adjacent to each
+    // other -- correctness needs every column in the key, not just the
+    // `ORDER BY` ones, since a column absent from the key could differ
+    // between two rows without ever breaking their adjacency. Which
+    // columns come first only affects output order, not which rows
+    // land next to which.
+    let sort_key = if is_distinct {
+        let mut keys = sort_key.unwrap_or_default();
+        keys.extend((0..output_count).map(|idx| OrderByPlan {
+            target: OrderByTarget::Column(idx),
+            descending: false,
+            nulls_first: false,
+        }));
+        Some(keys)
+    } else {
+        sort_key
     };
 
     let mut em = Emitter::new();
@@ -426,6 +464,7 @@ chooser is deferred to #117, N-way joins to #118"
             output_count,
             limit,
             end_label,
+            is_distinct,
         );
     }
 
@@ -527,6 +566,7 @@ chooser is deferred to #117, N-way joins to #118"
         output_count,
         limit,
         end_label,
+        is_distinct,
     )
 }
 
@@ -544,6 +584,7 @@ fn finish_scan(
     output_count: usize,
     limit: Option<LimitState>,
     end_label: Label,
+    distinct: bool,
 ) -> Result<Program> {
     // `end_label` is placed by the caller, not here: `FULL OUTER`'s
     // second pass deliberately begins at it, so it can't be rebound to
@@ -555,14 +596,26 @@ fn finish_scan(
         let sort_addr = em.emit(Instruction::new(Opcode::SorterSort, sorter_cursor, 0, 0));
         em.patch_p2(sort_addr, sorter_end_label);
 
+        // `DISTINCT` (db-core#176): the sort key already covers every
+        // output column (see `compile_select_inner`'s own `is_distinct`
+        // handling), so two identical rows always land adjacent in the
+        // drain -- tracking the last *emitted* row and comparing each
+        // new one against it, mirroring `aggregate::emit_boundary_check`,
+        // is enough to collapse the run. The comparison happens before
+        // `OFFSET`/`LIMIT` are consulted below: a duplicate must not
+        // consume either budget, only a genuinely distinct row may.
+        let dedup = distinct.then(|| {
+            let zero_reg = reg.alloc();
+            em.emit(Instruction::new(Opcode::Integer, 0, zero_reg, 0));
+            let have_prev_reg = reg.alloc();
+            em.emit(Instruction::new(Opcode::Integer, 0, have_prev_reg, 0));
+            let prev_regs: Vec<i32> = (0..output_count).map(|_| reg.alloc()).collect();
+            (zero_reg, have_prev_reg, prev_regs)
+        });
+
         let sorter_loop_start = em.new_label();
         em.place(sorter_loop_start);
         let sorter_row_skip = em.new_label();
-
-        if let Some(limit) = &limit {
-            limit_scan::emit_offset_guard(&mut em, limit, sorter_row_skip);
-            limit_scan::emit_limit_guard(&mut em, limit, sorter_end_label);
-        }
 
         let mut regs = Vec::with_capacity(output_count);
         for idx in 0..output_count {
@@ -577,6 +630,45 @@ fn finish_scan(
             ));
             regs.push(r);
         }
+
+        if let Some((zero_reg, have_prev_reg, prev_regs)) = &dedup {
+            let boundary_label = em.new_label();
+            let first_row_check =
+                em.emit(Instruction::new(Opcode::Eq, *have_prev_reg, 0, *zero_reg));
+            em.patch_p2(first_row_check, boundary_label);
+            for (&cur, &prev) in regs.iter().zip(prev_regs) {
+                let a_null = em.new_label();
+                let same_col = em.new_label();
+                let a_null_addr = em.emit(Instruction::new(Opcode::IsNull, cur, 0, 0));
+                em.patch_p2(a_null_addr, a_null);
+                let b_null_addr = em.emit(Instruction::new(Opcode::IsNull, prev, 0, 0));
+                em.patch_p2(b_null_addr, boundary_label);
+                let eq_addr = em.emit(Instruction::new(Opcode::Eq, cur, 0, prev));
+                em.patch_p2(eq_addr, same_col);
+                let goto_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+                em.patch_p2(goto_boundary, boundary_label);
+                em.place(a_null);
+                let b_not_null_addr = em.emit(Instruction::new(Opcode::NotNull, prev, 0, 0));
+                em.patch_p2(b_not_null_addr, boundary_label);
+                em.place(same_col);
+            }
+            // Every column matched the previous row: a duplicate, which
+            // must not reach `ResultRow` or consume `OFFSET`/`LIMIT`.
+            let goto_skip = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+            em.patch_p2(goto_skip, sorter_row_skip);
+
+            em.place(boundary_label);
+            for (&cur, &prev) in regs.iter().zip(prev_regs) {
+                em.emit(Instruction::new(Opcode::Copy, cur, prev, 0));
+            }
+            em.emit(Instruction::new(Opcode::Integer, 1, *have_prev_reg, 0));
+        }
+
+        if let Some(limit) = &limit {
+            limit_scan::emit_offset_guard(&mut em, limit, sorter_row_skip);
+            limit_scan::emit_limit_guard(&mut em, limit, sorter_end_label);
+        }
+
         if let Some(&first) = regs.first() {
             em.emit(Instruction::new(
                 Opcode::ResultRow,
@@ -1355,6 +1447,78 @@ mod tests {
     }
 
     #[test]
+    fn distinct_collapses_duplicate_single_column_rows() {
+        let schema = schema(&["a"]);
+        let query = query("SELECT DISTINCT a FROM t ORDER BY a");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+                vec![Value::Integer(1)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1)], vec![Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn distinct_dedups_the_whole_row_not_per_column() {
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT DISTINCT a, b FROM t ORDER BY a, b");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(1), Value::Integer(2)],
+                vec![Value::Integer(1), Value::Integer(1)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(1), Value::Integer(2)],
+            ]
+        );
+    }
+
+    #[test]
+    fn distinct_composes_with_limit_counting_only_distinct_rows() {
+        let schema = schema(&["a"]);
+        let query = query("SELECT DISTINCT a FROM t ORDER BY a LIMIT 1");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1)],
+                vec![Value::Integer(1)],
+                vec![Value::Integer(2)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn distinct_treats_two_nulls_as_equal() {
+        let schema = schema(&["a"]);
+        let query = query("SELECT DISTINCT a FROM t");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Null],
+                vec![Value::Null],
+                vec![Value::Integer(1)],
+            ],
+        );
+        assert_eq!(rows.len(), 2, "{rows:?}");
+    }
+
+    #[test]
     fn select_list_arithmetic_expression_compiles_and_executes() {
         let schema = schema(&["a"]);
         let query = query("SELECT a + 1 FROM t");
@@ -1411,6 +1575,45 @@ mod tests {
                 vec![Value::Integer(2)],
             ]
         );
+    }
+
+    #[test]
+    fn table_star_on_a_single_table_matches_bare_star() {
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT t.* FROM t");
+        let rows = run(
+            &schema,
+            &query,
+            vec![vec![Value::Integer(1), Value::Integer(10)]],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(10)]]);
+    }
+
+    #[test]
+    fn table_star_restricts_to_one_side_of_a_join() {
+        let left = schema_named("a", &["x"]);
+        let right = schema_named("b", &["y"]);
+        let query = query("SELECT a.*, b.* FROM a JOIN b ON a.x = b.y");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)]],
+            vec![vec![Value::Integer(1)]],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn table_star_over_an_unknown_table_is_unsupported() {
+        let schema = schema(&["a"]);
+        let err = compile_select(&schema, 0, &query("SELECT bogus.* FROM t")).unwrap_err();
+        match err {
+            CodegenError::Unsupported { reason } => {
+                assert!(reason.contains("unknown table"), "{reason}");
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2356,6 +2559,44 @@ mod tests {
     }
 
     #[test]
+    fn group_by_over_an_arithmetic_expression_groups_by_its_computed_value() {
+        // The SELECT-list itself stays bare-column/aggregate-only here
+        // (a computed, non-aggregate result column is a separate,
+        // still-open limitation, db-core#175) -- this only exercises
+        // `GROUP BY`'s own key, via `COUNT(*)` per group.
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT COUNT(*) FROM t GROUP BY a + b");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(0), Value::Integer(2)],
+                vec![Value::Integer(3), Value::Integer(4)],
+            ],
+        );
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert!(rows.contains(&vec![Value::Integer(1)]), "{rows:?}");
+        assert!(rows.contains(&vec![Value::Integer(2)]), "{rows:?}");
+    }
+
+    #[test]
+    fn group_by_expression_composes_with_having() {
+        let schema = schema(&["a", "b"]);
+        let query = query("SELECT COUNT(*) FROM t GROUP BY a + b HAVING \"COUNT(*)\" > 1");
+        let rows = run(
+            &schema,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(1)],
+                vec![Value::Integer(0), Value::Integer(2)],
+                vec![Value::Integer(3), Value::Integer(4)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(2)]]);
+    }
+
+    #[test]
     fn group_by_over_an_empty_table_emits_no_rows() {
         let schema = schema(&["g", "v"]);
         let query = query("SELECT g, COUNT(*) FROM t GROUP BY g");
@@ -2583,14 +2824,43 @@ mod tests {
     }
 
     #[test]
-    fn having_combined_with_a_join_is_unsupported() {
+    fn having_over_an_inner_join_filters_groups_by_their_aggregate() {
         let left = schema(&["a"]);
-        let right = schema_named("u", &["b"]);
-        let query = query("SELECT a, COUNT(*) FROM t JOIN u ON t.a = u.b GROUP BY a HAVING 1");
-        assert!(matches!(
-            compile_select_join(&left, 0, &right, 1, &query),
-            Err(CodegenError::Unsupported { .. })
-        ));
+        let right = schema_named("u", &["b", "c"]);
+        let query = query(
+            "SELECT a, COUNT(*) FROM t JOIN u ON t.a = u.b GROUP BY a HAVING \"COUNT(*)\" > 1",
+        );
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(1), Value::Integer(50)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn having_over_a_join_may_reference_either_sides_column() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let query =
+            query("SELECT a, COUNT(*) FROM t JOIN u ON t.a = u.b GROUP BY a HAVING u.c > 30");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(1)]]);
     }
 
     #[test]

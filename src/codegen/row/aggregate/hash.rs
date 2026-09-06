@@ -2,11 +2,11 @@
 //! `codegen/select/aggregate/hash.rs`, over db-core#86's `HashAgg*`
 //! opcode slice.
 
-use super::super::{Emitter, Label, RegAlloc, Result, Scope, TableSchema};
+use super::super::{CodegenError, Emitter, Label, RegAlloc, Result, Scope, TableSchema};
 use super::accum::{
     collect_aggregates, count_operand, flush_group, read_row_columns_into, AggSlot,
 };
-use super::{compile_full_row, emit_where, group_column_indices};
+use super::{compile_full_row, emit_where, group_by_targets, group_target_affinity, GroupByTarget};
 use crate::parser::ast::Select;
 use crate::vm::row::{Collation, GroupKeyColumn, Instruction, Opcode, P4};
 
@@ -48,34 +48,25 @@ where
         return Ok(false);
     }
     let scope = Scope::single(schema.clone(), cursors.table);
-    let group_indices = group_column_indices(query, schema)?;
+    let group_targets = group_by_targets(query);
     let agg_slots = collect_aggregates(query)?;
 
     // The hash table reuses the sort cursor's number: `SorterOpen` never
     // runs on this branch (the reference's own convention).
     let hash_cursor = cursors.sort;
-    // The same collation and comparison affinity the sort strategy puts
-    // on its group-boundary `Eq` -- hash equality has to agree with that
-    // comparison exactly, or the two strategies would group differently.
-    let group_keys: Vec<GroupKeyColumn> = super::group_by_column_names(query)?
-        .into_iter()
-        .zip(&group_indices)
-        .map(|(name, &index)| GroupKeyColumn {
-            index,
-            collation: Collation::Binary,
-            affinity: crate::vm::row::comparison_affinity(
-                super::super::value::expr_affinity(&scope, &super::super::column_expr(name)),
-                None,
-            )
-            .to_p4_byte(),
-        })
-        .collect();
-    em.emit(Instruction::with_p4(
+    // A bare-column term's record index is its schema column index,
+    // fixed here; an expression term's isn't known until it's actually
+    // compiled below (its final register depends on how many registers
+    // the expression itself allocates), so `HashAggOpen` takes a
+    // placeholder `P4` here, patched once the loop body resolves the
+    // real indices -- mirrors the sort strategy's identical
+    // `GroupByTarget::Expr` handling (db-core#177).
+    let hash_open_addr = em.emit(Instruction::with_p4(
         Opcode::HashAggOpen,
         hash_cursor,
         0,
         0,
-        P4::GroupKey(group_keys),
+        P4::GroupKey(Vec::new()),
     ));
 
     // The one and only pass over the table: filter, project, fold.
@@ -89,16 +80,49 @@ where
     emit_where(em, reg, &scope, query, scan_skip)?;
 
     // Identical record layout to the sort strategy's pass 1 (every
-    // schema column in declared order), which is what lets the retained
+    // schema column in declared order, plus any `GROUP BY` expression
+    // columns appended past them), which is what lets the retained
     // group row be read back through an ordinary `OpenPseudo` cursor
-    // below, and what makes `P4::GroupKey`'s indices plain column
+    // below, and what makes `P4::GroupKey`'s indices plain record
     // indices.
     let first = compile_full_row(em, reg, schema, cursors.table)?;
+    let mut group_indices = Vec::with_capacity(group_targets.len());
+    for target in &group_targets {
+        let index = match target {
+            GroupByTarget::Column(name) => schema
+                .column_index(name)
+                .ok_or_else(|| CodegenError::UnknownColumn(name.clone()))?,
+            GroupByTarget::Expr(expr) => {
+                let r = super::super::value::compile_value(em, reg, &scope, expr)?;
+                usize::try_from(r.saturating_sub(first)).unwrap_or(0)
+            }
+        };
+        group_indices.push(index);
+    }
+    // The same collation and comparison affinity the sort strategy puts
+    // on its group-boundary `Eq` -- hash equality has to agree with that
+    // comparison exactly, or the two strategies would group differently.
+    let group_keys: Vec<GroupKeyColumn> = group_targets
+        .iter()
+        .zip(&group_indices)
+        .map(|(target, &index)| GroupKeyColumn {
+            index,
+            collation: Collation::Binary,
+            affinity: group_target_affinity(&scope, target).to_p4_byte(),
+        })
+        .collect();
+    em.patch_p4(hash_open_addr, P4::GroupKey(group_keys));
+
+    // The record spans every schema column plus any `GROUP BY`
+    // expression registers appended past them -- `reg`'s watermark is
+    // the authoritative span, mirroring the sort strategy's identical
+    // widening.
+    let count = usize::try_from(reg.peek().saturating_sub(first)).unwrap_or(schema.columns.len());
     let record_reg = reg.alloc();
     em.emit(Instruction::new(
         Opcode::MakeRecord,
         first,
-        count_operand(schema.columns.len())?,
+        count_operand(count)?,
         record_reg,
     ));
     em.emit(Instruction::new(

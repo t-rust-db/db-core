@@ -617,7 +617,14 @@ mod tests {
         /// use that construct as its example anymore.
         #[test]
         fn unsupported_select_construct_fails_clearly_through_dispatch() {
-            let err = compile_statement("SELECT DISTINCT a FROM t", &[schema(&["a"])]).unwrap_err();
+            // DISTINCT itself compiles (db-core#176); combined with
+            // aggregation it's still unsupported, so that combination
+            // stands in for "an unsupported SELECT construct" here.
+            let err = compile_statement(
+                "SELECT DISTINCT COUNT(*) FROM t GROUP BY a",
+                &[schema(&["a"])],
+            )
+            .unwrap_err();
             assert!(matches!(
                 err,
                 DispatchError::Codegen(CodegenError::Unsupported { .. })

@@ -9,9 +9,16 @@
 //! pseudo cursor, detecting boundaries and accumulating by *absolute
 //! column offset* rather than by a `TableSchema`-relative index.
 //!
+//! `HAVING` combined with a `JOIN` (db-core#178) reuses the same
+//! synthetic-schema/`Scope` detour [`accum::flush_group`] uses: the
+//! flushed group's raw joined columns (left bare, right qualified
+//! `{right_schema.name}.col`, matching [`super::super::select`]'s own
+//! `Star`-expansion convention) followed by each aggregate's label, so
+//! `HAVING` compiles through the ordinary `compile_cond` machinery
+//! exactly like the single-table path.
+//!
 //! Bounded MVP scope, documented rather than silently wrong, and
 //! mirroring the reference's own list:
-//! - `HAVING` combined with a `JOIN` is rejected outright.
 //! - Only `INNER`/`LEFT` joins aggregate. `FULL OUTER`'s second
 //!   (right-outer) pass would have to feed the same sorter a second
 //!   time; `RIGHT`/`CROSS` have no non-aggregate counterpart in
@@ -20,7 +27,9 @@
 //! None of these apply to the single-table path.
 
 use super::super::select::{build_join_cond, emit_limit_guard};
-use super::super::{CodegenError, CondTargets, Emitter, Label, RegAlloc, Result, Scope, Target};
+use super::super::{
+    CodegenError, CondTargets, Emitter, Label, RegAlloc, Result, Scope, TableSchema, Target,
+};
 use super::accum::{
     agg_label, collect_aggregates, column_operand, count_operand, emit_agg_final, AggSlot,
 };
@@ -45,11 +54,6 @@ pub(in crate::codegen::row) fn compile_joined_grouped_scan<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, usize) -> Result<()>,
 {
-    if query.having.is_some() {
-        return Err(CodegenError::Unsupported {
-            reason: "HAVING combined with a JOIN is not yet supported".to_string(),
-        });
-    }
     let Some(join) = super::super::joins_of(query).first() else {
         return Err(CodegenError::Unsupported {
             reason: "compile_joined_grouped_scan requires a JOIN".to_string(),
@@ -427,10 +431,10 @@ fn emit_joined_agg_step(
 /// [`super::accum::flush_group`]'s joined counterpart: finalizes one
 /// group into a `total_width + agg_slots.len()`-wide record (the group's
 /// snapshot joined row followed by each aggregate's finalized value),
-/// then reprojects it by absolute offset. There is no `Scope`-based
-/// re-resolution here (and so no `HAVING`, rejected up front): a flat
-/// joined record has two bindings' column names in it, which a
-/// single-table synthetic schema could not disambiguate.
+/// evaluates `HAVING` against it (via [`joined_synthetic_schema`], since
+/// a flat joined record has two bindings' column names in it that a
+/// bare single-table schema could not disambiguate), then reprojects it
+/// by absolute offset.
 #[allow(clippy::too_many_arguments)]
 fn flush_joined_group<F>(
     em: &mut Emitter,
@@ -473,6 +477,24 @@ where
         record_reg,
         0,
     ));
+
+    let skip_label = em.new_label();
+    if let Some(having) = &query.having {
+        let Some((right_schema, _)) = &scope.right else {
+            return Err(CodegenError::Unsupported {
+                reason: "compile_joined_grouped_scan requires a right-hand binding".to_string(),
+            });
+        };
+        let synthetic = joined_synthetic_schema(scope, right_schema, agg_slots);
+        let synthetic_scope = Scope::single(synthetic, flush_cursor);
+        super::super::compile_cond(
+            em,
+            reg,
+            &synthetic_scope,
+            having,
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip_label)),
+        )?;
+    }
     if let Some(limit_reg) = limit_reg {
         emit_limit_guard(em, limit_reg, end_label);
     }
@@ -491,7 +513,39 @@ where
     }
     let first = regs.first().copied().unwrap_or_else(|| reg.alloc());
     sink(em, reg, first, regs.len())?;
+    em.place(skip_label);
     Ok(())
+}
+
+/// A synthetic single-cursor schema over one flushed joined group's
+/// record: the left binding's column names, then the right binding's,
+/// both bare (unqualified), then one field per aggregate, named by its
+/// label -- so `HAVING` compiles against it through the ordinary,
+/// aggregate-unaware `compile_cond` machinery, exactly like
+/// [`super::accum::flush_group`]'s single-table counterpart.
+///
+/// Bare, not qualified: [`Scope::single`]'s resolution (no `right`
+/// binding of its own) strips any `table.`-qualifier off a name before
+/// looking it up, so a query's `u.c` resolves here as a bare `c` lookup
+/// regardless of the qualifier written -- consistent with
+/// [`Scope::resolve`]'s own documented ambiguity trade-off, unqualified
+/// names always favoring the earlier (left) binding on a collision.
+fn joined_synthetic_schema(
+    scope: &Scope,
+    right_schema: &TableSchema,
+    agg_slots: &[AggSlot],
+) -> TableSchema {
+    let mut names: Vec<String> = scope.schema.columns.clone();
+    names.extend(right_schema.columns.iter().cloned());
+    names.extend(agg_slots.iter().map(|a| a.label.clone()));
+    TableSchema {
+        name: String::new(),
+        column_types: names.iter().map(|_| String::new()).collect(),
+        columns: names,
+        rowid_alias: None,
+        root_page: 0,
+        indexes: vec![],
+    }
 }
 
 /// Each result column's absolute offset within a finalized group record:
