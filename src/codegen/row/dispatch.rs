@@ -4,27 +4,32 @@
 //! crate): keyword-sniffs a raw SQL string to pick the right
 //! parser/compiler pair for one statement.
 //!
-//! **Scoped to what this crate has codegen for.** sqlite-rs's dispatcher
-//! also routes `INSERT`/`UPDATE`/`DELETE`/`SELECT`; none of those have a
-//! `codegen::row` counterpart yet (only #91's expression-compilation
-//! slice landed), so [`compile_statement`] only knows
+//! **Routes every statement kind `codegen::row` compiles** (#148):
 //! `BEGIN`/`COMMIT`/`ROLLBACK`/`PRAGMA`/`ANALYZE`/`CREATE TABLE`/
-//! `CREATE INDEX`/`CREATE VIEW`/`DROP TABLE`/`DROP INDEX` -- every
-//! statement kind [`super::ddl`], [`super::transaction`], [`super::pragma`],
-//! and [`super::analyze`] compile. Routing the DML/SELECT statements is
-//! deferred to whichever sub-ticket of #20 ports their codegen.
+//! `CREATE INDEX`/`CREATE VIEW`/`DROP TABLE`/`DROP INDEX` (unchanged
+//! since #97), plus `SELECT`/`INSERT`/`UPDATE`/`DELETE` now that #147
+//! retargeted [`super::select`]/[`super::stmt`] onto [`crate::parser::ast`].
+//! A `SELECT` with a single `JOIN` resolves its right-hand table from
+//! `schemas` and compiles via [`super::compile_select_join`]; anything
+//! else (no `JOIN`, an optional `FROM`-subquery) goes through
+//! [`super::compile_select_with_catalog`], which wires its own cursors.
+//! N-way joins, `WITH`, compound `SELECT`, and everything else
+//! [`super::select`] doesn't implement yet surface as
+//! [`CodegenError::Unsupported`] from within it, not from here.
 
+use crate::parser::ast::TableRefKind;
 use crate::parser::row::error::{
     parse_analyze, parse_begin, parse_commit, parse_create_index, parse_create_table,
-    parse_create_view, parse_drop_index, parse_drop_table, parse_pragma, parse_rollback,
-    ParseOutcome,
+    parse_create_view, parse_delete, parse_drop_index, parse_drop_table, parse_insert,
+    parse_pragma, parse_rollback, parse_select, parse_update, ParseOutcome,
 };
 use crate::vm::row::Program;
 
 use super::{
     compile_analyze, compile_begin, compile_commit, compile_create_index, compile_create_table,
-    compile_create_view, compile_drop_index, compile_drop_table, compile_pragma, compile_rollback,
-    CodegenError, TableSchema,
+    compile_create_view, compile_delete, compile_drop_index, compile_drop_table, compile_insert,
+    compile_pragma, compile_rollback, compile_select_join, compile_select_with_catalog,
+    compile_update, CodegenError, TableSchema,
 };
 
 /// Failure compiling one dispatched statement -- everything
@@ -70,8 +75,8 @@ impl From<CodegenError> for DispatchError {
 
 /// The first one or two whitespace-separated words of `sql`, uppercased.
 const DISPATCH_WORDS: &[&str] = &[
-    "ANALYZE", "BEGIN", "COMMIT", "CREATE", "DROP", "END", "INDEX", "PRAGMA", "ROLLBACK", "TABLE",
-    "UNIQUE", "VIEW",
+    "ANALYZE", "BEGIN", "COMMIT", "CREATE", "DELETE", "DROP", "END", "INDEX", "INSERT", "PRAGMA",
+    "ROLLBACK", "SELECT", "TABLE", "UNIQUE", "UPDATE", "VIEW", "WITH",
 ];
 
 /// `word`'s canonical uppercase spelling if it's one of the statement
@@ -189,6 +194,109 @@ pub fn compile_statement(sql: &str, schemas: &[TableSchema]) -> Result<Program, 
             ParseOutcome::Accepted(di) => {
                 let root_page = find_index_root(&di.name)?;
                 Ok(compile_drop_index(&di, root_page))
+            }
+            other => Err(parse_error(other)),
+        },
+        // `WITH ...` is a `SELECT`'s CTE prefix -- the AST's
+        // `with_clause` field lives only on `Select` (#153's table
+        // confirms `Insert`/`Update`/`Delete` have none), so a leading
+        // `WITH` unambiguously means "parse and compile as a SELECT".
+        "SELECT" | "WITH" => match parse_select(sql) {
+            ParseOutcome::Accepted(select) => {
+                // A single JOIN needs both cursors pre-wired, which only
+                // `compile_select_join` does; anything else (no JOIN, an
+                // optional FROM-subquery) goes through
+                // `compile_select_with_catalog`, which wires cursor 0
+                // itself. N-way joins are rejected inside `codegen::row`
+                // regardless of which entry point reaches them.
+                let joins = select.from.as_ref().map_or(&[][..], |f| f.joins.as_slice());
+                match joins {
+                    [] => {
+                        // `compile_select_with_catalog` resolves the FROM
+                        // table itself, but reports an unknown name as
+                        // `CodegenError::Unsupported` (a generic message),
+                        // not `DispatchError::NoSuchTable` -- the specific
+                        // variant every other statement kind uses here.
+                        // Pre-check a plain-table FROM so the two error
+                        // shapes agree; a FROM-subquery has no name to
+                        // check and is left to that call.
+                        // Skip the pre-check for `WITH`: the FROM
+                        // table may well be a CTE name, which isn't in
+                        // the catalog at all -- that's not a "no such
+                        // table" error, it's `codegen::row`'s own
+                        // "WITH is not supported yet" rejection, and
+                        // only `compile_select_with_catalog` knows to
+                        // raise that one.
+                        if select.with_clause.is_none() {
+                            if let Some(name) = select.from.as_ref().and_then(|f| f.first.name()) {
+                                find_schema(name)?;
+                            }
+                        }
+                        Ok(compile_select_with_catalog(schemas, &select)?)
+                    }
+                    [join] => {
+                        let left_name = select
+                            .from
+                            .as_ref()
+                            .and_then(|f| f.first.name())
+                            .ok_or_else(|| CodegenError::Unsupported {
+                                reason: "a JOIN whose left side is a FROM-subquery is not yet \
+                                             supported"
+                                    .to_string(),
+                            })?;
+                        let left = find_schema(left_name)?;
+                        let TableRefKind::Name(right_name) = &join.table.kind else {
+                            return Err(CodegenError::Unsupported {
+                                reason: "a JOIN against a FROM-subquery is not yet supported"
+                                    .to_string(),
+                            }
+                            .into());
+                        };
+                        let right = find_schema(right_name)?;
+                        Ok(compile_select_join(left, 0, right, 1, &select)?)
+                    }
+                    // More than one JOIN: let `codegen::row`'s own
+                    // "only a single JOIN is supported" check produce the
+                    // error, rather than duplicating that message here.
+                    [join, ..] => {
+                        let left_name = select.from.as_ref().and_then(|f| f.first.name());
+                        let left = left_name.map(find_schema).transpose()?;
+                        let right = match &join.table.kind {
+                            TableRefKind::Name(name) => find_schema(name).ok(),
+                            TableRefKind::Subquery(_) => None,
+                        };
+                        match (left, right) {
+                            (Some(left), Some(right)) => {
+                                Ok(compile_select_join(left, 0, right, 1, &select)?)
+                            }
+                            _ => Err(CodegenError::Unsupported {
+                                reason: "N-way joins are not yet supported".to_string(),
+                            }
+                            .into()),
+                        }
+                    }
+                }
+            }
+            other => Err(parse_error(other)),
+        },
+        "INSERT" => match parse_insert(sql) {
+            ParseOutcome::Accepted(insert) => {
+                let schema = find_schema(&insert.table)?;
+                Ok(compile_insert(schema, &insert)?)
+            }
+            other => Err(parse_error(other)),
+        },
+        "UPDATE" => match parse_update(sql) {
+            ParseOutcome::Accepted(update) => {
+                let schema = find_schema(&update.table)?;
+                Ok(compile_update(schema, &update)?)
+            }
+            other => Err(parse_error(other)),
+        },
+        "DELETE" => match parse_delete(sql) {
+            ParseOutcome::Accepted(delete) => {
+                let schema = find_schema(&delete.table)?;
+                Ok(compile_delete(schema, &delete)?)
             }
             other => Err(parse_error(other)),
         },
@@ -385,5 +493,136 @@ mod tests {
     fn unrecognized_statement_reports_leading_word() {
         let err = compile_statement("FROBNICATE t", &[]).unwrap_err();
         assert!(matches!(err, DispatchError::Unrecognized(word) if word == "FROBNICATE"));
+    }
+
+    /// #148: `SELECT`/`INSERT`/`UPDATE`/`DELETE` end-to-end through
+    /// `compile_statement` -- SQL text -> `parser::ast` -> `codegen::row`
+    /// -> `Program`, executed against a real cursor. Before this, these
+    /// planners were reachable only from unit tests that hand-built
+    /// `ast::Select`/`Insert`/`Update`/`Delete` and called the per-kind
+    /// `compile_*` functions directly; the dispatcher itself never routed
+    /// to them.
+    mod end_to_end {
+        use super::*;
+        use crate::vm::row::{execute, Cursor, EphemeralTableCursor, Value, Vm};
+
+        fn schema(columns: &[&str]) -> TableSchema {
+            TableSchema {
+                name: "t".to_string(),
+                columns: columns.iter().map(|c| (*c).to_string()).collect(),
+                column_types: columns.iter().map(|_| String::new()).collect(),
+                ..Default::default()
+            }
+        }
+
+        fn run(
+            schemas: &[TableSchema],
+            sql: &str,
+            seed: Vec<(i64, Vec<Value>)>,
+        ) -> Vec<Vec<Value>> {
+            let program = compile_statement(sql, schemas).unwrap();
+            let mut vm = Vm::new();
+            let mut table = EphemeralTableCursor::new();
+            for (rowid, values) in seed {
+                table.insert(rowid, values);
+            }
+            vm.open_cursor(0, Box::new(table)).unwrap();
+            execute(&mut vm, &program).unwrap()
+        }
+
+        #[test]
+        fn dispatches_select() {
+            let rows = run(
+                &[schema(&["a"])],
+                "SELECT a FROM t WHERE a > 1",
+                vec![(1, vec![Value::Integer(1)]), (2, vec![Value::Integer(2)])],
+            );
+            assert_eq!(rows, vec![vec![Value::Integer(2)]]);
+        }
+
+        #[test]
+        fn dispatches_select_with_a_join() {
+            let left = schema(&["a"]);
+            let mut right = schema(&["b", "c"]);
+            right.name = "u".to_string();
+
+            let program =
+                compile_statement("SELECT a, u.c FROM t JOIN u ON t.a = u.b", &[left, right])
+                    .unwrap();
+            let mut vm = Vm::new();
+            let mut left_table = EphemeralTableCursor::new();
+            left_table.insert(1, vec![Value::Integer(1)]);
+            vm.open_cursor(0, Box::new(left_table)).unwrap();
+            let mut right_table = EphemeralTableCursor::new();
+            right_table.insert(1, vec![Value::Integer(1), Value::Integer(100)]);
+            vm.open_cursor(1, Box::new(right_table)).unwrap();
+            let rows = execute(&mut vm, &program).unwrap();
+            assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(100)]]);
+        }
+
+        #[test]
+        fn dispatches_insert_then_select_sees_it() {
+            let schemas = [schema(&["a"])];
+            let insert_program = compile_statement("INSERT INTO t VALUES (1)", &schemas).unwrap();
+            let mut vm = Vm::new();
+            vm.open_cursor(0, Box::new(EphemeralTableCursor::new()))
+                .unwrap();
+            execute(&mut vm, &insert_program).unwrap();
+
+            let select_program = compile_statement("SELECT a FROM t", &schemas).unwrap();
+            let rows = execute(&mut vm, &select_program).unwrap();
+            assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+        }
+
+        #[test]
+        fn dispatches_update() {
+            let rows = run(
+                &[schema(&["a", "b"])],
+                "UPDATE t SET b = 99 WHERE a = 1",
+                vec![(1, vec![Value::Integer(1), Value::Integer(10)])],
+            );
+            assert!(rows.is_empty(), "UPDATE has no result rows: {rows:?}");
+        }
+
+        #[test]
+        fn dispatches_delete() {
+            let program =
+                compile_statement("DELETE FROM t WHERE a = 1", &[schema(&["a"])]).unwrap();
+            let mut vm = Vm::new();
+            let mut table = EphemeralTableCursor::new();
+            table.insert(1, vec![Value::Integer(1)]);
+            table.insert(2, vec![Value::Integer(2)]);
+            vm.open_cursor(0, Box::new(table)).unwrap();
+            execute(&mut vm, &program).unwrap();
+        }
+
+        #[test]
+        fn select_unknown_table_is_reported() {
+            let err = compile_statement("SELECT a FROM nope", &[]).unwrap_err();
+            assert!(matches!(err, DispatchError::NoSuchTable(name) if name == "nope"));
+        }
+
+        #[test]
+        fn insert_unknown_table_is_reported() {
+            let err = compile_statement("INSERT INTO nope VALUES (1)", &[]).unwrap_err();
+            assert!(matches!(err, DispatchError::NoSuchTable(name) if name == "nope"));
+        }
+
+        /// A construct the AST can express but `codegen::row` can't
+        /// compile yet must fail with a clear error naming it, not a
+        /// panic -- the same contract #147's `Unsupported` stubs promise,
+        /// now proven from the dispatcher entry point a real caller uses.
+        #[test]
+        fn unsupported_select_construct_fails_clearly_through_dispatch() {
+            let err = compile_statement(
+                "WITH x AS (SELECT a FROM t) SELECT a FROM x",
+                &[schema(&["a"])],
+            )
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                DispatchError::Codegen(CodegenError::Unsupported { .. })
+            ));
+        }
     }
 }
