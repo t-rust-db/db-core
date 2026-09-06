@@ -422,7 +422,7 @@ fn decode_utf16(bytes: &[u8], unit_from_bytes: fn([u8; 2]) -> u16) -> Result<Str
     if !bytes.len().is_multiple_of(2) {
         return Err(RecordError::InvalidUtf16);
     }
-    let units = bytes.chunks_exact(2).map(|c| unit_from_bytes([c[0], c[1]]));
+    let units = bytes.as_chunks::<2>().0.iter().map(|c| unit_from_bytes(*c));
     char::decode_utf16(units)
         .collect::<Result<String, _>>()
         .map_err(|_| RecordError::InvalidUtf16)

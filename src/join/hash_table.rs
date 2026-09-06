@@ -184,16 +184,13 @@ impl<'a, K: Hash + Eq, V> Iterator for Probe<'a, K, V> {
     fn next(&mut self) -> Option<Self::Item> {
         let mask = self.cap - 1;
         while self.steps < self.cap {
-            match &self.entries[self.idx] {
-                None => return None, // empty slot proves no further match
-                Some(entry) => {
-                    let matched = &entry.key == self.key;
-                    self.idx = (self.idx + 1) & mask;
-                    self.steps += 1;
-                    if matched {
-                        return Some(&entry.value);
-                    }
-                }
+            // empty slot proves no further match
+            let entry = self.entries[self.idx].as_ref()?;
+            let matched = &entry.key == self.key;
+            self.idx = (self.idx + 1) & mask;
+            self.steps += 1;
+            if matched {
+                return Some(&entry.value);
             }
         }
         None

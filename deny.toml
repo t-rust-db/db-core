@@ -1,0 +1,25 @@
+# cargo-deny policy for db-core. See `make check-deny` / .github/workflows/ci.yml.
+# db-core has zero dependencies today (Cargo.toml `[dependencies]` is empty);
+# this file exists to gate whatever gets added later, not because there's
+# anything to check yet.
+
+[graph]
+all-features = true
+
+[advisories]
+ignore = []
+
+[licenses]
+# db-core itself is Apache-2.0; MIT is the common companion license for the
+# Rust ecosystem's dependency graph.
+allow = ["Apache-2.0", "MIT"]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

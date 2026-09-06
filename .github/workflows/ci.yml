@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  # cargo-mvl-limit is not published to crates.io, so the qualified-subset
+  # gate builds it from source at this pinned rev. Bumping it is a reviewed
+  # change, like any other pinned tool version.
+  MVL_RUST_REV: "a64eb33e7c9ef9ad031d22a70405e59aa1ad3cb0"
+
+jobs:
+  # Formatting and lint. Fails fast, cheap, no dependency-graph work needed.
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+      - run: make lint
+
+  # Supply-chain policy: licenses, banned/duplicate crates, allowed sources.
+  # See deny.toml.
+  deny:
+    name: Supply chain (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: deny
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: make check-deny
+
+  # Qualified-subset gate (cargo-mvl-limit): flags language features
+  # (explicit lifetimes beyond function-scoped elision, dyn dispatch,
+  # non-allowlisted macros, ...) outside the subset this codebase holds
+  # itself to. Non-blocking for now: the codebase carries a pre-existing
+  # backlog (db-core#156) this gate was never applied against before.
+  # Reported here so the backlog is visible without failing every PR;
+  # flip this job (and the Makefile's `check-mvl-limit`/`ci` wiring) to
+  # blocking once #156 is clear.
+  mvl-limit:
+    name: Qualified subset (cargo-mvl-limit)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mvl-limit
+      - name: Cache cargo-mvl-limit
+        id: cache-mvl
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-mvl-limit
+          key: cargo-mvl-limit-${{ runner.os }}-${{ env.MVL_RUST_REV }}
+      - name: Build cargo-mvl-limit
+        if: steps.cache-mvl.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          cargo install --git https://github.com/mvl-lang/mvl-rust \
+            --rev "$MVL_RUST_REV" rust-limit --bin cargo-mvl-limit --locked --force
+      - run: make check-mvl-limit
+
+  # Unit/integration test suite, all features.
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+      - run: make test
