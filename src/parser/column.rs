@@ -780,18 +780,11 @@ mod tests {
     /// one `SELECT`-list item, or `None` if it isn't a plain column.
     fn bare_col(rc: &ResultColumn) -> Option<String> {
         match rc {
-            ResultColumn::Expr {
-                expr:
-                    AstExpr {
-                        kind: ExprKind::Column { .. },
-                        ..
-                    },
-                alias: None,
-            } => column_name(match rc {
-                ResultColumn::Expr { expr, .. } => expr,
-                _ => unreachable!(),
-            })
-            .ok(),
+            ResultColumn::Expr { expr, alias: None }
+                if matches!(expr.kind, ExprKind::Column { .. }) =>
+            {
+                column_name(expr).ok()
+            }
             _ => None,
         }
     }
@@ -1282,7 +1275,7 @@ mod tests {
             }
         ));
         let ExprKind::Binary { lhs, .. } = &where_expr(&q).kind else {
-            unreachable!()
+            panic!("expected a Binary WHERE expression")
         };
         assert_eq!(column_name(lhs).unwrap(), "customers.id");
     }

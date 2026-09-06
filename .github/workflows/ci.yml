@@ -46,15 +46,12 @@ jobs:
   # Qualified-subset gate (cargo-mvl-limit): flags language features
   # (explicit lifetimes beyond function-scoped elision, dyn dispatch,
   # non-allowlisted macros, ...) outside the subset this codebase holds
-  # itself to. Non-blocking for now: the codebase carries a pre-existing
-  # backlog (db-core#156) this gate was never applied against before.
-  # Reported here so the backlog is visible without failing every PR;
-  # flip this job (and the Makefile's `check-mvl-limit`/`ci` wiring) to
-  # blocking once #156 is clear.
+  # itself to. Blocking since #156 cleared the backlog. The documented
+  # `dyn` boundary (vm/row's storage traits, ADR 0008) is exempt via the
+  # Makefile's MVL_LIMIT_EXCLUDE -- see that comment for why.
   mvl-limit:
     name: Qualified subset (cargo-mvl-limit)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

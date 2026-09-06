@@ -503,10 +503,7 @@ fn run_morsels<T: Send>(len: usize, f: impl Fn(usize) -> T + Sync) -> Vec<T> {
 ///
 /// `GroupReduce`/`Reduce` results are per-segment only — merging partial
 /// aggregates across segments is not performed here.
-pub fn run_parallel<'s>(
-    segments: &[Box<dyn Segment + 's>],
-    program: &[Opcode],
-) -> Result<Vec<Vec<Value>>> {
+pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
     let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments.len(), |idx| {
         let batch = segments[idx].load();
         let mut vm = Vm::new();
@@ -617,8 +614,8 @@ fn top_n_reduce(rows: Vec<Vec<Value>>, spec: &TopN) -> Vec<Vec<Value>> {
 /// the merge itself is a final top-`spec.limit` reduction rather than a
 /// concatenation -- so peak memory is bounded by `segments.len() *
 /// spec.limit` rather than the full row count.
-pub fn run_parallel_top_n<'s>(
-    segments: &[Box<dyn Segment + 's>],
+pub fn run_parallel_top_n<S: Segment>(
+    segments: &[S],
     program: &[Opcode],
     spec: &TopN,
 ) -> Result<Vec<Vec<Value>>> {
@@ -670,6 +667,13 @@ pub enum VmError {
         opcode: &'static str,
         limit: usize,
     },
+    /// An opcode named an operation its kernel has no dispatch for -- a
+    /// planner bug, surfaced to the caller as an error rather than a
+    /// panic mid-query.
+    UnsupportedOp {
+        opcode: &'static str,
+        op: String,
+    },
 }
 
 impl fmt::Display for VmError {
@@ -689,6 +693,9 @@ impl fmt::Display for VmError {
             }
             VmError::StepLimitExceeded { opcode, limit } => {
                 write!(f, "{opcode}: exceeded step limit of {limit}")
+            }
+            VmError::UnsupportedOp { opcode, op } => {
+                write!(f, "{opcode}: no dispatch for {op}")
             }
         }
     }
@@ -832,7 +839,11 @@ impl Vm {
     /// Drive `program` across every batch `source` yields, honoring
     /// [`Opcode::Scan`]/[`Opcode::NextSegment`]/[`Opcode::Halt`] control
     /// flow, and return the rows collected by [`Opcode::Emit`].
-    pub fn run(&mut self, source: &mut dyn Source, program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
+    pub fn run<T: Source>(
+        &mut self,
+        source: &mut T,
+        program: &[Opcode],
+    ) -> Result<Vec<Vec<Value>>> {
         self.output.clear();
         let mut batch = match source.next_batch() {
             Some(b) => b,
@@ -1047,7 +1058,7 @@ impl Vm {
                 let mut emitted: Vec<(usize, Option<Vec<Value>>)> = Vec::with_capacity(num_rows);
                 for row in 0..num_rows {
                     let key = JoinKey(key_columns.iter().map(|c| c[row].clone()).collect());
-                    let matches: Vec<&Vec<Value>> = ht.get_all(&key).collect();
+                    let matches: Vec<&Vec<Value>> = ht.get_all(&key);
                     if matches.is_empty() {
                         if should_emit(*kind, false, false) {
                             emitted.push((row, None));
@@ -1125,7 +1136,7 @@ impl Vm {
                     &order_cols,
                     arg_col,
                     num_rows,
-                );
+                )?;
                 self.registers.insert(*dst, result);
             }
             Opcode::Emit { registers } => {
@@ -1167,7 +1178,7 @@ fn compute_window(
     order_cols: &[(&[Value], bool)],
     arg_col: Option<&[Value]>,
     num_rows: usize,
-) -> Vec<Value> {
+) -> Result<Vec<Value>> {
     let mut partitions: HashMap<String, Vec<usize>> = HashMap::new();
     let mut partition_order: Vec<String> = Vec::new();
     for row in 0..num_rows {
@@ -1270,7 +1281,7 @@ fn compute_window(
             }
             WindowFunc::Sum | WindowFunc::Avg | WindowFunc::Count => {
                 if order_cols.is_empty() {
-                    let agg = whole_partition_aggregate(func, arg_col, &indices);
+                    let agg = whole_partition_aggregate(func, arg_col, &indices)?;
                     for &row in &indices {
                         output[row] = agg.clone();
                     }
@@ -1306,14 +1317,19 @@ fn compute_window(
                                     Value::Null
                                 }
                             }
-                            _ => unreachable!(),
+                            other => {
+                                return Err(VmError::UnsupportedOp {
+                                    opcode: "Window",
+                                    op: format!("{other:?} as a running aggregate"),
+                                })
+                            }
                         };
                     }
                 }
             }
         }
     }
-    output
+    Ok(output)
 }
 
 /// `SUM`/`AVG`/`COUNT OVER (PARTITION BY ...)` with no `ORDER BY`: the
@@ -1323,7 +1339,7 @@ fn whole_partition_aggregate(
     func: WindowFunc,
     arg_col: Option<&[Value]>,
     indices: &[usize],
-) -> Value {
+) -> Result<Value> {
     if func == WindowFunc::Count {
         let count = match arg_col {
             Some(a) => indices
@@ -1332,19 +1348,24 @@ fn whole_partition_aggregate(
                 .count(),
             None => indices.len(),
         };
-        return Value::Int(count as i64);
+        return Ok(Value::Int(count as i64));
     }
     let values: Vec<f64> = indices
         .iter()
         .filter_map(|&row| arg_col.and_then(|a| a[row].as_f64()))
         .collect();
     if values.is_empty() {
-        return Value::Null;
+        return Ok(Value::Null);
     }
     match func {
-        WindowFunc::Sum => Value::Float(values.iter().sum()),
-        WindowFunc::Avg => Value::Float(values.iter().sum::<f64>() / values.len() as f64),
-        _ => unreachable!(),
+        WindowFunc::Sum => Ok(Value::Float(values.iter().sum())),
+        WindowFunc::Avg => Ok(Value::Float(
+            values.iter().sum::<f64>() / values.len() as f64,
+        )),
+        other => Err(VmError::UnsupportedOp {
+            opcode: "Window",
+            op: format!("{other:?} as a partition aggregate"),
+        }),
     }
 }
 
@@ -1391,6 +1412,8 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
 }
 
 fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
+    // `IsNull`/`IsNotNull` must observe a `Null` operand, so they run
+    // before the null-propagation rule below.
     if matches!(op, MapOp::IsNull) {
         return Value::Bool(matches!(a, Value::Null));
     }
@@ -1400,44 +1423,18 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
     if matches!(a, Value::Null) || matches!(b, Value::Null) {
         return Value::Null;
     }
+    use std::cmp::Ordering::{Equal, Greater, Less};
     match op {
-        MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div => {
-            let (x, y) = match (a.as_f64(), b.as_f64()) {
-                (Some(x), Some(y)) => (x, y),
-                _ => return Value::Null,
-            };
-            let result = match op {
-                MapOp::Add => x + y,
-                MapOp::Sub => x - y,
-                MapOp::Mul => x * y,
-                MapOp::Div => x / y,
-                _ => unreachable!(),
-            };
-            if matches!(a, Value::Int(_)) && matches!(b, Value::Int(_)) && op != MapOp::Div {
-                Value::Int(result as i64)
-            } else {
-                Value::Float(result)
-            }
-        }
-        MapOp::Eq | MapOp::Ne | MapOp::Lt | MapOp::Le | MapOp::Gt | MapOp::Ge => {
-            let ordering = compare_values(a, b);
-            let result = match op {
-                MapOp::Eq => ordering == Some(std::cmp::Ordering::Equal),
-                MapOp::Ne => ordering != Some(std::cmp::Ordering::Equal),
-                MapOp::Lt => ordering == Some(std::cmp::Ordering::Less),
-                MapOp::Le => matches!(
-                    ordering,
-                    Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
-                ),
-                MapOp::Gt => ordering == Some(std::cmp::Ordering::Greater),
-                MapOp::Ge => matches!(
-                    ordering,
-                    Some(std::cmp::Ordering::Greater | std::cmp::Ordering::Equal)
-                ),
-                _ => unreachable!(),
-            };
-            Value::Bool(result)
-        }
+        MapOp::Add => arithmetic(op, a, b, |x, y| x + y),
+        MapOp::Sub => arithmetic(op, a, b, |x, y| x - y),
+        MapOp::Mul => arithmetic(op, a, b, |x, y| x * y),
+        MapOp::Div => arithmetic(op, a, b, |x, y| x / y),
+        MapOp::Eq => comparison(a, b, |o| o == Some(Equal)),
+        MapOp::Ne => comparison(a, b, |o| o != Some(Equal)),
+        MapOp::Lt => comparison(a, b, |o| o == Some(Less)),
+        MapOp::Le => comparison(a, b, |o| matches!(o, Some(Less | Equal))),
+        MapOp::Gt => comparison(a, b, |o| o == Some(Greater)),
+        MapOp::Ge => comparison(a, b, |o| matches!(o, Some(Greater | Equal))),
         MapOp::And => Value::Bool(as_bool(a) && as_bool(b)),
         MapOp::Or => Value::Bool(as_bool(a) || as_bool(b)),
         MapOp::Not => Value::Bool(!as_bool(a)),
@@ -1447,8 +1444,30 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
             Value::Float(v) => Value::Float(-v),
             _ => Value::Null,
         },
-        MapOp::IsNull | MapOp::IsNotNull => unreachable!("handled above"),
+        // Already answered by the early returns above (they must see
+        // `Null`); the same semantics here keep this match total without
+        // an `unreachable!` the qualified subset forbids.
+        MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),
+        MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),
     }
+}
+
+/// `a op b` for the four arithmetic operators: `Int` when both operands
+/// are `Int` and the result is exact (`Div` always yields `Float`).
+fn arithmetic(op: MapOp, a: &Value, b: &Value, f: impl Fn(f64, f64) -> f64) -> Value {
+    let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) else {
+        return Value::Null;
+    };
+    let result = f(x, y);
+    if matches!(a, Value::Int(_)) && matches!(b, Value::Int(_)) && op != MapOp::Div {
+        Value::Int(result as i64)
+    } else {
+        Value::Float(result)
+    }
+}
+
+fn comparison(a: &Value, b: &Value, pred: impl Fn(Option<std::cmp::Ordering>) -> bool) -> Value {
+    Value::Bool(pred(compare_values(a, b)))
 }
 
 fn as_bool(v: &Value) -> bool {
@@ -2789,12 +2808,8 @@ mod tests {
 
     #[test]
     fn run_parallel_scans_all_segments_in_order() {
-        let segments: Vec<Box<dyn Segment>> = (0..8)
-            .map(|i| {
-                Box::new(InMemorySegment(
-                    Batch::new(1).with_column("id", vec![Value::Int(i)]),
-                )) as Box<dyn Segment>
-            })
+        let segments: Vec<InMemorySegment> = (0..8)
+            .map(|i| InMemorySegment(Batch::new(1).with_column("id", vec![Value::Int(i)])))
             .collect();
         let program = vec![
             Opcode::LoadColumn {
@@ -2810,7 +2825,7 @@ mod tests {
             .iter()
             .map(|r| match &r[0] {
                 Value::Int(v) => *v,
-                _ => unreachable!(),
+                other => panic!("expected Value::Int, got {other:?}"),
             })
             .collect();
         assert_eq!(ids, (0..8).collect::<Vec<_>>());
@@ -2818,13 +2833,13 @@ mod tests {
 
     #[test]
     fn run_parallel_applies_filter_per_segment() {
-        let segments: Vec<Box<dyn Segment>> = vec![
-            Box::new(InMemorySegment(
+        let segments: Vec<InMemorySegment> = vec![
+            InMemorySegment(
                 Batch::new(2).with_column("amount", vec![Value::Int(5), Value::Int(15)]),
-            )),
-            Box::new(InMemorySegment(
+            ),
+            InMemorySegment(
                 Batch::new(2).with_column("amount", vec![Value::Int(25), Value::Int(3)]),
-            )),
+            ),
         ];
         let program = vec![
             Opcode::LoadColumn {
@@ -2852,15 +2867,15 @@ mod tests {
 
     #[test]
     fn run_parallel_top_n_picks_largest_across_segments_descending() {
-        let segments: Vec<Box<dyn Segment>> = vec![
-            Box::new(InMemorySegment(Batch::new(3).with_column(
-                "amount",
-                vec![Value::Int(5), Value::Int(15), Value::Null],
-            ))),
-            Box::new(InMemorySegment(Batch::new(3).with_column(
+        let segments: Vec<InMemorySegment> = vec![
+            InMemorySegment(
+                Batch::new(3)
+                    .with_column("amount", vec![Value::Int(5), Value::Int(15), Value::Null]),
+            ),
+            InMemorySegment(Batch::new(3).with_column(
                 "amount",
                 vec![Value::Int(25), Value::Int(3), Value::Int(20)],
-            ))),
+            )),
         ];
         let program = vec![
             Opcode::LoadColumn {
@@ -2889,11 +2904,10 @@ mod tests {
 
     #[test]
     fn run_parallel_top_n_sorts_nulls_last_ascending() {
-        let segments: Vec<Box<dyn Segment>> =
-            vec![Box::new(InMemorySegment(Batch::new(4).with_column(
-                "amount",
-                vec![Value::Int(5), Value::Null, Value::Int(1), Value::Int(9)],
-            )))];
+        let segments: Vec<InMemorySegment> = vec![InMemorySegment(Batch::new(4).with_column(
+            "amount",
+            vec![Value::Int(5), Value::Null, Value::Int(1), Value::Int(9)],
+        ))];
         let program = vec![
             Opcode::LoadColumn {
                 reg: 0,
@@ -2921,9 +2935,9 @@ mod tests {
 
     #[test]
     fn run_parallel_top_n_limit_larger_than_row_count_returns_all_sorted() {
-        let segments: Vec<Box<dyn Segment>> = vec![Box::new(InMemorySegment(
+        let segments: Vec<InMemorySegment> = vec![InMemorySegment(
             Batch::new(2).with_column("amount", vec![Value::Int(2), Value::Int(1)]),
-        ))];
+        )];
         let program = vec![
             Opcode::LoadColumn {
                 reg: 0,

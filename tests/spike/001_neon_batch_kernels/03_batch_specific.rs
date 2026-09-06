@@ -98,11 +98,8 @@ fn build_segments(rows_total: usize) -> Vec<Batch> {
     segments
 }
 
-fn as_segment_trait_objects(batches: &[Batch]) -> Vec<Box<dyn Segment + '_>> {
-    batches
-        .iter()
-        .map(|b| Box::new(PrebuiltSegment(b.clone())) as Box<dyn Segment + '_>)
-        .collect()
+fn as_segment_trait_objects(batches: &[Batch]) -> Vec<PrebuiltSegment> {
+    batches.iter().map(|b| PrebuiltSegment(b.clone())).collect()
 }
 
 // ---------------------------------------------------------------------

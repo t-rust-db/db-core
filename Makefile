@@ -67,24 +67,34 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # cargo-mvl-limit is not published to crates.io; install from source at a
 # pinned rev (see .github/workflows/ci.yml for the version this repo gates
 # on). This is the "qualified subset" gate: it flags language features
-# (lifetimes, dyn dispatch, unsafe, ...) outside the subset this codebase
-# holds itself to.
-check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit); scans all of src/, same set as test-mcdc
+# (explicit lifetimes, dyn dispatch, non-allowlisted macros, ...) outside
+# the subset this codebase holds itself to.
+#
+# The designated `dyn` boundary is exempt, same convention as sqlite-rs's
+# `src/vfs.rs`: `vm/row`'s Cursor/Transaction/CursorFactory/SchemaStorage
+# are ADR 0008's storage-agnostic extension point, implemented by
+# *downstream* crates (sqlite-rs over its own b-tree) that db-core cannot
+# name at compile time -- an open implementor set generics can't express.
+# Everything above that boundary stays in the qualified subset.
+MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs
+
+check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
 	@command -v cargo-mvl-limit >/dev/null 2>&1 || { \
 		echo "cargo-mvl-limit not found — install with:"; \
 		echo "  cargo install --git https://github.com/mvl-lang/mvl-rust rust-limit --bin cargo-mvl-limit --locked"; \
 		exit 1; \
 	}
-	cargo mvl-limit $(MCDC_FILES)
+	@cargo mvl-limit $$(find src -name '*.rs' $(foreach e,$(MVL_LIMIT_EXCLUDE),-not -path '$(e)') | sort) \
+		&& echo "check-mvl-limit: all files in the qualified subset"
 
 # === CI ===
 
 ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) lint
 	$(MAKE) check-deny
-	-$(MAKE) check-mvl-limit # non-blocking (db-core#156): reported, doesn't fail this target
+	$(MAKE) check-mvl-limit
 	$(MAKE) test
-	@echo "all blocking CI gates passed (see above for any non-blocking mvl-limit findings)"
+	@echo "all CI gates passed"
 
 # === Release ===
 

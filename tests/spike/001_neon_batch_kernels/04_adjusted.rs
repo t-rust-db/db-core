@@ -131,11 +131,8 @@ impl Segment for PrebuiltSegment {
     }
 }
 
-fn owned_segments(batches: &[Batch]) -> Vec<Box<dyn Segment>> {
-    batches
-        .iter()
-        .map(|b| Box::new(PrebuiltSegment(b.clone())) as Box<dyn Segment>)
-        .collect()
+fn owned_segments(batches: &[Batch]) -> Vec<PrebuiltSegment> {
+    batches.iter().map(|b| PrebuiltSegment(b.clone())).collect()
 }
 
 #[inline(never)]

@@ -93,7 +93,7 @@ fn outer_access_detail(query: &Select, schema: &TableSchema) -> String {
         }
     }
     if let Some((column, op)) = range_scan::seek_detail(query, schema) {
-        if let Some(position) = range_scan::find_leading_index(schema, column) {
+        if let Some(position) = range_scan::find_leading_index(schema, &column) {
             if let Some(index) = schema.indexes.get(position) {
                 return format!("SEARCH {name} USING INDEX {} ({column}{op}?)", index.name);
             }

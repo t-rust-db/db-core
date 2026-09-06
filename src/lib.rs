@@ -40,6 +40,14 @@
     reason = "lint burn-down tracked in #105"
 )]
 
+/// This crate's version, as embedded in `emit`'s generated-source headers.
+///
+/// A plain constant rather than `env!("CARGO_PKG_VERSION")`: the
+/// qualified-subset gate (`make check-mvl-limit`) keeps `env!` out of
+/// `src/`. Must match `Cargo.toml`'s `version` -- `tests/version.rs`
+/// fails the build if the two drift, so bump both together on release.
+pub const VERSION: &str = "0.52.0";
+
 pub mod join;
 pub mod types;
 pub mod value;
