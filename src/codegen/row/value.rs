@@ -239,9 +239,12 @@ pub(crate) fn compile_value_depth(
             compile_value_depth(em, reg, scope, inner, depth + 1)
         }
 
-        ExprKind::Param(_) => Err(CodegenError::Unsupported {
-            reason: "bind parameters are not supported by codegen::row yet (#162)".to_string(),
-        }),
+        ExprKind::Param(kind) => {
+            let slot = reg.alloc_param(kind);
+            let r = reg.alloc();
+            em.emit(Instruction::new(Opcode::Variable, slot, r, 0));
+            Ok(r)
+        }
         ExprKind::FunctionCall {
             name,
             distinct,
@@ -623,6 +626,118 @@ mod tests {
         rows.into_iter().next().unwrap().into_iter().next().unwrap()
     }
 
+    fn param(kind: crate::parser::ast::ParamKind) -> Expr {
+        e(ExprKind::Param(kind))
+    }
+
+    /// Compiles `expr` through `compile_value`, binds `params` (1-based,
+    /// matching [`Vm::bind_params`]) and executes, returning the result
+    /// value -- for `ExprKind::Param` shapes, which `run_value` alone
+    /// can't exercise since it never binds anything.
+    fn run_value_with_params(expr: &Expr, scope: &Scope, params: Vec<Value>) -> Value {
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        let dest = compile_value(&mut em, &mut reg, scope, expr).unwrap();
+        em.emit(Instruction::new(Opcode::ResultRow, dest, 1, 0));
+        em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+        let program = em.finish();
+        let mut vm = Vm::new();
+        vm.bind_params(params);
+        let rows = execute(&mut vm, &program).unwrap();
+        rows.into_iter().next().unwrap().into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn bind_parameter_forms_compile_and_execute() {
+        use crate::parser::ast::ParamKind;
+        let scope = Scope::single(schema(&[]), 0);
+
+        assert_eq!(
+            run_value_with_params(
+                &param(ParamKind::Anonymous),
+                &scope,
+                vec![Value::Integer(7)]
+            ),
+            Value::Integer(7)
+        );
+        assert_eq!(
+            run_value_with_params(
+                &param(ParamKind::Numbered(2)),
+                &scope,
+                vec![Value::Null, Value::Integer(9)]
+            ),
+            Value::Integer(9)
+        );
+        assert_eq!(
+            run_value_with_params(
+                &param(ParamKind::Colon("x".to_string())),
+                &scope,
+                vec![Value::Integer(3)]
+            ),
+            Value::Integer(3)
+        );
+        assert_eq!(
+            run_value_with_params(
+                &param(ParamKind::At("y".to_string())),
+                &scope,
+                vec![Value::Integer(4)]
+            ),
+            Value::Integer(4)
+        );
+        assert_eq!(
+            run_value_with_params(
+                &param(ParamKind::Dollar("z".to_string())),
+                &scope,
+                vec![Value::Integer(5)]
+            ),
+            Value::Integer(5)
+        );
+
+        // Unbound slot reads as NULL, matching `Opcode::Variable`'s own
+        // fallback for an index past the bound vec.
+        assert_eq!(
+            run_value_with_params(&param(ParamKind::Anonymous), &scope, vec![]),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn repeated_named_parameter_reuses_the_same_slot() {
+        use crate::parser::ast::ParamKind;
+        let scope = Scope::single(schema(&[]), 0);
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+
+        let first = compile_value(
+            &mut em,
+            &mut reg,
+            &scope,
+            &param(ParamKind::Colon("x".to_string())),
+        )
+        .unwrap();
+        let second = compile_value(
+            &mut em,
+            &mut reg,
+            &scope,
+            &param(ParamKind::Colon("x".to_string())),
+        )
+        .unwrap();
+        em.emit(Instruction::new(Opcode::Add, first, second, first));
+        em.emit(Instruction::new(Opcode::ResultRow, first, 1, 0));
+        em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+        let program = em.finish().with_param_names(reg.param_names());
+
+        assert_eq!(program.param_names, vec![Some(":x".to_string())]);
+
+        let mut vm = Vm::new();
+        vm.bind_params(vec![Value::Integer(10)]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            rows.into_iter().next().unwrap().into_iter().next().unwrap(),
+            Value::Integer(20)
+        );
+    }
+
     #[test]
     fn literal_int_compiles_to_integer_or_int64() {
         let scope = Scope::single(schema(&[]), 0);
@@ -795,22 +910,17 @@ mod tests {
     /// Constructs that the AST can express but `codegen::row` cannot
     /// compile yet must fail soft, naming the construct -- never panic
     /// mid-query (#147).
-    /// Bind parameters and scalar subqueries remain genuinely
-    /// unsupported (own follow-up tickets, #162/#163) -- everything
+    /// Scalar subqueries remain genuinely unsupported (own follow-up
+    /// ticket, #163) -- bind parameters compile for real now (#162, see
+    /// `bind_parameter_forms_compile_and_execute` below), and everything
     /// else `#150` listed is exercised for real below.
     #[test]
-    fn params_and_scalar_subqueries_fail_soft_and_name_themselves() {
+    fn scalar_subqueries_fail_soft_and_name_themselves() {
         let scope = Scope::single(schema(&["a"]), 0);
-        let cases = [
-            (
-                e(ExprKind::Param(crate::parser::ast::ParamKind::Anonymous)),
-                "bind parameter",
-            ),
-            (
-                crate::codegen::row::testutil::expr("(SELECT a FROM t)"),
-                "scalar subquery",
-            ),
-        ];
+        let cases = [(
+            crate::codegen::row::testutil::expr("(SELECT a FROM t)"),
+            "scalar subquery",
+        )];
         for (expr, label) in cases {
             let mut em = Emitter::new();
             let mut reg = RegAlloc::new();

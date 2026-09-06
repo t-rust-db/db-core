@@ -609,11 +609,31 @@ impl Instruction {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Program {
     pub instructions: Vec<Instruction>,
+    /// Slot-indexed (0 = bind-parameter slot 1) names for every
+    /// `Opcode::Variable` slot this program's compile allocated --
+    /// `None` for an anonymous (`?`)/numbered (`?NNN`) slot, `Some` for
+    /// a named one (`:name`/`@name`/`$name`) (db-core#162). Empty when
+    /// the compiler that produced this program never wired it up (e.g.
+    /// a statement kind with no bind-parameter support yet); positional
+    /// binding via [`crate::vm::row::Vm::bind_params`] does not depend
+    /// on this being populated.
+    pub param_names: Vec<Option<String>>,
 }
 
 impl Program {
     pub fn new(instructions: Vec<Instruction>) -> Self {
-        Program { instructions }
+        Program {
+            instructions,
+            param_names: Vec::new(),
+        }
+    }
+
+    /// Attaches bind-parameter slot names, for a caller that wants to
+    /// bind `:name`/`@name`/`$name` forms by name.
+    #[must_use]
+    pub fn with_param_names(mut self, param_names: Vec<Option<String>>) -> Self {
+        self.param_names = param_names;
+        self
     }
 
     pub fn push(&mut self, instr: Instruction) -> &mut Self {
