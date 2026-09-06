@@ -154,7 +154,7 @@ pub(super) fn try_compile_index_ordered_scan(
     em.patch_p2(table_seek_addr, row_skip);
 
     emit_row(
-        em, reg, scope, columns, None, None, 0, limit, row_skip, end_label,
+        em, reg, scope, columns, None, None, None, 0, limit, row_skip, end_label,
     )?;
 
     em.place(row_skip);
