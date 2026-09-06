@@ -15,27 +15,32 @@
 //!   caller crate's own `execute_joined`/`execute_semi_join`, which
 //!   materialize whole tables and hash-join in plain Rust), so there's no
 //!   single `Opcode` array to emit for them. Instead, codegen
-//!   reconstructs the parsed [`Query`] as a literal Rust value -- built
-//!   from `String`/`Vec` constructors, not `const`, but still no SQL
-//!   *text* parsed at runtime ([`render_joined`]/[`render_semi_join`]).
+//!   reconstructs the parsed [`Select`] (#153: `parser::ast::Select`, not
+//!   a private lowered type) as a literal Rust value -- built from
+//!   `String`/`Vec` constructors, not `const`, but still no SQL *text*
+//!   parsed at runtime ([`render_joined`]/[`render_semi_join`]).
 //! - Window functions (`SELECT`s containing `ROW_NUMBER`/`RANK`/`LAG`/
 //!   etc.) bypass the VM the same way `JOIN` does: codegen reconstructs
-//!   the parsed `Query` as a literal Rust value and the generated code
+//!   the parsed `Select` as a literal Rust value and the generated code
 //!   calls the caller crate's own `execute_windowed` at runtime -- no
 //!   `const PROGRAM`, since window evaluation partitions/sorts entirely
 //!   outside the register-machine model ([`render_windowed`]).
 //!
-//! Planning -- deciding which of the above shapes a [`Query`] needs and
+//! Planning -- deciding which of the above shapes a [`Select`] needs and
 //! producing the flat shape's [`Program`] -- is [`crate::codegen::batch`]'s
 //! job; [`generate`] calls it and then renders. The render functions only
 //! turn already-planned data into text.
 //!
 //! **`crate_name`:** every render function takes the caller's own crate
 //! name (column-rs passes `"column_rs"`) and emits `use
-//! {crate_name}::...`/`{crate_name}::query::...` etc. in the generated
+//! {crate_name}::...`/`{crate_name}::sql::...` etc. in the generated
 //! source -- so the emitted code calls back into whichever crate actually
 //! has the `ParquetFile`/`execute_joined`/`execute_windowed`/`run_program`
-//! runtime glue, not a name hardcoded to column-rs specifically.
+//! runtime glue, not a name hardcoded to column-rs specifically. Since
+//! #153, the reconstructed literal is `parser::ast::Select`-shaped, so
+//! the caller crate's own `sql` module is expected to mirror (or
+//! re-export) `db_core::parser::ast`'s types under those names, not the
+//! retired the retired `expr::Query` module shape.
 
 // Every `write!` here targets a `String`, which cannot fail; the discarded
 // `fmt::Result` is the idiom, not a swallowed error.
@@ -45,13 +50,13 @@
 )]
 
 use crate::codegen::batch::{compile, output_column_names};
-use crate::expr::{
-    AggFunc, BinOp, Expr, FromClause, Join, JoinKind, OrderBy, Query, SelectItem, WindowFunc,
-    WindowSpec,
+use crate::parser::ast::{
+    BinaryOp as AstBinOp, Distinctness, Expr as AstExpr, ExprKind, FromClause, FunctionArgs, Join,
+    JoinConstraint, JoinOp, Limit, Literal as AstLiteral, OrderingTerm, ResultColumn, Select,
+    TableRef, TableRefKind, UnaryOp, WindowDef,
 };
 use crate::parser::ParseError;
-use crate::types::Literal;
-use crate::vm::batch::{AggPart, MapOp, Opcode, Program, Value};
+use crate::vm::batch::{AggFunc, AggPart, MapOp, Opcode, Program, Value};
 use std::fmt::Write as _;
 
 #[derive(Debug)]
@@ -79,50 +84,91 @@ impl From<ParseError> for EmitError {
 
 pub type Result<T> = std::result::Result<T, EmitError>;
 
+/// Whether `select`'s `SELECT` list contains a window-function call
+/// (`func(...) OVER (...)`).
+fn has_window(select: &Select) -> bool {
+    select.columns.iter().any(|c| {
+        matches!(
+            c,
+            ResultColumn::Expr {
+                expr: AstExpr {
+                    kind: ExprKind::FunctionCall { over: Some(_), .. },
+                    ..
+                },
+                ..
+            }
+        )
+    })
+}
+
+/// `select`'s single-column `IN (SELECT ...)` `WHERE` clause, if its
+/// entire `WHERE` clause is exactly that shape.
+fn semi_join_subquery(select: &Select) -> Option<&Select> {
+    match &select.where_clause {
+        Some(AstExpr {
+            kind:
+                ExprKind::InSubquery {
+                    expr,
+                    subquery,
+                    negated: false,
+                },
+            ..
+        }) if matches!(expr.kind, ExprKind::Column { .. }) => Some(subquery),
+        _ => None,
+    }
+}
+
+fn from_table_name(from: &FromClause) -> &str {
+    match &from.first.kind {
+        TableRefKind::Name(name) => name,
+        TableRefKind::Subquery(_) => from.first.alias.as_deref().unwrap_or(""),
+    }
+}
+
 /// Compile `sql_text` ahead of time into a standalone `.rs` source file for
 /// `crate_name`'s runtime glue (column-rs passes `"column_rs"`): plans the
 /// query with [`crate::codegen::batch`], then renders the shape it needs
 /// -- `const PROGRAM` for flat queries ([`render_flat`]), a reconstructed
-/// `Query` literal for joins/semi-joins/windows.
+/// `Select` literal for joins/semi-joins/windows.
 pub fn generate(crate_name: &str, sql_text: &str) -> Result<String> {
-    let query = crate::parser::parse(sql_text)?;
-    if query
-        .columns
-        .iter()
-        .any(|c| matches!(c, SelectItem::Window(_)))
-    {
-        return Ok(render_windowed(crate_name, sql_text, &query));
+    let select = crate::parser::parse(sql_text)?;
+    if has_window(&select) {
+        return Ok(render_windowed(crate_name, sql_text, &select));
     }
 
-    if !query.joins.is_empty() {
-        if query.joins.len() > 1 {
+    let join_count = select
+        .from
+        .as_ref()
+        .map(|f| f.joins.len())
+        .unwrap_or_default();
+    if join_count > 0 {
+        if join_count > 1 {
             return Err(EmitError::Unsupported("more than one JOIN"));
         }
-        return Ok(render_joined(crate_name, sql_text, &query));
+        return Ok(render_joined(crate_name, sql_text, &select));
     }
-    if let Some(Expr::InSubquery { expr, subquery }) = &query.where_clause {
-        let Expr::Column(_) = expr.as_ref() else {
-            return Err(EmitError::Unsupported(
-                "IN (SELECT ...) with a non-column left-hand side",
-            ));
-        };
+    if let Some(subquery) = semi_join_subquery(&select) {
+        let subquery_from = subquery
+            .from
+            .as_ref()
+            .map(from_table_name)
+            .unwrap_or_default();
         return Ok(render_semi_join(
             crate_name,
             sql_text,
-            &query,
-            subquery.from.name(),
+            &select,
+            subquery_from,
         ));
     }
 
-    let program = compile(&query);
-    let columns = output_column_names(&query);
-    Ok(render_flat(
-        crate_name,
-        sql_text,
-        query.from.name(),
-        &program,
-        &columns,
-    ))
+    let program = compile(&select);
+    let columns = output_column_names(&select);
+    let from = select
+        .from
+        .as_ref()
+        .map(from_table_name)
+        .unwrap_or_default();
+    Ok(render_flat(crate_name, sql_text, from, &program, &columns))
 }
 
 /// A path or a simple `*`-glob (one wildcard, in the file name only --
@@ -159,7 +205,7 @@ const EXPAND_PATH_HELPER: &str = r#"fn expand_path(pattern: &str) -> Vec<std::pa
 /// the columns to load are derived from it at runtime), `const COLUMNS`
 /// (the output column names), and a `main` that reads every Parquet file
 /// path given on the command line, runs `PROGRAM` against each via the
-/// caller crate's `query::run_program`, and prints the results.
+/// caller crate's own `query::run_program`, and prints the results.
 pub fn render_flat(
     crate_name: &str,
     sql_text: &str,
@@ -256,13 +302,19 @@ fn render_order_by(order_by: Option<(usize, bool)>) -> String {
 }
 
 /// Render a `JOIN` query: a `main()` that opens the two named tables
-/// (matched to `query.from`/`join.table` by file stem), reconstructs
-/// `query` as a literal [`Query`] value (built at runtime via ordinary
+/// (matched to `select.from`/the join's table by file stem), reconstructs
+/// `select` as a literal [`Select`] value (built at runtime via ordinary
 /// `Vec`/`String` constructors, not parsed from SQL text), and calls the
 /// caller crate's own `execute_joined`.
-pub fn render_joined(crate_name: &str, sql_text: &str, query: &Query) -> String {
-    let other_table = query.joins[0].table.clone();
-    render_multi_table(crate_name, sql_text, query, &other_table, "execute_joined")
+pub fn render_joined(crate_name: &str, sql_text: &str, select: &Select) -> String {
+    let other_table = select
+        .from
+        .as_ref()
+        .and_then(|f| f.joins.first())
+        .and_then(|j| j.table.name())
+        .unwrap_or_default()
+        .to_string();
+    render_multi_table(crate_name, sql_text, select, &other_table, "execute_joined")
 }
 
 /// Render an `IN (SELECT ...)` semi-join query the same way as
@@ -271,13 +323,13 @@ pub fn render_joined(crate_name: &str, sql_text: &str, query: &Query) -> String 
 pub fn render_semi_join(
     crate_name: &str,
     sql_text: &str,
-    query: &Query,
+    select: &Select,
     subquery_from: &str,
 ) -> String {
     render_multi_table(
         crate_name,
         sql_text,
-        query,
+        select,
         subquery_from,
         "execute_semi_join",
     )
@@ -286,11 +338,16 @@ pub fn render_semi_join(
 fn render_multi_table(
     crate_name: &str,
     sql_text: &str,
-    query: &Query,
+    select: &Select,
     other_table: &str,
     exec_fn: &str,
 ) -> String {
-    let columns = output_column_names(query);
+    let columns = output_column_names(select);
+    let main_table = select
+        .from
+        .as_ref()
+        .map(from_table_name)
+        .unwrap_or_default();
     let mut out = String::new();
     let version = env!("CARGO_PKG_VERSION");
     let _ = writeln!(
@@ -298,13 +355,13 @@ fn render_multi_table(
         "//! Generated by db-core emit v{version} -- DO NOT EDIT"
     );
     let _ = writeln!(out, "//! Query: {}", sql_text.replace('\n', " "));
-    let _ = writeln!(out, "//! Tables: {}, {other_table}", query.from.name());
+    let _ = writeln!(out, "//! Tables: {main_table}, {other_table}");
     out.push_str("#![forbid(unsafe_code)]\n\n");
     out.push_str("#![allow(unused_imports)]\n");
     let _ = writeln!(out, "use {crate_name}::file::ParquetFile;");
     let _ = writeln!(
         out,
-        "use {crate_name}::sql::{{AggFunc, BinOp, Expr, FromClause, Join, JoinKind, Literal, OrderBy, Query, SelectItem}};\n"
+        "use {crate_name}::sql::{{BinaryOp, Distinctness, Expr, ExprKind, FromClause, FunctionArgs, Join, JoinConstraint, JoinOp, Limit, Literal, OrderingTerm, ResultColumn, Select, Span, TableRef, TableRefKind, UnaryOp}};\n"
     );
 
     out.push_str("const COLUMNS: &[&str] = &[");
@@ -316,7 +373,7 @@ fn render_multi_table(
     let _ = writeln!(
         out,
         "const MAIN_TABLE: &str = {};",
-        rust_str_literal(query.from.name())
+        rust_str_literal(main_table)
     );
     let _ = writeln!(
         out,
@@ -326,8 +383,8 @@ fn render_multi_table(
 
     let _ = writeln!(
         out,
-        "fn build_query() -> Query {{\n    {}\n}}\n",
-        render_query(query)
+        "fn build_query() -> Select {{\n    {}\n}}\n",
+        render_select(select)
     );
 
     out.push_str("fn main() -> Result<(), Box<dyn std::error::Error>> {\n");
@@ -366,11 +423,16 @@ fn render_multi_table(
 }
 
 /// Render a window-function query: a `main()` that opens the one named
-/// table, reconstructs `query` as a literal [`Query`] value (same
+/// table, reconstructs `select` as a literal [`Select`] value (same
 /// `Vec`/`String`-constructor approach as [`render_joined`]), and calls
 /// the caller crate's own `execute_windowed`.
-pub fn render_windowed(crate_name: &str, sql_text: &str, query: &Query) -> String {
-    let columns = output_column_names(query);
+pub fn render_windowed(crate_name: &str, sql_text: &str, select: &Select) -> String {
+    let columns = output_column_names(select);
+    let table = select
+        .from
+        .as_ref()
+        .map(from_table_name)
+        .unwrap_or_default();
     let mut out = String::new();
     let version = env!("CARGO_PKG_VERSION");
     let _ = writeln!(
@@ -378,13 +440,13 @@ pub fn render_windowed(crate_name: &str, sql_text: &str, query: &Query) -> Strin
         "//! Generated by db-core emit v{version} -- DO NOT EDIT"
     );
     let _ = writeln!(out, "//! Query: {}", sql_text.replace('\n', " "));
-    let _ = writeln!(out, "//! Table: {}", query.from.name());
+    let _ = writeln!(out, "//! Table: {table}");
     out.push_str("#![forbid(unsafe_code)]\n\n");
     out.push_str("#![allow(unused_imports)]\n");
     let _ = writeln!(out, "use {crate_name}::file::ParquetFile;");
     let _ = writeln!(
         out,
-        "use {crate_name}::sql::{{AggFunc, BinOp, Expr, FromClause, OrderBy, Query, SelectItem, WindowFunc, WindowSpec}};\n"
+        "use {crate_name}::sql::{{BinaryOp, Distinctness, Expr, ExprKind, FromClause, FunctionArgs, Join, JoinConstraint, JoinOp, Limit, Literal, OrderingTerm, ResultColumn, Select, Span, TableRef, TableRefKind, UnaryOp, WindowDef}};\n"
     );
 
     out.push_str("const COLUMNS: &[&str] = &[");
@@ -395,8 +457,8 @@ pub fn render_windowed(crate_name: &str, sql_text: &str, query: &Query) -> Strin
 
     let _ = writeln!(
         out,
-        "fn build_query() -> Query {{\n    {}\n}}\n",
-        render_query(query)
+        "fn build_query() -> Select {{\n    {}\n}}\n",
+        render_select(select)
     );
 
     out.push_str("fn main() -> Result<(), Box<dyn std::error::Error>> {\n");
@@ -429,193 +491,318 @@ pub fn render_windowed(crate_name: &str, sql_text: &str, query: &Query) -> Strin
     out
 }
 
-fn render_query(query: &Query) -> String {
-    let columns: Vec<String> = query.columns.iter().map(render_select_item).collect();
-    let joins: Vec<String> = query.joins.iter().map(render_join).collect();
-    let group_by: Vec<String> = query
-        .group_by
-        .iter()
-        .map(|c| format!("{}.to_string()", rust_str_literal(c)))
-        .collect();
-    format!(
-        "Query {{ columns: vec![{}], from: {}, joins: vec![{}], where_clause: {}, distinct: {}, group_by: vec![{}], having: {}, order_by: {}, limit: {}, offset: {} }}",
-        columns.join(", "),
-        render_from_clause(&query.from),
-        joins.join(", "),
-        render_option_expr(query.where_clause.as_ref()),
-        query.distinct,
-        group_by.join(", "),
-        render_option_expr(query.having.as_ref()),
-        render_option_order_by(query.order_by.as_ref()),
-        render_option_usize(query.limit),
-        render_option_usize(query.offset),
-    )
-}
-
-fn render_select_item(item: &SelectItem) -> String {
-    match item {
-        SelectItem::Column(name) => {
-            format!("SelectItem::Column({}.to_string())", rust_str_literal(name))
-        }
-        SelectItem::Star => "SelectItem::Star".to_string(),
-        SelectItem::Agg(func, arg) => format!(
-            "SelectItem::Agg(AggFunc::{}, {})",
-            render_agg_func(*func),
-            render_option_string(arg.as_deref())
-        ),
-        SelectItem::Window(spec) => {
-            format!("SelectItem::Window({})", render_window_spec(spec))
-        }
-    }
-}
-
-fn render_window_spec(spec: &WindowSpec) -> String {
-    let partition_by: Vec<String> = spec
-        .partition_by
-        .iter()
-        .map(|c| format!("{}.to_string()", rust_str_literal(c)))
-        .collect();
-    let order_by: Vec<String> = spec
-        .order_by
-        .iter()
-        .map(|(c, desc)| format!("({}.to_string(), {desc})", rust_str_literal(c)))
-        .collect();
-    format!(
-        "WindowSpec {{ func: WindowFunc::{}, arg: {}, offset: {}, partition_by: vec![{}], order_by: vec![{}] }}",
-        render_window_func(spec.func),
-        render_option_string(spec.arg.as_deref()),
-        render_option_i64(spec.offset),
-        partition_by.join(", "),
-        order_by.join(", "),
-    )
-}
-
-fn render_window_func(func: WindowFunc) -> &'static str {
-    match func {
-        WindowFunc::RowNumber => "RowNumber",
-        WindowFunc::Rank => "Rank",
-        WindowFunc::DenseRank => "DenseRank",
-        WindowFunc::Lag => "Lag",
-        WindowFunc::Lead => "Lead",
-        WindowFunc::FirstValue => "FirstValue",
-        WindowFunc::LastValue => "LastValue",
-        WindowFunc::Sum => "Sum",
-        WindowFunc::Avg => "Avg",
-        WindowFunc::Count => "Count",
-    }
-}
-
-fn render_option_i64(v: Option<i64>) -> String {
-    match v {
-        Some(v) => format!("Some({v})"),
-        None => "None".to_string(),
-    }
-}
-
-fn render_option_string(s: Option<&str>) -> String {
+fn render_option_str(s: Option<&str>) -> String {
     match s {
         Some(s) => format!("Some({}.to_string())", rust_str_literal(s)),
         None => "None".to_string(),
     }
 }
 
-fn render_join(join: &Join) -> String {
-    let kind = match join.kind {
-        JoinKind::Inner => "Inner",
-        JoinKind::Left => "Left",
-        JoinKind::Right => "Right",
-        JoinKind::Full => "Full",
-        JoinKind::Cross => "Cross",
-    };
+fn render_span() -> &'static str {
+    "Span::default()"
+}
+
+fn render_table_ref_kind(kind: &TableRefKind) -> String {
+    match kind {
+        TableRefKind::Name(name) => {
+            format!("TableRefKind::Name({}.to_string())", rust_str_literal(name))
+        }
+        TableRefKind::Subquery(select) => {
+            format!(
+                "TableRefKind::Subquery(Box::new({}))",
+                render_select(select)
+            )
+        }
+    }
+}
+
+fn render_table_ref(table: &TableRef) -> String {
     format!(
-        "Join {{ kind: JoinKind::{kind}, table: {}.to_string(), left_col: {}.to_string(), right_col: {}.to_string() }}",
-        rust_str_literal(&join.table),
-        rust_str_literal(&join.left_col),
-        rust_str_literal(&join.right_col),
+        "TableRef {{ kind: {}, alias: {}, span: {} }}",
+        render_table_ref_kind(&table.kind),
+        render_option_str(table.alias.as_deref()),
+        render_span()
+    )
+}
+
+fn render_join_op(op: JoinOp) -> &'static str {
+    match op {
+        JoinOp::Inner => "Inner",
+        JoinOp::Left => "Left",
+        JoinOp::Cross => "Cross",
+        JoinOp::Right => "Right",
+        JoinOp::Full => "Full",
+    }
+}
+
+fn render_join_constraint(constraint: &JoinConstraint) -> String {
+    match constraint {
+        JoinConstraint::On(expr) => format!("JoinConstraint::On({})", render_expr(expr)),
+        JoinConstraint::Using(cols) => format!(
+            "JoinConstraint::Using(vec![{}])",
+            cols.iter()
+                .map(|c| format!("{}.to_string()", rust_str_literal(c)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn render_join(join: &Join) -> String {
+    format!(
+        "Join {{ op: JoinOp::{}, table: {}, constraint: {}, natural: {} }}",
+        render_join_op(join.op),
+        render_table_ref(&join.table),
+        match &join.constraint {
+            Some(c) => format!("Some({})", render_join_constraint(c)),
+            None => "None".to_string(),
+        },
+        join.natural,
     )
 }
 
 fn render_from_clause(from: &FromClause) -> String {
-    match from {
-        FromClause::Table(name) => {
-            format!("FromClause::Table({}.to_string())", rust_str_literal(name))
-        }
-        FromClause::Subquery(query, alias) => format!(
-            "FromClause::Subquery(Box::new({}), {}.to_string())",
-            render_query(query),
-            rust_str_literal(alias)
-        ),
+    let joins: Vec<String> = from.joins.iter().map(render_join).collect();
+    format!(
+        "FromClause {{ first: {}, joins: vec![{}] }}",
+        render_table_ref(&from.first),
+        joins.join(", ")
+    )
+}
+
+fn render_distinctness(d: Option<Distinctness>) -> String {
+    match d {
+        Some(Distinctness::Distinct) => "Some(Distinctness::Distinct)".to_string(),
+        Some(Distinctness::All) => "Some(Distinctness::All)".to_string(),
+        None => "None".to_string(),
     }
 }
 
-fn render_expr(expr: &Expr) -> String {
-    match expr {
-        Expr::Column(name) => format!("Expr::Column({}.to_string())", rust_str_literal(name)),
-        Expr::Literal(lit) => format!("Expr::Literal({})", render_literal(lit)),
-        Expr::BinaryOp(l, op, r) => format!(
-            "Expr::BinaryOp(Box::new({}), BinOp::{}, Box::new({}))",
-            render_expr(l),
-            render_bin_op(*op),
-            render_expr(r)
-        ),
-        Expr::InSubquery { expr, subquery } => format!(
-            "Expr::InSubquery {{ expr: Box::new({}), subquery: Box::new({}) }}",
-            render_expr(expr),
-            render_query(subquery)
-        ),
-        Expr::Exists { subquery, negated } => format!(
-            "Expr::Exists {{ subquery: Box::new({}), negated: {negated} }}",
-            render_query(subquery)
-        ),
-        Expr::Not(inner) => format!("Expr::Not(Box::new({}))", render_expr(inner)),
-        Expr::Neg(inner) => format!("Expr::Neg(Box::new({}))", render_expr(inner)),
-        Expr::IsNull { expr, negated } => format!(
-            "Expr::IsNull {{ expr: Box::new({}), negated: {negated} }}",
-            render_expr(expr)
-        ),
-    }
-}
-
-fn render_literal(lit: &Literal) -> String {
-    match lit {
-        Literal::Int(v) => format!("Literal::Int({v})"),
-        Literal::Float(v) => format!("Literal::Float({v:?})"),
-        Literal::Str(v) => format!("Literal::Str({}.to_string())", rust_str_literal(v)),
-    }
-}
-
-fn render_bin_op(op: BinOp) -> &'static str {
-    match op {
-        BinOp::Add => "Add",
-        BinOp::Sub => "Sub",
-        BinOp::Mul => "Mul",
-        BinOp::Div => "Div",
-        BinOp::Eq => "Eq",
-        BinOp::Ne => "Ne",
-        BinOp::Lt => "Lt",
-        BinOp::Le => "Le",
-        BinOp::Gt => "Gt",
-        BinOp::Ge => "Ge",
-        BinOp::And => "And",
-        BinOp::Or => "Or",
-        BinOp::Concat => "Concat",
-    }
-}
-
-fn render_option_expr(expr: Option<&Expr>) -> String {
-    match expr {
+fn render_select(select: &Select) -> String {
+    let columns: Vec<String> = select.columns.iter().map(render_result_column).collect();
+    let group_by: Vec<String> = select.group_by.iter().map(render_expr).collect();
+    let order_by: Vec<String> = select.order_by.iter().map(render_ordering_term).collect();
+    let from = match &select.from {
+        Some(f) => format!("Some({})", render_from_clause(f)),
+        None => "None".to_string(),
+    };
+    let where_clause = match &select.where_clause {
         Some(e) => format!("Some({})", render_expr(e)),
         None => "None".to_string(),
+    };
+    let limit = match &select.limit {
+        Some(l) => format!("Some({})", render_limit(l)),
+        None => "None".to_string(),
+    };
+    format!(
+        "Select {{ with_clause: None, distinct: {}, columns: vec![{}], from: {}, where_clause: {}, group_by: vec![{}], having: None, compound: vec![], order_by: vec![{}], limit: {}, span: {} }}",
+        render_distinctness(select.distinct),
+        columns.join(", "),
+        from,
+        where_clause,
+        group_by.join(", "),
+        order_by.join(", "),
+        limit,
+        render_span(),
+    )
+}
+
+fn render_result_column(col: &ResultColumn) -> String {
+    match col {
+        ResultColumn::Star => "ResultColumn::Star".to_string(),
+        ResultColumn::TableStar { table } => format!(
+            "ResultColumn::TableStar {{ table: {}.to_string() }}",
+            rust_str_literal(table)
+        ),
+        ResultColumn::Expr { expr, alias } => format!(
+            "ResultColumn::Expr {{ expr: {}, alias: {} }}",
+            render_expr(expr),
+            render_option_str(alias.as_deref())
+        ),
     }
 }
 
-fn render_option_order_by(ob: Option<&OrderBy>) -> String {
-    match ob {
-        Some(OrderBy { column, descending }) => format!(
-            "Some(OrderBy {{ column: {}.to_string(), descending: {descending} }})",
-            rust_str_literal(column)
-        ),
+fn render_ordering_term(term: &OrderingTerm) -> String {
+    format!(
+        "OrderingTerm {{ expr: {}, desc: {}, nulls_last: {} }}",
+        render_expr(&term.expr),
+        render_option_bool(term.desc),
+        render_option_bool(term.nulls_last)
+    )
+}
+
+fn render_option_bool(v: Option<bool>) -> String {
+    match v {
+        Some(v) => format!("Some({v})"),
         None => "None".to_string(),
+    }
+}
+
+fn render_limit(limit: &Limit) -> String {
+    format!(
+        "Limit {{ limit: {}, offset: {} }}",
+        render_expr(&limit.limit),
+        match &limit.offset {
+            Some(e) => format!("Some({})", render_expr(e)),
+            None => "None".to_string(),
+        }
+    )
+}
+
+fn render_window_def(def: &WindowDef) -> String {
+    let partition_by: Vec<String> = def.partition_by.iter().map(render_expr).collect();
+    let order_by: Vec<String> = def.order_by.iter().map(render_ordering_term).collect();
+    format!(
+        "WindowDef {{ partition_by: vec![{}], order_by: vec![{}] }}",
+        partition_by.join(", "),
+        order_by.join(", ")
+    )
+}
+
+fn render_function_args(args: &FunctionArgs) -> String {
+    match args {
+        FunctionArgs::Star => "FunctionArgs::Star".to_string(),
+        FunctionArgs::List(list) => format!(
+            "FunctionArgs::List(vec![{}])",
+            list.iter().map(render_expr).collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
+fn render_expr(expr: &AstExpr) -> String {
+    format!(
+        "Expr {{ kind: {}, span: {} }}",
+        render_expr_kind(&expr.kind),
+        render_span()
+    )
+}
+
+fn render_expr_kind(kind: &ExprKind) -> String {
+    match kind {
+        ExprKind::Literal(lit) => format!("ExprKind::Literal({})", render_literal(lit)),
+        ExprKind::Column {
+            table,
+            catalog,
+            name,
+        } => format!(
+            "ExprKind::Column {{ table: {}, catalog: {}, name: {}.to_string() }}",
+            render_option_str(table.as_deref()),
+            render_option_str(catalog.as_deref()),
+            rust_str_literal(name)
+        ),
+        ExprKind::FunctionCall {
+            name,
+            distinct,
+            args,
+            over,
+        } => format!(
+            "ExprKind::FunctionCall {{ name: {}.to_string(), distinct: {distinct}, args: {}, over: {} }}",
+            rust_str_literal(name),
+            render_function_args(args),
+            match over {
+                Some(w) => format!("Some(Box::new({}))", render_window_def(w)),
+                None => "None".to_string(),
+            }
+        ),
+        ExprKind::Unary { op, expr } => {
+            format!("ExprKind::Unary {{ op: UnaryOp::{}, expr: Box::new({}) }}", render_unary_op(*op), render_expr(expr))
+        }
+        ExprKind::Binary { op, lhs, rhs } => format!(
+            "ExprKind::Binary {{ op: BinaryOp::{}, lhs: Box::new({}), rhs: Box::new({}) }}",
+            render_binary_op(*op),
+            render_expr(lhs),
+            render_expr(rhs)
+        ),
+        ExprKind::Is { lhs, rhs, negated } => format!(
+            "ExprKind::Is {{ lhs: Box::new({}), rhs: Box::new({}), negated: {negated} }}",
+            render_expr(lhs),
+            render_expr(rhs)
+        ),
+        ExprKind::IsNull { expr, negated } => format!(
+            "ExprKind::IsNull {{ expr: Box::new({}), negated: {negated} }}",
+            render_expr(expr)
+        ),
+        ExprKind::Paren(inner) => format!("ExprKind::Paren(Box::new({}))", render_expr(inner)),
+        ExprKind::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } => format!(
+            "ExprKind::InSubquery {{ expr: Box::new({}), subquery: Box::new({}), negated: {negated} }}",
+            render_expr(expr),
+            render_select(subquery)
+        ),
+        ExprKind::Exists { subquery, negated } => format!(
+            "ExprKind::Exists {{ subquery: Box::new({}), negated: {negated} }}",
+            render_select(subquery)
+        ),
+        // Not part of the batch planner's validated subset -- `generate`
+        // never plans a query containing these, so no renderer feeds
+        // this arm today. Not a feature gap to silently paper over: once
+        // a real caller needs one of these, this arm should become a
+        // real render, not before.
+        ExprKind::Param(_)
+        | ExprKind::Between { .. }
+        | ExprKind::In { .. }
+        | ExprKind::Like { .. }
+        | ExprKind::Case { .. }
+        | ExprKind::Cast { .. }
+        | ExprKind::Collate { .. }
+        | ExprKind::Subquery(_)
+        | ExprKind::InSubqueryMulti { .. } => {
+            unreachable!("no planner feeding emit::batch renders {kind:?} yet")
+        }
+    }
+}
+
+fn render_unary_op(op: UnaryOp) -> &'static str {
+    match op {
+        UnaryOp::Not => "Not",
+        UnaryOp::Plus => "Plus",
+        UnaryOp::Minus => "Minus",
+        UnaryOp::BitNot => "BitNot",
+    }
+}
+
+fn render_binary_op(op: AstBinOp) -> &'static str {
+    match op {
+        AstBinOp::Or => "Or",
+        AstBinOp::And => "And",
+        AstBinOp::Eq => "Eq",
+        AstBinOp::Ne => "Ne",
+        AstBinOp::Lt => "Lt",
+        AstBinOp::Le => "Le",
+        AstBinOp::Gt => "Gt",
+        AstBinOp::Ge => "Ge",
+        AstBinOp::BitAnd => "BitAnd",
+        AstBinOp::BitOr => "BitOr",
+        AstBinOp::Shl => "Shl",
+        AstBinOp::Shr => "Shr",
+        AstBinOp::Add => "Add",
+        AstBinOp::Sub => "Sub",
+        AstBinOp::Mul => "Mul",
+        AstBinOp::Div => "Div",
+        AstBinOp::Mod => "Mod",
+        AstBinOp::Concat => "Concat",
+    }
+}
+
+fn render_literal(lit: &AstLiteral) -> String {
+    match lit {
+        AstLiteral::Integer(v) => format!("Literal::Integer({v})"),
+        AstLiteral::Float(v) => format!("Literal::Float({v:?})"),
+        AstLiteral::Str(v) => format!("Literal::Str({}.to_string())", rust_str_literal(v)),
+        AstLiteral::Blob(bytes) => format!(
+            "Literal::Blob(vec![{}])",
+            bytes
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        AstLiteral::Null => "Literal::Null".to_string(),
+        AstLiteral::True => "Literal::True".to_string(),
+        AstLiteral::False => "Literal::False".to_string(),
     }
 }
 
@@ -685,7 +872,7 @@ fn render_opcode(op: &Opcode) -> String {
         // No caller-side planner emits these three yet -- the join/semi-
         // join/window bypass shapes ([`render_joined`]/
         // [`render_semi_join`]/[`render_windowed`]) still reconstruct a
-        // `Query` literal instead of a `const PROGRAM` for those cases
+        // `Select` literal instead of a `const PROGRAM` for those cases
         // (see this module's top doc comment), so no flat program this
         // module renders contains them. Not a feature gap to silently
         // paper over with a fake rendering: once a real planner starts
@@ -903,14 +1090,14 @@ mod tests {
             "SELECT a.id, b.budget FROM a JOIN b ON a.id = b.id",
         )
         .unwrap();
-        assert!(src.contains("fn build_query() -> Query"), "{src}");
+        assert!(src.contains("fn build_query() -> Select"), "{src}");
         assert!(
             src.contains("execute_joined(&main_file, &other_file, &query)"),
             "{src}"
         );
         assert!(src.contains("const MAIN_TABLE: &str = \"a\";"), "{src}");
         assert!(src.contains("const OTHER_TABLE: &str = \"b\";"), "{src}");
-        assert!(src.contains("JoinKind::Inner"), "{src}");
+        assert!(src.contains("JoinOp::Inner"), "{src}");
     }
 
     #[test]
@@ -928,7 +1115,7 @@ mod tests {
             src.contains("const OTHER_TABLE: &str = \"regions\";"),
             "{src}"
         );
-        assert!(src.contains("Expr::InSubquery"), "{src}");
+        assert!(src.contains("ExprKind::InSubquery"), "{src}");
     }
 
     #[test]
@@ -965,75 +1152,30 @@ mod tests {
         );
     }
 
-    fn sample_join_query() -> Query {
-        Query {
-            columns: vec![
-                SelectItem::Column("id".into()),
-                SelectItem::Column("budget".into()),
-            ],
-            from: "a".into(),
-            joins: vec![Join {
-                kind: JoinKind::Inner,
-                table: "b".into(),
-                left_col: "a.id".into(),
-                right_col: "b.id".into(),
-            }],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        }
-    }
-
     #[test]
     fn render_joined_reconstructs_query_literal_and_calls_execute_joined() {
-        let query = sample_join_query();
+        let query = crate::parser::parse("SELECT id, budget FROM a JOIN b ON a.id = b.id").unwrap();
         let src = render_joined(
             "column_rs",
             "SELECT a.id, b.budget FROM a JOIN b ON a.id = b.id",
             &query,
         );
-        assert!(src.contains("fn build_query() -> Query"), "{src}");
+        assert!(src.contains("fn build_query() -> Select"), "{src}");
         assert!(
             src.contains("column_rs::query::execute_joined(&main_file, &other_file, &query)"),
             "{src}"
         );
         assert!(src.contains("const MAIN_TABLE: &str = \"a\";"), "{src}");
         assert!(src.contains("const OTHER_TABLE: &str = \"b\";"), "{src}");
-        assert!(src.contains("JoinKind::Inner"), "{src}");
+        assert!(src.contains("JoinOp::Inner"), "{src}");
     }
 
     #[test]
     fn render_semi_join_calls_execute_semi_join() {
-        let query = Query {
-            columns: vec![SelectItem::Column("id".into())],
-            from: "orders".into(),
-            joins: vec![],
-            where_clause: Some(Expr::InSubquery {
-                expr: Box::new(Expr::Column("region_key".into())),
-                subquery: Box::new(Query {
-                    columns: vec![SelectItem::Column("rkey".into())],
-                    from: "regions".into(),
-                    joins: vec![],
-                    where_clause: None,
-                    distinct: false,
-                    group_by: vec![],
-                    having: None,
-                    order_by: None,
-                    limit: None,
-                    offset: None,
-                }),
-            }),
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        };
+        let query = crate::parser::parse(
+            "SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions)",
+        )
+        .unwrap();
         let src = render_semi_join(
             "column_rs",
             "SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions)",
@@ -1048,40 +1190,23 @@ mod tests {
             src.contains("const OTHER_TABLE: &str = \"regions\";"),
             "{src}"
         );
-        assert!(src.contains("Expr::InSubquery"), "{src}");
+        assert!(src.contains("ExprKind::InSubquery"), "{src}");
     }
 
     #[test]
     fn render_windowed_reconstructs_query_literal_and_calls_execute_windowed() {
-        let query = Query {
-            columns: vec![SelectItem::Window(WindowSpec {
-                func: WindowFunc::RowNumber,
-                arg: None,
-                offset: None,
-                partition_by: vec![],
-                order_by: vec![("id".into(), false)],
-            })],
-            from: "t".into(),
-            joins: vec![],
-            where_clause: None,
-            distinct: false,
-            group_by: vec![],
-            having: None,
-            order_by: None,
-            limit: None,
-            offset: None,
-        };
+        let query = crate::parser::parse("SELECT ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
         let src = render_windowed(
             "column_rs",
             "SELECT ROW_NUMBER() OVER (ORDER BY id) FROM t",
             &query,
         );
-        assert!(src.contains("fn build_query() -> Query"), "{src}");
+        assert!(src.contains("fn build_query() -> Select"), "{src}");
         assert!(
             src.contains("column_rs::query::execute_windowed(&file, &query)"),
             "{src}"
         );
-        assert!(src.contains("WindowFunc::RowNumber"), "{src}");
+        assert!(src.contains("\"ROW_NUMBER\""), "{src}");
     }
 
     #[test]
