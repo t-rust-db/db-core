@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.66.0] - 2026-09-07
+
+### Added
+
+- **`SELECT` with no `FROM` clause** (#175) -- a new `codegen::row::select::compile_select_no_from`, wired into `compile_select_with_catalog` whenever `query.from` is `None`: `SELECT 1`, `SELECT 2 IN (SELECT * FROM t6)`, etc. No table to scan, so the whole program is `<compile each column expr> -> ResultRow -> Halt`, run once (or zero times, if `WHERE` is present and evaluates false/`NULL`) -- no `Rewind`/`Next` loop at all. `*`/`table.*` (nothing to expand against) and `DISTINCT`/`GROUP BY`/`HAVING`/`ORDER BY`/`LIMIT` remain unsupported for this first cut, tracked on #175.
+
 ## [0.65.0] - 2026-09-07
 
 ### Added
