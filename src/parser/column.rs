@@ -165,18 +165,23 @@ fn resolve_expr_aliases(expr: &mut AstExpr, aliases: &HashMap<String, String>) {
                 }
             }
         }
-        ExprKind::FunctionCall { args, over, .. } => {
+        ExprKind::FunctionCall { args, tail, .. } => {
             if let FunctionArgs::List(list) = args {
                 for e in list {
                     resolve_expr_aliases(e, aliases);
                 }
             }
-            if let Some(window_def) = over {
-                for e in &mut window_def.partition_by {
-                    resolve_expr_aliases(e, aliases);
+            if let Some(tail) = tail {
+                if let Some(filter) = &mut tail.filter {
+                    resolve_expr_aliases(filter, aliases);
                 }
-                for term in &mut window_def.order_by {
-                    resolve_expr_aliases(&mut term.expr, aliases);
+                if let Some(window_def) = &mut tail.over {
+                    for e in &mut window_def.partition_by {
+                        resolve_expr_aliases(e, aliases);
+                    }
+                    for term in &mut window_def.order_by {
+                        resolve_expr_aliases(&mut term.expr, aliases);
+                    }
                 }
             }
         }
@@ -401,21 +406,26 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
                 name,
                 distinct,
                 args,
-                over: Some(window_def),
-            } => {
+                tail,
+            } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
                 if *distinct {
                     return Err(unsupported(
                         expr.span,
                         "DISTINCT inside a window function".into(),
                     ));
                 }
+                #[allow(clippy::expect_used, reason = "guarded by the match's `if` above")]
+                let window_def = tail
+                    .as_deref()
+                    .and_then(|t| t.over.as_ref())
+                    .expect("guarded by the match's `if` above");
                 validate_window_call(expr.span, name, args, window_def)
             }
             ExprKind::FunctionCall {
                 name,
                 distinct,
                 args,
-                over: None,
+                ..
             } => {
                 if *distinct {
                     return Err(unsupported(
@@ -446,8 +456,10 @@ fn item_kind(col: &crate::parser::ast::ResultColumn) -> ItemKind {
         ResultColumn::Star | ResultColumn::TableStar { .. } => ItemKind::Star,
         ResultColumn::Expr { expr, .. } => match &expr.kind {
             ExprKind::Column { .. } => ItemKind::Column(column_name(expr).unwrap_or_default()),
-            ExprKind::FunctionCall { over: Some(_), .. } => ItemKind::Window,
-            ExprKind::FunctionCall { over: None, .. } => ItemKind::Agg,
+            ExprKind::FunctionCall { tail, .. } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
+                ItemKind::Window
+            }
+            ExprKind::FunctionCall { .. } => ItemKind::Agg,
             _ => ItemKind::Expr,
         },
     }
@@ -620,8 +632,8 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 name,
                 distinct,
                 args,
-                over: None,
-            } => {
+                tail,
+            } if !matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
                 if *distinct {
                     return Err(unsupported(
                         term.expr.span,
@@ -1110,8 +1122,9 @@ mod tests {
         .unwrap();
         let term = q.order_by.first().unwrap();
         assert!(matches!(
-            term.expr.kind,
-            ExprKind::FunctionCall { over: None, .. }
+            &term.expr.kind,
+            ExprKind::FunctionCall { tail, .. }
+                if !matches!(tail.as_deref(), Some(t) if t.over.is_some())
         ));
         assert_eq!(term.desc, Some(true));
     }
@@ -1124,9 +1137,9 @@ mod tests {
             &term.expr.kind,
             ExprKind::FunctionCall {
                 args: FunctionArgs::Star,
-                over: None,
+                tail,
                 ..
-            }
+            } if !matches!(tail.as_deref(), Some(t) if t.over.is_some())
         ));
     }
 
@@ -1258,10 +1271,10 @@ mod tests {
     }
 
     #[test]
-    fn window_filter_clause_is_unsupported() {
-        let err = parse("SELECT SUM(amount) FILTER (WHERE amount > 0) OVER (ORDER BY id) FROM t")
-            .unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+    fn window_filter_clause_parses() {
+        let q = parse("SELECT SUM(amount) FILTER (WHERE amount > 0) OVER (ORDER BY id) FROM t")
+            .unwrap();
+        assert!(matches!(item_kind(&q.columns[0]), ItemKind::Window));
     }
 
     #[test]

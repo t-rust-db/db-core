@@ -10,6 +10,13 @@ use crate::parser::ast::{Expr, ExprKind, FunctionArgs, ResultColumn, Select};
 use crate::vm::batch::AggFunc;
 use crate::vm::row::{Collation, Instruction, Opcode, P4};
 
+/// Whether `expr` is a `FunctionCall` with an `OVER (...)` tail (a window
+/// function), which `codegen::row` doesn't support.
+pub(super) fn expr_has_window_over(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::FunctionCall { tail, .. }
+        if matches!(tail.as_deref(), Some(t) if t.over.is_some()))
+}
+
 /// One aggregate call's `AggStep`/`AggFinal` binding: `func` selects the
 /// accumulator kind in [`crate::vm::row::aggregate`], `arg` is its
 /// single argument column (`None` only for `COUNT(*)`), and `slot` is
@@ -64,7 +71,7 @@ pub(super) fn collect_aggregates(query: &Select) -> Result<Vec<AggSlot>> {
         let ResultColumn::Expr { expr, .. } = item else {
             continue;
         };
-        if let ExprKind::FunctionCall { over: Some(_), .. } = &expr.kind {
+        if expr_has_window_over(expr) {
             return Err(CodegenError::Unsupported {
                 reason: "window functions are not supported by codegen::row".to_string(),
             });
@@ -127,17 +134,22 @@ pub(in crate::codegen::row) fn as_aggregate(
     expr: &Expr,
 ) -> Result<Option<(AggFunc, Option<String>)>> {
     let ExprKind::FunctionCall {
-        name,
-        args,
-        over: None,
-        ..
+        name, args, tail, ..
     } = &expr.kind
     else {
         return Ok(None);
     };
+    if matches!(tail.as_deref(), Some(t) if t.over.is_some()) {
+        return Ok(None);
+    }
     let Some(func) = AggFunc::from_name(name) else {
         return Ok(None);
     };
+    if matches!(tail.as_deref(), Some(t) if t.filter.is_some()) {
+        return Err(CodegenError::Unsupported {
+            reason: format!("{name}(...) FILTER (WHERE ...) is not supported by codegen::row"),
+        });
+    }
     match args {
         FunctionArgs::Star => Ok(Some((func, None))),
         FunctionArgs::List(args) => match args.as_slice() {
@@ -398,7 +410,7 @@ pub(super) fn projected_names(query: &Select, columns: &[String]) -> Result<Vec<
                 })
             }
             ResultColumn::Expr { expr, .. } => {
-                if let ExprKind::FunctionCall { over: Some(_), .. } = &expr.kind {
+                if expr_has_window_over(expr) {
                     return Err(CodegenError::Unsupported {
                         reason: "window functions are not supported by codegen::row".to_string(),
                     });

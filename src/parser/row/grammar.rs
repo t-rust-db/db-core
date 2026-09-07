@@ -2344,11 +2344,7 @@ impl Parser {
             FunctionArgs::List(self.expr_list()?)
         };
         let mut end = self.expect_punct(TokenKind::RParen, "')' to close function call")?;
-        if self.at_kw(Keyword::FILTER) {
-            return self
-                .unsupported("FILTER clause on aggregates/window functions not yet supported");
-        }
-        let over = self.over_clause(&mut end)?;
+        let tail = self.function_tail(&mut end)?;
         let span = join_span(start, {
             end.len = end.len.max(1);
             end
@@ -2358,26 +2354,44 @@ impl Parser {
                 name,
                 distinct,
                 args,
-                over,
+                tail,
             },
             span,
         })
     }
 
-    /// `function_call`'s optional `OVER` tail, kept out of that function's
-    /// own frame: `function_call` sits on the stack once per nesting level
-    /// of `f(f(f(...)))`, and inlining the window-spec temporaries into it
-    /// pushed the 200-level `MAX_EXPR_DEPTH` probe past a default debug
-    /// thread stack (see `deeply_nested_expressions_hit_the_depth_guard_
-    /// instead_of_the_stack`). Only a real `OVER` pays for this frame.
+    /// `function_call`'s optional `FILTER (WHERE <expr>)` and `OVER` tails,
+    /// kept out of that function's own frame: `function_call` sits on the
+    /// stack once per nesting level of `f(f(f(...)))`, and inlining the
+    /// filter-predicate/window-spec temporaries into it pushed the
+    /// 200-level `MAX_EXPR_DEPTH` probe past a default debug thread stack
+    /// (see `deeply_nested_expressions_hit_the_depth_guard_instead_of_
+    /// the_stack`). Returns `None` when neither clause is present, so a
+    /// plain call like `abs(x)` pays for exactly one `Option<Box<_>>`
+    /// worth of space in `ExprKind::FunctionCall`, same as before `FILTER`
+    /// existed.
     #[inline(never)]
-    fn over_clause(&mut self, end: &mut Span) -> PResult<Option<Box<WindowDef>>> {
-        if !self.eat_kw(Keyword::OVER) {
+    fn function_tail(&mut self, end: &mut Span) -> PResult<Option<Box<FunctionTail>>> {
+        let filter = if self.eat_kw(Keyword::FILTER) {
+            self.expect_punct(TokenKind::LParen, "'(' after FILTER")?;
+            self.expect_kw(Keyword::WHERE)?;
+            let predicate = self.expr()?;
+            *end = self.expect_punct(TokenKind::RParen, "')' to close FILTER clause")?;
+            Some(predicate)
+        } else {
+            None
+        };
+        let over = if self.eat_kw(Keyword::OVER) {
+            let (def, over_end) = self.window_def()?;
+            *end = over_end;
+            Some(def)
+        } else {
+            None
+        };
+        if filter.is_none() && over.is_none() {
             return Ok(None);
         }
-        let (def, over_end) = self.window_def()?;
-        *end = over_end;
-        Ok(Some(Box::new(def)))
+        Ok(Some(Box::new(FunctionTail { filter, over })))
     }
 
     /// The inline window spec after `OVER`: `([PARTITION BY expr, ...]

@@ -276,7 +276,7 @@ impl fmt::Display for Expr {
                 name,
                 distinct,
                 args,
-                over,
+                tail,
             } => {
                 write!(f, "{name}(")?;
                 if *distinct {
@@ -294,8 +294,13 @@ impl fmt::Display for Expr {
                     }
                 }
                 write!(f, ")")?;
-                if let Some(over) = over {
-                    write!(f, " OVER {over}")?;
+                if let Some(tail) = tail {
+                    if let Some(filter) = &tail.filter {
+                        write!(f, " FILTER (WHERE {filter})")?;
+                    }
+                    if let Some(over) = &tail.over {
+                        write!(f, " OVER {over}")?;
+                    }
                 }
                 Ok(())
             }
@@ -1197,12 +1202,17 @@ mod tests {
         }
     }
 
+    /// #67: `FILTER (WHERE ...)` round-trips through `parser::row`'s
+    /// grammar/printer, with or without a window function's `OVER` tail.
     #[test]
-    fn window_filter_clause_is_unsupported() {
-        match parse_select("SELECT SUM(amount) FILTER (WHERE amount > 0) OVER (ORDER BY id) FROM t")
-        {
-            ParseOutcome::Unsupported { .. } => {}
-            other => panic!("expected Unsupported, got {other:?}"),
-        }
+    fn window_filter_clause_roundtrips() {
+        assert_eq!(
+            ok_select("SELECT SUM(amount) FILTER (WHERE amount > 0) OVER (ORDER BY id) FROM t"),
+            "SELECT SUM(amount) FILTER (WHERE amount > 0) OVER (ORDER BY id) FROM t"
+        );
+        assert_eq!(
+            ok_select("SELECT SUM(amount) FILTER (WHERE amount > 0) FROM t"),
+            "SELECT SUM(amount) FILTER (WHERE amount > 0) FROM t"
+        );
     }
 }

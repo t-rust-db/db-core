@@ -1131,7 +1131,7 @@ fn null_extend(scope: &Scope, null_cursor: i32, expr: &Expr) -> Expr {
             name,
             distinct,
             args,
-            over,
+            tail,
         } => ExprKind::FunctionCall {
             name: name.clone(),
             distinct: *distinct,
@@ -1143,7 +1143,15 @@ fn null_extend(scope: &Scope, null_cursor: i32, expr: &Expr) -> Expr {
                         .collect(),
                 ),
             },
-            over: over.clone(),
+            tail: tail.as_ref().map(|t| {
+                Box::new(crate::parser::ast::FunctionTail {
+                    filter: t
+                        .filter
+                        .as_ref()
+                        .map(|f| null_extend(scope, null_cursor, f)),
+                    over: t.over.clone(),
+                })
+            }),
         },
         ExprKind::Unary { op, expr: inner } => ExprKind::Unary {
             op: *op,

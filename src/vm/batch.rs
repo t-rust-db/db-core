@@ -188,6 +188,16 @@ pub enum MapOp {
     /// `Int`/`Float` negate; anything else (including `Null`, per the
     /// general null-propagation rule below) is `Null`.
     Neg,
+    /// `if b == Bool(true) { a } else { Null }` -- how an aggregate's or
+    /// window function's `FILTER (WHERE ...)` clause (#67) is compiled:
+    /// masking the source column to `Null` wherever the filter predicate
+    /// is false lets [`Opcode::Reduce`]/[`Opcode::GroupReduce`]/
+    /// [`Opcode::Window`]'s existing null-skipping do the actual
+    /// filtering, with no separate opcode needed. Unlike every other
+    /// binary op, this does *not* propagate `a`'s or `b`'s `Null`-ness
+    /// symmetrically: only `b` (the predicate) being exactly `Bool(true)`
+    /// passes `a` through.
+    MaskIf,
 }
 
 /// Window functions supported by [`Opcode::Window`] -- `Sum`/`Avg`/`Count`
@@ -1658,6 +1668,13 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
         // an `unreachable!` the qualified subset forbids.
         MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),
         MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),
+        MapOp::MaskIf => {
+            if matches!(b, Value::Bool(true)) {
+                a.clone()
+            } else {
+                Value::Null
+            }
+        }
     }
 }
 
