@@ -380,7 +380,7 @@ fn validate_window_call(
     Ok(())
 }
 
-fn validate_result_column(col: &crate::parser::ast::ResultColumn) -> Result<()> {
+fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<()> {
     use crate::parser::ast::ResultColumn;
     match col {
         ResultColumn::Star => Ok(()),
@@ -425,10 +425,7 @@ fn validate_result_column(col: &crate::parser::ast::ResultColumn) -> Result<()> 
                 }
                 validate_aggregate_call(expr, name, args)
             }
-            _ => Err(unsupported(
-                expr.span,
-                "unsupported SELECT expression".into(),
-            )),
+            _ => validate_expr(expr),
         },
     }
 }
@@ -440,6 +437,7 @@ enum ItemKind {
     Star,
     Agg,
     Window,
+    Expr,
 }
 
 fn item_kind(col: &crate::parser::ast::ResultColumn) -> ItemKind {
@@ -450,7 +448,7 @@ fn item_kind(col: &crate::parser::ast::ResultColumn) -> ItemKind {
             ExprKind::Column { .. } => ItemKind::Column(column_name(expr).unwrap_or_default()),
             ExprKind::FunctionCall { over: Some(_), .. } => ItemKind::Window,
             ExprKind::FunctionCall { over: None, .. } => ItemKind::Agg,
-            _ => ItemKind::Column(String::new()),
+            _ => ItemKind::Expr,
         },
     }
 }
@@ -668,7 +666,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
         ));
     }
 
-    for col in &select.columns {
+    for col in &mut select.columns {
         validate_result_column(col)?;
     }
 
@@ -686,6 +684,19 @@ fn validate_select(select: &mut Select) -> Result<()> {
     let items: Vec<ItemKind> = select.columns.iter().map(item_kind).collect();
     let has_window = items.iter().any(|c| matches!(c, ItemKind::Window));
     let has_agg = items.iter().any(|c| matches!(c, ItemKind::Agg));
+    let has_expr = items.iter().any(|c| matches!(c, ItemKind::Expr));
+    if has_window && has_expr {
+        return Err(unsupported(
+            select.span,
+            "a computed expression alongside a window function is not supported".into(),
+        ));
+    }
+    if has_agg && !has_window && has_expr {
+        return Err(unsupported(
+            select.span,
+            "a computed expression alongside an aggregate requires GROUP BY".into(),
+        ));
+    }
     if has_agg && !has_window {
         let select_bare: Vec<&String> = items
             .iter()
@@ -1014,6 +1025,25 @@ mod tests {
     #[test]
     fn select_list_matching_group_by_keys_exactly_is_accepted() {
         assert!(parse("SELECT region, year, SUM(amount) FROM t GROUP BY region, year").is_ok());
+    }
+
+    #[test]
+    fn computed_expressions_in_the_select_list_are_accepted() {
+        assert!(parse("SELECT -x FROM t").is_ok());
+        assert!(parse("SELECT a || b FROM t").is_ok());
+        assert!(parse("SELECT x * 2 + 1 FROM t").is_ok());
+    }
+
+    #[test]
+    fn computed_select_expression_alongside_aggregate_without_group_by_is_rejected() {
+        let err = parse("SELECT x * 2, SUM(amount) FROM t").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    #[test]
+    fn computed_select_expression_alongside_window_function_is_rejected() {
+        let err = parse("SELECT x * 2, ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
     #[test]
