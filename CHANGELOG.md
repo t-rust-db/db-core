@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.67.0] - 2026-09-07
+
+### Added
+
+- **`EXPLAIN QUERY PLAN` dispatch** (#175) -- `explain_query_plan` (`src/codegen/row/eqp.rs`) has been fully implemented since #94 but was never reachable from `compile_statement`: `EXPLAIN` wasn't in dispatch's keyword allowlist, so any `EXPLAIN`-prefixed statement fell straight to `Unrecognized`. Adds an `"EXPLAIN"` dispatch arm plus a new `eqp::compile_eqp_program` bridging `explain_query_plan`'s plain `Vec<EqpRow>` into a dispatchable `Program`. Scoped to `EXPLAIN QUERY PLAN` over a real catalog table with at most one `JOIN`, matching `explain_query_plan`'s own existing signature; bare `EXPLAIN` (opcode listing) parses but is rejected with a clear `Unsupported` (#55).
+
 ## [0.66.0] - 2026-09-07
 
 ### Added
