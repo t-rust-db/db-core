@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.68.1] - 2026-09-07
+
+### Added
+
+- **`codegen::row` schema richness** (#205) -- `TableSchema`/`IndexSchema` grow to a superset per new ADR 0012: `column_collations`, `without_rowid`, `strict`, `is_virtual`, `sql`, and per-index `unique` + `IndexedColumn { name, desc, collation }`. Carried through every in-crate test builder (db-core has no dependency on `db-storage`, so these are the only construction sites today); not yet consulted by codegen behavior itself -- that's #206/future work.
+- **`codegen::row` dispatch parity** (#206) -- adds db-core's own `ViewSchema { name, sql }` plus `resolve_views`/`expand_views` (`subquery::views`, ported from sqlite-rs): a view reference in `FROM`/`JOIN` position expands to a `TableRefKind::Subquery` the same way `WITH`-clause CTEs already do, with a new `CodegenError::CircularView` guarding against a cycle. `compile_statement_with_views` threads `views` through dispatch; `compile_statement` is now a thin wrapper with an empty `views` slice, so every existing caller is unaffected. `UPDATE`/`DELETE` gain `compile_update_with_catalog`/`compile_delete_with_catalog` so a scalar/`IN`/`EXISTS` subquery in their `WHERE` clause can resolve another table, matching `SELECT`'s own `compile_select_with_catalog`. Adds `leading_keywords(sql) -> Vec<String>`, mirroring sqlite-rs's dispatch helper. `INSERT ... SELECT` remains out of scope (`compile_insert` still rejects it as `Unsupported`).
+
 ## [0.68.0] - 2026-09-07
 
 ### Added
