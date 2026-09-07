@@ -35,6 +35,16 @@
 //!
 //! Plus [`explain`], the `EXPLAIN` plan-tree construction over the same
 //! planning decisions, and [`output_column_names`] for result headers.
+//!
+//! [`emit`] is the ahead-of-time Rust-source emitter for this planner's
+//! output (db-core#192 -- folded in from the former crate-level `emit`
+//! module; see ADR 0007's addendum there for why the standalone
+//! `batch`/`row`/`stream` mirror of `emit` was retracted while its
+//! vocabulary decision -- `codegen` = planner, `emit` = AOT renderer --
+//! stands).
+
+#[cfg(feature = "emit-batch")]
+pub mod emit;
 
 use crate::parser::ast::{
     BinaryOp as AstBinOp, Distinctness, Expr as AstExpr, ExprKind, FromClause as AstFromClause,

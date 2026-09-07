@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.62.0] - 2026-09-07
+
+### Changed
+
+- **Module layout: Rust 2018 style, `emit` folded into `codegen::batch`, `join` moved under `vm`** (db-core#192, db-core#193). Breaking:
+  - The nine `mod.rs` module roots under `codegen`/`parser`/`vm` are renamed to `<name>.rs` + `<name>/` siblings (pure rename, no behavior change); `[lints.clippy] mod_module_files = "deny"` now enforces this.
+  - `db_core::emit::batch::generate` moves to `db_core::codegen::batch::emit::generate`. The crate-level `emit` module (a three-way `batch`/`row`/`stream` mirror of `vm`, with `row`/`stream` both unimplemented stubs) is retired: ADR 0007 already said `emit` was "batch-only... by design", so the standalone mirror was retracted rather than filled in. The `emit-batch` Cargo feature is unchanged in name and still gates the emitter; `emit-row`/`emit-stream` (which gated no real code) are removed.
+  - `db_core::join` moves to `db_core::vm::join`. It is execution infrastructure (a hash table and join-kind emit predicate), not a parsing or planning concern, and its only consumer is `vm::batch`; available to a future `vm::row` hash join (#117) without moving again.
+  - See ADR 0007's addendum for the emit rationale.
+
 ## [0.61.1] - 2026-09-06
 
 ### Fixed

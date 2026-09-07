@@ -28,6 +28,14 @@
 //! 0007, db-core#48), plus the
 //! join/window drivers that materialize whole tables.
 //!
+//! [`join`] (always compiled, ungated) holds shared join infrastructure
+//! -- [`join::JoinHashTable`], [`join::JoinKind`]/[`join::should_emit`]
+//! (db-core#193, moved here from a former crate-level `join` module: a
+//! hash table representation and join-kind emit predicate are execution
+//! concerns, not parsing or planning ones). Its only consumer today is
+//! `batch`, but it's available to a future [`row`] hash join (#117)
+//! without needing to move again.
+//!
 //! Each executor has its own opcode set (`batch::Opcode` and a future
 //! `row::Opcode` are NOT the same type, and are not expected to become
 //! one) -- see each module's own docs.
@@ -45,6 +53,7 @@
 pub mod batch;
 #[cfg(feature = "vm-batch")]
 pub mod engine;
+pub mod join;
 #[cfg(feature = "vm-row")]
 pub mod row;
 #[cfg(feature = "vm-stream")]

@@ -183,3 +183,32 @@ vocabulary overlap on `Sort` is accepted rather than avoided: both name
 the same underlying operation (ordering rows), just in different
 executors' terms, the same way `Filter`/`Emit`/`Halt` already appear in
 spirit (if not name) on both sides.
+
+## Addendum (db-core#192): `emit` folded into `codegen::batch`
+
+This ADR's own Decision section already stated the target shape: "`emit`
+is batch-only and has no row counterpart by design." The module that got
+built didn't match that -- `src/emit/` was laid out as a three-way
+`batch`/`row`/`stream` mirror of `vm`, with `emit/row.rs` and
+`emit/stream.rs` each an eight-or-so-line file whose entire content was
+"not yet implemented, blocked on X." That mirror implied a growth path
+(one emitter per executor) the ADR had already ruled out, and it forced
+`db_core::emit::batch` to sit beside its only real dependency,
+`db_core::codegen::batch`, as siblings under separate crate-root modules
+instead of the render step living next to the planner it renders.
+
+**Fix: `emit::batch` moves to `codegen::batch::emit`, and `emit::row`/
+`emit::stream` are deleted rather than kept as stubs.** Naming is
+unchanged -- `codegen` still means the planner, the render step is still
+called `emit`, matching this ADR's Decision. Only the module tree
+changes: what was `db_core::emit::batch::generate` is now
+`db_core::codegen::batch::emit::generate`, gated by the same `emit-batch`
+Cargo feature (needing `codegen-batch`, as before). `emit-row`/
+`emit-stream` are removed -- they gated no code, so there is nothing to
+port forward; if a row or stream emitter is ever wanted, it is added as
+`codegen::row::emit`/`codegen::stream::emit` when the underlying planner
+and VM are real, not speculatively ahead of them.
+
+This is a breaking API change for any consumer importing
+`db_core::emit::batch` directly (column-rs is the only known one); see
+`CHANGELOG.md`'s 0.62.0 entry.

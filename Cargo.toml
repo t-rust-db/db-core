@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.61.1"
+version = "0.62.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/db-core"
@@ -58,8 +58,6 @@ default = [
     "codegen-row",
     "codegen-stream",
     "emit-batch",
-    "emit-row",
-    "emit-stream",
 ]
 
 # `parser`: one grammar section per Cargo feature, mirroring `vm`'s own
@@ -87,13 +85,15 @@ codegen-batch = ["vm-batch", "parser-column"]
 codegen-row = ["vm-row", "parser-row", "vm-batch"]
 codegen-stream = []
 
-# `emit`: one ahead-of-time Rust-source emitter per Cargo feature, one
-# per `vm` executor (ADR 0007). `emit-batch` renders a planned
-# `codegen::batch` program to `const PROGRAM` source text, so it needs the
-# planner (and, through it, `vm-batch`'s `Opcode`/`Value` types).
+# `emit-batch`: the ahead-of-time Rust-source emitter over the batch
+# planner's output, `codegen::batch::emit` (ADR 0007; db-core#192 folded
+# it into `codegen::batch` from a former crate-level `emit` module that
+# mirrored `vm`'s `batch`/`row`/`stream` split -- `emit-row`/`emit-stream`
+# never had code behind them and are retired along with that mirror).
+# `emit-batch` renders a planned `codegen::batch` program to `const
+# PROGRAM` source text, so it needs the planner (and, through it,
+# `vm-batch`'s `Opcode`/`Value` types).
 emit-batch = ["codegen-batch"]
-emit-row = []
-emit-stream = []
 
 # sqlite-rs's lint bar (#82).
 [lints.rust]
@@ -106,3 +106,7 @@ expect_used = "deny"
 indexing_slicing = "deny"
 panic = "deny"
 arithmetic_side_effects = "deny"
+# Rust 2018 module style (db-core#192): a self-named `mod.rs` file is a
+# clippy error, not just discouraged. The opposite lint,
+# `self_named_module_files`, is its mirror image -- never enable both.
+mod_module_files = "deny"
