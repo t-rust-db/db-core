@@ -8,8 +8,7 @@
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
-use db_core::join::JoinKind;
-use db_core::vm::batch::{Batch, Instruction, MapOp, Opcode, Program, Value, VmError};
+use db_core::vm::batch::{Batch, Instruction, JoinKind, MapOp, Opcode, Program, Value, VmError};
 use db_core::vm::engine::{run, run_join, InMemorySegment, JoinProgram};
 
 #[test]
