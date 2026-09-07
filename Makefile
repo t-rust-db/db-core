@@ -53,19 +53,28 @@ test-mcdc: mcdc-obligations ## MC/DC dashboard for all of src/; fails if any mul
 
 COVERAGE_MIN := 80
 
-coverage: ## Run the test suite under coverage instrumentation and print a line coverage report (cargo-llvm-cov)
+# Test targets the coverage run executes: the library plus every
+# integration test whose source is NOT under tests/spike/. Spikes are
+# throwaway by design (they still run under `make test`); they must not
+# inflate the coverage number for code that only a spike reaches.
+COVERAGE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
+	| python3 -c "import json,sys; \
+	  print(' '.join('--test '+t['name'] for t in json.load(sys.stdin)['packages'][0]['targets'] \
+	    if 'test' in t['kind'] and '/tests/spike/' not in t['src_path']))")
+
+coverage: ## Line coverage report over the library + tests/unit (cargo-llvm-cov); spikes excluded
 	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
 		echo "cargo-llvm-cov not found — install with: cargo install cargo-llvm-cov --locked"; \
 		echo "  (also needs: rustup component add llvm-tools-preview)"; \
 		exit 1; \
 	}
-	# Ported from sqlite-rs. One instrumented run covers everything here:
-	# every [[test]] target in Cargo.toml runs under plain `cargo test`
-	# (none is `test = false`), so unlike the reference there is no
-	# separately-named harness to merge in. `--all-features` mirrors
-	# `make test` so the report sees the same modules the suite does.
+	# Ported from sqlite-rs. One instrumented run: `--lib` plus the
+	# explicit `--test` list from COVERAGE_TESTS (naming any `--test`
+	# turns off autodiscovery, which is exactly how tests/spike/ stays
+	# out). `--all-features` mirrors `make test` so the report sees the
+	# same modules the suite does.
 	cargo llvm-cov clean --workspace
-	cargo llvm-cov --locked --all-features --no-report
+	cargo llvm-cov --locked --all-features --no-report --lib $(COVERAGE_TESTS)
 	cargo llvm-cov report
 	cargo llvm-cov report --json --output-path target/llvm-cov.json
 

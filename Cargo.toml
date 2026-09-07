@@ -15,6 +15,10 @@ name = "unit_mcdc_discharge"
 path = "tests/unit/mcdc_discharge_test.rs"
 
 [[test]]
+name = "unit_vm_row_hooks"
+path = "tests/unit/vm_row_hooks_test.rs"
+
+[[test]]
 name = "01_neon_batch_kernels"
 path = "tests/spike/001_neon_batch_kernels/01_neon_batch_kernels.rs"
 
