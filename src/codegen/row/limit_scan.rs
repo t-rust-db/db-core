@@ -88,6 +88,7 @@ mod tests {
                 rowid_alias: None,
                 root_page: 0,
                 indexes: vec![],
+                ..Default::default()
             },
             0,
         )

@@ -48,11 +48,14 @@ fn resolve_index_columns(schema: &TableSchema, index: &IndexSchema) -> Result<Ve
     index
         .columns
         .iter()
-        .map(|name| {
+        .map(|col| {
             schema
-                .column_index(name)
+                .column_index(&col.name)
                 .ok_or_else(|| CodegenError::Unsupported {
-                    reason: format!("index {} references unknown column {name}", index.name),
+                    reason: format!(
+                        "index {} references unknown column {}",
+                        index.name, col.name
+                    ),
                 })
         })
         .collect()

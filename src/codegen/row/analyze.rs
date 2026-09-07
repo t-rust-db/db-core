@@ -68,6 +68,7 @@ mod tests {
             column_types: vec![String::new()],
             rowid_alias: None,
             indexes,
+            ..Default::default()
         }
     }
 
@@ -93,6 +94,7 @@ mod tests {
         let idx = IndexSchema {
             name: "idx_a".to_string(),
             root_page: 3,
+            unique: false,
             columns: vec![],
         };
         let t = table("t", 2, vec![idx]);

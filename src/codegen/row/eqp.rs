@@ -175,7 +175,7 @@ fn single_order_by_column(query: &Select) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::codegen::row::testutil::select;
-    use crate::codegen::row::IndexSchema;
+    use crate::codegen::row::{IndexSchema, IndexedColumn};
     use crate::vm::row::{execute, Value, Vm};
 
     #[test]
@@ -219,6 +219,7 @@ mod tests {
             rowid_alias: None,
             root_page: 2,
             indexes,
+            ..Default::default()
         }
     }
 
@@ -226,7 +227,11 @@ mod tests {
         IndexSchema {
             name: "t_a".to_string(),
             root_page: 3,
-            columns: vec!["a".to_string()],
+            unique: false,
+            columns: vec![IndexedColumn {
+                name: "a".to_string(),
+                ..Default::default()
+            }],
         }
     }
 

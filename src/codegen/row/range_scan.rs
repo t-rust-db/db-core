@@ -86,7 +86,7 @@ pub(super) fn find_leading_index(schema: &TableSchema, col_name: &str) -> Option
         index
             .columns
             .first()
-            .is_some_and(|c| c.eq_ignore_ascii_case(col_name))
+            .is_some_and(|c| c.name.eq_ignore_ascii_case(col_name))
     })
 }
 
@@ -370,7 +370,7 @@ pub(super) fn try_compile_range_seek(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::codegen::row::IndexSchema;
+    use crate::codegen::row::{IndexSchema, IndexedColumn};
 
     fn schema() -> TableSchema {
         TableSchema {
@@ -382,8 +382,13 @@ mod tests {
             indexes: vec![IndexSchema {
                 name: "t_a".to_string(),
                 root_page: 3,
-                columns: vec!["a".to_string()],
+                unique: false,
+                columns: vec![IndexedColumn {
+                    name: "a".to_string(),
+                    ..Default::default()
+                }],
             }],
+            ..Default::default()
         }
     }
 
@@ -489,6 +494,7 @@ mod tests {
             rowid_alias: None,
             root_page: 4,
             indexes: vec![],
+            ..Default::default()
         }
     }
 

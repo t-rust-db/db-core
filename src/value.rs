@@ -40,9 +40,10 @@ pub enum TextEncoding {
 }
 
 /// A text collating function.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Collation {
     /// Byte-for-byte comparison. SQLite's default.
+    #[default]
     Binary,
     /// ASCII-only case folding -- NOT Unicode. `ß`/`SS` and `é`/`É` never
     /// compare equal.

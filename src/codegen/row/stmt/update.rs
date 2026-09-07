@@ -197,6 +197,7 @@ mod tests {
             rowid_alias: None,
             root_page: 0,
             indexes: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -269,7 +270,11 @@ mod tests {
         schema.indexes.push(IndexSchema {
             name: "idx_b".into(),
             root_page: 3,
-            columns: vec!["b".into()],
+            unique: false,
+            columns: vec![crate::codegen::row::IndexedColumn {
+                name: "b".into(),
+                ..Default::default()
+            }],
         });
         let program = compile_update(&schema, &update("UPDATE t SET b = 99 WHERE a = 1")).unwrap();
 

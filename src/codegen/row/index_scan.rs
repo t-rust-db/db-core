@@ -42,7 +42,7 @@ pub(super) fn find_ordering_index(schema: &TableSchema, order_by_column: &str) -
         index
             .columns
             .first()
-            .is_some_and(|c| c.eq_ignore_ascii_case(order_by_column))
+            .is_some_and(|c| c.name.eq_ignore_ascii_case(order_by_column))
     })
 }
 
@@ -167,6 +167,7 @@ pub(super) fn try_compile_index_ordered_scan(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use crate::codegen::row::IndexedColumn;
 
     fn schema_with_index(index_columns: Vec<&str>, root_page: u32) -> TableSchema {
         TableSchema {
@@ -178,8 +179,16 @@ mod tests {
             indexes: vec![IndexSchema {
                 name: "t_a".to_string(),
                 root_page,
-                columns: index_columns.into_iter().map(str::to_string).collect(),
+                unique: false,
+                columns: index_columns
+                    .into_iter()
+                    .map(|name| IndexedColumn {
+                        name: name.to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
             }],
+            ..Default::default()
         }
     }
 
@@ -251,6 +260,7 @@ mod tests {
             rowid_alias: None,
             root_page: 4,
             indexes: vec![],
+            ..Default::default()
         };
         let program = super::super::select::compile_select_join(
             &schema_with_index(vec!["a"], 3),
