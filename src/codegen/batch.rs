@@ -189,6 +189,7 @@ enum Item {
     Star,
     Agg(AggFunc, Option<String>),
     Window(WindowSpec),
+    Expr(AstExpr),
 }
 
 /// A (possibly qualified) column reference: `col` or `table.col`. Table
@@ -353,9 +354,7 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
                 let arg = agg_arg(expr, agg, args)?;
                 Ok(Item::Agg(agg, arg))
             }
-            _ => Err(PlanError::UnsupportedSelectItem(
-                "unsupported SELECT expression".into(),
-            )),
+            _ => Ok(Item::Expr(expr.clone())),
         },
     }
 }
@@ -767,6 +766,14 @@ pub fn compile(select: &Select) -> Program {
                 ctx.load_column(name);
                 agg_srcs.push(0);
             }
+            Item::Expr(expr) if group_by.is_empty() => {
+                let mut cols = Vec::new();
+                collect_expr_columns(expr, &mut cols);
+                for name in &cols {
+                    ctx.load_column(name);
+                }
+                agg_srcs.push(0);
+            }
             _ => agg_srcs.push(0),
         }
     }
@@ -831,6 +838,16 @@ pub fn compile(select: &Select) -> Program {
             // columns to be group-by keys, so this doesn't double-emit.
             if group_by.is_empty() {
                 let reg = ctx.load_column(name);
+                emit_regs.push(reg);
+            }
+        } else if let Item::Expr(expr) = item {
+            // Same rule as a plain column above: only meaningful without
+            // GROUP BY (the validator rejects a computed expression
+            // alongside an aggregate), and its referenced columns are
+            // already loaded pre-Filter, so `compile_expr` here reuses
+            // those (correctly filtered) registers.
+            if group_by.is_empty() {
+                let reg = compile_expr(expr, &mut ctx);
                 emit_regs.push(reg);
             }
         }
@@ -1106,7 +1123,7 @@ pub fn compile_window(select: &Select) -> Program {
                     push_needed(o, &mut needed);
                 }
             }
-            Item::Agg(..) | Item::Star => {}
+            Item::Agg(..) | Item::Star | Item::Expr(_) => {}
         }
     }
 
@@ -1169,7 +1186,7 @@ pub fn compile_window(select: &Select) -> Program {
                 ));
                 emit_regs.push(dst);
             }
-            Item::Agg(..) | Item::Star => {
+            Item::Agg(..) | Item::Star | Item::Expr(_) => {
                 let reg = *null_reg.get_or_insert_with(|| {
                     let reg = next_reg;
                     next_reg = next_reg.saturating_add(1);
@@ -1722,6 +1739,7 @@ fn select_item_label(item: &ResultColumn) -> String {
             None => format!("{}(*)", agg_func_name(func)),
         },
         Ok(Item::Window(spec)) => format!("{}()", window_func_name(spec.func)),
+        Ok(Item::Expr(expr)) => expr_to_string(&expr),
         Err(_) => String::new(),
     }
 }
@@ -1902,6 +1920,7 @@ fn referenced_columns(select: &Select) -> Vec<String> {
                     push_unique(&mut out, name.clone());
                 }
             }
+            Item::Expr(expr) => collect_expr_columns(expr, &mut out),
         }
     }
     if let Some(where_clause) = &select.where_clause {
@@ -1986,6 +2005,29 @@ mod tests {
             .iter()
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
         assert!(body.iter().any(|op| matches!(op, Opcode::Filter { .. })));
+    }
+
+    #[test]
+    fn compile_projects_computed_select_list_expression_via_map_into_emit() {
+        let query = sql::parse("SELECT x * 2 + 1, a || b FROM t").unwrap();
+        let program = compile(&query);
+        let columns = program.columns_to_load();
+        assert!(columns.contains(&"x".to_string()));
+        assert!(columns.contains(&"a".to_string()));
+        assert!(columns.contains(&"b".to_string()));
+        let (body, ..) = program.split_finalize();
+        assert!(body.iter().any(|op| matches!(
+            op,
+            Opcode::Map {
+                op: MapOp::Mul | MapOp::Add | MapOp::Concat,
+                ..
+            }
+        )));
+        assert!(matches!(body.last(), Some(Opcode::Emit { .. })));
+        assert_eq!(
+            output_column_names(&query),
+            vec!["x * 2 + 1".to_string(), "a || b".to_string()]
+        );
     }
 
     #[test]

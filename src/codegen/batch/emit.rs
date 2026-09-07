@@ -1105,6 +1105,17 @@ mod tests {
     }
 
     #[test]
+    fn generates_const_program_for_a_computed_select_list_expression() {
+        let src = generate("column_rs", "SELECT x * 2 + 1, a || b FROM t").unwrap();
+        assert!(src.contains("const PROGRAM: &[Opcode] = &["), "{src}");
+        assert!(src.contains("Opcode::Map"), "{src}");
+        assert!(
+            src.contains("const COLUMNS: &[&str] = &[\"x * 2 + 1\", \"a || b\", ];"),
+            "{src}"
+        );
+    }
+
+    #[test]
     fn generated_main_supports_glob_expansion() {
         let src = generate("column_rs", "SELECT id FROM t").unwrap();
         assert!(src.contains("fn expand_path"), "{src}");
