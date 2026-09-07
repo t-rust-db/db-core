@@ -5,12 +5,9 @@
 //! index entries.
 //!
 //! **Scoped down** (see [`super`]'s module doc for the general
-//! rationale): no real root pages -- index cursors, like the table
-//! cursor, are pre-wired storage-agnostic [`crate::vm::row::Cursor`]
-//! slots (see `super::select`'s same convention), so `open_index_cursors`
-//! just emits `OpenWrite` against the caller-assigned slot. No `DESC`
-//! index columns (rejected loudly, same reasoning sqlite-rs's own
-//! version gives: no index comparator here is aware of sort direction).
+//! rationale): no `DESC` index columns (rejected loudly, same reasoning
+//! sqlite-rs's own version gives: no index comparator here is aware of
+//! sort direction).
 //!
 //! For a row whose values are only available from disk (the row a
 //! `DELETE`/`UPDATE` is currently positioned on), index keys are read
@@ -21,18 +18,30 @@
 //! [`emit_index_key_ops_from_regs`] builds the same key layout via
 //! `Opcode::Copy` from those registers instead.
 
+use super::index_scan::valid_index_root_page;
 use super::value::emit_column_read;
 use super::{CodegenError, Emitter, IndexSchema, RegAlloc, Result, TableSchema};
 use crate::vm::row::{Instruction, Opcode, P4};
 
 /// `OpenWrite`s one write cursor per index on `schema`, starting at
-/// `first_cursor` -- the caller must pre-wire (`Vm::open_cursor`) the
-/// same slots before running the resulting `Program`.
-pub(crate) fn open_index_cursors(em: &mut Emitter, schema: &TableSchema, first_cursor: i32) {
-    for (i, _index) in schema.indexes.iter().enumerate() {
+/// `first_cursor`, against the index's real root page (db-core#182) --
+/// a program must open its own cursors rather than relying on a caller
+/// to pre-wire them.
+pub(crate) fn open_index_cursors(
+    em: &mut Emitter,
+    schema: &TableSchema,
+    first_cursor: i32,
+) -> Result<()> {
+    for (i, index) in schema.indexes.iter().enumerate() {
         let cursor = first_cursor.saturating_add(i32::try_from(i).unwrap_or(i32::MAX));
-        em.emit(Instruction::new(Opcode::OpenWrite, cursor, 0, 0));
+        em.emit(Instruction::new(
+            Opcode::OpenWrite,
+            cursor,
+            valid_index_root_page(index)?,
+            0,
+        ));
     }
+    Ok(())
 }
 
 fn resolve_index_columns(schema: &TableSchema, index: &IndexSchema) -> Result<Vec<usize>> {

@@ -521,6 +521,22 @@ pub(crate) fn joins_of(select: &Select) -> &[Join] {
     select.from.as_ref().map_or(&[], |from| &from.joins)
 }
 
+/// `schema.root_page` as `Opcode::OpenRead`/`OpenWrite`'s `p2` operand
+/// (db-core#182): every program must open its own cursors against the
+/// table's real root page rather than relying on a caller to pre-wire
+/// the slot, since a `CursorFactory`-backed `Vm` (the sqlite-rs adapter)
+/// never gets a chance to open anything a program doesn't ask for.
+/// Mirrors [`index_scan::valid_index_root_page`]'s shape for the
+/// table-schema case.
+pub(crate) fn valid_table_root_page(schema: &TableSchema) -> Result<i32> {
+    i32::try_from(schema.root_page).map_err(|_| CodegenError::Unsupported {
+        reason: format!(
+            "table {} root page does not fit in a p2 operand",
+            schema.name
+        ),
+    })
+}
+
 /// Builds an unqualified column reference. Codegen synthesizes these
 /// when it needs to name a column it just materialized (an aggregate
 /// output, a join key); they never come from source text, so they carry
@@ -1168,7 +1184,7 @@ mod tests {
     /// `resolve` reaches the enclosing scope's cursor instead.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__row_1077__v1_foreign_qualifier_with_outer_defers_to_outer() {
+    fn mcdc__row_1093__v1_foreign_qualifier_with_outer_defers_to_outer() {
         let scope = scope_named("inner", 1).with_outer(scope_named("outer", 7));
         assert_eq!(scope.resolve_local("outer.x"), None);
         assert_eq!(scope.resolve("outer.x"), Ok((7, 0)));
@@ -1178,10 +1194,10 @@ mod tests {
     /// from own name) false while leaf A (outer present) stays true --
     /// the qualifier is the scope's own table, so it resolves locally.
     /// Pairs against
-    /// `mcdc__row_1077__v1_foreign_qualifier_with_outer_defers_to_outer`.
+    /// `mcdc__row_1093__v1_foreign_qualifier_with_outer_defers_to_outer`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__row_1077__v2_own_qualifier_with_outer_resolves_locally() {
+    fn mcdc__row_1093__v2_own_qualifier_with_outer_resolves_locally() {
         let scope = scope_named("inner", 1).with_outer(scope_named("outer", 7));
         assert_eq!(scope.resolve_local("INNER.x"), Some((1, 0)));
         assert_eq!(scope.resolve("inner.x"), Ok((1, 0)));
@@ -1191,10 +1207,10 @@ mod tests {
     /// while leaf B (foreign qualifier) stays true -- with no enclosing
     /// scope the qualifier is stripped and the column still resolves
     /// against this scope's own table. Pairs against
-    /// `mcdc__row_1077__v1_foreign_qualifier_with_outer_defers_to_outer`.
+    /// `mcdc__row_1093__v1_foreign_qualifier_with_outer_defers_to_outer`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__row_1077__v3_foreign_qualifier_without_outer_resolves_locally() {
+    fn mcdc__row_1093__v3_foreign_qualifier_without_outer_resolves_locally() {
         let scope = scope_named("inner", 1);
         assert_eq!(scope.resolve_local("other.x"), Some((1, 0)));
         assert_eq!(scope.resolve("other.x"), Ok((1, 0)));
