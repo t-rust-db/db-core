@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.62.3] - 2026-09-07
+
+### Fixed
+
+- **Scalar/`IN` subquery may project a computed expression** (#175) -- `expr IN (SELECT ...)` and scalar `(SELECT ...)` subqueries required their single projected column to be a bare column reference, rejecting anything else (e.g. `x + 1`) as `Unsupported`. Any single non-star expression now compiles through the existing correlation-aware `compile_value` path; an aggregate call (`COUNT(*)`, `AVG(c)`, ...) is still rejected, now with a distinct message, since it needs whole-scan `AggStep`/`AggFinal` accumulation rather than a per-row `compile_value` call (left as follow-up work on #175).
+
 ## [0.62.2] - 2026-09-07
 
 ### Fixed
