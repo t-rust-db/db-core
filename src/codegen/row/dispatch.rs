@@ -21,6 +21,22 @@
 //! wires its own cursors. N-way joins and everything else
 //! [`super::select`] doesn't implement yet surface as
 //! [`CodegenError::Unsupported`] from within it, not from here.
+//!
+//! **`views` (db-core#206)**: [`compile_statement_with_views`] resolves
+//! `views` once (via [`super::resolve_views`]) and expands every view
+//! reference in a dispatched `SELECT`/`WITH` statement's `FROM`/`JOIN`
+//! clauses (via [`super::expand_views`]) before compiling it -- the
+//! same syntactic-rewrite approach `WITH`-clause expansion already
+//! uses, since a view is just a named, catalog-stored `SELECT`.
+//! `UPDATE`/`DELETE` are compiled via their `_with_catalog` variant so a
+//! scalar/`IN`/`EXISTS` subquery in their `WHERE` clause can resolve
+//! another table from `schemas`, matching `SELECT`'s own
+//! [`super::compile_select_with_catalog`]. `INSERT` does not expand
+//! `views`/`catalog` yet: `compile_insert` itself still rejects
+//! `InsertSource::Select` as `Unsupported` (see `stmt::insert`'s module
+//! doc), so there is nothing for either to feed until that lands.
+//! [`compile_statement`] is the plain entry point every existing caller
+//! keeps using, calling through with an empty `views` slice.
 
 use crate::parser::ast::TableRefKind;
 use crate::parser::row::error::{
@@ -32,9 +48,10 @@ use crate::vm::row::Program;
 
 use super::{
     compile_analyze, compile_begin, compile_commit, compile_create_index, compile_create_table,
-    compile_create_view, compile_delete, compile_drop_index, compile_drop_table,
+    compile_create_view, compile_delete_with_catalog, compile_drop_index, compile_drop_table,
     compile_eqp_program, compile_insert, compile_pragma, compile_rollback, compile_select_join,
-    compile_select_with_catalog, compile_update, explain_query_plan, CodegenError, TableSchema,
+    compile_select_with_catalog, compile_update_with_catalog, expand_views, explain_query_plan,
+    resolve_views, CodegenError, TableSchema, ViewSchema,
 };
 
 /// Failure compiling one dispatched statement -- everything
@@ -98,10 +115,35 @@ fn parse_error<T: std::fmt::Debug>(other: ParseOutcome<T>) -> DispatchError {
     DispatchError::ParseFailed(format!("{other:?}"))
 }
 
+/// The first up to 3 whitespace-separated words of `sql`, each
+/// uppercased -- for a caller (e.g. a REPL) that needs to classify a
+/// statement's kind without invoking [`compile_statement`] itself
+/// (mirrors sqlite-rs's own `codegen::dispatch::leading_keywords`).
+/// Unlike [`canonical`]'s internal, non-allocating `&str` lookup, this
+/// returns owned `String`s so the result can outlive `sql`.
+pub fn leading_keywords(sql: &str) -> Vec<String> {
+    sql.split_whitespace()
+        .take(3)
+        .map(str::to_ascii_uppercase)
+        .collect()
+}
+
+/// As [`compile_statement`], but also resolves `views` (db-core#206) --
+/// see this module's doc comment. `compile_statement` itself just calls
+/// through with an empty `views` slice.
+pub fn compile_statement(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+    compile_statement_with_views(sql, schemas, &[])
+}
+
 /// Parses `sql`, picks the compiler for its leading keyword(s), and
 /// compiles it against `schemas` -- the schema catalog every DDL/ANALYZE
-/// statement resolves table/index names against.
-pub fn compile_statement(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+/// statement resolves table/index names against -- and `views`, resolved
+/// once per call and expanded into any dispatched `SELECT`/`WITH`.
+pub fn compile_statement_with_views(
+    sql: &str,
+    schemas: &[TableSchema],
+    views: &[ViewSchema],
+) -> Result<Program, DispatchError> {
     let find_schema = |name: &str| -> Result<&TableSchema, DispatchError> {
         schemas
             .iter()
@@ -273,7 +315,9 @@ pub fn compile_statement(sql: &str, schemas: &[TableSchema]) -> Result<Program, 
         // confirms `Insert`/`Update`/`Delete` have none), so a leading
         // `WITH` unambiguously means "parse and compile as a SELECT".
         "SELECT" | "WITH" => match parse_select(sql) {
-            ParseOutcome::Accepted(select) => {
+            ParseOutcome::Accepted(mut select) => {
+                let resolved_views = resolve_views(views);
+                expand_views(&mut select, &resolved_views)?;
                 // A single JOIN needs both cursors pre-wired, which only
                 // `compile_select_join` does; anything else (no JOIN, an
                 // optional FROM-subquery) goes through
@@ -360,14 +404,14 @@ pub fn compile_statement(sql: &str, schemas: &[TableSchema]) -> Result<Program, 
         "UPDATE" => match parse_update(sql) {
             ParseOutcome::Accepted(update) => {
                 let schema = find_schema(&update.table)?;
-                Ok(compile_update(schema, &update)?)
+                Ok(compile_update_with_catalog(schema, &update, schemas)?)
             }
             other => Err(parse_error(other)),
         },
         "DELETE" => match parse_delete(sql) {
             ParseOutcome::Accepted(delete) => {
                 let schema = find_schema(&delete.table)?;
-                Ok(compile_delete(schema, &delete)?)
+                Ok(compile_delete_with_catalog(schema, &delete, schemas)?)
             }
             other => Err(parse_error(other)),
         },
@@ -739,5 +783,110 @@ mod tests {
                 DispatchError::Codegen(CodegenError::Unsupported { .. })
             ));
         }
+    }
+
+    fn schema(columns: &[&str]) -> TableSchema {
+        TableSchema {
+            name: "t".to_string(),
+            columns: columns.iter().map(|c| (*c).to_string()).collect(),
+            column_types: columns.iter().map(|_| String::new()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn leading_keywords_takes_up_to_three_uppercased_words() {
+        assert_eq!(
+            leading_keywords("select a from t"),
+            vec!["SELECT", "A", "FROM"]
+        );
+        assert_eq!(leading_keywords("BEGIN"), vec!["BEGIN"]);
+        assert_eq!(leading_keywords(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn select_through_a_view_resolves_the_views_query() {
+        let schemas = [schema(&["a"])];
+        let views = [ViewSchema {
+            name: "v".to_string(),
+            sql: "CREATE VIEW v AS SELECT a FROM t".to_string(),
+        }];
+        let program = compile_statement_with_views("SELECT a FROM v", &schemas, &views).unwrap();
+        assert_eq!(
+            opcodes(&program),
+            vec![
+                Opcode::OpenRead,
+                Opcode::Rewind,
+                Opcode::Column,
+                Opcode::ResultRow,
+                Opcode::Next,
+                Opcode::Halt,
+            ]
+        );
+    }
+
+    #[test]
+    fn select_through_an_unknown_view_name_falls_back_to_no_such_table() {
+        let schemas = [schema(&["a"])];
+        let err = compile_statement_with_views("SELECT a FROM nope", &schemas, &[]).unwrap_err();
+        assert!(matches!(err, DispatchError::NoSuchTable(name) if name == "nope"));
+    }
+
+    #[test]
+    fn a_view_referencing_itself_is_a_circular_view_error() {
+        let schemas = [schema(&["a"])];
+        let views = [ViewSchema {
+            name: "v".to_string(),
+            sql: "CREATE VIEW v AS SELECT a FROM v".to_string(),
+        }];
+        let err = compile_statement_with_views("SELECT a FROM v", &schemas, &views).unwrap_err();
+        assert!(matches!(
+            err,
+            DispatchError::Codegen(CodegenError::CircularView(name)) if name == "v"
+        ));
+    }
+
+    #[test]
+    fn plain_compile_statement_ignores_views() {
+        // The two-arg entry point every existing caller uses must keep
+        // resolving a bare table name, not fail trying to match it
+        // against an (absent) views catalog.
+        let schemas = [schema(&["a"])];
+        let program = compile_statement("SELECT a FROM t", &schemas).unwrap();
+        assert!(!program.instructions.is_empty());
+    }
+
+    #[test]
+    fn update_where_clause_resolves_a_subquery_against_the_catalog() {
+        let bound = TableSchema {
+            name: "bound".to_string(),
+            columns: vec!["n".to_string()],
+            column_types: vec![String::new()],
+            ..Default::default()
+        };
+        let schemas = [schema(&["a"]), bound];
+        // No rows in `bound`, so `(SELECT n FROM bound)` is NULL and
+        // `a = NULL` never matches -- this only needs to *compile*, not
+        // produce a particular row count.
+        let program = compile_statement(
+            "UPDATE t SET a = 1 WHERE a = (SELECT n FROM bound)",
+            &schemas,
+        )
+        .unwrap();
+        assert!(!program.instructions.is_empty());
+    }
+
+    #[test]
+    fn delete_where_clause_resolves_a_subquery_against_the_catalog() {
+        let bound = TableSchema {
+            name: "bound".to_string(),
+            columns: vec!["n".to_string()],
+            column_types: vec![String::new()],
+            ..Default::default()
+        };
+        let schemas = [schema(&["a"]), bound];
+        let program =
+            compile_statement("DELETE FROM t WHERE a = (SELECT n FROM bound)", &schemas).unwrap();
+        assert!(!program.instructions.is_empty());
     }
 }

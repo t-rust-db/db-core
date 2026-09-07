@@ -27,6 +27,18 @@ use crate::vm::row::{Instruction, Opcode, Program};
 /// Compiles `update` against `schema` (the resolved target table) into
 /// a `Program`.
 pub fn compile_update(schema: &TableSchema, update: &Update) -> Result<Program> {
+    compile_update_with_catalog(schema, update, &[])
+}
+
+/// As [`compile_update`], but also resolves `catalog` for any scalar/
+/// `IN`/`EXISTS` subquery in `update`'s `WHERE`/assignment expressions
+/// that references another table (db-core#206) -- `compile_update`
+/// itself just calls through with an empty catalog.
+pub fn compile_update_with_catalog(
+    schema: &TableSchema,
+    update: &Update,
+    catalog: &[TableSchema],
+) -> Result<Program> {
     if !schema.name.eq_ignore_ascii_case(&update.table) {
         return Err(CodegenError::Unsupported {
             reason: format!(
@@ -78,7 +90,7 @@ pub fn compile_update(schema: &TableSchema, update: &Update) -> Result<Program> 
     ));
     open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR)?;
 
-    let scope = Scope::single(schema.clone(), TABLE_CURSOR);
+    let scope = Scope::single(schema.clone(), TABLE_CURSOR).with_catalog(catalog.to_vec());
     let end_label = em.new_label();
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, TABLE_CURSOR, 0, 0));
     em.patch_p2(rewind_addr, end_label);

@@ -130,10 +130,14 @@ pub use ddl::{
 pub use eqp::{compile_eqp_program, explain_query_plan, EqpRow};
 pub use pragma::compile_pragma;
 pub use select::{compile_select, compile_select_join, compile_select_with_catalog};
-pub use stmt::{compile_delete, compile_insert, compile_update};
+pub use stmt::{
+    compile_delete, compile_delete_with_catalog, compile_insert, compile_update,
+    compile_update_with_catalog,
+};
 pub use subquery::{
-    compile_exists, compile_in_subquery, flatten_from_subquery, materialize_from_subquery,
-    push_down_where_predicates, resolve_from_table_schema,
+    compile_exists, compile_in_subquery, expand_views, flatten_from_subquery,
+    materialize_from_subquery, push_down_where_predicates, resolve_from_table_schema,
+    resolve_views, ResolvedView,
 };
 pub use transaction::{compile_begin, compile_commit, compile_rollback};
 pub use value::compile_value;
@@ -159,6 +163,11 @@ pub enum CodegenError {
         /// What is unsupported, for the error message.
         reason: String,
     },
+    /// A view's `FROM`/`JOIN` expansion (db-core#206,
+    /// [`subquery::views::expand_views`]) referenced a view already on
+    /// the expansion path -- directly or through a chain of other
+    /// views -- which would otherwise recurse forever.
+    CircularView(String),
 }
 
 impl fmt::Display for CodegenError {
@@ -169,6 +178,7 @@ impl fmt::Display for CodegenError {
                 write!(f, "expression nesting exceeds {MAX_EXPR_DEPTH} levels")
             }
             CodegenError::Unsupported { reason } => write!(f, "unsupported: {reason}"),
+            CodegenError::CircularView(name) => write!(f, "circular view reference: {name}"),
         }
     }
 }
@@ -1008,6 +1018,21 @@ pub struct IndexedColumn {
     /// Collation this index column sorts under. Carried for ADR 0012;
     /// not yet consulted by codegen (`#206`).
     pub collation: crate::value::Collation,
+}
+
+/// A view descriptor: just enough (name plus verbatim defining SQL) for
+/// [`subquery::views::resolve_views`]/[`subquery::views::expand_views`]
+/// (db-core#206) to re-parse and substitute a view reference in
+/// `FROM`/`JOIN` position. db-core's own copy, mirroring how
+/// [`TableSchema`] grew a superset by ADR 0012 rather than depending on
+/// `db_storage::row::schema::ViewSchema` (ADR 0008 forbids that
+/// dependency).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ViewSchema {
+    /// The view's name.
+    pub name: String,
+    /// The view's original `CREATE VIEW ... AS <select>` SQL text.
+    pub sql: String,
 }
 
 /// The table(s) a query's column references resolve against. Single-table
