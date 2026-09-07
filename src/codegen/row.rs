@@ -127,7 +127,7 @@ pub use ddl::{
     compile_create_index, compile_create_table, compile_create_view, compile_drop_index,
     compile_drop_table,
 };
-pub use eqp::{explain_query_plan, EqpRow};
+pub use eqp::{compile_eqp_program, explain_query_plan, EqpRow};
 pub use pragma::compile_pragma;
 pub use select::{compile_select, compile_select_join, compile_select_with_catalog};
 pub use stmt::{compile_delete, compile_insert, compile_update};

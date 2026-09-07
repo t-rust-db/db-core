@@ -8,28 +8,33 @@
 //! `BEGIN`/`COMMIT`/`ROLLBACK`/`PRAGMA`/`ANALYZE`/`CREATE TABLE`/
 //! `CREATE INDEX`/`CREATE VIEW`/`DROP TABLE`/`DROP INDEX` (unchanged
 //! since #97), plus `SELECT`/`INSERT`/`UPDATE`/`DELETE` now that #147
-//! retargeted [`super::select`]/[`super::stmt`] onto [`crate::parser::ast`].
+//! retargeted [`super::select`]/[`super::stmt`] onto [`crate::parser::ast`],
+//! and `EXPLAIN QUERY PLAN <select>` (db-core#175, scoped to a real
+//! catalog table with at most one `JOIN` -- [`super::explain_query_plan`]
+//! takes a `TableSchema` directly, not a catalog, so it can't yet
+//! resolve a `WITH`/`FROM`-subquery/compound `SELECT`; bare `EXPLAIN`,
+//! the opcode-listing form, stays `Unsupported`, #55).
 //! A `SELECT` with a single `JOIN` resolves its right-hand table from
 //! `schemas` and compiles via [`super::compile_select_join`]; anything
-//! else (no `JOIN`, an optional `FROM`-subquery) goes through
-//! [`super::compile_select_with_catalog`], which wires its own cursors.
-//! N-way joins, `WITH`, compound `SELECT`, and everything else
+//! else (no `JOIN`, an optional `FROM`-subquery, `WITH`, compound
+//! `SELECT`) goes through [`super::compile_select_with_catalog`], which
+//! wires its own cursors. N-way joins and everything else
 //! [`super::select`] doesn't implement yet surface as
 //! [`CodegenError::Unsupported`] from within it, not from here.
 
 use crate::parser::ast::TableRefKind;
 use crate::parser::row::error::{
     parse_analyze, parse_begin, parse_commit, parse_create_index, parse_create_table,
-    parse_create_view, parse_delete, parse_drop_index, parse_drop_table, parse_insert,
-    parse_pragma, parse_rollback, parse_select, parse_update, ParseOutcome,
+    parse_create_view, parse_delete, parse_drop_index, parse_drop_table, parse_explain,
+    parse_insert, parse_pragma, parse_rollback, parse_select, parse_update, ParseOutcome,
 };
 use crate::vm::row::Program;
 
 use super::{
     compile_analyze, compile_begin, compile_commit, compile_create_index, compile_create_table,
-    compile_create_view, compile_delete, compile_drop_index, compile_drop_table, compile_insert,
-    compile_pragma, compile_rollback, compile_select_join, compile_select_with_catalog,
-    compile_update, CodegenError, TableSchema,
+    compile_create_view, compile_delete, compile_drop_index, compile_drop_table,
+    compile_eqp_program, compile_insert, compile_pragma, compile_rollback, compile_select_join,
+    compile_select_with_catalog, compile_update, explain_query_plan, CodegenError, TableSchema,
 };
 
 /// Failure compiling one dispatched statement -- everything
@@ -75,8 +80,8 @@ impl From<CodegenError> for DispatchError {
 
 /// The first one or two whitespace-separated words of `sql`, uppercased.
 const DISPATCH_WORDS: &[&str] = &[
-    "ANALYZE", "BEGIN", "COMMIT", "CREATE", "DELETE", "DROP", "END", "INDEX", "INSERT", "PRAGMA",
-    "ROLLBACK", "SELECT", "TABLE", "UNIQUE", "UPDATE", "VIEW", "WITH",
+    "ANALYZE", "BEGIN", "COMMIT", "CREATE", "DELETE", "DROP", "END", "EXPLAIN", "INDEX", "INSERT",
+    "PRAGMA", "ROLLBACK", "SELECT", "TABLE", "UNIQUE", "UPDATE", "VIEW", "WITH",
 ];
 
 /// `word`'s canonical uppercase spelling if it's one of the statement
@@ -194,6 +199,72 @@ pub fn compile_statement(sql: &str, schemas: &[TableSchema]) -> Result<Program, 
             ParseOutcome::Accepted(di) => {
                 let root_page = find_index_root(&di.name)?;
                 Ok(compile_drop_index(&di, root_page))
+            }
+            other => Err(parse_error(other)),
+        },
+        // `EXPLAIN QUERY PLAN <select>` (db-core#175): `parse_explain`
+        // itself accepts bare `EXPLAIN` too (opcode listing, no `QUERY
+        // PLAN`) despite its own doc comment's claim otherwise, so the
+        // `if !explain.query_plan` guard below is this arm's only
+        // rejection of that form -- `codegen::row` has no bare-EXPLAIN
+        // (opcode dump) renderer yet (#55). Scoped to the same table
+        // shapes `find_schema` already resolves (a real catalog table,
+        // at most one JOIN): `explain_query_plan` takes a `TableSchema`
+        // directly rather than a catalog to resolve a `WITH`/
+        // FROM-subquery/compound `SELECT` against, so those are
+        // rejected here rather than partially supported.
+        "EXPLAIN" => match parse_explain(sql) {
+            ParseOutcome::Accepted(explain) => {
+                if !explain.query_plan {
+                    return Err(CodegenError::Unsupported {
+                        reason: "bare EXPLAIN (opcode listing) is not yet supported".to_string(),
+                    }
+                    .into());
+                }
+                let query = *explain.select;
+                if query.with_clause.is_some() || !query.compound.is_empty() {
+                    return Err(CodegenError::Unsupported {
+                        reason: "EXPLAIN QUERY PLAN over WITH/compound SELECT is not yet \
+                                 supported"
+                            .to_string(),
+                    }
+                    .into());
+                }
+                let joins = query.from.as_ref().map_or(&[][..], |f| f.joins.as_slice());
+                let no_from_subquery = || {
+                    query
+                        .from
+                        .as_ref()
+                        .and_then(|f| f.first.name())
+                        .ok_or_else(|| CodegenError::Unsupported {
+                            reason: "EXPLAIN QUERY PLAN over a SELECT with no FROM clause or a \
+                                     FROM-subquery is not yet supported"
+                                .to_string(),
+                        })
+                };
+                let (schema, right_schema) = match joins {
+                    [] => (find_schema(no_from_subquery()?)?.clone(), None),
+                    [join] => {
+                        let left = find_schema(no_from_subquery()?)?.clone();
+                        let TableRefKind::Name(right_name) = &join.table.kind else {
+                            return Err(CodegenError::Unsupported {
+                                reason: "EXPLAIN QUERY PLAN against a FROM-subquery is not yet \
+                                         supported"
+                                    .to_string(),
+                            }
+                            .into());
+                        };
+                        (left, Some(find_schema(right_name)?.clone()))
+                    }
+                    [..] => {
+                        return Err(CodegenError::Unsupported {
+                            reason: "N-way joins are not yet supported".to_string(),
+                        }
+                        .into())
+                    }
+                };
+                let rows = explain_query_plan(&query, &schema, right_schema.as_ref())?;
+                Ok(compile_eqp_program(&rows))
             }
             other => Err(parse_error(other)),
         },
@@ -558,6 +629,43 @@ mod tests {
             vm.open_cursor(1, Box::new(right_table)).unwrap();
             let rows = execute(&mut vm, &program).unwrap();
             assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(100)]]);
+        }
+
+        #[test]
+        fn dispatches_explain_query_plan() {
+            let program =
+                compile_statement("EXPLAIN QUERY PLAN SELECT a FROM t", &[schema(&["a"])]).unwrap();
+            let mut vm = Vm::new();
+            let rows = execute(&mut vm, &program).unwrap();
+            assert_eq!(
+                rows,
+                vec![vec![
+                    Value::Integer(1),
+                    Value::Integer(0),
+                    Value::Integer(0),
+                    Value::Text("SCAN t".to_string().into()),
+                ]]
+            );
+        }
+
+        #[test]
+        fn bare_explain_is_unsupported() {
+            // Bare `EXPLAIN` (opcode listing, no `QUERY PLAN`) parses
+            // fine -- `parse_explain`'s own doc comment claims it's
+            // rejected at parse time, but it isn't (db-core#175) -- so
+            // this exercises `compile_statement`'s own
+            // `!explain.query_plan` guard instead.
+            let err = compile_statement("EXPLAIN SELECT a FROM t", &[schema(&["a"])]).unwrap_err();
+            assert!(matches!(err, DispatchError::Codegen(_)), "{err:?}");
+        }
+
+        #[test]
+        fn explain_query_plan_over_an_unknown_table_is_no_such_table() {
+            let err = compile_statement("EXPLAIN QUERY PLAN SELECT a FROM nope", &[]).unwrap_err();
+            assert!(
+                matches!(&err, DispatchError::NoSuchTable(name) if name == "nope"),
+                "{err:?}"
+            );
         }
 
         #[test]
