@@ -17,8 +17,9 @@
 //! compiles today. `USING TEMP B-TREE FOR ORDER BY` is reported for an
 //! `ORDER BY` no index satisfies, matching the sorter that path opens.
 
-use super::{index_scan, range_scan, Result, TableSchema};
+use super::{index_scan, range_scan, Emitter, RegAlloc, Result, TableSchema};
 use crate::parser::ast::{ExprKind, Select};
+use crate::vm::row::{Instruction, Opcode, Program, P4};
 
 /// One row of `EXPLAIN QUERY PLAN` output -- SQLite's own EQP shape
 /// (`id, parent, notused, detail`), distinct from plain `EXPLAIN`'s
@@ -77,6 +78,38 @@ pub fn explain_query_plan(
         push(&mut rows, "USE TEMP B-TREE FOR ORDER BY".to_string());
     }
     Ok(rows)
+}
+
+/// Compiles `rows` (already-computed `EXPLAIN QUERY PLAN` output) into a
+/// `Program` the VM can run like any other query: every row's four
+/// columns bake as constants (there's no cursor to read them from --
+/// `explain_query_plan` already computed the whole plan at codegen
+/// time), `ResultRow`ed in sequence, `Halt` at the end. Mirrors
+/// `dispatch::compile_statement`'s db-core#175 wiring -- this is the
+/// bridge from [`explain_query_plan`]'s plain `Vec<EqpRow>` to a
+/// dispatchable `Program`.
+pub fn compile_eqp_program(rows: &[EqpRow]) -> Program {
+    let mut em = Emitter::new();
+    let mut reg = RegAlloc::new();
+    for row in rows {
+        let id = reg.alloc();
+        em.emit(Instruction::new(Opcode::Integer, row.id, id, 0));
+        let parent = reg.alloc();
+        em.emit(Instruction::new(Opcode::Integer, row.parent, parent, 0));
+        let notused = reg.alloc();
+        em.emit(Instruction::new(Opcode::Integer, row.notused, notused, 0));
+        let detail = reg.alloc();
+        em.emit(Instruction::with_p4(
+            Opcode::String8,
+            0,
+            detail,
+            0,
+            P4::Str(row.detail.clone()),
+        ));
+        em.emit(Instruction::new(Opcode::ResultRow, id, 4, 0));
+    }
+    em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+    em.finish()
 }
 
 /// The outermost table's access path: the index walk one of this
@@ -143,6 +176,40 @@ mod tests {
     use super::*;
     use crate::codegen::row::testutil::select;
     use crate::codegen::row::IndexSchema;
+    use crate::vm::row::{execute, Value, Vm};
+
+    #[test]
+    fn compile_eqp_program_emits_one_result_row_per_eqp_row() {
+        let rows = vec![
+            EqpRow::new(1, "SCAN t".to_string()),
+            EqpRow {
+                id: 2,
+                parent: 1,
+                notused: 0,
+                detail: "SCAN u".to_string(),
+            },
+        ];
+        let program = compile_eqp_program(&rows);
+        let mut vm = Vm::new();
+        let result = execute(&mut vm, &program).unwrap();
+        assert_eq!(
+            result,
+            vec![
+                vec![
+                    Value::Integer(1),
+                    Value::Integer(0),
+                    Value::Integer(0),
+                    Value::Text("SCAN t".to_string().into()),
+                ],
+                vec![
+                    Value::Integer(2),
+                    Value::Integer(1),
+                    Value::Integer(0),
+                    Value::Text("SCAN u".to_string().into()),
+                ],
+            ]
+        );
+    }
 
     fn schema(indexes: Vec<IndexSchema>) -> TableSchema {
         TableSchema {
