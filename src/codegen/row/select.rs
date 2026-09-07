@@ -305,10 +305,20 @@ fn compile_select_inner(
     let join = joins.first();
     match (join, right) {
         (Some(join), Some(_)) => {
-            if !matches!(join.op, JoinOp::Inner | JoinOp::Left | JoinOp::Full) {
+            if join.natural && join.op == JoinOp::Cross {
+                // Rejected at the parser (grammar.rs), never reaches here --
+                // kept as a codegen-side belt-and-suspenders check.
                 return Err(CodegenError::Unsupported {
-                    reason: "only INNER/LEFT/FULL JOIN are supported; the join-order/access-path \
-chooser is deferred to #117, N-way joins to #118"
+                    reason: "NATURAL CROSS JOIN is not valid".to_string(),
+                });
+            }
+            if !matches!(
+                join.op,
+                JoinOp::Inner | JoinOp::Left | JoinOp::Full | JoinOp::Right | JoinOp::Cross
+            ) {
+                return Err(CodegenError::Unsupported {
+                    reason: "the join-order/access-path chooser is deferred to #117, N-way joins \
+to #118"
                         .to_string(),
                 });
             }
@@ -367,10 +377,21 @@ chooser is deferred to #117, N-way joins to #118"
             ResultColumn::Star => {
                 columns.extend(schema.columns.iter().cloned().map(ProjectedColumn::Name));
                 if let Some((right_schema, _)) = right {
+                    // `NATURAL`/`USING` name a set of join-key columns
+                    // that SQL requires to appear once in `SELECT *`,
+                    // not once per side -- the left table's copy above
+                    // already covers them, so the right table's star
+                    // expansion excludes them here.
+                    let dedup = join.map(|j| join_key_columns(schema, right_schema, j));
                     columns.extend(
                         right_schema
                             .columns
                             .iter()
+                            .filter(|c| {
+                                dedup.as_ref().is_none_or(|keys| {
+                                    !keys.iter().any(|k| k.eq_ignore_ascii_case(c))
+                                })
+                            })
                             .map(|c| ProjectedColumn::Name(format!("{}.{c}", right_schema.name))),
                     );
                 }
@@ -622,12 +643,14 @@ chooser is deferred to #117, N-way joins to #118"
     em.place(outer_loop_start);
     let outer_row_skip = em.new_label();
 
-    // `FULL OUTER`'s limit-guard target must skip *both* passes, not
-    // just this outer scan -- `end_label` here is where pass two (if
-    // any) begins, not the true program end, so it can't double as the
-    // limit target the way it does for every other join kind (where
-    // there is no second pass, and the two labels are the same point).
-    let final_label = if matches!(join.map(|j| j.op), Some(JoinOp::Full)) {
+    // `FULL` and `RIGHT` both need a second pass over `right_cursor` (see
+    // `compile_full_outer_right_pass`) -- `RIGHT`'s is that same pass,
+    // since a right-outer join's unmatched-right-row null-extension is
+    // exactly `FULL`'s right-hand half with no left-hand half. Either
+    // way, `end_label` here is where pass two begins, not the true
+    // program end, so a limit guard must target `final_label` instead --
+    // the only point that's the true end for every join kind alike.
+    let final_label = if matches!(join.map(|j| j.op), Some(JoinOp::Full | JoinOp::Right)) {
         em.new_label()
     } else {
         end_label
@@ -687,7 +710,7 @@ chooser is deferred to #117, N-way joins to #118"
     em.place(end_label);
 
     if let (Some(join), Some((_, right_cursor))) = (join, right) {
-        if join.op == JoinOp::Full {
+        if matches!(join.op, JoinOp::Full | JoinOp::Right) {
             compile_full_outer_right_pass(
                 &mut em,
                 &mut reg,
@@ -975,49 +998,99 @@ fn unqualified(name: &str) -> &str {
 /// unqualified-defaults-to-left convention.
 pub(super) fn build_join_cond(scope: &Scope, join: &Join) -> Result<Expr> {
     if join.natural {
-        return Err(CodegenError::Unsupported {
-            reason: "NATURAL JOIN is not supported yet".to_string(),
-        });
+        let common = match scope.right.as_ref() {
+            Some((right_schema, _)) => join_key_columns_named(&scope.schema, right_schema),
+            None => Vec::new(),
+        };
+        return build_equi_cond(scope, &common);
     }
     match &join.constraint {
         Some(JoinConstraint::On(expr)) => Ok(expr.clone()),
-        Some(JoinConstraint::Using(cols)) => {
-            let right_table_name = scope
-                .right
-                .as_ref()
-                .map(|(right_schema, _)| right_schema.name.clone())
-                .unwrap_or_default();
-            let mut conds = cols.iter().map(|col| {
-                let col = unqualified(col);
-                Expr {
-                    kind: ExprKind::Binary {
-                        op: BinaryOp::Eq,
-                        lhs: Box::new(super::column_expr(format!("{}.{col}", scope.schema.name))),
-                        rhs: Box::new(super::column_expr(format!("{right_table_name}.{col}"))),
-                    },
-                    span: crate::parser::Span::UNKNOWN,
-                }
-            });
-            // `USING` requires at least one column (the grammar
-            // enforces it), so `next()` is `Some` for any parsed join.
-            let Some(first) = conds.next() else {
-                return Err(CodegenError::Unsupported {
-                    reason: "USING with no columns".to_string(),
-                });
-            };
-            Ok(conds.fold(first, |acc, cond| Expr {
-                kind: ExprKind::Binary {
-                    op: BinaryOp::And,
-                    lhs: Box::new(acc),
-                    rhs: Box::new(cond),
-                },
-                span: crate::parser::Span::UNKNOWN,
-            }))
-        }
+        Some(JoinConstraint::Using(cols)) => build_equi_cond(scope, cols),
+        None if join.op == JoinOp::Cross => Ok(Expr {
+            kind: ExprKind::Literal(Literal::True),
+            span: crate::parser::Span::UNKNOWN,
+        }),
         None => Err(CodegenError::Unsupported {
             reason: "a JOIN without ON or USING is not supported".to_string(),
         }),
     }
+}
+
+/// The columns a `USING`/`NATURAL` join treats as its key: `USING`'s
+/// explicit list, or every column name shared by both tables
+/// (case-insensitively, SQLite's own identifier-matching rule) for
+/// `NATURAL` -- no shared column at all degrades to an unconditional
+/// join, matching SQLite's own documented behavior for `NATURAL JOIN`
+/// over disjoint schemas. Anything else (a plain `ON`, or a constraint-
+/// less `CROSS JOIN`) has no key columns to fold into `SELECT *`'s
+/// dedup.
+fn join_key_columns(schema: &TableSchema, right_schema: &TableSchema, join: &Join) -> Vec<String> {
+    if join.natural {
+        return join_key_columns_named(schema, right_schema);
+    }
+    match &join.constraint {
+        Some(JoinConstraint::Using(cols)) => {
+            cols.iter().map(|c| unqualified(c).to_string()).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Every column name `schema` and `right_schema` share, case-insensitively,
+/// in `schema`'s own column order -- the computed key list `NATURAL JOIN`
+/// synthesizes in place of an explicit `USING (...)`.
+fn join_key_columns_named(schema: &TableSchema, right_schema: &TableSchema) -> Vec<String> {
+    schema
+        .columns
+        .iter()
+        .filter(|col| {
+            right_schema
+                .columns
+                .iter()
+                .any(|rc| rc.eq_ignore_ascii_case(col))
+        })
+        .cloned()
+        .collect()
+}
+
+/// Synthesizes `lhs.col = rhs.col AND ...` for every name in `cols`,
+/// qualified against `scope`'s two tables -- the shared machinery behind
+/// both `USING (...)` and `NATURAL`'s computed column list. An empty
+/// `cols` (a `NATURAL` join between tables with no common column name)
+/// compiles as an unconditional join, same as `CROSS JOIN` with no
+/// constraint.
+fn build_equi_cond(scope: &Scope, cols: &[String]) -> Result<Expr> {
+    let right_table_name = scope
+        .right
+        .as_ref()
+        .map(|(right_schema, _)| right_schema.name.clone())
+        .unwrap_or_default();
+    let mut conds = cols.iter().map(|col| {
+        let col = unqualified(col);
+        Expr {
+            kind: ExprKind::Binary {
+                op: BinaryOp::Eq,
+                lhs: Box::new(super::column_expr(format!("{}.{col}", scope.schema.name))),
+                rhs: Box::new(super::column_expr(format!("{right_table_name}.{col}"))),
+            },
+            span: crate::parser::Span::UNKNOWN,
+        }
+    });
+    let Some(first) = conds.next() else {
+        return Ok(Expr {
+            kind: ExprKind::Literal(Literal::True),
+            span: crate::parser::Span::UNKNOWN,
+        });
+    };
+    Ok(conds.fold(first, |acc, cond| Expr {
+        kind: ExprKind::Binary {
+            op: BinaryOp::And,
+            lhs: Box::new(acc),
+            rhs: Box::new(cond),
+        },
+        span: crate::parser::Span::UNKNOWN,
+    }))
 }
 
 /// Compiles the inner-join loop for `join` against `right_cursor`,
@@ -2177,13 +2250,247 @@ mod tests {
     }
 
     #[test]
-    fn right_join_is_unsupported() {
-        let schema = schema(&["a"]);
+    fn right_join_matches_rows_on_equi_condition() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let query = query("SELECT a, u.c FROM t RIGHT JOIN u ON t.a = u.b");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(2), Value::Integer(200)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(2), Value::Integer(200)],
+            ]
+        );
+    }
+
+    #[test]
+    fn right_join_null_extends_unmatched_right_rows() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let query = query("SELECT a, u.c FROM t RIGHT JOIN u ON t.a = u.b");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(3), Value::Integer(300)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Null, Value::Integer(300)],
+            ]
+        );
+    }
+
+    #[test]
+    fn right_join_with_empty_left_null_extends_every_right_row() {
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let query = query("SELECT a, u.c FROM t RIGHT JOIN u ON t.a = u.b");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(2), Value::Integer(200)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Null, Value::Integer(100)],
+                vec![Value::Null, Value::Integer(200)],
+            ]
+        );
+    }
+
+    #[test]
+    fn right_join_does_not_double_emit_a_matched_right_row() {
+        // A right row matched by two left rows must still surface twice
+        // (fan-out is correct join semantics) but must never *also* be
+        // emitted a third time by the unmatched-right second pass.
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b", "c"]);
+        let query = query("SELECT a, u.c FROM t RIGHT JOIN u ON t.a = u.b");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(1)]],
+            vec![vec![Value::Integer(1), Value::Integer(100)]],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(1), Value::Integer(100)],
+            ]
+        );
+    }
+
+    #[test]
+    fn cross_join_produces_the_cartesian_product() {
+        let left = schema(&["a"]);
         let right = schema_named("u", &["b"]);
-        let query = query("SELECT a FROM t RIGHT JOIN u ON t.a = u.b");
-        assert!(matches!(
-            compile_select_join(&schema, 0, &right, 1, &query),
-            Err(CodegenError::Unsupported { .. })
+        let query = query("SELECT a, u.b FROM t CROSS JOIN u");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![vec![Value::Integer(10)], vec![Value::Integer(20)]],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(10)],
+                vec![Value::Integer(1), Value::Integer(20)],
+                vec![Value::Integer(2), Value::Integer(10)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ]
+        );
+    }
+
+    #[test]
+    fn cross_join_with_using_still_filters() {
+        // `CROSS JOIN ... USING (...)` is valid grammar (grammar.rs) --
+        // codegen must still honor the explicit column-equality filter
+        // rather than treating every `CROSS JOIN` as unconditional.
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["a", "c"]);
+        let query = query("SELECT a, u.c FROM t CROSS JOIN u USING (a)");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(3), Value::Integer(300)],
+            ],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(100)]]);
+    }
+
+    #[test]
+    fn natural_join_matches_on_every_shared_column_name() {
+        let left = schema_named("t", &["a", "b"]);
+        let right = schema_named("u", &["a", "c"]);
+        let query = query("SELECT a, b, u.c FROM t NATURAL JOIN u");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![
+                vec![Value::Integer(1), Value::Integer(10)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ],
+            vec![
+                vec![Value::Integer(1), Value::Integer(100)],
+                vec![Value::Integer(3), Value::Integer(300)],
+            ],
+        );
+        assert_eq!(
+            rows,
+            vec![vec![
+                Value::Integer(1),
+                Value::Integer(10),
+                Value::Integer(100)
+            ]]
+        );
+    }
+
+    #[test]
+    fn natural_join_star_expansion_does_not_duplicate_shared_columns() {
+        let left = schema_named("t", &["a", "b"]);
+        let right = schema_named("u", &["a", "c"]);
+        let query = query("SELECT * FROM t NATURAL JOIN u");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1), Value::Integer(10)]],
+            vec![vec![Value::Integer(1), Value::Integer(100)]],
+        );
+        assert_eq!(
+            rows,
+            vec![vec![
+                Value::Integer(1),
+                Value::Integer(10),
+                Value::Integer(100)
+            ]]
+        );
+    }
+
+    #[test]
+    fn using_join_star_expansion_does_not_duplicate_named_columns() {
+        let left = schema_named("t", &["a", "b"]);
+        let right = schema_named("u", &["a", "c"]);
+        let query = query("SELECT * FROM t JOIN u USING (a)");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1), Value::Integer(10)]],
+            vec![vec![Value::Integer(1), Value::Integer(100)]],
+        );
+        assert_eq!(
+            rows,
+            vec![vec![
+                Value::Integer(1),
+                Value::Integer(10),
+                Value::Integer(100)
+            ]]
+        );
+    }
+
+    #[test]
+    fn natural_join_with_no_shared_columns_is_unconditional() {
+        let left = schema_named("t", &["a"]);
+        let right = schema_named("u", &["b"]);
+        let query = query("SELECT a, u.b FROM t NATURAL JOIN u");
+        let rows = run_join(
+            &left,
+            &right,
+            &query,
+            vec![vec![Value::Integer(1)], vec![Value::Integer(2)]],
+            vec![vec![Value::Integer(10)], vec![Value::Integer(20)]],
+        );
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(10)],
+                vec![Value::Integer(1), Value::Integer(20)],
+                vec![Value::Integer(2), Value::Integer(10)],
+                vec![Value::Integer(2), Value::Integer(20)],
+            ]
+        );
+    }
+
+    #[test]
+    fn natural_cross_join_does_not_parse() {
+        // `NATURAL CROSS JOIN` is invalid grammar (grammar.rs), same as
+        // real SQLite -- it never reaches codegen at all.
+        assert!(!matches!(
+            crate::parser::row::parse_select("SELECT a FROM t NATURAL CROSS JOIN u"),
+            crate::parser::row::ParseOutcome::Accepted(_)
         ));
     }
 
@@ -3041,6 +3348,20 @@ mod tests {
         let left = schema(&["a"]);
         let right = schema_named("u", &["b"]);
         let query = query("SELECT COUNT(*) FROM t FULL JOIN u ON t.a = u.b");
+        assert!(matches!(
+            compile_select_join(&left, 0, &right, 1, &query),
+            Err(CodegenError::Unsupported { .. })
+        ));
+    }
+
+    #[test]
+    fn right_join_combined_with_aggregation_is_unsupported() {
+        // #208 adds RIGHT/NATURAL/USING/CROSS to the non-aggregate join
+        // path only -- `compile_joined_grouped_scan` (aggregate/join.rs)
+        // still aggregates INNER/LEFT alone.
+        let left = schema(&["a"]);
+        let right = schema_named("u", &["b"]);
+        let query = query("SELECT COUNT(*) FROM t RIGHT JOIN u ON t.a = u.b");
         assert!(matches!(
             compile_select_join(&left, 0, &right, 1, &query),
             Err(CodegenError::Unsupported { .. })

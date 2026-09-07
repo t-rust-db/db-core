@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.68.0] - 2026-09-07
+
+### Added
+
+- **`RIGHT`/`NATURAL`/`USING`/`CROSS` join codegen** (#208) -- `codegen::row`'s join gate now admits `JoinOp::Right` and `JoinOp::Cross` (the parser has produced this AST since #250; only codegen rejected them). `RIGHT JOIN` reuses the existing `FULL OUTER`'s second pass unchanged, since a right-outer null-extension is exactly that pass's right-hand half with no left-hand half. `NATURAL` synthesizes its join condition from the two tables' shared column names (case-insensitive), degrading to an unconditional join when none are shared, matching SQLite. `CROSS JOIN` with no `ON`/`USING` compiles as an unconditional nested loop instead of erroring; `CROSS JOIN ... USING (...)` still filters. `SELECT *` now also dedupes `NATURAL`/`USING`'s join-key columns instead of emitting them from both sides -- a latent bug for `USING` even before this PR. Aggregation over a join remains `INNER`/`LEFT`-only, unchanged; two-table joins only, N-way joins remain tracked in #118.
+
 ## [0.67.0] - 2026-09-07
 
 ### Added
