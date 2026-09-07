@@ -10,9 +10,9 @@ all-features = true
 ignore = []
 
 [licenses]
-# db-core itself is Apache-2.0; MIT is the common companion license for the
-# Rust ecosystem's dependency graph.
-allow = ["Apache-2.0", "MIT"]
+# db-core itself is Apache-2.0. No dependency today pulls in anything else;
+# add a license here only once a real dependency actually needs it.
+allow = ["Apache-2.0"]
 confidence-threshold = 0.8
 
 [bans]
