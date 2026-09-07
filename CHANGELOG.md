@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.63.0] - 2026-09-07
+
+### Added
+
+- **Computed expressions in the `codegen::batch` `SELECT` list** (#198) -- `parser::column::validate_select` rejected any computed expression in the `SELECT` list (`SELECT -x`, `SELECT a || b`, `SELECT x * 2 FROM t` all failed at parse time), only accepting bare columns, `*`, aggregate calls, and window functions; `codegen::row` gained the row-level equivalent in #168, and `codegen::batch` already lowered `Binary`/`Unary`/`Concat`/`Neg` for `WHERE` (`MapOp::*`) but had no counterpart for `SELECT`. Validation now delegates to the existing `WHERE`-clause expression validator, and `codegen::batch` gains an `Item::Expr` projection kind compiled through the same `compile_expr`/`MapOp` machinery, with `EXPLAIN` and the AOT `emit::generate` path picking it up via the existing output-column-header renderers. A computed expression alongside an ungrouped aggregate, or alongside a window function, is still rejected -- neither compile path composes with those yet.
+
 ## [0.62.3] - 2026-09-07
 
 ### Fixed
