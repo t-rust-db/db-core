@@ -95,8 +95,7 @@ emit-batch = ["codegen-batch"]
 emit-row = []
 emit-stream = []
 
-# sqlite-rs's lint bar (#82). mod_module_files deliberately absent: the tree
-# still has mod.rs module roots (src/codegen/row/mod.rs, ...).
+# sqlite-rs's lint bar (#82).
 [lints.rust]
 unsafe_code = "deny"
 

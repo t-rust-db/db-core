@@ -6876,78 +6876,6 @@
     "compiler_void": false
   },
   {
-    "id": "mod_98",
-    "file": "src/codegen/row/aggregate/mod.rs",
-    "line": 98,
-    "decision": "match &expr.kind {\n            ExprKind::Column { name, .. } => Ok(name.as_str()),\n            _ => Err(CodegenError::Unsupported {\n                reason: \"GROUP BY an expression is not supported by codegen::row yet\".to_string(),\n            }),\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_124",
-    "file": "src/codegen/row/aggregate/mod.rs",
-    "line": 124,
-    "decision": "match &expr.kind {\n            ExprKind::Column { name, .. } => GroupByTarget::Column(name.clone()),\n            _ => GroupByTarget::Expr(expr.clone()),\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_139",
-    "file": "src/codegen/row/aggregate/mod.rs",
-    "line": 139,
-    "decision": "match target {\n        GroupByTarget::Column(name) => {\n            super::value::expr_affinity(scope, &super::column_expr(name))\n        }\n        GroupByTarget::Expr(expr) => super::value::expr_affinity(scope, expr),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_227",
-    "file": "src/codegen/row/aggregate/mod.rs",
-    "line": 227,
-    "decision": "hash::try_compile_hash_grouped_scan(\n        em, reg, query, schema, cursors, limit_reg, end_label, sink,\n    )?",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "mod_307",
-    "file": "src/codegen/row/aggregate/mod.rs",
-    "line": 307,
-    "decision": "match target {\n            GroupByTarget::Column(name) => schema\n                .column_index(name)\n                .ok_or_else(|| CodegenError::UnknownColumn(name.clone()))?,\n            GroupByTarget::Expr(expr) => {\n                let r = super::value::compile_value(em, reg, &scope, expr)?;\n                usize::try_from(r.saturating_sub(first)).unwrap_or(0)\n            }\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_360",
-    "file": "src/codegen/row/aggregate/mod.rs",
-    "line": 360,
-    "decision": "implicit_group",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "mod_466",
-    "file": "src/codegen/row/aggregate/mod.rs",
-    "line": 466,
-    "decision": "implicit_group",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "mod_470",
-    "file": "src/codegen/row/aggregate/mod.rs",
-    "line": 470,
-    "decision": "!implicit_group",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
     "id": "hash_47",
     "file": "src/codegen/row/aggregate/hash.rs",
     "line": 47,
@@ -7263,156 +7191,75 @@
     "compiler_void": true
   },
   {
-    "id": "mod_166",
-    "file": "src/codegen/row/mod.rs",
-    "line": 166,
-    "decision": "match self {\n            CodegenError::UnknownColumn(name) => write!(f, \"unknown column: {name}\"),\n            CodegenError::TooDeep => {\n                write!(f, \"expression nesting exceeds {MAX_EXPR_DEPTH} levels\")\n            }\n            CodegenError::Unsupported { reason } => write!(f, \"unsupported: {reason}\"),\n        }",
+    "id": "aggregate_98",
+    "file": "src/codegen/row/aggregate.rs",
+    "line": 98,
+    "decision": "match &expr.kind {\n            ExprKind::Column { name, .. } => Ok(name.as_str()),\n            _ => Err(CodegenError::Unsupported {\n                reason: \"GROUP BY an expression is not supported by codegen::row yet\".to_string(),\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "mod_254",
-    "file": "src/codegen/row/mod.rs",
-    "line": 254,
-    "decision": "match self.on_null {\n                NullTarget::True => NullTarget::False,\n                NullTarget::False => NullTarget::True,\n            }",
+    "id": "aggregate_124",
+    "file": "src/codegen/row/aggregate.rs",
+    "line": 124,
+    "decision": "match &expr.kind {\n            ExprKind::Column { name, .. } => GroupByTarget::Column(name.clone()),\n            _ => GroupByTarget::Expr(expr.clone()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "mod_460",
-    "file": "src/codegen/row/mod.rs",
-    "line": 460,
-    "decision": "match kind {\n            ParamKind::Anonymous => {\n                let slot = self.next_param;\n                self.next_param = self.next_param.saturating_add(1);\n                self.max_param = self.max_param.max(slot);\n                slot\n            }\n            ParamKind::Numbered(n) => {\n                let slot = i32::try_from(*n).unwrap_or(i32::MAX);\n                self.next_param = self.next_param.max(slot.saturating_add(1));\n                self.max_param = self.max_param.max(slot);\n                slot\n            }\n            ParamKind::Colon(name) => self.alloc_named_param(format!(\":{name}\")),\n            ParamKind::At(name) => self.alloc_named_param(format!(\"@{name}\")),\n            ParamKind::Dollar(name) => self.alloc_named_param(format!(\"${name}\")),\n        }",
+    "id": "aggregate_139",
+    "file": "src/codegen/row/aggregate.rs",
+    "line": 139,
+    "decision": "match target {\n        GroupByTarget::Column(name) => {\n            super::value::expr_affinity(scope, &super::column_expr(name))\n        }\n        GroupByTarget::Expr(expr) => super::value::expr_affinity(scope, expr),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "mod_588",
-    "file": "src/codegen/row/mod.rs",
-    "line": 588,
-    "decision": "match &expr.kind {\n        ExprKind::Column { name, .. } => f(name),\n        ExprKind::Literal(_) | ExprKind::Param(_) => {}\n        ExprKind::Paren(inner)\n        | ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Cast { expr: inner, .. }\n        | ExprKind::Collate { expr: inner, .. }\n        | ExprKind::InSubquery { expr: inner, .. } => walk_columns(inner, f),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            walk_columns(lhs, f);\n            walk_columns(rhs, f);\n        }\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            ..\n        } => {\n            walk_columns(inner, f);\n            walk_columns(lo, f);\n            walk_columns(hi, f);\n        }\n        ExprKind::In {\n            expr: inner, list, ..\n        } => {\n            walk_columns(inner, f);\n            for item in list {\n                walk_columns(item, f);\n            }\n        }\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape,\n            ..\n        } => {\n            walk_columns(inner, f);\n            walk_columns(pattern, f);\n            if let Some(escape) = escape {\n                walk_columns(escape, f);\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(operand) = operand {\n                walk_columns(operand, f);\n            }\n            for (cond, result) in whens {\n                walk_columns(cond, f);\n                walk_columns(result, f);\n            }\n            if let Some(else_) = else_ {\n                walk_columns(else_, f);\n            }\n        }\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(args) = args {\n                for arg in args {\n                    walk_columns(arg, f);\n                }\n            }\n        }\n        ExprKind::InSubqueryMulti { exprs, .. } => {\n            for e in exprs {\n                walk_columns(e, f);\n            }\n        }\n        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_665",
-    "file": "src/codegen/row/mod.rs",
-    "line": 665,
-    "decision": "match &mut expr.kind {\n        ExprKind::Column { name, .. } => f(name),\n        ExprKind::Literal(_) | ExprKind::Param(_) => {}\n        ExprKind::Paren(inner)\n        | ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Cast { expr: inner, .. }\n        | ExprKind::Collate { expr: inner, .. }\n        | ExprKind::InSubquery { expr: inner, .. } => walk_columns_mut(inner, f),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            walk_columns_mut(lhs, f);\n            walk_columns_mut(rhs, f);\n        }\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            ..\n        } => {\n            walk_columns_mut(inner, f);\n            walk_columns_mut(lo, f);\n            walk_columns_mut(hi, f);\n        }\n        ExprKind::In {\n            expr: inner, list, ..\n        } => {\n            walk_columns_mut(inner, f);\n            for item in list {\n                walk_columns_mut(item, f);\n            }\n        }\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape,\n            ..\n        } => {\n            walk_columns_mut(inner, f);\n            walk_columns_mut(pattern, f);\n            if let Some(escape) = escape {\n                walk_columns_mut(escape, f);\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(operand) = operand {\n                walk_columns_mut(operand, f);\n            }\n            for (cond, result) in whens {\n                walk_columns_mut(cond, f);\n                walk_columns_mut(result, f);\n            }\n            if let Some(else_) = else_ {\n                walk_columns_mut(else_, f);\n            }\n        }\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(args) = args {\n                for arg in args {\n                    walk_columns_mut(arg, f);\n                }\n            }\n        }\n        ExprKind::InSubqueryMulti { exprs, .. } => {\n            for e in exprs {\n                walk_columns_mut(e, f);\n            }\n        }\n        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_744",
-    "file": "src/codegen/row/mod.rs",
-    "line": 744,
-    "decision": "matches!(\n            e.kind,\n            ExprKind::Subquery(_)\n                | ExprKind::Exists { .. }\n                | ExprKind::InSubquery { .. }\n                | ExprKind::InSubqueryMulti { .. }\n        )",
+    "id": "aggregate_227",
+    "file": "src/codegen/row/aggregate.rs",
+    "line": 227,
+    "decision": "hash::try_compile_hash_grouped_scan(\n        em, reg, query, schema, cursors, limit_reg, end_label, sink,\n    )?",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "mod_761",
-    "file": "src/codegen/row/mod.rs",
-    "line": 761,
-    "decision": "match &expr.kind {\n        ExprKind::Column { .. } | ExprKind::Literal(_) | ExprKind::Param(_) => {}\n        ExprKind::Paren(inner)\n        | ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Cast { expr: inner, .. }\n        | ExprKind::Collate { expr: inner, .. }\n        | ExprKind::InSubquery { expr: inner, .. } => recurse(inner),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            recurse(lhs);\n            recurse(rhs);\n        }\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            ..\n        } => {\n            recurse(inner);\n            recurse(lo);\n            recurse(hi);\n        }\n        ExprKind::In {\n            expr: inner, list, ..\n        } => {\n            recurse(inner);\n            list.iter().for_each(recurse);\n        }\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape,\n            ..\n        } => {\n            recurse(inner);\n            recurse(pattern);\n            if let Some(escape) = escape {\n                recurse(escape);\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(operand) = operand {\n                recurse(operand);\n            }\n            for (cond, result) in whens {\n                recurse(cond);\n                recurse(result);\n            }\n            if let Some(else_) = else_ {\n                recurse(else_);\n            }\n        }\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(args) = args {\n                args.iter().for_each(recurse);\n            }\n        }\n        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().for_each(recurse),\n        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}\n    }",
+    "id": "aggregate_307",
+    "file": "src/codegen/row/aggregate.rs",
+    "line": 307,
+    "decision": "match target {\n            GroupByTarget::Column(name) => schema\n                .column_index(name)\n                .ok_or_else(|| CodegenError::UnknownColumn(name.clone()))?,\n            GroupByTarget::Expr(expr) => {\n                let r = super::value::compile_value(em, reg, &scope, expr)?;\n                usize::try_from(r.saturating_sub(first)).unwrap_or(0)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "mod_855",
-    "file": "src/codegen/row/mod.rs",
-    "line": 855,
-    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"expected {sql:?} to parse as a SELECT, got {other:?}\"),\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_865",
-    "file": "src/codegen/row/mod.rs",
-    "line": 865,
-    "decision": "match select.columns.into_iter().next() {\n            Some(ResultColumn::Expr { expr, .. }) => expr,\n            other => panic!(\"expected {sql:?} to parse as one expression, got {other:?}\"),\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_873",
-    "file": "src/codegen/row/mod.rs",
-    "line": 873,
-    "decision": "match crate::parser::row::parse_insert(sql) {\n            ParseOutcome::Accepted(insert) => *insert,\n            other => panic!(\"expected {sql:?} to parse as an INSERT, got {other:?}\"),\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_881",
-    "file": "src/codegen/row/mod.rs",
-    "line": 881,
-    "decision": "match crate::parser::row::parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"expected {sql:?} to parse as an UPDATE, got {other:?}\"),\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_889",
-    "file": "src/codegen/row/mod.rs",
-    "line": 889,
-    "decision": "match crate::parser::row::parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => *delete,\n            other => panic!(\"expected {sql:?} to parse as a DELETE, got {other:?}\"),\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_1039",
-    "file": "src/codegen/row/mod.rs",
-    "line": 1039,
-    "decision": "match name.split_once('.') {\n            Some((table, column)) => (Some(table), column),\n            None => (None, name),\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_1052",
-    "file": "src/codegen/row/mod.rs",
-    "line": 1052,
-    "decision": "match self.resolve_local(name) {\n            Some(binding) => Ok(binding),\n            None => match &self.outer {\n                Some(outer) => outer.resolve(name),\n                None => Err(CodegenError::UnknownColumn(name.to_string())),\n            },\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_1054",
-    "file": "src/codegen/row/mod.rs",
-    "line": 1054,
-    "decision": "match &self.outer {\n                Some(outer) => outer.resolve(name),\n                None => Err(CodegenError::UnknownColumn(name.to_string())),\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "mod_1070",
-    "file": "src/codegen/row/mod.rs",
-    "line": 1070,
-    "decision": "q.eq_ignore_ascii_case(&right_schema.name)",
+    "id": "aggregate_360",
+    "file": "src/codegen/row/aggregate.rs",
+    "line": 360,
+    "decision": "implicit_group",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "mod_1077",
-    "file": "src/codegen/row/mod.rs",
-    "line": 1077,
-    "decision": "self.outer.is_some() && !q.eq_ignore_ascii_case(&self.schema.name)",
-    "conditions": 2,
-    "vectors_required": 3,
+    "id": "aggregate_466",
+    "file": "src/codegen/row/aggregate.rs",
+    "line": 466,
+    "decision": "implicit_group",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "aggregate_470",
+    "file": "src/codegen/row/aggregate.rs",
+    "line": 470,
+    "decision": "!implicit_group",
+    "conditions": 1,
+    "vectors_required": 2,
     "compiler_void": false
   },
   {
@@ -8575,6 +8422,159 @@
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
+  },
+  {
+    "id": "row_166",
+    "file": "src/codegen/row.rs",
+    "line": 166,
+    "decision": "match self {\n            CodegenError::UnknownColumn(name) => write!(f, \"unknown column: {name}\"),\n            CodegenError::TooDeep => {\n                write!(f, \"expression nesting exceeds {MAX_EXPR_DEPTH} levels\")\n            }\n            CodegenError::Unsupported { reason } => write!(f, \"unsupported: {reason}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_254",
+    "file": "src/codegen/row.rs",
+    "line": 254,
+    "decision": "match self.on_null {\n                NullTarget::True => NullTarget::False,\n                NullTarget::False => NullTarget::True,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_460",
+    "file": "src/codegen/row.rs",
+    "line": 460,
+    "decision": "match kind {\n            ParamKind::Anonymous => {\n                let slot = self.next_param;\n                self.next_param = self.next_param.saturating_add(1);\n                self.max_param = self.max_param.max(slot);\n                slot\n            }\n            ParamKind::Numbered(n) => {\n                let slot = i32::try_from(*n).unwrap_or(i32::MAX);\n                self.next_param = self.next_param.max(slot.saturating_add(1));\n                self.max_param = self.max_param.max(slot);\n                slot\n            }\n            ParamKind::Colon(name) => self.alloc_named_param(format!(\":{name}\")),\n            ParamKind::At(name) => self.alloc_named_param(format!(\"@{name}\")),\n            ParamKind::Dollar(name) => self.alloc_named_param(format!(\"${name}\")),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_588",
+    "file": "src/codegen/row.rs",
+    "line": 588,
+    "decision": "match &expr.kind {\n        ExprKind::Column { name, .. } => f(name),\n        ExprKind::Literal(_) | ExprKind::Param(_) => {}\n        ExprKind::Paren(inner)\n        | ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Cast { expr: inner, .. }\n        | ExprKind::Collate { expr: inner, .. }\n        | ExprKind::InSubquery { expr: inner, .. } => walk_columns(inner, f),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            walk_columns(lhs, f);\n            walk_columns(rhs, f);\n        }\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            ..\n        } => {\n            walk_columns(inner, f);\n            walk_columns(lo, f);\n            walk_columns(hi, f);\n        }\n        ExprKind::In {\n            expr: inner, list, ..\n        } => {\n            walk_columns(inner, f);\n            for item in list {\n                walk_columns(item, f);\n            }\n        }\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape,\n            ..\n        } => {\n            walk_columns(inner, f);\n            walk_columns(pattern, f);\n            if let Some(escape) = escape {\n                walk_columns(escape, f);\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(operand) = operand {\n                walk_columns(operand, f);\n            }\n            for (cond, result) in whens {\n                walk_columns(cond, f);\n                walk_columns(result, f);\n            }\n            if let Some(else_) = else_ {\n                walk_columns(else_, f);\n            }\n        }\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(args) = args {\n                for arg in args {\n                    walk_columns(arg, f);\n                }\n            }\n        }\n        ExprKind::InSubqueryMulti { exprs, .. } => {\n            for e in exprs {\n                walk_columns(e, f);\n            }\n        }\n        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_665",
+    "file": "src/codegen/row.rs",
+    "line": 665,
+    "decision": "match &mut expr.kind {\n        ExprKind::Column { name, .. } => f(name),\n        ExprKind::Literal(_) | ExprKind::Param(_) => {}\n        ExprKind::Paren(inner)\n        | ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Cast { expr: inner, .. }\n        | ExprKind::Collate { expr: inner, .. }\n        | ExprKind::InSubquery { expr: inner, .. } => walk_columns_mut(inner, f),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            walk_columns_mut(lhs, f);\n            walk_columns_mut(rhs, f);\n        }\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            ..\n        } => {\n            walk_columns_mut(inner, f);\n            walk_columns_mut(lo, f);\n            walk_columns_mut(hi, f);\n        }\n        ExprKind::In {\n            expr: inner, list, ..\n        } => {\n            walk_columns_mut(inner, f);\n            for item in list {\n                walk_columns_mut(item, f);\n            }\n        }\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape,\n            ..\n        } => {\n            walk_columns_mut(inner, f);\n            walk_columns_mut(pattern, f);\n            if let Some(escape) = escape {\n                walk_columns_mut(escape, f);\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(operand) = operand {\n                walk_columns_mut(operand, f);\n            }\n            for (cond, result) in whens {\n                walk_columns_mut(cond, f);\n                walk_columns_mut(result, f);\n            }\n            if let Some(else_) = else_ {\n                walk_columns_mut(else_, f);\n            }\n        }\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(args) = args {\n                for arg in args {\n                    walk_columns_mut(arg, f);\n                }\n            }\n        }\n        ExprKind::InSubqueryMulti { exprs, .. } => {\n            for e in exprs {\n                walk_columns_mut(e, f);\n            }\n        }\n        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_744",
+    "file": "src/codegen/row.rs",
+    "line": 744,
+    "decision": "matches!(\n            e.kind,\n            ExprKind::Subquery(_)\n                | ExprKind::Exists { .. }\n                | ExprKind::InSubquery { .. }\n                | ExprKind::InSubqueryMulti { .. }\n        )",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "row_761",
+    "file": "src/codegen/row.rs",
+    "line": 761,
+    "decision": "match &expr.kind {\n        ExprKind::Column { .. } | ExprKind::Literal(_) | ExprKind::Param(_) => {}\n        ExprKind::Paren(inner)\n        | ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Cast { expr: inner, .. }\n        | ExprKind::Collate { expr: inner, .. }\n        | ExprKind::InSubquery { expr: inner, .. } => recurse(inner),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            recurse(lhs);\n            recurse(rhs);\n        }\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            ..\n        } => {\n            recurse(inner);\n            recurse(lo);\n            recurse(hi);\n        }\n        ExprKind::In {\n            expr: inner, list, ..\n        } => {\n            recurse(inner);\n            list.iter().for_each(recurse);\n        }\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape,\n            ..\n        } => {\n            recurse(inner);\n            recurse(pattern);\n            if let Some(escape) = escape {\n                recurse(escape);\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(operand) = operand {\n                recurse(operand);\n            }\n            for (cond, result) in whens {\n                recurse(cond);\n                recurse(result);\n            }\n            if let Some(else_) = else_ {\n                recurse(else_);\n            }\n        }\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(args) = args {\n                args.iter().for_each(recurse);\n            }\n        }\n        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().for_each(recurse),\n        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_855",
+    "file": "src/codegen/row.rs",
+    "line": 855,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"expected {sql:?} to parse as a SELECT, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_865",
+    "file": "src/codegen/row.rs",
+    "line": 865,
+    "decision": "match select.columns.into_iter().next() {\n            Some(ResultColumn::Expr { expr, .. }) => expr,\n            other => panic!(\"expected {sql:?} to parse as one expression, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_873",
+    "file": "src/codegen/row.rs",
+    "line": 873,
+    "decision": "match crate::parser::row::parse_insert(sql) {\n            ParseOutcome::Accepted(insert) => *insert,\n            other => panic!(\"expected {sql:?} to parse as an INSERT, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_881",
+    "file": "src/codegen/row.rs",
+    "line": 881,
+    "decision": "match crate::parser::row::parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"expected {sql:?} to parse as an UPDATE, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_889",
+    "file": "src/codegen/row.rs",
+    "line": 889,
+    "decision": "match crate::parser::row::parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => *delete,\n            other => panic!(\"expected {sql:?} to parse as a DELETE, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_1039",
+    "file": "src/codegen/row.rs",
+    "line": 1039,
+    "decision": "match name.split_once('.') {\n            Some((table, column)) => (Some(table), column),\n            None => (None, name),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_1052",
+    "file": "src/codegen/row.rs",
+    "line": 1052,
+    "decision": "match self.resolve_local(name) {\n            Some(binding) => Ok(binding),\n            None => match &self.outer {\n                Some(outer) => outer.resolve(name),\n                None => Err(CodegenError::UnknownColumn(name.to_string())),\n            },\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_1054",
+    "file": "src/codegen/row.rs",
+    "line": 1054,
+    "decision": "match &self.outer {\n                Some(outer) => outer.resolve(name),\n                None => Err(CodegenError::UnknownColumn(name.to_string())),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_1070",
+    "file": "src/codegen/row.rs",
+    "line": 1070,
+    "decision": "q.eq_ignore_ascii_case(&right_schema.name)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "row_1077",
+    "file": "src/codegen/row.rs",
+    "line": 1077,
+    "decision": "self.outer.is_some() && !q.eq_ignore_ascii_case(&self.schema.name)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false
   },
   {
     "id": "compare_14",
