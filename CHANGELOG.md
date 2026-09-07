@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.65.0] - 2026-09-07
+
+### Added
+
+- **`FILTER (WHERE ...)` for aggregates and window functions** (#67) -- `parser::row`'s grammar gains `FILTER (WHERE <expr>)` on any function call, carried on `ExprKind::FunctionCall` as a single `tail: Option<Box<FunctionTail>>` merging `FILTER`/`OVER` (rather than a second independent `Option<Box<_>>` field, which alone regressed the `MAX_EXPR_DEPTH` stack-overflow guard test). `codegen::batch` compiles the filter predicate and null-masks the aggregate's source register via a new `MapOp::MaskIf`, applied before `WHERE`'s `Opcode::Filter` so it shrinks in lockstep with everything else -- `Reduce`/`GroupReduce`/`Window`'s existing null-skipping does the actual filtering, no new VM control-flow opcode needed. Restricted to `SUM`/`AVG`/`COUNT` window functions per the SQL standard (ranking functions reject it with a clear `PlanError`); `codegen::row`'s row-at-a-time aggregates reject it outright rather than silently ignoring it.
+
+### Fixed
+
+- Closed #57 as resolved by the already-merged PR #66 -- the unification landed via a lighter parse-boundary approach than the issue's original plan, and #67 turned out to be the only real remaining gap.
+
 ## [0.64.0] - 2026-09-07
 
 ### Added
