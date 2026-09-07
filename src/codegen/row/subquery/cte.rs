@@ -251,6 +251,7 @@ mod tests {
             rowid_alias: None,
             root_page: 2,
             indexes: Vec::new(),
+            ..Default::default()
         }];
 
         let query = parse("WITH cte1 AS (SELECT a FROM t WHERE a > 0) SELECT a FROM cte1");

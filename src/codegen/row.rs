@@ -919,8 +919,12 @@ pub(crate) fn p4_coll_seq(
     }
 }
 
-/// A placeholder single-table schema -- see this module's doc comment
-/// for why it isn't a real catalog yet.
+/// A single-table schema -- see this module's doc comment for why it
+/// isn't a real catalog yet. Grown to a superset of
+/// `db_storage::row::schema::TableSchema` by ADR 0012 (#205): callers
+/// populate every field below, but existing codegen only consults
+/// `column_collations`/`without_rowid`/`strict`/`is_virtual`/`sql` where
+/// noted -- most of it is carried, not yet acted on (`#175`, `#206`).
 #[derive(Debug, Clone, Default)]
 pub struct TableSchema {
     /// Table name.
@@ -931,6 +935,10 @@ pub struct TableSchema {
     /// only for [`crate::vm::row::affinity_of`]. A missing/short entry
     /// is treated as no declared type (BLOB affinity).
     pub column_types: Vec<String>,
+    /// Per-column collation, parallel to `columns`. A missing/short
+    /// entry is treated as `Collation::Binary`. Carried for ADR 0012;
+    /// not yet consulted by comparison codegen (`#206`).
+    pub column_collations: Vec<crate::value::Collation>,
     /// The `INTEGER PRIMARY KEY` rowid-alias column, if any -- reading
     /// it must emit `Opcode::Rowid` rather than `Opcode::Column` (see
     /// [`value::emit_column_read`]'s doc comment).
@@ -939,6 +947,18 @@ pub struct TableSchema {
     /// needs this to bake root pages into `P4` at codegen time; the
     /// expr-only slice from #91 never read it).
     pub root_page: u32,
+    /// `CREATE TABLE ... WITHOUT ROWID`. Carried for ADR 0012; not yet
+    /// consulted by codegen (`#206`).
+    pub without_rowid: bool,
+    /// `CREATE TABLE ... STRICT`. Carried for ADR 0012; not yet
+    /// consulted by codegen (`#206`).
+    pub strict: bool,
+    /// Whether this is a virtual table. Carried for ADR 0012; not yet
+    /// consulted by codegen (`#206`).
+    pub is_virtual: bool,
+    /// The table's original `CREATE TABLE` SQL text. Carried for ADR
+    /// 0012; not yet consulted by codegen (`#206`).
+    pub sql: String,
     /// Every index on this table (db-core#97/#96) -- maintained by
     /// `INSERT`/`UPDATE`/`DELETE` codegen (see [`index_maintenance`]),
     /// not yet consulted by any scan (that's `#94`'s index-scan
@@ -958,18 +978,36 @@ impl TableSchema {
 /// An index descriptor: just enough for `ddl`/`analyze` (db-core#97) to
 /// bake index identity into `P4` at codegen time, and for
 /// `INSERT`/`UPDATE`/`DELETE` (db-core#96) to build/maintain its
-/// entries. Not a real catalog entry: no collation or partial-index
-/// predicate, and `columns` is ascending-only (no per-column `DESC`,
-/// since no index b-tree comparator here is aware of sort direction
-/// either).
+/// entries. Not a real catalog entry: no partial-index predicate. Grown
+/// to carry `unique` and per-column `desc`/`collation` by ADR 0012
+/// (#205); index-maintenance codegen still rejects `desc` columns
+/// loudly (no index b-tree comparator here is aware of sort direction
+/// yet -- `#206`).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct IndexSchema {
     /// Index name.
     pub name: String,
     /// The index b-tree's root page.
     pub root_page: u32,
-    /// Indexed column names, in key order (ascending only).
-    pub columns: Vec<String>,
+    /// Whether this is a UNIQUE index. Carried for ADR 0012; not yet
+    /// consulted by codegen (`#206`).
+    pub unique: bool,
+    /// Indexed columns, in key order.
+    pub columns: Vec<IndexedColumn>,
+}
+
+/// One column of an [`IndexSchema`], in key order.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct IndexedColumn {
+    /// Column name.
+    pub name: String,
+    /// `DESC` in the index definition. Carried for ADR 0012; index
+    /// maintenance/scan codegen here reject `true` (ascending-only,
+    /// see [`IndexSchema`]'s doc comment).
+    pub desc: bool,
+    /// Collation this index column sorts under. Carried for ADR 0012;
+    /// not yet consulted by codegen (`#206`).
+    pub collation: crate::value::Collation,
 }
 
 /// The table(s) a query's column references resolve against. Single-table
@@ -1150,6 +1188,7 @@ mod tests {
             rowid_alias: None,
             root_page: 0,
             indexes: vec![],
+            ..Default::default()
         };
         let scope = Scope::single(schema, 3);
         assert_eq!(scope.resolve("b"), Ok((3, 1)));
@@ -1172,6 +1211,7 @@ mod tests {
                 rowid_alias: None,
                 root_page: 0,
                 indexes: vec![],
+                ..Default::default()
             },
             cursor,
         )

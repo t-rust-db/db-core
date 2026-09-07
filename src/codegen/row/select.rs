@@ -1574,6 +1574,7 @@ mod tests {
             rowid_alias: None,
             root_page: 0,
             indexes: vec![],
+            ..Default::default()
         }
     }
 
@@ -1884,7 +1885,11 @@ mod tests {
         schema.indexes = vec![super::super::IndexSchema {
             name: format!("t_{index_column}"),
             root_page: 3,
-            columns: vec![index_column.to_string()],
+            unique: false,
+            columns: vec![super::super::IndexedColumn {
+                name: index_column.to_string(),
+                ..Default::default()
+            }],
         }];
         schema
     }

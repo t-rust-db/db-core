@@ -34,3 +34,5 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0008](0008-vm-row-opcode-and-cursor-design.md) — `vm::row`'s opcode identity and cursor abstraction
 - [0009](0009-parser-row-backport-rule.md) — While two copies of the row parser exist, Lab271/sqlite-rs leads and `parser::row` back-ports
 - [0010](0010-shared-row-value-type.md) — One row `Value` type, defined in `db-core::value`, consumed by `db-storage`
+- [0011](0011-shared-scalar-functions.md) — Scalar functions, comparison, and coercion live in `db-core` root, consumed by every `vm` executor
+- [0012](0012-codegen-schema-superset.md) — `codegen::row::TableSchema`/`IndexSchema` grow to a superset, not a trait

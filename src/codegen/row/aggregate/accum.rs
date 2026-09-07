@@ -303,6 +303,7 @@ fn synthetic_schema(columns: &[String], agg_slots: &[AggSlot]) -> TableSchema {
         rowid_alias: None,
         root_page: 0,
         indexes: vec![],
+        ..Default::default()
     }
 }
 
