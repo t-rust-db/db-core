@@ -23,6 +23,14 @@ name = "unit_parser_public_api"
 path = "tests/unit/parser_public_api_test.rs"
 
 [[test]]
+name = "unit_vm_row_public_api"
+path = "tests/unit/vm_row_public_api_test.rs"
+
+[[test]]
+name = "unit_vm_batch_public_api"
+path = "tests/unit/vm_batch_public_api_test.rs"
+
+[[test]]
 name = "01_neon_batch_kernels"
 path = "tests/spike/001_neon_batch_kernels/01_neon_batch_kernels.rs"
 
