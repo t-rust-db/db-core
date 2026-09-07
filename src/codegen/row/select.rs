@@ -139,6 +139,14 @@ pub fn compile_select_with_catalog(catalog: &[TableSchema], query: &Select) -> R
         return super::subquery::compile_compound_select(catalog, &query);
     }
 
+    // `SELECT 1`, `SELECT 2 IN (SELECT * FROM t6)`, ... -- no table to
+    // scan, so nothing below (which pre-wires a schema/cursor pair) is
+    // reachable; a genuinely separate, scan-free entry point instead
+    // (db-core#175).
+    if query.from.is_none() {
+        return compile_select_no_from(catalog, &query);
+    }
+
     let schema = super::subquery::resolve_from_table_schema(query.from.as_ref(), catalog)?;
     // The AST nests the `FROM` table inside an optional `FromClause`
     // and spells a subquery as a `TableRefKind`, where `expr::Query`
@@ -148,6 +156,111 @@ pub fn compile_select_with_catalog(catalog: &[TableSchema], query: &Select) -> R
         _ => None,
     };
     compile_select_inner(&schema, 0, None, &query, catalog, from_subquery.as_ref())
+}
+
+/// Compiles a `SELECT` with no `FROM` clause at all (`SELECT 1`, `SELECT
+/// 2 IN (SELECT * FROM t6)`, ...): no cursor to scan, so the whole
+/// program is `<compile each column expr> -> ResultRow -> Halt`, run
+/// exactly once (or zero times, if `WHERE` is present and false/`NULL`).
+///
+/// `*`/`table.*` have nothing to expand against (there is no table) and
+/// are rejected, matching SQLite's own `SELECT *` with no `FROM` error;
+/// `GROUP BY`/`HAVING`/`DISTINCT`/`ORDER BY`/`LIMIT` are rejected outright
+/// for this first cut (db-core#175) rather than reasoned through against
+/// a one-row-or-zero-row result. A bare column reference in the
+/// expression list resolves through [`Scope::resolve`] exactly like any
+/// other `Expr`, which fails with `UnknownColumn` against the schema-less
+/// [`Scope`] built here -- the same error SQLite itself gives, so no
+/// separate check is needed.
+fn compile_select_no_from(catalog: &[TableSchema], query: &Select) -> Result<Program> {
+    if super::is_distinct(query)
+        || !query.group_by.is_empty()
+        || query.having.is_some()
+        || !query.order_by.is_empty()
+        || query.limit.is_some()
+    {
+        return Err(CodegenError::Unsupported {
+            reason: "DISTINCT/GROUP BY/HAVING/ORDER BY/LIMIT on a SELECT with no FROM clause is \
+                     not yet supported"
+                .to_string(),
+        });
+    }
+    if query
+        .columns
+        .iter()
+        .any(|c| matches!(c, ResultColumn::Star | ResultColumn::TableStar { .. }))
+    {
+        return Err(CodegenError::Unsupported {
+            reason: "`*` has no table to expand against in a SELECT with no FROM clause"
+                .to_string(),
+        });
+    }
+
+    let mut em = Emitter::new();
+    let mut reg = RegAlloc::new();
+    // No table, so no cursor is ever opened -- this scope exists only to
+    // give `compile_value`/`compile_cond` a `Scope` to resolve a
+    // subquery-expression's outer catalog reference against (a bare
+    // column reference in the expression list has no schema to resolve
+    // to and fails naturally, exactly like SQLite's own error for the
+    // same query shape).
+    let scope = Scope::single(TableSchema::default(), 0).with_catalog(catalog.to_vec());
+
+    let end_label = em.new_label();
+    if let Some(where_expr) = &query.where_clause {
+        super::compile_cond(
+            &mut em,
+            &mut reg,
+            &scope,
+            where_expr,
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(end_label)),
+        )?;
+    }
+
+    // Mirrors `compile_row_values`'s own contiguity handling: a single
+    // literal lands in one fresh register by construction, but a
+    // computed expression (`2 + 3`) may allocate more than one register
+    // internally, so the result isn't contiguous with the previous
+    // column's register in general -- the `Copy`-into-fresh-registers
+    // fallback below handles both uniformly rather than assuming they
+    // always land adjacent.
+    let mut regs = Vec::with_capacity(query.columns.len());
+    for item in &query.columns {
+        let ResultColumn::Expr { expr, .. } = item else {
+            // Star/TableStar are rejected above; reachable only if this
+            // function's own guard and this match ever drift apart.
+            return Err(CodegenError::Unsupported {
+                reason: "`*` has no table to expand against in a SELECT with no FROM clause"
+                    .to_string(),
+            });
+        };
+        regs.push(compile_value(&mut em, &mut reg, &scope, expr)?);
+    }
+    let (first, count) = match regs.first() {
+        None => (reg.alloc(), 0),
+        Some(&first)
+            if regs
+                .iter()
+                .enumerate()
+                .all(|(i, &r)| r == first.saturating_add(i32::try_from(i).unwrap_or(i32::MAX))) =>
+        {
+            (first, regs.len())
+        }
+        Some(_) => {
+            let mut dests = Vec::with_capacity(regs.len());
+            for &r in &regs {
+                let dest = reg.alloc();
+                em.emit(Instruction::new(Opcode::Copy, r, dest, 0));
+                dests.push(dest);
+            }
+            (dests.first().copied().unwrap_or(0), regs.len())
+        }
+    };
+    emit_result_row(&mut em, &mut reg, first, count)?;
+
+    em.place(end_label);
+    em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+    Ok(em.finish())
 }
 
 fn compile_select_inner(
@@ -3086,5 +3199,67 @@ mod tests {
         let ops = opcodes(&schema, &query("SELECT a + 1 FROM t ORDER BY a"));
         assert!(ops.contains(&Opcode::SorterOpen));
         assert!(!ops.contains(&Opcode::IdxRewind));
+    }
+
+    mod no_from {
+        use super::*;
+
+        fn run_no_from(sql: &str) -> Vec<Vec<Value>> {
+            let program = compile_select_with_catalog(&[], &query(sql)).unwrap();
+            let mut vm = Vm::new();
+            execute(&mut vm, &program).unwrap()
+        }
+
+        #[test]
+        fn bare_expression_list_compiles_to_one_row() {
+            let rows = run_no_from("SELECT 1, 2 + 3");
+            assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(5)]]);
+        }
+
+        #[test]
+        fn a_subquery_in_the_expression_list_still_compiles() {
+            let schema = schema(&["x"]);
+            let program =
+                compile_select_with_catalog(&[schema], &query("SELECT 2 IN (SELECT x FROM t)"))
+                    .unwrap();
+            let mut vm = Vm::new();
+            let sub_slot = program
+                .instructions
+                .iter()
+                .find(|i| i.opcode == Opcode::OpenRead)
+                .map(|i| i.p1)
+                .expect("compiled program opens the subquery's cursor");
+            vm.open_cursor(
+                sub_slot,
+                Box::new(InMemoryCursor::new(vec![vec![Value::Integer(2)]])),
+            )
+            .unwrap();
+            let rows = execute(&mut vm, &program).unwrap();
+            assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+        }
+
+        #[test]
+        fn a_false_where_clause_yields_no_rows() {
+            let rows = run_no_from("SELECT 1 WHERE 1 = 2");
+            assert_eq!(rows, Vec::<Vec<Value>>::new());
+        }
+
+        #[test]
+        fn star_with_no_from_is_unsupported() {
+            let err = compile_select_with_catalog(&[], &query("SELECT *")).unwrap_err();
+            assert!(matches!(err, CodegenError::Unsupported { .. }), "{err:?}");
+        }
+
+        #[test]
+        fn a_bare_column_reference_fails_like_an_unknown_column() {
+            let err = compile_select_with_catalog(&[], &query("SELECT a")).unwrap_err();
+            assert!(matches!(err, CodegenError::UnknownColumn(_)), "{err:?}");
+        }
+
+        #[test]
+        fn order_by_with_no_from_is_unsupported() {
+            let err = compile_select_with_catalog(&[], &query("SELECT 1 ORDER BY 1")).unwrap_err();
+            assert!(matches!(err, CodegenError::Unsupported { .. }), "{err:?}");
+        }
     }
 }
