@@ -225,6 +225,7 @@ mod tests {
             column_types: columns.iter().map(|_| String::new()).collect(),
             rowid_alias: None,
             indexes: vec![],
+            ..Default::default()
         }
     }
 
@@ -273,8 +274,10 @@ mod tests {
             indexes: vec![IndexSchema {
                 name: "idx_t_a".to_string(),
                 root_page: 3,
+                unique: false,
                 columns: vec![],
             }],
+            ..Default::default()
         }
     }
 

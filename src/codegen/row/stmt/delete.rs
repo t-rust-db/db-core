@@ -20,6 +20,18 @@ use crate::vm::row::{Instruction, Opcode, Program};
 /// Compiles `delete` against `schema` (the resolved target table) into
 /// a `Program`.
 pub fn compile_delete(schema: &TableSchema, delete: &Delete) -> Result<Program> {
+    compile_delete_with_catalog(schema, delete, &[])
+}
+
+/// As [`compile_delete`], but also resolves `catalog` for any scalar/
+/// `IN`/`EXISTS` subquery in `delete`'s `WHERE` clause that references
+/// another table (db-core#206) -- `compile_delete` itself just calls
+/// through with an empty catalog.
+pub fn compile_delete_with_catalog(
+    schema: &TableSchema,
+    delete: &Delete,
+    catalog: &[TableSchema],
+) -> Result<Program> {
     if !schema.name.eq_ignore_ascii_case(&delete.table) {
         return Err(CodegenError::Unsupported {
             reason: format!(
@@ -45,7 +57,7 @@ pub fn compile_delete(schema: &TableSchema, delete: &Delete) -> Result<Program> 
     ));
     open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR)?;
 
-    let scope = Scope::single(schema.clone(), TABLE_CURSOR);
+    let scope = Scope::single(schema.clone(), TABLE_CURSOR).with_catalog(catalog.to_vec());
     let end_label = em.new_label();
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, TABLE_CURSOR, 0, 0));
     em.patch_p2(rewind_addr, end_label);
@@ -105,6 +117,7 @@ mod tests {
             rowid_alias: None,
             root_page: 0,
             indexes: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -174,7 +187,11 @@ mod tests {
         schema.indexes.push(IndexSchema {
             name: "idx_b".into(),
             root_page: 3,
-            columns: vec!["b".into()],
+            unique: false,
+            columns: vec![crate::codegen::row::IndexedColumn {
+                name: "b".into(),
+                ..Default::default()
+            }],
         });
 
         let insert_program =

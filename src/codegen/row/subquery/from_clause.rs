@@ -138,6 +138,7 @@ pub fn resolve_from_table_schema(
                 rowid_alias: None,
                 root_page: 0,
                 indexes: Vec::new(),
+                ..Default::default()
             })
         }
     }
@@ -199,6 +200,7 @@ pub fn materialize_from_subquery(
         rowid_alias: None,
         root_page: 0,
         indexes: Vec::new(),
+        ..Default::default()
     };
 
     // p5 = 1: a rowid-keyed ephemeral *table* (scannable by
@@ -326,6 +328,7 @@ mod tests {
             rowid_alias: None,
             root_page: 2,
             indexes: Vec::new(),
+            ..Default::default()
         }]
     }
 

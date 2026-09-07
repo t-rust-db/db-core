@@ -379,6 +379,7 @@ mod tests {
             rowid_alias: None,
             root_page,
             indexes: Vec::new(),
+            ..Default::default()
         }
     }
 

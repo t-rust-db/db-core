@@ -20,9 +20,9 @@ pub mod delete;
 pub mod insert;
 pub mod update;
 
-pub use delete::compile_delete;
+pub use delete::{compile_delete, compile_delete_with_catalog};
 pub use insert::compile_insert;
-pub use update::compile_update;
+pub use update::{compile_update, compile_update_with_catalog};
 
 /// The table cursor's fixed slot in every `Program` this module emits.
 pub(crate) const TABLE_CURSOR: i32 = 0;

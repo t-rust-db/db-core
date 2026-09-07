@@ -56,6 +56,7 @@ pub mod flatten;
 pub mod from_clause;
 pub mod pushdown;
 pub mod scalar;
+pub mod views;
 
 pub use compound::compile_compound_select;
 pub use cte::expand_with_clause;
@@ -63,3 +64,4 @@ pub use flatten::flatten_from_subquery;
 pub use from_clause::{materialize_from_subquery, resolve_from_table_schema};
 pub use pushdown::push_down_where_predicates;
 pub use scalar::{compile_exists, compile_in_subquery, compile_scalar_subquery};
+pub use views::{expand_views, resolve_views, ResolvedView};
