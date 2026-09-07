@@ -31,6 +31,10 @@ name = "unit_vm_batch_public_api"
 path = "tests/unit/vm_batch_public_api_test.rs"
 
 [[test]]
+name = "unit_codegen_roundtrip"
+path = "tests/unit/codegen_roundtrip_test.rs"
+
+[[test]]
 name = "01_neon_batch_kernels"
 path = "tests/spike/001_neon_batch_kernels/01_neon_batch_kernels.rs"
 
