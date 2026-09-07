@@ -131,6 +131,14 @@ pub fn compile_select_with_catalog(catalog: &[TableSchema], query: &Select) -> R
     super::subquery::push_down_where_predicates(&mut query);
     super::subquery::flatten_from_subquery(&mut query);
 
+    // A compound SELECT (UNION/UNION ALL) needs its own entry point --
+    // each arm may name a different table, so nothing here can be
+    // pre-wired against a single `schema`/`cursor` the way the rest of
+    // this function is (db-core#175).
+    if !query.compound.is_empty() {
+        return super::subquery::compile_compound_select(catalog, &query);
+    }
+
     let schema = super::subquery::resolve_from_table_schema(query.from.as_ref(), catalog)?;
     // The AST nests the `FROM` table inside an optional `FromClause`
     // and spells a subquery as a `TableRefKind`, where `expr::Query`
@@ -163,10 +171,16 @@ fn compile_select_inner(
                 .to_string(),
         });
     }
-    // Compound SELECT has no ticket yet.
+    // `compile_select_with_catalog` already routes a compound SELECT to
+    // `super::subquery::compile_compound_select` before reaching here
+    // (db-core#175) -- a `Some` this far in means the caller went
+    // through the pre-wired `compile_select`/`compile_select_join`
+    // entry points instead, which have no catalog to resolve a second
+    // (or later) arm's own `FROM` against.
     if !query.compound.is_empty() {
         return Err(CodegenError::Unsupported {
-            reason: "compound SELECT (UNION/INTERSECT/EXCEPT) is not supported yet".to_string(),
+            reason: "a compound SELECT requires the compile_select_with_catalog entry point"
+                .to_string(),
         });
     }
     let joins = super::joins_of(query);

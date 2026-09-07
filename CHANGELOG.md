@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.64.0] - 2026-09-07
+
+### Added
+
+- **Compound `SELECT` (`UNION`/`UNION ALL`)** (#175) -- a new `codegen::row::subquery::compound::compile_compound_select` entry point, wired into `compile_select_with_catalog` whenever `query.compound` is non-empty. Each arm's plain single-table scan (no `JOIN`, no `GROUP BY`/aggregate) is materialized into one shared ephemeral table; a `UNION` chain also dedups against one shared ephemeral index keyed on every output column, generalizing the same `OpenEphemeral`/`IdxInsert`/`Found` membership dance `IN (SELECT ...)` already uses for a single-column key. N-ary chains work; every arm must project the same column count. A mixed `UNION`/`UNION ALL` chain, `ORDER BY`/`LIMIT` over the whole compound, `GROUP BY`/aggregation in an arm, and `INTERSECT`/`EXCEPT` (no such AST variant yet) remain unsupported, tracked on #175.
+
 ## [0.63.0] - 2026-09-07
 
 ### Added
