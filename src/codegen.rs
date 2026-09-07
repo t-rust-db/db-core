@@ -4,7 +4,10 @@
 //!
 //! **Naming (ADR 0007):** *codegen* here means exactly what sqlite-rs's
 //! `src/codegen/*` means -- planning. The ahead-of-time *Rust-source*
-//! emitter that column-rs used to call "codegen" is [`crate::emit`].
+//! emitter that column-rs used to call "codegen" is `batch::emit`
+//! (db-core#192 folded the former crate-level `emit` module in here,
+//! since it renders only [`batch`]'s planner output and had no `row`/
+//! `stream` counterpart in practice -- see ADR 0007's addendum).
 //!
 //! - [`batch`] -- the columnar planner: `compile()` turns a flat/`GROUP
 //!   BY`/`ORDER BY`/`LIMIT` query into a [`crate::vm::batch::Program`]
@@ -14,7 +17,9 @@
 //!   construction. **Implemented** -- moved from column-rs's `src/query.rs`,
 //!   which never touched Parquet in these parts. Consumes
 //!   [`crate::parser::ast::Select`] directly, the same AST [`row`] does
-//!   (#153 retired the private the retired `expr::Query` module it used to consume).
+//!   (#153 retired the private `expr::Query` module it used to consume).
+//!   Its `emit` submodule is the AOT Rust-source renderer over this
+//!   planner's output, gated by its own `emit-batch` feature.
 //! - [`row`] -- the sqlite-rs-style planner (AST to VDBE-shaped bytecode).
 //!   **Implemented** (db-core#20/#91-#97) -- see its own doc comment for
 //!   what's ported and what's scoped down from the reference.

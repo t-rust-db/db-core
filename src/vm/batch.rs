@@ -13,8 +13,8 @@
 //! (`Vec<Value>`, one entry per row). Opcodes operate on whole registers at
 //! once rather than row-by-row.
 
-pub use crate::join::JoinKind;
-use crate::join::{should_emit, JoinHashTable};
+pub use crate::vm::join::JoinKind;
+use crate::vm::join::{should_emit, JoinHashTable};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;

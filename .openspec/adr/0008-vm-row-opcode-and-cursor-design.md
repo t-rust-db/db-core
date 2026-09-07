@@ -24,7 +24,7 @@ Two questions were left open by prior work:
 
 1. **Opcode-set identity** (`src/vm/row.rs`'s stub): does `vm::row` port
    sqlite-rs's ~65 VDBE opcodes near-verbatim, or define its own set
-   decoupled from sqlite-rs's? `vm::mod.rs` already states
+   decoupled from sqlite-rs's? `vm.rs` already states
    `batch::Opcode` and a future `row::Opcode` "are NOT the same type,
    and are not expected to become one" — but doesn't say whether `row`'s
    set is a port or an original design.

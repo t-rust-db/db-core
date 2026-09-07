@@ -1,8 +1,8 @@
-//! `BatchExecutor` ahead-of-time Rust-source emitter -- one of `emit`'s
-//! three emitters (see module docs) -- extracted from column-rs's private
-//! `src/codegen.rs` (#98/#101/#103), so any `crate::vm::batch` consumer
-//! compiling queries ahead of time can depend on this instead of
-//! reimplementing it.
+//! `BatchExecutor` ahead-of-time Rust-source emitter (see
+//! [`super`]'s module docs for where this fits against the planner) --
+//! extracted from column-rs's private `src/codegen.rs` (#98/#101/#103),
+//! so any `crate::vm::batch` consumer compiling queries ahead of time
+//! can depend on this instead of reimplementing it.
 //!
 //! Renders an already-planned query to standalone Rust source text, two
 //! shapes:
@@ -40,7 +40,7 @@
 //! #153, the reconstructed literal is `parser::ast::Select`-shaped, so
 //! the caller crate's own `sql` module is expected to mirror (or
 //! re-export) `db_core::parser::ast`'s types under those names, not the
-//! retired the retired `expr::Query` module shape.
+//! retired `expr::Query` module shape.
 
 // Every `write!` here targets a `String`, which cannot fail; the discarded
 // `fmt::Result` is the idiom, not a swallowed error.

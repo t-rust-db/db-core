@@ -1168,7 +1168,7 @@ mod tests {
     /// `resolve` reaches the enclosing scope's cursor instead.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__mod_1077__v1_foreign_qualifier_with_outer_defers_to_outer() {
+    fn mcdc__row_1077__v1_foreign_qualifier_with_outer_defers_to_outer() {
         let scope = scope_named("inner", 1).with_outer(scope_named("outer", 7));
         assert_eq!(scope.resolve_local("outer.x"), None);
         assert_eq!(scope.resolve("outer.x"), Ok((7, 0)));
@@ -1178,10 +1178,10 @@ mod tests {
     /// from own name) false while leaf A (outer present) stays true --
     /// the qualifier is the scope's own table, so it resolves locally.
     /// Pairs against
-    /// `mcdc__mod_1077__v1_foreign_qualifier_with_outer_defers_to_outer`.
+    /// `mcdc__row_1077__v1_foreign_qualifier_with_outer_defers_to_outer`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__mod_1077__v2_own_qualifier_with_outer_resolves_locally() {
+    fn mcdc__row_1077__v2_own_qualifier_with_outer_resolves_locally() {
         let scope = scope_named("inner", 1).with_outer(scope_named("outer", 7));
         assert_eq!(scope.resolve_local("INNER.x"), Some((1, 0)));
         assert_eq!(scope.resolve("inner.x"), Ok((1, 0)));
@@ -1191,10 +1191,10 @@ mod tests {
     /// while leaf B (foreign qualifier) stays true -- with no enclosing
     /// scope the qualifier is stripped and the column still resolves
     /// against this scope's own table. Pairs against
-    /// `mcdc__mod_1077__v1_foreign_qualifier_with_outer_defers_to_outer`.
+    /// `mcdc__row_1077__v1_foreign_qualifier_with_outer_defers_to_outer`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__mod_1077__v3_foreign_qualifier_without_outer_resolves_locally() {
+    fn mcdc__row_1077__v3_foreign_qualifier_without_outer_resolves_locally() {
         let scope = scope_named("inner", 1);
         assert_eq!(scope.resolve_local("other.x"), Some((1, 0)));
         assert_eq!(scope.resolve("other.x"), Ok((1, 0)));

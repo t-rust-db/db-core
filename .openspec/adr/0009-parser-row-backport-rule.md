@@ -41,9 +41,11 @@ While both copies exist:
    diff -r <sqlite-rs>/src/parser <db-core>/src/parser/row
    ```
 
-   The only tolerated difference is structural (`mod.rs`, `Span` living
-   in `crate::parser` instead of `tokenizer.rs`). Anything else is either
-   a pending Lab271 ticket or a bug.
+   The only tolerated difference is structural (`Span` living in
+   `crate::parser` instead of `tokenizer.rs`; `db-core#192` also moved
+   `db-core` off `mod.rs` module roots onto Rust 2018 style, which
+   sqlite-rs does not use). Anything else is either a pending Lab271
+   ticket or a bug.
 3. **ADR 0002's direction of convergence is unchanged**: `column`/`stream`
    still converge toward `row`; this ADR only fixes which *copy* of `row`
    is authoritative while there are two.
