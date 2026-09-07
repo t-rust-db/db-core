@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test test-lib build lint check-deny check-mvl-limit ci version
+.PHONY: help test test-lib build lint check-deny check-mvl-limit coverage check-coverage ci version
 
 help: ## Show this help
 	@echo ""
@@ -50,6 +50,30 @@ test-mcdc: mcdc-obligations ## MC/DC dashboard for all of src/; fails if any mul
 	# codegen-row, ...), not just what a curated file list would imply.
 	cargo-mvl-mcdc harvest --obligations=tests/mcdc/obligations.json --run-dir=. 2>/dev/null \
 		| python3 tools/mcdc_report.py $(if $(filter 1,$(VERBOSE)),--verbose,)
+
+COVERAGE_MIN := 80
+
+coverage: ## Run the test suite under coverage instrumentation and print a line coverage report (cargo-llvm-cov)
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
+		echo "cargo-llvm-cov not found — install with: cargo install cargo-llvm-cov --locked"; \
+		echo "  (also needs: rustup component add llvm-tools-preview)"; \
+		exit 1; \
+	}
+	# Ported from sqlite-rs. One instrumented run covers everything here:
+	# every [[test]] target in Cargo.toml runs under plain `cargo test`
+	# (none is `test = false`), so unlike the reference there is no
+	# separately-named harness to merge in. `--all-features` mirrors
+	# `make test` so the report sees the same modules the suite does.
+	cargo llvm-cov clean --workspace
+	cargo llvm-cov --locked --all-features --no-report
+	cargo llvm-cov report
+	cargo llvm-cov report --json --output-path target/llvm-cov.json
+
+check-coverage: coverage ## Gate: fail if line coverage is below $(COVERAGE_MIN)%
+	@python3 -c "import json, sys; \
+	  p = json.load(open('target/llvm-cov.json'))['data'][0]['totals']['lines']['percent']; \
+	  print(f'Line coverage: {p:.2f}% (threshold: $(COVERAGE_MIN)%)'); \
+	  sys.exit(0 if p >= $(COVERAGE_MIN) else 1)"
 
 # === Gates ===
 
