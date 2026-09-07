@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.62.1] - 2026-09-07
+
+### Fixed
+
+- **`make test`/`make lint` restored** -- `tests/unit/vm_batch_public_api_test.rs` still imported `db_core::join::JoinKind` after #192/#193/#194 moved `join` under `vm` (#195). Also restores `make test-mcdc`, which the same module move had silently dropped to 0/70 discharged obligations; regenerated and re-tagged the snapshot, and added a regression test guarding against future cross-file obligation-id collisions.
+- **`make check-deny`**: dropped the unmatched `MIT` entry from `deny.toml`'s license allow list -- db-core has zero dependencies, so nothing in the graph is MIT-licensed (#196).
+
+### Changed
+
+- `make test`/`make test-lib`/`make coverage` now exclude `tests/spike/` (throwaway experiments); added `make test-spike` to run them explicitly.
+
 ## [0.62.0] - 2026-09-07
 
 ### Changed
