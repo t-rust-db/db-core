@@ -155,9 +155,9 @@ pub struct CompoundSelect {
 
 /// `UnionAll` (#240) and plain `Union` (#377/#378, dedup via a shared
 /// ephemeral index across every arm — see
-/// [`crate::codegen::select::compile_select_compound`]) are
-/// implemented; `INTERSECT`/`EXCEPT` remain unsupported (deferred to
-/// V7).
+/// [`crate::codegen::row::subquery::compound::compile_compound_select`],
+/// db-core#175) are implemented; `INTERSECT`/`EXCEPT` remain unsupported
+/// (deferred to V7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompoundOp {
     /// `UNION ALL` — keeps duplicate rows.

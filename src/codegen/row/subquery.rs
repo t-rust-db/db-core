@@ -50,12 +50,14 @@
 //! N `FROM` items) have no counterpart while `Query.from` holds exactly
 //! one item.
 
+pub mod compound;
 pub mod cte;
 pub mod flatten;
 pub mod from_clause;
 pub mod pushdown;
 pub mod scalar;
 
+pub use compound::compile_compound_select;
 pub use cte::expand_with_clause;
 pub use flatten::flatten_from_subquery;
 pub use from_clause::{materialize_from_subquery, resolve_from_table_schema};
