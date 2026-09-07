@@ -371,6 +371,26 @@ chooser is deferred to #117, N-way joins to #118"
     let mut em = Emitter::new();
     let mut reg = RegAlloc::new();
 
+    // db-core#182: a program must open its own cursors. `from_subquery`
+    // materializes onto `cursor` itself (`Opcode::OpenEphemeral`, below)
+    // so it must not also be opened as a real table here.
+    if from_subquery.is_none() {
+        em.emit(Instruction::new(
+            Opcode::OpenRead,
+            cursor,
+            super::valid_table_root_page(schema)?,
+            0,
+        ));
+    }
+    if let Some((right_schema, right_cursor)) = right {
+        em.emit(Instruction::new(
+            Opcode::OpenRead,
+            right_cursor,
+            super::valid_table_root_page(right_schema)?,
+            0,
+        ));
+    }
+
     // The sorter cursor uses a slot past every cursor the caller wired
     // up -- `Opcode::SorterOpen` opens it itself at runtime, so it needs
     // no caller-side wiring, just an id that can't collide. The index
@@ -723,6 +743,24 @@ fn compile_aggregate_select(
 
     let mut em = Emitter::new();
     let mut reg = RegAlloc::new();
+
+    // db-core#182: a program must open its own cursors rather than
+    // relying on a caller to pre-wire them.
+    em.emit(Instruction::new(
+        Opcode::OpenRead,
+        cursor,
+        super::valid_table_root_page(schema)?,
+        0,
+    ));
+    if let Some((right_schema, right_cursor)) = right {
+        em.emit(Instruction::new(
+            Opcode::OpenRead,
+            right_cursor,
+            super::valid_table_root_page(right_schema)?,
+            0,
+        ));
+    }
+
     let limit_reg = compile_limit_setup(&mut em, &mut reg, scope, query)?;
     let end_label = em.new_label();
 
@@ -2982,26 +3020,26 @@ mod tests {
         assert!(ops.contains(&Opcode::AggFinal));
     }
 
-    /// MC/DC vector (obligation `select_399`, the index-ordered-scan
+    /// MC/DC vector (obligation `select_419`, the index-ordered-scan
     /// gate `right.is_none() && !has_projected_expr`): both leaves true
     /// -- a single-table, bare-column `ORDER BY` on an indexed column
     /// walks the index and never opens a sorter.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__select_399__v1_single_table_bare_columns_walks_index() {
+    fn mcdc__select_419__v1_single_table_bare_columns_walks_index() {
         let schema = indexed_schema(&["a"], "a");
         let ops = opcodes(&schema, &query("SELECT a FROM t ORDER BY a"));
         assert!(ops.contains(&Opcode::IdxRewind));
         assert!(!ops.contains(&Opcode::SorterOpen));
     }
 
-    /// MC/DC vector (obligation `select_399`): leaf A (`right.is_none()`)
+    /// MC/DC vector (obligation `select_419`): leaf A (`right.is_none()`)
     /// false -- a `JOIN` supplies a right cursor, so the gate declines
     /// and the sorter is used; flips against
-    /// `mcdc__select_399__v1_single_table_bare_columns_walks_index`.
+    /// `mcdc__select_419__v1_single_table_bare_columns_walks_index`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__select_399__v2_join_declines_index_ordered_scan() {
+    fn mcdc__select_419__v2_join_declines_index_ordered_scan() {
         let schema = indexed_schema(&["a"], "a");
         let right = schema_named("u", &["a"]);
         let query = query("SELECT t.a FROM t JOIN u ON t.a = u.a ORDER BY t.a");
@@ -3015,13 +3053,13 @@ mod tests {
         assert!(!ops.contains(&Opcode::IdxRewind));
     }
 
-    /// MC/DC vector (obligation `select_399`): leaf B
+    /// MC/DC vector (obligation `select_419`): leaf B
     /// (`!has_projected_expr`) false -- a computed SELECT-list item
     /// declines the gate on a single table; flips against
-    /// `mcdc__select_399__v1_single_table_bare_columns_walks_index`.
+    /// `mcdc__select_419__v1_single_table_bare_columns_walks_index`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__select_399__v3_projected_expression_declines_index_ordered_scan() {
+    fn mcdc__select_419__v3_projected_expression_declines_index_ordered_scan() {
         let schema = indexed_schema(&["a"], "a");
         let ops = opcodes(&schema, &query("SELECT a + 1 FROM t ORDER BY a"));
         assert!(ops.contains(&Opcode::SorterOpen));

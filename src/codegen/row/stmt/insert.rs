@@ -11,7 +11,9 @@
 //! `Opcode::NewRowid` generates one.
 
 use super::super::index_maintenance::{emit_index_key_ops_from_regs, open_index_cursors};
-use super::super::{CodegenError, Emitter, RegAlloc, Result, Scope, TableSchema};
+use super::super::{
+    valid_table_root_page, CodegenError, Emitter, RegAlloc, Result, Scope, TableSchema,
+};
 use super::{FIRST_INDEX_CURSOR, TABLE_CURSOR};
 use crate::parser::ast::{Insert, InsertSource};
 use crate::vm::row::{Instruction, Opcode, Program};
@@ -67,8 +69,13 @@ pub fn compile_insert(schema: &TableSchema, insert: &Insert) -> Result<Program> 
     em.place(body_start);
     em.patch_p2(init_addr, body_start);
 
-    em.emit(Instruction::new(Opcode::OpenWrite, TABLE_CURSOR, 0, 0));
-    open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR);
+    em.emit(Instruction::new(
+        Opcode::OpenWrite,
+        TABLE_CURSOR,
+        valid_table_root_page(schema)?,
+        0,
+    ));
+    open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR)?;
 
     let scope = Scope::single(schema.clone(), TABLE_CURSOR);
 
@@ -258,7 +265,7 @@ mod tests {
         let mut schema = schema(&["a", "b"]);
         schema.indexes.push(IndexSchema {
             name: "idx_b".into(),
-            root_page: 0,
+            root_page: 3,
             columns: vec!["b".into()],
         });
         let stmt = insert("INSERT INTO t VALUES (1, 2)");

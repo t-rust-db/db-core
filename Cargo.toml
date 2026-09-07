@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.62.1"
+version = "0.62.2"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/db-core"
@@ -33,6 +33,10 @@ path = "tests/unit/vm_batch_public_api_test.rs"
 [[test]]
 name = "unit_codegen_roundtrip"
 path = "tests/unit/codegen_roundtrip_test.rs"
+
+[[test]]
+name = "unit_codegen_cursor_factory"
+path = "tests/unit/codegen_cursor_factory_test.rs"
 
 [[test]]
 name = "01_neon_batch_kernels"

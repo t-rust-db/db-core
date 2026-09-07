@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.62.2] - 2026-09-07
+
+### Fixed
+
+- **`codegen::row` programs open their own cursors** (#182) -- every program relied on the caller pre-wiring its cursor slots via `Vm::open_cursor` ahead of time, which breaks once a `CursorFactory` is installed (the sqlite-rs adapter): a scan that never emits `OpenRead` never gets a cursor, and `INSERT`/`UPDATE`/`DELETE`'s hardcoded `OpenWrite cursor, 0, 0` opened root page 0 instead of the real table. `select.rs`'s main/JOIN-right cursors and every DML/index-maintenance `OpenWrite` now carry the real `schema.root_page`. Blocked the sqlite-rs repoint; all 2,919 statements in its shadow-run corpus failed before this fix.
+
 ## [0.62.1] - 2026-09-07
 
 ### Fixed
