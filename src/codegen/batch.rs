@@ -128,6 +128,10 @@ pub struct WindowSpec {
     pub partition_by: Vec<String>,
     /// `ORDER BY` terms as `(column, descending)` pairs.
     pub order_by: Vec<(String, bool)>,
+    /// `FILTER (WHERE ...)` predicate (#67): only `Sum`/`Avg`/`Count`
+    /// accept one, per the SQL standard restricting `FILTER` to aggregate
+    /// functions, not pure ranking functions.
+    pub filter: Option<AstExpr>,
 }
 
 /// Planning failures: a column that resolves to no table, or a query shape
@@ -187,7 +191,9 @@ pub type Result<T> = std::result::Result<T, PlanError>;
 enum Item {
     Column(String),
     Star,
-    Agg(AggFunc, Option<String>),
+    /// `agg(arg) [FILTER (WHERE ...)]`; the third field is the filter
+    /// predicate, if any.
+    Agg(AggFunc, Option<String>, Option<AstExpr>),
     Window(WindowSpec),
     Expr(AstExpr),
 }
@@ -317,6 +323,7 @@ fn window_spec(
         offset,
         partition_by,
         order_by,
+        filter: None,
     })
 }
 
@@ -340,19 +347,40 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
                 name,
                 distinct: _,
                 args,
-                over: Some(window_def),
-            } => Ok(Item::Window(window_spec(name, args, window_def)?)),
+                tail,
+            } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
+                #[allow(clippy::expect_used, reason = "guarded by the match's `if` above")]
+                let window_def = tail
+                    .as_deref()
+                    .and_then(|t| t.over.as_ref())
+                    .expect("guarded by the match's `if` above");
+                let mut spec = window_spec(name, args, window_def)?;
+                let filter = tail.as_deref().and_then(|t| t.filter.as_ref());
+                if let Some(f) = filter {
+                    if !matches!(
+                        spec.func,
+                        WindowFunc::Sum | WindowFunc::Avg | WindowFunc::Count
+                    ) {
+                        return Err(PlanError::UnsupportedSelectItem(format!(
+                            "FILTER is not supported on {name} (only SUM/AVG/COUNT window aggregates accept it)"
+                        )));
+                    }
+                    spec.filter = Some(f.clone());
+                }
+                Ok(Item::Window(spec))
+            }
             ExprKind::FunctionCall {
                 name,
                 distinct: _,
                 args,
-                over: None,
+                tail,
             } => {
                 let agg = AggFunc::from_name(name).ok_or_else(|| {
                     PlanError::UnsupportedSelectItem(format!("unknown function {name}"))
                 })?;
                 let arg = agg_arg(expr, agg, args)?;
-                Ok(Item::Agg(agg, arg))
+                let filter = tail.as_deref().and_then(|t| t.filter.clone());
+                Ok(Item::Agg(agg, arg, filter))
             }
             _ => Ok(Item::Expr(expr.clone())),
         },
@@ -469,11 +497,10 @@ fn select_order_by(select: &Select) -> Option<(String, bool)> {
     let column = match &term.expr.kind {
         ExprKind::Column { .. } => expr_column_name(&term.expr)?,
         ExprKind::FunctionCall {
-            name,
-            args,
-            over: None,
-            ..
-        } => aggregate_call_label(name, args)?,
+            name, args, tail, ..
+        } if !matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
+            aggregate_call_label(name, args)?
+        }
         _ => return None,
     };
     Some((column, term.desc.unwrap_or(false)))
@@ -724,6 +751,51 @@ fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
     }
 }
 
+/// Folds an aggregate's or window function's `FILTER (WHERE ...)` clause
+/// into its source register: with no filter, `base` (the plain argument
+/// column, `None` for `COUNT(*)`) passes through unchanged. With a filter,
+/// compiles the predicate (loading any columns it references first, same
+/// as `base`) and masks `base` -- or, for `COUNT(*) FILTER (...)`, a
+/// constant `true` marker register -- to `Null` wherever the predicate is
+/// false via `MapOp::MaskIf`, so `Reduce`/`GroupReduce`/`Window`'s
+/// existing null-skipping does the actual filtering. Must run before
+/// `WHERE`'s `Opcode::Filter`, like every other column load in `compile`/
+/// `compile_window` -- see the comment where this is called.
+fn mask_filtered_source(
+    ctx: &mut Ctx,
+    base: Option<usize>,
+    filter: Option<&AstExpr>,
+) -> Option<usize> {
+    let Some(predicate_expr) = filter else {
+        return base;
+    };
+    let mut cols = Vec::new();
+    collect_expr_columns(predicate_expr, &mut cols);
+    for name in &cols {
+        ctx.load_column(name);
+    }
+    let predicate = compile_expr(predicate_expr, ctx);
+    let data = base.unwrap_or_else(|| {
+        let reg = ctx.alloc();
+        ctx.push(Opcode::LoadConst {
+            reg,
+            value: Value::Bool(true),
+        });
+        reg
+    });
+    let masked = ctx.alloc();
+    ctx.push_commented(
+        Opcode::Map {
+            dst: masked,
+            op: MapOp::MaskIf,
+            a: data,
+            b: predicate,
+        },
+        format!("FILTER (WHERE {})", expr_to_string(predicate_expr)),
+    );
+    Some(masked)
+}
+
 /// Compile a flat/`GROUP BY`/`ORDER BY`/`LIMIT` query into a [`Program`]
 /// ending in [`Opcode::Combine`], optionally followed by `Sort`/`Limit`
 /// (db-core#48). Compiled once, reused across every segment.
@@ -749,11 +821,18 @@ pub fn compile(select: &Select) -> Program {
     for name in &group_by {
         group_by_regs.push(ctx.load_column(name));
     }
-    let mut agg_srcs = Vec::new();
+    // Resolved to the final source register for each `Item::Agg` (already
+    // folding in `FILTER (WHERE ...)`, if any -- see `mask_filtered_source`)
+    // before `WHERE`'s `Filter` runs, so a `FILTER` predicate's own column
+    // loads and its `Map { MaskIf }` masking land in the same pre-filter
+    // phase as everything else here and get shrunk in lockstep by `Filter`
+    // below, rather than desyncing like a load placed after it would.
+    let mut agg_srcs: Vec<Option<usize>> = Vec::new();
     for item in &items {
         match item {
-            Item::Agg(_, Some(name)) => {
-                agg_srcs.push(ctx.load_column(name));
+            Item::Agg(_, arg, filter) => {
+                let base = arg.as_ref().map(|name| ctx.load_column(name));
+                agg_srcs.push(mask_filtered_source(&mut ctx, base, filter.as_ref()));
             }
             // Plain projected columns are emitted (not aggregated), but they
             // must be loaded here for the same reason as the keys above: a
@@ -764,7 +843,7 @@ pub fn compile(select: &Select) -> Program {
             // instead of emitting a second LoadColumn.
             Item::Column(name) if group_by.is_empty() => {
                 ctx.load_column(name);
-                agg_srcs.push(0);
+                agg_srcs.push(None);
             }
             Item::Expr(expr) if group_by.is_empty() => {
                 let mut cols = Vec::new();
@@ -772,9 +851,9 @@ pub fn compile(select: &Select) -> Program {
                 for name in &cols {
                     ctx.load_column(name);
                 }
-                agg_srcs.push(0);
+                agg_srcs.push(None);
             }
-            _ => agg_srcs.push(0),
+            _ => agg_srcs.push(None),
         }
     }
 
@@ -796,8 +875,8 @@ pub fn compile(select: &Select) -> Program {
     let mut emit_regs = group_by_regs.clone();
 
     for (item, &agg_src) in items.iter().zip(&agg_srcs) {
-        if let Item::Agg(func, arg) = item {
-            let src = arg.as_ref().map(|_| agg_src);
+        if let Item::Agg(func, _, _) = item {
+            let src = agg_src;
             // Resolved up front so the dispatch below has no "can't happen"
             // arm: `None` *is* the `Avg` case (the only aggregate that
             // needs two partials), not a wildcard hiding one.
@@ -1140,7 +1219,7 @@ pub fn compile_window(select: &Select) -> Program {
             .expect("needed columns include every window spec's arg/partition_by/order_by column")
     };
 
-    let mut program: Vec<Instruction> = needed
+    let program: Vec<Instruction> = needed
         .iter()
         .enumerate()
         .map(|(reg, name)| {
@@ -1154,10 +1233,38 @@ pub fn compile_window(select: &Select) -> Program {
         })
         .collect();
 
-    let mut next_reg = needed.len();
+    // Resolve each window item's `FILTER (WHERE ...)` clause (Sum/Avg/Count
+    // only, enforced in `classify_item`) into a masked source register,
+    // reusing `Ctx`/`mask_filtered_source` even though this function
+    // otherwise addresses registers by `needed`'s fixed positions rather
+    // than `Ctx`'s memoizing `load_column` -- a filter predicate's own
+    // column loads simply land past `needed`'s registers, which is fine
+    // since nothing here reshapes registers the way `compile`'s `WHERE`
+    // `Opcode::Filter` does.
+    let mut ctx = Ctx {
+        next_reg: needed.len(),
+        column_regs: needed
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.clone(), i))
+            .collect(),
+        program,
+    };
+    let filtered_arg: Vec<Option<usize>> = items
+        .iter()
+        .map(|item| match item {
+            Item::Window(spec) => {
+                let base = spec.arg.as_ref().map(|name| ctx.load_column(name));
+                mask_filtered_source(&mut ctx, base, spec.filter.as_ref())
+            }
+            _ => None,
+        })
+        .collect();
+    let mut program = ctx.program;
+    let mut next_reg = ctx.next_reg;
     let mut null_reg: Option<usize> = None;
     let mut emit_regs = Vec::with_capacity(items.len());
-    for item in &items {
+    for (item, filtered_arg) in items.iter().zip(&filtered_arg) {
         match item {
             Item::Column(name) => emit_regs.push(column_reg(name)),
             Item::Window(spec) => {
@@ -1166,7 +1273,11 @@ pub fn compile_window(select: &Select) -> Program {
                 program.push(Instruction::with_comment(
                     Opcode::Window {
                         func: map_window_func(spec.func),
-                        arg: spec.arg.as_deref().map(column_reg),
+                        // Already resolved (and `FILTER`-masked, if any)
+                        // above -- same register `column_reg(arg)` would
+                        // give when there's no filter, since `needed`
+                        // seeded `ctx`'s `column_regs`.
+                        arg: *filtered_arg,
                         offset: spec.offset,
                         partition_by: spec
                             .partition_by
@@ -1734,7 +1845,7 @@ fn select_item_label(item: &ResultColumn) -> String {
     match classify_item(item) {
         Ok(Item::Column(name)) => name,
         Ok(Item::Star) => "*".to_string(),
-        Ok(Item::Agg(func, arg)) => match arg {
+        Ok(Item::Agg(func, arg, _)) => match arg {
             Some(col) => format!("{}({col})", agg_func_name(func)),
             None => format!("{}(*)", agg_func_name(func)),
         },
@@ -1907,8 +2018,18 @@ fn referenced_columns(select: &Select) -> Vec<String> {
         match item {
             Item::Column(name) => push_unique(&mut out, name.clone()),
             Item::Star => {}
-            Item::Agg(_, Some(name)) => push_unique(&mut out, name.clone()),
-            Item::Agg(_, None) => {}
+            Item::Agg(_, arg, filter) => {
+                if let Some(name) = arg {
+                    push_unique(&mut out, name.clone());
+                }
+                if let Some(f) = filter {
+                    let mut cols = Vec::new();
+                    collect_expr_columns(f, &mut cols);
+                    for name in cols {
+                        push_unique(&mut out, name);
+                    }
+                }
+            }
             Item::Window(spec) => {
                 if let Some(arg) = &spec.arg {
                     push_unique(&mut out, arg.clone());
@@ -1918,6 +2039,9 @@ fn referenced_columns(select: &Select) -> Vec<String> {
                 }
                 for (name, _) in &spec.order_by {
                     push_unique(&mut out, name.clone());
+                }
+                if let Some(f) = &spec.filter {
+                    collect_expr_columns(f, &mut out);
                 }
             }
             Item::Expr(expr) => collect_expr_columns(expr, &mut out),
@@ -2552,5 +2676,96 @@ mod tests {
         assert_eq!(output_column_names(&expanded), vec!["id", "name"]);
         let program = compile(&expanded);
         assert_eq!(program.columns_to_load(), vec!["id", "name"]);
+    }
+
+    // ---------------------------------------------------------------------
+    // #67: FILTER (WHERE ...) execution semantics -- run the compiled
+    // `Program` over real data via `vm::engine::run`, not just inspect
+    // opcode shape, since the masking is only correct if `Reduce`/
+    // `GroupReduce`/`Window`'s null-skipping actually excludes the right
+    // rows.
+    // ---------------------------------------------------------------------
+
+    fn amount_batch() -> crate::vm::batch::Batch {
+        crate::vm::batch::Batch::new(4)
+            .with_column(
+                "region",
+                vec![
+                    Value::Str("a".into()),
+                    Value::Str("a".into()),
+                    Value::Str("b".into()),
+                    Value::Str("b".into()),
+                ],
+            )
+            .with_column(
+                "amount",
+                vec![Value::Int(5), Value::Int(20), Value::Int(3), Value::Int(30)],
+            )
+    }
+
+    fn run_program(program: &Program) -> Vec<Vec<Value>> {
+        use crate::vm::engine::{run, InMemorySegment};
+        run(&[InMemorySegment(amount_batch())], program).unwrap()
+    }
+
+    #[test]
+    fn flat_sum_filter_excludes_non_matching_rows() {
+        let query = sql::parse("SELECT SUM(amount) FILTER (WHERE amount > 10) FROM t").unwrap();
+        let program = compile(&query);
+        assert_eq!(run_program(&program), vec![vec![Value::Float(50.0)]]);
+    }
+
+    #[test]
+    fn count_star_filter_counts_only_matching_rows() {
+        let query = sql::parse("SELECT COUNT(*) FILTER (WHERE amount > 10) FROM t").unwrap();
+        let program = compile(&query);
+        assert_eq!(run_program(&program), vec![vec![Value::Int(2)]]);
+    }
+
+    #[test]
+    fn group_by_sum_filter_masks_per_group() {
+        let query = sql::parse(
+            "SELECT region, SUM(amount) FILTER (WHERE amount > 10) FROM t GROUP BY region",
+        )
+        .unwrap();
+        let program = compile(&query);
+        let mut rows = run_program(&program);
+        rows.sort_by(|a, b| format!("{:?}", a[0]).cmp(&format!("{:?}", b[0])));
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Str("a".into()), Value::Float(20.0)],
+                vec![Value::Str("b".into()), Value::Float(30.0)],
+            ]
+        );
+    }
+
+    #[test]
+    fn window_sum_filter_masks_the_running_sum() {
+        let query = sql::parse(
+            "SELECT SUM(amount) FILTER (WHERE amount > 10) OVER (PARTITION BY region) FROM t",
+        )
+        .unwrap();
+        let program = compile_window(&query);
+        assert_eq!(
+            run_program(&program),
+            vec![
+                vec![Value::Float(20.0)],
+                vec![Value::Float(20.0)],
+                vec![Value::Float(30.0)],
+                vec![Value::Float(30.0)],
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_is_rejected_on_ranking_window_functions() {
+        let query =
+            sql::parse("SELECT ROW_NUMBER() FILTER (WHERE amount > 10) OVER (ORDER BY id) FROM t")
+                .unwrap();
+        assert!(matches!(
+            classify_items(&query),
+            Err(PlanError::UnsupportedSelectItem(_))
+        ));
     }
 }

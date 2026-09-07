@@ -91,17 +91,16 @@ pub type Result<T> = std::result::Result<T, EmitError>;
 /// Whether `select`'s `SELECT` list contains a window-function call
 /// (`func(...) OVER (...)`).
 fn has_window(select: &Select) -> bool {
-    select.columns.iter().any(|c| {
-        matches!(
-            c,
-            ResultColumn::Expr {
-                expr: AstExpr {
-                    kind: ExprKind::FunctionCall { over: Some(_), .. },
+    select.columns.iter().any(|c| match c {
+        ResultColumn::Expr {
+            expr:
+                AstExpr {
+                    kind: ExprKind::FunctionCall { tail, .. },
                     ..
                 },
-                ..
-            }
-        )
+            ..
+        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),
+        _ => false,
     })
 }
 
@@ -444,7 +443,7 @@ pub fn render_windowed(crate_name: &str, sql_text: &str, select: &Select) -> Str
     let _ = writeln!(out, "use {crate_name}::file::ParquetFile;");
     let _ = writeln!(
         out,
-        "use {crate_name}::sql::{{BinaryOp, Distinctness, Expr, ExprKind, FromClause, FunctionArgs, Join, JoinConstraint, JoinOp, Limit, Literal, OrderingTerm, ResultColumn, Select, Span, TableRef, TableRefKind, UnaryOp, WindowDef}};\n"
+        "use {crate_name}::sql::{{BinaryOp, Distinctness, Expr, ExprKind, FromClause, FunctionArgs, FunctionTail, Join, JoinConstraint, JoinOp, Limit, Literal, OrderingTerm, ResultColumn, Select, Span, TableRef, TableRefKind, UnaryOp, WindowDef}};\n"
     );
 
     out.push_str("const COLUMNS: &[&str] = &[");
@@ -692,13 +691,23 @@ fn render_expr_kind(kind: &ExprKind) -> String {
             name,
             distinct,
             args,
-            over,
+            tail,
         } => format!(
-            "ExprKind::FunctionCall {{ name: {}.to_string(), distinct: {distinct}, args: {}, over: {} }}",
+            "ExprKind::FunctionCall {{ name: {}.to_string(), distinct: {distinct}, args: {}, tail: {} }}",
             rust_str_literal(name),
             render_function_args(args),
-            match over {
-                Some(w) => format!("Some(Box::new({}))", render_window_def(w)),
+            match tail {
+                Some(t) => format!(
+                    "Some(Box::new(FunctionTail {{ filter: {}, over: {} }}))",
+                    match &t.filter {
+                        Some(f) => format!("Some({})", render_expr(f)),
+                        None => "None".to_string(),
+                    },
+                    match &t.over {
+                        Some(w) => format!("Some({})", render_window_def(w)),
+                        None => "None".to_string(),
+                    }
+                ),
                 None => "None".to_string(),
             }
         ),
@@ -933,6 +942,7 @@ fn render_map_op(op: MapOp) -> &'static str {
         MapOp::IsNotNull => "IsNotNull",
         MapOp::Concat => "Concat",
         MapOp::Neg => "Neg",
+        MapOp::MaskIf => "MaskIf",
     }
 }
 

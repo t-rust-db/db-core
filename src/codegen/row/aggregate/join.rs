@@ -569,7 +569,7 @@ fn projected_offsets(
                 })
             }
             ResultColumn::Expr { expr, .. } => {
-                if let ExprKind::FunctionCall { over: Some(_), .. } = &expr.kind {
+                if super::accum::expr_has_window_over(expr) {
                     return Err(CodegenError::Unsupported {
                         reason: "window functions are not supported by codegen::row".to_string(),
                     });

@@ -335,6 +335,17 @@ pub struct WindowDef {
     pub order_by: Vec<OrderingTerm>,
 }
 
+/// A `FunctionCall`'s `FILTER (WHERE ...)` and/or `OVER (...)` tail
+/// (#67): either, neither, or both may be present -- `FILTER` modifies
+/// the aggregate itself and is valid with or without `OVER`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionTail {
+    /// `FILTER (WHERE ...)`'s predicate, if given.
+    pub filter: Option<Expr>,
+    /// `OVER (...)`'s window spec, if given.
+    pub over: Option<WindowDef>,
+}
+
 /// `LIMIT limit [OFFSET offset]`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Limit {
@@ -378,13 +389,18 @@ pub enum ExprKind {
         distinct: bool,
         /// The argument list.
         args: FunctionArgs,
-        /// `Some` for a window function's `OVER (...)` tail. Boxed so the
-        /// rare window case doesn't grow every `ExprKind` by two `Vec`s:
-        /// expression parsing recurses one frame per nesting level, and
-        /// `MAX_EXPR_DEPTH` (200) has to be reachable within a debug
-        /// build's default thread stack (t-rust-db/sqlite-rs#17 hit the
-        /// overflow through its corpus depth-guard test).
-        over: Option<Box<WindowDef>>,
+        /// `Some` for `FILTER (WHERE ...)` and/or `OVER (...)` -- one
+        /// `Option<Box<_>>` for both rather than two, so the plain-call
+        /// case (no `FILTER`/`OVER` at all, e.g. `abs(x)`) stays a single
+        /// `None` pointer's worth of size: expression parsing recurses
+        /// one frame per nesting level, and `MAX_EXPR_DEPTH` (200) has to
+        /// be reachable within a debug build's default thread stack
+        /// (t-rust-db/sqlite-rs#17 hit the overflow through its corpus
+        /// depth-guard test; adding a second independent `Option<Box<_>>`
+        /// field here reproduced it -- see
+        /// `deeply_nested_expressions_hit_the_depth_guard_instead_of_
+        /// the_stack`).
+        tail: Option<Box<FunctionTail>>,
     },
     /// A unary operator applied to an expression, e.g. `-x`, `NOT x`.
     Unary {

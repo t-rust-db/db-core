@@ -251,11 +251,18 @@ pub(crate) fn compile_value_depth(
             name,
             distinct,
             args,
-            over,
+            tail,
         } => {
-            if over.is_some() {
+            if matches!(tail.as_deref(), Some(t) if t.over.is_some()) {
                 return Err(CodegenError::Unsupported {
                     reason: format!("window function `{name}` is not supported by codegen::row"),
+                });
+            }
+            if matches!(tail.as_deref(), Some(t) if t.filter.is_some()) {
+                return Err(CodegenError::Unsupported {
+                    reason: format!(
+                        "{name}(...) FILTER (WHERE ...) is not supported by codegen::row"
+                    ),
                 });
             }
             if *distinct {
