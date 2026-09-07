@@ -1,6 +1,6 @@
 [package]
 name = "db-storage"
-version = "0.5.6"
+version = "0.5.7"
 edition = "2021"
 
 [lib]
@@ -25,7 +25,7 @@ test-support = []
 # is defined once in db-core and re-exported here (db-core ADR 0010,
 # t-rust-db/db-core#83). default-features = false compiles only db-core's
 # leaf modules and pulls in no third-party crate.
-db-core = { version = "0.61.0", git = "https://github.com/t-rust-db/db-core", tag = "v0.61.0", default-features = false }
+db-core = { version = "0.61.1", git = "https://github.com/t-rust-db/db-core", tag = "v0.61.1", default-features = false }
 memmap2 = "0.9.11"
 ruzstd = "0.7"
 
