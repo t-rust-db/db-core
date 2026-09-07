@@ -53,7 +53,7 @@ use accum::{
     read_row_columns_into,
 };
 
-pub(super) use accum::query_has_aggregate;
+pub(super) use accum::{as_aggregate, query_has_aggregate};
 pub(super) use join::compile_joined_grouped_scan;
 
 /// The three cursor slots a grouped scan needs beyond the caller-wired

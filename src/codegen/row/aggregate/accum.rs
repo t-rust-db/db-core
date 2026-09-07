@@ -123,7 +123,9 @@ pub(crate) fn query_has_aggregate(query: &Select) -> bool {
 /// than one argument) is an error rather than `None`: silently treating
 /// `SUM(a + b)` as a non-aggregate would compile it as a plain column
 /// and answer nonsense.
-pub(super) fn as_aggregate(expr: &Expr) -> Result<Option<(AggFunc, Option<String>)>> {
+pub(in crate::codegen::row) fn as_aggregate(
+    expr: &Expr,
+) -> Result<Option<(AggFunc, Option<String>)>> {
     let ExprKind::FunctionCall {
         name,
         args,

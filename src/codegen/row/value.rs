@@ -912,8 +912,12 @@ mod tests {
     /// Constructs that the AST can express but `codegen::row` cannot
     /// compile yet must fail soft, naming the construct -- never panic
     /// mid-query (#147).
-    /// Scalar subqueries remain genuinely unsupported (own follow-up
-    /// ticket, #163) -- bind parameters compile for real now (#162, see
+    /// Scalar subqueries compile for real now (see
+    /// `subquery::scalar`'s own tests) when the referenced table is
+    /// visible to the compiler's catalog -- this case fails soft instead
+    /// because `t` isn't in `scope`'s catalog at all, exercising the same
+    /// fail-soft-and-name-itself path for an unresolvable table. Bind
+    /// parameters compile for real now too (#162, see
     /// `bind_parameter_forms_compile_and_execute` below), and everything
     /// else `#150` listed is exercised for real below.
     #[test]

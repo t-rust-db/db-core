@@ -8,27 +8,42 @@ use crate::codegen::row::value::compile_value;
 use crate::codegen::row::{
     CodegenError, CondTargets, Emitter, NullTarget, RegAlloc, Result, Scope, Target,
 };
-use crate::parser::ast::{Expr, ExprKind, ResultColumn, Select};
+use crate::parser::ast::{Expr, ResultColumn, Select};
 use crate::vm::row::{Instruction, Opcode, P4};
 
 /// A subquery's single projected result column -- `IN (SELECT ...)` and
 /// a scalar `(SELECT ...)` in value position both need exactly one
-/// (`SELECT *`, an aggregate, or more than one column is `Unsupported`),
-/// mirroring the reference's `single_result_expr`.
-fn single_result_column(subquery: &Select) -> Result<&str> {
+/// (`SELECT *`, or more than one column, is `Unsupported`), mirroring the
+/// reference's `single_result_expr`. A bare column or any other computed
+/// expression is accepted here and compiled through the ordinary
+/// [`compile_value`] machinery by the caller; an aggregate call (e.g.
+/// `COUNT(*)`) is rejected separately by [`reject_aggregate`] since it
+/// needs `AggStep`/`AggFinal`, not a per-row [`compile_value`] call.
+fn single_result_expr(subquery: &Select) -> Result<&Expr> {
     match subquery.columns.as_slice() {
-        [ResultColumn::Expr {
-            expr:
-                Expr {
-                    kind: ExprKind::Column { name, .. },
-                    ..
-                },
-            ..
-        }] => Ok(name),
+        [ResultColumn::Expr { expr, .. }] => Ok(expr),
         _ => Err(CodegenError::Unsupported {
-            reason: "a subquery in this position must project exactly one plain column".to_string(),
+            reason: "a subquery in this position must project exactly one column".to_string(),
         }),
     }
+}
+
+/// Rejects an aggregate call (`COUNT(*)`, `AVG(c)`, ...) as this
+/// subquery's single projected expression: it needs whole-scan
+/// accumulation (`AggStep`/`AggFinal`), which the per-row
+/// [`compile_value`] loop below doesn't provide. Tracked as a distinct,
+/// still-open follow-up (db-core#175) rather than folded into the
+/// generic "exactly one column" message above.
+fn reject_aggregate(expr: &Expr) -> Result<()> {
+    use crate::codegen::row::aggregate::as_aggregate;
+    if as_aggregate(expr)?.is_some() {
+        return Err(CodegenError::Unsupported {
+            reason: "an aggregate as a subquery's sole projected column is not supported by \
+                     codegen::row yet"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Opens the subquery's own table cursor and builds its scope, with the
@@ -131,7 +146,8 @@ pub fn compile_in_subquery(
     negated: bool,
     targets: CondTargets,
 ) -> Result<()> {
-    let col_name = single_result_column(subquery)?;
+    let result_expr = single_result_expr(subquery)?;
+    reject_aggregate(result_expr)?;
 
     let l = compile_value(em, reg, outer_scope, lhs)?;
 
@@ -156,7 +172,7 @@ pub fn compile_in_subquery(
             CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip)),
         )?;
     }
-    let v = compile_value(em, reg, &sub_scope, &super::super::column_expr(col_name))?;
+    let v = compile_value(em, reg, &sub_scope, result_expr)?;
     em.emit(Instruction::with_p4(
         Opcode::IdxInsert,
         eph_cursor,
@@ -214,7 +230,8 @@ pub fn compile_scalar_subquery(
     outer_scope: &Scope,
     subquery: &Select,
 ) -> Result<i32> {
-    let col_name = single_result_column(subquery)?;
+    let result_expr = single_result_expr(subquery)?;
+    reject_aggregate(result_expr)?;
 
     let (sub_cursor, sub_scope) = open_subquery_scan(em, reg, outer_scope, subquery)?;
 
@@ -235,7 +252,7 @@ pub fn compile_scalar_subquery(
             CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip)),
         )?;
     }
-    let v = compile_value(em, reg, &sub_scope, &super::super::column_expr(col_name))?;
+    let v = compile_value(em, reg, &sub_scope, result_expr)?;
     em.emit(Instruction::new(Opcode::Copy, v, dest, 0));
     let done = em.new_label();
     em.goto(done);
@@ -334,7 +351,7 @@ mod tests {
         let err = compile("SELECT a FROM t WHERE a IN (SELECT * FROM s)").unwrap_err();
         match err {
             CodegenError::Unsupported { reason } => {
-                assert!(reason.contains("exactly one plain column"), "{reason}");
+                assert!(reason.contains("exactly one column"), "{reason}");
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
@@ -443,7 +460,46 @@ mod tests {
         let err = compile("SELECT a FROM t WHERE (SELECT * FROM s) = 10").unwrap_err();
         match err {
             CodegenError::Unsupported { reason } => {
-                assert!(reason.contains("exactly one plain column"), "{reason}");
+                assert!(reason.contains("exactly one column"), "{reason}");
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scalar_subquery_projects_a_computed_expression() {
+        use crate::vm::row::Value;
+        let rows = run(
+            "SELECT a FROM t WHERE (SELECT x + 1 FROM s WHERE x = 10) = 11",
+            vec![vec![Value::Integer(1), Value::Integer(2)]],
+        );
+        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    }
+
+    #[test]
+    fn in_subquery_projects_a_computed_expression() {
+        let program = compile("SELECT a FROM t WHERE a IN (SELECT x + 1 FROM s)").unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::OpenEphemeral), "{ops:?}");
+    }
+
+    #[test]
+    fn scalar_subquery_aggregate_projection_is_unsupported() {
+        let err = compile("SELECT a FROM t WHERE (SELECT count(*) FROM s) = 1").unwrap_err();
+        match err {
+            CodegenError::Unsupported { reason } => {
+                assert!(reason.contains("aggregate"), "{reason}");
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn in_subquery_aggregate_projection_is_unsupported() {
+        let err = compile("SELECT a FROM t WHERE a IN (SELECT count(*) FROM s)").unwrap_err();
+        match err {
+            CodegenError::Unsupported { reason } => {
+                assert!(reason.contains("aggregate"), "{reason}");
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
