@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test test-lib build lint check-deny check-mvl-limit coverage check-coverage ci version
+.PHONY: help test test-lib test-spike build lint check-deny check-mvl-limit coverage check-coverage ci version
 
 help: ## Show this help
 	@echo ""
@@ -19,11 +19,30 @@ build: ## Build with all features
 
 # === Test ===
 
-test: ## Run the full test suite with all features
-	cargo test --all-features
+# Every [[test]] target's name whose source is NOT under tests/spike/
+# (naming any `--test` turns off cargo's target autodiscovery, which is
+# exactly how tests/spike/ stays out of a run that lists these). Spikes
+# are throwaway experiments (db-core#141/#186): they must not run under
+# the default test/coverage gates, nor count toward coverage -- use
+# `make test-spike` to run them explicitly.
+NON_SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
+	| python3 -c "import json,sys; \
+	  print(' '.join('--test '+t['name'] for t in json.load(sys.stdin)['packages'][0]['targets'] \
+	    if 'test' in t['kind'] and '/tests/spike/' not in t['src_path']))")
+
+test: ## Run the full test suite with all features (spikes excluded; see make test-spike)
+	cargo test --all-features --lib $(NON_SPIKE_TESTS)
 
 test-lib: ## Just the library unit tests (fastest inner loop)
 	cargo test --all-features --lib
+
+SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
+	| python3 -c "import json,sys; \
+	  print(' '.join('--test '+t['name'] for t in json.load(sys.stdin)['packages'][0]['targets'] \
+	    if 'test' in t['kind'] and '/tests/spike/' in t['src_path']))")
+
+test-spike: ## Run only the throwaway experiments under tests/spike/
+	cargo test --all-features $(SPIKE_TESTS)
 
 # Scanned file set for `test-mcdc` (db-core#111): all of `src/`, not a
 # curated subset -- no obligation is exempted by file selection.
@@ -53,28 +72,17 @@ test-mcdc: mcdc-obligations ## MC/DC dashboard for all of src/; fails if any mul
 
 COVERAGE_MIN := 80
 
-# Test targets the coverage run executes: the library plus every
-# integration test whose source is NOT under tests/spike/. Spikes are
-# throwaway by design (they still run under `make test`); they must not
-# inflate the coverage number for code that only a spike reaches.
-COVERAGE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
-	| python3 -c "import json,sys; \
-	  print(' '.join('--test '+t['name'] for t in json.load(sys.stdin)['packages'][0]['targets'] \
-	    if 'test' in t['kind'] and '/tests/spike/' not in t['src_path']))")
-
 coverage: ## Line coverage report over the library + tests/unit (cargo-llvm-cov); spikes excluded
 	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
 		echo "cargo-llvm-cov not found — install with: cargo install cargo-llvm-cov --locked"; \
 		echo "  (also needs: rustup component add llvm-tools-preview)"; \
 		exit 1; \
 	}
-	# Ported from sqlite-rs. One instrumented run: `--lib` plus the
-	# explicit `--test` list from COVERAGE_TESTS (naming any `--test`
-	# turns off autodiscovery, which is exactly how tests/spike/ stays
-	# out). `--all-features` mirrors `make test` so the report sees the
-	# same modules the suite does.
+	# Ported from sqlite-rs. Same test set `make test` runs -- `--lib`
+	# plus NON_SPIKE_TESTS -- under cargo-llvm-cov instrumentation
+	# instead of plain `cargo test`.
 	cargo llvm-cov clean --workspace
-	cargo llvm-cov --locked --all-features --no-report --lib $(COVERAGE_TESTS)
+	cargo llvm-cov --locked --all-features --no-report --lib $(NON_SPIKE_TESTS)
 	cargo llvm-cov report
 	cargo llvm-cov report --json --output-path target/llvm-cov.json
 

@@ -33,7 +33,7 @@
     clippy::arithmetic_side_effects
 )]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -85,6 +85,85 @@ fn known_obligation_ids() -> HashSet<String> {
             Some(rest[..end].to_string())
         })
         .collect()
+}
+
+/// Every `(id, file)` pair in the committed snapshot, in file order --
+/// `id` is `<basename>_<line>`, so two files sharing a basename (e.g.
+/// `src/codegen/batch.rs` and `src/vm/batch.rs`, since #192's module
+/// move) can coincidentally collide on the same line number and
+/// therefore the same id. `cargo-mvl-mcdc harvest` joins tagged tests to
+/// obligations by id alone, so a collision silently misattributes one
+/// file's discharged vectors to the other's obligation -- `make
+/// test-mcdc` then reports the real one stuck at 0/N with no indication
+/// why, since its own tagged tests look perfectly fine.
+///
+/// Hand-rolled for the same reason as [`known_obligation_ids`]: no JSON
+/// dependency, and the snapshot's `"id"`/`"file"` fields are always
+/// simple unescaped quoted strings in that order within one object.
+fn obligation_id_file_pairs() -> Vec<(String, String)> {
+    let raw = fs::read_to_string(manifest_path("tests/mcdc/obligations.json"))
+        .expect("tests/mcdc/obligations.json must exist -- run `make mcdc-obligations`");
+    raw.match_indices("\"id\":")
+        .filter_map(|(idx, _)| {
+            let after_id = raw[idx + "\"id\":".len()..].trim_start();
+            let id = after_id.strip_prefix('"')?;
+            let id_end = id.find('"')?;
+            let id = &id[..id_end];
+
+            let file_key = "\"file\":";
+            let file_idx = raw[idx..].find(file_key)? + idx + file_key.len();
+            let after_file = raw[file_idx..].trim_start();
+            let file = after_file.strip_prefix('"')?;
+            let file_end = file.find('"')?;
+
+            Some((id.to_string(), file[..file_end].to_string()))
+        })
+        .collect()
+}
+
+/// Pre-existing cross-file collisions between `src/codegen/batch.rs` and
+/// `src/vm/batch.rs` (same basename, coincidentally overlapping line
+/// numbers -- both files are large and grow independently, so some
+/// overlap is inevitable and not worth fighting line-by-line every time
+/// either shifts). Known and accepted as of db-core#196; anything beyond
+/// this fixed set is a *new* collision and must fail the test below.
+const KNOWN_BATCH_COLLISIONS: &[&str] = &["batch_427", "batch_699"];
+
+#[test]
+fn every_obligation_id_in_the_snapshot_is_unique_across_files() {
+    let mut files_by_id: HashMap<String, HashSet<String>> = HashMap::new();
+    for (id, file) in obligation_id_file_pairs() {
+        files_by_id.entry(id).or_default().insert(file);
+    }
+
+    // A single line legitimately hosts two obligations sharing one id --
+    // e.g. a real multi-leaf decision alongside the tool's own
+    // `compiler_void` placeholder for the same match arm. That's the
+    // same file twice, not a collision; only distinct files sharing an
+    // id are the failure mode this guards.
+    let mut collisions: Vec<String> = files_by_id
+        .into_iter()
+        .filter(|(id, files)| files.len() > 1 && !KNOWN_BATCH_COLLISIONS.contains(&id.as_str()))
+        .map(|(id, files)| {
+            let mut files: Vec<String> = files.into_iter().collect();
+            files.sort();
+            format!("{id}: {}", files.join(", "))
+        })
+        .collect();
+    collisions.sort();
+
+    assert!(
+        collisions.is_empty(),
+        "these obligation ids are shared by more than one file in \
+         tests/mcdc/obligations.json -- `cargo-mvl-mcdc harvest` joins tagged tests \
+         to obligations by id alone, so a shared id silently misattributes discharged \
+         vectors between the files (typically two files with the same basename, e.g. \
+         a module move that leaves both `src/codegen/batch.rs` and `src/vm/batch.rs` \
+         with a decision on the same line number). `cargo-mvl-mcdc`'s id scheme can't \
+         disambiguate this on its own -- rename one file, or move one of the colliding \
+         decisions to a different line, then re-run `make mcdc-obligations`:\n{}",
+        collisions.join("\n")
+    );
 }
 
 /// `mcdc__<id>__v<N>_<description>` -- `id` is greedy-safe here because
