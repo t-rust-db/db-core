@@ -388,8 +388,18 @@ where
                 .chain(std::iter::once(step.table))
                 .filter_map(|i| pos_of.get(i).copied())
                 .max()
-                .unwrap_or(0),
-            None => pos_of.get(step.table).copied().unwrap_or(0),
+                .ok_or_else(|| CodegenError::Internal {
+                    reason: format!(
+                        "join step for table {} references no known level",
+                        step.table
+                    ),
+                })?,
+            None => pos_of
+                .get(step.table)
+                .copied()
+                .ok_or_else(|| CodegenError::Internal {
+                    reason: format!("join step table {} has no level position", step.table),
+                })?,
         };
         if let Some(plan) = levels.get_mut(pos) {
             plan.checks.push(LevelCheck {
@@ -416,8 +426,16 @@ where
         // evaluated) may be deeper than the owning level whenever the
         // pre-existing chain being RIGHT-joined against has more than
         // one table.
-        let outer_pos = pos_of.get(rs.new_table).copied().unwrap_or(0);
-        let check_pos = pos_of.get(rs.deep_orig).copied().unwrap_or(0);
+        let level_of = |table: usize| {
+            pos_of
+                .get(table)
+                .copied()
+                .ok_or_else(|| CodegenError::Internal {
+                    reason: format!("RIGHT JOIN table {table} has no level position"),
+                })
+        };
+        let outer_pos = level_of(rs.new_table)?;
+        let check_pos = level_of(rs.deep_orig)?;
         let owner_pos = outer_pos.saturating_add(1);
         let constraint = constraints.get(rs.join_index).cloned().flatten();
         if let Some(plan) = levels.get_mut(check_pos) {
@@ -553,33 +571,38 @@ pub(super) fn join_scope(
     pos_of: &[usize],
     catalog: &[TableSchema],
     dedup_star: &[std::collections::HashSet<String>],
-) -> Scope {
-    Scope {
+) -> Result<Scope, CodegenError> {
+    Ok(Scope {
         tables: bindings
             .iter()
             .enumerate()
             .map(|(orig, b)| {
+                // `pos_of`/`null_mask` are built over these same bindings
+                // just above; a miss would silently drop this binding's
+                // outer-join NULL extension (#232).
                 let forced_null = pos_of
                     .get(orig)
                     .and_then(|&pos| null_mask.get(pos))
                     .copied()
-                    .unwrap_or(false)
+                    .ok_or_else(|| CodegenError::Internal {
+                        reason: format!("binding {orig} has no null-mask entry"),
+                    })?
                     || b.forced_null;
-                TableBinding {
+                Ok(TableBinding {
                     alias: b.alias.clone(),
                     name: b.name.clone(),
                     schema: b.schema.clone(),
                     cursor: b.cursor,
                     forced_null,
                     stats: b.stats.clone(),
-                }
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>, CodegenError>>()?,
         catalog: catalog.to_vec(),
         outer: None,
         dedup_star: dedup_star.to_vec(),
         ..Scope::default()
-    }
+    })
 }
 
 /// Builds the qualified-column `Expr` used to reference `binding`'s
@@ -757,7 +780,7 @@ mod mcdc_vectors {
     // routes a join to the grouped emitter, which rejects DISTINCT.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__joins_443__v1_group_by_routes_to_the_grouped_join() {
+    fn mcdc__joins_461__v1_group_by_routes_to_the_grouped_join() {
         let e = err_text(
             "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k GROUP BY a.k",
             &two_tables(),
@@ -769,7 +792,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__joins_443__v2_aggregate_without_group_by_routes_to_the_grouped_join() {
+    fn mcdc__joins_461__v2_aggregate_without_group_by_routes_to_the_grouped_join() {
         let e = err_text(
             "SELECT DISTINCT count(*) FROM a JOIN b ON a.k = b.k",
             &two_tables(),
@@ -781,7 +804,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__joins_443__v3_neither_is_a_plain_joined_scan() {
+    fn mcdc__joins_461__v3_neither_is_a_plain_joined_scan() {
         let p = ok(
             "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k",
             &two_tables(),

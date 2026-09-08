@@ -204,7 +204,7 @@ where
     L: FnMut(&mut Emitter, &mut RegAlloc, &Scope) -> Result<(), CodegenError>,
 {
     if level == exec_bindings.len() {
-        let scope = join_scope(orig_bindings, null_mask, pos_of, catalog, dedup_star);
+        let scope = join_scope(orig_bindings, null_mask, pos_of, catalog, dedup_star)?;
         return leaf(em, reg, &scope);
     }
 
@@ -214,7 +214,12 @@ where
         });
     };
     let cursor = binding.cursor;
-    let plan = levels.get(level).cloned().unwrap_or_default();
+    let plan = levels
+        .get(level)
+        .cloned()
+        .ok_or_else(|| CodegenError::Internal {
+            reason: format!("join level {level} has a binding but no access plan"),
+        })?;
 
     if plan.null_span.is_some() {
         let matched = reg.alloc();
@@ -258,7 +263,7 @@ where
 
     match single_check_access {
         Some(access) => {
-            let scope = join_scope(orig_bindings, null_mask, pos_of, catalog, dedup_star);
+            let scope = join_scope(orig_bindings, null_mask, pos_of, catalog, dedup_star)?;
             let miss = em.new_label();
             match access {
                 JoinAccess::Rowid(operand) => {
@@ -391,7 +396,7 @@ where
             em.place(after_build);
             em.patch_p2(once_addr, after_build);
 
-            let scope = join_scope(orig_bindings, null_mask, pos_of, catalog, dedup_star);
+            let scope = join_scope(orig_bindings, null_mask, pos_of, catalog, dedup_star)?;
             let probe_reg = compile_value(em, reg, &scope, &probe.probe)?;
             let seek_addr = em.emit(Instruction::with_p4(
                 Opcode::AutoIndexSeek,
@@ -423,7 +428,7 @@ where
 
             for check in &plan.checks {
                 if let Some(constraint) = &check.constraint {
-                    let scope = join_scope(orig_bindings, null_mask, pos_of, catalog, dedup_star);
+                    let scope = join_scope(orig_bindings, null_mask, pos_of, catalog, dedup_star)?;
                     compile_cond(
                         em,
                         reg,
@@ -476,7 +481,7 @@ where
             let skip = em.new_label();
             for check in &plan.checks {
                 if let Some(constraint) = &check.constraint {
-                    let scope = join_scope(orig_bindings, null_mask, pos_of, catalog, dedup_star);
+                    let scope = join_scope(orig_bindings, null_mask, pos_of, catalog, dedup_star)?;
                     compile_cond(
                         em,
                         reg,

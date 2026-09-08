@@ -101,7 +101,7 @@ where
         .collect();
     validate_joined_group_projection(select, &agg_slots)?;
 
-    let total_width = joined_column_offset(full_scope, full_scope.tables.len());
+    let total_width = joined_column_offset(full_scope, full_scope.tables.len())?;
 
     // #502: a trailing `ORDER BY` sorts the *finalized* group rows —
     // `total_width` raw joined columns followed by `agg_slots.len()`
@@ -425,7 +425,7 @@ fn joined_bare_column_offset(full_scope: &Scope, expr: &Expr) -> Result<usize, C
         });
     };
     let (binding_idx, local_idx) = resolve_scope_column(full_scope, table.as_deref(), name)?;
-    Ok(joined_column_offset(full_scope, binding_idx).saturating_add(local_idx))
+    Ok(joined_column_offset(full_scope, binding_idx)?.saturating_add(local_idx))
 }
 
 /// [`super::accum::emit_agg_step`]'s joined counterpart: reads
@@ -658,6 +658,8 @@ fn joined_synthetic_schema(full_scope: &Scope, synthetic_names: &[String]) -> Ta
                 .columns
                 .iter()
                 .enumerate()
+                // No entry = no declared type (SQLite "no affinity"),
+                // spelled as an empty decltype.
                 .map(|(i, _)| b.schema.column_types.get(i).cloned().unwrap_or_default())
         })
         .collect();
@@ -705,7 +707,7 @@ fn project_grouped_result_columns(
             ResultColumn::Star => {
                 for (i, binding) in full_scope.tables.iter().enumerate() {
                     let suppressed = dedup_star.get(i);
-                    let base = joined_column_offset(full_scope, i);
+                    let base = joined_column_offset(full_scope, i)?;
                     for idx in 0..binding.schema.columns.len() {
                         let Some(name) = binding.schema.columns.get(idx) else {
                             continue;
@@ -725,12 +727,16 @@ fn project_grouped_result_columns(
                     .ok_or_else(|| CodegenError::UnknownColumn {
                         name: format!("{table}.*"),
                     })?;
-                let base = joined_column_offset(full_scope, i);
+                let base = joined_column_offset(full_scope, i)?;
+                // `i` was just found by name in `full_scope.tables`; a miss
+                // here is a planner bug, not an empty expansion (#232).
                 let count = full_scope
                     .tables
                     .get(i)
                     .map(|b| b.schema.columns.len())
-                    .unwrap_or(0);
+                    .ok_or_else(|| CodegenError::Internal {
+                        reason: format!("binding {i} for {table}.* vanished from scope"),
+                    })?;
                 for idx in 0..count {
                     regs.push(read_offset(em, reg, base.saturating_add(idx)));
                 }
@@ -750,7 +756,7 @@ fn project_grouped_result_columns(
                 };
                 let (binding_idx, local_idx) =
                     resolve_scope_column(full_scope, table.as_deref(), name)?;
-                let abs = joined_column_offset(full_scope, binding_idx).saturating_add(local_idx);
+                let abs = joined_column_offset(full_scope, binding_idx)?.saturating_add(local_idx);
                 regs.push(read_offset(em, reg, abs));
             }
         }
@@ -939,7 +945,7 @@ mod mcdc_vectors {
     // resolution, which rejects a function call.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__join_796__v1_same_name_and_distinctness_matches_the_slot() {
+    fn mcdc__join_802__v1_same_name_and_distinctness_matches_the_slot() {
         let p = ok(
             "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k ORDER BY count(b.w)",
             &two_tables(),
@@ -948,7 +954,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__join_796__v2_different_name_does_not_match() {
+    fn mcdc__join_802__v2_different_name_does_not_match() {
         let e = err_text(
             "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k ORDER BY sum(b.w)",
             &two_tables(),
@@ -960,7 +966,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__join_796__v3_same_name_but_different_distinctness_does_not_match() {
+    fn mcdc__join_802__v3_same_name_but_different_distinctness_does_not_match() {
         let e = err_text(
             "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k \
              ORDER BY count(DISTINCT b.w)",
