@@ -84,6 +84,21 @@ path = "tests/spike/002_arrow_optimization/02_groupreduce_key_hashing_adjusted.r
 
 [dependencies]
 
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "parser"
+harness = false
+
+[[bench]]
+name = "codegen"
+harness = false
+
+[[bench]]
+name = "vm_opcodes"
+harness = false
+
 [features]
 # Every feature on by default (db-core#111): `cargo-mvl-mcdc harvest`
 # (the MC/DC discharge tool -- see `make test-mcdc`) hardcodes a
