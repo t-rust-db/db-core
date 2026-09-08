@@ -8,6 +8,7 @@ use super::limit_scan::{
 use super::order_by::strip_collate;
 use super::*;
 use crate::codegen::row::planner::{estimate_index_cost, estimate_scan_cost};
+use crate::codegen::row::{key_index, record_width};
 /// The access strategy #243's join-level planner picked for a table
 /// binding, in place of an unconditional `Rewind`/`Next` full scan --
 /// see [`choose_join_access`].
@@ -301,7 +302,9 @@ pub(super) fn resolve_scope_column(
         .tables
         .get(i)
         .and_then(|b| column_index(&b.schema, name))
-        .unwrap_or(0);
+        .ok_or_else(|| CodegenError::Internal {
+            reason: format!("column {name} resolved to binding {i} but is not in its schema"),
+        })?;
     Ok((i, idx))
 }
 
@@ -482,11 +485,15 @@ pub(super) fn emit_joined_pseudo_projection(
                         name: format!("{table}.*"),
                     })?;
                 let base = joined_column_offset(scope, i);
+                // `i` was just found by name in `scope.tables`, so this
+                // lookup cannot miss; an empty expansion would be a bug.
                 let count = scope
                     .tables
                     .get(i)
                     .map(|b| b.schema.columns.len())
-                    .unwrap_or(0);
+                    .ok_or_else(|| CodegenError::Internal {
+                        reason: format!("binding {i} for {table}.* vanished from scope"),
+                    })?;
                 for idx in 0..count {
                     regs.push(read_offset(em, reg, base.saturating_add(idx)));
                 }
@@ -698,7 +705,7 @@ pub(super) fn compile_join_order_by_sort_keys(
             JoinOrderTarget::Offset(off) => *off,
             JoinOrderTarget::Expr(expr) => {
                 let r = compile_value(em, reg, scope, expr)?;
-                usize::try_from(r.saturating_sub(first)).unwrap_or(0)
+                key_index(r, first)?
             }
         };
         sort_keys.push(SortKeyColumn {
@@ -769,7 +776,7 @@ pub(super) fn compile_join_level_for_sort(
             let sort_keys = compile_join_order_by_sort_keys(em, reg, scope, order_by_plans, first)?;
             em.patch_p4(sorter_open_addr, P4::SortKey(sort_keys));
 
-            let count = usize::try_from(reg.peek().saturating_sub(first)).unwrap_or(0);
+            let count = record_width(reg.peek(), first)?;
             let record_reg = reg.alloc();
             em.emit(Instruction::new(
                 Opcode::MakeRecord,
