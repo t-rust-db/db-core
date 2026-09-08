@@ -4,11 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
-## [Unreleased]
+## [0.75.0] - 2026-09-08
 
 ### Changed
 
 - **BREAKING: `codegen::batch::compile` and `explain` return `Result`** (#232, group 3) -- `compile(select) -> Result<Program, PlanError>`, `explain(select, stats) -> Result<Vec<PlanNode>, PlanError>` (was infallible). Before, a select item the planner could not classify compiled to a program that emitted nothing, `has_agg` silently flipped to `false`, and EXPLAIN dropped a join it could not plan (`UnsupportedJoinKind` swallowed). `codegen::batch::emit::{render_joined, render_semi_join, render_windowed}` return `Result<String, EmitError>` for the same reason; new `EmitError::Plan(PlanError)` and `PlanError::Internal(String)`.
+- **Parser and batch-VM fallbacks are typed errors** (#232, group 4). `a.b.c.d` is `Invalid` (the wildcard arm silently dropped the fourth part); the batch validator rejects a `GROUP BY` expression with its span instead of dropping it from the bare-column comparison; `Tokenizer::tokenize` refuses SQL text longer than 4 GiB up front instead of saturating span offsets. New `VmError::MalformedProgram { opcode, reason }` for `HashBuild`/`HashProbe` with no key columns, `Emit` with no registers, a join payload narrower than its destinations, and a non-numeric partial aggregate (was: merged as `0.0`); `vm::engine::finalize` returns `Result` accordingly.
 - **`emit` refuses what it used to render as `TABLE = ""`** -- a `SELECT` without `FROM`, a `FROM` subquery without an alias, or a `JOIN` against a subquery is `EmitError::Unsupported` instead of generated source that can never bind a file. The generated program's file matcher errors on a non-UTF-8 file name instead of binding it to a table called `data`.
 
 ## [0.74.1] - 2026-09-08

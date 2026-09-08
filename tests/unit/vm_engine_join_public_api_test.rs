@@ -34,7 +34,8 @@ fn finalize_merges_groups_sorts_and_limits() {
         None,
         None,
         rows,
-    );
+    )
+    .unwrap();
     // Group "a" merges two rows (1 + 2 = 3, as `f64`); group "b" has only
     // one row, so it never goes through the merge step and keeps its
     // original `Int`.
@@ -50,7 +51,7 @@ fn finalize_applies_order_by_then_limit() {
         vec![Value::Int(1)],
         vec![Value::Int(2)],
     ];
-    let out = finalize(&[], 0, false, Some((0, false)), Some(2), rows);
+    let out = finalize(&[], 0, false, Some((0, false)), Some(2), rows).unwrap();
     assert_eq!(out, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
 }
 

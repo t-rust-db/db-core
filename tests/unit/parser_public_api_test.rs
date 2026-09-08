@@ -274,3 +274,27 @@ fn span_reads_back_line_and_column_and_parse_error_carries_one() {
         ParseError::UnexpectedEof { .. } | ParseError::Unexpected { .. } => {}
     }
 }
+
+/// db-core#232: a column reference has at most three dotted parts. The
+/// old wildcard arm also matched `a.b.c.d`, silently dropping `d`.
+#[test]
+fn four_part_column_reference_is_invalid_not_silently_truncated() {
+    assert!(matches!(
+        db_core::parser::row::parse_select("SELECT a.b.c.d FROM t"),
+        ParseOutcome::Invalid { .. }
+    ));
+    assert!(matches!(
+        db_core::parser::row::parse_select("SELECT a.b.c FROM t"),
+        ParseOutcome::Accepted(_)
+    ));
+}
+
+/// db-core#232: the batch validator's GROUP BY check compared the bare
+/// SELECT columns against only the GROUP BY keys that happened to be
+/// plain columns -- an expression key was dropped from the comparison.
+/// It is rejected with its own span now.
+#[test]
+fn batch_validator_rejects_a_group_by_expression_instead_of_dropping_it() {
+    assert!(parse("SELECT a, SUM(b) FROM t GROUP BY a + 1").is_err());
+    assert!(parse("SELECT a, SUM(b) FROM t GROUP BY a").is_ok());
+}

@@ -354,3 +354,54 @@ fn compare_for_order_sorts_null_last_both_directions() {
         Ordering::Greater
     );
 }
+
+/// db-core#232: an `Emit` with no registers used to emit zero rows -- a
+/// planner bug read as an empty result. It is a typed error now, as are
+/// `HashBuild`/`HashProbe` with no key columns.
+#[test]
+fn emit_with_no_registers_is_a_malformed_program_error() {
+    let batch = Batch::new(2).with_column("id", vec![Value::Int(1), Value::Int(2)]);
+    let program = Program::new(vec![
+        Instruction::new(Opcode::Emit {
+            registers: vec![].into(),
+        }),
+        Instruction::new(Opcode::Halt),
+    ]);
+    assert!(matches!(
+        run(&[InMemorySegment(batch)], &program),
+        Err(VmError::MalformedProgram { opcode: "Emit", .. })
+    ));
+}
+
+/// db-core#232: a non-numeric partial aggregate used to merge as `0.0`
+/// into a plausible wrong SUM; NULL (a segment that saw no rows) is the
+/// additive identity, anything else non-numeric is a planner bug.
+#[test]
+fn finalize_rejects_a_non_numeric_partial_aggregate() {
+    use db_core::vm::batch::AggPart;
+    use db_core::vm::engine::finalize;
+    let ok = finalize(
+        &[AggPart::Sum],
+        0,
+        false,
+        None,
+        None,
+        vec![vec![Value::Null], vec![Value::Int(3)]],
+    )
+    .unwrap();
+    assert_eq!(ok, vec![vec![Value::Float(3.0)]]);
+    assert!(matches!(
+        finalize(
+            &[AggPart::Sum],
+            0,
+            false,
+            None,
+            None,
+            vec![vec![Value::Str("x".into())], vec![Value::Int(3)]],
+        ),
+        Err(VmError::MalformedProgram {
+            opcode: "Combine",
+            ..
+        })
+    ));
+}
