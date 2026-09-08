@@ -2754,6 +2754,15 @@
     "compiler_void": true
   },
   {
+    "id": "grammar_3249",
+    "file": "src/parser/row/grammar.rs",
+    "line": 3249,
+    "decision": "self.depth > MAX_EXPR_DEPTH",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
     "id": "error_63",
     "file": "src/parser/row/error.rs",
     "line": 63,

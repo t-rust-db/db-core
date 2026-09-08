@@ -10,10 +10,16 @@
 //! `ExecError` paths a caller can hit directly -- independent of
 //! whatever codegen currently generates.
 
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic
+)]
 
 use db_core::vm::row::{
-    execute, ExecError, InMemoryCursor, Instruction, Opcode, Program, Value, Vm, P4,
+    execute, Cursor, EphemeralTableCursor, ExecError, InMemoryCursor, Instruction, Opcode, Program,
+    Value, Vm, P4,
 };
 
 #[test]
@@ -94,4 +100,58 @@ fn running_off_the_end_of_the_program_is_a_program_counter_error() {
     let program = Program::new(vec![Instruction::new(Opcode::Goto, 0, 5, 0)]);
     let err = execute(&mut vm, &program).unwrap_err();
     assert!(matches!(err, ExecError::ProgramCounterOutOfRange { pc: 5 }));
+}
+
+/// db-core#226: an `OpenDup` sibling shares the ephemeral table's row
+/// store (`Rc<RefCell<Vec<_>>>`). Every `Cursor` method takes and
+/// releases its borrow within the call, so mutating through one cursor
+/// while the other is mid-scan must never trip `RefCell`'s runtime
+/// borrow check -- and, because rows are kept sorted by rowid and the
+/// scan is positioned by rowid rather than by index, the mid-scan
+/// cursor must still visit exactly the surviving rows in order.
+#[test]
+fn ephemeral_dup_sibling_can_mutate_while_the_original_is_mid_scan() {
+    let mut a = EphemeralTableCursor::new();
+    for rowid in 1..=5 {
+        a.insert(rowid, vec![Value::Integer(rowid * 10)]);
+    }
+    let mut b = a.dup().expect("ephemeral tables support OpenDup");
+
+    assert!(a.rewind());
+    assert_eq!(a.rowid(), 1);
+
+    // Through the sibling, while `a` is positioned on row 1: delete the
+    // row `a` would visit next-but-one, and append one past the end.
+    assert!(b.seek(3));
+    assert!(b.delete());
+    assert!(b.insert(6, vec![Value::Integer(60)]));
+
+    // Read the column *inside* the scan: once `next()` has returned
+    // false there is no current row, and `column()` on a positionless
+    // cursor is one of the production `expect`s db-core#231 turns into
+    // a typed error -- this test exercises the RefCell sharing, not that.
+    let mut visited = vec![(a.rowid(), a.column(0))];
+    while a.next() {
+        visited.push((a.rowid(), a.column(0)));
+    }
+    assert_eq!(
+        visited,
+        vec![
+            (1, Value::Integer(10)),
+            (2, Value::Integer(20)),
+            (4, Value::Integer(40)),
+            (5, Value::Integer(50)),
+            (6, Value::Integer(60)),
+        ]
+    );
+
+    // And the other way round: `b` scanning while `a` mutates.
+    assert!(b.rewind());
+    assert!(a.seek(2));
+    assert!(a.delete());
+    let mut visited = vec![b.rowid()];
+    while b.next() {
+        visited.push(b.rowid());
+    }
+    assert_eq!(visited, vec![1, 4, 5, 6]);
 }
