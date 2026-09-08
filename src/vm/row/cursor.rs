@@ -408,6 +408,12 @@ pub struct EphemeralTableCursor {
     /// deleted (a fence-post `next()`/`prev()` resume from) --
     /// [`Self::at_row`] says whether it still names a live row.
     current_rowid: Option<i64>,
+    /// Where `current_rowid` was last seen in `rows` -- a hint for
+    /// [`Self::row_index`] that turns the per-`column` binary search
+    /// into one bounds-checked compare on the hot scan path (#254).
+    /// Validated against the rowid on every use, so an `insert`/
+    /// `delete` that shifts positions only costs the fallback search.
+    current_index: Option<usize>,
     at_row: bool,
 }
 
@@ -416,6 +422,7 @@ impl Default for EphemeralTableCursor {
         EphemeralTableCursor {
             rows: Rc::new(RefCell::new(Vec::new())),
             current_rowid: None,
+            current_index: None,
             at_row: false,
         }
     }
@@ -428,16 +435,21 @@ impl EphemeralTableCursor {
     }
 
     fn row_index(&self, rowid: i64) -> Option<usize> {
-        self.rows
-            .borrow()
-            .binary_search_by_key(&rowid, |(r, _)| *r)
-            .ok()
+        let rows = self.rows.borrow();
+        if let Some(idx) = self.current_index {
+            if rows.get(idx).is_some_and(|(r, _)| *r == rowid) {
+                return Some(idx);
+            }
+        }
+        rows.binary_search_by_key(&rowid, |(r, _)| *r).ok()
     }
 
-    fn position_at(&mut self, rowid: Option<i64>) -> bool {
-        match rowid {
-            Some(rowid) => {
+    /// Positions at `found` = `(index into rows, rowid)`, or off-row.
+    fn position_at(&mut self, found: Option<(usize, i64)>) -> bool {
+        match found {
+            Some((idx, rowid)) => {
                 self.current_rowid = Some(rowid);
+                self.current_index = Some(idx);
                 self.at_row = true;
                 true
             }
@@ -451,7 +463,7 @@ impl EphemeralTableCursor {
 
 impl Cursor for EphemeralTableCursor {
     fn rewind(&mut self) -> bool {
-        let first = self.rows.borrow().first().map(|(r, _)| *r);
+        let first = self.rows.borrow().first().map(|(r, _)| (0, *r));
         if first.is_none() {
             self.current_rowid = None;
         }
@@ -462,14 +474,25 @@ impl Cursor for EphemeralTableCursor {
         let after = self.current_rowid.unwrap_or(i64::MIN);
         let found = {
             let rows = self.rows.borrow();
-            let pos = rows.partition_point(|(r, _)| *r <= after);
-            rows.get(pos).map(|(r, _)| *r)
+            // The cached index is the common case: the next row is the
+            // one right after it. Fall back to the partition search when
+            // the hint is stale (a sibling cursor inserted or deleted).
+            let pos = match self.current_index {
+                Some(idx) if self.at_row && rows.get(idx).is_some_and(|(r, _)| *r == after) => {
+                    idx.saturating_add(1)
+                }
+                _ => rows.partition_point(|(r, _)| *r <= after),
+            };
+            rows.get(pos).map(|(r, _)| (pos, *r))
         };
         self.position_at(found)
     }
 
     fn last(&mut self) -> bool {
-        let last = self.rows.borrow().last().map(|(r, _)| *r);
+        let last = {
+            let rows = self.rows.borrow();
+            rows.last().map(|(r, _)| (rows.len().saturating_sub(1), *r))
+        };
         if last.is_none() {
             self.current_rowid = None;
         }
@@ -482,8 +505,7 @@ impl Cursor for EphemeralTableCursor {
             let rows = self.rows.borrow();
             let pos = rows.partition_point(|(r, _)| *r < before);
             pos.checked_sub(1)
-                .and_then(|p| rows.get(p))
-                .map(|(r, _)| *r)
+                .and_then(|p| rows.get(p).map(|(r, _)| (p, *r)))
         };
         self.position_at(found)
     }
@@ -506,7 +528,7 @@ impl Cursor for EphemeralTableCursor {
     }
 
     fn seek(&mut self, rowid: i64) -> bool {
-        let hit = self.row_index(rowid).map(|_| rowid);
+        let hit = self.row_index(rowid).map(|idx| (idx, rowid));
         self.position_at(hit)
     }
 
@@ -562,6 +584,7 @@ impl Cursor for EphemeralTableCursor {
         Some(Box::new(EphemeralTableCursor {
             rows: Rc::clone(&self.rows),
             current_rowid: None,
+            current_index: None,
             at_row: false,
         }))
     }
@@ -1816,7 +1839,7 @@ mod tests {
     /// matters here, not the entries' actual content.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_660__v1_new_key_at_capacity_is_rejected() {
+    fn mcdc__cursor_683__v1_new_key_at_capacity_is_rejected() {
         let mut c = EphemeralIndexCursor {
             entries: (0..MAX_EPHEMERAL_ROWS)
                 .map(|i| (i.to_le_bytes().to_vec(), Vec::new()))
@@ -1834,10 +1857,10 @@ mod tests {
     /// MC/DC vector (obligation `cursor_695`): leaf A (`!contains_key`)
     /// true, leaf B (`len() >= MAX_EPHEMERAL_ROWS`) false -- an ordinary
     /// insert under capacity succeeds. Independence pair for B against
-    /// `mcdc__cursor_660__v1_new_key_at_capacity_is_rejected`.
+    /// `mcdc__cursor_683__v1_new_key_at_capacity_is_rejected`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_660__v2_new_key_under_capacity_is_accepted() {
+    fn mcdc__cursor_683__v2_new_key_under_capacity_is_accepted() {
         let mut c = EphemeralIndexCursor::new();
         let key = [Value::Integer(1)];
         let collations = [Collation::Binary];
@@ -1851,10 +1874,10 @@ mod tests {
     /// already-present key is accepted (an update, not a new row) even
     /// with the table at capacity, since leaf B is never reached.
     /// Independence pair for A against
-    /// `mcdc__cursor_660__v1_new_key_at_capacity_is_rejected`.
+    /// `mcdc__cursor_683__v1_new_key_at_capacity_is_rejected`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_660__v3_existing_key_at_capacity_is_still_accepted() {
+    fn mcdc__cursor_683__v3_existing_key_at_capacity_is_still_accepted() {
         let key = [Value::Integer(-1)];
         let collations = [Collation::Binary];
         let encoded = encode_key(&key, &collations);
@@ -1901,5 +1924,50 @@ mod tests {
         let mut c = InMemoryIndexCursor::new(vec![ascending_key(1)]);
         assert!(!c.insert(1, vec![Value::Integer(1)]));
         assert!(c.insert(2, vec![Value::Integer(1), Value::Integer(2)]));
+    }
+
+    // #254 tagged MC/DC vectors (obligation `cursor_481`): `next()`'s
+    // cached-index guard `self.at_row && rows[idx].rowid == after`.
+
+    fn ephemeral_1_2_3() -> EphemeralTableCursor {
+        let mut c = EphemeralTableCursor::new();
+        for r in 1..=3 {
+            c.insert(r, vec![Value::Integer(r * 10)]);
+        }
+        c
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__cursor_481__v1_valid_hint_steps_to_the_following_row() {
+        let mut c = ephemeral_1_2_3();
+        assert!(c.rewind());
+        assert!(c.next());
+        assert_eq!(c.rowid(), Some(2));
+        assert_eq!(c.column(0), Some(Value::Integer(20)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__cursor_481__v2_after_a_delete_next_resumes_past_the_deleted_rowid() {
+        let mut c = ephemeral_1_2_3();
+        assert!(c.rewind());
+        assert!(c.next());
+        assert!(c.delete()); // rowid 2 gone; at_row is now false
+        assert!(c.next());
+        assert_eq!(c.rowid(), Some(3));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__cursor_481__v3_stale_hint_after_a_sibling_insert_falls_back_to_search() {
+        let mut c = ephemeral_1_2_3();
+        assert!(c.rewind());
+        assert!(c.next()); // at rowid 2, index 1
+        let mut sibling = c.dup().unwrap();
+        assert!(sibling.insert(0, vec![Value::Integer(0)])); // shifts every index by one
+        assert!(c.next());
+        assert_eq!(c.rowid(), Some(3));
+        assert_eq!(c.column(0), Some(Value::Integer(30)));
     }
 }
