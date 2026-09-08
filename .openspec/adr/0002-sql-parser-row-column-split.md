@@ -1,131 +1,70 @@
 # ADR 0002: One SQL grammar, one AST, dedicated codegen per engine
 
-> Source: `#10`, `#19`, `#57`, `#147`. Supersedes the earlier ADR 0005
-> ("sqlite-rs's grammar is the canonical `sql-parser`"), whose content is
-> folded in here.
-
 ## Status
 
-Accepted. Two of three parts are implemented; the third is tracked as
-`#153`. See *Current state* at the end.
+Accepted. ADR 0005 and ADR 0009 are folded into this one.
 
 ## Decision
 
 `db-core` has **one SQL front end and one AST**, and **one planner per
-execution engine**. Concretely:
+execution engine**.
 
-1. **One grammar.** `parser::row` — sqlite-rs's tokenizer and
-   recursive-descent grammar, ported from the leading codebase (ADR 0009)
-   — is the only SQL parser in the crate. It parses the full SQLite
-   surface: `SELECT` with joins, subqueries, CTEs, compound `SELECT`,
-   window functions; DDL; DML; transactions; `PRAGMA`; `EXPLAIN`.
-   Nothing else tokenizes or parses SQL.
+1. **One grammar.** `parser::row` is the only SQL tokenizer and parser
+   in the crate. It parses the full SQLite surface: `SELECT` with joins,
+   subqueries, CTEs, compound `SELECT`, window functions; DDL; DML;
+   transactions; `PRAGMA`; `EXPLAIN`. Nothing else tokenizes or parses
+   SQL. Grammar changes land here and only here.
 
-2. **One AST.** `parser::ast` is the crate's AST. It is sqlite-rs's
-   `ast.rs`, and it lives directly under `parser` — not under
-   `parser::row` — because it is not row's private type: every engine's
-   planner consumes it. Features are added to this AST and only this AST.
-   No narrower, engine-specific AST exists or is grown alongside it.
+2. **One AST.** `parser::ast` is the crate's AST. It lives directly under
+   `parser`, not under `parser::row`, because it is not row's private
+   type: every engine's planner consumes it. Features are added to this
+   AST and only this AST; no narrower, engine-specific AST exists.
 
 3. **Engines enforce their subset by rejecting, not by parsing less.**
-   Each execution engine (row, batch, stream) compiles the subset of the
-   AST it can execute and returns a clear, span-carrying error for the
-   rest. The batch engine rejects DDL/DML/transactions/`PRAGMA`, `WITH`,
-   compound `SELECT`, `HAVING`, multi-way and non-equi joins, multi-term
-   `ORDER BY`, and so on; the row engine rejects window functions and
-   whatever it has not implemented yet. The grammar accepts all of it.
-   "What batch supports" is a property of the batch planner, documented
-   by its rejection list, not a second grammar that cannot recognize
-   the rest.
+   Each engine compiles the subset of the AST it can execute and returns
+   a span-carrying error for the rest. `parser::column::validate_select`
+   is the executable statement of what the batch engine accepts; the row
+   engine's `CodegenError::Unsupported` arms are the same for row. "What
+   an engine supports" is a property of its planner, documented by its
+   rejection list, not a second grammar.
 
-4. **Dedicated codegen and emitters per engine.** `codegen::row`,
-   `codegen::batch`, `codegen::stream` (and `emit::batch`) are separate
-   and stay separate. They share the AST as input and nothing about
-   their output: row-at-a-time bytecode and vectorized batch programs
-   are legitimately different instruction sets with different
-   performance and semantics (ADR 0001, ADR 0007, ADR 0008). Sharing the
-   *front end* is what buys synergy; sharing the *back end* would
-   destroy the reason to have three engines.
+4. **Dedicated codegen per engine.** `codegen::row`, `codegen::batch` and
+   `codegen::stream` share the AST as input and nothing about their
+   output. Row-at-a-time bytecode and vectorized batch programs are
+   legitimately different instruction sets with different performance
+   and semantics (ADR 0007, ADR 0008). Sharing the front end is what buys
+   synergy; sharing the back end would remove the reason to have three
+   engines.
 
-5. **sqlite-rs leads.** Full SQLite grammar and semantics parity is the
-   goal; the three engines are three execution strategies for one
-   language, not three languages. Where batch/stream and row overlap
-   (`SELECT`-shaped queries) the gap always runs one way: batch/stream
-   are missing options sqlite-rs already has. Closing it means the
-   batch/stream planners accepting more of the AST, never syntax
-   invented in `db-core` that sqlite-rs does not support. DDL, DML,
-   transactions and `PRAGMA` are row-only by design — they have no
-   meaning over an externally-managed schema (a Parquet file, a log
-   topic) — and that asymmetry is permanent and correct.
+5. **Full SQLite grammar and semantics are the target.** The three
+   engines are three execution strategies for one language. Where batch
+   or stream lack something row has, closing the gap means the batch or
+   stream planner accepting more of the AST -- never syntax that SQLite
+   does not have. DDL, DML, transactions and `PRAGMA` are row-only by
+   design: they have no meaning over an externally managed schema (a
+   Parquet file, a log topic). That asymmetry is permanent.
 
 6. **Cargo features gate compilation, not grammar.** `parser-row` gates
-   the grammar and AST; `parser-column` gates the batch-subset
-   validator and implies `parser-row`; `codegen-*`/`emit-*` gate each
-   engine's planner and imply the parser features they need. A consumer
-   that wants only the row engine builds with `parser-row` +
-   `codegen-row` and compiles no batch code, and vice versa. The
-   features select *which planners* are compiled; there is exactly one
-   grammar regardless of which are on.
+   the grammar and AST; `parser-column` gates the batch validator and
+   implies `parser-row`; each `codegen-*` feature implies the parser
+   features it needs. There is exactly one grammar regardless of which
+   features are on.
 
 ## Rationale
 
-The alternatives were tried and failed in this repository, which is why
-this ADR states the target flatly rather than weighing options:
-
-- **Two grammars** (column-rs's analytics subset alongside sqlite-rs's
-  full grammar) meant every `SELECT` feature was implemented twice or
-  existed in only one. Divergence appeared within a day of coexistence:
-  a feature was filed against the subset grammar that the full grammar
-  already implemented correctly.
-- **Two ASTs** (a narrow `expr::Query` for batch, `ast::Select` for row)
-  meant the row planner was built against the *narrower* type — the one
-  that could never represent `GROUP BY` expressions, expression `LIMIT`,
-  aliases, CTEs, or compound `SELECT`, and that the row parser could not
-  even produce. Ten thousand lines of planner reachable only from
-  hand-built test literals. Worse, features started being *backported*
-  into the narrow AST to mirror the full one, which is the opposite of
-  retiring it. Two ASTs do not "cost nothing because no code joins
-  them"; they cost every planner being written against whichever one
-  its author happened to reach for.
-- **One shared back end** was never seriously proposed and is rejected
-  here for the record: the engines exist because row-at-a-time and
-  vectorized execution want different instruction sets.
-
-The analogy that misled the earlier decision was ADR 0001's
-"consolidated location, not shared representation" for the VM opcode
-sets. That analogy holds for *outputs* — two opcode sets are genuinely
-different programs — and does not transfer to *inputs*: two SQL grammars
-for `SELECT` are the same language parsed twice.
+Two grammars mean every `SELECT` feature is implemented twice or exists
+in only one. Two ASTs mean each planner is written against whichever
+type its author reached for, and the narrower one can never represent
+what the wider one parses. One shared back end would collapse the
+engines into one. All three alternatives are rejected for the record.
 
 ## Consequences
 
 - Anything the grammar accepts has exactly one AST shape. A planner that
-  cannot compile a shape says so with `Unsupported`/`PlanError` naming
-  the construct. Silent miscompilation of an unrecognized shape is a
-  bug, not a limitation.
+  cannot compile a shape says so by name. Silent miscompilation of an
+  unrecognized shape is a bug, not a limitation.
 - New SQL surface is added once, to `parser::row` + `parser::ast`, then
-  each planner opts in. A construct the row engine gains but batch does
-  not is a batch limitation, tracked against the batch planner.
-- The batch subset validator (`parser::column::validate_select`) is
-  the authoritative, executable statement of what batch accepts. Its
-  rejection list is preserved verbatim through refactors (`#153`) and
-  gated by the downstream DuckDB oracle suite: a front-end change must
-  produce byte-identical batch output.
-- `parser::row` back-ports from sqlite-rs (ADR 0009) continue to be the
-  way the grammar and AST grow; `db-core` does not fork them.
-
-## Current state (2026-09-06)
-
-| Part | Status | Evidence |
-|---|---|---|
-| One grammar | **Done** (`#57`) | `parser::column` has no tokenizer or grammar; it parses via `parser::row::parse_select`. |
-| One AST — location | **Done** (`#151`) | `src/parser/ast.rs`; the one-release `parser::row::ast` compatibility re-export was removed in `#153`. |
-| One AST — row planner | **Done** (`#152`) | `codegen::row` (SELECT/DML/aggregate/subquery/DDL) consumes `parser::ast` exclusively. |
-| One AST — batch planner | **Done** (`#153`) | `codegen::batch::compile*` and `emit::batch` take `&parser::ast::Select` directly. `parser::column::validate_select` is a pure validator (`Result<(), ParseError>`, same rejection list, same `Span`s) that also resolves table aliases in place; it produces no intermediate type. `src/expr.rs` is deleted. `AggFunc` moved to `vm::batch` (shared by both engines); the window-function enums (`WindowFunc`/`WindowSpec`) are now local, planner-only types inside `codegen::batch`, built directly from `ast::ExprKind::FunctionCall`'s `over` tail. `codegen-batch` implies `parser-column`; `emit-batch` builds standalone (`--no-default-features --features emit-batch`). |
-| Cross-mode rejection | **Done** | Batch: `parser::column::validate_select`. Row: `codegen::row` `Unsupported` arms (window functions, `IS`, `BETWEEN`, `IN (list)`, `LIKE`, `CASE`, `CAST`, parameters, `WITH`, compound — `#149`/`#150`). |
-| Dedicated codegen | **Done** | `codegen::{row,batch,stream}`, `emit::batch`. |
-
-Every row of this table is now **Done**: `parser::ast::Select` is the
-crate's single AST, consumed directly by both planners, with no
-`crate::expr::Query` (or any other intermediate lowering type) anywhere
-in the crate.
+  each planner opts in. A construct one engine accepts and another does
+  not is a limitation tracked against the second engine's planner.
+- The batch validator's rejection list is preserved through refactors:
+  a front-end change must not alter which queries batch accepts.

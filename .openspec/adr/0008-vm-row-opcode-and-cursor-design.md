@@ -1,150 +1,65 @@
-# ADR 0008: `vm::row`'s opcode identity and cursor abstraction
-
-> Source: db-core#18 ("db_core::vm::row real content from sqlite-rs's
-> src/vdbe"), session 2026-09-04. Resolves the two open questions
-> `src/vm/row.rs`'s stub doc comment and ADR 0007's consequences section
-> both left explicit but unanswered.
+# ADR 0008: `vm::row`'s opcode set and cursor abstraction
 
 ## Status
 
-Accepted, **revised** (db-core#51 session, 2026-09-04): the original
-decision below generalized ADR 0007's typed-operand design from
-`vm::batch` to `vm::row` too. That was wrong and is corrected in the
-Decision section — `vm::row::Instruction` uses sqlite-rs's literal
-`p1..p5` operand slots, not typed named fields, and its `Opcode`
-variants are bare tags (an exhaustive tag list, matching sqlite-rs's
-own by name), not structs. The original mistake and correction are kept
-below rather than rewritten, since the *why* (a wrong precedent-reuse,
-caught by explicit user review: "We want full parity in db-core with
-sqlite-rs. Where did it drift?") is itself useful history.
-
-## Context
-
-Two questions were left open by prior work:
-
-1. **Opcode-set identity** (`src/vm/row.rs`'s stub): does `vm::row` port
-   sqlite-rs's ~65 VDBE opcodes near-verbatim, or define its own set
-   decoupled from sqlite-rs's? `vm.rs` already states
-   `batch::Opcode` and a future `row::Opcode` "are NOT the same type,
-   and are not expected to become one" — but doesn't say whether `row`'s
-   set is a port or an original design.
-2. **Storage dependency direction** (raised in db-core#18's description
-   and ADR 0007's consequences): does `vm::row` depend on `db-storage`
-   directly to drive real B-tree cursors (sqlite-rs's own design), or
-   define a storage-agnostic cursor trait it depends on instead? ADR
-   0007 rejected a `TableSource`-trait-style coupling for column-rs's
-   `batch` path, but noted that rejection was app-specific, not
-   necessarily binding for `row`.
+Accepted.
 
 ## Decision
 
-**Opcode identity: `vm::row::Opcode` is a mechanical port of sqlite-rs's
-VDBE opcode set**, not a new design — matching how `parser::row`
-(db-core#23) and `codegen::row` (db-core#20, still blocked) are both
-described as ports, not reimplementations.
-
-**~~Following ADR 0007's precedent for `batch`, `Instruction`/`Program`
-keep sqlite-rs's shape but operands stay typed on the `Opcode` enum's
-variants rather than raw `p1..p5` integer slots — the same departure
-ADR 0007 made for `batch`.~~ Corrected (db-core#51 session):** that
-departure was never justified for `row`. ADR 0007's typed-operand
-choice for `batch` exists because *some* batch opcodes (`GroupReduce`)
-carry variable-length operand lists that don't fit five integer slots
-without a dynamically-typed escape hatch — a `vm::batch`-specific
-problem. `vm::row`'s opcodes, being a literal VDBE port, have no such
-problem and are expected to be emitted by a literal port of sqlite-rs's
-own codegen (`codegen::row`, db-core#20) — which emits `p1..p5`
-directly. Reshaping them into typed fields would force `codegen::row`
-to translate sqlite-rs's actual output into a different shape for no
-reason, defeating the "unambiguous target" this ADR's own Consequences
-section originally promised.
-
-**Corrected decision:** `vm::row::Instruction` uses sqlite-rs's literal
-operand shape:
+**Instruction shape.** `vm::row` executes the SQLite VDBE instruction
+model literally:
 
 ```rust
 pub struct Instruction {
-    pub opcode: Opcode,     // a bare tag enum, one variant per sqlite-rs opcode
+    pub opcode: Opcode,     // bare tag, one variant per VDBE opcode
     pub p1: i32,
     pub p2: i32,
     pub p3: i32,
-    pub p4: P4,             // dynamically-typed fourth operand, sqlite-rs's own enum
+    pub p4: P4,             // dynamically typed fourth operand
     pub p5: u16,
-    pub comment: Option<String>,  // ADR 0007's EXPLAIN convention, kept
+    pub comment: Option<String>,
 }
 ```
 
-`Opcode` lists every variant sqlite-rs's VDBE has (opcode-identity
-parity), whether or not `vm::row`'s dispatch loop implements it yet —
-matching sqlite-rs's own convention for its `Opcode::ALL`/`_exhaustive`
-pattern. The fused compare-and-jump opcodes (`Eq`/`Ne`/`Lt`/`Le`/`Gt`/
-`Ge`) are ported as such, not as a register-writing `Compare` opcode —
-an earlier, since-corrected draft of db-core#18 did exactly that
-substitution and needed the same fix (see db-core#51's PR).
+`Opcode` lists every VDBE opcode by name whether or not the dispatch
+loop implements it yet; the compare-and-jump opcodes (`Eq`/`Ne`/`Lt`/
+`Le`/`Gt`/`Ge`) are fused jumps, not register-writing compares. The row
+planner (`codegen::row`) emits `p1..p5` directly, so no operand
+translation layer exists between planner and VM. This differs from the
+batch VM's typed operands (ADR 0007) on purpose: row opcodes have no
+variable-length operand lists.
 
-**Cursor abstraction: storage-agnostic trait, not a direct `db-storage`
-dependency.** `vm::row` defines its own cursor trait (name/shape decided
-when the execution-loop phase lands, not by this ADR) that an adapter
-crate implements over `db-storage::row::btree::TableCursor` — the same
-shape as ADR 0007's `TableSource`-rejection reasoning: `db-core` stays
-storage-agnostic (ADR 0006), and the adapter lives at the composition
-root (an app crate, or `db-storage` itself gaining an optional adapter
-feature) rather than creating a `db-core` → `db-storage` dependency edge.
-This is a **narrower** decision than ADR 0007's batch-side rejection —
-it only says the boundary is a trait, not that no crate anywhere depends
-on both; the follow-up ticket for the execution-loop phase (`db-core#18`
-sub-ticket, filed alongside this ADR) owns the trait's actual shape.
+**Cursor abstraction.** `vm::row` drives storage through its own
+storage-agnostic traits and never depends on `db-storage` (ADR 0006):
 
-**Amendment (db-core#81, decided):** "the composition root" above was
-left open-ended pending a concrete consumer. It's now decided: the
-adapter over `db_storage::row::btree::TableCursor` lives in
-**t-rust-db/sqlite-rs**, as part of that repo's VDBE repoint (phase 3),
-**not** in `db-storage` gaining an optional adapter feature. `db-core`
-itself never depends on `db-storage` (this ADR's core decision,
-unchanged) — #81 instead completed the trait side of the boundary:
-`Cursor` grew `seek`/`payload` (alongside #76's `prev`/`last`/`delete`)
-and a separate `Transaction` hook trait (`vm::row::transaction`) a
-consumer's pager installs to observe `BEGIN`/`COMMIT`/`ROLLBACK`, and
-`vm::row::cursor_conformance` publishes trait-level conformance checks
-so the sqlite-rs adapter can prove it satisfies the same contract this
-crate's own tests do, without ever pulling `db-storage` into `db-core`.
+- `vm::row::cursor::Cursor` -- positioned access to one table or index
+  b-tree (`rewind`/`next`/`prev`/`last`/`seek*`/`column`/`rowid`/
+  `payload`/`insert`/`delete`, ...). `column` and `rowid` return
+  `Option`; the dispatch loop, which knows what a missing row means for
+  a given opcode, turns `None` into `ExecError::NoCurrentRow { opcode,
+  slot }`. A cursor never panics on an unpositioned read.
+- `vm::row::cursor_factory::CursorFactory` -- opens cursors for
+  `OpenRead`/`OpenWrite` by root page.
+- `vm::row::transaction::Transaction` -- the hook a consumer's pager
+  installs to observe `BEGIN`/`COMMIT`/`ROLLBACK`.
+- `vm::row::schema_storage::SchemaStorage` -- the hook for writing
+  `sqlite_master`/`sqlite_stat1`/`sqlite_sequence` rows.
+
+An in-memory `EphemeralTableCursor` implements `Cursor` for tests and
+for the VM's own ephemeral tables. `vm::row::cursor_conformance`
+publishes the trait-level conformance checks (including the `None`
+case) so any external implementation can prove it satisfies the same
+contract the in-memory one does.
+
+**The storage adapter lives in the embedding application**, at the
+composition root -- not in `db-core` and not as an optional feature of
+`db-storage`.
 
 ## Consequences
 
-- `vm::row::value` gains its own `Value`/`Collation`/`compare_text`,
-  ported from sqlite-rs's `record::{value.rs, collation.rs}` — not
-  reused from `vm::batch::Value` (`Cow<'static, str>`-based, designed
-  for AOT-emitted `const` literals) since the two `Opcode` sets are
-  already established as separate types with separate value models
-  (ADR 0001, ADR 0007's consequences).
-- db-core#18's originally-landed `Opcode::Compare`/`Cast`/`Arith`/
-  `Logic`/`Not`/`BitNot`/`Neg` (typed-struct variants) were replaced by
-  db-core#51's PR with bare-tag `Eq`/`Ne`/`Lt`/`Le`/`Gt`/`Ge` (fused
-  jump), `Cast`, `Add`/`Subtract`/etc., `Not`/`BitNot` over `p1..p5` —
-  a breaking change to the just-landed API, done in the same PR that
-  added the execution loop rather than as a separate cleanup, since
-  #51's new control-flow opcodes were going to be written against
-  whichever shape `Compare` had anyway.
-- `codegen::row` (db-core#20) now has a concrete, literally-portable
-  target: sqlite-rs's own codegen emits `p1..p5` directly, so a
-  mechanical port needs no operand-shape translation layer.
-- `vm::row`'s cursor-trait/storage-dependency decision (the second half
-  of this ADR, unchanged by the correction above) still governs the
-  execution-loop phase, landed by db-core#51: a storage-agnostic
-  `Cursor` trait (`vm::row::cursor`) plus an in-memory mock, with real
-  `db-storage` wiring deferred again.
-
-## Addendum (2026-09-08, db-core#231): the cursor accessors are total
-
-`Cursor::column` and `Cursor::rowid` return `Option<Value>` / `Option<i64>`.
-The original contract ("callers never read an unpositioned cursor, so the
-implementor may panic") pushed a program-correctness invariant onto every
-storage implementor and made a codegen bug an unrecoverable abort of the
-embedding process. The dispatch loop is the one place that knows what a
-missing row means for a given opcode, so it -- not the cursor -- turns
-`None` into `ExecError::NoCurrentRow { opcode, slot }`. This is the same
-shape the trait already used for `idx_rowid`, `payload` and
-`current_blob`. `cursor_conformance` checks the `None` case, so a
-downstream cursor that still panics fails its own conformance suite.
-Consequence for implementors: wrap the positioned result in `Some`, return
-`None` when unpositioned; no other method changed.
+- The `dyn Cursor` boundary is the one place `vm::row` uses dynamic
+  dispatch; `src/vm/row/{vm,cursor,cursor_factory,cursor_conformance}.rs`
+  are the documented exclusions from the qualified-subset gate (ADR
+  0015).
+- `vm::row::value` is `db_core::value` (ADR 0010); the VM has no value
+  type of its own.

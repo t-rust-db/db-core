@@ -8,9 +8,12 @@ log of routine changes.
 ## Naming convention
 
 `NNNN-short-title.md`, numbered sequentially starting at `0001`, title in
-kebab-case. Mirrors [sqlite-rs's `adr/`](../../../sqlite-rs/.openspec/adr/)
-(e.g. `0009-zero-unsafe.md`), so the two repos' ADR indices read the same
-way if ever compared side by side.
+kebab-case. Numbers are stable; a retired or superseded ADR keeps its
+number and file, reduced to a pointer at what replaced it.
+
+ADRs describe the architecture as it stands. They are not a changelog
+and do not narrate how code arrived; `CHANGELOG.md` and git history do
+that.
 
 ## When to add one
 
@@ -26,15 +29,16 @@ caller's key conversion rather than in `sql-join` itself" (see
 
 - [0001](0001-layered-synergetic-architecture.md) — Layered, synergetic architecture across db-core
 - [0002](0002-sql-parser-row-column-split.md) — One SQL grammar, one AST, dedicated codegen per engine
-- [0003](0003-vfs-trait-reconciliation.md) — `db-storage::{Vfs, VfsFile}` vs sqlite-rs's `vfs::{Vfs, VfsFile}` — two traits, not one
-- [0004](0004-sql-pager-extraction.md) — `sql-pager` extraction, and the `sql-header` dependency it forced
-- 0005 — *retired*; its content (sqlite-rs's grammar is canonical, engines are enforced subsets) is folded into 0002
-- [0006](0006-storage-consolidation-into-db-storage.md) — All physical storage (row/column/stream) consolidates into `db-storage`; `db-core` stays storage-agnostic
-- [0007](0007-program-instruction-mirror-sqlite-rs.md) — Batch execution mirrors sqlite-rs's Program/Instruction shape
-- [0008](0008-vm-row-opcode-and-cursor-design.md) — `vm::row`'s opcode identity and cursor abstraction
-- [0009](0009-parser-row-backport-rule.md) — While two copies of the row parser exist, Lab271/sqlite-rs leads and `parser::row` back-ports
+- [0003](0003-two-vfs-traits.md) — Two VFS traits, not one
+- [0004](0004-header-and-pager-in-db-storage.md) — Database header and pager are `db-storage::row` modules
+- 0005 — *retired*; folded into 0002
+- [0006](0006-storage-lives-in-db-storage.md) — All physical storage lives in `db-storage`; `db-core` is storage-agnostic
+- [0007](0007-batch-program-instruction-shape.md) — Batch programs are `Program`/`Instruction` with typed operands and an explicit barrier
+- [0008](0008-vm-row-opcode-and-cursor-design.md) — `vm::row`'s opcode set and cursor abstraction
+- [0009](0009-retired-single-parser.md) — *retired*; one parser, folded into 0002
 - [0010](0010-shared-row-value-type.md) — One row `Value` type, defined in `db-core::value`, consumed by `db-storage`
-- [0011](0011-shared-scalar-functions.md) — Scalar functions, comparison, and coercion live in `db-core` root, consumed by every `vm` executor
-- [0012](0012-codegen-schema-superset.md) — `codegen::row::TableSchema`/`IndexSchema` grow to a superset, not a trait
-- [0013](0013-row-codegen-moved-not-rederived.md) — Row codegen is moved from Lab271/sqlite-rs, never re-derived
+- [0011](0011-shared-scalar-functions.md) — Scalar functions, comparison and coercion live in `db-core` root modules
+- [0012](0012-codegen-schema-superset.md) — *superseded* by 0014
+- [0013](0013-row-codegen-owned-in-db-core.md) — `codegen::row` is the one row planner, owned in `db-core`
 - [0014](0014-one-row-schema-type.md) — One row schema type, defined in `db-core::schema`, consumed by `db-storage`
+- [0015](0015-testing-strategy.md) — db-core's testing strategy
