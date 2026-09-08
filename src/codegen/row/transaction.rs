@@ -1,22 +1,24 @@
-//! `Begin`/`Commit`/`Rollback` AST -> `Program` compilation (db-core#97,
-//! ported from sqlite-rs's `src/codegen/transaction.rs`). Each compiles
-//! to a single control opcode, exactly like the DDL statements in the
-//! sibling [`super::ddl`] module: `Transaction` for `BEGIN`,
-//! `AutoCommit` for `COMMIT`/`ROLLBACK` (`p2` = 1/0 respectively, stock
-//! SQLite's convention). `TransactionMode` (DEFERRED/IMMEDIATE/
-//! EXCLUSIVE) is carried through `Transaction`'s `p1`.
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! `Begin`/`Commit`/`Rollback` AST -> `Program` compilation (#360). Each
+//! compiles to a single control opcode, exactly like the DDL statements
+//! in the sibling `ddl` module: `Transaction` for `BEGIN`, `AutoCommit`
+//! for `COMMIT`/`ROLLBACK` (`P2` = 1/0 respectively, stock SQLite's
+//! convention). `TransactionMode` (DEFERRED/IMMEDIATE/EXCLUSIVE) is
+//! carried through `Transaction`'s `P1` (#395) so
+//! `crate::vm::row::control::transaction` can escalate the lock at `BEGIN`
+//! time for IMMEDIATE/EXCLUSIVE rather than waiting for the first write.
 
+use crate::codegen::row::Emitter;
 use crate::parser::ast::{Begin, Commit, Rollback, TransactionMode};
 use crate::vm::row::{
     Instruction, Opcode, Program, TRANSACTION_MODE_DEFERRED, TRANSACTION_MODE_EXCLUSIVE,
     TRANSACTION_MODE_IMMEDIATE,
 };
 
-use super::Emitter;
-
 /// Compiles `BEGIN [DEFERRED|IMMEDIATE|EXCLUSIVE]` into an
 /// `Init -> Transaction -> Halt` program, carrying the transaction mode
-/// through `Transaction`'s `p1`.
+/// through `Transaction`'s `P1`.
 pub fn compile_begin(begin: &Begin) -> Program {
     let mode = match begin.mode {
         None | Some(TransactionMode::Deferred) => TRANSACTION_MODE_DEFERRED,
@@ -36,13 +38,13 @@ pub fn compile_begin(begin: &Begin) -> Program {
 }
 
 /// Compiles `COMMIT` into an `Init -> AutoCommit -> Halt` program with
-/// `AutoCommit`'s `p2` set to 1.
+/// `AutoCommit`'s `P2` set to 1.
 pub fn compile_commit(_commit: &Commit) -> Program {
     compile_auto_commit(1)
 }
 
 /// Compiles `ROLLBACK` into an `Init -> AutoCommit -> Halt` program with
-/// `AutoCommit`'s `p2` set to 0.
+/// `AutoCommit`'s `P2` set to 0.
 pub fn compile_rollback(_rollback: &Rollback) -> Program {
     compile_auto_commit(0)
 }

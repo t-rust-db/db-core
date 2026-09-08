@@ -1,185 +1,234 @@
-//! `FROM`-subquery schema resolution and materialization -- see
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! `FROM`-subquery schema resolution and materialization — see
 //! `super`'s module doc.
 
-use crate::codegen::row::cond::compile_cond;
-use crate::codegen::row::value::compile_value;
-use crate::codegen::row::{
-    CodegenError, CondTargets, Emitter, RegAlloc, Result, Scope, TableSchema, Target,
+use crate::codegen::row::index_maintenance::valid_table_root_page;
+use crate::codegen::row::select::{
+    compile_select_joined_scan, compile_select_scan, CodegenError, ScanCursors,
 };
-use crate::parser::ast::{ExprKind, FromClause, ResultColumn, Select, TableRefKind};
+use crate::codegen::row::TableSchema;
+use crate::codegen::row::{Emitter, RegAlloc};
+use crate::parser::ast::{ExprKind, ResultColumn, Select, TableRef, TableRefKind};
 use crate::vm::row::{Instruction, Opcode, P4};
 
-/// Rejects a subquery shape this materializing pass can't compile:
-/// anything that isn't a plain single-table scan with an optional
-/// `WHERE`. The reference rejects the same set for a subquery-*expression*
-/// (its `resolve_subquery_schema`); db-core additionally rejects the
-/// post-scan clauses here, since none of them is reachable through
-/// `compile_select`'s per-clause machinery from inside this inlined scan.
-fn reject_unsupported_shape(subquery: &Select, what: &str) -> Result<()> {
-    if !super::super::joins_of(subquery).is_empty() {
+/// Resolves a subquery's own single-table `FROM` against `catalog`,
+/// rejecting anything this MVP pass doesn't materialize: no `FROM` at
+/// all is only valid when the subquery has no column references (e.g.
+/// `SELECT (SELECT 1)`), and a `JOIN`ed `FROM` isn't supported.
+pub(crate) fn resolve_subquery_schema(
+    subselect: &Select,
+    catalog: &[TableSchema],
+) -> Result<Option<TableSchema>, CodegenError> {
+    let Some(from) = &subselect.from else {
+        return Ok(None);
+    };
+    if !from.joins.is_empty() {
         return Err(CodegenError::Unsupported {
-            reason: format!("{what} whose own FROM clause has a JOIN is not yet supported"),
+            reason: "a subquery whose own FROM clause has a JOIN is not yet supported".to_string(),
         });
     }
-    if super::super::is_distinct(subquery)
-        || !subquery.group_by.is_empty()
-        || subquery.having.is_some()
-        || !subquery.order_by.is_empty()
-        || subquery.limit.is_some()
-        || subquery.with_clause.is_some()
-        || !subquery.compound.is_empty()
-    {
+    let Some(name) = from.first.name() else {
         return Err(CodegenError::Unsupported {
-            reason: format!(
-                "{what} with DISTINCT/GROUP BY/HAVING/ORDER BY/LIMIT/WITH/UNION is not yet supported"
-            ),
-        });
-    }
-    Ok(())
-}
-
-/// Resolves a subquery-expression's own single-table `FROM` against
-/// `outer_scope`'s catalog.
-pub(super) fn resolve_subquery_schema(
-    subquery: &Select,
-    outer_scope: &Scope,
-) -> Result<TableSchema> {
-    reject_unsupported_shape(subquery, "a subquery")?;
-    let Some(name) = subquery.from.as_ref().and_then(|from| from.first.name()) else {
-        return Err(CodegenError::Unsupported {
-            reason: "a subquery-expression's own FROM being itself a subquery is not yet supported"
+            reason: "a subquery-expression's own FROM being itself a subquery is not yet \
+                     supported"
                 .to_string(),
         });
     };
-    outer_scope
-        .catalog_table(name)
+    let schema = catalog
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(name))
         .cloned()
         .ok_or_else(|| CodegenError::Unsupported {
             reason: format!(
-                "subquery references table {name:?}, which isn't visible to this compiler's catalog"
+                "subquery references table {name:?}, which isn't visible to this compiler's \
+                 catalog"
             ),
-        })
+        })?;
+    Ok(Some(schema))
 }
 
 /// The column names a `FROM`-subquery's own `SELECT` list exposes to the
-/// enclosing query, used to build the synthetic [`TableSchema`] the
-/// materialized result is bound into `Scope` as. Aggregate/window items
-/// are rejected rather than given the reference's positional `columnN`
-/// fallback: db-core's `SelectItem` has no alias to name them by, and
-/// [`materialize_from_subquery`] compiles the projection through
-/// `compile_value`, which cannot evaluate an aggregate.
-fn subquery_output_columns(subquery: &Select, schema: &TableSchema) -> Result<Vec<String>> {
+/// enclosing query (#257) — used to build the synthetic [`TableSchema`]
+/// a materialized subquery-in-FROM is bound into `Scope` as.
+/// `table_refs`/`schemas` are the subquery's own resolved `FROM` tables,
+/// same order, for `*`/`table.*` expansion; an unaliased computed
+/// expression falls back to a positional `columnN` name (`N` 1-based),
+/// same convention SQLite itself uses for an anonymous result column.
+fn subquery_output_columns(
+    subquery: &Select,
+    table_refs: &[&TableRef],
+    schemas: &[TableSchema],
+) -> Vec<String> {
     let mut out = Vec::new();
-    for col in &subquery.columns {
+    for (i, col) in subquery.columns.iter().enumerate() {
         match col {
-            // An alias would be the natural output name, but the
-            // synthetic schema binds by position and nothing downstream
-            // reads aliases yet, so it is accepted and ignored.
-            ResultColumn::Expr { expr, .. } => match &expr.kind {
-                ExprKind::Column { name, .. } => out.push(name.clone()),
-                _ => {
-                    return Err(CodegenError::Unsupported {
-                        reason: "a computed column in a FROM-subquery's SELECT list is not yet \
-                                 supported"
-                            .to_string(),
-                    })
+            ResultColumn::Star => {
+                for schema in schemas {
+                    out.extend(schema.columns.iter().cloned());
                 }
-            },
-            ResultColumn::Star => out.extend(schema.columns.iter().cloned()),
+            }
             ResultColumn::TableStar { table } => {
-                return Err(CodegenError::Unsupported {
-                    reason: format!(
-                        "`{table}.*` in a FROM-subquery's SELECT list is not yet supported"
-                    ),
-                })
+                if let Some(schema) = table_refs
+                    .iter()
+                    .position(|t| t.alias.as_deref().or(t.name()).unwrap_or("") == table)
+                    .and_then(|idx| schemas.get(idx))
+                {
+                    out.extend(schema.columns.iter().cloned());
+                }
+            }
+            ResultColumn::Expr { expr, alias } => {
+                let name = alias.clone().unwrap_or_else(|| match &expr.kind {
+                    ExprKind::Column { name, .. } => name.clone(),
+                    _ => format!("column{}", i.saturating_add(1)),
+                });
+                out.push(name);
             }
         }
     }
-    Ok(out)
+    out
 }
 
-/// The [`TableSchema`] the rest of codegen should treat `from` as: a
-/// real catalog lookup by name, or the synthetic schema describing a
-/// `FROM`-subquery's own projected columns (its `name` is the
-/// subquery's mandatory alias). Mirrors the reference's
-/// `resolve_from_table_schema`.
-pub fn resolve_from_table_schema(
-    from: Option<&FromClause>,
-    catalog: &[TableSchema],
-) -> Result<TableSchema> {
-    // `expr::Query.from` was always present; the AST allows a `SELECT`
-    // with no `FROM` at all, which none of this codegen can scan.
-    let Some(from) = from else {
+/// A `FROM`-subquery's own `FROM` table(s) (#257) — the first table plus
+/// every join's table, same order. Split from [`resolve_subquery_schemas`]
+/// (rather than returning both together) because a function borrowing
+/// from two different reference parameters (`subquery` here, `catalog`
+/// there) can't have its output lifetime elided, and this codebase's
+/// `make check-mvl-limit` gate forbids writing an explicit lifetime to spell
+/// it out.
+pub(super) fn subquery_own_table_refs(subquery: &Select) -> Result<Vec<&TableRef>, CodegenError> {
+    let Some(from) = &subquery.from else {
         return Err(CodegenError::Unsupported {
-            reason: "a SELECT with no FROM clause is not yet supported".to_string(),
+            reason: "a subquery in FROM must itself have a FROM clause".to_string(),
         });
     };
-    match &from.first.kind {
-        TableRefKind::Name(name) => catalog
+    Ok(std::iter::once(&from.first)
+        .chain(from.joins.iter().map(|j| &j.table))
+        .collect())
+}
+
+/// Resolves each of `table_refs` against `catalog` — one schema per
+/// table, same order. Delegates to [`resolve_from_table_schema`], which
+/// itself recurses for a nested `TableRefKind::Subquery` (e.g. a CTE
+/// whose own body's `FROM` names another CTE, #376), so nesting to
+/// arbitrary depth just falls out rather than needing its own handling
+/// here.
+fn resolve_subquery_schemas(
+    table_refs: &[&TableRef],
+    catalog: &[TableSchema],
+) -> Result<Vec<TableSchema>, CodegenError> {
+    table_refs
+        .iter()
+        .map(|table_ref| resolve_from_table_schema(table_ref, catalog))
+        .collect()
+}
+
+/// Builds the synthetic [`TableSchema`] (#257) a materialized
+/// subquery-in-FROM is bound into `Scope` as — `name` left empty, since
+/// only the caller (which has the `TableRef`) knows the subquery's
+/// mandatory alias.
+fn subquery_result_schema(
+    subquery: &Select,
+    table_refs: &[&TableRef],
+    schemas: &[TableSchema],
+) -> TableSchema {
+    let columns = subquery_output_columns(subquery, table_refs, schemas);
+    TableSchema {
+        name: String::new(),
+        root_page: 0,
+        columns: columns.clone(),
+        without_rowid: false,
+        strict: false,
+        column_types: vec![String::new(); columns.len()],
+        column_collations: vec![],
+        is_virtual: false,
+        sql: String::new(),
+        indexes: Vec::new(),
+        rowid_alias: None,
+    }
+}
+
+/// Resolves `table_ref` to the [`TableSchema`] the rest of codegen
+/// should treat it as: a real catalog lookup by name, or (#257) the
+/// synthetic schema describing a `FROM`-subquery's own projected
+/// columns (its `name` is `table_ref`'s alias — mandatory for a
+/// subquery, enforced by the parser). Used by callers (the `sqlite-rs`
+/// CLI, `INSERT ... SELECT`) that need a `TableSchema` up front, before
+/// the codegen pass that actually emits the materialization
+/// (`compile_select_with_catalog`/`compile_select_joined` call
+/// [`materialize_from_subquery`] themselves once compiling).
+pub fn resolve_from_table_schema(
+    table_ref: &TableRef,
+    catalog: &[TableSchema],
+) -> Result<TableSchema, CodegenError> {
+    match &table_ref.kind {
+        crate::parser::ast::TableRefKind::Name(name) => catalog
             .iter()
             .find(|s| s.name.eq_ignore_ascii_case(name))
             .cloned()
             .ok_or_else(|| CodegenError::Unsupported {
                 reason: format!("no such table: {name}"),
             }),
-        TableRefKind::Subquery(subquery) => {
-            reject_unsupported_shape(subquery, "a subquery in FROM")?;
-            let Some(alias) = from.first.alias.clone() else {
-                return Err(CodegenError::Unsupported {
-                    reason: "a FROM-subquery must have an alias".to_string(),
-                });
-            };
-            let inner = resolve_from_table_schema(subquery.from.as_ref(), catalog)?;
-            let columns = subquery_output_columns(subquery, &inner)?;
-            Ok(TableSchema {
-                name: alias,
-                column_types: vec![String::new(); columns.len()],
-                columns,
-                rowid_alias: None,
-                root_page: 0,
-                indexes: Vec::new(),
-                ..Default::default()
-            })
+        crate::parser::ast::TableRefKind::Subquery(subquery) => {
+            let table_refs = subquery_own_table_refs(subquery)?;
+            let schemas = resolve_subquery_schemas(&table_refs, catalog)?;
+            let mut schema = subquery_result_schema(subquery, &table_refs, &schemas);
+            schema.name = table_ref.alias.clone().unwrap_or_default();
+            Ok(schema)
         }
     }
 }
 
-/// Materializes a `FROM`-subquery into an in-memory ephemeral table
-/// opened on `dest_cursor`, so the enclosing query can then scan it
-/// exactly like a real table cursor (`Rewind`/`Next`/`Column`). Drives
-/// the subquery's own single-table scan inline, substituting a row sink
-/// that `MakeRecord`s each projected row and `Insert`s it with a freshly
-/// `Sequence`d rowid, in place of `ResultRow` -- the same substitution
-/// the reference makes.
+/// Materializes a `FROM`-subquery (#257) into an in-memory ephemeral
+/// table opened on `dest_cursor`, so the enclosing query can then scan
+/// it exactly like a real table cursor (`Rewind`/`Next`/`Column`/
+/// `Rowid`). Drives the subquery's own scan through
+/// [`compile_select_scan`] (single-table) or [`compile_select_joined_scan`]
+/// (its own `FROM` has a JOIN — criterion 3), substituting a row sink
+/// that `MakeRecord`s each projected row and `Insert`s it into
+/// `dest_cursor` with a freshly `Sequence`d rowid, in place of
+/// `ResultRow` — the same substitution #208's `INSERT ... SELECT`
+/// codegen uses. Returns the synthetic [`TableSchema`] (`name` left
+/// empty — the caller fills in the subquery's alias) describing the
+/// materialized table's columns, for the caller to bind into `Scope`.
+/// A subquery nested inside another subquery's `FROM` is not yet
+/// supported (this pass materializes one level).
 ///
-/// Returns the synthetic [`TableSchema`] describing the materialized
-/// table's columns. Nesting to arbitrary depth falls out of the
-/// recursion, as it does in the reference.
+/// #425: if an earlier call in this same statement's compile already
+/// materialized a *structurally identical* `subquery` (checked via
+/// `Select`'s derived `PartialEq` — this is how `expand_with_clause`
+/// rewrites a CTE referenced N times: N independent `TableRefKind::
+/// Subquery` AST clones, one per `FROM`/`JOIN` site, preserving
+/// self-join correctness, but every clone is byte-for-byte the same
+/// query), this call reuses that materialization (`OpenDup`) instead
+/// of paying to re-run and re-populate the identical query again. Safe
+/// for any subquery-in-FROM, not just CTEs, given what this crate can
+/// express today: no correlated variables reach this materialization
+/// path (see the module doc), and no volatile/non-deterministic
+/// expression exists yet either (`random()` and
+/// `CURRENT_TIME`/`CURRENT_DATE`/`CURRENT_TIMESTAMP` are all still
+/// `unsupported(..)` in the parser — checked as of #425/#421's V7.2
+/// review), so two textually-identical subqueries are currently
+/// guaranteed to produce the same rows.
 ///
-/// db-core#143: if an earlier call in this same statement's compile
-/// already materialized a *structurally identical* `subquery` (checked
-/// via `Select`'s derived `PartialEq` -- this is how
-/// [`super::cte::expand_with_clause`] rewrites a CTE referenced N times:
-/// N independent [`TableRefKind::Subquery`] AST clones, one per `FROM`/
-/// `JOIN` site, but every clone is byte-for-byte the same query), this
-/// call reuses that materialization (`OpenDup`) instead of paying to
-/// re-run and re-populate the identical query again. Safe for any
-/// subquery-in-FROM, not just CTEs, given what this crate can express
-/// today: no correlated variables reach this materialization path (see
-/// the module doc), and no volatile/non-deterministic expression exists
-/// yet either, so two textually-identical subqueries are currently
-/// guaranteed to produce the same rows. **This stops being true the day
-/// a volatile function is added** -- whichever ticket adds the first
-/// one must revisit this cache (exclude a `Select` containing it, or
-/// key off genuine CTE identity instead of raw structural equality),
-/// mirroring the caveat on sqlite-rs's own `cached_cte`/`cache_cte`.
-pub fn materialize_from_subquery(
+/// **This stops being true the day a volatile function is added.**
+/// `SELECT * FROM (SELECT random() r FROM t) a JOIN (SELECT random() r
+/// FROM t) b` — two independent, unrelated derived tables that happen
+/// to be textually identical — would then incorrectly share one
+/// evaluation instead of drawing independently, unlike real `sqlite3`.
+/// Whichever ticket adds the first such function must revisit this
+/// cache: either exclude a `Select` containing one from
+/// `RegAlloc::cached_cte`/`cache_cte`, or narrow the cache key from raw
+/// structural equality to genuine CTE identity (tracked back to
+/// `expand_with_clause`'s substitution) so it never activates for two
+/// merely-coincidental derived tables in the first place.
+pub(crate) fn materialize_from_subquery(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     subquery: &Select,
     catalog: &[TableSchema],
     dest_cursor: i32,
-) -> Result<TableSchema> {
+) -> Result<TableSchema, CodegenError> {
     if let Some((source_cursor, schema)) = reg.cached_cte(subquery) {
         em.emit(Instruction::new(
             Opcode::OpenDup,
@@ -190,21 +239,33 @@ pub fn materialize_from_subquery(
         return Ok(schema);
     }
 
-    reject_unsupported_shape(subquery, "a subquery in FROM")?;
-    let inner_schema = resolve_from_table_schema(subquery.from.as_ref(), catalog)?;
-    let columns = subquery_output_columns(subquery, &inner_schema)?;
-    let synthetic = TableSchema {
-        name: String::new(),
-        column_types: vec![String::new(); columns.len()],
-        columns: columns.clone(),
-        rowid_alias: None,
-        root_page: 0,
-        indexes: Vec::new(),
-        ..Default::default()
-    };
+    // #382: a compound (`UNION`/`UNION ALL`) body isn't handled by this
+    // materialization path yet — only `subquery`'s own `first` arm would
+    // be scanned into `dest_cursor`, silently dropping every other
+    // arm's rows (discovered via a CTE-body-is-UNION corpus regression).
+    // Reject cleanly here rather than let that data loss reach a
+    // caller, matching the "not yet supported" pattern used just below
+    // for a joined subquery-in-FROM. Fast-follow: teach this function
+    // (and its view-expansion counterpart, `expand_views`, which shares
+    // the same underlying materialization) to loop over every compound
+    // arm like `compile_select_compound` does at the top level.
+    if !subquery.compound.is_empty() {
+        return Err(CodegenError::Unsupported {
+            reason: "a compound (UNION) SELECT as a CTE/view/derived-table body is not yet \
+                     supported"
+                .to_string(),
+        });
+    }
 
-    // p5 = 1: a rowid-keyed ephemeral *table* (scannable by
-    // `Rewind`/`Next`/`Column`), not the keyed index form `IN` opens.
+    let table_refs = subquery_own_table_refs(subquery)?;
+    let schemas = resolve_subquery_schemas(&table_refs, catalog)?;
+    let Some(from) = &subquery.from else {
+        return Err(CodegenError::Unsupported {
+            reason: "a subquery in FROM must itself have a FROM clause".to_string(),
+        });
+    };
+    let synthetic_schema = subquery_result_schema(subquery, &table_refs, &schemas);
+
     em.emit(Instruction {
         opcode: Opcode::OpenEphemeral,
         p1: dest_cursor,
@@ -212,322 +273,289 @@ pub fn materialize_from_subquery(
         p3: 0,
         p4: P4::None,
         p5: 1,
-        ..Instruction::new(Opcode::OpenEphemeral, dest_cursor, 0, 0)
+        comment: None,
     });
 
-    let src_cursor = reg.alloc_cursor();
-    match subquery.from.as_ref().map(|from| &from.first.kind) {
-        None | Some(TableRefKind::Name(_)) => {
-            em.emit(Instruction::new(
-                Opcode::OpenRead,
-                src_cursor,
-                i32::try_from(inner_schema.root_page).map_err(|_| CodegenError::Unsupported {
-                    reason: format!(
-                        "root page {} does not fit in a p2 operand",
-                        inner_schema.root_page
-                    ),
-                })?,
-                0,
-            ));
-        }
-        Some(TableRefKind::Subquery(inner)) => {
-            materialize_from_subquery(em, reg, inner, catalog, src_cursor)?;
-        }
-    }
-
-    let scope = Scope::single(inner_schema, src_cursor).with_catalog(catalog.to_vec());
-
     let end_label = em.new_label();
-    let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, src_cursor, 0, 0));
-    em.patch_p2(rewind_addr, end_label);
-    let loop_start = em.new_label();
-    em.place(loop_start);
-    let skip = em.new_label();
+    let mut sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {
+        let rowid_reg = reg.alloc();
+        em.emit(Instruction::new(
+            Opcode::Sequence,
+            dest_cursor,
+            rowid_reg,
+            0,
+        ));
+        let record_reg = reg.alloc();
+        em.emit(Instruction::new(
+            Opcode::MakeRecord,
+            first,
+            count,
+            record_reg,
+        ));
+        em.emit(Instruction::new(
+            Opcode::Insert,
+            dest_cursor,
+            rowid_reg,
+            record_reg,
+        ));
+        Ok(())
+    };
 
-    if let Some(where_expr) = &subquery.where_clause {
-        compile_cond(
-            em,
-            reg,
-            &scope,
-            where_expr,
-            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip)),
-        )?;
-    }
-
-    let mut first_reg = None;
-    for (i, name) in columns.iter().enumerate() {
-        let r = compile_value(em, reg, &scope, &super::super::column_expr(name.clone()))?;
-        match first_reg {
-            None => first_reg = Some(r),
-            // `MakeRecord` reads a contiguous run, so a projection that
-            // doesn't compile into one can't be recorded -- the same
-            // check the reference's `compile_contiguous` makes.
-            Some(first) => {
-                let want = first.saturating_add(i32::try_from(i).unwrap_or(i32::MAX));
-                if r != want {
-                    return Err(CodegenError::Unsupported {
-                        reason: "a FROM-subquery's projection must compile into contiguous \
-                                 registers"
-                            .to_string(),
-                    });
-                }
+    if from.joins.is_empty() {
+        let schema = schemas.first().ok_or_else(|| CodegenError::Unsupported {
+            reason: "materialized subquery FROM has no schema".to_string(),
+        })?;
+        let cursors = ScanCursors {
+            table: reg.alloc_cursor(),
+            sort: reg.alloc_cursor(),
+            pseudo: reg.alloc_cursor(),
+            distinct: reg.alloc_cursor(),
+        };
+        match &from.first.kind {
+            TableRefKind::Name(_) => {
+                let root_page = valid_table_root_page(schema)?;
+                em.emit(Instruction::new(
+                    Opcode::OpenRead,
+                    cursors.table,
+                    root_page,
+                    0,
+                ));
+            }
+            TableRefKind::Subquery(inner) => {
+                // A subquery-in-FROM nested inside this one (#376: a CTE
+                // whose own body's FROM names another CTE) — materialize
+                // it into the same cursor this level would otherwise
+                // `OpenRead` a real table into.
+                materialize_from_subquery(em, reg, inner, catalog, cursors.table)?;
             }
         }
+        compile_select_scan(
+            em,
+            reg,
+            subquery,
+            schema,
+            cursors,
+            end_label,
+            catalog,
+            &crate::codegen::row::planner::Stats::default(),
+            &mut sink,
+        )?;
+    } else {
+        let cursor_base = reg.alloc_cursor();
+        // Reserve `table_count + 2` contiguous cursor numbers (one per
+        // joined table, plus the sort/pseudo or distinct cursor
+        // `compile_select_joined_scan` may itself derive by offsetting
+        // from `cursor_base`) so a later `reg.alloc_cursor()` call (e.g.
+        // for a correlated subquery expression inside this subquery)
+        // can't collide with a number that function computes by
+        // arithmetic rather than by calling `alloc_cursor` itself.
+        for _ in 0..schemas.len().saturating_add(1) {
+            reg.alloc_cursor();
+        }
+        compile_select_joined_scan(
+            em,
+            reg,
+            subquery,
+            &schemas,
+            catalog,
+            cursor_base,
+            end_label,
+            &std::collections::HashMap::new(),
+            &mut sink,
+        )?;
     }
-    let Some(first) = first_reg else {
-        return Err(CodegenError::Unsupported {
-            reason: "a FROM-subquery must project at least one column".to_string(),
-        });
-    };
-    let count = i32::try_from(columns.len()).map_err(|_| CodegenError::Unsupported {
-        reason: format!("{} columns do not fit in a p2 operand", columns.len()),
-    })?;
-
-    let rowid_reg = reg.alloc();
-    em.emit(Instruction::new(
-        Opcode::Sequence,
-        dest_cursor,
-        rowid_reg,
-        0,
-    ));
-    let record_reg = reg.alloc();
-    em.emit(Instruction::new(
-        Opcode::MakeRecord,
-        first,
-        count,
-        record_reg,
-    ));
-    em.emit(Instruction::new(
-        Opcode::Insert,
-        dest_cursor,
-        rowid_reg,
-        record_reg,
-    ));
-
-    em.place(skip);
-    let next_addr = em.emit(Instruction::new(Opcode::Next, src_cursor, 0, 0));
-    em.patch_p2(next_addr, loop_start);
     em.place(end_label);
 
-    reg.cache_cte(subquery.clone(), dest_cursor, synthetic.clone());
-    Ok(synthetic)
+    reg.cache_cte(subquery, dest_cursor, synthetic_schema.clone());
+
+    Ok(synthetic_schema)
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::codegen::row::select::compile_select_with_catalog;
-    use crate::vm::row::Program;
+    use crate::codegen::row::{Emitter, RegAlloc};
+    use crate::parser::row::error::{parse_select, ParseOutcome};
 
-    fn catalog() -> Vec<TableSchema> {
-        vec![TableSchema {
-            name: "t".to_string(),
+    fn parse(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("expected Accepted, got {other:?}"),
+        }
+    }
+
+    fn table(name: &str, root_page: u32) -> TableSchema {
+        TableSchema {
+            name: name.to_string(),
+            root_page,
             columns: vec!["a".to_string(), "b".to_string()],
+            without_rowid: false,
+            strict: false,
             column_types: vec![String::new(), String::new()],
-            rowid_alias: None,
-            root_page: 2,
+            column_collations: vec![],
+            is_virtual: false,
+            sql: format!("CREATE TABLE {name}(a, b)"),
             indexes: Vec::new(),
-            ..Default::default()
-        }]
+            rowid_alias: None,
+        }
     }
 
-    fn compile(sql: &str) -> Result<Program> {
-        compile_select_with_catalog(&catalog(), &crate::codegen::row::testutil::select(sql))
-    }
-
-    fn opcodes(program: &Program) -> Vec<Opcode> {
-        program.instructions.iter().map(|i| i.opcode).collect()
+    fn from_of(select: &Select) -> &TableRef {
+        &select.from.as_ref().unwrap().first
     }
 
     #[test]
-    fn resolves_a_subquerys_projected_columns_as_a_synthetic_schema() {
-        let query = crate::codegen::row::testutil::select("SELECT b FROM (SELECT b FROM t) x");
-        let schema = resolve_from_table_schema(query.from.as_ref(), &catalog()).unwrap();
-        assert_eq!(schema.name, "x");
-        assert_eq!(schema.columns, vec!["b".to_string()]);
-        assert_eq!(schema.root_page, 0);
+    fn resolve_subquery_schema_none_when_no_from() {
+        let select = parse("SELECT (SELECT 1)");
+        let inner = match &select.columns[0] {
+            ResultColumn::Expr { expr, .. } => match &expr.kind {
+                ExprKind::Subquery(sub) => (**sub).clone(),
+                _ => panic!("expected subquery expr"),
+            },
+            _ => panic!("expected Expr result column"),
+        };
+        let result = resolve_subquery_schema(&inner, &[]).unwrap();
+        assert!(result.is_none());
     }
 
     #[test]
-    fn star_projection_exposes_every_underlying_column() {
-        let query = crate::codegen::row::testutil::select("SELECT a FROM (SELECT * FROM t) x");
-        let schema = resolve_from_table_schema(query.from.as_ref(), &catalog()).unwrap();
+    fn resolve_subquery_schema_rejects_join_in_own_from() {
+        let sub = parse("SELECT a FROM t JOIN u ON t.a = u.a");
+        let err = resolve_subquery_schema(&sub, &[]).unwrap_err();
+        assert!(matches!(err, CodegenError::Unsupported { reason } if reason.contains("JOIN")));
+    }
+
+    #[test]
+    fn resolve_subquery_schema_rejects_nested_subquery_from() {
+        let sub = parse("SELECT a FROM (SELECT a FROM t) AS x");
+        let err = resolve_subquery_schema(&sub, &[]).unwrap_err();
+        assert!(
+            matches!(err, CodegenError::Unsupported { reason } if reason.contains("subquery-expression"))
+        );
+    }
+
+    #[test]
+    fn resolve_subquery_schema_rejects_unknown_table() {
+        let sub = parse("SELECT a FROM missing");
+        let err = resolve_subquery_schema(&sub, &[]).unwrap_err();
+        assert!(matches!(err, CodegenError::Unsupported { reason } if reason.contains("missing")));
+    }
+
+    #[test]
+    fn resolve_subquery_schema_finds_catalog_table_case_insensitively() {
+        let sub = parse("SELECT a FROM T");
+        let catalog = vec![table("t", 2)];
+        let schema = resolve_subquery_schema(&sub, &catalog).unwrap().unwrap();
+        assert_eq!(schema.name, "t");
+    }
+
+    #[test]
+    fn resolve_from_table_schema_name_not_found() {
+        let select = parse("SELECT a FROM missing");
+        let err = resolve_from_table_schema(from_of(&select), &[]).unwrap_err();
+        assert!(
+            matches!(err, CodegenError::Unsupported { reason } if reason.contains("no such table"))
+        );
+    }
+
+    #[test]
+    fn resolve_from_table_schema_name_found() {
+        let select = parse("SELECT a FROM t");
+        let catalog = vec![table("t", 2)];
+        let schema = resolve_from_table_schema(from_of(&select), &catalog).unwrap();
+        assert_eq!(schema.name, "t");
+    }
+
+    #[test]
+    fn resolve_from_table_schema_star_and_alias_expr() {
+        let select = parse("SELECT * FROM (SELECT a, b AS c FROM t) AS s");
+        let catalog = vec![table("t", 2)];
+        let schema = resolve_from_table_schema(from_of(&select), &catalog).unwrap();
+        assert_eq!(schema.name, "s");
+        assert_eq!(schema.columns, vec!["a".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn resolve_from_table_schema_table_star() {
+        let select = parse("SELECT s.* FROM (SELECT a, b FROM t) AS s");
+        let catalog = vec![table("t", 2)];
+        let schema = resolve_from_table_schema(from_of(&select), &catalog).unwrap();
         assert_eq!(schema.columns, vec!["a".to_string(), "b".to_string()]);
     }
 
     #[test]
-    fn materializes_into_an_ephemeral_table_when_flattening_cannot_apply() {
-        // `DISTINCT` on the *outer* query is rejected by `compile_select`,
-        // so an unflattenable inner `LIMIT` is what forces materialization.
-        let program = compile("SELECT b FROM (SELECT b FROM t LIMIT 1) x").unwrap_err();
-        assert!(matches!(program, CodegenError::Unsupported { .. }));
-
-        let mut em = Emitter::new();
-        let mut reg = RegAlloc::new();
-        let inner = crate::codegen::row::testutil::select("SELECT b FROM t WHERE a = 1");
-        let schema = materialize_from_subquery(&mut em, &mut reg, &inner, &catalog(), 0).unwrap();
-        assert_eq!(schema.columns, vec!["b".to_string()]);
-        let ops: Vec<Opcode> = em.finish().instructions.iter().map(|i| i.opcode).collect();
-        assert!(ops.contains(&Opcode::OpenEphemeral), "{ops:?}");
-        assert!(ops.contains(&Opcode::Sequence), "{ops:?}");
-        assert!(ops.contains(&Opcode::MakeRecord), "{ops:?}");
-        assert!(ops.contains(&Opcode::Insert), "{ops:?}");
+    fn resolve_from_table_schema_computed_expr_gets_positional_name() {
+        let select = parse("SELECT * FROM (SELECT a + 1 FROM t) AS s");
+        let catalog = vec![table("t", 2)];
+        let schema = resolve_from_table_schema(from_of(&select), &catalog).unwrap();
+        assert_eq!(schema.columns, vec!["column1".to_string()]);
     }
 
     #[test]
-    fn a_structurally_identical_subquery_reuses_the_first_materialization() {
-        let mut em = Emitter::new();
-        let mut reg = RegAlloc::new();
-        let inner = crate::codegen::row::testutil::select("SELECT b FROM t WHERE a = 1");
-        let first = materialize_from_subquery(&mut em, &mut reg, &inner, &catalog(), 0).unwrap();
-        let second = materialize_from_subquery(&mut em, &mut reg, &inner, &catalog(), 1).unwrap();
-        assert_eq!(first.columns, second.columns);
+    fn resolve_from_table_schema_unaliased_column_expr_uses_column_name() {
+        let select = parse("SELECT a FROM (SELECT a FROM t) AS s");
+        let catalog = vec![table("t", 2)];
+        let schema = resolve_from_table_schema(from_of(&select), &catalog).unwrap();
+        assert_eq!(schema.columns, vec!["a".to_string()]);
+    }
 
+    #[test]
+    fn materialize_from_subquery_rejects_compound() {
+        let subquery = parse("SELECT a FROM t UNION SELECT a FROM t2");
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::default();
+        let err = materialize_from_subquery(&mut em, &mut reg, &subquery, &[], 1).unwrap_err();
+        assert!(matches!(err, CodegenError::Unsupported { reason } if reason.contains("UNION")));
+    }
+
+    #[test]
+    fn materialize_from_subquery_rejects_unknown_table() {
+        let subquery = parse("SELECT a FROM missing");
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::default();
+        let err = materialize_from_subquery(&mut em, &mut reg, &subquery, &[], 1).unwrap_err();
+        assert!(matches!(err, CodegenError::Unsupported { .. }));
+    }
+
+    #[test]
+    fn materialize_from_subquery_single_table_and_cache_reuse() {
+        let subquery = parse("SELECT a, b FROM t");
+        let catalog = vec![table("t", 2)];
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::default();
+
+        let schema = materialize_from_subquery(&mut em, &mut reg, &subquery, &catalog, 10).unwrap();
+        assert_eq!(schema.columns, vec!["a".to_string(), "b".to_string()]);
+
+        // #425: an identical subquery reuses the cached materialization via
+        // OpenDup instead of re-running the scan.
+        let before = em.here();
+        let schema2 =
+            materialize_from_subquery(&mut em, &mut reg, &subquery, &catalog, 11).unwrap();
+        assert_eq!(schema2.columns, schema.columns);
         let program = em.finish();
-        let open_ephemeral_count = program
-            .instructions
-            .iter()
-            .filter(|i| i.opcode == Opcode::OpenEphemeral)
-            .count();
-        assert_eq!(open_ephemeral_count, 1, "{:?}", program.instructions);
-        let open_dup = program
-            .instructions
-            .iter()
-            .find(|i| i.opcode == Opcode::OpenDup)
-            .unwrap_or_else(|| panic!("expected an OpenDup, got {:?}", program.instructions));
-        assert_eq!(open_dup.p1, 1);
-        assert_eq!(open_dup.p2, 0);
+        assert_eq!(program.len(), before + 1);
+        assert_eq!(program.get(before).unwrap().opcode, Opcode::OpenDup);
     }
 
     #[test]
-    fn a_flattenable_from_subquery_never_opens_an_ephemeral_table() {
-        let program = compile("SELECT b FROM (SELECT a, b FROM t WHERE a = 1) x").unwrap();
-        let ops = opcodes(&program);
-        assert!(!ops.contains(&Opcode::OpenEphemeral), "{ops:?}");
-        assert!(ops.contains(&Opcode::Rewind), "{ops:?}");
+    fn materialize_from_subquery_joined_own_from() {
+        let subquery = parse("SELECT t.a FROM t JOIN t2 ON t.a = t2.a");
+        let catalog = vec![table("t", 2), table("t2", 3)];
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::default();
+        let schema = materialize_from_subquery(&mut em, &mut reg, &subquery, &catalog, 10).unwrap();
+        assert_eq!(schema.columns, vec!["a".to_string()]);
     }
 
     #[test]
-    fn star_over_a_narrowing_from_subquery_materializes() {
-        // Flattening would widen `*` from the subquery's one column to
-        // the whole underlying table, so it declines and the ephemeral
-        // table is what carries the projection.
-        let program = compile("SELECT * FROM (SELECT b FROM t) x").unwrap();
-        let ops = opcodes(&program);
-        assert!(ops.contains(&Opcode::OpenEphemeral), "{ops:?}");
-        assert!(ops.contains(&Opcode::Insert), "{ops:?}");
-        assert!(ops.contains(&Opcode::ResultRow), "{ops:?}");
-    }
-
-    #[test]
-    fn an_aggregate_in_a_from_subquery_is_unsupported() {
-        let q = crate::codegen::row::testutil::select("SELECT c FROM (SELECT COUNT(*) FROM t) x");
-        assert!(resolve_from_table_schema(q.from.as_ref(), &catalog()).is_err());
-    }
-
-    /// The all-leaves-false baseline for `reject_unsupported_shape`'s
-    /// seven-way post-scan-clause disjunction: a plain single-table
-    /// scan. Each `mcdc__from_clause_24__*` vector flips exactly one
-    /// field on this shape, so the leaf under test is the only one that
-    /// differs from the baseline.
-    fn plain_scan() -> Select {
-        crate::codegen::row::testutil::select("SELECT b FROM t")
-    }
-
-    fn is_unsupported(result: Result<()>) -> bool {
-        matches!(result, Err(CodegenError::Unsupported { .. }))
-    }
-
-    /// MC/DC vector (obligation `from_clause_24`, the seven-leaf
-    /// DISTINCT/GROUP BY/HAVING/ORDER BY/LIMIT/WITH/compound disjunction):
-    /// every leaf false -- a plain scan passes.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__from_clause_24__v1_plain_scan_passes() {
-        assert!(reject_unsupported_shape(&plain_scan(), "a subquery").is_ok());
-    }
-
-    /// MC/DC vector (obligation `from_clause_24`): leaf 1 (`DISTINCT`)
-    /// true alone.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__from_clause_24__v2_distinct_alone_rejects() {
-        let mut q = plain_scan();
-        q.distinct = Some(crate::parser::ast::Distinctness::Distinct);
-        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
-    }
-
-    /// MC/DC vector (obligation `from_clause_24`): leaf 2 (`GROUP BY`)
-    /// true alone.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__from_clause_24__v3_group_by_alone_rejects() {
-        let mut q = plain_scan();
-        q.group_by = crate::codegen::row::testutil::select("SELECT b FROM t GROUP BY b").group_by;
-        assert!(!q.group_by.is_empty());
-        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
-    }
-
-    /// MC/DC vector (obligation `from_clause_24`): leaf 3 (`HAVING`) true
-    /// alone. The grammar only accepts `HAVING` alongside `GROUP BY`, so
-    /// the predicate is lifted from a `WHERE` onto the baseline's
-    /// `having` slot to keep `group_by` empty.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__from_clause_24__v4_having_alone_rejects() {
-        let mut q = plain_scan();
-        q.having =
-            crate::codegen::row::testutil::select("SELECT b FROM t WHERE b > 1").where_clause;
-        assert!(q.having.is_some());
-        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
-    }
-
-    /// MC/DC vector (obligation `from_clause_24`): leaf 4 (`ORDER BY`)
-    /// true alone.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__from_clause_24__v5_order_by_alone_rejects() {
-        let mut q = plain_scan();
-        q.order_by = crate::codegen::row::testutil::select("SELECT b FROM t ORDER BY b").order_by;
-        assert!(!q.order_by.is_empty());
-        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
-    }
-
-    /// MC/DC vector (obligation `from_clause_24`): leaf 5 (`LIMIT`) true
-    /// alone.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__from_clause_24__v6_limit_alone_rejects() {
-        let mut q = plain_scan();
-        q.limit = crate::codegen::row::testutil::select("SELECT b FROM t LIMIT 1").limit;
-        assert!(q.limit.is_some());
-        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
-    }
-
-    /// MC/DC vector (obligation `from_clause_24`): leaf 6 (`WITH`) true
-    /// alone.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__from_clause_24__v7_with_clause_alone_rejects() {
-        let mut q = plain_scan();
-        q.with_clause =
-            crate::codegen::row::testutil::select("WITH c AS (SELECT b FROM t) SELECT b FROM t")
-                .with_clause;
-        assert!(q.with_clause.is_some());
-        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
-    }
-
-    /// MC/DC vector (obligation `from_clause_24`): leaf 7 (compound
-    /// `UNION ALL` arms) true alone.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__from_clause_24__v8_compound_alone_rejects() {
-        let mut q = plain_scan();
-        q.compound =
-            crate::codegen::row::testutil::select("SELECT b FROM t UNION ALL SELECT b FROM t")
-                .compound;
-        assert!(!q.compound.is_empty());
-        assert!(is_unsupported(reject_unsupported_shape(&q, "a subquery")));
+    fn materialize_from_subquery_nested_subquery_in_own_from() {
+        let subquery = parse("SELECT a FROM (SELECT a FROM t) AS inner_s");
+        let catalog = vec![table("t", 2)];
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::default();
+        let schema = materialize_from_subquery(&mut em, &mut reg, &subquery, &catalog, 10).unwrap();
+        assert_eq!(schema.columns, vec!["a".to_string()]);
     }
 }

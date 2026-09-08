@@ -20,9 +20,10 @@
 //!   (#153 retired the private `expr::Query` module it used to consume).
 //!   Its `emit` submodule is the AOT Rust-source renderer over this
 //!   planner's output, gated by its own `emit-batch` feature.
-//! - [`row`] -- the sqlite-rs-style planner (AST to VDBE-shaped bytecode).
-//!   **Implemented** (db-core#20/#91-#97) -- see its own doc comment for
-//!   what's ported and what's scoped down from the reference.
+//! - [`row`] -- sqlite-rs's own planner (AST to VDBE-shaped bytecode),
+//!   moved in verbatim by db-core#219 (ADR 0013) after #20/#91-#97's
+//!   re-derivation was retired -- see its own doc comment for the source
+//!   sha and the two db-core-owned additions.
 //! - [`stream`] -- push-driven planner for live/unbounded sources. **Not
 //!   yet implemented.**
 //!

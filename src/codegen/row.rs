@@ -1,242 +1,119 @@
-//! sqlite-rs-style planner -- one of `codegen`'s three planners (see
-//! module docs).
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! sqlite-rs's row codegen, **moved verbatim** from t-rust-db/sqlite-rs
+//! `src/codegen.rs` + `src/codegen/**` (and the pure half of
+//! `src/planner.rs` as [`planner`]) at sqlite-rs `751e291` (v0.19.1,
+//! Lab271 synced sha `7701d18`) -- db-core#219, ADR 0013. Only module
+//! paths changed (`crate::vdbe` -> [`crate::vm::row`], `crate::schema`
+//! -> this module, `crate::planner` -> [`planner`]); the schema structs
+//! at the bottom of this file are the one piece that was not in
+//! sqlite-rs's codegen tree (they came from its `schema` module, which
+//! db-core may not depend on -- ADR 0008/0012).
 //!
-//! **Started (db-core#91, tracking issue db-core#20).** Ported from
-//! sqlite-rs's `src/codegen.rs` + `src/codegen/expr.rs` +
-//! `src/codegen/expr/{cond,value}.rs`, targeting
-//! [`crate::vm::row::Opcode`] directly (the #18 decision) -- expressions
-//! compile to jump-based control flow, never an intermediate boolean
-//! register, exactly like the oracle.
-//!
-//! **Scoped down from a byte-faithful port** (see #91's comment
-//! recording this decision): sqlite-rs's `Scope`/`RegAlloc` carry a full
-//! table catalog, `ANALYZE` stats, join bindings, and correlated-
-//! subquery hoisting/memoization caches -- none of which db-core has
-//! yet (they belong to #92 joins / #95 subqueries), and none of which
-//! the batch planner's narrower validated subset (no `Case`/`Cast`/
-//! `Like`/`Between`) could exercise anyway. This module ports the
-//! *mechanism* -- [`Label`]/[`Target`]/[`NullTarget`]/[`CondTargets`]/
-//! [`Emitter`], a plain-bump [`RegAlloc`] (no CTE cache, no
-//! subquery-cursor allocation), and a single-table [`Scope`] (bare
-//! column name to index, no catalog/joins/hoisting) -- sized to what
-//! `Expr` has today. #95 grows [`RegAlloc`] a cursor allocator and
-//! [`Scope`] a catalog plus an `outer` link, which is what subquery
-//! materialization needs; the reference's hoisting/memoization caches
-//! are still unported (see [`subquery`]'s own doc).
-//!
-//! [`TableSchema`] here is a placeholder: just enough (declared column
-//! types, one optional rowid-alias column) for [`value::compile_value`]'s
-//! column-read/affinity logic to be correct. It is not a real catalog --
-//! #118 is expected to replace it with one once a real N-way join needs
-//! multi-table resolution.
-//!
-//! [`select::compile_select`] (db-core#92) covers a single-table scan
-//! plus projection (bare columns, `SELECT *`) plus `WHERE` plus
-//! `LIMIT`. [`select::compile_select_join`] (db-core#102/#101) adds a
-//! single `INNER`/`LEFT`/`FULL` equi-join (a two-pass nested loop for
-//! `FULL`'s both-sides null-extension) and `ORDER BY` via the existing
-//! single-key sorter, both without any stats/access-path cost model;
-//! that chooser and N-way joins are deferred to #117 (needs
-//! `planner::Stats`, blocked on #116's missing `ANALYZE` VM
-//! implementation) and #118 (no consumer needs N-way joins yet).
-//!
-//! **#93 adds `GROUP BY`/`HAVING`/aggregation**: [`aggregate`], ported
-//! from sqlite-rs's `codegen/select/aggregate.rs` and its
-//! `aggregate/{accum,hash,join}.rs`. Both of that module's grouping
-//! strategies are ported (sort-then-group over `Sorter*`, and the
-//! single-pass hash one over #86's `HashAgg*` slice), plus `HAVING` and
-//! aggregation over a join. See that module's own doc for what db-core's
-//! narrower `Query`/`SelectItem` scopes out of the reference.
-//!
-//! **#94 adds index-aware access paths**: [`index_scan`]
-//! (index-ordered scans, ADR 0020), [`range_scan`] (index range seeks,
-//! ADR 0034), [`limit_scan`] (`LIMIT`/`OFFSET`, and `Query` grows the
-//! matching `offset` field), and [`eqp`] (`EXPLAIN QUERY PLAN`). Each
-//! is scoped to the case that needs no cost model -- "is there an index
-//! whose leading column matches?" -- with the reference's stats-driven
-//! parts (skip-scan, `compile_direct_scan`'s chooser, EQP's
-//! `stats_by_table`) left unported for the same reason `planner.rs`
-//! below is. See each module's own doc.
-//!
-//! **#97 adds the DDL/transaction/PRAGMA/ANALYZE slice**: [`ddl`]
-//! (`CREATE`/`DROP TABLE`/`INDEX`/`VIEW`), [`transaction`]
-//! (`BEGIN`/`COMMIT`/`ROLLBACK`), [`pragma`] (`journal_mode`/
-//! `integrity_check`/`synchronous`), [`analyze`] (`ANALYZE` into
-//! `sqlite_stat1`), and [`dispatch`] (the statement dispatcher). Each of
-//! these compiles to a single procedural opcode at exec time -- no
-//! per-row cursor work, unlike the expression-driven DML codegen #91
-//! started -- so [`TableSchema`] grows `root_page`/`indexes` here
-//! (via the new [`IndexSchema`]) purely to bake root pages/names into
-//! `P4` at codegen time, the same way sqlite-rs's schema catalog does.
-//!
-//! [`dispatch::compile_statement`] only routes the statement kinds this
-//! module (and #91's expr slice) actually have codegen for --
-//! `BEGIN`/`COMMIT`/`ROLLBACK`/`PRAGMA`/`ANALYZE`/`CREATE TABLE`/
-//! `CREATE INDEX`/`CREATE VIEW`/`DROP TABLE`/`DROP INDEX`. sqlite-rs's
-//! own `dispatch.rs` also routes `INSERT`/`UPDATE`/`DELETE`/`SELECT`,
-//! but those have no codegen counterpart in `db-core` yet, so routing
-//! them is deferred to whichever sub-ticket of #20 ports that codegen.
-//!
-//! **#95 adds subqueries**: [`subquery`], ported from sqlite-rs's
-//! `codegen/subquery.rs` and its `subquery/{scalar,from_clause,flatten,
-//! pushdown}.rs`. Consumes `ast::ExprKind::Exists`/`ast::TableRefKind::
-//! Subquery` (a table name or a subquery plus its alias), and
-//! [`select::compile_select_with_catalog`] is the entry point that wires
-//! the cursors itself, since a subquery's own `FROM` table can't be
-//! pre-wired by the caller. See that module's own doc for what db-core
-//! scopes out of the reference -- notably CTEs and the correlated-
-//! subquery hoisting/memoization caches.
-//!
-//! **`planner.rs` (sqlite-rs's 386-line cost model) is deliberately not
-//! ported here yet**, even though `codegen::row::planner` is its
-//! natural home (per #97's own note): it decodes `sqlite_stat1` via
-//! real b-tree/page-source types (`crate::btree`/`crate::vfs` in
-//! sqlite-rs) and feeds a join-access chooser (`join_access`) that
-//! db-core has neither of yet (storage integration is #18's `vm-row`
-//! feature; joins are #92). Porting it now would mean vendoring dead
-//! code with no caller. Tracked as a follow-up once both land.
+//! Compiles a parsed [`crate::parser::ast::Select`] into a
+//! [`crate::vm::row::Program`] (spec 009, Requirements 7, 10, 11 — the
+//! convergence ticket #91, needing #89's VDBE core and #90's cursor/
+//! sorter/ephemeral opcodes). Expressions compile to jump-based control
+//! flow, never an intermediate boolean register (Requirement 11).
 
 #![forbid(unsafe_code)]
 
-pub mod aggregate;
 pub mod analyze;
-pub mod cond;
 pub mod ddl;
 pub mod dispatch;
-pub mod eqp;
-pub mod index_maintenance;
-pub mod index_scan;
-pub mod limit_scan;
+pub mod expr;
+pub(crate) mod index_maintenance;
+#[cfg(test)]
+mod mcdc;
+pub mod planner;
 pub mod pragma;
-pub mod range_scan;
 pub mod select;
 pub mod stmt;
-pub mod subquery;
+pub(crate) mod subquery;
 pub mod transaction;
-pub mod value;
-
-use std::collections::HashMap;
-use std::fmt;
-
-use crate::parser::ast::{BinaryOp, Distinctness, Expr, ExprKind, FunctionArgs, Join, Select};
-use crate::vm::row::{Instruction, Opcode, P4};
 
 pub use analyze::compile_analyze;
-pub use cond::compile_cond;
 pub use ddl::{
     compile_create_index, compile_create_table, compile_create_view, compile_drop_index,
     compile_drop_table,
 };
-pub use eqp::{compile_eqp_program, explain_query_plan, EqpRow};
+pub use dispatch::{compile_statement, leading_keywords, DispatchError};
 pub use pragma::compile_pragma;
-pub use select::{compile_select, compile_select_join, compile_select_with_catalog};
-pub use stmt::{
-    compile_delete, compile_delete_with_catalog, compile_insert, compile_update,
-    compile_update_with_catalog,
+pub use select::{
+    compile_select, compile_select_compound, compile_select_joined, compile_select_with_catalog,
+    compile_select_with_catalog_and_stats, explain_query_plan, output_column_names, CodegenError,
+    EqpRow,
 };
+pub use stmt::delete::{compile_delete, compile_delete_with_catalog};
+pub use stmt::insert::compile_insert;
+pub use stmt::update::{compile_update, compile_update_with_catalog};
+pub use stmt::{delete, insert, update};
 pub use subquery::{
-    compile_exists, compile_in_subquery, expand_views, flatten_from_subquery,
-    materialize_from_subquery, push_down_where_predicates, resolve_from_table_schema,
-    resolve_views, ResolvedView,
+    expand_with_clause, flatten_from_subqueries, push_down_where_predicates,
+    resolve_from_table_schema, resolve_views, ExpandViews, ResolvedView,
 };
 pub use transaction::{compile_begin, compile_commit, compile_rollback};
-pub use value::compile_value;
 
-/// The nesting bound this compiler enforces while walking an [`Expr`]
-/// tree, mirroring sqlite-rs's ADR 0014 (200, deliberately below
-/// SQLite's own 1000 -- a debug-build stack-overflow investigation
-/// found the guard was otherwise unreachable at this crate's real
-/// recursion depth per `Expr` level).
-pub const MAX_EXPR_DEPTH: usize = 200;
+use std::collections::HashMap;
 
-/// Codegen failures: an unresolvable column, an `Expr` tree deeper than
-/// [`MAX_EXPR_DEPTH`], or a construct this scoped-down compiler doesn't
-/// implement yet (see this module's doc comment).
-#[derive(Debug, Clone, PartialEq)]
-pub enum CodegenError {
-    /// A column reference the current [`Scope`] cannot resolve.
-    UnknownColumn(String),
-    /// The expression tree nests deeper than [`MAX_EXPR_DEPTH`].
-    TooDeep,
-    /// A construct this compiler does not implement yet.
-    Unsupported {
-        /// What is unsupported, for the error message.
-        reason: String,
-    },
-    /// A view's `FROM`/`JOIN` expansion (db-core#206,
-    /// [`subquery::views::expand_views`]) referenced a view already on
-    /// the expansion path -- directly or through a chain of other
-    /// views -- which would otherwise recurse forever.
-    CircularView(String),
-}
-
-impl fmt::Display for CodegenError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CodegenError::UnknownColumn(name) => write!(f, "unknown column: {name}"),
-            CodegenError::TooDeep => {
-                write!(f, "expression nesting exceeds {MAX_EXPR_DEPTH} levels")
-            }
-            CodegenError::Unsupported { reason } => write!(f, "unsupported: {reason}"),
-            CodegenError::CircularView(name) => write!(f, "circular view reference: {name}"),
-        }
-    }
-}
-
-impl std::error::Error for CodegenError {}
-
-/// Result alias for codegen operations, with [`CodegenError`] as the error type.
-pub type Result<T> = std::result::Result<T, CodegenError>;
+use crate::vm::row::{Instruction, Opcode, Program, P4};
 
 /// A not-yet-resolved jump target, placed later via [`Emitter::place`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Label(usize);
+pub(crate) struct Label(usize);
 
 /// Where a boolean condition's true/false outcome continues: either an
 /// explicit jump target, or "fall through to the next emitted
-/// instruction" -- the classic jumping-code-generation technique, used
-/// throughout this module so AND/OR compose without materializing an
-/// intermediate boolean register.
+/// instruction" — the classic jumping-code-generation technique (Aho
+/// et al.), used throughout `expr.rs` so AND/OR/CASE compose without
+/// materializing an intermediate boolean register (Requirement 11).
 #[derive(Debug, Clone, Copy)]
-pub enum Target {
-    /// Jump to `Label` (resolved when the label is placed).
+pub(crate) enum Target {
     Jump(Label),
-    /// Continue with the next emitted instruction.
     Fallthrough,
 }
 
-/// Where a condition's *unknown* (SQL NULL) outcome continues -- names
-/// one of [`CondTargets`]'s other two targets rather than being a third
-/// [`Target`] of its own; see sqlite-rs's `NullTarget` doc for why an
-/// independent third continuation doesn't work for `AND`/`OR`.
+/// Where a condition's *unknown* (SQL NULL) outcome continues — SQLite's
+/// own `jumpIfNull` flag (`sqlite3ExprIfTrue`/`sqlite3ExprIfFalse`),
+/// carried as the third field of [`CondTargets`].
+///
+/// It names one of the other two targets rather than being a third
+/// [`Target`] of its own, on purpose. NULL is never an independent
+/// continuation in practice: `WHERE` folds it into false (a NULL
+/// predicate excludes the row), and `NOT` must leave it pinned to the
+/// same address while swapping which of the two targets that address
+/// is — which [`CondTargets::negate`] does in one line. An absolute
+/// third label would have to be rewritten every time `AND`/`OR`
+/// synthesize a fresh false/true label, and, worse, would be
+/// unrepresentable for `AND`/`OR` at all: `NULL AND false` is *false*,
+/// so a genuinely independent unknown continuation could not be taken
+/// until the second operand had been evaluated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NullTarget {
+pub(crate) enum NullTarget {
     /// NULL continues where [`CondTargets::on_true`] does.
     True,
-    /// NULL continues where [`CondTargets::on_false`] does -- what
-    /// `WHERE` wants.
+    /// NULL continues where [`CondTargets::on_false`] does — what
+    /// `WHERE`, `CASE WHEN`, and every other boolean consumer in V2
+    /// wants.
     False,
 }
 
 /// The full jump-mode contract: where a condition's true, false, and
-/// unknown outcomes each continue. Bundled rather than three parameters
-/// because [`CondTargets::negate`] has to move all three together --
-/// swapping true and false without flipping `on_null` reproduces
-/// sqlite-rs's #134 bug.
+/// unknown outcomes each continue. Bundled rather than passed as three
+/// parameters because [`negate`](CondTargets::negate) has to move all
+/// three together — swapping true and false without flipping
+/// `on_null` is precisely the #134 bug.
 #[derive(Debug, Clone, Copy)]
-pub struct CondTargets {
-    /// Where execution continues when the condition is true.
-    pub on_true: Target,
-    /// Where execution continues when the condition is false.
-    pub on_false: Target,
-    /// Which of the two targets the NULL (unknown) outcome follows.
-    pub on_null: NullTarget,
+pub(crate) struct CondTargets {
+    pub(crate) on_true: Target,
+    pub(crate) on_false: Target,
+    pub(crate) on_null: NullTarget,
 }
 
 impl CondTargets {
-    /// The setting every boolean consumer here wants: unknown joins
+    /// The setting every boolean consumer in V2 wants: unknown joins
     /// false.
-    pub fn null_is_false(on_true: Target, on_false: Target) -> Self {
+    pub(crate) fn null_is_false(on_true: Target, on_false: Target) -> Self {
         CondTargets {
             on_true,
             on_false,
@@ -244,9 +121,9 @@ impl CondTargets {
         }
     }
 
-    /// Unknown joins true -- used only to separate "definitely false"
+    /// Unknown joins true — used only to separate "definitely false"
     /// from "unknown" when materializing a condition into a register.
-    pub fn null_is_true(on_true: Target, on_false: Target) -> Self {
+    pub(crate) fn null_is_true(on_true: Target, on_false: Target) -> Self {
         CondTargets {
             on_true,
             on_false,
@@ -257,7 +134,7 @@ impl CondTargets {
     /// The contract for the operand of a `NOT`: true and false trade
     /// places, and `on_null` flips so the unknown outcome still names
     /// the address it named before the swap.
-    pub fn negate(self) -> Self {
+    pub(crate) fn negate(self) -> Self {
         CondTargets {
             on_true: self.on_false,
             on_false: self.on_true,
@@ -268,24 +145,21 @@ impl CondTargets {
         }
     }
 
-    /// A copy with `on_true` replaced.
-    pub fn with_true(self, on_true: Target) -> Self {
+    pub(crate) fn with_true(self, on_true: Target) -> Self {
         CondTargets { on_true, ..self }
     }
 
-    /// A copy with `on_false` replaced.
-    pub fn with_false(self, on_false: Target) -> Self {
+    pub(crate) fn with_false(self, on_false: Target) -> Self {
         CondTargets { on_false, ..self }
     }
 }
 
-/// Builds a [`crate::vm::row::Program`] with forward-referenceable jump
-/// targets: `new_label`/`place` mark an address, `patch_p2` records a
-/// pending fixup (every jump-carrying opcode this module emits targets
-/// `p2`), and [`Emitter::finish`] resolves every pending fixup in one
-/// pass.
+/// Builds a [`Program`] with forward-referenceable jump targets:
+/// `new_label`/`place` mark an address, `patch_p2` records a pending
+/// fixup (every jump-carrying opcode this ticket emits targets `P2`),
+/// and `finish` resolves every pending fixup in one pass.
 #[derive(Debug, Default)]
-pub struct Emitter {
+pub(crate) struct Emitter {
     instructions: Vec<Instruction>,
     labels: HashMap<Label, usize>,
     patches: Vec<(usize, Label)>,
@@ -293,54 +167,48 @@ pub struct Emitter {
 }
 
 impl Emitter {
-    /// An empty emitter.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// Appends `instr` and returns its address.
-    pub fn emit(&mut self, instr: Instruction) -> usize {
+    pub(crate) fn emit(&mut self, instr: Instruction) -> usize {
         self.instructions.push(instr);
         self.instructions.len().saturating_sub(1)
     }
 
-    /// The address the next emitted instruction will get.
-    pub fn here(&self) -> usize {
+    pub(crate) fn here(&self) -> usize {
         self.instructions.len()
     }
 
-    /// Allocates a fresh, not-yet-placed label.
-    pub fn new_label(&mut self) -> Label {
+    pub(crate) fn new_label(&mut self) -> Label {
         let label = Label(self.next_label);
         self.next_label = self.next_label.saturating_add(1);
         label
     }
 
     /// Binds `label` to the current (next-to-be-emitted) address.
-    pub fn place(&mut self, label: Label) {
+    pub(crate) fn place(&mut self, label: Label) {
         self.labels.insert(label, self.here());
     }
 
-    /// Records that the instruction at `addr` must have its `p2` set to
-    /// `label`'s address when [`Emitter::finish`] runs.
-    pub fn patch_p2(&mut self, addr: usize, label: Label) {
+    pub(crate) fn patch_p2(&mut self, addr: usize, label: Label) {
         self.patches.push((addr, label));
     }
 
-    /// Overwrites the `p4` operand of the instruction at `addr` --
-    /// used to fill in `Opcode::SorterOpen`'s sort-key descriptor once
-    /// its final form (with every `ORDER BY` expression's compiled
-    /// register offset) is known, which is only after the scan body
-    /// that computes those registers has been emitted.
-    pub fn patch_p4(&mut self, addr: usize, p4: crate::vm::row::P4) {
+    /// Overwrites an already-emitted instruction's `P4`, for cases
+    /// where the value (e.g. a sort-key descriptor) isn't known until
+    /// after later instructions — computing it requires registers that
+    /// only get allocated once the code between the placeholder and
+    /// the fixup has been emitted — have already been generated.
+    pub(crate) fn patch_p4(&mut self, addr: usize, p4: P4) {
         if let Some(instr) = self.instructions.get_mut(addr) {
             instr.p4 = p4;
         }
     }
 
     /// Resolves every pending patch against its placed label's address,
-    /// consuming the emitter into a finished [`crate::vm::row::Program`].
-    pub fn finish(mut self) -> crate::vm::row::Program {
+    /// consuming the emitter into a finished [`Program`].
+    pub(crate) fn finish(mut self) -> Program {
         for (addr, label) in &self.patches {
             let Some(&resolved) = self.labels.get(label) else {
                 continue; // Every patched label is always placed by construction; skip defensively rather than panic.
@@ -351,571 +219,139 @@ impl Emitter {
                 instr.p2 = target;
             }
         }
-        crate::vm::row::Program::new(self.instructions)
+        Program::new(self.instructions)
     }
 
     /// Emits an unconditional jump to `label`, patched once placed.
-    pub fn goto(&mut self, label: Label) {
+    pub(crate) fn goto(&mut self, label: Label) {
         let addr = self.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
         self.patch_p2(addr, label);
     }
 }
 
-/// A monotonically-increasing register bump allocator -- the simplest
-/// correct scheme for this scoped-down compiler; a real allocator that
-/// reuses freed slots is deferred to whichever sub-ticket actually
-/// needs it.
-#[derive(Debug, Default)]
-pub struct RegAlloc {
+/// A monotonically-increasing register bump allocator — the simplest
+/// correct scheme for V2's scope; SQLite's real register allocator
+/// reuses freed slots, which this deliberately does not (known
+/// simplification, not a TODO to chase further).
+#[derive(Debug)]
+pub(crate) struct RegAlloc {
     next: i32,
+    /// Next bind-parameter index to hand out for a bare `?`
+    /// (`ParamKind::Anonymous`) — 1-based, matching SQLite's
+    /// `sqlite3_bind_*` convention and `Opcode::Variable`'s `P1`.
+    next_param: u32,
+    /// Next cursor number to hand out for a subquery's own scan (#238) —
+    /// started well above every fixed cursor constant this compiler's
+    /// other features use (`TABLE_CURSOR`/`SORT_CURSOR`/`PSEUDO_CURSOR`/
+    /// `DISTINCT_CURSOR`, plus one per joined table), so a subquery's
+    /// cursor never collides with the enclosing query's — subqueries in
+    /// the same statement are never open concurrently (each fully scans
+    /// and closes over before the next expression compiles), so a
+    /// single monotonically-increasing counter suffices without needing
+    /// to reason about lifetimes across subqueries.
     next_cursor: i32,
-    /// A structural-equality cache of every `FROM`-subquery this
-    /// compile has already materialized, keyed by the subquery's own
-    /// AST (db-core#143) -- mirrors sqlite-rs's `RegAlloc::cached_cte`.
-    /// See [`crate::codegen::row::subquery::materialize_from_subquery`]'s
-    /// doc for why raw structural equality is safe today (no
-    /// correlated variables, no volatile expression reaches this path
-    /// yet) and what has to change the day that stops being true.
-    cte_cache: Vec<(crate::parser::ast::Select, i32, TableSchema)>,
-    /// The next anonymous (`?`) bind-parameter slot to hand out,
-    /// 1-based -- matches `Opcode::Variable`'s `p1` convention
-    /// (db-core#162). `?NNN` bumps this past `NNN` so a later bare `?`
-    /// never collides with an explicit number, mirroring SQLite.
-    next_param: i32,
-    /// The highest bind-parameter slot allocated so far by any form
-    /// (anonymous, numbered, or named), so [`RegAlloc::param_names`]
-    /// knows how long a vec to build even when `?NNN` jumps ahead of
-    /// every name it tracks.
-    max_param: i32,
-    /// Named parameters seen so far this compile, keyed by the sigil
-    /// plus name (`:foo`/`@foo`/`$foo` are treated as three distinct
-    /// parameters, not aliases of one another -- a conservative
-    /// simplification, since nothing in this codebase asserts SQLite's
-    /// actual cross-sigil aliasing behavior either way). A repeated
-    /// occurrence of the same key within one statement reuses its slot.
-    named_params: Vec<(String, i32)>,
+    /// Every `FROM`-subquery already materialized earlier in this same
+    /// statement's compile, keyed by structural equality of its
+    /// `Select` — the cursor it was materialized into, plus its
+    /// synthetic output schema (#425). A `WITH`-clause CTE referenced N
+    /// times rewrites into N independent but byte-for-byte identical
+    /// `TableRefKind::Subquery` clones (preserving self-join
+    /// correctness — `subquery/cte.rs`'s module doc); the first one to
+    /// materialize (`OpenEphemeral`+populate) gets cached here, and
+    /// every later structurally-identical reference just `OpenDup`s
+    /// onto that cursor instead of re-running the query. A `Vec` with a
+    /// linear scan rather than a `HashMap` (`Select` has no cheap
+    /// hash) — bounded by the number of distinct FROM-subqueries in
+    /// one statement, always small. Scoped to one `RegAlloc` (one
+    /// top-level statement compile). **Safe only as long as no volatile/
+    /// non-deterministic expression exists in this crate** — see
+    /// `subquery::from_clause::materialize_from_subquery`'s doc for the
+    /// full caveat and what must change the day one is added.
+    materialized_ctes: Vec<(
+        crate::parser::ast::Select,
+        i32,
+        crate::codegen::row::TableSchema,
+    )>,
+}
+
+impl Default for RegAlloc {
+    fn default() -> Self {
+        RegAlloc {
+            next: 0,
+            next_param: 0,
+            next_cursor: 1000,
+            materialized_ctes: Vec::new(),
+        }
+    }
 }
 
 impl RegAlloc {
-    /// A fresh allocator starting at register 0 and cursor 0.
-    pub fn new() -> Self {
-        Self {
-            next_param: 1,
-            ..Self::default()
-        }
+    pub(crate) fn new() -> Self {
+        Self::default()
     }
 
-    /// Allocates the next free register.
-    pub fn alloc(&mut self) -> i32 {
-        let r = self.next;
-        self.next = self.next.saturating_add(1);
-        r
-    }
-
-    /// Hands out a fresh cursor slot (db-core#95): every subquery
-    /// occurrence opens its own table cursor, plus an ephemeral one for
-    /// `IN`'s membership index or a `FROM`-subquery's materialized
-    /// result. Mirrors sqlite-rs's `RegAlloc::alloc_cursor`.
-    pub fn alloc_cursor(&mut self) -> i32 {
+    /// Hands out a fresh cursor number for a subquery's own table scan
+    /// or ephemeral materialization (#238).
+    pub(crate) fn alloc_cursor(&mut self) -> i32 {
         let c = self.next_cursor;
         self.next_cursor = self.next_cursor.saturating_add(1);
         c
     }
 
-    /// Moves the cursor bump allocator past `cursor`, so a later
-    /// [`RegAlloc::alloc_cursor`] can't hand back a slot the caller
-    /// wired up by hand (`select.rs` derives its sorter/index cursors by
-    /// arithmetic rather than through this allocator).
-    pub fn reserve_cursors_through(&mut self, cursor: i32) {
-        self.next_cursor = self.next_cursor.max(cursor.saturating_add(1));
-    }
-
-    /// The register the next [`RegAlloc::alloc`] call would hand out,
-    /// without allocating it.
-    pub fn peek(&self) -> i32 {
-        self.next
-    }
-
-    /// Looks up an already-materialized subquery structurally equal to
-    /// `subquery`, returning the cursor it was materialized onto and its
-    /// synthetic schema, for the caller to `OpenDup` instead of
-    /// re-running the same query. Mirrors sqlite-rs's
-    /// `RegAlloc::cached_cte`.
-    pub fn cached_cte(&self, subquery: &crate::parser::ast::Select) -> Option<(i32, TableSchema)> {
-        self.cte_cache
+    /// The cursor/schema a structurally-identical `FROM`-subquery was
+    /// already materialized into earlier in this same statement's
+    /// compile, if any (#425).
+    pub(crate) fn cached_cte(
+        &self,
+        subquery: &crate::parser::ast::Select,
+    ) -> Option<(i32, crate::codegen::row::TableSchema)> {
+        self.materialized_ctes
             .iter()
-            .find(|(q, _, _)| q == subquery)
+            .find(|(cached, _, _)| cached == subquery)
             .map(|(_, cursor, schema)| (*cursor, schema.clone()))
     }
 
-    /// Records that `subquery` was materialized onto `cursor` with
-    /// `schema`, so a later structurally-identical occurrence can reuse
-    /// it via [`RegAlloc::cached_cte`]. Mirrors sqlite-rs's
-    /// `RegAlloc::cache_cte`.
-    pub fn cache_cte(
+    /// Records that `subquery` has now been materialized into `cursor`,
+    /// with the given synthetic output schema, so a later structurally-
+    /// identical reference reuses it instead of materializing again
+    /// (#425).
+    pub(crate) fn cache_cte(
         &mut self,
-        subquery: crate::parser::ast::Select,
+        subquery: &crate::parser::ast::Select,
         cursor: i32,
-        schema: TableSchema,
+        schema: crate::codegen::row::TableSchema,
     ) {
-        self.cte_cache.push((subquery, cursor, schema));
+        self.materialized_ctes
+            .push((subquery.clone(), cursor, schema));
     }
 
-    /// Resolves `kind` to its 1-based bind-parameter slot for
-    /// `Opcode::Variable`'s `p1` (db-core#162), allocating a new slot on
-    /// first occurrence and reusing it for a repeated named parameter
-    /// within the same compile.
-    pub fn alloc_param(&mut self, kind: &crate::parser::ast::ParamKind) -> i32 {
-        use crate::parser::ast::ParamKind;
-        match kind {
-            ParamKind::Anonymous => {
-                let slot = self.next_param;
-                self.next_param = self.next_param.saturating_add(1);
-                self.max_param = self.max_param.max(slot);
-                slot
-            }
-            ParamKind::Numbered(n) => {
-                let slot = i32::try_from(*n).unwrap_or(i32::MAX);
-                self.next_param = self.next_param.max(slot.saturating_add(1));
-                self.max_param = self.max_param.max(slot);
-                slot
-            }
-            ParamKind::Colon(name) => self.alloc_named_param(format!(":{name}")),
-            ParamKind::At(name) => self.alloc_named_param(format!("@{name}")),
-            ParamKind::Dollar(name) => self.alloc_named_param(format!("${name}")),
-        }
+    pub(crate) fn alloc(&mut self) -> i32 {
+        let r = self.next;
+        self.next = self.next.saturating_add(1);
+        r
     }
 
-    fn alloc_named_param(&mut self, key: String) -> i32 {
-        if let Some((_, slot)) = self.named_params.iter().find(|(k, _)| *k == key) {
-            return *slot;
-        }
-        let slot = self.next_param;
+    /// The register the next `alloc()` call would hand out, without
+    /// allocating it — used to find the highest register a just-compiled
+    /// expression touched (its last-allocated register isn't always its
+    /// own return value, e.g. `CASE` allocates its destination first).
+    pub(crate) fn peek(&self) -> i32 {
+        self.next
+    }
+
+    /// Assigns register-independent parameter index for a bare `?`,
+    /// incrementing past any `?NNN` index already claimed via
+    /// [`RegAlloc::numbered_param`].
+    pub(crate) fn anonymous_param(&mut self) -> u32 {
         self.next_param = self.next_param.saturating_add(1);
-        self.max_param = self.max_param.max(slot);
-        self.named_params.push((key, slot));
-        slot
+        self.next_param
     }
 
-    /// Slot-indexed (0 = slot 1) bind-parameter names for every slot
-    /// this compile allocated, `None` for an anonymous/numbered slot
-    /// with no name -- the shape [`crate::vm::row::Program`] carries so
-    /// a caller can bind `:name`/`@name`/`$name` forms by name rather
-    /// than only positionally.
-    pub fn param_names(&self) -> Vec<Option<String>> {
-        let len = usize::try_from(self.max_param).unwrap_or(0);
-        let mut names = vec![None; len];
-        for (key, slot) in &self.named_params {
-            if let Some(idx) = usize::try_from(*slot).ok().and_then(|s| s.checked_sub(1)) {
-                if let Some(entry) = names.get_mut(idx) {
-                    *entry = Some(key.clone());
-                }
-            }
-        }
-        names
-    }
-}
-
-/// Whether `select` asks for `DISTINCT`. The AST spells distinctness
-/// as an `Option<Distinctness>` (`None` = neither keyword given, which
-/// is `ALL`), where `expr::Query` had a bare `bool` (#147).
-pub(crate) fn is_distinct(select: &Select) -> bool {
-    matches!(select.distinct, Some(Distinctness::Distinct))
-}
-
-/// The join chain of `select`'s `FROM`, or empty when it has no `FROM`
-/// at all. `expr::Query` kept `from` and `joins` as sibling fields;
-/// the AST nests `joins` inside an optional [`FromClause`] (#147),
-/// which is the shape a `SELECT` with no `FROM` needs.
-pub(crate) fn joins_of(select: &Select) -> &[Join] {
-    select.from.as_ref().map_or(&[], |from| &from.joins)
-}
-
-/// `schema.root_page` as `Opcode::OpenRead`/`OpenWrite`'s `p2` operand
-/// (db-core#182): every program must open its own cursors against the
-/// table's real root page rather than relying on a caller to pre-wire
-/// the slot, since a `CursorFactory`-backed `Vm` (the sqlite-rs adapter)
-/// never gets a chance to open anything a program doesn't ask for.
-/// Mirrors [`index_scan::valid_index_root_page`]'s shape for the
-/// table-schema case.
-pub(crate) fn valid_table_root_page(schema: &TableSchema) -> Result<i32> {
-    i32::try_from(schema.root_page).map_err(|_| CodegenError::Unsupported {
-        reason: format!(
-            "table {} root page does not fit in a p2 operand",
-            schema.name
-        ),
-    })
-}
-
-/// Builds an unqualified column reference. Codegen synthesizes these
-/// when it needs to name a column it just materialized (an aggregate
-/// output, a join key); they never come from source text, so they carry
-/// [`Span::UNKNOWN`].
-pub(crate) fn column_expr(name: impl Into<String>) -> Expr {
-    Expr {
-        kind: ExprKind::Column {
-            table: None,
-            catalog: None,
-            name: name.into(),
-        },
-        span: crate::parser::Span::UNKNOWN,
-    }
-}
-
-/// Builds `lhs = rhs`.
-pub(crate) fn eq_expr(lhs: Expr, rhs: Expr) -> Expr {
-    Expr {
-        kind: ExprKind::Binary {
-            op: BinaryOp::Eq,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-        },
-        span: crate::parser::Span::UNKNOWN,
-    }
-}
-
-/// Compiles `args` into a fresh, *contiguous* block of registers --
-/// what `Opcode::Function`/`Opcode::MakeRecord` require (they read
-/// `arity` registers starting at one base). Each dest register is
-/// allocated up front, before any argument's own (possibly
-/// multi-register) evaluation runs, so an argument that needs scratch
-/// registers of its own can never land in the middle of the block and
-/// break contiguity -- the same bug `stmt::update::compile_update` had
-/// for two-or-more assigned columns (#147).
-pub(crate) fn compile_contiguous_values(
-    em: &mut Emitter,
-    reg: &mut RegAlloc,
-    scope: &Scope,
-    args: &[&Expr],
-) -> Result<i32> {
-    let dest_regs: Vec<i32> = (0..args.len()).map(|_| reg.alloc()).collect();
-    for (&dest, arg) in dest_regs.iter().zip(args) {
-        let value_reg = value::compile_value(em, reg, scope, arg)?;
-        em.emit(Instruction::new(Opcode::Copy, value_reg, dest, 0));
-    }
-    // `args` is never empty in any caller today, but a defensive
-    // `reg.alloc()` (an unused register, never read) keeps this total
-    // rather than panicking on a future empty-arg caller.
-    Ok(dest_regs.first().copied().unwrap_or_else(|| reg.alloc()))
-}
-
-/// Visits every column reference in `expr`, in source order.
-///
-/// Does **not** descend into a nested `SELECT` (a scalar subquery,
-/// `EXISTS`, or `IN (SELECT ...)`): those resolve against their own
-/// scope, so their column names are not this expression's to read or
-/// rewrite. Callers that need the subquery's columns walk it separately.
-///
-/// Centralized here because `expr::Expr` had 8 variants and the AST has
-/// 20 (#147) -- open-coding the match in each caller made every new AST
-/// node a multi-file change, and a missed arm silently skips columns
-/// rather than failing to compile.
-pub(crate) fn walk_columns(expr: &Expr, f: &mut impl FnMut(&str)) {
-    match &expr.kind {
-        ExprKind::Column { name, .. } => f(name),
-        ExprKind::Literal(_) | ExprKind::Param(_) => {}
-        ExprKind::Paren(inner)
-        | ExprKind::Unary { expr: inner, .. }
-        | ExprKind::IsNull { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::Collate { expr: inner, .. }
-        | ExprKind::InSubquery { expr: inner, .. } => walk_columns(inner, f),
-        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
-            walk_columns(lhs, f);
-            walk_columns(rhs, f);
-        }
-        ExprKind::Between {
-            expr: inner,
-            lo,
-            hi,
-            ..
-        } => {
-            walk_columns(inner, f);
-            walk_columns(lo, f);
-            walk_columns(hi, f);
-        }
-        ExprKind::In {
-            expr: inner, list, ..
-        } => {
-            walk_columns(inner, f);
-            for item in list {
-                walk_columns(item, f);
-            }
-        }
-        ExprKind::Like {
-            expr: inner,
-            pattern,
-            escape,
-            ..
-        } => {
-            walk_columns(inner, f);
-            walk_columns(pattern, f);
-            if let Some(escape) = escape {
-                walk_columns(escape, f);
-            }
-        }
-        ExprKind::Case {
-            operand,
-            whens,
-            else_,
-        } => {
-            if let Some(operand) = operand {
-                walk_columns(operand, f);
-            }
-            for (cond, result) in whens {
-                walk_columns(cond, f);
-                walk_columns(result, f);
-            }
-            if let Some(else_) = else_ {
-                walk_columns(else_, f);
-            }
-        }
-        ExprKind::FunctionCall { args, .. } => {
-            if let FunctionArgs::List(args) = args {
-                for arg in args {
-                    walk_columns(arg, f);
-                }
-            }
-        }
-        ExprKind::InSubqueryMulti { exprs, .. } => {
-            for e in exprs {
-                walk_columns(e, f);
-            }
-        }
-        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}
-    }
-}
-
-/// [`walk_columns`], but able to rename each column reference in place.
-pub(crate) fn walk_columns_mut(expr: &mut Expr, f: &mut impl FnMut(&mut String)) {
-    match &mut expr.kind {
-        ExprKind::Column { name, .. } => f(name),
-        ExprKind::Literal(_) | ExprKind::Param(_) => {}
-        ExprKind::Paren(inner)
-        | ExprKind::Unary { expr: inner, .. }
-        | ExprKind::IsNull { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::Collate { expr: inner, .. }
-        | ExprKind::InSubquery { expr: inner, .. } => walk_columns_mut(inner, f),
-        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
-            walk_columns_mut(lhs, f);
-            walk_columns_mut(rhs, f);
-        }
-        ExprKind::Between {
-            expr: inner,
-            lo,
-            hi,
-            ..
-        } => {
-            walk_columns_mut(inner, f);
-            walk_columns_mut(lo, f);
-            walk_columns_mut(hi, f);
-        }
-        ExprKind::In {
-            expr: inner, list, ..
-        } => {
-            walk_columns_mut(inner, f);
-            for item in list {
-                walk_columns_mut(item, f);
-            }
-        }
-        ExprKind::Like {
-            expr: inner,
-            pattern,
-            escape,
-            ..
-        } => {
-            walk_columns_mut(inner, f);
-            walk_columns_mut(pattern, f);
-            if let Some(escape) = escape {
-                walk_columns_mut(escape, f);
-            }
-        }
-        ExprKind::Case {
-            operand,
-            whens,
-            else_,
-        } => {
-            if let Some(operand) = operand {
-                walk_columns_mut(operand, f);
-            }
-            for (cond, result) in whens {
-                walk_columns_mut(cond, f);
-                walk_columns_mut(result, f);
-            }
-            if let Some(else_) = else_ {
-                walk_columns_mut(else_, f);
-            }
-        }
-        ExprKind::FunctionCall { args, .. } => {
-            if let FunctionArgs::List(args) = args {
-                for arg in args {
-                    walk_columns_mut(arg, f);
-                }
-            }
-        }
-        ExprKind::InSubqueryMulti { exprs, .. } => {
-            for e in exprs {
-                walk_columns_mut(e, f);
-            }
-        }
-        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}
-    }
-}
-
-/// Whether `expr` contains a nested `SELECT` anywhere.
-pub(crate) fn contains_subquery(expr: &Expr) -> bool {
-    let mut found = false;
-    walk_subexprs(expr, &mut |e| {
-        if matches!(
-            e.kind,
-            ExprKind::Subquery(_)
-                | ExprKind::Exists { .. }
-                | ExprKind::InSubquery { .. }
-                | ExprKind::InSubqueryMulti { .. }
-        ) {
-            found = true;
-        }
-    });
-    found
-}
-
-/// Visits `expr` and every sub-expression below it, outermost first.
-pub(crate) fn walk_subexprs(expr: &Expr, f: &mut impl FnMut(&Expr)) {
-    f(expr);
-    let mut recurse = |e: &Expr| walk_subexprs(e, f);
-    match &expr.kind {
-        ExprKind::Column { .. } | ExprKind::Literal(_) | ExprKind::Param(_) => {}
-        ExprKind::Paren(inner)
-        | ExprKind::Unary { expr: inner, .. }
-        | ExprKind::IsNull { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::Collate { expr: inner, .. }
-        | ExprKind::InSubquery { expr: inner, .. } => recurse(inner),
-        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
-            recurse(lhs);
-            recurse(rhs);
-        }
-        ExprKind::Between {
-            expr: inner,
-            lo,
-            hi,
-            ..
-        } => {
-            recurse(inner);
-            recurse(lo);
-            recurse(hi);
-        }
-        ExprKind::In {
-            expr: inner, list, ..
-        } => {
-            recurse(inner);
-            list.iter().for_each(recurse);
-        }
-        ExprKind::Like {
-            expr: inner,
-            pattern,
-            escape,
-            ..
-        } => {
-            recurse(inner);
-            recurse(pattern);
-            if let Some(escape) = escape {
-                recurse(escape);
-            }
-        }
-        ExprKind::Case {
-            operand,
-            whens,
-            else_,
-        } => {
-            if let Some(operand) = operand {
-                recurse(operand);
-            }
-            for (cond, result) in whens {
-                recurse(cond);
-                recurse(result);
-            }
-            if let Some(else_) = else_ {
-                recurse(else_);
-            }
-        }
-        ExprKind::FunctionCall { args, .. } => {
-            if let FunctionArgs::List(args) = args {
-                args.iter().for_each(recurse);
-            }
-        }
-        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().for_each(recurse),
-        ExprKind::Subquery(_) | ExprKind::Exists { .. } => {}
-    }
-}
-
-/// Builds `lhs AND rhs`.
-pub(crate) fn and_expr(lhs: Expr, rhs: Expr) -> Expr {
-    Expr {
-        kind: ExprKind::Binary {
-            op: BinaryOp::And,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
-        },
-        span: crate::parser::Span::UNKNOWN,
-    }
-}
-
-/// Test-only AST constructors.
-///
-/// These parse real SQL through the crate's only grammar rather than
-/// hand-building planner structs. Before #147 the tests had no choice
-/// but to build `expr::Query` literals, because no parser produced that
-/// type -- which meant they could assert on shapes the parser could
-/// never actually deliver. Parsing closes that gap.
-#[cfg(test)]
-#[allow(clippy::panic)]
-pub(crate) mod testutil {
-    use crate::parser::ast::{Expr, ResultColumn, Select};
-    use crate::parser::row::{parse_select, ParseOutcome};
-
-    /// Parses a complete `SELECT`, panicking with the parse failure if
-    /// `sql` does not parse.
-    pub(crate) fn select(sql: &str) -> Select {
-        match parse_select(sql) {
-            ParseOutcome::Accepted(select) => *select,
-            other => panic!("expected {sql:?} to parse as a SELECT, got {other:?}"),
-        }
-    }
-
-    /// Parses a bare expression, by parsing it as a one-column
-    /// `SELECT` list and taking that column back out.
-    pub(crate) fn expr(sql: &str) -> Expr {
-        let select = select(&format!("SELECT {sql} FROM t"));
-        match select.columns.into_iter().next() {
-            Some(ResultColumn::Expr { expr, .. }) => expr,
-            other => panic!("expected {sql:?} to parse as one expression, got {other:?}"),
-        }
-    }
-
-    /// Parses a complete `INSERT`.
-    pub(crate) fn insert(sql: &str) -> crate::parser::ast::Insert {
-        match crate::parser::row::parse_insert(sql) {
-            ParseOutcome::Accepted(insert) => *insert,
-            other => panic!("expected {sql:?} to parse as an INSERT, got {other:?}"),
-        }
-    }
-
-    /// Parses a complete `UPDATE`.
-    pub(crate) fn update(sql: &str) -> crate::parser::ast::Update {
-        match crate::parser::row::parse_update(sql) {
-            ParseOutcome::Accepted(update) => *update,
-            other => panic!("expected {sql:?} to parse as an UPDATE, got {other:?}"),
-        }
-    }
-
-    /// Parses a complete `DELETE`.
-    pub(crate) fn delete(sql: &str) -> crate::parser::ast::Delete {
-        match crate::parser::row::parse_delete(sql) {
-            ParseOutcome::Accepted(delete) => *delete,
-            other => panic!("expected {sql:?} to parse as a DELETE, got {other:?}"),
-        }
+    /// Claims an explicit `?NNN` parameter index, advancing
+    /// `next_param` past it so a later bare `?` doesn't collide.
+    pub(crate) fn numbered_param(&mut self, n: u32) -> u32 {
+        self.next_param = self.next_param.max(n);
+        n
     }
 }
 
@@ -929,355 +365,410 @@ pub(crate) fn p4_coll_seq(
     }
 }
 
-/// A single-table schema -- see this module's doc comment for why it
-/// isn't a real catalog yet. Grown to a superset of
-/// `db_storage::row::schema::TableSchema` by ADR 0012 (#205): callers
-/// populate every field below, but existing codegen only consults
-/// `column_collations`/`without_rowid`/`strict`/`is_virtual`/`sql` where
-/// noted -- most of it is carried, not yet acted on (`#175`, `#206`).
-#[derive(Debug, Clone, Default)]
-pub struct TableSchema {
-    /// Table name.
-    pub name: String,
-    /// Column names, in declaration order.
-    pub columns: Vec<String>,
-    /// Declared type string per column, parallel to `columns` -- used
-    /// only for [`crate::vm::row::affinity_of`]. A missing/short entry
-    /// is treated as no declared type (BLOB affinity).
-    pub column_types: Vec<String>,
-    /// Per-column collation, parallel to `columns`. A missing/short
-    /// entry is treated as `Collation::Binary`. Carried for ADR 0012;
-    /// not yet consulted by comparison codegen (`#206`).
-    pub column_collations: Vec<crate::value::Collation>,
-    /// The `INTEGER PRIMARY KEY` rowid-alias column, if any -- reading
-    /// it must emit `Opcode::Rowid` rather than `Opcode::Column` (see
-    /// [`value::emit_column_read`]'s doc comment).
-    pub rowid_alias: Option<usize>,
-    /// The table b-tree's root page (db-core#97's DDL/ANALYZE slice
-    /// needs this to bake root pages into `P4` at codegen time; the
-    /// expr-only slice from #91 never read it).
-    pub root_page: u32,
-    /// `CREATE TABLE ... WITHOUT ROWID`. Carried for ADR 0012; not yet
-    /// consulted by codegen (`#206`).
-    pub without_rowid: bool,
-    /// `CREATE TABLE ... STRICT`. Carried for ADR 0012; not yet
-    /// consulted by codegen (`#206`).
-    pub strict: bool,
-    /// Whether this is a virtual table. Carried for ADR 0012; not yet
-    /// consulted by codegen (`#206`).
-    pub is_virtual: bool,
-    /// The table's original `CREATE TABLE` SQL text. Carried for ADR
-    /// 0012; not yet consulted by codegen (`#206`).
-    pub sql: String,
-    /// Every index on this table (db-core#97/#96) -- maintained by
-    /// `INSERT`/`UPDATE`/`DELETE` codegen (see [`index_maintenance`]),
-    /// not yet consulted by any scan (that's `#94`'s index-scan
-    /// codegen, a separate ticket).
-    pub indexes: Vec<IndexSchema>,
+/// One table bound into a query's [`Scope`]: its cursor number, and the
+/// schema/alias used to resolve `table.column`/bare `column` references
+/// against it. Owns its `TableSchema` (a small, `Clone` metadata struct)
+/// rather than borrowing it — this crate's qualified subset (`make
+/// mvl-limit`) forbids explicit lifetimes in `src/`, so a borrowed
+/// `Scope<'a>` is not an option here.
+#[derive(Debug, Clone)]
+pub(crate) struct TableBinding {
+    /// The table's `AS alias`, if any. Once a table is aliased, SQLite
+    /// no longer accepts the real table name as a qualifier — `resolve`
+    /// preserves that: it matches `alias` when present, `name`
+    /// otherwise, never both.
+    pub(crate) alias: Option<String>,
+    pub(crate) name: String,
+    pub(crate) schema: crate::codegen::row::TableSchema,
+    pub(crate) cursor: i32,
+    /// #237's LEFT JOIN null-extension: when true, every column read
+    /// against this binding compiles to `Opcode::Null` instead of a
+    /// real `Column`/`Rowid` read against `cursor` — `cursor` may not
+    /// even hold a matching row (or any row at all) in that case. Set
+    /// by the join codegen's "no match found" branch; always `false`
+    /// for [`Scope::single`] and for an INNER/CROSS-joined table.
+    pub(crate) forced_null: bool,
+    /// This table's `ANALYZE` statistics (#461, spec 011/Req 4), empty
+    /// (the `Default`) when no caller has threaded real
+    /// `planner::load_stats` output through — `join_access::
+    /// choose_join_access` only ever *vetoes* a structurally-available
+    /// index seek using this, never invents one, so an empty `Stats`
+    /// (no `ANALYZE` has run, or the caller hasn't wired stats through
+    /// this particular codegen path yet) reproduces this ticket's
+    /// pre-#461 behavior exactly.
+    pub(crate) stats: crate::codegen::row::planner::Stats,
 }
 
-impl TableSchema {
-    /// The position of `name` in `columns` (case-insensitive), if present.
-    pub fn column_index(&self, name: &str) -> Option<usize> {
-        self.columns
-            .iter()
-            .position(|c| c.eq_ignore_ascii_case(name))
+impl TableBinding {
+    /// Whether `table` (a `Column` expression's optional qualifier)
+    /// names this binding — the alias when present, the bare table name
+    /// otherwise.
+    pub(crate) fn matches_qualifier(&self, table: &str) -> bool {
+        match &self.alias {
+            Some(alias) => alias.eq_ignore_ascii_case(table),
+            None => self.name.eq_ignore_ascii_case(table),
+        }
     }
 }
 
-/// An index descriptor: just enough for `ddl`/`analyze` (db-core#97) to
-/// bake index identity into `P4` at codegen time, and for
-/// `INSERT`/`UPDATE`/`DELETE` (db-core#96) to build/maintain its
-/// entries. Not a real catalog entry: no partial-index predicate. Grown
-/// to carry `unique` and per-column `desc`/`collation` by ADR 0012
-/// (#205); index-maintenance codegen still rejects `desc` columns
-/// loudly (no index b-tree comparator here is aware of sort direction
-/// yet -- `#206`).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct IndexSchema {
-    /// Index name.
-    pub name: String,
-    /// The index b-tree's root page.
-    pub root_page: u32,
-    /// Whether this is a UNIQUE index. Carried for ADR 0012; not yet
-    /// consulted by codegen (`#206`).
-    pub unique: bool,
-    /// Indexed columns, in key order.
-    pub columns: Vec<IndexedColumn>,
-}
-
-/// One column of an [`IndexSchema`], in key order.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct IndexedColumn {
-    /// Column name.
-    pub name: String,
-    /// `DESC` in the index definition. Carried for ADR 0012; index
-    /// maintenance/scan codegen here reject `true` (ascending-only,
-    /// see [`IndexSchema`]'s doc comment).
-    pub desc: bool,
-    /// Collation this index column sorts under. Carried for ADR 0012;
-    /// not yet consulted by codegen (`#206`).
-    pub collation: crate::value::Collation,
-}
-
-/// A view descriptor: just enough (name plus verbatim defining SQL) for
-/// [`subquery::views::resolve_views`]/[`subquery::views::expand_views`]
-/// (db-core#206) to re-parse and substitute a view reference in
-/// `FROM`/`JOIN` position. db-core's own copy, mirroring how
-/// [`TableSchema`] grew a superset by ADR 0012 rather than depending on
-/// `db_storage::row::schema::ViewSchema` (ADR 0008 forbids that
-/// dependency).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ViewSchema {
-    /// The view's name.
-    pub name: String,
-    /// The view's original `CREATE VIEW ... AS <select>` SQL text.
-    pub sql: String,
-}
-
-/// The table(s) a query's column references resolve against. Single-table
-/// queries never need to disambiguate: this module's own [`Scope`]
-/// resolves a column by bare name, not by the AST's `table`/`catalog`
-/// qualifier fields -- a qualified reference only ever arrives here as a
-/// `"table.column"`-shaped plain string. #102 grows
-/// this to an optional second (right-side) binding for a single equi-join,
-/// and #95 a `catalog`/`outer` pair for subqueries; full multi-table
-/// resolution (N-way joins) is still deferred to #101.
-#[derive(Debug, Clone)]
-pub struct Scope {
-    /// The primary (left-hand or only) table.
-    pub schema: TableSchema,
-    /// The cursor opened on `schema`.
-    pub cursor: i32,
-    /// The join's right-hand table, when this scope covers a join.
-    pub right: Option<(TableSchema, i32)>,
-    /// Every table a subquery nested in this scope may name in its own
-    /// `FROM` (db-core#95). Empty for a caller that wired its cursors up
-    /// by hand and has no subquery to resolve -- the same reason
-    /// sqlite-rs's `Scope` carries a catalog while db-core's didn't.
-    pub catalog: Vec<TableSchema>,
-    /// The enclosing query's scope, for a correlated subquery
-    /// (db-core#95): [`Scope::resolve`] falls back here for any
-    /// reference this scope's own tables don't resolve, which is all
-    /// correlation needs under materialization -- the outer cursor is
-    /// already positioned on the current row every time the inlined
-    /// subquery code runs.
-    pub outer: Option<Box<Scope>>,
+/// The set of tables a `FROM` clause's column references resolve
+/// against — one binding for a plain single-table `SELECT`, one per
+/// table for a join chain (#237). [`Scope::resolve`] is the single entry
+/// point `expr.rs` uses instead of the old `schema: &TableSchema, cursor:
+/// i32` parameter pair.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Scope {
+    pub(crate) tables: Vec<TableBinding>,
+    /// The full table catalog (#238), used only to resolve a subquery
+    /// expression's (`Subquery`/`Exists`/`InSubquery`) own `FROM` table
+    /// — a subquery may name a table that isn't part of the enclosing
+    /// query's own `FROM` clause at all, so `tables` above (the
+    /// enclosing scope's own bindings) isn't enough. Empty for every
+    /// caller that never compiles a subquery-bearing expression (most
+    /// of `delete.rs`/`insert.rs`/`update.rs`, and any `Scope::single`/
+    /// literal-construction call site that hasn't opted in via
+    /// [`Scope::with_catalog`]) — a subquery reached through one of
+    /// those compiles to `CodegenError::Unsupported` (no table found)
+    /// rather than silently resolving against the wrong catalog.
+    pub(crate) catalog: Vec<crate::codegen::row::TableSchema>,
+    /// A correlated subquery's enclosing scope (#238 follow-up): set on
+    /// the `Scope` built for a subquery's own `FROM` table(s) so
+    /// [`Scope::resolve`] can fall back to it once this scope's own
+    /// `tables` fails to resolve a reference. `None` for every ordinary
+    /// (non-subquery) scope. SQL's scoping rule — the subquery's own
+    /// tables shadow the enclosing query's, never the other way round —
+    /// falls out for free from trying `self.tables` first and `outer`
+    /// only on failure, rather than merging the two table lists.
+    pub(crate) outer: Option<Box<Scope>>,
+    /// #250's NATURAL/USING codegen: `dedup_star[i]` names the columns
+    /// (lowercased) that a plain `SELECT *` expansion must skip for
+    /// `tables[i]` — the right-hand side of a NATURAL/USING join
+    /// suppresses its copy of each shared column so only the left-most
+    /// table's value survives in `*` output, matching real SQLite.
+    /// Always a same-length-as-`tables` vec of empty sets outside a
+    /// joined query. `table.*` and explicit column references are
+    /// unaffected — this only gates the [`select::ResultColumn::Star`]
+    /// expansion path.
+    pub(crate) dedup_star: Vec<std::collections::HashSet<String>>,
+    /// Uncorrelated WHERE-clause subqueries hoisted out of the enclosing
+    /// single-table scan loop and materialized exactly once, before the
+    /// scan's `Rewind` (#306) — keyed by [`subquery::select_id`] of the
+    /// subquery's own `Select` AST node. `compile_cond`/`compile_value`'s
+    /// `InSubquery`/`Subquery` dispatch consult this map first, reading
+    /// the precomputed cursor/register instead of re-materializing the
+    /// subquery on every outer row. Empty (the default) for every scope
+    /// that isn't a single-table scan's own — a correlated subquery, or
+    /// one outside this pass's scope (see
+    /// [`subquery::hoist_uncorrelated_where_subqueries`]'s doc comment),
+    /// is simply never inserted, so its lookup misses and it falls
+    /// through to the unmodified per-row materialization path.
+    pub(crate) hoisted: std::rc::Rc<HashMap<usize, subquery::HoistedSubquery>>,
+    /// Correlated WHERE-clause scalar subqueries memoized against a
+    /// single-table scan's per-row correlated value (#314) — keyed by
+    /// [`subquery::select_id`], same shape as [`Scope::hoisted`] but for
+    /// the correlated case #306 explicitly left untouched (a correlated
+    /// subquery's result can differ per row, so it can't be
+    /// materialized once — but it *can* be cached per distinct value of
+    /// the one outer column it's correlated against, which is what
+    /// [`subquery::memoize_correlated_where_subqueries`] sets up).
+    /// Empty (the default) outside a single-table scan's own scope, or
+    /// for any correlated subquery whose shape falls outside that
+    /// pass's narrow recognition (see its own doc comment) — such a
+    /// subquery's lookup simply misses and it falls through to the
+    /// unmodified per-row [`subquery::compile_scalar_subquery`] path.
+    pub(crate) memoized: std::rc::Rc<HashMap<usize, subquery::MemoizedSubquery>>,
 }
 
 impl Scope {
-    /// A scope over exactly one table opened on `cursor`.
-    pub fn single(schema: TableSchema, cursor: i32) -> Self {
+    /// The single-table case — every pre-#237 call site's `schema`/
+    /// `cursor` pair, wrapped so `expr.rs`'s signatures can be uniform
+    /// over 1..N tables without duplicating codegen for the N=1 case.
+    pub(crate) fn single(schema: &crate::codegen::row::TableSchema, cursor: i32) -> Self {
         Scope {
-            schema,
-            cursor,
-            right: None,
+            tables: vec![TableBinding {
+                alias: None,
+                name: schema.name.clone(),
+                schema: schema.clone(),
+                cursor,
+                forced_null: false,
+                stats: crate::codegen::row::planner::Stats::default(),
+            }],
             catalog: Vec::new(),
             outer: None,
+            dedup_star: vec![std::collections::HashSet::new()],
+            hoisted: std::rc::Rc::default(),
+            memoized: std::rc::Rc::default(),
         }
     }
 
-    /// Sets the tables nested subqueries may name in their `FROM`.
-    pub fn with_catalog(mut self, catalog: Vec<TableSchema>) -> Self {
+    /// Attaches the full table catalog (#238) so subquery expressions
+    /// compiled against this scope can resolve their own `FROM` table
+    /// even when it isn't one of `tables` above.
+    pub(crate) fn with_catalog(mut self, catalog: Vec<crate::codegen::row::TableSchema>) -> Self {
         self.catalog = catalog;
         self
     }
 
-    /// Sets the enclosing scope for correlated-subquery resolution.
-    pub fn with_outer(mut self, outer: Scope) -> Self {
+    /// Marks this scope as a (possibly) correlated subquery's own scope,
+    /// with `outer` as the enclosing query's scope to fall back to —
+    /// see [`Scope::outer`]'s doc comment for the shadowing rule this
+    /// implements.
+    pub(crate) fn with_outer(mut self, outer: Scope) -> Self {
         self.outer = Some(Box::new(outer));
         self
     }
 
-    /// Looks `name` up in `catalog`, case-insensitively by table name.
-    pub fn catalog_table(&self, name: &str) -> Option<&TableSchema> {
-        self.catalog
-            .iter()
-            .find(|s| s.name.eq_ignore_ascii_case(name))
-    }
-
-    /// A scope over a single equi-join's two tables.
-    pub fn join(
-        schema: TableSchema,
-        cursor: i32,
-        right_schema: TableSchema,
-        right_cursor: i32,
+    /// Attaches a single-table scan's hoisted-uncorrelated-subquery map
+    /// (#306) — see [`Scope::hoisted`]'s doc comment.
+    pub(crate) fn with_hoisted(
+        mut self,
+        hoisted: std::rc::Rc<HashMap<usize, subquery::HoistedSubquery>>,
     ) -> Self {
-        Scope {
-            schema,
-            cursor,
-            right: Some((right_schema, right_cursor)),
-            catalog: Vec::new(),
-            outer: None,
-        }
+        self.hoisted = hoisted;
+        self
     }
 
-    /// Splits an optional `table.column` qualifier off `name`, mirroring
-    /// `codegen::batch::split_qualified`'s convention.
-    fn split_qualified(name: &str) -> (Option<&str>, &str) {
-        match name.split_once('.') {
-            Some((table, column)) => (Some(table), column),
-            None => (None, name),
-        }
+    /// Attaches a single-table scan's memoized-correlated-subquery map
+    /// (#314) — see [`Scope::memoized`]'s doc comment.
+    pub(crate) fn with_memoized(
+        mut self,
+        memoized: std::rc::Rc<HashMap<usize, subquery::MemoizedSubquery>>,
+    ) -> Self {
+        self.memoized = memoized;
+        self
     }
 
-    /// Resolves a (possibly `table.column`-qualified) column name to
-    /// `(cursor, column_index)`. Following `codegen::batch::compile_join`'s
-    /// established convention: an unqualified name always resolves to the
-    /// left/`FROM` table; reaching the right table's column requires an
-    /// explicit qualifier, sidestepping true ambiguity detection when both
-    /// tables share a column name.
-    pub fn resolve(&self, name: &str) -> Result<(i32, usize)> {
-        match self.resolve_local(name) {
-            Some(binding) => Ok(binding),
-            None => match &self.outer {
-                Some(outer) => outer.resolve(name),
-                None => Err(CodegenError::UnknownColumn(name.to_string())),
+    /// Resolves a `table.name`/bare `name` column reference to
+    /// `(cursor, column_index, schema, forced_null)`. `table: Some(_)`
+    /// matches the alias-or-name qualifier exactly (see
+    /// [`TableBinding::matches_qualifier`]); `table: None` searches
+    /// every binding and rejects more than one match as ambiguous —
+    /// SQLite's own rule for an unqualified column shared by two joined
+    /// tables. `forced_null` is [`TableBinding::forced_null`]'s value
+    /// for whichever binding resolved — see its doc comment.
+    ///
+    /// Tries this scope's own `tables` first; only on failure does it
+    /// fall back to `self.outer` (a correlated reference) if set — so a
+    /// name that resolves in both this scope and an enclosing one binds
+    /// to this scope, matching SQL's shadowing rule, and two same-named
+    /// columns split across this scope and `outer` are never reported
+    /// ambiguous (only same-scope ambiguity is, per the existing rule
+    /// below).
+    pub(crate) fn resolve(
+        &self,
+        table: Option<&str>,
+        name: &str,
+    ) -> Result<(i32, usize, &crate::codegen::row::TableSchema, bool), select::CodegenError> {
+        match self.resolve_own(table, name) {
+            Ok(v) => Ok(v),
+            Err(own_err) => match &self.outer {
+                Some(outer) => outer.resolve(table, name),
+                None => Err(own_err),
             },
         }
     }
 
-    /// Resolves against this scope's own table(s) only, without the
-    /// [`Scope::outer`] fallback. A qualifier naming neither of this
-    /// scope's tables resolves to nothing here rather than being
-    /// stripped and matched against the left table anyway -- that's what
-    /// lets a correlated `WHERE inner.x = outer.x` reach the enclosing
-    /// scope even when both tables happen to have an `x`.
-    fn resolve_local(&self, name: &str) -> Option<(i32, usize)> {
-        let (qualifier, col) = Self::split_qualified(name);
-        if let (Some(q), Some((right_schema, right_cursor))) = (qualifier, &self.right) {
-            if q.eq_ignore_ascii_case(&right_schema.name) {
-                return right_schema
-                    .column_index(col)
-                    .map(|idx| (*right_cursor, idx));
+    fn resolve_own(
+        &self,
+        table: Option<&str>,
+        name: &str,
+    ) -> Result<(i32, usize, &crate::codegen::row::TableSchema, bool), select::CodegenError> {
+        let binding_idx = self.resolve_own_binding_index(table, name)?;
+        let binding =
+            self.tables
+                .get(binding_idx)
+                .ok_or_else(|| select::CodegenError::UnknownColumn {
+                    name: name.to_string(),
+                })?;
+        let idx = expr::column_index(&binding.schema, name).unwrap_or(0);
+        Ok((binding.cursor, idx, &binding.schema, binding.forced_null))
+    }
+
+    /// The qualifier-match-or-ambiguity rule behind [`Scope::resolve_own`]:
+    /// `table: Some(_)` matches the alias-or-name qualifier exactly
+    /// against `self.tables` (see [`TableBinding::matches_qualifier`]);
+    /// `table: None` searches every binding and rejects more than one
+    /// match as ambiguous. Returns the matching binding's *position*
+    /// within `self.tables` rather than its `cursor` — needed by callers
+    /// (e.g. `select/join_access.rs::resolve_scope_column`) that must
+    /// compute an offset into a flat, all-bindings-concatenated row
+    /// rather than read through a per-binding cursor.
+    pub(crate) fn resolve_own_binding_index(
+        &self,
+        table: Option<&str>,
+        name: &str,
+    ) -> Result<usize, select::CodegenError> {
+        if let Some(table) = table {
+            let idx = self
+                .tables
+                .iter()
+                .position(|b| b.matches_qualifier(table))
+                .ok_or_else(|| select::CodegenError::UnknownColumn {
+                    name: format!("{table}.{name}"),
+                })?;
+            let binding =
+                self.tables
+                    .get(idx)
+                    .ok_or_else(|| select::CodegenError::UnknownColumn {
+                        name: format!("{table}.{name}"),
+                    })?;
+            expr::column_index(&binding.schema, name).ok_or_else(|| {
+                select::CodegenError::UnknownColumn {
+                    name: format!("{table}.{name}"),
+                }
+            })?;
+            return Ok(idx);
+        }
+        let mut found: Option<usize> = None;
+        for (i, binding) in self.tables.iter().enumerate() {
+            if expr::column_index(&binding.schema, name).is_some() {
+                if found.is_some() {
+                    return Err(select::CodegenError::AmbiguousColumn {
+                        name: name.to_string(),
+                    });
+                }
+                found = Some(i);
             }
         }
-        if let Some(q) = qualifier {
-            if self.outer.is_some() && !q.eq_ignore_ascii_case(&self.schema.name) {
-                return None;
-            }
-        }
-        self.schema.column_index(col).map(|idx| (self.cursor, idx))
+        found.ok_or_else(|| select::CodegenError::UnknownColumn {
+            name: name.to_string(),
+        })
     }
 }
 
-#[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
-mod tests {
-    use super::*;
+/// A table's schema as codegen sees it -- the same shape as
+/// `db_storage::row::schema::TableSchema` (ADR 0012 keeps the two in
+/// lock-step, field for field, because db-core may not depend on
+/// db-storage -- ADR 0008). Callers build it by literal construction or
+/// convert from db-storage's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TableSchema {
+    /// The table's name.
+    pub name: String,
+    /// The table's b-tree root page (`sqlite_master.rootpage`).
+    pub root_page: u32,
+    /// Column names, in declared order.
+    pub columns: Vec<String>,
+    /// Whether the table was declared `WITHOUT ROWID`.
+    pub without_rowid: bool,
+    /// Whether the table was declared `STRICT`.
+    pub strict: bool,
+    /// Each column's declared type text, position-for-position with
+    /// `columns` (empty string when a column has none) -- what
+    /// [`crate::vm::row::affinity_of`] derives column affinity from.
+    pub column_types: Vec<String>,
+    /// Each column's declared `COLLATE` (default `Collation::Binary`
+    /// when absent), position-for-position with `columns`.
+    pub column_collations: Vec<crate::value::Collation>,
+    /// `CREATE VIRTUAL TABLE ...`: `columns` is empty and `root_page`
+    /// is `0`.
+    pub is_virtual: bool,
+    /// The verbatim `CREATE TABLE` statement text.
+    pub sql: String,
+    /// Every `CREATE INDEX`/`CREATE UNIQUE INDEX` on this table.
+    pub indexes: Vec<IndexSchema>,
+    /// The rowid-alias column index (0-based into `columns`) -- SQLite's
+    /// single-`INTEGER PRIMARY KEY` special case. Codegen reads this
+    /// field per column reference, so it is a field, not a re-parse of
+    /// `sql` on every call.
+    pub rowid_alias: Option<usize>,
+}
 
-    #[test]
-    fn emitter_resolves_forward_jump() {
-        let mut em = Emitter::new();
-        let label = em.new_label();
-        let addr = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-        em.patch_p2(addr, label);
-        em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
-        em.place(label);
-        let program = em.finish();
-        assert_eq!(program.instructions[0].p2, 2);
-    }
-
-    #[test]
-    fn cond_targets_negate_flips_null_target() {
-        let true_label = Label(0);
-        let false_label = Label(1);
-        let targets =
-            CondTargets::null_is_false(Target::Jump(true_label), Target::Jump(false_label));
-        let negated = targets.negate();
-        assert_eq!(negated.on_null, NullTarget::True);
-        assert!(matches!(negated.on_true, Target::Jump(l) if l == false_label));
-        assert!(matches!(negated.on_false, Target::Jump(l) if l == true_label));
-    }
-
-    #[test]
-    fn reg_alloc_hands_out_increasing_registers() {
-        let mut reg = RegAlloc::new();
-        assert_eq!(reg.alloc(), 0);
-        assert_eq!(reg.alloc(), 1);
-        assert_eq!(reg.peek(), 2);
-    }
-
-    #[test]
-    fn scope_resolves_known_column_and_rejects_unknown() {
-        let schema = TableSchema {
-            name: "t".into(),
-            columns: vec!["a".into(), "b".into()],
-            column_types: vec![String::new(), String::new()],
-            rowid_alias: None,
-            root_page: 0,
-            indexes: vec![],
-            ..Default::default()
+impl TableSchema {
+    /// Recomputes [`TableSchema::rowid_alias`] from `sql`/`without_rowid`
+    /// -- for callers (tests, synthetic schemas) that build a
+    /// `TableSchema` literal by hand instead of decoding one from
+    /// `sqlite_master`. Unlike db-storage's string-scanning original,
+    /// this one asks the crate's own parser: a column-level `INTEGER
+    /// PRIMARY KEY`, or a table-level `PRIMARY KEY(c)` naming the one and
+    /// only column when that column is `INTEGER`-typed. Unparseable SQL
+    /// yields `None`.
+    #[must_use]
+    pub fn with_computed_rowid_alias(mut self) -> Self {
+        self.rowid_alias = if self.is_virtual || self.without_rowid {
+            None
+        } else {
+            rowid_alias_from_sql(&self.sql)
         };
-        let scope = Scope::single(schema, 3);
-        assert_eq!(scope.resolve("b"), Ok((3, 1)));
-        assert_eq!(scope.resolve("B"), Ok((3, 1)));
-        assert_eq!(
-            scope.resolve("z"),
-            Err(CodegenError::UnknownColumn("z".to_string()))
-        );
+        self
     }
+}
 
-    /// A single-table scope named `name` whose only column is `x`, so a
-    /// column shared between an inner and an outer scope can only be
-    /// told apart by its qualifier.
-    fn scope_named(name: &str, cursor: i32) -> Scope {
-        Scope::single(
-            TableSchema {
-                name: name.into(),
-                columns: vec!["x".into()],
-                column_types: vec![String::new()],
-                rowid_alias: None,
-                root_page: 0,
-                indexes: vec![],
-                ..Default::default()
-            },
-            cursor,
-        )
-    }
+fn rowid_alias_from_sql(sql: &str) -> Option<usize> {
+    use crate::parser::ast::{ColumnConstraint, ExprKind, TableConstraint};
+    use crate::parser::row::error::ParseOutcome;
 
-    /// MC/DC vector (obligation `mod_1077`, `Scope::resolve_local`'s
-    /// "foreign qualifier under an enclosing scope" guard): both leaves
-    /// true -- the scope has an outer and the qualifier names a table
-    /// other than its own, so the local lookup yields nothing and
-    /// `resolve` reaches the enclosing scope's cursor instead.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__row_1093__v1_foreign_qualifier_with_outer_defers_to_outer() {
-        let scope = scope_named("inner", 1).with_outer(scope_named("outer", 7));
-        assert_eq!(scope.resolve_local("outer.x"), None);
-        assert_eq!(scope.resolve("outer.x"), Ok((7, 0)));
+    let create = match crate::parser::row::parse_create_table(sql) {
+        ParseOutcome::Accepted(create) => *create,
+        _ => return None,
+    };
+    if create.without_rowid {
+        return None;
     }
+    let is_integer = |def: &crate::parser::ast::ColumnDef| {
+        def.type_name
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case("INTEGER"))
+    };
+    for (idx, def) in create.columns.iter().enumerate() {
+        let inline_pk = def
+            .constraints
+            .iter()
+            .any(|c| matches!(c, ColumnConstraint::PrimaryKey { .. }));
+        if inline_pk && is_integer(def) {
+            return Some(idx);
+        }
+    }
+    if let [only] = create.columns.as_slice() {
+        if is_integer(only) {
+            let named = create.constraints.iter().any(|c| match c {
+                TableConstraint::PrimaryKey(cols) => match cols.as_slice() {
+                    [col] => matches!(&col.expr.kind, ExprKind::Column { name, .. } if name.eq_ignore_ascii_case(&only.name)),
+                    _ => false,
+                },
+                _ => false,
+            });
+            if named {
+                return Some(0);
+            }
+        }
+    }
+    None
+}
 
-    /// MC/DC vector (obligation `mod_1077`): leaf B (qualifier differs
-    /// from own name) false while leaf A (outer present) stays true --
-    /// the qualifier is the scope's own table, so it resolves locally.
-    /// Pairs against
-    /// `mcdc__row_1093__v1_foreign_qualifier_with_outer_defers_to_outer`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__row_1093__v2_own_qualifier_with_outer_resolves_locally() {
-        let scope = scope_named("inner", 1).with_outer(scope_named("outer", 7));
-        assert_eq!(scope.resolve_local("INNER.x"), Some((1, 0)));
-        assert_eq!(scope.resolve("inner.x"), Ok((1, 0)));
-    }
+/// A `CREATE INDEX` entry, same shape as
+/// `db_storage::row::schema::IndexSchema` (ADR 0012).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IndexSchema {
+    /// The index's name.
+    pub name: String,
+    /// Whether the index was declared `UNIQUE`.
+    pub unique: bool,
+    /// The indexed columns, in declared key order.
+    pub columns: Vec<IndexedColumn>,
+    /// The index b-tree's root page (`sqlite_master.rootpage`).
+    pub root_page: u32,
+}
 
-    /// MC/DC vector (obligation `mod_1077`): leaf A (outer present) false
-    /// while leaf B (foreign qualifier) stays true -- with no enclosing
-    /// scope the qualifier is stripped and the column still resolves
-    /// against this scope's own table. Pairs against
-    /// `mcdc__row_1093__v1_foreign_qualifier_with_outer_defers_to_outer`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__row_1093__v3_foreign_qualifier_without_outer_resolves_locally() {
-        let scope = scope_named("inner", 1);
-        assert_eq!(scope.resolve_local("other.x"), Some((1, 0)));
-        assert_eq!(scope.resolve("other.x"), Ok((1, 0)));
-    }
+/// One column (or expression, kept as raw text) in an index's key.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IndexedColumn {
+    /// The column's (unquoted) name, or raw expression text for an
+    /// expression index.
+    pub name: String,
+    /// Whether this key part is sorted `DESC`.
+    pub desc: bool,
+    /// The key part's declared `COLLATE` (default `Collation::Binary`).
+    pub collation: crate::value::Collation,
+}
+
+/// A `CREATE VIEW` entry, same shape as
+/// `db_storage::row::schema::ViewSchema` (ADR 0012): kept as verbatim
+/// SQL and re-parsed by [`subquery::resolve_views`] on demand.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ViewSchema {
+    /// The view's name.
+    pub name: String,
+    /// The verbatim `CREATE VIEW ...` source text.
+    pub sql: String,
 }

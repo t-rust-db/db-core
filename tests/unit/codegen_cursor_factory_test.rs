@@ -114,12 +114,13 @@ fn schema(name: &str, root_page: u32, columns: &[&str]) -> TableSchema {
         columns: columns.iter().map(|c| (*c).to_string()).collect(),
         column_types: columns.iter().map(|_| String::new()).collect(),
         root_page,
+        sql: format!("CREATE TABLE {name} ({})", columns.join(", ")),
         ..Default::default()
     }
 }
 
 fn run(vm: &mut Vm, sql: &str, schemas: &[TableSchema]) -> Vec<Vec<Value>> {
-    let program = compile_statement(sql, schemas).unwrap();
+    let program = compile_statement(sql, schemas, &[]).unwrap();
     execute(vm, &program).unwrap()
 }
 

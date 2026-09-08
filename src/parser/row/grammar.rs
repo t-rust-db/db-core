@@ -3175,4 +3175,41 @@ mod tests {
             );
         }
     }
+
+    /// db-core#219 tagged MC/DC vectors (obligation `grammar_2391`, the
+    /// `FunctionTail` elision `filter.is_none() && over.is_none()`).
+    #[allow(clippy::panic, clippy::indexing_slicing)]
+    fn function_tail_of(sql: &str) -> Option<Box<FunctionTail>> {
+        let select = match crate::parser::row::parse_select(sql) {
+            crate::parser::row::ParseOutcome::Accepted(select) => *select,
+            other => panic!("{sql:?} must parse, got {other:?}"),
+        };
+        match &select.columns[0] {
+            ResultColumn::Expr { expr, .. } => match &expr.kind {
+                ExprKind::FunctionCall { tail, .. } => tail.clone(),
+                other => panic!("expected a function call, got {other:?}"),
+            },
+            other => panic!("expected an expression column, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__grammar_2391__v1_no_filter_no_over_elides_the_tail() {
+        assert!(function_tail_of("SELECT abs(x) FROM t").is_none());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__grammar_2391__v2_filter_alone_keeps_the_tail() {
+        let tail = function_tail_of("SELECT count(x) FILTER (WHERE x > 1) FROM t").unwrap();
+        assert!(tail.filter.is_some() && tail.over.is_none());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__grammar_2391__v3_over_alone_keeps_the_tail() {
+        let tail = function_tail_of("SELECT row_number() OVER (ORDER BY x) FROM t").unwrap();
+        assert!(tail.filter.is_none() && tail.over.is_some());
+    }
 }

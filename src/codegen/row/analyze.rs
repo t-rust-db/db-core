@@ -1,25 +1,30 @@
-//! `Analyze` AST -> `Program` compilation (db-core#97, ported from
-//! sqlite-rs's `src/codegen/analyze.rs`). Like [`super::ddl`]'s
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! `Analyze` AST -> `Program` compilation (#461, spec 011). Like
 //! `CreateTable`/`CreateIndex`, a single `Opcode::Analyze` instruction
 //! does the whole job procedurally at exec time (scan each target
 //! table/index, replace its `sqlite_stat1` rows) rather than a
-//! decomposed cursor-driven sequence -- every target table's root page
+//! decomposed cursor-driven sequence — every target table's root page
 //! and its indexes' names/root pages are baked into `P4::Analyze` here,
 //! at codegen time, from the schema catalog. Which table(s) `targets`
-//! names (bare `ANALYZE` vs `ANALYZE table-name`) is the caller's job --
-//! [`super::dispatch`] resolves the AST's `target: Option<String>`
-//! against the schema catalog before calling this function.
+//! names (bare `ANALYZE` vs `ANALYZE table-name`, and the "unknown
+//! table"/"is that name an index?" resolution spec 011/Req 1 requires)
+//! is the caller's job — `src/codegen/dispatch.rs` resolves the AST's
+//! `target: Option<String>` against the schema catalog before calling
+//! this function, the same way it resolves `INSERT`/`UPDATE`/`DELETE`'s
+//! target table name.
 
+use crate::codegen::row::select::CodegenError;
+use crate::codegen::row::Emitter;
+use crate::codegen::row::TableSchema;
 use crate::vm::row::{AnalyzeIndexTarget, AnalyzeTarget, Instruction, Opcode, Program, P4};
-
-use super::{Emitter, TableSchema};
 
 /// Compiles `ANALYZE` (or `ANALYZE table-name`) into a single-instruction
 /// `Program` that replaces `sqlite_stat1` rows for every table in
 /// `targets` (and their indexes) at exec time. See the module doc for why
 /// this bakes root pages/names in at codegen time instead of a
 /// cursor-driven sequence.
-pub fn compile_analyze(targets: &[&TableSchema]) -> Program {
+pub fn compile_analyze(targets: &[&TableSchema]) -> Result<Program, CodegenError> {
     let targets: Vec<AnalyzeTarget> = targets
         .iter()
         .map(|schema| AnalyzeTarget {
@@ -50,7 +55,7 @@ pub fn compile_analyze(targets: &[&TableSchema]) -> Program {
         P4::Analyze { targets },
     ));
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
-    em.finish()
+    Ok(em.finish())
 }
 
 #[cfg(test)]
@@ -65,17 +70,22 @@ mod tests {
             name: name.to_string(),
             root_page,
             columns: vec!["a".to_string()],
+            without_rowid: false,
+            strict: false,
             column_types: vec![String::new()],
-            rowid_alias: None,
+            column_collations: vec![],
+            is_virtual: false,
+            sql: format!("CREATE TABLE {name}(a)"),
             indexes,
-            ..Default::default()
+            rowid_alias: None,
         }
+        .with_computed_rowid_alias()
     }
 
     #[test]
     fn compiles_to_init_analyze_halt() {
         let t = table("t", 2, vec![]);
-        let program = compile_analyze(&[&t]);
+        let program = compile_analyze(&[&t]).unwrap();
 
         let opcodes: Vec<Opcode> = program.instructions.iter().map(|i| i.opcode).collect();
         assert_eq!(opcodes, vec![Opcode::Init, Opcode::Analyze, Opcode::Halt]);
@@ -93,12 +103,12 @@ mod tests {
     fn bakes_every_index_on_the_target_table() {
         let idx = IndexSchema {
             name: "idx_a".to_string(),
-            root_page: 3,
-            unique: false,
+            unique: true,
             columns: vec![],
+            root_page: 3,
         };
         let t = table("t", 2, vec![idx]);
-        let program = compile_analyze(&[&t]);
+        let program = compile_analyze(&[&t]).unwrap();
 
         match &program.instructions[1].p4 {
             P4::Analyze { targets } => {

@@ -1,67 +1,98 @@
-//! Subquery codegen (db-core#95) -- ported from sqlite-rs's
-//! `src/codegen/subquery.rs` and its `subquery/{scalar,from_clause,
-//! flatten,pushdown}.rs`.
-//!
-//! Materialization only (no coroutines), exactly like the reference:
-//! each subquery occurrence opens its own table cursor (and, for `IN`
-//! and a `FROM`-subquery, an ephemeral one) via
-//! [`super::RegAlloc::alloc_cursor`], compiles the inner `SELECT`'s own
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! Subquery-expression codegen (#238, plus the correlated-subquery
+//! follow-up): scalar subqueries (`(SELECT ...)`), `IN (SELECT ...)`/
+//! `NOT IN (SELECT ...)`, and `EXISTS (SELECT ...)`/`NOT EXISTS
+//! (SELECT ...)`. Materialization only (no coroutines) — each subquery
+//! occurrence opens its own table cursor (and, for `IN`, an ephemeral
+//! index to hold the materialized result column) via
+//! [`RegAlloc::alloc_cursor`], compiles the inner `SELECT`'s own
 //! single-table scan inline into the enclosing instruction stream, and
-//! either tests row existence ([`scalar::compile_exists`]), tests row
-//! membership ([`scalar::compile_in_subquery`]), or populates a scannable
-//! ephemeral table ([`from_clause::materialize_from_subquery`]).
+//! either captures its first row's leading column (scalar subquery) or
+//! tests row existence (`EXISTS`) or row membership (`IN`).
 //!
-//! Correlation works for free under materialization: the subquery's own
-//! [`super::Scope`] is built with [`super::Scope::with_outer`] pointing
-//! at the enclosing scope, so [`super::Scope::resolve`] falls back there
-//! for any reference the subquery's own table doesn't resolve. Because
-//! the whole `compile_*` call is inlined at the point the subquery
-//! expression is evaluated (once per outer row), the outer cursor is
-//! already positioned on the current row every time this code runs.
+//! Correlation (a column reference inside the subquery that resolves
+//! against the *enclosing* query's scope rather than the subquery's
+//! own) works for free under materialization: the subquery's own
+//! `Scope` is built with [`Scope::with_outer`] pointing at the
+//! enclosing scope, so [`Scope::resolve`] falls back there for any
+//! reference the subquery's own tables don't resolve. Because this
+//! whole `compile_*` call is inlined at the exact point the subquery
+//! expression is evaluated (once per outer row, for a subquery inside
+//! a `WHERE`/result-column expression), the outer table's cursor is
+//! already correctly positioned on the current row every time this
+//! code runs — no coroutine or per-row re-invocation machinery needed.
 //!
-//! **Scoped down from the reference**, in each case because this module
-//! doesn't yet compile the input, not because the AST can't express it
-//! (`parser::ast::ExprKind` already has `Subquery`/`InSubqueryMulti`
-//! variants for both of these):
+//! Deliberately out of scope for this pass (see the doc comments on
+//! each `compile_*` function below for the exact rejection): `ANY`/
+//! `ALL`/`SOME`, and a scalar/`IN`/`EXISTS` subquery-*expression* whose
+//! own `FROM` has a `JOIN` (unlike a `FROM`-*subquery*'s own `FROM`
+//! having a JOIN, which [`materialize_from_subquery`] (#257) does
+//! support). Multi-column `IN` (`(a, b) IN (SELECT ...)`) landed in #251
+//! as [`compile_in_subquery_multi`] — it reuses the same ephemeral-index
+//! machinery as [`compile_in_subquery`], generalized from a
+//! single-register key to a contiguous register range (`Found`/
+//! `IdxInsert`'s `P4::Int` key-column-count already supported N > 1).
 //!
-//! - **Multi-column `IN`** (`compile_in_subquery_multi`,
-//!   `ast::ExprKind::InSubqueryMulti`) isn't compiled here yet -- only
-//!   the single-column `ExprKind::InSubquery` form is.
-//! - **The `SeekRowid`/`SeekIndexEq` point-lookup fast path** the
-//!   reference takes for a correlated equality (its `choose_join_access`)
-//!   needs the join-access chooser db-core defers to #117 along with
-//!   `planner::Stats`; both `compile_exists` and `compile_in_subquery`
-//!   here always compile the plain `Rewind`/`Next` scan the reference
-//!   falls back to.
-//! - **`hoist_uncorrelated_where_subqueries` (the reference's
-//!   `correlation.rs`) and `memoize.rs`** both key a per-statement cache
-//!   off `Scope`, which db-core's `Scope` (cloned per nesting level, not
-//!   threaded as one mutable pass) has no place to hold. Both are pure
-//!   optimizations over the codegen here, so they are deferred rather
-//!   than scoped down.
-//! - **Views** are not ported -- nothing in this crate represents a
-//!   stored view definition today, unlike a `WITH`-clause CTE (which
-//!   [`cte::expand_with_clause`] now does port -- db-core#143).
-//!
-//! [`flatten`] and [`pushdown`] are AST rewrites rather than codegen, and
-//! are ported at db-core's own scope: a single `FROM` item, no aliasing
-//! beyond the subquery's own mandatory one. The reference's multi-way
-//! join-tree cases (pushing into a `JOIN`ed subquery, flattening one of
-//! N `FROM` items) have no counterpart while `Query.from` holds exactly
-//! one item.
+//! Split (#339, follow-up to #273/#329) into [`from_clause`]
+//! (`FROM`-subquery schema resolution/materialization), [`scalar`]
+//! (scalar/`EXISTS`/`IN` subquery-expression compilation), [`correlation`]
+//! (correlation detection and #306's uncorrelated-subquery hoist), and
+//! [`memoize`] (#314's per-probe-value memoization cache for correlated
+//! scalar subqueries).
 
-pub mod compound;
-pub mod cte;
-pub mod flatten;
-pub mod from_clause;
-pub mod pushdown;
-pub mod scalar;
-pub mod views;
+mod correlation;
+mod cte;
+mod flatten;
+mod from_clause;
+mod memoize;
+mod pushdown;
+mod scalar;
+mod views;
 
-pub use compound::compile_compound_select;
+use crate::parser::ast::Select;
+
 pub use cte::expand_with_clause;
-pub use flatten::flatten_from_subquery;
-pub use from_clause::{materialize_from_subquery, resolve_from_table_schema};
+pub use flatten::flatten_from_subqueries;
+pub use from_clause::resolve_from_table_schema;
 pub use pushdown::push_down_where_predicates;
-pub use scalar::{compile_exists, compile_in_subquery, compile_scalar_subquery};
-pub use views::{expand_views, resolve_views, ResolvedView};
+pub use views::{resolve_views, ExpandViews, ResolvedView};
+
+pub(crate) use correlation::hoist_uncorrelated_where_subqueries;
+pub(crate) use from_clause::materialize_from_subquery;
+pub(crate) use memoize::{compile_memoized_scalar_subquery, memoize_correlated_where_subqueries};
+pub(crate) use scalar::{
+    compile_exists, compile_in_subquery, compile_in_subquery_multi, compile_scalar_subquery,
+};
+
+/// Identifies a subquery's own `Select` AST node by pointer identity —
+/// stable for the lifetime of a single compile pass, since no codegen
+/// step clones a `Select`/`Expr` tree once parsing has produced it. Used
+/// to key [`Scope::hoisted`] (#306): the same `Select` reference reached
+/// once (to hoist/materialize it before the enclosing scan's `Rewind`)
+/// and later, per outer row (from `compile_cond`/`compile_value`'s
+/// `InSubquery`/`Subquery` dispatch), must resolve to the same map key.
+pub(crate) fn select_id(select: &Select) -> usize {
+    std::ptr::from_ref(select) as usize
+}
+
+/// What a hoisted (materialized-once-before-the-scan) WHERE-clause
+/// subquery (#306) precomputed, stashed in [`Scope::hoisted`]: a scalar
+/// subquery's already-populated result register, or an uncorrelated
+/// `IN`-subquery's already-built ephemeral membership index's cursor.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum HoistedSubquery {
+    Scalar { reg: i32 },
+    In { eph_cursor: i32 },
+}
+
+/// A correlated scalar subquery memoized against a single outer column
+/// (#314): `cache_cursor` is a table-mode `OpenEphemeral` cursor holding
+/// one `(probe_value, result)` row per distinct value of `probe_column`
+/// seen so far, opened once before the enclosing scan's `Rewind`. See
+/// [`memoize::memoize_correlated_where_subqueries`].
+#[derive(Debug, Clone)]
+pub(crate) struct MemoizedSubquery {
+    pub(crate) cache_cursor: i32,
+    pub(crate) probe_column: String,
+}

@@ -2248,7 +2248,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_839__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__batch_935__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query);
         let (body, ..) = program.split_finalize();
@@ -2259,7 +2259,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_839__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__batch_935__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query);
         let (body, ..) = program.split_finalize();
@@ -2270,7 +2270,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_839__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__batch_935__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query);
         let (body, ..) = program.split_finalize();
@@ -2283,7 +2283,7 @@ mod tests {
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_879__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__batch_975__v1_group_by_without_agg_column_merges_partial_aggregates() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query);
         let fin = program.instructions.last().unwrap();
@@ -2293,7 +2293,7 @@ mod tests {
     /// MC/DC vector (obligation `batch_879`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_879__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__batch_975__v2_agg_column_without_group_by_merges_partial_aggregates() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query);
         let fin = program.instructions.last().unwrap();
@@ -2304,7 +2304,7 @@ mod tests {
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_879__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__batch_975__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query);
         let fin = program.instructions.last().unwrap();

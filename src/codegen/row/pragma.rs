@@ -1,24 +1,25 @@
-//! `Pragma` AST -> `Program` compilation (db-core#97, ported from
-//! sqlite-rs's `src/codegen/pragma.rs`): `journal_mode`,
-//! `integrity_check`/`quick_check`, and `synchronous`. Mirrors
-//! [`super::transaction`]'s shape: one control opcode per pragma,
-//! operands carrying whatever the executor needs.
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! `Pragma` AST -> `Program` compilation: `journal_mode` (#388),
+//! `integrity_check`/`quick_check` (#540, #541), and `synchronous`
+//! (#645). Mirrors `src/codegen/transaction.rs`'s shape: one control
+//! opcode per pragma, operands carrying whatever the executor needs.
 
+use crate::codegen::row::Emitter;
 use crate::parser::ast::{Pragma, PragmaJournalMode, PragmaSynchronous};
 use crate::vm::row::{
     Instruction, Opcode, Program, JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, SYNCHRONOUS_FULL,
     SYNCHRONOUS_NORMAL, SYNCHRONOUS_OFF, SYNCHRONOUS_QUERY,
 };
 
-use super::Emitter;
-
 /// Compiles a `PRAGMA` statement into an `Init -> <op> -> Halt` program.
-/// `journal_mode` emits `SetJournalMode` (`p1` carries the target mode,
+/// `journal_mode` emits `SetJournalMode` (`P1` carries the target mode,
 /// no result rows); `integrity_check`/`quick_check` emit
-/// `IntegrityCheck` (`p1` = 1 for the `quick_check` reduced pass, 0 for
-/// the full `integrity_check`); `synchronous` emits `Synchronous` (`p1`
-/// carries the target level, or [`SYNCHRONOUS_QUERY`] for the bare
-/// query form).
+/// `IntegrityCheck` (`P1` = 1 for the `quick_check` reduced pass, 0 for
+/// the full `integrity_check`), which produces a result set of `TEXT`
+/// rows; `synchronous` emits `Synchronous` (`P1` carries the target
+/// level, or `SYNCHRONOUS_QUERY` for the bare query form, which
+/// produces a single `INTEGER` result row instead of a side effect).
 pub fn compile_pragma(pragma: &Pragma) -> Program {
     let mut em = Emitter::new();
     let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
