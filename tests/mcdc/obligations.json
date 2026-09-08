@@ -675,45 +675,45 @@
     "compiler_void": false
   },
   {
-    "id": "functions_690",
+    "id": "functions_711",
     "file": "src/functions.rs",
-    "line": 690,
+    "line": 711,
     "decision": "match (name.to_ascii_lowercase().as_str(), arity) {\n        (\"length\", 1) => Some(length),\n        (\"upper\", 1) => Some(upper),\n        (\"lower\", 1) => Some(lower),\n        (\"abs\", 1) => Some(abs),\n        (\"coalesce\", n) if n >= 2 => Some(coalesce),\n        (\"ifnull\", 2) => Some(coalesce),\n        (\"nullif\", 2) => Some(nullif),\n        (\"typeof\", 1) => Some(typeof_fn),\n        (\"sqlite_version\", 0) => Some(sqlite_version),\n        (\"hex\", 1) => Some(hex),\n        (\"unhex\", 1) => Some(unhex),\n        (\"quote\", 1) => Some(quote),\n        (\"min\", n) if n >= 1 => Some(scalar_min),\n        (\"max\", n) if n >= 1 => Some(scalar_max),\n        (\"round\", 1 | 2) => Some(round_fn),\n        (\"sign\", 1) => Some(sign),\n        (\"instr\", 2) => Some(instr),\n        (\"zeroblob\", 1) => Some(zeroblob),\n        (\"iif\", 3) => Some(iif),\n        (\"substr\", 2 | 3) => Some(substr),\n        (\"trim\", 1 | 2) => Some(trim_fn),\n        (\"ltrim\", 1 | 2) => Some(ltrim_fn),\n        (\"rtrim\", 1 | 2) => Some(rtrim_fn),\n        (\"replace\", 3) => Some(replace_fn),\n        (\"like\", 2 | 3) => Some(like_fn),\n        (\"glob\", 2) => Some(glob_fn),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "functions_695",
+    "id": "functions_716",
     "file": "src/functions.rs",
-    "line": 695,
+    "line": 716,
     "decision": "n >= 2",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "functions_703",
+    "id": "functions_724",
     "file": "src/functions.rs",
-    "line": 703,
+    "line": 724,
     "decision": "n >= 1",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "functions_704",
+    "id": "functions_725",
     "file": "src/functions.rs",
-    "line": 704,
+    "line": 725,
     "decision": "n >= 1",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "functions_719",
+    "id": "functions_740",
     "file": "src/functions.rs",
-    "line": 719,
+    "line": 740,
     "decision": "match f {\n        Some(f) => f(args),\n        None => Err(FunctionError::Unknown {\n            name: name.to_string(),\n            arity,\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
