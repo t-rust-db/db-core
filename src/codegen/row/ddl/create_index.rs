@@ -90,7 +90,6 @@ pub fn compile_create_index(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::parser::row::error::{parse_create_index, ParseOutcome};

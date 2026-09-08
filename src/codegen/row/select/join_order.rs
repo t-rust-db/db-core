@@ -241,7 +241,6 @@ fn collect_referenced_binding_indices(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::codegen::row::IndexSchema;

@@ -332,7 +332,6 @@ fn comment_for(opcode: Opcode, p1: i32, p2: i32, p3: i32) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 mod tests {
     use super::super::program::{AnalyzeTarget, Instruction};
     use super::*;

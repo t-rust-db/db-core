@@ -284,13 +284,6 @@ pub fn finalize(name: &str, state: Option<&AggState>) -> Result<Value, Aggregate
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
 mod tests {
     use super::*;
 

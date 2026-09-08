@@ -14,7 +14,18 @@
 //! the weakest-covered files in the crate (71.5%/79.3% lines) before
 //! this suite existed.
 
-#![allow(clippy::unwrap_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::string_slice,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "test code fails fast (db-core#230); clippy.toml's allow-*-in-tests does not reach helper fns outside #[test]"
+)]
 
 use db_core::codegen::row::dispatch::compile_statement;
 use db_core::codegen::row::TableSchema;

@@ -59,7 +59,6 @@ pub fn compile_analyze(targets: &[&TableSchema]) -> Result<Program, CodegenError
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::codegen::row::IndexSchema;

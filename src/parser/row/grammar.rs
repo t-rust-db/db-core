@@ -2561,7 +2561,6 @@ fn bin(op: BinaryOp, lhs: Expr, rhs: Expr) -> Expr {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::super::tokenizer::Tokenizer;
     use super::*;
@@ -3183,7 +3182,6 @@ mod tests {
 
     /// db-core#219 tagged MC/DC vectors (obligation `grammar_2391`, the
     /// `FunctionTail` elision `filter.is_none() && over.is_none()`).
-    #[allow(clippy::panic, clippy::indexing_slicing)]
     fn function_tail_of(sql: &str) -> Option<Box<FunctionTail>> {
         let select = match crate::parser::row::parse_select(sql) {
             crate::parser::row::ParseOutcome::Accepted(select) => *select,

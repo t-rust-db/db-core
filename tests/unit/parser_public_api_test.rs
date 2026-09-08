@@ -12,7 +12,18 @@
 //! drives every entry point directly with representative accepted and
 //! malformed SQL, independent of codegen.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::string_slice,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "test code fails fast (db-core#230); clippy.toml's allow-*-in-tests does not reach helper fns outside #[test]"
+)]
 
 use db_core::parser::ast::TableRefKind;
 use db_core::parser::column::{parse, parse_explain, Explain};

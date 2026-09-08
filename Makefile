@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test test-lib test-spike build lint check-deny check-mvl-limit coverage check-coverage ci version
+.PHONY: help test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci version
 
 help: ## Show this help
 	@echo ""
@@ -94,9 +94,20 @@ check-coverage: coverage ## Gate: fail if line coverage is below $(COVERAGE_MIN)
 
 # === Gates ===
 
-lint: ## Run clippy (deny warnings) and check formatting
+lint: ## Run clippy (deny warnings), check formatting, and the panic-allow policy gate
 	cargo clippy --all-targets --all-features -- -D warnings
 	cargo fmt --all -- --check
+	$(MAKE) check-panic-allows
+
+# The panic lints in Cargo.toml are a *production* rule (db-core#230):
+# production returns typed errors, tests fail fast. clippy.toml's
+# `allow-*-in-tests` + lib.rs's `cfg_attr(test, allow(...))` scope the
+# lints so test code needs no per-module `#[allow]`; this gate then
+# states the policy directly -- no `#[allow(clippy::{unwrap_used,
+# expect_used,panic,unreachable,todo,unimplemented})]` anywhere in
+# production `src/`. Its EXEMPT list is db-core#231's worklist.
+check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see tools/check_panic_allows.py)
+	@python3 tools/check_panic_allows.py
 
 check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 	@command -v cargo-deny >/dev/null 2>&1 || { \

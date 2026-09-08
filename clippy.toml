@@ -1,0 +1,19 @@
+# db-core#230: the panic lints in Cargo.toml's `[lints.clippy]` are a
+# *production* rule -- production code returns typed errors, never
+# panics. Test code has the opposite rule: fail fast, with `expect("why")`,
+# `unwrap()` and `assert!` as the natural tools. These switches make
+# clippy skip the four fail-fast lints inside `#[cfg(test)]` modules and
+# `#[test]` fns, so inline test modules need no `#[allow]` header at all.
+#
+# They do NOT reach helper fns in `tests/*.rs` that sit outside a `#[test]`
+# (an integration-test crate is compiled with `--test`, but clippy keys on
+# the attribute, not the cfg), which is why every `tests/unit/*.rs` file
+# carries the one canonical `#![allow(...)]` header instead.
+#
+# Lints with no `-in-tests` switch (`arithmetic_side_effects`,
+# `string_slice`, `cast_*`) are scoped for inline tests by the
+# `#![cfg_attr(test, allow(...))]` in `src/lib.rs`.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

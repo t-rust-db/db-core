@@ -372,7 +372,6 @@ pub(crate) fn materialize_from_subquery(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::codegen::row::{Emitter, RegAlloc};

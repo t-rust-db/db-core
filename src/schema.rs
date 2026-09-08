@@ -161,7 +161,6 @@ pub struct ViewSchema {
 }
 
 #[cfg(all(test, feature = "parser-row"))]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::TableSchema;
 

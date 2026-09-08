@@ -34,7 +34,6 @@ pub fn compile_drop_index(di: &DropIndex, root_page: u32) -> Result<Program, Cod
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::parser::row::error::{parse_drop_index, ParseOutcome};
