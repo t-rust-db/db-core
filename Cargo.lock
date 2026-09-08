@@ -10,12 +10,12 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "db-core"
-version = "0.70.1"
-source = "git+https://github.com/t-rust-db/db-core?tag=v0.70.1#db6898c5ca56f40a111778e65aea0051ab8c8f66"
+version = "0.71.1"
+source = "git+https://github.com/t-rust-db/db-core?tag=v0.71.1#f45e8a2839f9cfbdaaeed1dcb78658764610f47b"
 
 [[package]]
 name = "db-storage"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "db-core",
  "memmap2",
