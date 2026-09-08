@@ -113,7 +113,7 @@ pub fn explain_query_plan(
         .map(|(i, (table_ref, schema))| TableBinding {
             alias: table_ref.alias.clone(),
             name: table_binding_name(table_ref),
-            schema: schema.clone(),
+            schema: std::rc::Rc::new(schema.clone()),
             cursor: i32::try_from(i).unwrap_or(0),
             forced_null: false,
             stats: stats_by_table

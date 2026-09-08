@@ -72,7 +72,7 @@ pub fn compile_delete_with_catalog(
     ));
     open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR)?;
 
-    let scope = Scope::single(schema, TABLE_CURSOR).with_catalog(catalog.to_vec());
+    let scope = Scope::single(schema, TABLE_CURSOR).with_catalog(catalog);
     let end_label = em.new_label();
 
     let rowid_seek_operand = delete

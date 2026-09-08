@@ -199,7 +199,9 @@ pub(crate) fn first_reg(regs: &[i32]) -> Result<i32, select::CodegenError> {
 #[derive(Debug, Default)]
 pub(crate) struct Emitter {
     instructions: Vec<Instruction>,
-    labels: HashMap<Label, usize>,
+    /// Indexed by `Label`'s id (labels are dense, allocated by
+    /// `new_label`); `None` until `place`d.
+    labels: Vec<Option<usize>>,
     patches: Vec<(usize, Label)>,
     next_label: usize,
 }
@@ -226,7 +228,13 @@ impl Emitter {
 
     /// Binds `label` to the current (next-to-be-emitted) address.
     pub(crate) fn place(&mut self, label: Label) {
-        self.labels.insert(label, self.here());
+        let here = self.here();
+        if label.0 >= self.labels.len() {
+            self.labels.resize(label.0.saturating_add(1), None);
+        }
+        if let Some(slot) = self.labels.get_mut(label.0) {
+            *slot = Some(here);
+        }
     }
 
     pub(crate) fn patch_p2(&mut self, addr: usize, label: Label) {
@@ -248,7 +256,7 @@ impl Emitter {
     /// consuming the emitter into a finished [`Program`].
     pub(crate) fn finish(mut self) -> Program {
         for (addr, label) in &self.patches {
-            let Some(&resolved) = self.labels.get(label) else {
+            let Some(resolved) = self.labels.get(label.0).copied().flatten() else {
                 continue; // Every patched label is always placed by construction; skip defensively rather than panic.
             };
             let Ok(target) = i32::try_from(resolved) else {
@@ -418,7 +426,7 @@ pub(crate) struct TableBinding {
     /// otherwise, never both.
     pub(crate) alias: Option<String>,
     pub(crate) name: String,
-    pub(crate) schema: crate::codegen::row::TableSchema,
+    pub(crate) schema: std::rc::Rc<crate::codegen::row::TableSchema>,
     pub(crate) cursor: i32,
     /// #237's LEFT JOIN null-extension: when true, every column read
     /// against this binding compiles to `Opcode::Null` instead of a
@@ -469,7 +477,7 @@ pub(crate) struct Scope {
     /// [`Scope::with_catalog`]) — a subquery reached through one of
     /// those compiles to `CodegenError::Unsupported` (no table found)
     /// rather than silently resolving against the wrong catalog.
-    pub(crate) catalog: Vec<crate::codegen::row::TableSchema>,
+    pub(crate) catalog: std::rc::Rc<[crate::codegen::row::TableSchema]>,
     /// A correlated subquery's enclosing scope (#238 follow-up): set on
     /// the `Scope` built for a subquery's own `FROM` table(s) so
     /// [`Scope::resolve`] can fall back to it once this scope's own
@@ -523,16 +531,28 @@ impl Scope {
     /// `cursor` pair, wrapped so `expr.rs`'s signatures can be uniform
     /// over 1..N tables without duplicating codegen for the N=1 case.
     pub(crate) fn single(schema: &crate::codegen::row::TableSchema, cursor: i32) -> Self {
+        Self::single_shared(&std::rc::Rc::new(schema.clone()), cursor)
+    }
+
+    /// [`Scope::single`] over an already-shared schema: no `TableSchema`
+    /// clone, just a refcount bump (#252). The `select` planner threads
+    /// one `Rc<TableSchema>` from its entry point through every scan
+    /// strategy so each `Scope` it builds costs one allocation, not a
+    /// deep copy of the table's column lists.
+    pub(crate) fn single_shared(
+        schema: &std::rc::Rc<crate::codegen::row::TableSchema>,
+        cursor: i32,
+    ) -> Self {
         Scope {
             tables: vec![TableBinding {
                 alias: None,
                 name: schema.name.clone(),
-                schema: schema.clone(),
+                schema: std::rc::Rc::clone(schema),
                 cursor,
                 forced_null: false,
                 stats: crate::codegen::row::planner::Stats::default(),
             }],
-            catalog: Vec::new(),
+            catalog: std::rc::Rc::default(),
             outer: None,
             dedup_star: vec![std::collections::HashSet::new()],
             hoisted: std::rc::Rc::default(),
@@ -543,8 +563,11 @@ impl Scope {
     /// Attaches the full table catalog (#238) so subquery expressions
     /// compiled against this scope can resolve their own `FROM` table
     /// even when it isn't one of `tables` above.
-    pub(crate) fn with_catalog(mut self, catalog: Vec<crate::codegen::row::TableSchema>) -> Self {
-        self.catalog = catalog;
+    pub(crate) fn with_catalog(
+        mut self,
+        catalog: impl Into<std::rc::Rc<[crate::codegen::row::TableSchema]>>,
+    ) -> Self {
+        self.catalog = catalog.into();
         self
     }
 

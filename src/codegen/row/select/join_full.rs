@@ -80,7 +80,7 @@ pub(super) fn compile_full_join_two_table(
         bindings.push(TableBinding {
             alias: table_ref.alias.clone(),
             name: table_binding_name(table_ref),
-            schema: schema.clone(),
+            schema: std::rc::Rc::new(schema.clone()),
             cursor,
             forced_null: false,
             stats: stats_by_table
@@ -108,7 +108,7 @@ pub(super) fn compile_full_join_two_table(
 
     let full_scope = Scope {
         tables: bindings.clone(),
-        catalog: schemas.to_vec(),
+        catalog: std::rc::Rc::from(schemas),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -185,7 +185,7 @@ pub(super) fn compile_full_join_two_table(
     let b_skip = em.new_label();
     let match_scope = Scope {
         tables: bindings.clone(),
-        catalog: schemas.to_vec(),
+        catalog: std::rc::Rc::from(schemas),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -249,7 +249,7 @@ pub(super) fn compile_full_join_two_table(
     }
     let b_null_scope = Scope {
         tables: b_null_bindings,
-        catalog: schemas.to_vec(),
+        catalog: std::rc::Rc::from(schemas),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -307,7 +307,7 @@ pub(super) fn compile_full_join_two_table(
     }
     let a_null_scope = Scope {
         tables: a_null_bindings,
-        catalog: schemas.to_vec(),
+        catalog: std::rc::Rc::from(schemas),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()

@@ -12,6 +12,7 @@ use super::{
     collect_aggregates, columns_needed_for_projection, flush_group, read_row_columns_into, AggSlot,
 };
 use crate::codegen::row::{key_index, record_width};
+use std::rc::Rc;
 
 /// This spike's own pre-#665 copy of what was `compile_grouped_scan`'s
 /// `compile_row_values_pruned`: one register per `schema` column in
@@ -77,7 +78,7 @@ pub(in crate::codegen::row::select) fn try_compile_hash_grouped_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
@@ -94,7 +95,7 @@ where
         return Ok(false);
     }
 
-    let table_scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let table_scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     // Same #322 hoist as the sort strategy: an uncorrelated WHERE-clause
     // subquery is materialized once here rather than once per scanned
     // row.
