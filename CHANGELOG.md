@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING: `codegen::batch::compile` and `explain` return `Result`** (#232, group 3) -- `compile(select) -> Result<Program, PlanError>`, `explain(select, stats) -> Result<Vec<PlanNode>, PlanError>` (was infallible). Before, a select item the planner could not classify compiled to a program that emitted nothing, `has_agg` silently flipped to `false`, and EXPLAIN dropped a join it could not plan (`UnsupportedJoinKind` swallowed). `codegen::batch::emit::{render_joined, render_semi_join, render_windowed}` return `Result<String, EmitError>` for the same reason; new `EmitError::Plan(PlanError)` and `PlanError::Internal(String)`.
+- **`emit` refuses what it used to render as `TABLE = ""`** -- a `SELECT` without `FROM`, a `FROM` subquery without an alias, or a `JOIN` against a subquery is `EmitError::Unsupported` instead of generated source that can never bind a file. The generated program's file matcher errors on a non-UTF-8 file name instead of binding it to a table called `data`.
+
 ## [0.74.1] - 2026-09-08
 
 ### Changed

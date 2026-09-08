@@ -31,7 +31,8 @@ fn select(sql: &str) -> db_core::parser::ast::Select {
 fn compile_produces_a_program_ending_in_combine() {
     let program = compile(&select(
         "SELECT product, SUM(amount) FROM sales GROUP BY product",
-    ));
+    ))
+    .unwrap();
     assert!(program
         .instructions
         .iter()
@@ -119,7 +120,8 @@ fn explain_builds_a_scan_plan_tree_for_a_flat_query() {
     let plan = explain(&select("SELECT a FROM t"), |_| TableStats {
         row_groups: 1,
         rows: 10,
-    });
+    })
+    .unwrap();
     assert!(plan.iter().any(|node| node.detail.contains("SCAN")));
 }
 
@@ -149,4 +151,28 @@ fn compile_join_reports_unsupported_join_kind_as_a_typed_error() {
     ))
     .unwrap_err();
     assert!(matches!(err, PlanError::UnsupportedJoinKind(_)));
+}
+
+/// db-core#232: `compile`/`explain` are fallible. A select item the batch
+/// planner cannot classify -- here a column alias, which only the
+/// `parser::column` validator used to reject -- is a `PlanError`, not a
+/// program that silently emits nothing.
+#[test]
+fn compile_and_explain_reject_a_select_item_the_planner_cannot_classify() {
+    let db_core::parser::row::ParseOutcome::Accepted(select) =
+        db_core::parser::row::parse_select("SELECT amount AS total FROM sales")
+    else {
+        panic!("row grammar accepts a column alias");
+    };
+    assert!(matches!(
+        compile(&select),
+        Err(PlanError::UnsupportedSelectItem(_))
+    ));
+    assert!(matches!(
+        explain(&select, |_| TableStats {
+            row_groups: 1,
+            rows: 10,
+        }),
+        Err(PlanError::UnsupportedSelectItem(_))
+    ));
 }

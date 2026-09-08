@@ -49,6 +49,7 @@
     reason = "fmt::Write into String is infallible"
 )]
 
+use crate::codegen::batch::PlanError;
 use crate::codegen::batch::{compile, output_column_names};
 use crate::parser::ast::{
     BinaryOp as AstBinOp, Distinctness, Expr as AstExpr, ExprKind, FromClause, FunctionArgs, Join,
@@ -66,6 +67,10 @@ pub enum EmitError {
     Parse(ParseError),
     /// The query parsed but uses a construct this emitter does not handle yet.
     Unsupported(&'static str),
+    /// The batch planner rejected the query (db-core#232: `compile` is
+    /// fallible now, so a select item the planner cannot handle is an
+    /// error here instead of an empty program rendered to source).
+    Plan(PlanError),
 }
 
 impl std::fmt::Display for EmitError {
@@ -73,11 +78,18 @@ impl std::fmt::Display for EmitError {
         match self {
             EmitError::Parse(e) => write!(f, "{e}"),
             EmitError::Unsupported(what) => write!(f, "codegen does not support {what} yet"),
+            EmitError::Plan(e) => write!(f, "{e}"),
         }
     }
 }
 
 impl std::error::Error for EmitError {}
+
+impl From<PlanError> for EmitError {
+    fn from(e: PlanError) -> Self {
+        EmitError::Plan(e)
+    }
+}
 
 impl From<ParseError> for EmitError {
     fn from(e: ParseError) -> Self {
@@ -121,11 +133,28 @@ fn semi_join_subquery(select: &Select) -> Option<&Select> {
     }
 }
 
-fn from_table_name(from: &FromClause) -> &str {
+fn from_table_name(from: &FromClause) -> Result<&str> {
     match &from.first.kind {
-        TableRefKind::Name(name) => name,
-        TableRefKind::Subquery(_) => from.first.alias.as_deref().unwrap_or(""),
+        TableRefKind::Name(name) => Ok(name),
+        // The grammar requires the alias; emitting `""` as a table name
+        // would produce a program that can never bind a file (db-core#232).
+        TableRefKind::Subquery(_) => from
+            .first
+            .alias
+            .as_deref()
+            .ok_or(EmitError::Unsupported("a FROM subquery without an alias")),
     }
+}
+
+/// The main table a generated program reads: `FROM`'s first item. A
+/// `SELECT` without `FROM` has no file to open, so it cannot be emitted
+/// (db-core#232; it used to render as `TABLE = ""`).
+fn main_table_name(select: &Select) -> Result<&str> {
+    select
+        .from
+        .as_ref()
+        .ok_or(EmitError::Unsupported("a SELECT without a FROM clause"))
+        .and_then(from_table_name)
 }
 
 /// Compile `sql_text` ahead of time into a standalone `.rs` source file for
@@ -136,7 +165,7 @@ fn from_table_name(from: &FromClause) -> &str {
 pub fn generate(crate_name: &str, sql_text: &str) -> Result<String> {
     let select = crate::parser::parse(sql_text)?;
     if has_window(&select) {
-        return Ok(render_windowed(crate_name, sql_text, &select));
+        return render_windowed(crate_name, sql_text, &select);
     }
 
     let join_count = select
@@ -148,29 +177,16 @@ pub fn generate(crate_name: &str, sql_text: &str) -> Result<String> {
         if join_count > 1 {
             return Err(EmitError::Unsupported("more than one JOIN"));
         }
-        return Ok(render_joined(crate_name, sql_text, &select));
+        return render_joined(crate_name, sql_text, &select);
     }
     if let Some(subquery) = semi_join_subquery(&select) {
-        let subquery_from = subquery
-            .from
-            .as_ref()
-            .map(from_table_name)
-            .unwrap_or_default();
-        return Ok(render_semi_join(
-            crate_name,
-            sql_text,
-            &select,
-            subquery_from,
-        ));
+        let subquery_from = main_table_name(subquery)?;
+        return render_semi_join(crate_name, sql_text, &select, subquery_from);
     }
 
-    let program = compile(&select);
+    let program = compile(&select)?;
     let columns = output_column_names(&select);
-    let from = select
-        .from
-        .as_ref()
-        .map(from_table_name)
-        .unwrap_or_default();
+    let from = main_table_name(&select)?;
     Ok(render_flat(crate_name, sql_text, from, &program, &columns))
 }
 
@@ -303,13 +319,15 @@ fn render_agg_part(part: &AggPart) -> String {
 /// `select` as a literal [`Select`] value (built at runtime via ordinary
 /// `Vec`/`String` constructors, not parsed from SQL text), and calls the
 /// caller crate's own `execute_joined`.
-pub fn render_joined(crate_name: &str, sql_text: &str, select: &Select) -> String {
+pub fn render_joined(crate_name: &str, sql_text: &str, select: &Select) -> Result<String> {
+    // The join's right side must be a named table: a subquery there has
+    // no file for the generated program to open (db-core#232).
     let other_table = select
         .from
         .as_ref()
         .and_then(|f| f.joins.first())
         .and_then(|j| j.table.name())
-        .unwrap_or_default()
+        .ok_or(EmitError::Unsupported("a JOIN against a subquery"))?
         .to_string();
     render_multi_table(crate_name, sql_text, select, &other_table, "execute_joined")
 }
@@ -322,7 +340,7 @@ pub fn render_semi_join(
     sql_text: &str,
     select: &Select,
     subquery_from: &str,
-) -> String {
+) -> Result<String> {
     render_multi_table(
         crate_name,
         sql_text,
@@ -338,13 +356,9 @@ fn render_multi_table(
     select: &Select,
     other_table: &str,
     exec_fn: &str,
-) -> String {
+) -> Result<String> {
     let columns = output_column_names(select);
-    let main_table = select
-        .from
-        .as_ref()
-        .map(from_table_name)
-        .unwrap_or_default();
+    let main_table = main_table_name(select)?;
     let mut out = String::new();
     let version = crate::VERSION;
     let _ = writeln!(
@@ -393,8 +407,13 @@ fn render_multi_table(
     out.push_str("    let mut tables: std::collections::HashMap<String, std::path::PathBuf> = std::collections::HashMap::new();\n");
     out.push_str("    for pattern in &args {\n");
     out.push_str("        for path in expand_path(pattern) {\n");
-    out.push_str("            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or(\"data\").to_string();\n");
-    out.push_str("            tables.insert(name, path);\n");
+    // A file whose stem is not UTF-8 cannot name a table; refuse it rather
+    // than binding it to a made-up "data" table (db-core#232).
+    out.push_str("            let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {\n");
+    out.push_str("                return Err(format!(\"file name is not valid UTF-8: {}\", path.display()).into());\n");
+    out.push_str("            };\n");
+    out.push_str("            tables.insert(name.to_string(), path);\n");
+
     out.push_str("        }\n");
     out.push_str("    }\n\n");
     out.push_str("    let main_path = tables.get(MAIN_TABLE).ok_or_else(|| format!(\"no file given for table '{MAIN_TABLE}'\"))?;\n");
@@ -416,20 +435,16 @@ fn render_multi_table(
     out.push_str("    Ok(())\n");
     out.push_str("}\n\n");
     out.push_str(EXPAND_PATH_HELPER);
-    out
+    Ok(out)
 }
 
 /// Render a window-function query: a `main()` that opens the one named
 /// table, reconstructs `select` as a literal [`Select`] value (same
 /// `Vec`/`String`-constructor approach as [`render_joined`]), and calls
 /// the caller crate's own `execute_windowed`.
-pub fn render_windowed(crate_name: &str, sql_text: &str, select: &Select) -> String {
+pub fn render_windowed(crate_name: &str, sql_text: &str, select: &Select) -> Result<String> {
     let columns = output_column_names(select);
-    let table = select
-        .from
-        .as_ref()
-        .map(from_table_name)
-        .unwrap_or_default();
+    let table = main_table_name(select)?;
     let mut out = String::new();
     let version = crate::VERSION;
     let _ = writeln!(
@@ -485,7 +500,7 @@ pub fn render_windowed(crate_name: &str, sql_text: &str, select: &Select) -> Str
     out.push_str("    Ok(())\n");
     out.push_str("}\n\n");
     out.push_str(EXPAND_PATH_HELPER);
-    out
+    Ok(out)
 }
 
 fn render_option_str(s: Option<&str>) -> String {
@@ -1202,7 +1217,8 @@ mod tests {
             "column_rs",
             "SELECT a.id, b.budget FROM a JOIN b ON a.id = b.id",
             &query,
-        );
+        )
+        .unwrap();
         assert!(src.contains("fn build_query() -> Select"), "{src}");
         assert!(
             src.contains("column_rs::query::execute_joined(&main_file, &other_file, &query)"),
@@ -1224,7 +1240,8 @@ mod tests {
             "SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions)",
             &query,
             "regions",
-        );
+        )
+        .unwrap();
         assert!(
             src.contains("column_rs::query::execute_semi_join(&main_file, &other_file, &query)"),
             "{src}"
@@ -1243,7 +1260,8 @@ mod tests {
             "column_rs",
             "SELECT ROW_NUMBER() OVER (ORDER BY id) FROM t",
             &query,
-        );
+        )
+        .unwrap();
         assert!(src.contains("fn build_query() -> Select"), "{src}");
         assert!(
             src.contains("column_rs::query::execute_windowed(&file, &query)"),
