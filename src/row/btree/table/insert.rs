@@ -123,6 +123,70 @@ fn write_overflow_chain(
 /// `leaf_page`, splitting it (and cascading into ancestors/`root_page`) if
 /// it doesn't fit.
 #[allow(clippy::too_many_arguments)]
+/// Partitions a sorted run of cells into consecutive groups that each fit
+/// a page whose b-tree content area (after the leaf header) is `capacity`
+/// bytes, counting every cell plus its 2-byte pointer. Prefers the
+/// balanced two-way cut (the one minimising the larger side); when no
+/// two-way cut fits — three cells each over a third of a page, say —
+/// falls back to first-fit packing, which needs at most three groups
+/// because the input is at most one page's content plus one cell. This
+/// is the by-*bytes* balance SQLite's own `balance_nonroot` does (it
+/// spreads over up to three siblings); splitting by cell count (the
+/// pre-#31 behavior) overfilled a side as soon as cell sizes were mixed.
+/// Returns group *end* indices; callers guarantee at least two cells.
+fn split_groups_by_bytes(sizes: &[usize], capacity: usize) -> Vec<usize> {
+    let n = sizes.len();
+    let weights: Vec<usize> = sizes.iter().map(|s| s.saturating_add(2)).collect();
+    let total: usize = weights.iter().sum();
+
+    // Balanced two-way cut.
+    let mut best: Option<(usize, usize)> = None; // (max side, cut)
+    let mut acc = 0usize;
+    for (i, w) in weights.iter().enumerate().take(n.saturating_sub(1)) {
+        acc = acc.saturating_add(*w);
+        let worst = acc.max(total.saturating_sub(acc));
+        if best.is_none_or(|(m, _)| worst < m) {
+            best = Some((worst, i.saturating_add(1)));
+        }
+    }
+    if let Some((worst, cut)) = best {
+        if worst <= capacity {
+            return vec![cut, n];
+        }
+    }
+
+    // First-fit packing.
+    let mut ends = Vec::new();
+    let mut acc = 0usize;
+    for (i, w) in weights.iter().enumerate() {
+        if acc > 0 && acc.saturating_add(*w) > capacity {
+            ends.push(i);
+            acc = 0;
+        }
+        acc = acc.saturating_add(*w);
+    }
+    ends.push(n);
+    ends
+}
+
+/// The entry whose promotion splits an interior page's cells most evenly
+/// by bytes (interior cells are near-uniform, so this is normally the
+/// count median too). Never the first or last entry, so both halves keep
+/// at least one routing cell.
+fn interior_median_by_bytes(cells: &[Vec<u8>]) -> usize {
+    let n = cells.len();
+    let total: usize = cells.iter().map(Vec::len).sum();
+    let mut acc = 0usize;
+    for (i, c) in cells.iter().enumerate() {
+        acc = acc.saturating_add(c.len());
+        if acc.saturating_mul(2) >= total {
+            return i.clamp(1, n.saturating_sub(2).max(1));
+        }
+    }
+    (n / 2).clamp(1, n.saturating_sub(2).max(1))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn insert_into_leaf(
     pager: &mut Pager,
     usable_size: u32,
@@ -164,39 +228,69 @@ fn insert_into_leaf(
     let mut cells = collect_leaf_cells(buf, header_start, leaf_page, usable_size)?;
     cells.insert(insert_pos, (rowid, cell));
 
-    // Split: left keeps the lower half (including here if inserted there),
-    // right (a freshly allocated page) takes the upper half.
-    let n = cells.len();
-    let left_n = n.div_ceil(2);
-    let right_page = pager.allocate_page()?;
-    let right = cells.split_off(left_n);
-    let left = cells;
-    let divider = left
-        .last()
-        .ok_or(BtreeError::Internal(
-            "left half of a split leaf must not be empty",
-        ))?
-        .0;
+    // Split by *bytes* into two (rarely three) leaves: `leaf_page` keeps
+    // the first group, each further group goes to a freshly allocated
+    // page, and every new page is routed into the parent in turn. The
+    // first routing reuses `ancestors`; a third group's routing re-descends
+    // from the root, since the first `insert_into_parent` may have split
+    // or re-rooted the path (#31).
+    let capacity = page_len.saturating_sub(header_start.saturating_add(8));
+    let sizes: Vec<usize> = cells.iter().map(|(_, c)| c.len()).collect();
+    let ends = split_groups_by_bytes(&sizes, capacity);
 
-    {
-        let buf = pager.get_page_mut(leaf_page)?;
-        write_leaf_page(buf, header_start, leaf_page, &cell_bytes(left))?;
-    }
-    {
-        let buf = pager.get_page_mut(right_page)?;
-        write_leaf_page(buf, 0, right_page, &cell_bytes(right))?;
+    let mut groups: Vec<Vec<(i64, Vec<u8>)>> = Vec::with_capacity(ends.len());
+    let mut rest = cells;
+    let mut taken = 0usize;
+    for end in &ends {
+        let tail = rest.split_off(end.saturating_sub(taken));
+        groups.push(std::mem::replace(&mut rest, tail));
+        taken = *end;
     }
 
-    insert_into_parent(
-        pager,
-        usable_size,
-        page_len,
-        ancestors,
-        root_page,
-        leaf_page,
-        right_page,
-        divider,
-    )
+    let mut pages: Vec<(u32, i64)> = Vec::with_capacity(groups.len()); // (page, max rowid)
+    for (i, group) in groups.into_iter().enumerate() {
+        let divider = group
+            .last()
+            .ok_or(BtreeError::Internal("split group must not be empty"))?
+            .0;
+        let (page, hs) = if i == 0 {
+            (leaf_page, header_start)
+        } else {
+            (pager.allocate_page()?, 0)
+        };
+        let buf = pager.get_page_mut(page)?;
+        write_leaf_page(buf, hs, page, &cell_bytes(group))?;
+        pages.push((page, divider));
+    }
+
+    let mut owned_ancestors: Vec<u32>;
+    let mut route = ancestors;
+    for pair in pages.windows(2) {
+        let [(old_page, divider), (new_page, _)] = pair else {
+            return Err(BtreeError::Internal("split page pairing out of shape"));
+        };
+        if *old_page != leaf_page {
+            let (anc, found) = find_leaf_page(pager, root_page, *divider)?;
+            if found != *old_page {
+                return Err(BtreeError::Internal(
+                    "re-descent after a three-way split did not reach the middle leaf",
+                ));
+            }
+            owned_ancestors = anc;
+            route = &owned_ancestors;
+        }
+        insert_into_parent(
+            pager,
+            usable_size,
+            page_len,
+            route,
+            root_page,
+            *old_page,
+            *new_page,
+            *divider,
+        )?;
+    }
+    Ok(())
 }
 
 /// Propagates a child split (`old_page` keeps its identity as the left
@@ -264,10 +358,11 @@ fn insert_into_parent(
         return Ok(());
     }
 
-    // Interior split: the median key is promoted to the grandparent
-    // without being duplicated in either child.
-    let n = entries.len();
-    let mid = n / 2;
+    // Interior split: the median (by bytes, same rationale as the leaf
+    // split — interior cells are near-uniform, so this is usually the
+    // count median too) is promoted to the grandparent without being
+    // duplicated in either child.
+    let mid = interior_median_by_bytes(&cell_bytes);
     let (promoted_child, promoted_key) = *entries.get(mid).ok_or(BtreeError::Internal(
         "median entry index out of bounds during interior split",
     ))?;
@@ -446,6 +541,112 @@ mod tests {
         rowids.sort_unstable();
         let expected: Vec<i64> = (-500..0).chain(1..=n).collect();
         assert_eq!(rowids, expected);
+    }
+
+    /// #31: a leaf holding many small cells next to a run of large ones
+    /// used to be split by cell *count*, handing the right half more bytes
+    /// than a page holds; `write_leaf_page` then wrapped and the next
+    /// descent failed with `UnexpectedPageType`. The oracle (sqlite3
+    /// 3.53.4) inserts the same sequence fine, packing leaves by size.
+    #[test]
+    fn mixed_cell_sizes_split_by_bytes_not_count() {
+        let page_size = 512u32;
+        let (vfs, header) = minimal_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        let usable_size = header.usable_page_size();
+
+        // 40 tiny cells fill the leaf, then large cells (each ~1/3 of a
+        // page) land at the tail: a count split would give the right half
+        // twenty 150-byte cells.
+        let small = vec![1u8; 4];
+        let large = vec![2u8; 150];
+        let mut expected = Vec::new();
+        for rowid in 1..=40 {
+            insert_row(&mut pager, &header, 1, rowid, &small).unwrap();
+            expected.push(rowid);
+        }
+        for rowid in 41..=80 {
+            insert_row(&mut pager, &header, 1, rowid, &large).unwrap();
+            expected.push(rowid);
+        }
+        // And the mirror image: large cells first, then small ones at the head.
+        for rowid in (-40..0).rev() {
+            insert_row(&mut pager, &header, 1, rowid, &large).unwrap();
+            expected.push(rowid);
+        }
+        for rowid in (-80..-40).rev() {
+            insert_row(&mut pager, &header, 1, rowid, &small).unwrap();
+            expected.push(rowid);
+        }
+
+        let mut rowids = Vec::new();
+        collect_all_rowids(&mut pager, usable_size, 1, &mut rowids);
+        rowids.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(rowids, expected);
+    }
+
+    /// #31, randomized: pseudo-random rowids with payloads anywhere from
+    /// a few bytes to most of a (512-byte) page must never produce an
+    /// overfull page — now an `Internal` error at the write site rather
+    /// than silent corruption — and every row must be found exactly once.
+    #[test]
+    fn random_mixed_sizes_never_overfill_a_page() {
+        let page_size = 512u32;
+        let (vfs, header) = minimal_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        let usable_size = header.usable_page_size();
+
+        // Deterministic xorshift so a failure is reproducible without an
+        // RNG dependency.
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut expected = std::collections::BTreeSet::new();
+        for _ in 0..1500 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let rowid = (x % 100_000) as i64;
+            let len = 1 + (x >> 20) as usize % 300;
+            if !expected.insert(rowid) {
+                continue;
+            }
+            insert_row(&mut pager, &header, 1, rowid, &vec![0xab; len]).unwrap();
+        }
+
+        let mut rowids = Vec::new();
+        collect_all_rowids(&mut pager, usable_size, 1, &mut rowids);
+        rowids.sort_unstable();
+        assert_eq!(rowids, expected.into_iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn split_groups_by_bytes_balances_by_size() {
+        // Uniform sizes: the count median.
+        assert_eq!(split_groups_by_bytes(&[10, 10, 10, 10], 500), vec![2, 4]);
+        // One big cell at the tail: everything small goes left.
+        assert_eq!(split_groups_by_bytes(&[4, 4, 4, 4, 4, 4, 100], 500), vec![6, 7]);
+        // One big cell at the head: it goes left alone.
+        assert_eq!(split_groups_by_bytes(&[100, 4, 4, 4, 4, 4, 4], 500), vec![1, 7]);
+        // Never an empty side.
+        assert_eq!(split_groups_by_bytes(&[1, 1000], 500), vec![1, 2]);
+        // No two-way cut fits: three groups.
+        assert_eq!(split_groups_by_bytes(&[240, 273, 240], 500), vec![1, 2, 3]);
+        assert_eq!(split_groups_by_bytes(&[100, 100, 100, 273, 100, 100], 500), vec![3, 6]);
+    }
+
+    /// #31: cells that cannot fit are refused up front instead of being
+    /// laid over the page header.
+    #[test]
+    fn write_leaf_page_refuses_overfull_cells() {
+        let mut buf = vec![0u8; 512];
+        let cells: Vec<Vec<u8>> = (0..4).map(|_| vec![7u8; 150]).collect();
+        let err = write_leaf_page(&mut buf, 0, 2, &cells).unwrap_err();
+        assert!(matches!(err, BtreeError::Internal(_)), "{err}");
+        // Untouched: header byte still zero, not a stale/garbage type.
+        assert_eq!(buf[0], 0);
+        let fits: Vec<Vec<u8>> = (0..3).map(|_| vec![7u8; 150]).collect();
+        write_leaf_page(&mut buf, 0, 2, &fits).unwrap();
+        assert_eq!(buf[0], LEAF_TABLE);
     }
 
     /// A payload larger than two overflow pages' worth of data must span a
