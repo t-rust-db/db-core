@@ -1,278 +1,501 @@
-//! Predicate push-down into a `FROM`-subquery -- see `super`'s module
-//! doc.
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! Predicate push-down into `FROM`-subqueries and views (#532) — see
+//! `super`'s module doc.
 //!
-//! Splits the enclosing query's own `WHERE` into top-level `AND`
-//! conjuncts and moves a conjunct into the `FROM`-subquery's own `WHERE`
-//! when doing so is provably safe, so the subquery materializes fewer
-//! rows. Ported from sqlite-rs's `subquery/pushdown.rs`; the reference's
-//! `require_qualified` rule (a conjunct's unqualified column is
-//! ambiguous once the enclosing `FROM` has a `JOIN`) is kept, and its
-//! recursion over N `FROM` items reduces to db-core's single one.
+//! Runs once, right after [`super::expand_views`]/[`super::expand_with_clause`]
+//! have rewritten every view/CTE reference into a `TableRefKind::Subquery`,
+//! and before any scan/join codegen or catalog resolution happens. Splits
+//! the enclosing `SELECT`'s own `WHERE` into top-level `AND`-conjuncts
+//! (the same split [`super::hoist_uncorrelated_where_subqueries`] uses) and
+//! moves a conjunct into a `FROM`-subquery's own `WHERE` when doing so is
+//! provably safe:
 //!
-//! A conjunct containing its own subquery expression (`InSubquery`/
-//! `Exists`) is never pushed -- reasoning about a second scope nested
-//! inside the moved predicate is out of scope here, matching the
-//! reference's conservative default of leaving anything unrecognized
-//! exactly where it was.
+//! - the subquery is a plain single-table `SELECT` (no `JOIN` of its own,
+//!   no `DISTINCT`/aggregate/`GROUP BY`/`HAVING`/`LIMIT`, not a compound
+//!   `UNION`) — anything else could change which rows survive a filter
+//!   applied *before* that operation instead of after;
+//! - the subquery's projection is either a bare `SELECT *` (any column
+//!   name passes through unchanged) or a list of plain column references,
+//!   optionally aliased (`SELECT a, b AS c FROM t` — each output name is
+//!   exactly that one column, alias or not) — a *computed* result column
+//!   has no single underlying column a predicate on it could be rewritten
+//!   against, so a conjunct touching one is left alone;
+//! - every column the conjunct references resolves unambiguously to that
+//!   one subquery (qualified with its alias, or unqualified when the
+//!   enclosing `FROM` has no `JOIN` at all to be ambiguous with).
+//!
+//! A conjunct containing its own subquery expression (`Subquery`/`Exists`/
+//! `InSubquery`/`InSubqueryMulti`) is never pushed — reasoning about a
+//! second scope nested inside the moved predicate is out of scope here,
+//! matching this pass's conservative default of leaving anything
+//! unrecognized exactly where it was. Pushing is applied recursively, so
+//! a predicate can chain through nested views/CTEs.
 
-use super::flatten::{collect_expr_column_names, split_qualified};
-use crate::parser::ast::{BinaryOp, Expr, ExprKind, ResultColumn, Select, TableRefKind};
+use super::correlation::top_level_and_conjuncts;
+use crate::codegen::row::select::select_has_aggregate;
+use crate::parser::ast::{
+    BinaryOp, Expr, ExprKind, FunctionArgs, ResultColumn, Select, TableRef, TableRefKind,
+};
 
-/// Pushes every safely-movable `WHERE` conjunct of `query` into its
-/// `FROM`-subquery, returning whether it moved any.
-pub fn push_down_where_predicates(query: &mut Select) -> bool {
-    let Some(from) = &query.from else {
+/// How a `FROM`-subquery's projection maps an output column name back to
+/// the underlying expression a pushed predicate should reference instead.
+/// Shared with [`super::flatten`], which needs the identical projection-
+/// shape eligibility check when rewriting the *rest* of the enclosing
+/// query's references to a flattened subquery's alias.
+pub(super) enum ColumnMap {
+    /// `SELECT * FROM t` — any bare name passes through unchanged.
+    Wildcard,
+    /// `SELECT a, b AS c, ... FROM t` — each output name (its alias, or
+    /// its own name when unaliased) maps to exactly that column; a
+    /// computed expression is never in this list.
+    Explicit(Vec<(String, Expr)>),
+}
+
+/// Recursively pushes safely-movable outer `WHERE` conjuncts into
+/// `select`'s own `FROM`-subqueries/views (#532), then descends into
+/// whatever subqueries remain so a pushed predicate keeps chaining
+/// through nested views/CTEs.
+pub fn push_down_where_predicates(select: &mut Select) {
+    let require_qualified = select
+        .from
+        .as_ref()
+        .is_none_or(|from| !from.joins.is_empty());
+
+    if let Some(where_expr) = select.where_clause.clone() {
+        let mut remaining = Vec::new();
+        let mut any_pushed = false;
+        for conjunct in top_level_and_conjuncts(&where_expr) {
+            if push_conjunct_into_subqueries(select, conjunct, require_qualified) {
+                any_pushed = true;
+            } else {
+                remaining.push(conjunct.clone());
+            }
+        }
+        if any_pushed {
+            select.where_clause = rebuild_conjunction(remaining);
+        }
+    }
+
+    recurse_into_from_subqueries(select);
+}
+
+fn push_conjunct_into_subqueries(
+    select: &mut Select,
+    conjunct: &Expr,
+    require_qualified: bool,
+) -> bool {
+    let Some(from) = &mut select.from else {
         return false;
     };
-    let TableRefKind::Subquery(inner) = &from.first.kind else {
-        return false;
-    };
-    let Some(alias) = from.first.alias.as_ref() else {
+    if try_push_into_table_ref(&mut from.first, conjunct, require_qualified) {
+        return true;
+    }
+    from.joins
+        .iter_mut()
+        .any(|join| try_push_into_table_ref(&mut join.table, conjunct, require_qualified))
+}
+
+fn try_push_into_table_ref(
+    table_ref: &mut TableRef,
+    conjunct: &Expr,
+    require_qualified: bool,
+) -> bool {
+    let TableRefKind::Subquery(inner) = &mut table_ref.kind else {
         return false;
     };
     if !subquery_pushdown_safe(inner) {
         return false;
     }
-    let Some(exposed) = exposed_columns(inner) else {
+    let Some(column_map) = subquery_column_map(inner) else {
         return false;
     };
-    let alias = alias.clone();
-    // An unqualified column is only unambiguously the subquery's when
-    // there is no `JOIN`ed table it could equally belong to.
-    let require_qualified = !super::super::joins_of(query).is_empty();
+    // A subquery in FROM always carries a mandatory alias (enforced by
+    // the parser), so this is never actually `None`.
+    let Some(alias) = table_ref.alias.as_deref() else {
+        return false;
+    };
 
-    let Some(where_expr) = query.where_clause.take() else {
-        return false;
-    };
-    let mut pushed = Vec::new();
-    let mut remaining = Vec::new();
-    for conjunct in top_level_and_conjuncts(where_expr) {
-        if let Some(rewritten) =
-            rewrite_for_pushdown(&conjunct, &alias, exposed.as_deref(), require_qualified)
-        {
-            pushed.push(rewritten);
-        } else {
-            remaining.push(conjunct);
-        }
-    }
-    query.where_clause = rebuild_conjunction(remaining);
-    if pushed.is_empty() {
+    let mut candidate = conjunct.clone();
+    if !rewrite_for_pushdown(&mut candidate, alias, &column_map, require_qualified) {
         return false;
     }
-    if let Some(TableRefKind::Subquery(inner)) =
-        query.from.as_mut().map(|from| &mut from.first.kind)
-    {
-        for conjunct in pushed {
-            inner.where_clause = and_exprs(inner.where_clause.take(), conjunct);
-        }
-    }
+
+    inner.where_clause = Some(and_exprs(inner.where_clause.take(), candidate));
     true
 }
 
 /// Whether `inner`'s own shape rules out moving a filter earlier: a
-/// `DISTINCT`, an aggregate/`GROUP BY`/`HAVING`, or a `LIMIT`/`OFFSET`
-/// would all change which rows a pre-filter leaves behind versus
-/// filtering the materialized result. Unlike [`super::flatten`]'s check,
-/// a `JOIN`ed or subquery `FROM` inside `inner` is fine here -- the
-/// predicate is still applied to the same row set, just earlier.
+/// `JOIN` of its own, `DISTINCT`, an aggregate/`GROUP BY`/`HAVING`, a
+/// `LIMIT`, or a compound (`UNION`) body would all change which rows a
+/// pre-filter leaves behind versus filtering the materialized result.
 fn subquery_pushdown_safe(inner: &Select) -> bool {
-    !super::super::is_distinct(inner)
-        && inner.group_by.is_empty()
-        && inner.having.is_none()
-        && inner.limit.is_none()
-        // A `WITH` body or a compound arm changes which rows exist at
-        // all, so a pre-filter is not equivalent to a post-filter.
-        && inner.with_clause.is_none()
-        && inner.compound.is_empty()
+    if inner.distinct.is_some()
+        || inner.having.is_some()
+        || !inner.group_by.is_empty()
+        || inner.limit.is_some()
+        || !inner.compound.is_empty()
+        || select_has_aggregate(inner)
+    {
+        return false;
+    }
+    inner
+        .from
+        .as_ref()
+        .is_some_and(|from| from.joins.is_empty())
 }
 
-/// The subquery's projected column names, or `None` for a `SELECT *`
-/// (any name passes through unchanged); `Some(None)` for a projection
-/// this pass can't map back (an aggregate/window item has no single
-/// underlying column a predicate on it could be rewritten against).
-fn exposed_columns(inner: &Select) -> Option<Option<Vec<String>>> {
-    if inner
-        .columns
-        .iter()
-        .any(|c| matches!(c, ResultColumn::Star))
-    {
-        return Some(None);
+pub(super) fn subquery_column_map(inner: &Select) -> Option<ColumnMap> {
+    if let [ResultColumn::Star] = inner.columns.as_slice() {
+        return Some(ColumnMap::Wildcard);
     }
     let mut out = Vec::with_capacity(inner.columns.len());
     for col in &inner.columns {
-        let ResultColumn::Expr { expr, .. } = col else {
+        let ResultColumn::Expr { expr, alias } = col else {
             return None;
         };
-        let ExprKind::Column { name, .. } = &expr.kind else {
+        let ExprKind::Column {
+            catalog: None,
+            name,
+            ..
+        } = &expr.kind
+        else {
             return None;
         };
-        out.push(name.clone());
+        let output_name = alias.clone().unwrap_or_else(|| name.clone());
+        out.push((output_name, expr.clone()));
     }
-    Some(Some(out))
+    Some(ColumnMap::Explicit(out))
 }
 
-/// `expr`, rewritten into the subquery's own scope (its `alias.`
-/// qualifiers dropped), or `None` as soon as any column can't be proven
-/// to belong solely to the subquery and be identity-mapped.
+/// Rewrites `expr` in place so every column reference it makes against
+/// `alias` becomes the equivalent reference inside the subquery's own
+/// scope, per `column_map`. Returns `false` (leaving `expr` partially,
+/// harmlessly mutated — the caller discards it on failure) as soon as any
+/// column can't be proven to belong solely to `alias` and be identity-
+/// mapped, or a nested subquery expression is found.
 fn rewrite_for_pushdown(
-    expr: &Expr,
+    expr: &mut Expr,
     alias: &str,
-    exposed: Option<&[String]>,
+    column_map: &ColumnMap,
     require_qualified: bool,
-) -> Option<Expr> {
-    if contains_subquery(expr) {
-        return None;
-    }
-    let mut names = Vec::new();
-    collect_expr_column_names(expr, &mut names);
-    if names.is_empty() {
-        return None;
-    }
-    for name in &names {
-        let (qualifier, col) = split_qualified(name);
-        match qualifier {
-            Some(q) if q.eq_ignore_ascii_case(alias) => {}
-            Some(_) => return None,
-            None if require_qualified => return None,
-            None => {}
-        }
-        if let Some(exposed) = exposed {
-            if !exposed.iter().any(|c| c.eq_ignore_ascii_case(col)) {
-                return None;
-            }
-        }
-    }
-    let mut rewritten = expr.clone();
-    strip_alias_in_expr(&mut rewritten, alias);
-    Some(rewritten)
-}
-
-fn contains_subquery(expr: &Expr) -> bool {
-    super::super::contains_subquery(expr)
-}
-
-fn strip_alias_in_expr(expr: &mut Expr, alias: &str) {
-    super::super::walk_columns_mut(expr, &mut |name| {
-        if let (Some(q), col) = split_qualified(name) {
-            if q.eq_ignore_ascii_case(alias) {
-                *name = col.to_string();
-            }
-        }
-    });
-}
-
-/// Splits an expression into its top-level `AND` conjuncts -- the same
-/// split the reference's `top_level_and_conjuncts` makes.
-fn top_level_and_conjuncts(expr: Expr) -> Vec<Expr> {
-    match expr.kind {
-        ExprKind::Binary {
-            op: BinaryOp::And,
-            lhs,
-            rhs,
+) -> bool {
+    match &mut expr.kind {
+        ExprKind::Literal(_) | ExprKind::Param(_) => true,
+        ExprKind::Column {
+            table,
+            catalog,
+            name,
         } => {
-            let mut out = top_level_and_conjuncts(*lhs);
-            out.extend(top_level_and_conjuncts(*rhs));
-            out
+            if catalog.is_some() {
+                return false;
+            }
+            let qualifies = match table {
+                Some(t) => t.eq_ignore_ascii_case(alias),
+                None => !require_qualified,
+            };
+            if !qualifies {
+                return false;
+            }
+            match column_map {
+                ColumnMap::Wildcard => {
+                    *table = None;
+                    true
+                }
+                ColumnMap::Explicit(cols) => {
+                    let Some((_, underlying)) =
+                        cols.iter().find(|(n, _)| n.eq_ignore_ascii_case(name))
+                    else {
+                        return false;
+                    };
+                    *expr = underlying.clone();
+                    true
+                }
+            }
         }
-        // A parenthesized `AND` is still a top-level conjunction; the
-        // parens only recorded how it was written.
-        ExprKind::Paren(inner) => top_level_and_conjuncts(*inner),
-        _ => vec![expr],
+        ExprKind::FunctionCall { args, .. } => match args {
+            FunctionArgs::Star => true,
+            FunctionArgs::List(list) => list
+                .iter_mut()
+                .all(|e| rewrite_for_pushdown(e, alias, column_map, require_qualified)),
+        },
+        ExprKind::Unary { expr: inner, .. } => {
+            rewrite_for_pushdown(inner, alias, column_map, require_qualified)
+        }
+        ExprKind::Binary { lhs, rhs, .. } => {
+            rewrite_for_pushdown(lhs, alias, column_map, require_qualified)
+                && rewrite_for_pushdown(rhs, alias, column_map, require_qualified)
+        }
+        ExprKind::Is { lhs, rhs, .. } => {
+            rewrite_for_pushdown(lhs, alias, column_map, require_qualified)
+                && rewrite_for_pushdown(rhs, alias, column_map, require_qualified)
+        }
+        ExprKind::IsNull { expr: inner, .. } => {
+            rewrite_for_pushdown(inner, alias, column_map, require_qualified)
+        }
+        ExprKind::Between {
+            expr: e, lo, hi, ..
+        } => {
+            rewrite_for_pushdown(e, alias, column_map, require_qualified)
+                && rewrite_for_pushdown(lo, alias, column_map, require_qualified)
+                && rewrite_for_pushdown(hi, alias, column_map, require_qualified)
+        }
+        ExprKind::In { expr: e, list, .. } => {
+            rewrite_for_pushdown(e, alias, column_map, require_qualified)
+                && list
+                    .iter_mut()
+                    .all(|item| rewrite_for_pushdown(item, alias, column_map, require_qualified))
+        }
+        ExprKind::Like {
+            expr: e,
+            pattern,
+            escape,
+            ..
+        } => {
+            rewrite_for_pushdown(e, alias, column_map, require_qualified)
+                && rewrite_for_pushdown(pattern, alias, column_map, require_qualified)
+                && match escape {
+                    Some(esc) => rewrite_for_pushdown(esc, alias, column_map, require_qualified),
+                    None => true,
+                }
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            let operand_ok = match operand {
+                Some(o) => rewrite_for_pushdown(o, alias, column_map, require_qualified),
+                None => true,
+            };
+            let whens_ok = whens.iter_mut().all(|(w, t)| {
+                rewrite_for_pushdown(w, alias, column_map, require_qualified)
+                    && rewrite_for_pushdown(t, alias, column_map, require_qualified)
+            });
+            let else_ok = match else_ {
+                Some(e) => rewrite_for_pushdown(e, alias, column_map, require_qualified),
+                None => true,
+            };
+            operand_ok && whens_ok && else_ok
+        }
+        ExprKind::Cast { expr: e, .. } => {
+            rewrite_for_pushdown(e, alias, column_map, require_qualified)
+        }
+        ExprKind::Collate { expr: e, .. } => {
+            rewrite_for_pushdown(e, alias, column_map, require_qualified)
+        }
+        ExprKind::Paren(inner) => rewrite_for_pushdown(inner, alias, column_map, require_qualified),
+        ExprKind::Subquery(_)
+        | ExprKind::Exists { .. }
+        | ExprKind::InSubquery { .. }
+        | ExprKind::InSubqueryMulti { .. } => false,
+    }
+}
+
+fn and_exprs(existing: Option<Expr>, addition: Expr) -> Expr {
+    match existing {
+        Some(e) => Expr {
+            span: e.span,
+            kind: ExprKind::Binary {
+                op: BinaryOp::And,
+                lhs: Box::new(e),
+                rhs: Box::new(addition),
+            },
+        },
+        None => addition,
     }
 }
 
 fn rebuild_conjunction(exprs: Vec<Expr>) -> Option<Expr> {
-    exprs.into_iter().reduce(super::super::and_expr)
+    let mut iter = exprs.into_iter();
+    let first = iter.next()?;
+    Some(iter.fold(first, |acc, next| Expr {
+        span: acc.span,
+        kind: ExprKind::Binary {
+            op: BinaryOp::And,
+            lhs: Box::new(acc),
+            rhs: Box::new(next),
+        },
+    }))
 }
 
-fn and_exprs(existing: Option<Expr>, addition: Expr) -> Option<Expr> {
-    Some(match existing {
-        Some(existing) => super::super::and_expr(existing, addition),
-        None => addition,
-    })
+fn recurse_into_from_subqueries(select: &mut Select) {
+    let Some(from) = &mut select.from else {
+        return;
+    };
+    if let TableRefKind::Subquery(inner) = &mut from.first.kind {
+        push_down_where_predicates(inner);
+    }
+    for join in &mut from.joins {
+        if let TableRefKind::Subquery(inner) = &mut join.table.kind {
+            push_down_where_predicates(inner);
+        }
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::parser::row::error::{parse_select, ParseOutcome};
 
     fn parse(sql: &str) -> Select {
-        crate::codegen::row::testutil::select(sql)
-    }
-
-    fn inner(query: &Select) -> &Select {
-        match query.from.as_ref().map(|f| &f.first.kind) {
-            Some(TableRefKind::Subquery(inner)) => inner,
-            _ => panic!("expected a FROM-subquery"),
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("expected Accepted, got {other:?}"),
         }
     }
 
-    #[test]
-    fn pushes_a_qualified_conjunct_into_the_subquery() {
-        let mut query = parse("SELECT b FROM (SELECT a, b FROM t) x WHERE x.a = 1");
-        assert!(push_down_where_predicates(&mut query));
-        assert!(query.where_clause.is_none(), "{:?}", query.where_clause);
-        // The alias qualifier is dropped: inside the subquery, `a` is
-        // its own table's column.
-        assert!(matches!(
-            &inner(&query).where_clause,
-            Some(Expr {
-                kind: ExprKind::Binary {
-                    op: BinaryOp::Eq,
-                    lhs,
-                    rhs,
-                },
-                ..
-            }) if matches!(&lhs.kind, ExprKind::Column { name, .. } if name == "a")
-                && matches!(&rhs.kind, ExprKind::Literal(crate::parser::ast::Literal::Integer(1)))
-        ));
+    fn pushed(sql: &str) -> String {
+        let mut select = parse(sql);
+        push_down_where_predicates(&mut select);
+        select.to_string()
     }
 
     #[test]
-    fn pushes_only_the_movable_half_of_a_conjunction() {
-        let mut query =
-            parse("SELECT b FROM (SELECT a, b FROM t GROUP BY a, b) x WHERE x.a = 1 AND x.b = 2");
-        // A `GROUP BY` subquery is not pushdown-safe at all.
-        assert!(!push_down_where_predicates(&mut query));
-        assert!(query.where_clause.is_some());
+    fn pushes_predicate_through_wildcard_projection() {
+        let out = pushed("SELECT * FROM (SELECT a, b FROM t) AS sub WHERE sub.a = 1");
+        assert!(out.contains("WHERE a = 1"), "{out}");
     }
 
     #[test]
-    fn does_not_push_a_conjunct_naming_a_column_the_subquery_does_not_expose() {
-        let mut query = parse("SELECT b FROM (SELECT b FROM t) x WHERE x.a = 1");
-        assert!(!push_down_where_predicates(&mut query));
-        assert!(inner(&query).where_clause.is_none());
+    fn pushes_predicate_and_rewrites_aliased_column() {
+        let out = pushed("SELECT * FROM (SELECT a, b AS c FROM t) AS sub WHERE sub.c = 1");
+        assert!(out.contains("WHERE b = 1"), "{out}");
     }
 
     #[test]
-    fn does_not_push_a_conjunct_containing_its_own_subquery() {
-        let mut query =
-            parse("SELECT b FROM (SELECT a, b FROM t) x WHERE x.a IN (SELECT a FROM t)");
-        assert!(!push_down_where_predicates(&mut query));
-        assert!(inner(&query).where_clause.is_none());
+    fn does_not_push_when_column_unknown_in_explicit_map() {
+        let out = pushed("SELECT * FROM (SELECT a FROM t) AS sub WHERE sub.zzz = 1");
+        assert!(out.contains("zzz"), "{out}");
     }
 
     #[test]
-    fn conjoins_with_the_subquerys_existing_where() {
-        let mut query = parse("SELECT b FROM (SELECT a, b FROM t WHERE b > 0) x WHERE x.a = 1");
-        assert!(push_down_where_predicates(&mut query));
-        assert!(matches!(
-            &inner(&query).where_clause,
-            Some(Expr {
-                kind: ExprKind::Binary {
-                    op: BinaryOp::And,
-                    ..
-                },
-                ..
-            })
-        ));
+    fn does_not_push_when_subquery_has_group_by() {
+        let out = pushed(
+            "SELECT * FROM (SELECT a, count(*) AS c FROM t GROUP BY a) AS sub WHERE sub.a = 1",
+        );
+        assert!(out.contains("sub.a = 1"), "{out}");
     }
 
     #[test]
-    fn a_plain_table_from_is_left_alone() {
-        let mut query = parse("SELECT a FROM t WHERE a = 1");
-        assert!(!push_down_where_predicates(&mut query));
-        assert!(query.where_clause.is_some());
+    fn does_not_push_when_subquery_has_distinct() {
+        let out = pushed("SELECT * FROM (SELECT DISTINCT a FROM t) AS sub WHERE sub.a = 1");
+        assert!(out.contains("sub.a = 1"), "{out}");
+    }
+
+    #[test]
+    fn does_not_push_when_subquery_has_limit() {
+        let out = pushed("SELECT * FROM (SELECT a FROM t LIMIT 5) AS sub WHERE sub.a = 1");
+        assert!(out.contains("sub.a = 1"), "{out}");
+    }
+
+    #[test]
+    fn does_not_push_when_subquery_is_compound() {
+        let out =
+            pushed("SELECT * FROM (SELECT a FROM t UNION SELECT a FROM t2) AS sub WHERE sub.a = 1");
+        assert!(out.contains("sub.a = 1"), "{out}");
+    }
+
+    #[test]
+    fn does_not_push_when_subquery_has_own_join() {
+        let out = pushed(
+            "SELECT * FROM (SELECT t.a FROM t JOIN t2 ON t.a = t2.a) AS sub WHERE sub.a = 1",
+        );
+        assert!(out.contains("sub.a = 1"), "{out}");
+    }
+
+    #[test]
+    fn does_not_push_computed_projection() {
+        let out = pushed("SELECT * FROM (SELECT a + 1 AS c FROM t) AS sub WHERE sub.c = 1");
+        assert!(out.contains("sub.c = 1"), "{out}");
+    }
+
+    #[test]
+    fn does_not_push_catalog_qualified_column() {
+        let out = pushed("SELECT * FROM (SELECT a FROM t) AS sub WHERE main.sub.a = 1");
+        assert!(out.contains("main.sub.a = 1"), "{out}");
+    }
+
+    #[test]
+    fn requires_qualification_when_join_present() {
+        let out = pushed("SELECT * FROM (SELECT a FROM t) AS sub JOIN t2 ON t2.x = 1 WHERE a = 1");
+        assert!(out.contains("WHERE a = 1"), "{out}");
+    }
+
+    #[test]
+    fn allows_unqualified_column_without_join() {
+        let out = pushed("SELECT * FROM (SELECT a FROM t) AS sub WHERE a = 1");
+        assert!(out.contains("(SELECT a FROM t WHERE a = 1)"), "{out}");
+    }
+
+    #[test]
+    fn does_not_push_nested_subquery_expression() {
+        let out =
+            pushed("SELECT * FROM (SELECT a FROM t) AS sub WHERE sub.a IN (SELECT x FROM t2)");
+        assert!(out.contains("sub.a IN"), "{out}");
+    }
+
+    #[test]
+    fn pushes_into_second_join_table() {
+        let out = pushed(
+            "SELECT * FROM t0 JOIN (SELECT a FROM t) AS sub ON t0.x = sub.a WHERE sub.a = 1",
+        );
+        assert!(out.contains("(SELECT a FROM t WHERE a = 1)"), "{out}");
+    }
+
+    #[test]
+    fn splits_conjuncts_pushing_only_the_movable_one() {
+        let out = pushed("SELECT * FROM (SELECT a FROM t) AS sub WHERE sub.a = 1 AND sub.zzz = 1");
+        assert!(out.contains("t WHERE a = 1"), "{out}");
+        assert!(out.contains("sub.zzz = 1"), "{out}");
+    }
+
+    #[test]
+    fn rewrite_for_pushdown_covers_every_expr_kind() {
+        let out = pushed(
+            "SELECT * FROM (SELECT a FROM t) AS sub WHERE \
+             CASE WHEN sub.a BETWEEN 1 AND 10 THEN sub.a IN (1, 2) ELSE sub.a LIKE 'x' END \
+               AND CAST(sub.a AS INTEGER) IS NULL \
+               AND (-sub.a) IS NOT 1 \
+               AND (sub.a) COLLATE NOCASE = 1 \
+               AND foo(sub.a)",
+        );
+        assert!(out.contains("FROM t WHERE"), "{out}");
+        assert!(!out.contains("sub.a"), "{out}");
+    }
+
+    #[test]
+    fn does_not_push_like_escape_referencing_unmapped_column() {
+        let out =
+            pushed("SELECT * FROM (SELECT a FROM t) AS sub WHERE sub.a LIKE 'x' ESCAPE sub.zzz");
+        assert!(out.contains("zzz"), "{out}");
+    }
+
+    #[test]
+    fn does_not_push_exists_or_scalar_subquery_conjunct() {
+        let out = pushed(
+            "SELECT * FROM (SELECT a FROM t) AS sub WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.x = sub.a)",
+        );
+        assert!(out.contains("EXISTS"), "{out}");
+
+        let out = pushed("SELECT * FROM (SELECT a FROM t) AS sub WHERE (SELECT x FROM t2) = sub.a");
+        assert!(out.contains("sub.a"), "{out}");
+    }
+
+    #[test]
+    fn does_not_push_in_subquery_multi_conjunct() {
+        let out = pushed(
+            "SELECT * FROM (SELECT a FROM t) AS sub WHERE (sub.a, 1) IN (SELECT x, y FROM t2)",
+        );
+        assert!(out.contains("sub.a"), "{out}");
+    }
+
+    #[test]
+    fn recurses_into_nested_subqueries() {
+        let out = pushed(
+            "SELECT * FROM (SELECT * FROM (SELECT a FROM t) AS inner1) AS outer1 WHERE outer1.a = 1",
+        );
+        assert!(out.contains("(SELECT a FROM t WHERE a = 1)"), "{out}");
     }
 }

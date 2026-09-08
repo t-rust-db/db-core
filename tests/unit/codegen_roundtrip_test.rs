@@ -21,7 +21,7 @@ use db_core::codegen::row::TableSchema;
 use db_core::vm::row::{execute, Cursor, EphemeralTableCursor, Opcode, Program, Value, Vm};
 
 fn schema(name: &str, columns: &[&str]) -> TableSchema {
-    schema_with_root(name, columns, 0)
+    schema_with_root(name, columns, 2)
 }
 
 fn schema_with_root(name: &str, columns: &[&str], root_page: u32) -> TableSchema {
@@ -30,6 +30,7 @@ fn schema_with_root(name: &str, columns: &[&str], root_page: u32) -> TableSchema
         columns: columns.iter().map(|c| (*c).to_string()).collect(),
         column_types: columns.iter().map(|_| String::new()).collect(),
         root_page,
+        sql: format!("CREATE TABLE {name} ({})", columns.join(", ")),
         ..Default::default()
     }
 }
@@ -49,7 +50,7 @@ fn cursor_slot_for_root(program: &Program, root_page: u32) -> i32 {
 }
 
 fn run(schemas: &[TableSchema], sql: &str, seed: Vec<(i64, Vec<Value>)>) -> Vec<Vec<Value>> {
-    let program = compile_statement(sql, schemas).unwrap();
+    let program = compile_statement(sql, schemas, &[]).unwrap();
     let mut vm = Vm::new();
     let mut table = EphemeralTableCursor::new();
     for (rowid, values) in seed {
@@ -63,7 +64,7 @@ fn run(schemas: &[TableSchema], sql: &str, seed: Vec<(i64, Vec<Value>)>) -> Vec<
 fn group_by_with_having_and_an_aggregate() {
     let rows = run(
         &[schema("t", &["k", "v"])],
-        "SELECT k, SUM(v) FROM t GROUP BY k HAVING \"SUM(v)\" > 5",
+        "SELECT k, SUM(v) FROM t GROUP BY k HAVING SUM(v) > 5",
         vec![
             (1, vec![Value::Integer(1), Value::Integer(10)]),
             (2, vec![Value::Integer(2), Value::Integer(1)]),
@@ -125,8 +126,12 @@ fn where_clause_scalar_subquery() {
         schema_with_root("t", &["a"], 2),
         schema_with_root("bound", &["n"], 3),
     ];
-    let program =
-        compile_statement("SELECT a FROM t WHERE a > (SELECT n FROM bound)", &schemas).unwrap();
+    let program = compile_statement(
+        "SELECT a FROM t WHERE a > (SELECT n FROM bound)",
+        &schemas,
+        &[],
+    )
+    .unwrap();
 
     // The outer table is the caller's pre-wired cursor 0 (no `OpenRead`
     // of its own -- codegen's compiled-ahead-of-time path); only the
@@ -148,19 +153,19 @@ fn where_clause_scalar_subquery() {
 #[test]
 fn insert_then_group_by_select_sees_the_new_row() {
     let schemas = [schema("t", &["k", "v"])];
-    let insert = compile_statement("INSERT INTO t VALUES (1, 7)", &schemas).unwrap();
+    let insert = compile_statement("INSERT INTO t VALUES (1, 7)", &schemas, &[]).unwrap();
     let mut vm = Vm::new();
     vm.open_cursor(0, Box::new(EphemeralTableCursor::new()))
         .unwrap();
     execute(&mut vm, &insert).unwrap();
 
-    let select = compile_statement("SELECT k, SUM(v) FROM t GROUP BY k", &schemas).unwrap();
+    let select = compile_statement("SELECT k, SUM(v) FROM t GROUP BY k", &schemas, &[]).unwrap();
     let rows = execute(&mut vm, &select).unwrap();
     assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(7)]]);
 }
 
 #[test]
 fn compile_statement_reports_an_unknown_table() {
-    let err = compile_statement("SELECT a FROM missing", &[]).unwrap_err();
+    let err = compile_statement("SELECT a FROM missing", &[], &[]).unwrap_err();
     assert!(format!("{err:?}").contains("missing"));
 }

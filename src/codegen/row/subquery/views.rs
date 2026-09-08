@@ -1,44 +1,56 @@
-//! `CREATE VIEW` expansion (db-core#206) -- see `super`'s module doc.
-//!
-//! Mirrors [`super::cte`]'s non-recursive `WITH`-clause expansion
-//! almost exactly, but for the schema catalog's [`ViewSchema`] rows
-//! instead of a query-local `WITH` clause: every `FROM`/`JOIN` table
-//! reference naming a view becomes a [`TableRefKind::Subquery`]
-//! wrapping that view's stored `SELECT`, so the rest of codegen
-//! materializes and scans it exactly like any other `FROM`-subquery.
-//!
-//! Ported near-verbatim from sqlite-rs's `src/codegen/subquery/
-//! views.rs`, adapted to this crate's `ViewSchema` (db-core's own copy
-//! per ADR 0012 -- `db_storage::row::schema::ViewSchema` isn't
-//! available here, ADR 0008 forbids the dependency).
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! `CREATE VIEW` query expansion (#380) — the catalog counterpart to
+//! [`super::cte::expand_with_clause`]: every `FROM`/`JOIN` table
+//! reference naming a catalog view becomes a `TableRefKind::Subquery`
+//! wrapping that view's stored `Select`, reusing exactly the same
+//! `TableRefKind::Subquery` materialization path (#257) CTEs already
+//! ride on. Unlike CTEs (declared inline, resolved in one pass in
+//! declaration order), every view is already fully defined in the
+//! catalog before a query ever runs, so a view referencing another view
+//! (nested views) is resolved by recursing into the substituted
+//! subquery's own `FROM`/`JOIN` clauses with the same view list. Since
+//! `CREATE VIEW` never checks for cycles at DDL time, a view can
+//! reference itself directly or transitively (through other views); the
+//! stack of view names currently being expanded is tracked so such a
+//! cycle is rejected with [`CodegenError::CircularView`] (matching stock
+//! SQLite's own "view X is circularly defined" wording) instead of
+//! recursing forever.
 
-use crate::codegen::row::{CodegenError, Result, ViewSchema};
+use std::borrow::Cow;
+
 use crate::parser::ast::{Select, TableRef, TableRefKind};
-use crate::parser::row::error::{parse_create_view, ParseOutcome};
+use crate::parser::row::error::ParseOutcome;
 
-/// A view resolved from its stored `CREATE VIEW ... AS <select>` text
-/// into a ready-to-substitute query body.
-#[derive(Debug, Clone)]
+use crate::codegen::row::select::CodegenError;
+
+use super::cte::{apply_column_aliases, expand_with_clause};
+
+/// A view's catalog entry, pre-parsed once per query by the caller
+/// (`bin/sqlite-rs/query.rs`) from `schema::ViewSchema::sql`.
 pub struct ResolvedView {
-    /// The view's name.
+    /// The view's name, as it appears in `sqlite_master`.
     pub name: String,
-    /// The view's body.
+    /// Optional explicit column name list from `CREATE VIEW name(cols)`.
+    pub columns: Option<Vec<String>>,
+    /// The view's underlying, already-parsed `SELECT`.
     pub query: Box<Select>,
 }
 
-/// Parses every view's stored `sql` back into a [`ResolvedView`]. A row
-/// whose `sql` doesn't parse as a `CREATE VIEW` (shouldn't happen for
-/// anything this crate's own DDL codegen wrote, but the catalog is an
-/// untrusted input as far as this pass is concerned) is silently
-/// dropped -- a query referencing it then fails to resolve the name at
-/// the ordinary "no such table" path, rather than this pass surfacing a
-/// parse error for a view nothing in the query actually needs.
-pub fn resolve_views(views: &[ViewSchema]) -> Vec<ResolvedView> {
+/// Parses every `schema::ViewSchema` into a [`ResolvedView`], silently
+/// dropping any view whose stored `sql` no longer parses (should not
+/// happen in practice — `sqlite_master.sql` is only ever written by
+/// [`crate::codegen::row::compile_create_view`] itself — but this module
+/// follows the same graceful-degradation convention as
+/// `schema::ddl_reader`'s unparseable-DDL handling rather than turning a
+/// single bad row into a hard failure for every other query).
+pub fn resolve_views(views: &[crate::codegen::row::ViewSchema]) -> Vec<ResolvedView> {
     views
         .iter()
-        .filter_map(|view| match parse_create_view(&view.sql) {
+        .filter_map(|v| match crate::parser::row::parse_create_view(&v.sql) {
             ParseOutcome::Accepted(create) => Some(ResolvedView {
-                name: view.name.clone(),
+                name: create.name,
+                columns: create.columns,
                 query: create.query,
             }),
             _ => None,
@@ -46,69 +58,132 @@ pub fn resolve_views(views: &[ViewSchema]) -> Vec<ResolvedView> {
         .collect()
 }
 
-/// Expands away every view reference in `select`'s own main `FROM`
-/// clause and each compound arm's `FROM` clause, in place. Does not
-/// recurse into subquery *expressions* (scalar/`IN`/`EXISTS`) -- a view
-/// is only visible in `FROM`/`JOIN` position, matching how #95's
-/// subquery-in-FROM support and [`super::cte::expand_with_clause`] are
-/// themselves scoped.
-pub fn expand_views(select: &mut Select, views: &[ResolvedView]) -> Result<()> {
-    let mut seen = Vec::new();
-    substitute_view_refs(select, views, &mut seen)
+/// Rewrites away every catalog-view reference in `select`'s `FROM`/
+/// `JOIN` clauses (main query and each `UNION`/`UNION ALL` arm),
+/// recursively. A `Select` that references no view (including no view
+/// reachable through a `TableRefKind::Subquery` a prior CTE rewrite
+/// produced) is returned as `Cow::Borrowed` rather than cloned — the
+/// common case for a query with no view in scope at all (#590 item 6).
+/// Fails with [`CodegenError::CircularView`] if a view directly or
+/// transitively references itself.
+///
+/// A method (rather than a free function taking `select: &Select,
+/// views: &[ResolvedView]`) specifically so the returned `Cow<'_,
+/// Select>`'s lifetime elides to the receiver's alone — the qualified
+/// subset (`make check-mvl-limit`) denies explicit lifetime parameters, and a
+/// free function with two independently-lifetimed reference parameters
+/// has no elided borrow to tie an elided `Cow<'_, _>` to.
+pub trait ExpandViews {
+    /// See [`ExpandViews`]'s trait-level doc.
+    fn expand_views(&self, views: &[ResolvedView]) -> Result<Cow<'_, Select>, CodegenError>;
 }
 
-fn substitute_view_refs(
+impl ExpandViews for Select {
+    fn expand_views(&self, views: &[ResolvedView]) -> Result<Cow<'_, Select>, CodegenError> {
+        if views.is_empty() || !select_references_any_view(self, views) {
+            return Ok(Cow::Borrowed(self));
+        }
+        let mut out = self.clone();
+        let mut stack = Vec::new();
+        expand_views_in_select(&mut out, views, &mut stack)?;
+        Ok(Cow::Owned(out))
+    }
+}
+
+/// Read-only check mirroring [`expand_views_in_select`]'s traversal
+/// exactly (main `FROM`/`JOIN`, each compound arm, recursing into any
+/// `TableRefKind::Subquery`) so the "nothing to rewrite" fast path in
+/// [`expand_views`] can never disagree with what the rewrite itself
+/// would have found.
+fn select_references_any_view(select: &Select, views: &[ResolvedView]) -> bool {
+    let from_has_view = |from: &crate::parser::ast::FromClause| {
+        table_ref_references_view(&from.first, views)
+            || from
+                .joins
+                .iter()
+                .any(|j| table_ref_references_view(&j.table, views))
+    };
+    if select.from.as_ref().is_some_and(from_has_view) {
+        return true;
+    }
+    select
+        .compound
+        .iter()
+        .any(|arm| arm.from.as_ref().is_some_and(from_has_view))
+}
+
+fn table_ref_references_view(table_ref: &TableRef, views: &[ResolvedView]) -> bool {
+    match &table_ref.kind {
+        TableRefKind::Name(name) => views.iter().any(|v| v.name.eq_ignore_ascii_case(name)),
+        TableRefKind::Subquery(inner) => select_references_any_view(inner, views),
+    }
+}
+
+fn expand_views_in_select(
     select: &mut Select,
     views: &[ResolvedView],
-    seen: &mut Vec<String>,
-) -> Result<()> {
+    stack: &mut Vec<String>,
+) -> Result<(), CodegenError> {
     if let Some(from) = &mut select.from {
-        substitute_table_ref(&mut from.first, views, seen)?;
+        expand_table_ref(&mut from.first, views, stack)?;
         for join in &mut from.joins {
-            substitute_table_ref(&mut join.table, views, seen)?;
+            expand_table_ref(&mut join.table, views, stack)?;
         }
     }
     for arm in &mut select.compound {
         if let Some(from) = &mut arm.from {
-            substitute_table_ref(&mut from.first, views, seen)?;
+            expand_table_ref(&mut from.first, views, stack)?;
             for join in &mut from.joins {
-                substitute_table_ref(&mut join.table, views, seen)?;
+                expand_table_ref(&mut join.table, views, stack)?;
             }
         }
     }
     Ok(())
 }
 
-fn substitute_table_ref(
+fn expand_table_ref(
     table_ref: &mut TableRef,
     views: &[ResolvedView],
-    seen: &mut Vec<String>,
-) -> Result<()> {
+    stack: &mut Vec<String>,
+) -> Result<(), CodegenError> {
     match &mut table_ref.kind {
         TableRefKind::Name(name) => {
             let Some(view) = views.iter().find(|v| v.name.eq_ignore_ascii_case(name)) else {
                 return Ok(());
             };
-            if seen.iter().any(|s| s.eq_ignore_ascii_case(&view.name)) {
-                return Err(CodegenError::CircularView(view.name.clone()));
+            if stack
+                .iter()
+                .any(|seen| seen.eq_ignore_ascii_case(&view.name))
+            {
+                return Err(CodegenError::CircularView {
+                    name: view.name.clone(),
+                });
             }
-            // A subquery-in-FROM's alias is mandatory to the rest of
-            // codegen (see `resolve_from_table_schema`'s doc comment)
-            // -- default it to the view's own name when the reference
-            // didn't supply one (the common `FROM view_name` case, as
-            // opposed to `FROM view_name AS v`).
+            // A view's own stored body may carry its own `WITH` clause
+            // (`CREATE VIEW v AS WITH cte AS (...) SELECT * FROM cte`) —
+            // that never runs through `expand_with_clause` otherwise,
+            // since only the outermost query gets that pass at the top
+            // of `compile_select_program`. Expanding it here, before
+            // recursing for nested views, mirrors the ordering already
+            // used at the top level (CTEs first, then views).
+            let mut query = expand_with_clause(&view.query).into_owned();
+            if let Some(columns) = &view.columns {
+                apply_column_aliases(&mut query, columns);
+            }
+            stack.push(view.name.clone());
+            let result = expand_views_in_select(&mut query, views, stack);
+            stack.pop();
+            result?;
+            // Same alias-defaulting rule as CTE substitution (#376): a
+            // bare `FROM view_name` (no explicit alias) needs the
+            // subquery's alias set to the view's own name, since a
+            // `TableRefKind::Subquery`'s alias is mandatory to the rest
+            // of codegen (`resolve_from_table_schema`'s doc comment).
             let alias = table_ref.alias.clone().or_else(|| Some(view.name.clone()));
-            let mut body = (*view.query).clone();
-            seen.push(view.name.clone());
-            substitute_view_refs(&mut body, views, seen)?;
-            seen.pop();
-            table_ref.kind = TableRefKind::Subquery(Box::new(body));
+            table_ref.kind = TableRefKind::Subquery(Box::new(query));
             table_ref.alias = alias;
             Ok(())
         }
-        // An inline derived table (`FROM (SELECT ... FROM v) sub`) can
-        // itself reference a view in its own FROM -- recurse into it
-        // the same way CTE expansion would.
-        TableRefKind::Subquery(inner) => substitute_view_refs(inner, views, seen),
+        TableRefKind::Subquery(inner) => expand_views_in_select(inner, views, stack),
     }
 }

@@ -62,7 +62,7 @@ const QUERIES: &[&str] = &[
 ];
 
 fn run_db_core(sql: &str) -> Vec<Vec<Value>> {
-    let program = compile_statement(sql, &[schema()]).unwrap_or_else(|e| {
+    let program = compile_statement(sql, &[schema()], &[]).unwrap_or_else(|e| {
         panic!("db-core failed to compile {sql:?}: {e}");
     });
     let mut vm = Vm::new();

@@ -1,102 +1,395 @@
-//! `EXISTS`/`IN`/scalar subquery-expression compilation -- see `super`'s
-//! module doc, including why the reference's multi-column-`IN` entry
-//! point has no db-core counterpart.
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! Scalar/`EXISTS`/`IN` subquery-expression compilation — see
+//! `super`'s module doc.
 
 use super::from_clause::resolve_subquery_schema;
-use crate::codegen::row::cond::{compile_cond, ensure_label};
-use crate::codegen::row::value::compile_value;
-use crate::codegen::row::{
-    CodegenError, CondTargets, Emitter, NullTarget, RegAlloc, Result, Scope, Target,
+use super::{select_id, HoistedSubquery};
+use crate::codegen::row::expr::{compile_cond, compile_value};
+use crate::codegen::row::index_maintenance::{valid_index_root_page, valid_table_root_page};
+use crate::codegen::row::select::join_access::{choose_join_access, JoinAccess};
+use crate::codegen::row::select::{
+    compile_grouped_scan, select_has_aggregate, try_compile_index_only_count,
+    try_compile_index_only_sum, CodegenError, ScanCursors,
 };
+use crate::codegen::row::{CondTargets, Emitter, NullTarget, RegAlloc, Scope, Target};
 use crate::parser::ast::{Expr, ResultColumn, Select};
-use crate::vm::row::{Instruction, Opcode, P4};
+use crate::vm::row::{Collation, Instruction, Opcode, P4};
 
-/// A subquery's single projected result column -- `IN (SELECT ...)` and
-/// a scalar `(SELECT ...)` in value position both need exactly one
-/// (`SELECT *`, or more than one column, is `Unsupported`), mirroring the
-/// reference's `single_result_expr`. A bare column or any other computed
-/// expression is accepted here and compiled through the ordinary
-/// [`compile_value`] machinery by the caller; an aggregate call (e.g.
-/// `COUNT(*)`) is rejected separately by [`reject_aggregate`] since it
-/// needs `AggStep`/`AggFinal`, not a per-row [`compile_value`] call.
-fn single_result_expr(subquery: &Select) -> Result<&Expr> {
-    match subquery.columns.as_slice() {
+/// A subquery's single projected result-column expression — scalar
+/// subqueries and single-column `IN (SELECT ...)` both need exactly one
+/// (`SELECT *`/`table.*`/more than one column is `Unsupported`); see
+/// [`multi_result_exprs`] for the multi-column `IN` counterpart.
+fn single_result_expr(subselect: &Select) -> Result<&Expr, CodegenError> {
+    match subselect.columns.as_slice() {
         [ResultColumn::Expr { expr, .. }] => Ok(expr),
         _ => Err(CodegenError::Unsupported {
-            reason: "a subquery in this position must project exactly one column".to_string(),
+            reason: "a scalar/IN subquery must project exactly one expression column".to_string(),
         }),
     }
 }
 
-/// Rejects an aggregate call (`COUNT(*)`, `AVG(c)`, ...) as this
-/// subquery's single projected expression: it needs whole-scan
-/// accumulation (`AggStep`/`AggFinal`), which the per-row
-/// [`compile_value`] loop below doesn't provide. Tracked as a distinct,
-/// still-open follow-up (db-core#175) rather than folded into the
-/// generic "exactly one column" message above.
-fn reject_aggregate(expr: &Expr) -> Result<()> {
-    use crate::codegen::row::aggregate::as_aggregate;
-    if as_aggregate(expr)?.is_some() {
+/// A subquery's N projected result-column expressions for
+/// multi-column `IN` (#251) — `SELECT *`/`table.*` isn't supported
+/// here (arity must be known statically from the expression list).
+fn multi_result_exprs(subselect: &Select) -> Result<Vec<&Expr>, CodegenError> {
+    subselect
+        .columns
+        .iter()
+        .map(|c| match c {
+            ResultColumn::Expr { expr, .. } => Ok(expr),
+            _ => Err(CodegenError::Unsupported {
+                reason: "a multi-column IN subquery's result columns must be plain expressions \
+                         (no * / table.*)"
+                    .to_string(),
+            }),
+        })
+        .collect()
+}
+
+/// Compiles each of `exprs` into a value register, requiring the
+/// results land in a contiguous range (mirrors `select.rs`'s
+/// `MakeRecord` contiguity check) — returns `(first register, count)`.
+fn compile_contiguous(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    scope: &Scope,
+    exprs: impl IntoIterator<Item = impl std::borrow::Borrow<Expr>>,
+    what: &str,
+) -> Result<(i32, i32), CodegenError> {
+    let mut regs = Vec::new();
+    for e in exprs {
+        regs.push(compile_value(em, reg, scope, e.borrow())?);
+    }
+    let Some(&first) = regs.first() else {
         return Err(CodegenError::Unsupported {
-            reason: "an aggregate as a subquery's sole projected column is not supported by \
-                     codegen::row yet"
-                .to_string(),
+            reason: format!("{what} must not be empty"),
+        });
+    };
+    for (i, r) in regs.iter().enumerate() {
+        let want = first.saturating_add(i32::try_from(i).unwrap_or(i32::MAX));
+        if *r != want {
+            return Err(CodegenError::Unsupported {
+                reason: format!("{what} must land in contiguous registers"),
+            });
+        }
+    }
+    Ok((first, i32::try_from(regs.len()).unwrap_or(0)))
+}
+
+/// Compiles a scalar subquery `(SELECT ...)` (#238) into a fresh
+/// register: NULL if the subquery yields zero rows, otherwise its
+/// first result column's value from the *first* row returned (matching
+/// SQLite: more than one row silently takes the first rather than
+/// erroring).
+pub(crate) fn compile_scalar_subquery(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    outer_scope: &Scope,
+    subselect: &Select,
+) -> Result<i32, CodegenError> {
+    if !subselect.order_by.is_empty() || subselect.limit.is_some() {
+        return Err(CodegenError::Unsupported {
+            reason: "ORDER BY/LIMIT in a scalar subquery is not yet supported".to_string(),
         });
     }
-    Ok(())
-}
+    let dest = reg.alloc();
+    em.emit(Instruction::new(Opcode::Null, 0, dest, 0));
 
-/// Opens the subquery's own table cursor and builds its scope, with the
-/// enclosing scope as [`Scope::outer`] so a correlated column reference
-/// resolves there.
-fn open_subquery_scan(
-    em: &mut Emitter,
-    reg: &mut RegAlloc,
-    outer_scope: &Scope,
-    subquery: &Select,
-) -> Result<(i32, Scope)> {
-    let schema = resolve_subquery_schema(subquery, outer_scope)?;
+    let catalog = outer_scope.catalog.clone();
+    let resolved = resolve_subquery_schema(subselect, &catalog)?;
+    let Some(schema) = resolved else {
+        // No FROM: a single computed expression, evaluated exactly
+        // once (no rows to iterate).
+        if subselect.where_clause.is_some() {
+            return Err(CodegenError::Unsupported {
+                reason: "a FROM-less scalar subquery cannot have a WHERE clause".to_string(),
+            });
+        }
+        let col_expr = single_result_expr(subselect)?;
+        let empty_scope = Scope::default()
+            .with_catalog(catalog)
+            .with_outer(outer_scope.clone());
+        let v = compile_value(em, reg, &empty_scope, col_expr)?;
+        em.emit(Instruction::new(Opcode::Copy, v, dest, 0));
+        return Ok(dest);
+    };
+
     let sub_cursor = reg.alloc_cursor();
-    em.emit(Instruction::new(
-        Opcode::OpenRead,
-        sub_cursor,
-        i32::try_from(schema.root_page).map_err(|_| CodegenError::Unsupported {
-            reason: format!(
-                "root page {} does not fit in a p2 operand",
-                schema.root_page
-            ),
-        })?,
-        0,
-    ));
-    let sub_scope = Scope::single(schema, sub_cursor)
-        .with_catalog(outer_scope.catalog.clone())
+
+    let root_page = valid_table_root_page(&schema)?;
+    em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));
+
+    if select_has_aggregate(subselect) {
+        // #304: the subquery's projected expression contains an
+        // aggregate call (e.g. `(SELECT max(x) FROM t ...)`) — route
+        // through the same implicit-whole-table-group machinery #287
+        // built for a top-level `GROUP BY`-less aggregate query, via
+        // its `sink` callback, instead of `compile_value`'s plain
+        // (aggregate-rejecting) expression path. `compile_grouped_scan`
+        // always emits exactly one finalized group's registers, so the
+        // sink just copies the first of them into `dest` — no loop/
+        // `Rewind`/`Next`/`WHERE`-skip bookkeeping needed here, that's
+        // all internal to `compile_grouped_scan` now.
+        let cursors = ScanCursors {
+            table: sub_cursor,
+            sort: reg.alloc_cursor(),
+            pseudo: reg.alloc_cursor(),
+            distinct: reg.alloc_cursor(),
+        };
+        let mut sink = |em: &mut Emitter, _reg: &mut RegAlloc, first: i32, _count: i32| {
+            em.emit(Instruction::new(Opcode::Copy, first, dest, 0));
+            Ok(())
+        };
+        // #634: try the same index-only fast paths top-level aggregate
+        // queries get (`entry.rs`'s dispatch order) before falling back
+        // to `compile_grouped_scan`'s buffer-then-flush machinery — a
+        // subquery's projected aggregate is otherwise never given the
+        // chance at an index-only scan.
+        if try_compile_index_only_count(em, reg, subselect, &schema, cursors, &catalog, &mut sink)?
+        {
+            return Ok(dest);
+        }
+        if try_compile_index_only_sum(em, reg, subselect, &schema, cursors, &mut sink)? {
+            return Ok(dest);
+        }
+        let end_label = em.new_label();
+        compile_grouped_scan(
+            em,
+            reg,
+            subselect,
+            &schema,
+            cursors,
+            end_label,
+            &catalog,
+            true,
+            Some(outer_scope),
+            &mut sink,
+        )?;
+        em.place(end_label);
+        return Ok(dest);
+    }
+
+    let col_expr = single_result_expr(subselect)?;
+    let sub_scope = Scope::single(&schema, sub_cursor)
+        .with_catalog(catalog)
         .with_outer(outer_scope.clone());
-    Ok((sub_cursor, sub_scope))
+
+    let end_label = em.new_label();
+
+    // #434: a `WHERE` clause that's a single equality between this
+    // subquery's own table and a safe outer-query probe (the
+    // correlated case) compiles to a `SeekRowid`/`SeekIndexEq` point
+    // lookup — the same #243 join-level access strategy
+    // (`join_access::choose_join_access`) a `JOIN ... ON` condition
+    // gets — instead of an unconditional `Rewind`/`Next` scan. This is
+    // the actual technique the sqlite3 oracle uses for this exact
+    // query shape (confirmed via `EXPLAIN`: `cat = t.y` compiles to a
+    // single `SeekRowid`, never a table scan, and the subquery is
+    // simply re-run per outer row — no caching at all), and it makes
+    // #314's memoization cache unnecessary for this shape (that cache
+    // still helps a correlated subquery whose `WHERE` isn't a seekable
+    // equality).
+    let seek_access = subselect.where_clause.as_ref().and_then(|where_expr| {
+        let sub_binding = sub_scope.tables.first()?;
+        choose_join_access(sub_binding, where_expr, &outer_scope.tables)
+    });
+
+    if let Some(access) = seek_access {
+        let value_reg = match &access {
+            JoinAccess::Rowid(operand) | JoinAccess::UniqueIndex { operand, .. } => {
+                compile_value(em, reg, outer_scope, operand)?
+            }
+        };
+        // A NULL probe value can never equal anything (SQL's `NULL =
+        // x` is unknown, not true) — `SeekRowid`/`SeekIndexEq` require
+        // an actual key, so this must be checked explicitly rather
+        // than let it reach either opcode as a malformed target.
+        let null_addr = em.emit(Instruction::new(Opcode::IsNull, value_reg, 0, 0));
+        em.patch_p2(null_addr, end_label);
+        match access {
+            JoinAccess::Rowid(_) => {
+                let seek_addr = em.emit(Instruction::new(
+                    Opcode::SeekRowid,
+                    sub_cursor,
+                    0,
+                    value_reg,
+                ));
+                em.patch_p2(seek_addr, end_label);
+            }
+            JoinAccess::UniqueIndex { index, .. } => {
+                let index_cursor = reg.alloc_cursor();
+                let root_page = valid_index_root_page(&index)?;
+                let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+                open_instr.p5 = 1;
+                em.emit(open_instr);
+                let leading_collation = index
+                    .columns
+                    .first()
+                    .map_or(Collation::Binary, |c| c.collation);
+                let seek_instr = Instruction::with_p4(
+                    Opcode::SeekIndexEq,
+                    index_cursor,
+                    0,
+                    value_reg,
+                    P4::SeekKey(vec![leading_collation]),
+                );
+                let seek_addr = em.emit(seek_instr);
+                em.patch_p2(seek_addr, end_label);
+                let rowid_reg = reg.alloc();
+                em.emit(Instruction::new(
+                    Opcode::IdxRowid,
+                    index_cursor,
+                    rowid_reg,
+                    0,
+                ));
+                let table_seek_addr = em.emit(Instruction::new(
+                    Opcode::SeekRowid,
+                    sub_cursor,
+                    0,
+                    rowid_reg,
+                ));
+                em.patch_p2(table_seek_addr, end_label);
+            }
+        }
+        let v = compile_value(em, reg, &sub_scope, col_expr)?;
+        em.emit(Instruction::new(Opcode::Copy, v, dest, 0));
+        em.goto(end_label);
+        em.place(end_label);
+        return Ok(dest);
+    }
+
+    let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
+    em.patch_p2(rewind_addr, end_label);
+    let loop_start = em.new_label();
+    em.place(loop_start);
+
+    let skip = em.new_label();
+    if let Some(where_expr) = &subselect.where_clause {
+        compile_cond(
+            em,
+            reg,
+            &sub_scope,
+            where_expr,
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip)),
+        )?;
+    }
+    let v = compile_value(em, reg, &sub_scope, col_expr)?;
+    em.emit(Instruction::new(Opcode::Copy, v, dest, 0));
+    em.goto(end_label);
+
+    em.place(skip);
+    let next_addr = em.emit(Instruction::new(Opcode::Next, sub_cursor, 0, 0));
+    em.patch_p2(next_addr, loop_start);
+    em.place(end_label);
+    Ok(dest)
 }
 
-/// Compiles `[NOT] EXISTS (SELECT ...)` as a jump: runs the subquery's
-/// scan and jumps to the true continuation as soon as one row satisfies
-/// its `WHERE` clause (or immediately, if it has none), without
-/// materializing anything -- cheaper than the `IN` form since `EXISTS`
-/// never needs a row's actual values. `EXISTS` is always definitely true
-/// or false (never SQL's unknown), so `targets.on_null` is not consulted.
-pub fn compile_exists(
+/// Compiles `EXISTS (SELECT ...)`/`NOT EXISTS (SELECT ...)` (#238) as a
+/// jump: runs the subquery's scan and jumps to the true continuation as
+/// soon as one row satisfies its `WHERE` clause (or immediately, if it
+/// has none), without materializing anything — cheaper than the
+/// scalar/`IN` forms since `EXISTS` never needs a row's actual values.
+/// `EXISTS` is always definitely true or false (never SQL's unknown),
+/// so `targets.on_null` is not consulted.
+///
+/// #580: when the `WHERE` clause is a single correlated equality
+/// against a rowid or unique index (the same shape #434 detects for
+/// scalar subqueries via `choose_join_access`), this compiles to a
+/// `SeekRowid`/`SeekIndexEq` point lookup instead of an unconditional
+/// `Rewind`/`Next` scan — no scan loop at all, not merely an early exit
+/// from one.
+pub(crate) fn compile_exists(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     outer_scope: &Scope,
-    subquery: &Select,
+    subselect: &Select,
     negated: bool,
     targets: CondTargets,
-) -> Result<()> {
-    let (sub_cursor, sub_scope) = open_subquery_scan(em, reg, outer_scope, subquery)?;
+) -> Result<(), CodegenError> {
+    let catalog = outer_scope.catalog.clone();
+    let resolved = resolve_subquery_schema(subselect, &catalog)?;
+    let Some(schema) = resolved else {
+        return Err(CodegenError::Unsupported {
+            reason: "EXISTS (SELECT ...) requires a FROM clause".to_string(),
+        });
+    };
+    let sub_cursor = reg.alloc_cursor();
+    let sub_scope = Scope::single(&schema, sub_cursor)
+        .with_catalog(catalog)
+        .with_outer(outer_scope.clone());
 
     let (exists_true, exists_false) = if negated {
         (targets.on_false, targets.on_true)
     } else {
         (targets.on_true, targets.on_false)
     };
-    let (t_label, t_is_new) = ensure_label(em, exists_true);
+    let (t_label, t_is_new) = crate::codegen::row::expr::ensure_label(em, exists_true);
 
+    let seek_access = subselect.where_clause.as_ref().and_then(|where_expr| {
+        let sub_binding = sub_scope.tables.first()?;
+        choose_join_access(sub_binding, where_expr, &outer_scope.tables)
+    });
+
+    if let Some(access) = seek_access {
+        let not_found = em.new_label();
+        let value_reg = match &access {
+            JoinAccess::Rowid(operand) | JoinAccess::UniqueIndex { operand, .. } => {
+                compile_value(em, reg, outer_scope, operand)?
+            }
+        };
+        // A NULL probe value can never equal anything (SQL's `NULL =
+        // x` is unknown, not true) — `SeekRowid`/`SeekIndexEq` require
+        // an actual key, so this must be checked explicitly rather
+        // than let it reach either opcode as a malformed target.
+        let null_addr = em.emit(Instruction::new(Opcode::IsNull, value_reg, 0, 0));
+        em.patch_p2(null_addr, not_found);
+        let root_page = valid_table_root_page(&schema)?;
+        em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));
+        match access {
+            JoinAccess::Rowid(_) => {
+                let seek_addr = em.emit(Instruction::new(
+                    Opcode::SeekRowid,
+                    sub_cursor,
+                    0,
+                    value_reg,
+                ));
+                em.patch_p2(seek_addr, not_found);
+            }
+            JoinAccess::UniqueIndex { index, .. } => {
+                let index_cursor = reg.alloc_cursor();
+                let root_page = valid_index_root_page(&index)?;
+                let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+                open_instr.p5 = 1;
+                em.emit(open_instr);
+                let leading_collation = index
+                    .columns
+                    .first()
+                    .map_or(Collation::Binary, |c| c.collation);
+                let seek_instr = Instruction::with_p4(
+                    Opcode::SeekIndexEq,
+                    index_cursor,
+                    0,
+                    value_reg,
+                    P4::SeekKey(vec![leading_collation]),
+                );
+                let seek_addr = em.emit(seek_instr);
+                em.patch_p2(seek_addr, not_found);
+            }
+        }
+        em.goto(t_label);
+        em.place(not_found);
+        if let Target::Jump(fl) = exists_false {
+            em.goto(fl);
+        }
+        if t_is_new {
+            em.place(t_label);
+        }
+        return Ok(());
+    }
+
+    let root_page = valid_table_root_page(&schema)?;
+    em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));
     let not_found = em.new_label();
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
     em.patch_p2(rewind_addr, not_found);
@@ -104,7 +397,7 @@ pub fn compile_exists(
     em.place(loop_start);
 
     let skip = em.new_label();
-    if let Some(where_expr) = &subquery.where_clause {
+    if let Some(where_expr) = &subselect.where_clause {
         compile_cond(
             em,
             reg,
@@ -128,65 +421,53 @@ pub fn compile_exists(
     Ok(())
 }
 
-/// Compiles `expr IN (SELECT ...)`: materializes the subquery's single
-/// result column into a fresh ephemeral index (the same
-/// `OpenEphemeral`/`IdxInsert`/`Found` machinery the reference uses),
-/// then tests `expr`'s value for membership.
+/// Compiles `expr IN (SELECT ...)`/`expr NOT IN (SELECT ...)` (#238):
+/// materializes the subquery's single result column into a fresh
+/// ephemeral index (the same `OpenEphemeral`/`IdxInsert`/`Found`
+/// machinery `DISTINCT` uses), then tests `expr`'s value for membership.
+/// Known simplification: a NULL `expr` always routes to the unknown
+/// (`on_null`) continuation, rather than SQLite's more precise rule
+/// that `NULL IN (<empty subquery result>)` is definitely false — this
+/// matches the literal-list `IN` form's own documented NULL-handling
+/// shape in this compiler.
 ///
-/// Known simplification, carried over from the reference: a NULL `expr`
-/// always routes to the unknown (`on_null`) continuation, rather than
-/// SQLite's more precise rule that `NULL IN (<empty result>)` is
-/// definitely false.
-pub fn compile_in_subquery(
+/// A strict N=1 case of [`compile_in_subquery_multi`] — this is a thin
+/// wrapper over it with a one-element LHS tuple, so both forms share the
+/// exact same ephemeral-index/`Found` codegen.
+///
+/// #306: if this subquery was hoisted (materialized once, before the
+/// enclosing scan's `Rewind`, because it's uncorrelated — see
+/// `correlation::hoist_uncorrelated_where_subqueries`), its ephemeral
+/// index is already built; reuse the cached cursor instead of
+/// delegating to `compile_in_subquery_multi`'s normal per-occurrence
+/// materialization.
+pub(crate) fn compile_in_subquery(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     outer_scope: &Scope,
     lhs: &Expr,
-    subquery: &Select,
+    subselect: &Select,
     negated: bool,
     targets: CondTargets,
-) -> Result<()> {
-    let result_expr = single_result_expr(subquery)?;
-    reject_aggregate(result_expr)?;
+) -> Result<(), CodegenError> {
+    let Some(HoistedSubquery::In { eph_cursor }) =
+        outer_scope.hoisted.get(&select_id(subselect)).copied()
+    else {
+        return compile_in_subquery_multi(
+            em,
+            reg,
+            outer_scope,
+            std::slice::from_ref(lhs),
+            subselect,
+            negated,
+            targets,
+        );
+    };
 
     let l = compile_value(em, reg, outer_scope, lhs)?;
 
-    let eph_cursor = reg.alloc_cursor();
-    em.emit(Instruction::new(Opcode::OpenEphemeral, eph_cursor, 0, 0));
-
-    let (sub_cursor, sub_scope) = open_subquery_scan(em, reg, outer_scope, subquery)?;
-
-    let scan_end = em.new_label();
-    let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
-    em.patch_p2(rewind_addr, scan_end);
-    let loop_start = em.new_label();
-    em.place(loop_start);
-
-    let skip = em.new_label();
-    if let Some(where_expr) = &subquery.where_clause {
-        compile_cond(
-            em,
-            reg,
-            &sub_scope,
-            where_expr,
-            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip)),
-        )?;
-    }
-    let v = compile_value(em, reg, &sub_scope, result_expr)?;
-    em.emit(Instruction::with_p4(
-        Opcode::IdxInsert,
-        eph_cursor,
-        v,
-        0,
-        P4::Int(1),
-    ));
-    em.place(skip);
-    let next_addr = em.emit(Instruction::new(Opcode::Next, sub_cursor, 0, 0));
-    em.patch_p2(next_addr, loop_start);
-    em.place(scan_end);
-
-    let (true_label, true_is_new) = ensure_label(em, targets.on_true);
-    let (false_label, false_is_new) = ensure_label(em, targets.on_false);
+    let (true_label, true_is_new) = crate::codegen::row::expr::ensure_label(em, targets.on_true);
+    let (false_label, false_is_new) = crate::codegen::row::expr::ensure_label(em, targets.on_false);
     let (found_label, notfound_label) = if negated {
         (false_label, true_label)
     } else {
@@ -218,32 +499,44 @@ pub fn compile_in_subquery(
     Ok(())
 }
 
-/// Compiles a scalar `(SELECT ...)` used in value position: the first
-/// row's single projected column, or `NULL` if the subquery produces no
-/// rows. A second or later row is simply never reached -- unlike
-/// [`compile_in_subquery`], which drains the whole scan into an
-/// ephemeral index, this stops at the first match, matching SQLite's
-/// behaviour for a scalar subquery.
-pub fn compile_scalar_subquery(
+/// Materializes a single-column `IN`-subquery's result column into a
+/// fresh ephemeral membership index, returning the cursor. Used by
+/// `correlation::try_hoist_conjunct` to materialize a hoisted,
+/// uncorrelated `IN`-subquery exactly once, before the enclosing scan's
+/// `Rewind` (#306), instead of [`compile_in_subquery_multi`]'s normal
+/// per-occurrence materialization.
+pub(super) fn materialize_in_subquery_index(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     outer_scope: &Scope,
-    subquery: &Select,
-) -> Result<i32> {
-    let result_expr = single_result_expr(subquery)?;
-    reject_aggregate(result_expr)?;
+    subselect: &Select,
+) -> Result<i32, CodegenError> {
+    let catalog = outer_scope.catalog.clone();
+    let resolved = resolve_subquery_schema(subselect, &catalog)?;
+    let Some(schema) = resolved else {
+        return Err(CodegenError::Unsupported {
+            reason: "IN (SELECT ...) requires a FROM clause".to_string(),
+        });
+    };
+    let col_expr = single_result_expr(subselect)?;
+    let sub_cursor = reg.alloc_cursor();
+    let sub_scope = Scope::single(&schema, sub_cursor)
+        .with_catalog(catalog)
+        .with_outer(outer_scope.clone());
 
-    let (sub_cursor, sub_scope) = open_subquery_scan(em, reg, outer_scope, subquery)?;
+    let eph_cursor = reg.alloc_cursor();
+    em.emit(Instruction::new(Opcode::OpenEphemeral, eph_cursor, 0, 0));
 
-    let dest = reg.alloc();
-    let no_rows = em.new_label();
+    let root_page = valid_table_root_page(&schema)?;
+    em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));
+    let scan_end = em.new_label();
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
-    em.patch_p2(rewind_addr, no_rows);
+    em.patch_p2(rewind_addr, scan_end);
     let loop_start = em.new_label();
     em.place(loop_start);
 
     let skip = em.new_label();
-    if let Some(where_expr) = &subquery.where_clause {
+    if let Some(where_expr) = &subselect.where_clause {
         compile_cond(
             em,
             reg,
@@ -252,20 +545,145 @@ pub fn compile_scalar_subquery(
             CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip)),
         )?;
     }
-    let v = compile_value(em, reg, &sub_scope, result_expr)?;
-    em.emit(Instruction::new(Opcode::Copy, v, dest, 0));
-    let done = em.new_label();
-    em.goto(done);
-
+    let v = compile_value(em, reg, &sub_scope, col_expr)?;
+    em.emit(Instruction::with_p4(
+        Opcode::IdxInsert,
+        eph_cursor,
+        v,
+        0,
+        P4::Int(1),
+    ));
     em.place(skip);
     let next_addr = em.emit(Instruction::new(Opcode::Next, sub_cursor, 0, 0));
     em.patch_p2(next_addr, loop_start);
+    em.place(scan_end);
+    Ok(eph_cursor)
+}
 
-    em.place(no_rows);
-    em.emit(Instruction::new(Opcode::Null, 0, dest, 0));
+/// Compiles `(a, b, ...) IN (SELECT ...)`/`... NOT IN (SELECT ...)`
+/// (#251): the multi-column generalization of [`compile_in_subquery`].
+/// Materializes the subquery's N projected columns into a fresh
+/// ephemeral index keyed on all N (`Found`/`IdxInsert`'s `P4::Int`
+/// key-column-count, already N-column-capable — see
+/// `vdbe/cursor.rs::found`/`idx_insert`), then tests the LHS tuple's N
+/// values for membership the same way. Requires the LHS tuple and the
+/// subquery's projection to compile into contiguous register ranges
+/// (`compile_contiguous`) and to have matching arity. NULL handling
+/// mirrors [`compile_in_subquery`]: any NULL component in the LHS tuple
+/// routes to the unknown (`on_null`) continuation.
+pub(crate) fn compile_in_subquery_multi(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    outer_scope: &Scope,
+    lhs_exprs: &[Expr],
+    subselect: &Select,
+    negated: bool,
+    targets: CondTargets,
+) -> Result<(), CodegenError> {
+    let catalog = outer_scope.catalog.clone();
+    let resolved = resolve_subquery_schema(subselect, &catalog)?;
+    let Some(schema) = resolved else {
+        return Err(CodegenError::Unsupported {
+            reason: "IN (SELECT ...) requires a FROM clause".to_string(),
+        });
+    };
+    let col_exprs = multi_result_exprs(subselect)?;
+    if col_exprs.len() != lhs_exprs.len() {
+        return Err(CodegenError::Unsupported {
+            reason: format!(
+                "multi-column IN: left-hand tuple has {} column(s) but the subquery projects {}",
+                lhs_exprs.len(),
+                col_exprs.len()
+            ),
+        });
+    }
+    let sub_cursor = reg.alloc_cursor();
+    let sub_scope = Scope::single(&schema, sub_cursor)
+        .with_catalog(catalog)
+        .with_outer(outer_scope.clone());
 
-    em.place(done);
-    Ok(dest)
+    let (l_first, l_count) = compile_contiguous(
+        em,
+        reg,
+        outer_scope,
+        lhs_exprs.iter(),
+        "multi-column IN's left-hand tuple",
+    )?;
+
+    let eph_cursor = reg.alloc_cursor();
+    em.emit(Instruction::new(Opcode::OpenEphemeral, eph_cursor, 0, 0));
+
+    let root_page = valid_table_root_page(&schema)?;
+    em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));
+    let scan_end = em.new_label();
+    let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
+    em.patch_p2(rewind_addr, scan_end);
+    let loop_start = em.new_label();
+    em.place(loop_start);
+
+    let skip = em.new_label();
+    if let Some(where_expr) = &subselect.where_clause {
+        compile_cond(
+            em,
+            reg,
+            &sub_scope,
+            where_expr,
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip)),
+        )?;
+    }
+    let (v_first, v_count) = compile_contiguous(
+        em,
+        reg,
+        &sub_scope,
+        col_exprs.iter().copied(),
+        "multi-column IN's subquery projection",
+    )?;
+    em.emit(Instruction::with_p4(
+        Opcode::IdxInsert,
+        eph_cursor,
+        v_first,
+        0,
+        P4::Int(v_count.into()),
+    ));
+    em.place(skip);
+    let next_addr = em.emit(Instruction::new(Opcode::Next, sub_cursor, 0, 0));
+    em.patch_p2(next_addr, loop_start);
+    em.place(scan_end);
+
+    let (true_label, true_is_new) = crate::codegen::row::expr::ensure_label(em, targets.on_true);
+    let (false_label, false_is_new) = crate::codegen::row::expr::ensure_label(em, targets.on_false);
+    let (found_label, notfound_label) = if negated {
+        (false_label, true_label)
+    } else {
+        (true_label, false_label)
+    };
+    let null_label = match targets.on_null {
+        NullTarget::True => true_label,
+        NullTarget::False => false_label,
+    };
+
+    for i in 0..l_count {
+        let r = l_first.saturating_add(i);
+        let null_addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));
+        em.patch_p2(null_addr, null_label);
+    }
+    let found_addr = em.emit(Instruction::with_p4(
+        Opcode::Found,
+        eph_cursor,
+        0,
+        l_first,
+        P4::Int(l_count.into()),
+    ));
+    em.patch_p2(found_addr, found_label);
+    em.goto(notfound_label);
+
+    if false_is_new {
+        em.place(false_label);
+    }
+    if true_is_new {
+        em.place(true_label);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -273,252 +691,295 @@ pub fn compile_scalar_subquery(
 mod tests {
     use super::*;
     use crate::codegen::row::select::compile_select_with_catalog;
-    use crate::codegen::row::TableSchema;
-    use crate::vm::row::Program;
+    use crate::codegen::row::{IndexSchema, IndexedColumn, TableSchema};
+    use crate::parser::row::{parse_select, ParseOutcome};
 
-    fn table(name: &str, root_page: u32, columns: &[&str]) -> TableSchema {
+    fn table(name: &str, root_page: u32, columns: &[&str], sql: &str) -> TableSchema {
         TableSchema {
             name: name.to_string(),
-            columns: columns.iter().map(|c| (*c).to_string()).collect(),
-            column_types: vec![String::new(); columns.len()],
-            rowid_alias: None,
             root_page,
-            indexes: Vec::new(),
-            ..Default::default()
+            columns: columns.iter().map(|c| c.to_string()).collect(),
+            without_rowid: false,
+            strict: false,
+            column_types: vec![String::new(); columns.len()],
+            column_collations: vec![],
+            is_virtual: false,
+            sql: sql.to_string(),
+            indexes: vec![],
+            rowid_alias: None,
+        }
+        .with_computed_rowid_alias()
+    }
+
+    fn select(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(s) => *s,
+            other => panic!("failed to parse {sql:?}: {other:?}"),
         }
     }
 
-    fn catalog() -> Vec<TableSchema> {
-        vec![table("t", 2, &["a", "b"]), table("s", 3, &["x", "y"])]
+    fn t() -> TableSchema {
+        table("t", 2, &["x"], "CREATE TABLE t(x)")
     }
 
-    fn compile(sql: &str) -> Result<Program> {
-        // Parses through the crate's only grammar rather than
-        // `parser::column`'s analytics-subset lowering, which exists to
-        // feed `codegen::batch` and rejects most of what this planner
-        // now accepts (#147).
-        compile_select_with_catalog(&catalog(), &crate::codegen::row::testutil::select(sql))
+    fn s_rowid() -> TableSchema {
+        table(
+            "s",
+            3,
+            &["id", "v"],
+            "CREATE TABLE s(id INTEGER PRIMARY KEY, v)",
+        )
     }
 
-    fn opcodes(program: &Program) -> Vec<Opcode> {
+    fn s2_unique() -> TableSchema {
+        let mut s2 = table("s2", 4, &["k", "v"], "CREATE TABLE s2(k, v)");
+        s2.indexes.push(IndexSchema {
+            name: "idx_k".to_string(),
+            unique: true,
+            columns: vec![IndexedColumn {
+                name: "k".to_string(),
+                desc: false,
+                collation: Collation::Binary,
+            }],
+            root_page: 5,
+        });
+        s2
+    }
+
+    fn compile(
+        sql: &str,
+        catalog: &[TableSchema],
+    ) -> Result<crate::vm::row::Program, CodegenError> {
+        let sel = select(sql);
+        compile_select_with_catalog(&sel, &t(), catalog)
+    }
+
+    fn opcodes(program: &crate::vm::row::Program) -> Vec<Opcode> {
         program.instructions.iter().map(|i| i.opcode).collect()
     }
 
     #[test]
-    fn exists_plain_scan() {
-        let program = compile("SELECT a FROM t WHERE EXISTS (SELECT x FROM s)").unwrap();
+    fn scalar_subquery_plain_scan_with_where() {
+        let catalog = [t(), s_rowid()];
+        let program = compile("SELECT (SELECT v FROM s WHERE v > 0) FROM t", &catalog).unwrap();
         let ops = opcodes(&program);
-        assert!(
-            ops.iter().filter(|o| **o == Opcode::Rewind).count() >= 2,
-            "{ops:?}"
-        );
-        assert!(!ops.contains(&Opcode::OpenEphemeral), "{ops:?}");
+        assert!(ops.contains(&Opcode::Rewind));
+        assert!(ops.contains(&Opcode::Next));
     }
 
     #[test]
-    fn not_exists_scan_with_where() {
+    fn scalar_subquery_correlated_rowid_seek() {
+        let catalog = [t(), s_rowid()];
         let program =
-            compile("SELECT a FROM t WHERE NOT EXISTS (SELECT x FROM s WHERE s.x = t.a)").unwrap();
+            compile("SELECT (SELECT v FROM s WHERE s.id = t.x) FROM t", &catalog).unwrap();
         let ops = opcodes(&program);
-        assert!(ops.contains(&Opcode::Rewind), "{ops:?}");
-        assert!(ops.contains(&Opcode::Next), "{ops:?}");
+        assert!(ops.contains(&Opcode::SeekRowid));
     }
 
     #[test]
-    fn exists_subquery_over_unknown_table_is_unsupported() {
-        let err = compile("SELECT a FROM t WHERE EXISTS (SELECT z FROM nope)").unwrap_err();
-        match err {
-            CodegenError::Unsupported { reason } => {
-                assert!(
-                    reason.contains("isn't visible to this compiler's catalog"),
-                    "{reason}"
-                );
-            }
-            other => panic!("expected Unsupported, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn in_subquery_materializes_an_ephemeral_index() {
-        let program = compile("SELECT a FROM t WHERE a IN (SELECT x FROM s)").unwrap();
-        let ops = opcodes(&program);
-        assert!(ops.contains(&Opcode::OpenEphemeral), "{ops:?}");
-        assert!(ops.contains(&Opcode::IdxInsert), "{ops:?}");
-        assert!(ops.contains(&Opcode::Found), "{ops:?}");
-    }
-
-    #[test]
-    fn in_subquery_star_projection_is_unsupported() {
-        let err = compile("SELECT a FROM t WHERE a IN (SELECT * FROM s)").unwrap_err();
-        match err {
-            CodegenError::Unsupported { reason } => {
-                assert!(reason.contains("exactly one column"), "{reason}");
-            }
-            other => panic!("expected Unsupported, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn subquery_with_limit_is_unsupported() {
-        let err = compile("SELECT a FROM t WHERE a IN (SELECT x FROM s LIMIT 1)").unwrap_err();
-        assert!(matches!(err, CodegenError::Unsupported { .. }), "{err:?}");
-    }
-
-    fn run(sql: &str, t_rows: Vec<Vec<crate::vm::row::Value>>) -> Vec<Vec<crate::vm::row::Value>> {
-        let program = compile(sql).unwrap();
-        let mut vm = crate::vm::row::Vm::new();
-        // `t` (cursor 0) is the outer table `compile_select_with_catalog`
-        // always leaves pre-wired by the caller, exactly like
-        // `compile_select`'s own tests. No `CursorFactory` is installed
-        // here (implementing that trait outside the VM's own dyn
-        // boundary -- see `MVL_LIMIT_EXCLUDE` in the Makefile -- would
-        // put a `Box<dyn Cursor>`-returning fn signature outside the
-        // qualified subset), so the subquery's own cursor slot is
-        // pre-wired the same way: find its `OpenRead`'s slot (the one
-        // that isn't `t`'s) and wire it directly via `open_cursor`,
-        // exactly like `Opcode::OpenRead`'s own pre-wired fallback path
-        // expects when no factory is installed.
-        vm.open_cursor(0, Box::new(crate::vm::row::InMemoryCursor::new(t_rows)))
-            .unwrap();
-        let sub_slot = match program
-            .instructions
-            .iter()
-            .find(|i| i.opcode == Opcode::OpenRead && i.p1 != 0)
-        {
-            Some(instr) => instr.p1,
-            None => panic!("compiled program opens a subquery cursor"),
-        };
-        vm.open_cursor(
-            sub_slot,
-            Box::new(crate::vm::row::InMemoryCursor::new(s_rows())),
+    fn scalar_subquery_correlated_unique_index_seek() {
+        let catalog = [t(), s2_unique()];
+        let program = compile(
+            "SELECT (SELECT v FROM s2 WHERE s2.k = t.x) FROM t",
+            &catalog,
         )
         .unwrap();
-        crate::vm::row::execute(&mut vm, &program).unwrap()
-    }
-
-    fn s_rows() -> Vec<Vec<crate::vm::row::Value>> {
-        use crate::vm::row::Value;
-        vec![
-            vec![Value::Integer(10), Value::Integer(1)],
-            vec![Value::Integer(20), Value::Integer(2)],
-        ]
-    }
-
-    // `compile_select`'s plain projection path only resolves bare
-    // columns by name in the SELECT list (see `select.rs`'s
-    // `only bare column references are supported` check) -- a scalar
-    // subquery in *that* position is therefore blocked by a
-    // pre-existing, unrelated limitation, not anything from #163. `WHERE`
-    // is the value position this planner already compiles arbitrary
-    // expressions in (it's how `a IN (SELECT ...)` above is exercised
-    // too), so these tests exercise the scalar subquery there instead.
-
-    #[test]
-    fn scalar_subquery_returns_the_first_rows_column() {
-        use crate::vm::row::Value;
-        let rows = run(
-            "SELECT a FROM t WHERE (SELECT x FROM s) = 10",
-            vec![vec![Value::Integer(1), Value::Integer(2)]],
-        );
-        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::SeekIndexEq));
+        assert!(ops.contains(&Opcode::IdxRowid));
+        assert!(ops.contains(&Opcode::SeekRowid));
     }
 
     #[test]
-    fn scalar_subquery_over_zero_rows_is_null() {
-        use crate::vm::row::Value;
-        let rows = run(
-            "SELECT a FROM t WHERE (SELECT x FROM s WHERE x = 999) IS NULL",
-            vec![vec![Value::Integer(1), Value::Integer(2)]],
-        );
-        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    fn scalar_subquery_with_aggregate() {
+        let catalog = [t(), s_rowid()];
+        let program = compile("SELECT (SELECT max(v) FROM s) FROM t", &catalog).unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::AggStep));
+        assert!(ops.contains(&Opcode::AggFinal));
+    }
+
+    fn s_indexed_v() -> TableSchema {
+        let mut s = s_rowid();
+        s.indexes.push(IndexSchema {
+            name: "idx_v".to_string(),
+            unique: false,
+            columns: vec![IndexedColumn {
+                name: "v".to_string(),
+                desc: false,
+                collation: Collation::Binary,
+            }],
+            root_page: 6,
+        });
+        s
     }
 
     #[test]
-    fn scalar_subquery_ignores_rows_after_the_first_match() {
-        use crate::vm::row::Value;
-        let rows = run(
-            "SELECT a FROM t WHERE (SELECT x FROM s WHERE x > 5) = 10",
-            vec![vec![Value::Integer(1), Value::Integer(2)]],
-        );
-        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+    fn scalar_subquery_with_aggregate_index_only_sum() {
+        let catalog = [t(), s_indexed_v()];
+        let program = compile("SELECT (SELECT sum(v) FROM s) FROM t", &catalog).unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::IdxRewind));
+        assert!(ops.contains(&Opcode::IdxNext));
     }
 
     #[test]
-    fn scalar_subquery_is_correlated_against_the_outer_row() {
-        use crate::vm::row::Value;
-        let rows = run(
-            "SELECT a FROM t WHERE (SELECT x FROM s WHERE y = a) = 20",
-            vec![
-                vec![Value::Integer(1), Value::Integer(0)],
-                vec![Value::Integer(2), Value::Integer(0)],
-            ],
-        );
-        assert_eq!(rows, vec![vec![Value::Integer(2)]]);
+    fn scalar_subquery_with_aggregate_index_only_avg() {
+        let catalog = [t(), s_indexed_v()];
+        let program = compile("SELECT (SELECT avg(v) FROM s) FROM t", &catalog).unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::IdxRewind));
+        assert!(ops.contains(&Opcode::IdxNext));
+    }
+
+    #[test]
+    fn scalar_subquery_with_aggregate_index_only_count_star() {
+        let catalog = [t(), s_rowid()];
+        let program = compile("SELECT (SELECT count(*) FROM s) FROM t", &catalog).unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::Count));
+    }
+
+    #[test]
+    fn scalar_subquery_from_less_computed_expression() {
+        let catalog = [t()];
+        let program = compile("SELECT (SELECT 1 + 1)", &catalog).unwrap();
+        assert!(opcodes(&program).contains(&Opcode::Copy));
     }
 
     #[test]
     fn scalar_subquery_star_projection_is_unsupported() {
-        let err = compile("SELECT a FROM t WHERE (SELECT * FROM s) = 10").unwrap_err();
+        let catalog = [t(), s_rowid()];
+        let err = compile("SELECT (SELECT * FROM s) FROM t", &catalog).unwrap_err();
         match err {
             CodegenError::Unsupported { reason } => {
-                assert!(reason.contains("exactly one column"), "{reason}");
+                assert!(reason.contains("exactly one expression column"));
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
     }
 
     #[test]
-    fn scalar_subquery_projects_a_computed_expression() {
-        use crate::vm::row::Value;
-        let rows = run(
-            "SELECT a FROM t WHERE (SELECT x + 1 FROM s WHERE x = 10) = 11",
-            vec![vec![Value::Integer(1), Value::Integer(2)]],
-        );
-        assert_eq!(rows, vec![vec![Value::Integer(1)]]);
-    }
-
-    #[test]
-    fn in_subquery_projects_a_computed_expression() {
-        let program = compile("SELECT a FROM t WHERE a IN (SELECT x + 1 FROM s)").unwrap();
+    fn exists_plain_scan() {
+        let catalog = [t(), s_rowid()];
+        let program = compile("SELECT x FROM t WHERE EXISTS (SELECT 1 FROM s)", &catalog).unwrap();
         let ops = opcodes(&program);
-        assert!(ops.contains(&Opcode::OpenEphemeral), "{ops:?}");
+        assert!(ops.contains(&Opcode::Rewind));
     }
 
     #[test]
-    fn scalar_subquery_aggregate_projection_is_unsupported() {
-        let err = compile("SELECT a FROM t WHERE (SELECT count(*) FROM s) = 1").unwrap_err();
+    fn not_exists_plain_scan_with_where() {
+        let catalog = [t(), s_rowid()];
+        let program = compile(
+            "SELECT x FROM t WHERE NOT EXISTS (SELECT 1 FROM s WHERE v > 0)",
+            &catalog,
+        )
+        .unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::Rewind));
+        assert!(ops.contains(&Opcode::Next));
+    }
+
+    #[test]
+    fn exists_correlated_rowid_seek() {
+        let catalog = [t(), s_rowid()];
+        let program = compile(
+            "SELECT x FROM t WHERE EXISTS (SELECT 1 FROM s WHERE s.id = t.x)",
+            &catalog,
+        )
+        .unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::SeekRowid));
+    }
+
+    #[test]
+    fn not_exists_correlated_unique_index_seek() {
+        let catalog = [t(), s2_unique()];
+        let program = compile(
+            "SELECT x FROM t WHERE NOT EXISTS (SELECT 1 FROM s2 WHERE s2.k = t.x)",
+            &catalog,
+        )
+        .unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::SeekIndexEq));
+    }
+
+    #[test]
+    fn exists_from_less_is_unsupported() {
+        let catalog = [t()];
+        let err = compile("SELECT x FROM t WHERE EXISTS (SELECT 1)", &catalog).unwrap_err();
         match err {
             CodegenError::Unsupported { reason } => {
-                assert!(reason.contains("aggregate"), "{reason}");
+                assert!(reason.contains("EXISTS (SELECT ...) requires a FROM clause"));
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
     }
 
     #[test]
-    fn in_subquery_aggregate_projection_is_unsupported() {
-        let err = compile("SELECT a FROM t WHERE a IN (SELECT count(*) FROM s)").unwrap_err();
+    fn in_subquery_hoisted_uncorrelated() {
+        let catalog = [t(), s_rowid()];
+        let program = compile("SELECT x FROM t WHERE x IN (SELECT v FROM s)", &catalog).unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::Found));
+        assert!(ops.contains(&Opcode::OpenEphemeral));
+    }
+
+    #[test]
+    fn in_subquery_not_hoisted_when_not_a_bare_conjunct() {
+        let catalog = [t(), s_rowid()];
+        let program = compile(
+            "SELECT x FROM t WHERE (x IN (SELECT v FROM s)) OR (x IS NULL)",
+            &catalog,
+        )
+        .unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::Found));
+        assert!(ops.contains(&Opcode::Rewind));
+    }
+
+    #[test]
+    fn multi_column_in_subquery() {
+        let catalog = [t(), s_rowid()];
+        let program = compile(
+            "SELECT x FROM t WHERE (x, x) IN (SELECT id, v FROM s)",
+            &catalog,
+        )
+        .unwrap();
+        let ops = opcodes(&program);
+        assert!(ops.contains(&Opcode::IdxInsert));
+        assert!(ops.contains(&Opcode::Found));
+    }
+
+    #[test]
+    fn multi_column_in_subquery_arity_mismatch_is_unsupported() {
+        let catalog = [t(), s_rowid()];
+        let err = compile(
+            "SELECT x FROM t WHERE (x, x) IN (SELECT id FROM s)",
+            &catalog,
+        )
+        .unwrap_err();
         match err {
             CodegenError::Unsupported { reason } => {
-                assert!(reason.contains("aggregate"), "{reason}");
+                assert!(reason.contains("left-hand tuple has 2 column(s)"));
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
     }
 
     #[test]
-    fn correlated_column_resolves_against_the_outer_scope() {
-        // `t.a` is not a column of `s`, so it can only resolve through
-        // `Scope::outer` -- and it must read the *outer* cursor.
-        let program =
-            compile("SELECT a FROM t WHERE EXISTS (SELECT x FROM s WHERE s.x = t.a)").unwrap();
-        let cursors: Vec<i32> = program
-            .instructions
-            .iter()
-            .filter(|i| i.opcode == Opcode::Column)
-            .map(|i| i.p1)
-            .collect();
-        assert!(cursors.contains(&0), "{cursors:?}");
-        assert!(cursors.iter().any(|c| *c != 0), "{cursors:?}");
+    fn multi_column_in_subquery_star_is_unsupported() {
+        let catalog = [t(), s_rowid()];
+        let err = compile(
+            "SELECT x FROM t WHERE (x, x) IN (SELECT * FROM s)",
+            &catalog,
+        )
+        .unwrap_err();
+        match err {
+            CodegenError::Unsupported { reason } => {
+                assert!(reason.contains("no * / table.*"));
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
     }
 }

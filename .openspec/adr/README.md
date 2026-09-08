@@ -36,3 +36,4 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0010](0010-shared-row-value-type.md) — One row `Value` type, defined in `db-core::value`, consumed by `db-storage`
 - [0011](0011-shared-scalar-functions.md) — Scalar functions, comparison, and coercion live in `db-core` root, consumed by every `vm` executor
 - [0012](0012-codegen-schema-superset.md) — `codegen::row::TableSchema`/`IndexSchema` grow to a superset, not a trait
+- [0013](0013-row-codegen-moved-not-rederived.md) — Row codegen is moved from Lab271/sqlite-rs, never re-derived

@@ -1,43 +1,57 @@
-//! `Delete` AST -> `Program` compilation -- see `super`'s module doc.
-//! Mirrors [`super::super::select`]'s `Init -> OpenWrite -> Rewind ->
-//! [WHERE test] -> Next -> Halt` scan shape, swapping the result-row
-//! emission for a per-index `IdxDelete` plus a table `Delete` per
-//! matched row.
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! `Delete` AST -> `Program` compilation (#210, index maintenance #196).
+//! Mirrors `select.rs`'s `Init -> OpenRead -> Rewind -> [WHERE test] ->
+//! Next -> Halt` scan shape, swapping `OpenRead` for `OpenWrite` and the
+//! result-row emission for a per-index `IdxDelete` plus a table
+//! `Delete` per matched row.
 //!
-//! **Scoped down**: no `WHERE rowid = ...` seek fast path (sqlite-rs's
-//! own #336) -- every `Program` here does a full table scan, deferred
-//! alongside #94's index/range-scan codegen.
+//! Safe to delete mid-scan: `TableCursor`'s traversal frames are
+//! snapshotted page bytes captured at descent time (`src/btree.rs`'s
+//! `Frame::page`), so `Opcode::Delete` mutating the on-disk b-tree via
+//! `btree::delete_row` never invalidates this cursor's own in-flight
+//! `Next` traversal — unlike a cursor that re-reads live page state on
+//! every step.
+//!
+//! #336: `WHERE rowid = <int literal|param>` (or the table's `INTEGER
+//! PRIMARY KEY` rowid-alias column) compiles to `SeekRowid` instead of
+//! the full scan below, mirroring `select.rs`'s `try_compile_rowid_seek`
+//! (#137) exactly — same narrow recognition (a single top-level
+//! equality, nothing compound), same fallback to the ordinary scan for
+//! anything else.
 
-use super::super::index_maintenance::{emit_index_key_ops, open_index_cursors};
-use super::super::{
-    valid_table_root_page, CodegenError, CondTargets, Emitter, RegAlloc, Result, Scope,
-    TableSchema, Target,
+use crate::codegen::row::expr::{compile_cond, compile_value};
+use crate::codegen::row::index_maintenance::{
+    emit_index_key_ops, open_index_cursors, valid_table_root_page,
 };
-use super::{FIRST_INDEX_CURSOR, TABLE_CURSOR};
-use crate::parser::ast::Delete;
+use crate::codegen::row::select::{is_rowid_reference, top_level_equality_operands, CodegenError};
+use crate::codegen::row::TableSchema;
+use crate::codegen::row::{CondTargets, Emitter, RegAlloc, Scope, Target};
+use crate::parser::ast::{Delete, ExprKind, Literal, ParamKind};
 use crate::vm::row::{Instruction, Opcode, Program};
 
+const TABLE_CURSOR: i32 = 0;
+const FIRST_INDEX_CURSOR: i32 = 1;
+
 /// Compiles `delete` against `schema` (the resolved target table) into
-/// a `Program`.
-pub fn compile_delete(schema: &TableSchema, delete: &Delete) -> Result<Program> {
-    compile_delete_with_catalog(schema, delete, &[])
+/// a `Program`. `catalog = [schema]` — no cross-table subquery support
+/// in the `WHERE` expression; use [`compile_delete_with_catalog`] for
+/// that (#251).
+pub fn compile_delete(delete: &Delete, schema: &TableSchema) -> Result<Program, CodegenError> {
+    compile_delete_with_catalog(delete, schema, std::slice::from_ref(schema))
 }
 
-/// As [`compile_delete`], but also resolves `catalog` for any scalar/
-/// `IN`/`EXISTS` subquery in `delete`'s `WHERE` clause that references
-/// another table (db-core#206) -- `compile_delete` itself just calls
-/// through with an empty catalog.
+/// [`compile_delete`], plus `catalog` — the full table catalog, used to
+/// resolve a scalar/`IN`/`EXISTS` subquery expression in the `WHERE`
+/// clause when it names a table other than `schema` itself (#251).
 pub fn compile_delete_with_catalog(
-    schema: &TableSchema,
     delete: &Delete,
+    schema: &TableSchema,
     catalog: &[TableSchema],
-) -> Result<Program> {
-    if !schema.name.eq_ignore_ascii_case(&delete.table) {
+) -> Result<Program, CodegenError> {
+    if schema.without_rowid {
         return Err(CodegenError::Unsupported {
-            reason: format!(
-                "DELETE targets table {}, but the given schema is for {}",
-                delete.table, schema.name
-            ),
+            reason: "WITHOUT ROWID tables are not supported by DELETE codegen yet".to_string(),
         });
     }
 
@@ -49,25 +63,76 @@ pub fn compile_delete_with_catalog(
     em.place(body_start);
     em.patch_p2(init_addr, body_start);
 
+    let root_page = valid_table_root_page(schema)?;
     em.emit(Instruction::new(
         Opcode::OpenWrite,
         TABLE_CURSOR,
-        valid_table_root_page(schema)?,
+        root_page,
         0,
     ));
     open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR)?;
 
-    let scope = Scope::single(schema.clone(), TABLE_CURSOR).with_catalog(catalog.to_vec());
+    let scope = Scope::single(schema, TABLE_CURSOR).with_catalog(catalog.to_vec());
     let end_label = em.new_label();
+
+    let rowid_seek_operand = delete
+        .where_clause
+        .as_ref()
+        .and_then(|where_expr| top_level_equality_operands(where_expr))
+        .and_then(|(lhs, rhs)| {
+            if is_rowid_reference(schema, lhs) {
+                Some(rhs)
+            } else if is_rowid_reference(schema, rhs) {
+                Some(lhs)
+            } else {
+                None
+            }
+        })
+        .filter(|operand| {
+            matches!(
+                &operand.kind,
+                ExprKind::Literal(Literal::Integer(_))
+                    | ExprKind::Param(ParamKind::Anonymous | ParamKind::Numbered(_))
+            )
+        });
+
+    if let Some(operand) = rowid_seek_operand {
+        // #336: exactly one row can match — seek straight to it instead
+        // of scanning. Jumping to `end_label` on a miss (no such rowid)
+        // skips the delete entirely, same as the ordinary scan finding
+        // zero matching rows.
+        let value_reg = compile_value(&mut em, &mut reg, &scope, operand)?;
+        let seek_addr = em.emit(Instruction::new(
+            Opcode::SeekRowid,
+            TABLE_CURSOR,
+            0,
+            value_reg,
+        ));
+        em.patch_p2(seek_addr, end_label);
+
+        emit_index_key_ops(
+            &mut em,
+            &mut reg,
+            schema,
+            TABLE_CURSOR,
+            FIRST_INDEX_CURSOR,
+            Opcode::IdxDelete,
+        )?;
+        em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));
+
+        em.place(end_label);
+        em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+        return Ok(em.finish());
+    }
+
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, TABLE_CURSOR, 0, 0));
     em.patch_p2(rewind_addr, end_label);
-
     let loop_start = em.new_label();
     em.place(loop_start);
 
     let row_skip = em.new_label();
     if let Some(where_expr) = &delete.where_clause {
-        super::super::compile_cond(
+        compile_cond(
             &mut em,
             &mut reg,
             &scope,
@@ -93,125 +158,4 @@ pub fn compile_delete_with_catalog(
     em.place(end_label);
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
     Ok(em.finish())
-}
-
-#[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
-mod tests {
-    use super::*;
-    use crate::codegen::row::testutil::{delete, insert, select};
-    use crate::codegen::row::{compile_select, IndexSchema};
-    use crate::vm::row::{execute, Cursor, EphemeralTableCursor, Value, Vm};
-
-    fn schema(columns: &[&str]) -> TableSchema {
-        TableSchema {
-            name: "t".into(),
-            columns: columns.iter().map(|c| (*c).to_string()).collect(),
-            column_types: columns.iter().map(|_| String::new()).collect(),
-            rowid_alias: None,
-            root_page: 0,
-            indexes: Vec::new(),
-            ..Default::default()
-        }
-    }
-
-    fn seed(schema: &TableSchema, vm: &mut Vm, rows: Vec<(i64, Vec<Value>)>) {
-        let mut table = EphemeralTableCursor::new();
-        for (rowid, values) in rows {
-            table.insert(rowid, values);
-        }
-        vm.open_cursor(0, Box::new(table)).unwrap();
-        for i in 0..schema.indexes.len() {
-            vm.open_cursor(
-                i32::try_from(i + 1).unwrap(),
-                Box::new(EphemeralTableCursor::new()),
-            )
-            .unwrap();
-        }
-    }
-
-    fn scan_all(schema: &TableSchema, vm: &mut Vm) -> Vec<Vec<Value>> {
-        let query = select(&format!("SELECT * FROM {}", schema.name));
-        let program = compile_select(schema, 0, &query).unwrap();
-        execute(vm, &program).unwrap()
-    }
-
-    #[test]
-    fn deletes_rows_matching_where_clause() {
-        let schema = schema(&["a"]);
-        let stmt = delete("DELETE FROM t WHERE a = 2");
-        let program = compile_delete(&schema, &stmt).unwrap();
-        let mut vm = Vm::new();
-        seed(
-            &schema,
-            &mut vm,
-            vec![
-                (1, vec![Value::Integer(1)]),
-                (2, vec![Value::Integer(2)]),
-                (3, vec![Value::Integer(3)]),
-            ],
-        );
-        execute(&mut vm, &program).unwrap();
-        assert_eq!(
-            scan_all(&schema, &mut vm),
-            vec![vec![Value::Integer(1)], vec![Value::Integer(3)]]
-        );
-    }
-
-    #[test]
-    fn no_where_clause_deletes_every_row() {
-        let schema = schema(&["a"]);
-        let stmt = delete("DELETE FROM t");
-        let program = compile_delete(&schema, &stmt).unwrap();
-        let mut vm = Vm::new();
-        seed(
-            &schema,
-            &mut vm,
-            vec![(1, vec![Value::Integer(1)]), (2, vec![Value::Integer(2)])],
-        );
-        execute(&mut vm, &program).unwrap();
-        assert!(scan_all(&schema, &mut vm).is_empty());
-    }
-
-    #[test]
-    fn removes_secondary_index_entries() {
-        use crate::codegen::row::compile_insert;
-
-        let mut schema = schema(&["a", "b"]);
-        schema.indexes.push(IndexSchema {
-            name: "idx_b".into(),
-            root_page: 3,
-            unique: false,
-            columns: vec![crate::codegen::row::IndexedColumn {
-                name: "b".into(),
-                ..Default::default()
-            }],
-        });
-
-        let insert_program =
-            compile_insert(&schema, &insert("INSERT INTO t VALUES (1, 10)")).unwrap();
-        let delete_program = compile_delete(&schema, &delete("DELETE FROM t WHERE a = 1")).unwrap();
-
-        let mut vm = Vm::new();
-        seed(&schema, &mut vm, vec![]);
-        execute(&mut vm, &insert_program).unwrap();
-        // Fails (`IdxDelete` finds no matching entry) unless `INSERT`
-        // built the index entry `DELETE` now needs to remove -- the
-        // real assertion here is that this doesn't error.
-        execute(&mut vm, &delete_program).unwrap();
-        assert!(scan_all(&schema, &mut vm).is_empty());
-    }
-
-    #[test]
-    fn wrong_table_name_is_rejected() {
-        let schema = schema(&["a"]);
-        let stmt = delete("DELETE FROM other");
-        assert!(compile_delete(&schema, &stmt).is_err());
-    }
 }

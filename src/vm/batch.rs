@@ -1,4 +1,15 @@
 //! `BatchExecutor`: the vectorized/columnar query VM, one of `sql-vm`'s
+//!
+//! **MC/DC obligation ids (db-core#219):** `cargo-mvl-mcdc` names an
+//! obligation `<file-stem>_<line>`, so this file and
+//! `src/codegen/batch.rs` -- same stem, both long -- collide whenever a
+//! decision in each sits on the same line number, and
+//! `unit_mcdc_discharge` rejects the snapshot. This doc block is
+//! deliberately eleven lines long: it offsets every decision below so
+//! that none currently shares a line with a `codegen::batch` decision.
+//! If a later edit re-introduces a collision, the fix is the one that
+//! test's message gives (shift one of the two decisions), and this
+//! block is the cheapest place to do it.
 //! three executors (see crate root docs) -- extracted from column-rs's
 //! private `src/vm.rs`, which was its only consumer, so any engine
 //! executing queries in batches over `sql_expr`-compiled programs
@@ -1897,7 +1908,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1628__v1_a_null_propagates() {
+    fn mcdc__batch_1649__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1925,7 +1936,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1628__v2_b_null_propagates() {
+    fn mcdc__batch_1649__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1953,7 +1964,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1628__v3_neither_null_computes_result() {
+    fn mcdc__batch_1649__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1981,7 +1992,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1671__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1699__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2009,7 +2020,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1671__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1699__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2037,7 +2048,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1671__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1699__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2065,7 +2076,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1671__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1699__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2760,7 +2771,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1453__v1_target_in_bounds_yields_source_value() {
+    fn mcdc__batch_1474__v1_target_in_bounds_yields_source_value() {
         let batch = Batch::new(3)
             .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
             .with_column(
@@ -2788,7 +2799,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1453__v2_target_below_zero_yields_null() {
+    fn mcdc__batch_1474__v2_target_below_zero_yields_null() {
         let batch = Batch::new(3)
             .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
             .with_column(
@@ -2816,7 +2827,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1453__v3_target_at_or_past_len_yields_null() {
+    fn mcdc__batch_1474__v3_target_at_or_past_len_yields_null() {
         let batch = Batch::new(3)
             .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
             .with_column(

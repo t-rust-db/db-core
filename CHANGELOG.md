@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.69.0] - 2026-09-08
+
+### Changed
+
+- **`codegen::row` is now sqlite-rs's codegen, moved verbatim** (#219, ADR 0013) -- the 15.7k-line re-derived tree is deleted and replaced by t-rust-db/sqlite-rs's `src/codegen.rs` + `src/codegen/**` (as of `751e291`, v0.19.1; Lab271 synced `7701d18`) plus the pure half of its `src/planner.rs` as `codegen::row::planner` (`Stats`, `PlanCost`, `estimate_*`, `is_*_worthwhile`; `load_stats` stays storage-side). Only module paths changed (`crate::vdbe` -> `vm::row`, `crate::schema` -> `codegen::row`, `crate::planner` -> `codegen::row::planner`). Public API follows sqlite-rs: `dispatch::compile_statement(sql, schemas, views)` (the `views` argument is no longer optional; `compile_statement_with_views` is gone), `compile_select`/`compile_select_with_catalog[_and_stats]`/`compile_select_joined`/`compile_select_compound`, `explain_query_plan(select, schemas, stats_by_table, catalog) -> Vec<EqpRow>`, `output_column_names`, `leading_keywords`, `expand_with_clause`, `flatten_from_subqueries`, `push_down_where_predicates`, `resolve_views`, `ExpandViews`. db-core's two additions are marked `db-core#219` in place: the schema structs (`TableSchema` gains `with_computed_rowid_alias`, backed by the crate's own parser) and `dispatch.rs`'s `SELECT`/`WITH`/`EXPLAIN` arms (`compile_select_statement`, `explain_select_statement`, `compile_eqp_program`), ported from sqlite-rs's CLI `query.rs`. Brings the stats-driven access-path chooser, skip-scan, automatic indexes, N-way joins (`join_order`), `FULL`/`RIGHT` join levels, correlated-subquery hoisting/memoization, and the CTE/view flattening + predicate push-down passes (#117, #118, #144 land implemented). Supersedes #175, #212-#218, #216.
+- **MC/DC snapshot regenerated** -- `tests/mcdc/obligations.json` had not been regenerated since #198, so `unit_mcdc_discharge` was checking stale ids; re-tagged the shifted `column`/`batch` vectors, padded `vm/batch.rs`'s module doc so its obligation ids stop colliding with `codegen/batch.rs`'s, and added vectors for every multi-leaf decision the moved tree brings (test-only `codegen::row::mcdc`).
+
+### Removed
+
+- `codegen::row`'s re-derived entry points: `compile_select_join`, `compile_select_with_catalog(schemas, select)` (argument order now follows sqlite-rs: `(select, schema, catalog)`), `compile_eqp_program` in `eqp.rs` (now in `dispatch`), `expand_views(&mut Select, ..)` (now the `ExpandViews` trait over `Cow`), `CodegenError::{TooDeep, CircularView}`, `MAX_EXPR_DEPTH`.
+
 ## [0.68.1] - 2026-09-07
 
 ### Added
