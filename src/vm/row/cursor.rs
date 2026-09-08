@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use super::aggregate::{AggState, AggregateError};
 use super::program::{GroupKeyColumn, SortKeyColumn};
-use super::record::{decode_column, decode_record, encode_record};
+use super::record::{decode_column, decode_record, encode_record, RecordError};
 use super::value::{Collation, TextEncoding, Value};
 
 /// A forward-scanning, row-at-a-time cursor over a table's rows.
@@ -732,10 +732,14 @@ impl SorterCursor {
         }
     }
 
-    fn decode_keys(&self, blob: &[u8]) -> Vec<Value> {
+    /// The sort-key columns of `blob`; `None` if the blob is not a
+    /// decodable record. A key column past the record's width decodes as
+    /// NULL (SQLite), so `None` is real corruption, not a short row
+    /// (db-core#232).
+    fn decode_keys(&self, blob: &[u8]) -> Option<Vec<Value>> {
         self.keys
             .iter()
-            .map(|k| decode_column(blob, k.index, TextEncoding::Utf8).unwrap_or(Value::Null))
+            .map(|k| decode_column(blob, k.index, TextEncoding::Utf8).ok())
             .collect()
     }
 }
@@ -815,6 +819,8 @@ impl Cursor for SorterCursor {
 
     fn column(&self, col: usize) -> Option<Value> {
         let (blob, _) = self.buffer.get(self.pos?)?;
+        // Every buffered blob decoded in `sorter_insert`, so the `.ok()`
+        // fallback is unreachable; a `col` past the row's width is NULL.
         Some(
             decode_record(blob, TextEncoding::Utf8)
                 .ok()
@@ -828,7 +834,12 @@ impl Cursor for SorterCursor {
     }
 
     fn sorter_insert(&mut self, blob: Rc<[u8]>) -> bool {
-        let key_values = self.decode_keys(&blob);
+        // Rejecting an undecodable blob here -- the one sorter entry point
+        // with an error channel (the VM turns `false` into an error) -- is
+        // what lets `column()` below treat decode as infallible.
+        let Some(key_values) = self.decode_keys(&blob) else {
+            return false;
+        };
         self.buffer.push((blob, key_values));
         self.sorted = false;
         if let Some(bound) = self.bound {
@@ -962,6 +973,8 @@ impl Cursor for HashAggCursor {
 
     fn column(&self, col: usize) -> Option<Value> {
         let group = self.groups.get(*self.order.get(self.pos?)?)?;
+        // `hash_agg_find` decoded this row's blob, so `.ok()` is
+        // unreachable; a `col` past the row's width is NULL.
         Some(
             decode_record(&group.row, TextEncoding::Utf8)
                 .ok()
@@ -981,19 +994,24 @@ impl Cursor for HashAggCursor {
     }
 
     fn hash_agg_find(&mut self, blob: Rc<[u8]>) -> bool {
-        let key_values: Vec<Value> = self
+        // Same discipline as `SorterCursor::sorter_insert`: an undecodable
+        // blob is rejected here (the VM turns `false` into an error) rather
+        // than silently keyed as NULL, which would merge distinct groups.
+        let Some(key_values) = self
             .keys
             .iter()
             .map(|k| {
-                let mut value =
-                    decode_column(&blob, k.index, TextEncoding::Utf8).unwrap_or(Value::Null);
+                let mut value = decode_column(&blob, k.index, TextEncoding::Utf8).ok()?;
                 super::affinity::apply_affinity(
                     &mut value,
                     super::affinity::Affinity::from_p4_byte(k.affinity),
                 );
-                value
+                Some(value)
             })
-            .collect();
+            .collect::<Option<Vec<Value>>>()
+        else {
+            return false;
+        };
         let idx = match self.find_group(&key_values) {
             Some(idx) => idx,
             None => {
@@ -1066,16 +1084,19 @@ impl Cursor for HashAggCursor {
 /// re-populates across loop iterations without re-opening it. A real
 /// live-register pseudo-cursor needs `Vm` access `Cursor` doesn't have;
 /// revisit if a corpus test needs it.
+#[derive(Default)]
 pub struct PseudoCursor {
     values: Vec<Value>,
 }
 
 impl PseudoCursor {
     /// Builds a pseudo-cursor over `blob`'s already-`MakeRecord`-encoded
-    /// row, decoded once up front (see this type's own doc).
-    pub fn new(blob: &[u8]) -> Self {
-        let values = decode_record(blob, TextEncoding::Utf8).unwrap_or_default();
-        PseudoCursor { values }
+    /// row, decoded once up front (see this type's own doc). An
+    /// undecodable blob is an error, not an empty row (db-core#232); the
+    /// VM's `OpenPseudo` placeholder (no record yet) is `Self::default()`.
+    pub fn new(blob: &[u8]) -> Result<Self, RecordError> {
+        let values = decode_record(blob, TextEncoding::Utf8)?;
+        Ok(PseudoCursor { values })
     }
 }
 
@@ -1197,10 +1218,13 @@ impl InMemoryIndexCursor {
         }
     }
 
-    fn key_of(&self, values: &[Value]) -> Vec<Value> {
+    /// The index key of `values`; `None` if the row is narrower than the
+    /// index's columns -- indexing NULL for a missing column would corrupt
+    /// seeks, so the insert is refused instead (db-core#232).
+    fn key_of(&self, values: &[Value]) -> Option<Vec<Value>> {
         self.key_cols
             .iter()
-            .map(|k| values.get(k.index).cloned().unwrap_or(Value::Null))
+            .map(|k| values.get(k.index).cloned())
             .collect()
     }
 }
@@ -1254,7 +1278,9 @@ impl Cursor for InMemoryIndexCursor {
     /// purely through the trait, matching `cursor_conformance`'s
     /// `build` helper.
     fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
-        let key = self.key_of(&values);
+        let Some(key) = self.key_of(&values) else {
+            return false;
+        };
         let pos = self.entries.partition_point(|(k, _)| {
             compare_keys(k, &key, &self.key_cols) == std::cmp::Ordering::Less
         });
@@ -1751,7 +1777,7 @@ mod tests {
             &[Value::Integer(7), Value::Text("x".to_string().into())],
             TextEncoding::Utf8,
         );
-        let mut c = PseudoCursor::new(&blob);
+        let mut c = PseudoCursor::new(&blob).unwrap();
         assert!(c.rewind());
         assert_eq!(c.column(0).unwrap(), Value::Integer(7));
         assert_eq!(c.column(1).unwrap(), Value::Text("x".to_string().into()));
@@ -1844,5 +1870,36 @@ mod tests {
             c.ephemeral_idx_insert(&key, &collations, vec![Value::Integer(-2)]),
             Some(true)
         );
+    }
+
+    /// db-core#232: an undecodable record is refused at the one entry
+    /// point with an error channel, instead of being keyed/read as NULL.
+    #[test]
+    fn sorter_insert_refuses_an_undecodable_record() {
+        let mut c = SorterCursor::new(vec![ascending_key(0)], None);
+        assert!(!c.sorter_insert(vec![0xFF, 0xFF, 0xFF].into()));
+        assert!(c.sorter_insert(make_row(&[Value::Integer(1)])));
+    }
+
+    #[test]
+    fn hash_agg_find_refuses_an_undecodable_record() {
+        let mut c = HashAggCursor::new(vec![group_key(0)]);
+        assert!(!c.hash_agg_find(vec![0xFF, 0xFF, 0xFF].into()));
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(1)])));
+    }
+
+    #[test]
+    fn pseudo_cursor_over_an_undecodable_record_is_an_error() {
+        assert!(PseudoCursor::new(&[0xFF, 0xFF, 0xFF]).is_err());
+        assert!(PseudoCursor::new(&make_row(&[Value::Integer(7)])).is_ok());
+    }
+
+    #[test]
+    fn in_memory_index_refuses_a_row_narrower_than_its_key() {
+        // Key on column 1; a one-column row cannot be indexed -- before,
+        // it was indexed under NULL.
+        let mut c = InMemoryIndexCursor::new(vec![ascending_key(1)]);
+        assert!(!c.insert(1, vec![Value::Integer(1)]));
+        assert!(c.insert(2, vec![Value::Integer(1), Value::Integer(2)]));
     }
 }

@@ -22,6 +22,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 - **MC/DC vectors live with the code they test** (#235) -- the test-only `codegen::row::mcdc` module from #219 is gone; every tagged vector sits in a `mcdc_vectors` test module at the bottom of the file whose decision it discharges, with only the fixtures it uses. That module only existed to keep the moved files diff-able against sqlite-rs; db-core owns its own testing strategy (one of three core strategies, sqlite-rs holds a fourth). ADR 0013 amended to withdraw the drift-check clause; `tools/check_panic_allows.py` drops its `mcdc/` carve-out.
 
+## [Unreleased]
+
+### Changed
+
+- **Silent fallbacks in `vm::row` are typed errors or documented semantics** (#232, group 1 of 4). New `ExecError::RecordDecode { opcode, source }` for a corrupt record blob read through a pseudo-cursor (was NULL); `Sequence` on an unopened slot is `CursorNotOpen` (was a counter seeded from 0); `Variable` with a zero/negative index is `MalformedInstruction` (was NULL); `HashAggData` on a non-hash-agg cursor is `MalformedInstruction` (was empty accumulators). `SorterCursor::sorter_insert` / `HashAggCursor::hash_agg_find` refuse an undecodable record (`false` → VM error) instead of keying it as NULL; `InMemoryIndexCursor::insert` refuses a row narrower than its key. **`PseudoCursor::new(blob)` now returns `Result<Self, RecordError>`** (was an empty row on decode failure); use `PseudoCursor::default()` for an empty placeholder.
+
 ## [0.71.0] - 2026-09-08
 
 ### Changed

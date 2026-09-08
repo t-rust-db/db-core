@@ -95,6 +95,15 @@ pub enum ExecError {
         /// The cursor-slot table index that was empty.
         slot: i32,
     },
+    /// A record blob in a register (`OpenPseudo`'s source register, or the
+    /// blob handed to `OpenPseudo`) did not decode. Record corruption used
+    /// to read as a NULL column; it is a typed error instead (db-core#232).
+    RecordDecode {
+        /// Name of the opcode that read the record.
+        opcode: &'static str,
+        /// What the record decoder rejected.
+        source: super::record::RecordError,
+    },
     /// `Column`/`Rowid`/`AutoIndexRowid` read a cursor that has no current
     /// row -- nothing positioned it, or its last `Rewind`/`Next`/`Seek`
     /// returned false. A codegen bug (sqlite-rs's own programs never do
@@ -179,6 +188,9 @@ impl std::fmt::Display for ExecError {
                 write!(f, "opcode {opcode:?} is not yet implemented by this VM")
             }
             ExecError::CursorNotOpen { slot } => write!(f, "cursor slot {slot} is not open"),
+            ExecError::RecordDecode { opcode, source } => {
+                write!(f, "{opcode}: record blob does not decode: {source}")
+            }
             ExecError::NoCurrentRow { opcode, slot } => {
                 write!(f, "{opcode}: cursor slot {slot} has no current row")
             }
@@ -441,6 +453,7 @@ impl Vm {
 
     fn is_null_row(&self, slot: i32) -> Result<bool, ExecError> {
         let idx = Self::index("cursor slot read", slot)?;
+        // The flag table grows lazily; a slot never written is not NULL-rowed.
         Ok(self.null_rows.get(idx).copied().unwrap_or(false))
     }
 
@@ -451,7 +464,7 @@ impl Vm {
         let idx = Self::index("sequence slot", slot)?;
         // Seeded from the cursor kind: 1 for an ephemeral table, 0
         // otherwise (sqlite-rs, #134).
-        let base = self.cursor(slot).map(|c| c.sequence_base()).unwrap_or(0);
+        let base = self.cursor(slot)?.sequence_base();
         if idx >= self.sequences.len() {
             self.sequences.resize(idx.saturating_add(1), None);
         }
@@ -494,9 +507,18 @@ impl Vm {
             .ok_or(ExecError::CursorNotOpen { slot })
     }
 
-    fn param(&self, index: i32) -> Option<&Value> {
-        let idx = usize::try_from(index).ok()?.checked_sub(1)?;
-        self.params.get(idx)
+    /// Host parameter `index` (1-based, as in `?NNN`). `Ok(None)` is an
+    /// unbound parameter -- SQLite reads those as NULL; a zero or negative
+    /// index is a malformed instruction, not "unbound" (db-core#232).
+    fn param(&self, index: i32) -> Result<Option<&Value>, ExecError> {
+        let idx = usize::try_from(index)
+            .ok()
+            .and_then(|i| i.checked_sub(1))
+            .ok_or_else(|| ExecError::MalformedInstruction {
+                opcode: "Variable",
+                reason: format!("parameter index {index} is not >= 1"),
+            })?;
+        Ok(self.params.get(idx))
     }
 
     #[allow(clippy::cast_sign_loss)]
@@ -560,6 +582,9 @@ impl Vm {
         Ok(())
     }
 
+    /// The register a pseudo-cursor slot is bound to, `None` for any
+    /// other slot (including a negative one -- the `cursor(slot)?` that
+    /// follows every `pseudo_reg` miss raises `CursorNotOpen` for those).
     fn pseudo_reg(&self, slot: i32) -> Option<i32> {
         usize::try_from(slot)
             .ok()
@@ -576,9 +601,8 @@ impl Vm {
         opcode: &'static str,
     ) -> Result<Value, ExecError> {
         match self.register(reg)? {
-            Value::Blob(bytes) => {
-                Ok(decode_column(bytes, col, self.text_encoding).unwrap_or(Value::Null))
-            }
+            Value::Blob(bytes) => decode_column(bytes, col, self.text_encoding)
+                .map_err(|source| ExecError::RecordDecode { opcode, source }),
             Value::Null => Ok(Value::Null),
             other => Err(ExecError::MalformedInstruction {
                 opcode,
@@ -1111,7 +1135,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::Variable => {
-            let value = vm.param(instr.p1).cloned().unwrap_or(Value::Null);
+            // An unbound host parameter reads as NULL (SQLite semantics).
+            let value = vm.param(instr.p1)?.cloned().unwrap_or(Value::Null);
             vm.set_register(instr.p2, value)?;
             Ok(Step::Next)
         }
@@ -1357,7 +1382,9 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             // sqlite-rs: the cursor reads register p2 *lazily* — codegen
             // opens it before the register holds a row (`SorterData` /
             // `MakeRecord` fill it later, and rewrite it between rows).
-            vm.open_cursor(instr.p1, Box::new(PseudoCursor::new(&[])))?;
+            // Placeholder only: the row is read live from register `p2`
+            // (`pseudo_column`), never from this cursor's own values.
+            vm.open_cursor(instr.p1, Box::new(PseudoCursor::default()))?;
             vm.set_pseudo_reg(instr.p1, Some(instr.p2))?;
             Ok(Step::Next)
         }
@@ -1386,6 +1413,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             let bound = if instr.p5 == 0 {
                 None
             } else {
+                // `LIMIT -1` (any negative) means "no limit" in SQLite, and a
+                // non-integer limit register is unbounded too.
                 match vm.register(instr.p2)? {
                     Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),
                     _ => None,
@@ -1408,7 +1437,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             if !inserted {
                 return Err(ExecError::MalformedInstruction {
                     opcode: "SorterInsert",
-                    reason: "cursor slot is not a sorter".to_string(),
+                    reason: "cursor slot is not a sorter, or the record blob does not decode"
+                        .to_string(),
                 });
             }
             Ok(Step::Next)
@@ -1467,7 +1497,9 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             if !found {
                 return Err(ExecError::MalformedInstruction {
                     opcode: "HashAggFind",
-                    reason: "cursor slot is not a hash-aggregation cursor".to_string(),
+                    reason:
+                        "cursor slot is not a hash-aggregation cursor, or the record blob does not decode"
+                            .to_string(),
                 });
             }
             Ok(Step::Next)
@@ -1528,8 +1560,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 .cursor(instr.p1)?
                 .hash_agg_group_accumulators()
                 .map(<[_]>::to_vec)
-                .unwrap_or_default();
+                .ok_or_else(|| ExecError::MalformedInstruction {
+                    opcode: "HashAggData",
+                    reason: "cursor slot is not a hash-aggregation cursor".to_string(),
+                })?;
             for (slot, state) in accumulators.into_iter().enumerate() {
+                // Saturation is unreachable (slots are bounded by
+                // MAX_REGISTERS) and would be caught by set_agg_context's
+                // own range check anyway.
                 let slot = i32::try_from(slot).unwrap_or(i32::MAX);
                 match state {
                     Some(state) => vm.set_agg_context(slot, state)?,
@@ -3479,8 +3517,12 @@ mod tests {
 
     #[test]
     fn sequence_hands_out_increasing_values_per_slot() {
+        // `Sequence` needs an open cursor on `p1` (codegen always opens the
+        // ephemeral table first; an unopened slot is `CursorNotOpen`,
+        // db-core#232).
         let mut vm = Vm::new();
         let program = Program::new(vec![
+            Instruction::new(Opcode::OpenEphemeral, 0, 0, 0),
             Instruction::new(Opcode::Sequence, 0, 0, 0),
             Instruction::new(Opcode::Sequence, 0, 1, 0),
             Instruction::new(Opcode::ResultRow, 0, 2, 0),
@@ -4062,7 +4104,7 @@ mod tests {
     /// 0 || reg as usize > MAX_REGISTERS`): leaf A (`reg < 0`) true.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_504__v1_negative_register_is_out_of_range() {
+    fn mcdc__vm_526__v1_negative_register_is_out_of_range() {
         let vm = Vm::new();
         assert!(matches!(
             vm.register(-1),
@@ -4072,20 +4114,20 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_491`): both leaves false -- an
     /// ordinary in-range register. Independence pair for A against
-    /// `mcdc__vm_504__v1_negative_register_is_out_of_range`.
+    /// `mcdc__vm_526__v1_negative_register_is_out_of_range`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_504__v2_in_range_register_is_ok() {
+    fn mcdc__vm_526__v2_in_range_register_is_ok() {
         let vm = Vm::new();
         assert!(vm.register(0).is_ok());
     }
 
     /// MC/DC vector (obligation `vm_491`): leaf B (`reg as usize >
     /// MAX_REGISTERS`) true, leaf A false. Independence pair for B
-    /// against `mcdc__vm_504__v2_in_range_register_is_ok`.
+    /// against `mcdc__vm_526__v2_in_range_register_is_ok`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_504__v3_register_past_the_cap_is_out_of_range() {
+    fn mcdc__vm_526__v3_register_past_the_cap_is_out_of_range() {
         let vm = Vm::new();
         let past_cap = i32::try_from(MAX_REGISTERS).unwrap().saturating_add(1);
         assert!(matches!(
@@ -4099,7 +4141,7 @@ mod tests {
     /// (`a` is NULL) true -- no jump is taken regardless of `b`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_682__v1_lhs_null_suppresses_the_jump() {
+    fn mcdc__vm_706__v1_lhs_null_suppresses_the_jump() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4114,10 +4156,10 @@ mod tests {
     /// MC/DC vector (obligation `vm_670`): both leaves false -- neither
     /// operand is NULL, so the comparison runs normally and the jump is
     /// taken on equality. Independence pair for A against
-    /// `mcdc__vm_682__v1_lhs_null_suppresses_the_jump`.
+    /// `mcdc__vm_706__v1_lhs_null_suppresses_the_jump`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_682__v2_neither_null_lets_the_comparison_decide() {
+    fn mcdc__vm_706__v2_neither_null_lets_the_comparison_decide() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4131,10 +4173,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_670`): leaf B (`b` is NULL) true,
     /// leaf A false -- no jump. Independence pair for B against
-    /// `mcdc__vm_682__v2_neither_null_lets_the_comparison_decide`.
+    /// `mcdc__vm_706__v2_neither_null_lets_the_comparison_decide`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_682__v3_rhs_null_suppresses_the_jump() {
+    fn mcdc__vm_706__v3_rhs_null_suppresses_the_jump() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4151,7 +4193,7 @@ mod tests {
     /// true -- the result is NULL regardless of `b`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_731__v1_lhs_null_forces_null_result() {
+    fn mcdc__vm_755__v1_lhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4164,10 +4206,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_719`): both leaves false -- the
     /// underlying operation actually runs. Independence pair for A
-    /// against `mcdc__vm_731__v1_lhs_null_forces_null_result`.
+    /// against `mcdc__vm_755__v1_lhs_null_forces_null_result`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_731__v2_neither_null_runs_the_operation() {
+    fn mcdc__vm_755__v2_neither_null_runs_the_operation() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 2, 0, 0),
             Instruction::new(Opcode::Integer, 3, 1, 0),
@@ -4180,10 +4222,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_719`): leaf B true, leaf A false --
     /// the result is NULL. Independence pair for B against
-    /// `mcdc__vm_731__v2_neither_null_runs_the_operation`.
+    /// `mcdc__vm_755__v2_neither_null_runs_the_operation`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_731__v3_rhs_null_forces_null_result() {
+    fn mcdc__vm_755__v3_rhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4199,7 +4241,7 @@ mod tests {
     /// leaf A (`p1`'s operand) true -- the result is NULL.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_751__v1_lhs_null_forces_null_result() {
+    fn mcdc__vm_775__v1_lhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 10, 1, 0),
@@ -4212,10 +4254,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_739`): both leaves false -- the
     /// reversed subtraction (`p2 - p1`) actually runs. Independence pair
-    /// for A against `mcdc__vm_751__v1_lhs_null_forces_null_result`.
+    /// for A against `mcdc__vm_775__v1_lhs_null_forces_null_result`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_751__v2_neither_null_runs_the_operation() {
+    fn mcdc__vm_775__v2_neither_null_runs_the_operation() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 3, 0, 0),
             Instruction::new(Opcode::Integer, 10, 1, 0),
@@ -4228,10 +4270,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_739`): leaf B (`p2`'s operand) true,
     /// leaf A false -- the result is NULL. Independence pair for B
-    /// against `mcdc__vm_751__v2_neither_null_runs_the_operation`.
+    /// against `mcdc__vm_775__v2_neither_null_runs_the_operation`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_751__v3_rhs_null_forces_null_result() {
+    fn mcdc__vm_775__v3_rhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 3, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4247,16 +4289,16 @@ mod tests {
     /// all three leaves true -- a whole, finite, in-range REAL converts.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_883__v1_whole_finite_in_range_converts() {
+    fn mcdc__vm_907__v1_whole_finite_in_range_converts() {
         assert_eq!(try_to_integer(&Value::Real(5.0)), Some(5));
     }
 
     /// MC/DC vector (obligation `vm_871`): leaf A (`fract() == 0.0`)
     /// false -- a fractional REAL never converts. Independence pair for
-    /// A against `mcdc__vm_883__v1_whole_finite_in_range_converts`.
+    /// A against `mcdc__vm_907__v1_whole_finite_in_range_converts`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_883__v2_fractional_real_does_not_convert() {
+    fn mcdc__vm_907__v2_fractional_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(5.5)), None);
     }
 
@@ -4266,17 +4308,17 @@ mod tests {
     /// whole-valued). Exercises B's false branch alongside A's.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_883__v3_infinite_real_does_not_convert() {
+    fn mcdc__vm_907__v3_infinite_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(f64::INFINITY)), None);
     }
 
     /// MC/DC vector (obligation `vm_871`): leaf C (`in_i64_range`) false,
     /// leaves A and B true -- a whole, finite REAL outside `i64`'s range
     /// never converts. Independence pair for C against
-    /// `mcdc__vm_883__v1_whole_finite_in_range_converts`.
+    /// `mcdc__vm_907__v1_whole_finite_in_range_converts`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_883__v4_out_of_range_whole_real_does_not_convert() {
+    fn mcdc__vm_907__v4_out_of_range_whole_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(1e30)), None);
     }
 

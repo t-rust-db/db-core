@@ -207,3 +207,62 @@ fn column_before_positioning_is_a_no_current_row_error() {
         })
     ));
 }
+
+/// db-core#232: three fallbacks that used to hide a fault behind a
+/// plausible value are typed errors now.
+#[test]
+fn variable_with_a_non_positive_parameter_index_is_malformed() {
+    // Parameters are 1-based (`?1`); 0 used to read NULL as if unbound.
+    for p1 in [0, -1] {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Variable, p1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert!(
+            matches!(
+                execute(&mut vm, &program),
+                Err(ExecError::MalformedInstruction {
+                    opcode: "Variable",
+                    ..
+                })
+            ),
+            "p1 = {p1}"
+        );
+    }
+}
+
+#[test]
+fn sequence_on_an_unopened_cursor_slot_is_a_cursor_not_open_error() {
+    // Used to seed the counter from 0 as if a non-ephemeral cursor were open.
+    let mut vm = Vm::new();
+    let program = Program::new(vec![
+        Instruction::new(Opcode::Sequence, 3, 1, 0),
+        Instruction::new(Opcode::Halt, 0, 0, 0),
+    ]);
+    assert!(matches!(
+        execute(&mut vm, &program),
+        Err(ExecError::CursorNotOpen { slot: 3 })
+    ));
+}
+
+#[test]
+fn pseudo_cursor_column_over_a_corrupt_record_blob_is_a_decode_error() {
+    // Used to read NULL, turning record corruption into plausible data.
+    let mut vm = Vm::new();
+    // 0xFF... is a header-length varint that runs past the payload.
+    vm.set_register(0, Value::Blob(vec![0xFF, 0xFF, 0xFF].into()))
+        .unwrap();
+    let program = Program::new(vec![
+        Instruction::new(Opcode::OpenPseudo, 1, 0, 0), // slot 1 reads register 0
+        Instruction::new(Opcode::Column, 1, 0, 2),
+        Instruction::new(Opcode::Halt, 0, 0, 0),
+    ]);
+    assert!(matches!(
+        execute(&mut vm, &program),
+        Err(ExecError::RecordDecode {
+            opcode: "Column",
+            ..
+        })
+    ));
+}
