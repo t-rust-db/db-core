@@ -297,7 +297,7 @@ fn mcdc__aggregate_1123__v3_without_rowid_table_needs_a_sorter() {
 }
 
 // ---------------------------------------------------------------------
-// join_744 -- `matches_agg_slot`: an ORDER BY aggregate matches a
+// join_796 -- `matches_agg_slot`: an ORDER BY aggregate matches a
 // collected slot only when `name` and `DISTINCT`-ness both agree
 // (`!name_eq || distinct != slot_distinct`). A match sorts on the
 // finalized aggregate; no match falls through to bare-column
@@ -305,7 +305,7 @@ fn mcdc__aggregate_1123__v3_without_rowid_table_needs_a_sorter() {
 // ---------------------------------------------------------------------
 
 #[test]
-fn mcdc__join_744__v1_same_name_and_distinctness_matches_the_slot() {
+fn mcdc__join_796__v1_same_name_and_distinctness_matches_the_slot() {
     let p = ok(
         "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k ORDER BY count(b.w)",
         &two_tables(),
@@ -314,7 +314,7 @@ fn mcdc__join_744__v1_same_name_and_distinctness_matches_the_slot() {
 }
 
 #[test]
-fn mcdc__join_744__v2_different_name_does_not_match() {
+fn mcdc__join_796__v2_different_name_does_not_match() {
     let e = err_text(
         "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k ORDER BY sum(b.w)",
         &two_tables(),
@@ -326,7 +326,7 @@ fn mcdc__join_744__v2_different_name_does_not_match() {
 }
 
 #[test]
-fn mcdc__join_744__v3_same_name_but_different_distinctness_does_not_match() {
+fn mcdc__join_796__v3_same_name_but_different_distinctness_does_not_match() {
     let e = err_text(
         "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k \
          ORDER BY count(DISTINCT b.w)",
@@ -372,83 +372,12 @@ fn mcdc__joins_81__v3_single_inner_join_takes_the_ordinary_join_tree() {
 }
 
 // ---------------------------------------------------------------------
-// joins_88 -- inside that FULL JOIN arm:
-// `!order_by.is_empty() && distinct == Distinct` is the one rejected
-// combination.
-// ---------------------------------------------------------------------
-
-#[test]
-fn mcdc__joins_88__v1_full_join_with_order_by_and_distinct_is_rejected() {
-    let e = err_text(
-        "SELECT DISTINCT a.k FROM a FULL JOIN b ON a.k = b.k ORDER BY a.k",
-        &two_tables(),
-    );
-    assert!(
-        e.contains("DISTINCT combined with ORDER BY and a FULL JOIN"),
-        "{e}"
-    );
-}
-
-#[test]
-fn mcdc__joins_88__v2_full_join_with_order_by_alone_compiles() {
-    let p = ok(
-        "SELECT a.k FROM a FULL JOIN b ON a.k = b.k ORDER BY a.k",
-        &two_tables(),
-    );
-    assert!(has(&p, Opcode::SorterOpen), "{p:?}");
-}
-
-#[test]
-fn mcdc__joins_88__v3_full_join_with_distinct_alone_compiles() {
-    let p = ok(
-        "SELECT DISTINCT a.k FROM a FULL JOIN b ON a.k = b.k",
-        &two_tables(),
-    );
-    assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
-}
-
-// ---------------------------------------------------------------------
-// joins_192 -- the same ORDER BY + DISTINCT guard in
-// `compile_select_joined_scan` (the non-FULL join tree).
-// ---------------------------------------------------------------------
-
-#[test]
-fn mcdc__joins_192__v1_join_with_order_by_and_distinct_is_rejected() {
-    let e = err_text(
-        "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k ORDER BY a.k",
-        &two_tables(),
-    );
-    assert!(
-        e.contains("DISTINCT combined with ORDER BY and a JOIN"),
-        "{e}"
-    );
-}
-
-#[test]
-fn mcdc__joins_192__v2_join_with_order_by_alone_compiles() {
-    let p = ok(
-        "SELECT a.k FROM a JOIN b ON a.k = b.k ORDER BY a.k",
-        &two_tables(),
-    );
-    assert!(has(&p, Opcode::SorterOpen), "{p:?}");
-}
-
-#[test]
-fn mcdc__joins_192__v3_join_with_distinct_alone_compiles() {
-    let p = ok(
-        "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k",
-        &two_tables(),
-    );
-    assert!(has(&p, Opcode::OpenEphemeral), "{p:?}");
-}
-
-// ---------------------------------------------------------------------
-// joins_456 -- `!group_by.is_empty() || select_has_aggregate(select)`
+// joins_443 -- `!group_by.is_empty() || select_has_aggregate(select)`
 // routes a join to the grouped emitter, which rejects DISTINCT.
 // ---------------------------------------------------------------------
 
 #[test]
-fn mcdc__joins_456__v1_group_by_routes_to_the_grouped_join() {
+fn mcdc__joins_443__v1_group_by_routes_to_the_grouped_join() {
     let e = err_text(
         "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k GROUP BY a.k",
         &two_tables(),
@@ -460,7 +389,7 @@ fn mcdc__joins_456__v1_group_by_routes_to_the_grouped_join() {
 }
 
 #[test]
-fn mcdc__joins_456__v2_aggregate_without_group_by_routes_to_the_grouped_join() {
+fn mcdc__joins_443__v2_aggregate_without_group_by_routes_to_the_grouped_join() {
     let e = err_text(
         "SELECT DISTINCT count(*) FROM a JOIN b ON a.k = b.k",
         &two_tables(),
@@ -472,52 +401,12 @@ fn mcdc__joins_456__v2_aggregate_without_group_by_routes_to_the_grouped_join() {
 }
 
 #[test]
-fn mcdc__joins_456__v3_neither_is_a_plain_joined_scan() {
+fn mcdc__joins_443__v3_neither_is_a_plain_joined_scan() {
     let p = ok(
         "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k",
         &two_tables(),
     );
     assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
-}
-
-// ---------------------------------------------------------------------
-// join_full_115 -- `compile_full_join_two_table`'s defensive
-// `has_order_by && has_distinct`. `compile_select_joined` (joins_88)
-// already rejects the true/true vector with the identical message, so
-// that vector is observed at the outer guard.
-// ---------------------------------------------------------------------
-
-#[test]
-fn mcdc__join_full_115__v1_order_by_and_distinct_together_are_rejected() {
-    let e = err_text(
-        "SELECT DISTINCT a.k FROM a FULL JOIN b ON a.k = b.k ORDER BY a.k",
-        &two_tables(),
-    );
-    assert!(
-        e.contains("DISTINCT combined with ORDER BY and a FULL JOIN"),
-        "{e}"
-    );
-}
-
-#[test]
-fn mcdc__join_full_115__v2_order_by_alone_sorts_the_full_join() {
-    let p = ok(
-        "SELECT a.k FROM a FULL JOIN b ON a.k = b.k ORDER BY a.k",
-        &two_tables(),
-    );
-    assert!(has(&p, Opcode::SorterOpen), "{p:?}");
-}
-
-#[test]
-fn mcdc__join_full_115__v3_distinct_alone_dedups_the_full_join() {
-    let p = ok(
-        "SELECT DISTINCT a.k FROM a FULL JOIN b ON a.k = b.k",
-        &two_tables(),
-    );
-    assert!(
-        has(&p, Opcode::OpenEphemeral) && !has(&p, Opcode::SorterOpen),
-        "{p:?}"
-    );
 }
 
 // ---------------------------------------------------------------------

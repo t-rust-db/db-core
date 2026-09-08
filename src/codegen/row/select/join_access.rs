@@ -597,6 +597,11 @@ where
     em.patch_p2(sort_addr, end_label);
 
     let limit = compile_limit_setup(em, reg, full_scope, select)?;
+    let distinct_cursor = matches!(select.distinct, Some(Distinctness::Distinct)).then(|| {
+        let cursor = pseudo_cursor.saturating_add(1);
+        em.emit(Instruction::new(Opcode::OpenEphemeral, cursor, 0, 0));
+        cursor
+    });
 
     let sorted_loop = em.new_label();
     em.place(sorted_loop);
@@ -619,19 +624,57 @@ where
     // `emit_joined_pseudo_projection` (it always reads `pseudo_cursor`
     // directly at an absolute offset) — `full_scope` is passed through
     // purely for its `tables`/`dedup_star` structure.
+    let (first, count) = emit_joined_pseudo_projection(em, reg, select, full_scope, pseudo_cursor)?;
+    // db-core#219 (carried over from db-core#208): `DISTINCT` combined
+    // with `ORDER BY` dedups the *sorted* output on its projected result
+    // columns, ahead of `LIMIT`/`OFFSET` so a suppressed duplicate never
+    // counts against them -- the ephemeral index lives one cursor past
+    // the sorter's pseudo cursor.
+    if let Some(distinct_cursor) = distinct_cursor {
+        emit_pseudo_distinct_guard(em, distinct_cursor, first, count, row_skip);
+    }
     if let Some(limit) = &limit {
         emit_offset_guard(em, limit, row_skip);
     }
     if let Some(limit) = &limit {
         emit_limit_guard(em, limit, end_label);
     }
-    let (first, count) = emit_joined_pseudo_projection(em, reg, select, full_scope, pseudo_cursor)?;
     sink(em, reg, first, i32::try_from(count).unwrap_or(0))?;
 
     em.place(row_skip);
     let sorted_next = em.emit(Instruction::new(Opcode::SorterNext, sort_cursor, 0, 0));
     em.patch_p2(sorted_next, sorted_loop);
     Ok(())
+}
+
+/// db-core#219: the `Found`/`IdxInsert` dedup check over a result row
+/// already projected into `first..first+count` from a sorter's pseudo
+/// record -- `DISTINCT` applied post-sort. Same shape as
+/// `level::emit_join_distinct_guard`'s pre-sink check, minus the
+/// re-projection (the sorted path already has the registers in hand).
+pub(super) fn emit_pseudo_distinct_guard(
+    em: &mut Emitter,
+    distinct_cursor: i32,
+    first: i32,
+    count: usize,
+    skip_label: Label,
+) {
+    let width = P4::Int(i64::try_from(count).unwrap_or(0));
+    let addr = em.emit(Instruction::with_p4(
+        Opcode::Found,
+        distinct_cursor,
+        0,
+        first,
+        width.clone(),
+    ));
+    em.patch_p2(addr, skip_label);
+    em.emit(Instruction::with_p4(
+        Opcode::IdxInsert,
+        distinct_cursor,
+        first,
+        0,
+        width,
+    ));
 }
 
 /// Builds the [`SortKeyColumn`] list for one buffered joined row: a

@@ -9,7 +9,7 @@ use super::super::limit_scan::{
 };
 use super::super::order_by::strip_collate;
 use super::super::*;
-use super::accum::{collect_aggregates, AggSlot};
+use super::accum::{collect_aggregates, substitute_aggregates, AggSlot};
 
 /// [`super::compile_grouped_scan`]'s joined counterpart (#333):
 /// `GROUP BY`/an implicit whole-table aggregate combined with a JOIN.
@@ -68,12 +68,6 @@ pub(crate) fn compile_joined_grouped_scan<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
 {
-    if select.having.is_some() {
-        return Err(CodegenError::Unsupported {
-            reason: "HAVING combined with a JOIN is not yet supported".to_string(),
-        });
-    }
-
     let group_offsets: Vec<usize> = select
         .group_by
         .iter()
@@ -577,17 +571,6 @@ where
         i32::try_from(synthetic_count).unwrap_or(0),
         record_reg,
     ));
-
-    if let Some(order_sort_cursor) = order_sort_cursor {
-        em.emit(Instruction::new(
-            Opcode::SorterInsert,
-            order_sort_cursor,
-            record_reg,
-            0,
-        ));
-        return Ok(());
-    }
-
     em.emit(Instruction::new(
         Opcode::OpenPseudo,
         flush_cursor,
@@ -596,6 +579,41 @@ where
     ));
 
     let skip_label = em.new_label();
+    // db-core#219 (carried over from db-core#178): `HAVING` over a joined
+    // group filters the finalized record the same way `accum::flush_group`
+    // does for a single table -- aggregate calls rewritten to the
+    // record's trailing `__agg<n>` fields via `substitute_aggregates`,
+    // bare columns resolved by name against a synthetic single-cursor
+    // schema over the flat joined row -- and, with a trailing `ORDER BY`,
+    // ahead of the `SorterInsert` so a rejected group never reaches the
+    // re-sort pass.
+    if let Some(having) = &select.having {
+        let synthetic_names: Vec<String> =
+            (0..agg_slots.len()).map(|i| format!("__agg{i}")).collect();
+        let synthetic = joined_synthetic_schema(full_scope, &synthetic_names);
+        let flush_scope =
+            Scope::single(&synthetic, flush_cursor).with_catalog(full_scope.catalog.clone());
+        let rewritten = substitute_aggregates(having, agg_slots, &synthetic_names);
+        compile_cond(
+            em,
+            reg,
+            &flush_scope,
+            &rewritten,
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(skip_label)),
+        )?;
+    }
+
+    if let Some(order_sort_cursor) = order_sort_cursor {
+        em.emit(Instruction::new(
+            Opcode::SorterInsert,
+            order_sort_cursor,
+            record_reg,
+            0,
+        ));
+        em.place(skip_label);
+        return Ok(());
+    }
+
     if let Some(limit) = limit {
         emit_offset_guard(em, limit, skip_label);
     }
@@ -616,6 +634,40 @@ where
     sink(em, reg, first, i32::try_from(count).unwrap_or(0))?;
     em.place(skip_label);
     Ok(())
+}
+
+/// db-core#219: a synthetic single-cursor schema over one flushed joined
+/// group's record -- every binding's column names in `full_scope.tables`
+/// order (the same layout `joined_column_offset` addresses), then one
+/// `__agg<n>` field per aggregate -- so `HAVING` compiles against it
+/// through the ordinary, aggregate-unaware `compile_cond`, exactly like
+/// `accum::flush_group`'s single-table counterpart. Bare names only: a
+/// `table.`-qualified reference resolves by its bare name here, the
+/// earlier binding winning on a collision.
+fn joined_synthetic_schema(full_scope: &Scope, synthetic_names: &[String]) -> TableSchema {
+    let mut columns: Vec<String> = full_scope
+        .tables
+        .iter()
+        .flat_map(|b| b.schema.columns.iter().cloned())
+        .collect();
+    let mut column_types: Vec<String> = full_scope
+        .tables
+        .iter()
+        .flat_map(|b| {
+            b.schema
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(i, _)| b.schema.column_types.get(i).cloned().unwrap_or_default())
+        })
+        .collect();
+    columns.extend(synthetic_names.iter().cloned());
+    column_types.extend(synthetic_names.iter().map(|_| String::new()));
+    TableSchema {
+        columns,
+        column_types,
+        ..TableSchema::default()
+    }
 }
 
 /// Reprojects `select`'s result columns from `cursor` — a pseudo

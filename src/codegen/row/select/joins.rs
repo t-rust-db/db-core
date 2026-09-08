@@ -79,18 +79,10 @@ pub fn compile_select_joined(
     // combined together stays rejected, same as the ordinary join tree
     // below.
     if from.joins.len() == 1 && from.joins.first().is_some_and(|j| j.op == JoinOp::Full) {
-        // #288: `ORDER BY` and `DISTINCT` are each independently
-        // supported combined with a `FULL JOIN` now (see
-        // `compile_full_join_two_table`'s doc comment) — only their
-        // *combination* stays rejected, mirroring the same restriction
-        // the ordinary join tree enforces just below in
-        // `compile_select_joined_scan`.
-        if !select.order_by.is_empty() && matches!(select.distinct, Some(Distinctness::Distinct)) {
-            return Err(CodegenError::Unsupported {
-                reason: "DISTINCT combined with ORDER BY and a FULL JOIN is not yet supported"
-                    .to_string(),
-            });
-        }
+        // #288 made `ORDER BY` and `DISTINCT` each work with a `FULL
+        // JOIN`; db-core#219 (carried over from db-core#208) lets them
+        // combine too -- `DISTINCT` dedups the sorted output, see
+        // `compile_full_join_two_table`.
         return compile_full_join_two_table(select, schemas, from, stats_by_table);
     }
     if from.joins.iter().any(|j| j.op == JoinOp::Full) {
@@ -189,11 +181,6 @@ where
     let Some(from) = &select.from else {
         return Err(CodegenError::NoFromClause);
     };
-    if !select.order_by.is_empty() && matches!(select.distinct, Some(Distinctness::Distinct)) {
-        return Err(CodegenError::Unsupported {
-            reason: "DISTINCT combined with ORDER BY and a JOIN is not yet supported".to_string(),
-        });
-    }
     // `FULL JOIN` has its own dedicated two-table emitter
     // (`compile_full_join_two_table`), reached only through
     // `compile_select_joined`'s own dispatch above this function — a

@@ -105,19 +105,11 @@ pub(super) fn compile_full_join_two_table(
         ..Scope::default()
     };
 
-    // #288: `ORDER BY` and `DISTINCT` combined stay rejected — the
-    // dispatch in `compile_select_joined` already turns that away
-    // before ever reaching this function, but the check is repeated
-    // here defensively since nothing else guarantees that's the only
-    // path in.
+    // db-core#219 (carried over from db-core#208): `ORDER BY` and
+    // `DISTINCT` combine -- the dedup then runs over the sorted output
+    // (below), on cursor 5, past the sorter's own 3/4.
     let has_order_by = !select.order_by.is_empty();
     let has_distinct = matches!(select.distinct, Some(Distinctness::Distinct));
-    if has_order_by && has_distinct {
-        return Err(CodegenError::Unsupported {
-            reason: "DISTINCT combined with ORDER BY and a FULL JOIN is not yet supported"
-                .to_string(),
-        });
-    }
     let order_by_plans = if has_order_by {
         resolve_join_order_by(select, &full_scope)?
     } else {
@@ -135,7 +127,7 @@ pub(super) fn compile_full_join_two_table(
     // `distinct_cursor` (DISTINCT, no ORDER BY) and `sort_cursor`/
     // `pseudo_cursor` (ORDER BY) never coexist — rejected above — so
     // cursor 3 (and 4) are safely reused across either shape.
-    let distinct_cursor = (has_distinct && !has_order_by).then_some(3);
+    let distinct_cursor = has_distinct.then_some(if has_order_by { 5 } else { 3 });
     if let Some(dc) = distinct_cursor {
         em.emit(Instruction::new(Opcode::OpenEphemeral, dc, 0, 0));
     }
@@ -363,14 +355,23 @@ pub(super) fn compile_full_join_two_table(
         ));
 
         let row_skip = em.new_label();
+        let (first, count) =
+            emit_joined_pseudo_projection(&mut em, &mut reg, select, &full_scope, pseudo_cursor)?;
+        if let Some(distinct_cursor) = distinct_cursor {
+            super::join_access::emit_pseudo_distinct_guard(
+                &mut em,
+                distinct_cursor,
+                first,
+                count,
+                row_skip,
+            );
+        }
         if let Some(limit) = &limit {
             emit_offset_guard(&mut em, limit, row_skip);
         }
         if let Some(limit) = &limit {
             emit_limit_guard(&mut em, limit, end_label);
         }
-        let (first, count) =
-            emit_joined_pseudo_projection(&mut em, &mut reg, select, &full_scope, pseudo_cursor)?;
         sink(&mut em, &mut reg, first, i32::try_from(count).unwrap_or(0))?;
 
         em.place(row_skip);

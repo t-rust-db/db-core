@@ -169,3 +169,155 @@ fn compile_statement_reports_an_unknown_table() {
     let err = compile_statement("SELECT a FROM missing", &[], &[]).unwrap_err();
     assert!(format!("{err:?}").contains("missing"));
 }
+
+// ---------------------------------------------------------------------
+// db-core#219 carry-overs: behaviour db-core's re-derived codegen had
+// grown that sqlite-rs's tree lacked, re-added on top of the moved code.
+// ---------------------------------------------------------------------
+
+/// Two-table variant of [`run`]: `t` on root 2, `u` on root 3, each
+/// seeded with `(rowid, values)` rows.
+fn run_two(
+    sql: &str,
+    t: (&[&str], Vec<(i64, Vec<Value>)>),
+    u: (&[&str], Vec<(i64, Vec<Value>)>),
+) -> Vec<Vec<Value>> {
+    let schemas = [schema_with_root("t", t.0, 2), schema_with_root("u", u.0, 3)];
+    let program = compile_statement(sql, &schemas, &[]).unwrap();
+    let mut vm = Vm::new();
+    for (root, seed) in [(2, t.1), (3, u.1)] {
+        let mut table = EphemeralTableCursor::new();
+        for (rowid, values) in seed {
+            table.insert(rowid, values);
+        }
+        vm.open_cursor(cursor_slot_for_root(&program, root), Box::new(table))
+            .unwrap();
+    }
+    execute(&mut vm, &program).unwrap()
+}
+
+fn ints(values: &[i64]) -> Vec<Value> {
+    values.iter().map(|v| Value::Integer(*v)).collect()
+}
+
+#[test]
+fn having_filters_groups_over_a_join() {
+    let rows = run_two(
+        "SELECT t.k, count(*) FROM t JOIN u ON u.k = t.k GROUP BY t.k HAVING count(*) > 1",
+        (&["k"], vec![(1, ints(&[1])), (2, ints(&[2]))]),
+        (
+            &["k", "v"],
+            vec![
+                (1, ints(&[1, 10])),
+                (2, ints(&[1, 20])),
+                (3, ints(&[2, 30])),
+            ],
+        ),
+    );
+    assert_eq!(rows, vec![ints(&[1, 2])]);
+}
+
+#[test]
+fn having_over_a_join_may_name_a_bare_grouped_column() {
+    let rows = run_two(
+        "SELECT t.k, sum(u.v) FROM t JOIN u ON u.k = t.k GROUP BY t.k HAVING k = 2",
+        (&["k"], vec![(1, ints(&[1])), (2, ints(&[2]))]),
+        (&["k", "v"], vec![(1, ints(&[1, 10])), (2, ints(&[2, 30]))]),
+    );
+    assert_eq!(rows, vec![ints(&[2, 30])]);
+}
+
+#[test]
+fn having_over_a_join_composes_with_order_by() {
+    let rows = run_two(
+        "SELECT t.k, count(*) FROM t JOIN u ON u.k = t.k GROUP BY t.k HAVING count(*) >= 1 \
+         ORDER BY t.k DESC",
+        (
+            &["k"],
+            vec![(1, ints(&[1])), (2, ints(&[2])), (3, ints(&[3]))],
+        ),
+        (
+            &["k", "v"],
+            vec![
+                (1, ints(&[1, 10])),
+                (2, ints(&[1, 20])),
+                (3, ints(&[3, 30])),
+            ],
+        ),
+    );
+    assert_eq!(rows, vec![ints(&[3, 1]), ints(&[1, 2])]);
+}
+
+#[test]
+fn distinct_with_order_by_over_a_join_dedups_the_sorted_output() {
+    let rows = run_two(
+        "SELECT DISTINCT u.v FROM t JOIN u ON u.k = t.k ORDER BY u.v DESC",
+        (&["k"], vec![(1, ints(&[1])), (2, ints(&[2]))]),
+        (
+            &["k", "v"],
+            vec![
+                (1, ints(&[1, 7])),
+                (2, ints(&[2, 7])),
+                (3, ints(&[1, 9])),
+                (4, ints(&[2, 3])),
+            ],
+        ),
+    );
+    assert_eq!(rows, vec![ints(&[9]), ints(&[7]), ints(&[3])]);
+}
+
+#[test]
+fn distinct_with_order_by_and_limit_over_a_join_counts_only_distinct_rows() {
+    let rows = run_two(
+        "SELECT DISTINCT u.v FROM t JOIN u ON u.k = t.k ORDER BY u.v LIMIT 2",
+        (&["k"], vec![(1, ints(&[1])), (2, ints(&[2]))]),
+        (
+            &["k", "v"],
+            vec![
+                (1, ints(&[1, 3])),
+                (2, ints(&[2, 3])),
+                (3, ints(&[1, 5])),
+                (4, ints(&[2, 9])),
+            ],
+        ),
+    );
+    assert_eq!(rows, vec![ints(&[3]), ints(&[5])]);
+}
+
+#[test]
+fn distinct_with_order_by_over_a_full_join_dedups_both_passes() {
+    let rows = run_two(
+        "SELECT DISTINCT u.v FROM t FULL JOIN u ON u.k = t.k ORDER BY u.v",
+        (&["k"], vec![(1, ints(&[1])), (2, ints(&[5]))]),
+        (
+            &["k", "v"],
+            vec![(1, ints(&[1, 7])), (2, ints(&[1, 7])), (3, ints(&[9, 2]))],
+        ),
+    );
+    // t.k = 5 matches nothing (u.v is NULL for that row); u.k = 9 is the
+    // unmatched right side (v = 2); the two k = 1 matches collapse.
+    assert_eq!(rows, vec![vec![Value::Null], ints(&[2]), ints(&[7])]);
+}
+
+#[test]
+fn in_subquery_may_project_a_computed_expression() {
+    let rows = run_two(
+        "SELECT t.k FROM t WHERE t.k IN (SELECT u.v + 1 FROM u)",
+        (
+            &["k"],
+            vec![(1, ints(&[1])), (2, ints(&[2])), (3, ints(&[3]))],
+        ),
+        (&["k", "v"], vec![(1, ints(&[0, 1])), (2, ints(&[0, 2]))]),
+    );
+    assert_eq!(rows, vec![ints(&[2]), ints(&[3])]);
+}
+
+#[test]
+fn scalar_subquery_may_project_a_computed_expression() {
+    let rows = run_two(
+        "SELECT t.k FROM t WHERE t.k = (SELECT u.v * 2 FROM u WHERE u.k = 1)",
+        (&["k"], vec![(1, ints(&[1])), (2, ints(&[4]))]),
+        (&["k", "v"], vec![(1, ints(&[1, 2])), (2, ints(&[2, 5]))]),
+    );
+    assert_eq!(rows, vec![ints(&[4])]);
+}
