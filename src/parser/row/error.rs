@@ -397,7 +397,6 @@ pub fn parse_analyze(src: &str) -> ParseOutcome<Analyze> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
 

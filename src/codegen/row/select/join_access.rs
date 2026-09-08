@@ -790,7 +790,6 @@ pub(super) fn compile_join_level_for_sort(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::codegen::row::planner::Stats;

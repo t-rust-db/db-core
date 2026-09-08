@@ -276,7 +276,6 @@ pub fn concat(a: &Value, b: &Value) -> Value {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic)]
 mod tests {
     use super::*;
 

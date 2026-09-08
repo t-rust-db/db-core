@@ -361,13 +361,6 @@ pub fn semi_filter(batch: &Batch, key_column: &str, allowed: &HashSet<String>) -
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
 mod tests {
     use super::*;
     use crate::vm::batch::AggFunc;

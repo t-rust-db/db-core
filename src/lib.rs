@@ -43,6 +43,21 @@
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
+// db-core#230: test code fails fast. `clippy.toml`'s `allow-*-in-tests`
+// switches scope `unwrap_used`/`expect_used`/`panic`/`indexing_slicing`
+// to production code; these five have no such switch, so the `lib` test
+// target relaxes them here instead of every `mod tests` carrying its own
+// `#[allow]` header. Production code (`cfg(not(test))`) is unaffected.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::arithmetic_side_effects,
+        clippy::string_slice,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss
+    )
+)]
 
 /// This crate's version, as embedded in `codegen::batch::emit`'s
 /// generated-source headers.

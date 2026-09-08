@@ -86,13 +86,6 @@ pub fn compare(a: &Value, b: &Value, collation: Collation) -> Ordering {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
 mod tests {
     use super::*;
 

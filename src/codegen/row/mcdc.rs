@@ -11,13 +11,7 @@
 //! Obligation ids are `<file-stem>_<line>`, so a moved file's later
 //! re-sync that shifts lines means re-tagging here, nothing else.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    non_snake_case
-)]
+#![allow(non_snake_case)]
 
 mod aggregate_joins;
 mod misc;

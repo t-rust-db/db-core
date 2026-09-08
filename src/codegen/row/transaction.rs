@@ -62,7 +62,6 @@ fn compile_auto_commit(commit: i32) -> Program {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::parser::row::error::{parse_begin, parse_commit, parse_rollback, ParseOutcome};

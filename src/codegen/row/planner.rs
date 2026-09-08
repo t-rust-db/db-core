@@ -175,7 +175,6 @@ pub fn is_automatic_index_worthwhile(stats: &Stats) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

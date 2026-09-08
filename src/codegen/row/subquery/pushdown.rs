@@ -334,7 +334,6 @@ fn recurse_into_from_subqueries(select: &mut Select) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::parser::row::error::{parse_select, ParseOutcome};

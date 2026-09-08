@@ -51,7 +51,6 @@ pub fn compile_create_view(create: &CreateView, source: &str) -> Result<Program,
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::parser::row::error::ParseOutcome;

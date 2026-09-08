@@ -217,7 +217,6 @@ pub(crate) use limit_scan::{is_rowid_reference, top_level_equality_operands};
 pub(crate) use range_scan::{range_seek_index_position, try_compile_range_row_seek};
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

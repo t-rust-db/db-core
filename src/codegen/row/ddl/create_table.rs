@@ -51,7 +51,6 @@ pub fn compile_create_table(create: &CreateTable, source: &str) -> Result<Progra
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::parser::row::error::ParseOutcome;

@@ -687,7 +687,6 @@ pub(crate) fn compile_in_subquery_multi(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::codegen::row::select::compile_select_with_catalog;

@@ -759,7 +759,6 @@ impl fmt::Display for ParamKind {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::super::error::{
         parse_begin, parse_commit, parse_create_index, parse_create_table, parse_create_view,
