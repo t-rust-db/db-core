@@ -1094,7 +1094,7 @@ impl Parser {
         })
     }
 
-    pub(super) fn parse_select_stmt(&mut self) -> PResult<Select> {
+    fn select_stmt_body(&mut self) -> PResult<Select> {
         let with_clause = if self.at_kw(Keyword::WITH) {
             Some(self.parse_with_clause()?)
         } else {
@@ -3216,5 +3216,144 @@ mod tests {
     fn mcdc__grammar_2396__v3_over_alone_keeps_the_tail() {
         let tail = function_tail_of("SELECT row_number() OVER (ORDER BY x) FROM t").unwrap();
         assert!(tail.filter.is_none() && tail.over.is_some());
+    }
+}
+
+/// How many [`MAX_EXPR_DEPTH`] units one `SELECT` level costs
+/// (db-core#226). The depth counter measures *stack*, not syntax: a
+/// `parse_select_stmt` frame (WITH/compound/FROM/WHERE/GROUP/ORDER/LIMIT
+/// temporaries) is several times the size of an `expr` frame, and
+/// before this the counter never saw it at all -- `SELECT a FROM (SELECT
+/// a FROM (...))` overflowed a 2 MiB thread stack at ~100 levels and
+/// `SELECT (SELECT (SELECT ...))` at ~50, both with the expression guard
+/// intact. Charging a `SELECT` at this weight caps subquery nesting at
+/// `MAX_EXPR_DEPTH / SELECT_DEPTH_COST` = 33 levels, roughly half the
+/// measured 2 MiB breaking point for the worst shape, and keeps the
+/// *combined* budget honest: a deeply nested subquery with a deeply
+/// nested expression inside it is rejected sooner than either alone,
+/// which is exactly what the stack would have done.
+const SELECT_DEPTH_COST: usize = 6;
+
+impl Parser {
+    /// The `SELECT` statement entry point every embedding site calls --
+    /// top-level (`parse_select`/`parse_explain`), `INSERT ... SELECT`,
+    /// `CREATE VIEW ... AS`, CTE bodies, `FROM (...)`, `EXISTS (...)`,
+    /// `IN (...)` and scalar `(SELECT ...)` -- guarded against runaway
+    /// nesting the same way [`Self::with_depth_guard`] guards `expr`,
+    /// but at [`SELECT_DEPTH_COST`] per level. Fails with `Invalid`
+    /// ("subquery nesting too deep") instead of overflowing the stack;
+    /// always pays the cost back afterward, including on error, so
+    /// sibling arms of a compound or sibling CTEs aren't penalized.
+    pub(super) fn parse_select_stmt(&mut self) -> PResult<Select> {
+        self.depth = self.depth.saturating_add(SELECT_DEPTH_COST);
+        if self.depth > MAX_EXPR_DEPTH {
+            self.depth = self.depth.saturating_sub(SELECT_DEPTH_COST);
+            return self.invalid("subquery nesting too deep");
+        }
+        let result = self.select_stmt_body();
+        self.depth = self.depth.saturating_sub(SELECT_DEPTH_COST);
+        result
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod select_depth_tests {
+    use crate::parser::row::{parse_select, ParseOutcome};
+
+    fn nested_from(depth: usize) -> String {
+        let mut s = "SELECT a FROM t".to_string();
+        for i in 0..depth {
+            s = format!("SELECT a FROM ({s}) AS s{i}");
+        }
+        s
+    }
+
+    fn nested_scalar(depth: usize) -> String {
+        let mut s = "SELECT 1".to_string();
+        for _ in 0..depth {
+            s = format!("SELECT ({s})");
+        }
+        s
+    }
+
+    fn is_too_deep(sql: &str) -> bool {
+        matches!(
+            parse_select(sql),
+            // Either guard may trip first: the FROM shape spends its last
+            // units on the innermost `a` expression, the scalar shape on
+            // the `SELECT` itself. Both are the same defence.
+            ParseOutcome::Invalid { message, .. } if message.ends_with("nesting too deep")
+        )
+    }
+
+    /// Runs `f` on a thread with cargo-test's own default 2 MiB stack --
+    /// the budget an embedding application's worker thread typically
+    /// has -- so "rejected by the guard" is proven against the stack
+    /// size that used to overflow, not the 8 MiB main thread.
+    fn on_2mib_stack(f: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn modest_subquery_nesting_is_still_accepted() {
+        // 16 levels is far past anything a real query does, well under
+        // the cap, and the same shape that overflowed at ~50 before.
+        for sql in [nested_from(16), nested_scalar(16)] {
+            assert!(
+                matches!(parse_select(&sql), ParseOutcome::Accepted(_)),
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn deeply_nested_subqueries_hit_the_depth_guard_instead_of_the_stack() {
+        on_2mib_stack(|| {
+            for depth in [40usize, 100, 1_000] {
+                assert!(is_too_deep(&nested_from(depth)), "FROM depth {depth}");
+                assert!(is_too_deep(&nested_scalar(depth)), "scalar depth {depth}");
+            }
+        });
+    }
+
+    #[test]
+    fn the_measured_boundaries_are_pinned() {
+        // Measured on 2026-09-08 with MAX_EXPR_DEPTH = 200 and
+        // SELECT_DEPTH_COST = 6, on a 2 MiB stack that used to overflow
+        // at ~100 (FROM) and ~50 (scalar). A derived table costs one
+        // `SELECT` per level; a scalar subquery also threads through the
+        // `expr` chain, so its boundary is lower. Pinned so a change to
+        // either constant -- or a heavier parser frame -- shows up here
+        // rather than as a stack overflow in production.
+        assert!(!is_too_deep(&nested_from(31)));
+        assert!(is_too_deep(&nested_from(32)));
+        assert!(!is_too_deep(&nested_scalar(21)));
+        assert!(is_too_deep(&nested_scalar(22)));
+    }
+
+    #[test]
+    fn sibling_subqueries_do_not_accumulate_depth() {
+        // Ten sibling CTEs and ten `UNION ALL` arms each enter
+        // `parse_select_stmt` once, one after another -- the cost is
+        // paid back between them, so none of this comes near the cap.
+        let ctes = (0..10)
+            .map(|i| format!("c{i} AS (SELECT {i})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let arms = (0..10)
+            .map(|i| format!("SELECT {i}"))
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        assert!(matches!(
+            parse_select(&format!("WITH {ctes} SELECT 1")),
+            ParseOutcome::Accepted(_)
+        ));
+        assert!(matches!(parse_select(&arms), ParseOutcome::Accepted(_)));
     }
 }
