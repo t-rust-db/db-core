@@ -22,7 +22,7 @@ build: ## Build with all features
 # Every [[test]] target's name whose source is NOT under tests/spike/
 # (naming any `--test` turns off cargo's target autodiscovery, which is
 # exactly how tests/spike/ stays out of a run that lists these). Spikes
-# are throwaway experiments (db-core#141/#186): they must not run under
+# are throwaway experiments (ADR 0015, tier 5): they must not run under
 # the default test/coverage gates, nor count toward coverage -- use
 # `make test-spike` to run them explicitly.
 NON_SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
@@ -44,8 +44,8 @@ SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
 test-spike: ## Run only the throwaway experiments under tests/spike/
 	cargo test --all-features $(SPIKE_TESTS)
 
-# Scanned file set for `test-mcdc` (db-core#111): all of `src/`, not a
-# curated subset -- no obligation is exempted by file selection.
+# Scanned file set for `test-mcdc`: all of `src/`, not a curated subset --
+# no obligation is exempted by file selection (ADR 0015, tier 3).
 MCDC_FILES := $(shell find src -name '*.rs')
 
 mcdc-obligations: ## Regenerate the committed MC/DC obligations snapshot (tests/mcdc/obligations.json)
@@ -99,7 +99,7 @@ lint: ## Run clippy (deny warnings), check formatting, and the panic-allow polic
 	cargo fmt --all -- --check
 	$(MAKE) check-panic-allows
 
-# The panic lints in Cargo.toml are a *production* rule (db-core#230):
+# The panic lints in Cargo.toml are a *production* rule (ADR 0015):
 # production returns typed errors, tests fail fast. clippy.toml's
 # `allow-*-in-tests` + lib.rs's `cfg_attr(test, allow(...))` scope the
 # lints so test code needs no per-module `#[allow]`; this gate then
@@ -133,7 +133,8 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # implementors through `&dyn Cursor`. `transaction.rs` and
 # `schema_storage.rs` define boundary traits too, but contain no `dyn`
 # themselves and so pass the gate unexempted. Everything above the
-# boundary stays in the qualified subset.
+# boundary stays in the qualified subset. Adding a file here is an
+# architecture decision (ADR 0008, ADR 0015), not a lint fix.
 MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs
 
 check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
