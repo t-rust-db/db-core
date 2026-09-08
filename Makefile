@@ -157,7 +157,7 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 
 # === Performance ===
 
-perf: ## Run the parser/codegen/vm_opcodes benchmarks (report only, not a CI gate; JSON under target/criterion/)
+perf: ## Run the parser/codegen/vm_opcodes benchmarks (report only, not a CI gate; std-only harness, JSON under target/perf/ -- ADR 0015 tier 6)
 	cargo bench --bench parser
 	cargo bench --bench codegen
 	cargo bench --bench vm_opcodes

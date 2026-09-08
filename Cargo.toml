@@ -1,6 +1,9 @@
 [package]
 name = "db-core"
 version = "0.74.1"
+# The three [[bench]] targets are declared explicitly; `benches/common.rs`
+# is their shared harness module, not a bench of its own.
+autobenches = false
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/db-core"
@@ -85,7 +88,6 @@ path = "tests/spike/002_arrow_optimization/02_groupreduce_key_hashing_adjusted.r
 [dependencies]
 
 [dev-dependencies]
-criterion = "0.5"
 
 [[bench]]
 name = "parser"

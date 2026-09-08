@@ -52,12 +52,14 @@ exists for another crate's benefit.
    `make test` and from coverage; run only via `make test-spike`. A
    spike whose conclusion is recorded (in an ADR or an issue) is deleted.
 
-6. **Performance report** -- `make perf`: criterion benchmarks under
+6. **Performance report** -- `make perf`: micro-benchmarks under
    `benches/` for the parser (tokenize + parse), the planners
    (`codegen::row`/`codegen::batch` over an already-parsed AST) and a
-   representative opcode per execution shape in both VMs. Report only
-   (JSON under `target/criterion/`), never a gate; criterion is the
-   crate's only third-party dependency and is dev-only.
+   representative opcode per execution shape in both VMs, on the
+   crate's own `std`-only harness (`benches/common`: warm-up, batched
+   timed samples, min/median/p95 ns per call, JSON under
+   `target/perf/`). Report only, never a gate; no benchmark asserts a
+   number.
 
 ### Static gates
 
@@ -73,7 +75,8 @@ exists for another crate's benefit.
   allow(...))`, so inline test modules carry no allow header and each
   `tests/unit/*.rs` file carries the one canonical header.
 - **Supply chain** (`make check-deny`): `cargo-deny` over licenses, bans
-  and sources; the crate has zero third-party runtime dependencies.
+  and sources; the crate has zero third-party dependencies, runtime or
+  dev.
 - **Qualified subset** (`make check-mvl-limit`): `cargo-mvl-limit` over
   `src/` -- no `unsafe`, no `dyn`, no explicit lifetimes, allow-listed
   macros only -- minus the documented `dyn Cursor` boundary
