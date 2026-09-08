@@ -217,3 +217,60 @@ fn parse_analyze_accepts_bare_and_scoped_forms_and_rejects_malformed() {
     assert_eq!(scoped.target.as_deref(), Some("t"));
     rejected(parse_analyze("ANALYZE 1 2 3"));
 }
+
+// db-core#223: `parser::row`'s own `parse_select`/`parse_explain` (the
+// entry points `parser::column::parse`/`parse_explain` delegate to
+// internally) plus `split_statements`/`ends_with_semicolon`, `Span`, and
+// `column::ParseError` -- none of these were called directly by name
+// from `tests/unit` before this.
+#[test]
+fn row_parse_select_accepts_and_rejects() {
+    use db_core::parser::row::parse_select as row_parse_select;
+
+    assert!(matches!(
+        row_parse_select("SELECT 1"),
+        ParseOutcome::Accepted(_)
+    ));
+    assert!(matches!(
+        row_parse_select("SELECT FROM t"),
+        ParseOutcome::Invalid { .. }
+    ));
+}
+
+#[test]
+fn row_parse_explain_distinguishes_opcodes_from_query_plan() {
+    use db_core::parser::ast::Explain as RowExplain;
+    use db_core::parser::row::parse_explain as row_parse_explain;
+
+    let opcodes = accepted(row_parse_explain("EXPLAIN SELECT 1"));
+    assert!(!opcodes.query_plan);
+    let plan = accepted(row_parse_explain("EXPLAIN QUERY PLAN SELECT 1"));
+    assert!(plan.query_plan);
+    let _: RowExplain = opcodes;
+}
+
+#[test]
+fn split_statements_splits_on_semicolons_and_ends_with_semicolon_detects_trailer() {
+    use db_core::parser::row::{ends_with_semicolon, split_statements};
+
+    let stmts = split_statements("SELECT 1; SELECT 2 ;");
+    assert_eq!(stmts.len(), 2);
+    assert!(stmts[0].contains("SELECT 1"));
+    assert!(stmts[1].contains("SELECT 2"));
+
+    assert!(ends_with_semicolon("SELECT 1;"));
+    assert!(!ends_with_semicolon("SELECT 1"));
+}
+
+#[test]
+fn span_reads_back_line_and_column_and_parse_error_carries_one() {
+    use db_core::parser::column::{parse, ParseError};
+    use db_core::parser::Span;
+
+    let err = parse("SELECT FROM t").unwrap_err();
+    let span: Span = err.span();
+    assert!(span.line >= 1);
+    match err {
+        ParseError::UnexpectedEof { .. } | ParseError::Unexpected { .. } => {}
+    }
+}

@@ -43,6 +43,22 @@ name = "unit_nesting_depth"
 path = "tests/unit/nesting_depth_test.rs"
 
 [[test]]
+name = "unit_root_public_api"
+path = "tests/unit/root_public_api_test.rs"
+
+[[test]]
+name = "unit_codegen_batch_public_api"
+path = "tests/unit/codegen_batch_public_api_test.rs"
+
+[[test]]
+name = "unit_codegen_batch_emit"
+path = "tests/unit/codegen_batch_emit_test.rs"
+
+[[test]]
+name = "unit_vm_engine_join_public_api"
+path = "tests/unit/vm_engine_join_public_api_test.rs"
+
+[[test]]
 name = "01_neon_batch_kernels"
 path = "tests/spike/001_neon_batch_kernels/01_neon_batch_kernels.rs"
 

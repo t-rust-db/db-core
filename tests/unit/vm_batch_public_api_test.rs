@@ -20,7 +20,8 @@
 )]
 
 use db_core::vm::batch::{
-    Batch, Instruction, JoinKind, MapOp, Opcode, Program, Value, VmError, WindowFunc,
+    compare_for_order, AggFunc, Batch, Instruction, JoinKind, MapOp, Opcode, Program, Segment,
+    Source, TopN, Value, Vm, VmError, WindowFunc,
 };
 use db_core::vm::engine::{run, run_join, InMemorySegment, JoinProgram};
 
@@ -213,4 +214,143 @@ fn window_function_without_its_argument_register_is_a_vm_error() {
             "{func:?}"
         );
     }
+}
+
+// db-core#223: `vm::batch::Vm`'s own direct API (`new`/`register`/
+// `execute`/`run`), `run_parallel`/`run_parallel_top_n`/`TopN`/
+// `Segment`, `AggFunc`, and `compare_for_order` -- previously reached
+// only transitively through `vm::engine::run`.
+
+struct OneShotSource(Option<Batch>);
+
+impl Source for OneShotSource {
+    fn next_batch(&mut self) -> Option<Batch> {
+        self.0.take()
+    }
+}
+
+struct StaticSegment(Batch);
+
+impl Segment for StaticSegment {
+    fn load(&self) -> Batch {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn vm_execute_then_register_reads_back_a_loaded_column() {
+    let batch = Batch::new(2).with_column("id", vec![Value::Int(1), Value::Int(2)]);
+    let mut vm = Vm::new();
+    vm.execute(
+        &batch,
+        &[Opcode::LoadColumn {
+            reg: 0,
+            column: "id".into(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(vm.register(0).unwrap(), &[Value::Int(1), Value::Int(2)]);
+}
+
+#[test]
+fn vm_register_reports_unknown_register() {
+    let vm = Vm::new();
+    assert_eq!(
+        vm.register(0).unwrap_err(),
+        VmError::UnknownRegister {
+            opcode: "register",
+            register: 0
+        }
+    );
+}
+
+#[test]
+fn vm_run_drives_a_custom_source_via_next_segment() {
+    let batch = Batch::new(1).with_column("id", vec![Value::Int(7)]);
+    let mut source = OneShotSource(Some(batch));
+    let program = [
+        Opcode::LoadColumn {
+            reg: 0,
+            column: "id".into(),
+        },
+        Opcode::Emit {
+            registers: vec![0].into(),
+        },
+        Opcode::NextSegment { loop_start: 0 },
+        Opcode::Halt,
+    ];
+    let mut vm = Vm::new();
+    let rows = vm.run(&mut source, &program).unwrap();
+    assert_eq!(rows, vec![vec![Value::Int(7)]]);
+}
+
+#[test]
+fn run_parallel_concatenates_every_segment_in_order() {
+    let segments = [
+        StaticSegment(Batch::new(1).with_column("id", vec![Value::Int(1)])),
+        StaticSegment(Batch::new(1).with_column("id", vec![Value::Int(2)])),
+    ];
+    let program = [
+        Opcode::LoadColumn {
+            reg: 0,
+            column: "id".into(),
+        },
+        Opcode::Emit {
+            registers: vec![0].into(),
+        },
+    ];
+    let rows = db_core::vm::batch::run_parallel(&segments, &program).unwrap();
+    assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+}
+
+#[test]
+fn run_parallel_top_n_keeps_only_the_smallest_n_rows_across_segments() {
+    let segments = [
+        StaticSegment(Batch::new(2).with_column("id", vec![Value::Int(3), Value::Int(1)])),
+        StaticSegment(Batch::new(1).with_column("id", vec![Value::Int(2)])),
+    ];
+    let program = [
+        Opcode::LoadColumn {
+            reg: 0,
+            column: "id".into(),
+        },
+        Opcode::Emit {
+            registers: vec![0].into(),
+        },
+    ];
+    let spec = TopN {
+        col: 0,
+        descending: false,
+        limit: 2,
+    };
+    let rows = db_core::vm::batch::run_parallel_top_n(&segments, &program, &spec).unwrap();
+    assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+}
+
+#[test]
+fn agg_func_variants_are_distinct() {
+    assert_ne!(AggFunc::Count, AggFunc::Sum);
+    assert_ne!(AggFunc::Min, AggFunc::Max);
+    assert_eq!(AggFunc::Avg, AggFunc::Avg);
+}
+
+#[test]
+fn compare_for_order_sorts_null_last_both_directions() {
+    use std::cmp::Ordering;
+    assert_eq!(
+        compare_for_order(&Value::Null, &Value::Int(1), false),
+        Ordering::Greater
+    );
+    assert_eq!(
+        compare_for_order(&Value::Null, &Value::Int(1), true),
+        Ordering::Greater
+    );
+    assert_eq!(
+        compare_for_order(&Value::Int(1), &Value::Int(2), false),
+        Ordering::Less
+    );
+    assert_eq!(
+        compare_for_order(&Value::Int(1), &Value::Int(2), true),
+        Ordering::Greater
+    );
 }
