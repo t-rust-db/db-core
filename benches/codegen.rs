@@ -1,11 +1,11 @@
-//! Codegen (planner) phase micro-benchmarks (db-core#224):
+//! Codegen (planner) phase micro-benchmarks:
 //! `codegen::row::select::compile_select_with_catalog` and
 //! `codegen::batch::compile`, run over an already-parsed AST so the
-//! measurement isolates the planner from tokenizing/parsing (see
+//! measurement isolates the planner from tokenizing/parsing (see the
 //! `parser` bench for that phase). Also benchmarks
 //! `codegen::row::dispatch::compile_statement` (parse+plan together)
 //! for comparison against the pre-parsed path. **Report only** --
-//! `make perf`, not a CI gate.
+//! `make perf`, not a CI gate (ADR 0015, tier 6).
 
 #![allow(
     clippy::unwrap_used,
@@ -16,10 +16,15 @@
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    reason = "benches/ is unconstrained like tests/ (db-core#224); criterion's own timing loop needs unwrap/index freely"
+    clippy::cast_precision_loss,
+    dead_code,
+    reason = "benches/ is unconstrained like tests/ (ADR 0015, tier 6)"
 )]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+mod common;
+
+use std::hint::black_box;
+
 use db_core::codegen::batch::compile as compile_batch;
 use db_core::codegen::row::dispatch::compile_statement;
 use db_core::codegen::row::select::compile_select_with_catalog;
@@ -38,37 +43,25 @@ fn schema() -> TableSchema {
     }
 }
 
-fn bench_compile_select_with_catalog(c: &mut Criterion) {
+fn main() {
     let select = match db_core::parser::row::parse_select(SQL) {
         ParseOutcome::Accepted(select) => *select,
         other => panic!("fixed SQL failed to parse: {other:?}"),
     };
-    let schema = schema();
-    c.bench_function("codegen/compile_select_with_catalog", |b| {
-        b.iter(|| compile_select_with_catalog(black_box(&select), &schema, &[]));
-    });
-}
-
-fn bench_compile_batch(c: &mut Criterion) {
-    let select =
+    let batch_select =
         db_core::parser::column::parse(SQL).expect("fixed SQL passes the column validator");
-    c.bench_function("codegen/compile_batch", |b| {
-        b.iter(|| compile_batch(black_box(&select)));
-    });
-}
-
-fn bench_compile_statement_full_pipeline(c: &mut Criterion) {
     let schema = schema();
-    let schemas = [schema];
-    c.bench_function("codegen/compile_statement (parse+plan)", |b| {
-        b.iter(|| compile_statement(black_box(SQL), &schemas, &[]));
-    });
-}
+    let schemas = [schema.clone()];
 
-criterion_group!(
-    benches,
-    bench_compile_select_with_catalog,
-    bench_compile_batch,
-    bench_compile_statement_full_pipeline
-);
-criterion_main!(benches);
+    let mut report = common::Report::new("codegen");
+    report.bench("codegen/compile_select_with_catalog", || {
+        compile_select_with_catalog(black_box(&select), &schema, &[])
+    });
+    report.bench("codegen/compile_batch", || {
+        compile_batch(black_box(&batch_select))
+    });
+    report.bench("codegen/compile_statement (parse+plan)", || {
+        compile_statement(black_box(SQL), &schemas, &[])
+    });
+    report.finish();
+}

@@ -1,8 +1,8 @@
-//! Parser phase micro-benchmarks (db-core#224): tokenize +
-//! `parser::row::parse_select` over a fixed corpus of increasing
-//! complexity, so a regression localizes to the parser rather than
-//! showing up only as a slower end-to-end query in the separate
-//! benchmark repo. **Report only** -- `make perf`, not a CI gate.
+//! Parser phase micro-benchmarks: tokenize + `parser::row::parse_select`
+//! over a fixed corpus of increasing complexity, so a regression
+//! localizes to the parser rather than showing up only as a slower
+//! end-to-end query in the separate benchmark repo. **Report only** --
+//! `make perf`, not a CI gate (ADR 0015, tier 6).
 
 #![allow(
     clippy::unwrap_used,
@@ -13,10 +13,15 @@
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    reason = "benches/ is unconstrained like tests/ (db-core#224); criterion's own timing loop needs unwrap/index freely"
+    clippy::cast_precision_loss,
+    dead_code,
+    reason = "benches/ is unconstrained like tests/ (ADR 0015, tier 6)"
 )]
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+mod common;
+
+use std::hint::black_box;
+
 use db_core::parser::row::parse_select;
 use db_core::parser::row::tokenizer::Tokenizer;
 
@@ -37,35 +42,23 @@ fn deep_nesting() -> String {
     sql
 }
 
-fn bench_tokenize(c: &mut Criterion) {
+fn main() {
     let deep = deep_nesting();
-    let mut group = c.benchmark_group("parser/tokenize");
-    for (label, sql) in [
+    let corpus = [
         ("short", SHORT),
         ("medium", MEDIUM),
         ("deep_nesting", deep.as_str()),
-    ] {
-        group.bench_function(label, |b| {
-            b.iter(|| Tokenizer::tokenize(black_box(sql)));
+    ];
+    let mut report = common::Report::new("parser");
+    for (label, sql) in corpus {
+        report.bench(&format!("parser/tokenize/{label}"), || {
+            Tokenizer::tokenize(black_box(sql))
         });
     }
-    group.finish();
-}
-
-fn bench_parse_select(c: &mut Criterion) {
-    let deep = deep_nesting();
-    let mut group = c.benchmark_group("parser/parse_select");
-    for (label, sql) in [
-        ("short", SHORT),
-        ("medium", MEDIUM),
-        ("deep_nesting", deep.as_str()),
-    ] {
-        group.bench_function(label, |b| {
-            b.iter(|| parse_select(black_box(sql)));
+    for (label, sql) in corpus {
+        report.bench(&format!("parser/parse_select/{label}"), || {
+            parse_select(black_box(sql))
         });
     }
-    group.finish();
+    report.finish();
 }
-
-criterion_group!(benches, bench_tokenize, bench_parse_select);
-criterion_main!(benches);
