@@ -133,3 +133,18 @@ crate's own tests do, without ever pulling `db-storage` into `db-core`.
   execution-loop phase, landed by db-core#51: a storage-agnostic
   `Cursor` trait (`vm::row::cursor`) plus an in-memory mock, with real
   `db-storage` wiring deferred again.
+
+## Addendum (2026-09-08, db-core#231): the cursor accessors are total
+
+`Cursor::column` and `Cursor::rowid` return `Option<Value>` / `Option<i64>`.
+The original contract ("callers never read an unpositioned cursor, so the
+implementor may panic") pushed a program-correctness invariant onto every
+storage implementor and made a codegen bug an unrecoverable abort of the
+embedding process. The dispatch loop is the one place that knows what a
+missing row means for a given opcode, so it -- not the cursor -- turns
+`None` into `ExecError::NoCurrentRow { opcode, slot }`. This is the same
+shape the trait already used for `idx_rowid`, `payload` and
+`current_blob`. `cursor_conformance` checks the `None` case, so a
+downstream cursor that still panics fails its own conformance suite.
+Consequence for implementors: wrap the positioned result in `Some`, return
+`None` when unpositioned; no other method changed.

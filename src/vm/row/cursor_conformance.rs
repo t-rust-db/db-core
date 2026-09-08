@@ -50,9 +50,9 @@ pub fn assert_forward_scan_matches_insertion_order<C: Cursor>(mut make: impl FnM
     assert_eq!(
         seen,
         vec![
-            (10, Value::Integer(1)),
-            (20, Value::Integer(2)),
-            (30, Value::Integer(3)),
+            (Some(10), Some(Value::Integer(1))),
+            (Some(20), Some(Value::Integer(2))),
+            (Some(30), Some(Value::Integer(3))),
         ]
     );
 }
@@ -64,7 +64,7 @@ pub fn assert_seek_finds_an_exact_rowid<C: Cursor>(mut make: impl FnMut() -> C) 
     build(&mut cursor, &rows);
 
     assert!(cursor.seek(20));
-    assert_eq!(cursor.column(0), Value::Integer(2));
+    assert_eq!(cursor.column(0), Some(Value::Integer(2)));
 }
 
 /// `seek` reports `false` on a miss.
@@ -96,12 +96,13 @@ pub fn assert_delete_removes_only_the_current_row<C: Cursor>(mut make: impl FnMu
         seen.push(cursor.rowid());
         has_row = cursor.next();
     }
-    assert_eq!(seen, vec![10, 30]);
+    assert_eq!(seen, vec![Some(10), Some(30)]);
 }
 
 /// Runs every check in this module against `make` -- the convenience
 /// entry point a consumer's own test typically wants.
 pub fn assert_cursor_conformance<C: Cursor>(mut make: impl FnMut() -> C) {
+    assert_reads_with_no_current_row_are_none(&mut make);
     assert_forward_scan_matches_insertion_order(&mut make);
     assert_seek_finds_an_exact_rowid(&mut make);
     assert_seek_misses_an_absent_rowid(&mut make);
@@ -117,7 +118,7 @@ pub fn assert_seek_index_eq_finds_an_exact_key<C: Cursor>(mut make: impl FnMut()
     build(&mut cursor, &rows);
 
     assert!(cursor.seek_index_eq(&[Value::Integer(2)], &[]));
-    assert_eq!(cursor.column(0), Value::Integer(2));
+    assert_eq!(cursor.column(0), Some(Value::Integer(2)));
     assert_eq!(cursor.idx_rowid(), Some(20));
 }
 
@@ -140,7 +141,7 @@ pub fn assert_seek_index_ge_positions_at_the_first_not_less_key<C: Cursor>(
     build(&mut cursor, &rows);
 
     assert!(cursor.seek_index_ge(&[Value::Integer(2)], &[]));
-    assert_eq!(cursor.column(0), Value::Integer(3));
+    assert_eq!(cursor.column(0), Some(Value::Integer(3)));
 }
 
 /// `idx_compare` reports how the current entry's key orders against an
@@ -171,6 +172,25 @@ pub fn assert_index_cursor_conformance<C: Cursor>(mut make: impl FnMut() -> C) {
     assert_seek_index_eq_misses_an_absent_key(&mut make);
     assert_seek_index_ge_positions_at_the_first_not_less_key(&mut make);
     assert_idx_compare_orders_the_current_entry_against_a_key(&mut make);
+}
+
+/// Reading `column`/`rowid` with no current row -- before any
+/// positioning call, and again after a scan has run off the end -- is
+/// `None`, never a panic (db-core#231). The dispatch loop turns this
+/// into `ExecError::NoCurrentRow`; an implementor that panics here would
+/// abort the embedding process on a malformed program instead.
+pub fn assert_reads_with_no_current_row_are_none<C: Cursor>(mut make: impl FnMut() -> C) {
+    let rows = vec![(10, vec![Value::Integer(1)])];
+    let mut cursor = make();
+    build(&mut cursor, &rows);
+
+    assert_eq!(cursor.column(0), None);
+    assert_eq!(cursor.rowid(), None);
+
+    assert!(cursor.rewind());
+    assert!(!cursor.next());
+    assert_eq!(cursor.column(0), None);
+    assert_eq!(cursor.rowid(), None);
 }
 
 #[cfg(test)]
@@ -215,15 +235,13 @@ mod tests {
             }
         }
 
-        fn column(&self, col: usize) -> Value {
-            let pos = self.pos.expect("column read with no current row");
-            let (_, blob) = &self.rows[pos];
-            decode_column(blob, col, TextEncoding::Utf8).unwrap_or(Value::Null)
+        fn column(&self, col: usize) -> Option<Value> {
+            let (_, blob) = &self.rows[self.pos?];
+            Some(decode_column(blob, col, TextEncoding::Utf8).unwrap_or(Value::Null))
         }
 
-        fn rowid(&self) -> i64 {
-            let pos = self.pos.expect("rowid read with no current row");
-            self.rows[pos].0
+        fn rowid(&self) -> Option<i64> {
+            Some(self.rows[self.pos?].0)
         }
 
         fn seek(&mut self, rowid: i64) -> bool {

@@ -875,6 +875,15 @@ pub enum VmError {
         /// The operation (e.g. a `MapOp` or function name) with no dispatch.
         op: String,
     },
+    /// An [`Opcode::Window`] for a function that takes an argument
+    /// (`Lag`/`Lead`/`FirstValue`/`LastValue`) came with `arg: None` -- a
+    /// planner bug, surfaced as an error rather than a panic (db-core#231).
+    MissingWindowArgument {
+        /// Name of the [`Opcode`] variant that failed.
+        opcode: &'static str,
+        /// The window function that needed an argument register.
+        func: WindowFunc,
+    },
 }
 
 impl fmt::Display for VmError {
@@ -897,6 +906,9 @@ impl fmt::Display for VmError {
             }
             VmError::UnsupportedOp { opcode, op } => {
                 write!(f, "{opcode}: no dispatch for {op}")
+            }
+            VmError::MissingWindowArgument { opcode, func } => {
+                write!(f, "{opcode}: {func:?} requires an argument register")
             }
         }
     }
@@ -1462,11 +1474,12 @@ fn compute_window(
             }
             WindowFunc::Lag | WindowFunc::Lead => {
                 let offset = offset.unwrap_or(1);
-                #[allow(
-                    clippy::expect_used,
-                    reason = "codegen guarantees the argument column for this window function"
-                )]
-                let arg = arg_col.expect("Lag/Lead always have an argument column");
+                let Some(arg) = arg_col else {
+                    return Err(VmError::MissingWindowArgument {
+                        opcode: "Window",
+                        func,
+                    });
+                };
                 for (pos, &row) in indices.iter().enumerate() {
                     let pos = len_to_i64(pos);
                     let target = if func == WindowFunc::Lag {
@@ -1484,11 +1497,12 @@ fn compute_window(
                 }
             }
             WindowFunc::FirstValue => {
-                #[allow(
-                    clippy::expect_used,
-                    reason = "codegen guarantees the argument column for this window function"
-                )]
-                let arg = arg_col.expect("FirstValue always has an argument column");
+                let Some(arg) = arg_col else {
+                    return Err(VmError::MissingWindowArgument {
+                        opcode: "Window",
+                        func,
+                    });
+                };
                 if let Some(&first) = indices.first() {
                     let v = arg[first].clone();
                     for &row in &indices {
@@ -1497,16 +1511,18 @@ fn compute_window(
                 }
             }
             WindowFunc::LastValue => {
-                #[allow(
-                    clippy::expect_used,
-                    reason = "codegen guarantees the argument column for this window function"
-                )]
-                let arg = arg_col.expect("LastValue always has an argument column");
+                let Some(arg) = arg_col else {
+                    return Err(VmError::MissingWindowArgument {
+                        opcode: "Window",
+                        func,
+                    });
+                };
                 for &row in &indices {
                     output[row] = arg[row].clone();
                 }
             }
             WindowFunc::Sum | WindowFunc::Avg | WindowFunc::Count => {
+                // No ORDER BY: the frame is the whole partition -- one aggregate value for every row.
                 if order_cols.is_empty() {
                     let agg = whole_partition_aggregate(func, arg_col, &indices)?;
                     for &row in &indices {
@@ -1538,6 +1554,7 @@ fn compute_window(
                                 }
                             }
                             WindowFunc::Avg => {
+                                // AVG over an empty running frame is NULL, never a division by zero.
                                 if running_count > 0 {
                                     Value::Float(running_sum / running_count as f64)
                                 } else {
@@ -1914,7 +1931,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1655__v1_a_null_propagates() {
+    fn mcdc__batch_1672__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1942,7 +1959,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1655__v2_b_null_propagates() {
+    fn mcdc__batch_1672__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1970,7 +1987,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1655__v3_neither_null_computes_result() {
+    fn mcdc__batch_1672__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1998,7 +2015,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1706__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1723__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2026,7 +2043,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1706__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1723__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2054,7 +2071,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1706__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1723__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2082,7 +2099,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1706__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1723__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(

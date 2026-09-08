@@ -4,6 +4,15 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING: `vm::row::Cursor::column` and `Cursor::rowid` return `Option`** (db-core#231) -- `None` means "no current row" (nothing positioned the cursor, or its last `rewind`/`next`/`seek` returned false). Before, every in-tree implementor `expect`ed here, so a malformed program aborted the embedding process; the dispatch loop now maps `None` to the new `ExecError::NoCurrentRow { opcode, slot }`. This matches the trait's existing `idx_rowid`/`payload`/`current_blob` idiom. **Downstream implementors** (t-rust-db/sqlite-rs's storage-backed `TableCursor`/index cursors) must wrap their return in `Some(..)` and return `None` instead of panicking when unpositioned; `cursor_conformance::assert_cursor_conformance` now checks that (`assert_reads_with_no_current_row_are_none`).
+- `codegen::batch::compile_window` returns `Result<Program>` (was `Program`) -- a window column missing from the load list is `PlanError::UnsupportedSelectItem`, not a panic. `explain_opcodes` already returned `Result`, so its callers are unaffected.
+- New error variants, all replacing production `expect`s: `ExecError::NoCurrentRow`, `VmError::MissingWindowArgument { opcode, func }` (an `Opcode::Window` for `Lag`/`Lead`/`FirstValue`/`LastValue` with `arg: None`), `PlanError::NoJoinClause` (`compile_join` on a `SELECT` without a `JOIN`).
+- Production `src/` now has **zero** `#[allow(clippy::expect_used)]`; `make check-panic-allows` (#230) enforces it with an empty exempt list.
+
 ## [0.70.2] - 2026-09-08
 
 ### Fixed
