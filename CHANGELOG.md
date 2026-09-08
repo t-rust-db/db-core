@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.72.0] - 2026-09-08
+
+### Added
+
+- **Black-box `tests/unit` coverage for `codegen::batch`(+`emit`), the five root modules, and `vm::batch`/`vm::engine`/`vm::join`** (#223) -- four new test files (`codegen_batch_public_api_test.rs`, `codegen_batch_emit_test.rs`, `root_public_api_test.rs`, `vm_engine_join_public_api_test.rs`) plus extensions to `vm_batch_public_api_test.rs` and `parser_public_api_test.rs`, so every pub entry point named in the issue is called from at least one black-box test rather than only reached transitively through whatever an executor happens to call.
+
 ## [0.71.1] - 2026-09-08
 
 ### Changed
