@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.74.0] - 2026-09-08
+
+### Added
+
+- **Shared trigram-extraction helper** (#246) -- `functions::trigrams` (every overlapping 3-byte window of a string's raw UTF-8 bytes, allocation-free) and `functions::trigram_key` (packs a trigram into an i64 b-tree rowid key). Not wired into the scalar-function registry; a shared primitive for a future trigram-accelerated `LIKE`/`GLOB` index here, and for sqlite-rs's planned `sqlgrep` (t-rust-db/sqlite-rs#34), which needs the same byte-level trigram definition SQLite's own FTS tokenizer and tools like ripgrep/tgrep use.
+
 ## [0.73.0] - 2026-09-08
 
 ### Added
