@@ -160,6 +160,11 @@ pub enum PlanError {
     /// dispatch routes only joined queries here, so this is a caller bug,
     /// surfaced as an error rather than a panic (db-core#231).
     NoJoinClause,
+    /// db-core#232: a planner invariant did not hold (a `FROM` subquery
+    /// reached the planner without the alias the grammar requires, ...).
+    /// A codegen bug, never a property of the SQL; before, these sites
+    /// fell back to an empty name and planned a wrong program.
+    Internal(String),
 }
 
 impl fmt::Display for PlanError {
@@ -177,6 +182,7 @@ impl fmt::Display for PlanError {
             ),
             PlanError::UnsupportedSelectItem(msg) => write!(f, "unsupported SELECT item: {msg}"),
             PlanError::NoJoinClause => write!(f, "compile_join requires a JOIN clause"),
+            PlanError::Internal(reason) => write!(f, "planner invariant violated: {reason}"),
         }
     }
 }
@@ -400,10 +406,14 @@ fn classify_items(select: &Select) -> Result<Vec<Item>> {
 
 /// The table this `FROM` clause is scanned/joined against: a real table's
 /// name, or a `FROM`-subquery's mandatory alias.
-fn table_name(from: &AstFromClause) -> &str {
+fn table_name(from: &AstFromClause) -> Result<&str> {
     match &from.first.kind {
-        TableRefKind::Name(name) => name,
-        TableRefKind::Subquery(_) => from.first.alias.as_deref().unwrap_or(""),
+        TableRefKind::Name(name) => Ok(name),
+        // The grammar requires the alias; its absence is a planner bug,
+        // not a table called "" (db-core#232).
+        TableRefKind::Subquery(_) => from.first.alias.as_deref().ok_or_else(|| {
+            PlanError::Internal("FROM subquery reached the planner without an alias".into())
+        }),
     }
 }
 
@@ -474,6 +484,7 @@ fn literal_value(lit: &AstLiteral) -> Value {
 fn select_limit(select: &Select) -> Option<usize> {
     let limit = select.limit.as_ref()?;
     match &limit.limit.kind {
+        // A negative LIMIT means "no limit" in SQLite (`LIMIT -1`).
         ExprKind::Literal(AstLiteral::Integer(n)) => usize::try_from(*n).ok(),
         _ => None,
     }
@@ -806,14 +817,14 @@ fn mask_filtered_source(
 /// Compile a flat/`GROUP BY`/`ORDER BY`/`LIMIT` query into a [`Program`]
 /// ending in [`Opcode::Combine`], optionally followed by `Sort`/`Limit`
 /// (db-core#48). Compiled once, reused across every segment.
-pub fn compile(select: &Select) -> Program {
+pub fn compile(select: &Select) -> Result<Program> {
     let mut ctx = Ctx {
         next_reg: 0,
         column_regs: HashMap::new(),
         program: Vec::new(),
     };
 
-    let items = classify_items(select).unwrap_or_default();
+    let items = classify_items(select)?;
     let group_by: Vec<String> = select
         .group_by
         .iter()
@@ -922,6 +933,7 @@ pub fn compile(select: &Select) -> Program {
             // be one of the group-by columns (already in `emit_regs` via
             // `group_by_regs` above) -- SQL requires non-aggregated SELECT
             // columns to be group-by keys, so this doesn't double-emit.
+            // Without GROUP BY the whole input is one group: emit the column as-is.
             if group_by.is_empty() {
                 let reg = ctx.load_column(name);
                 emit_regs.push(reg);
@@ -967,9 +979,9 @@ pub fn compile(select: &Select) -> Program {
         select_output_index(select, &column).map(|pos| (pos, descending))
     });
     let limit = select_limit(select);
-    let has_agg = classify_items(select)
-        .map(|items| items.iter().any(|c| matches!(c, Item::Agg(..))))
-        .unwrap_or(false);
+    let has_agg = classify_items(select)?
+        .iter()
+        .any(|c| matches!(c, Item::Agg(..)));
     let group_by_present = !group_by.is_empty();
 
     // `Combine` is always emitted, mirroring the old bundled `Finalize`
@@ -1003,7 +1015,7 @@ pub fn compile(select: &Select) -> Program {
         ctx.push_commented(Opcode::Limit { n }, format!("LIMIT {n}"));
     }
 
-    Program::new(ctx.program)
+    Ok(Program::new(ctx.program))
 }
 
 /// Split a (possibly qualified) column name into `(table_prefix, column)`.
@@ -1036,7 +1048,7 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
     if !matches!(join.op, JoinOp::Inner | JoinOp::Left) {
         return Err(PlanError::UnsupportedJoinKind(join.op));
     }
-    let body = compile(select);
+    let body = compile(select)?;
 
     let mut needed: Vec<String> = body.columns_to_load();
     for extra in [&join.left_col, &join.right_col] {
@@ -1045,7 +1057,7 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
         }
     }
 
-    let from_name = table_name(from);
+    let from_name = table_name(from)?;
     let mut left_columns = Vec::new();
     let mut right_columns = Vec::new();
     for name in &needed {
@@ -1165,7 +1177,7 @@ pub fn compile_semi_join(select: &Select) -> Result<SemiJoinProgram> {
     Ok(SemiJoinProgram {
         key_column,
         subquery: subquery.clone(),
-        body: compile(&stripped),
+        body: compile(&stripped)?,
     })
 }
 
@@ -1183,7 +1195,7 @@ pub fn compile_semi_join(select: &Select) -> Result<SemiJoinProgram> {
 /// it return the *current* row's value, not the partition's true last row
 /// -- that's implemented literally, ignoring `RANGE` peer-group ties.
 pub fn compile_window(select: &Select) -> Result<Program> {
-    let items = classify_items(select).unwrap_or_default();
+    let items = classify_items(select)?;
 
     let mut needed: Vec<String> = Vec::new();
     let push_needed = |name: &str, needed: &mut Vec<String>| {
@@ -1455,10 +1467,10 @@ impl PlanBuilder {
 /// (#99). Mirrors the executor's dispatch (semi-join, join, windowed, or
 /// plain single-table) over the same planning decisions [`compile`] makes;
 /// `stats` supplies each referenced table's `SCAN` detail.
-pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Vec<PlanNode> {
+pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Vec<PlanNode>> {
     let mut b = PlanBuilder::new("QUERY PLAN");
 
-    let items = classify_items(select).unwrap_or_default();
+    let items = classify_items(select)?;
     let has_window = items.iter().any(|c| matches!(c, Item::Window(_)));
     let is_semi_join = matches!(
         &select.where_clause,
@@ -1468,10 +1480,9 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Vec<PlanN
         })
     );
     let from = select.from.as_ref();
-    let from_name = from.map(table_name).unwrap_or_default();
-    let joins = from
-        .map(|f| extract_joins(f).unwrap_or_default())
-        .unwrap_or_default();
+    // No FROM is a legitimate (table-less) SELECT: empty name, no joins.
+    let from_name = from.map(table_name).transpose()?.unwrap_or_default();
+    let joins = from.map(extract_joins).transpose()?.unwrap_or_default();
     let join = joins.first();
 
     // Semi-joins compile with `where_clause` stripped, mirroring
@@ -1481,9 +1492,9 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Vec<PlanN
     } else if is_semi_join {
         let mut stripped = select.clone();
         stripped.where_clause = None;
-        Some(compile(&stripped))
+        Some(compile(&stripped)?)
     } else {
-        Some(compile(select))
+        Some(compile(select)?)
     };
     let columns_to_load = program.as_ref().map(Program::columns_to_load);
 
@@ -1494,7 +1505,7 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Vec<PlanN
             .cloned()
             .collect(),
         (Some(cols), None) => cols.clone(),
-        (None, _) => referenced_columns(select),
+        (None, _) => referenced_columns(select)?,
     };
     if let Some(j) = join {
         push_unique(&mut main_cols, j.left_col.clone());
@@ -1519,9 +1530,14 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Vec<PlanN
             ..
         }) = &select.where_clause
         {
-            let sub_from = subquery.from.as_ref().map(table_name).unwrap_or_default();
+            let sub_from = subquery
+                .from
+                .as_ref()
+                .map(table_name)
+                .transpose()?
+                .unwrap_or_default();
             let sub_scan = b.push(0, scan_detail(sub_from, stats(sub_from)));
-            let sub_cols = referenced_columns(subquery);
+            let sub_cols = referenced_columns(subquery)?;
             if !sub_cols.is_empty() {
                 b.push(sub_scan, format!("LOAD COLUMNS: {}", sub_cols.join(", ")));
             }
@@ -1625,7 +1641,7 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Vec<PlanN
     let emit_labels: Vec<String> = select.columns.iter().map(select_item_label).collect();
     b.push(0, format!("EMIT: {}", emit_labels.join(", ")));
 
-    b.finish()
+    Ok(b.finish())
 }
 
 // ---------------------------------------------------------------------
@@ -1770,6 +1786,7 @@ pub fn explain_opcodes(select: &Select) -> Result<Vec<OpcodeSection>> {
             .from
             .as_ref()
             .map(table_name)
+            .transpose()?
             .unwrap_or_default();
         Ok(vec![OpcodeSection {
             label: format!(
@@ -1809,7 +1826,7 @@ pub fn explain_opcodes(select: &Select) -> Result<Vec<OpcodeSection>> {
     } else {
         Ok(vec![OpcodeSection {
             label: "body".to_string(),
-            rows: render_program(&compile(select)),
+            rows: render_program(&compile(select)?),
         }])
     }
 }
@@ -1929,6 +1946,8 @@ fn bin_op_str(op: AstBinOp) -> &'static str {
 /// `amount > 100`.
 fn expr_to_string(expr: &AstExpr) -> String {
     match &expr.kind {
+        // A `Column` always carries a name; `expr_column_name` is `None`
+        // only for non-column kinds, which this arm excludes. Plan text.
         ExprKind::Column { .. } => expr_column_name(expr).unwrap_or_default(),
         ExprKind::Literal(lit) => literal_to_string(lit),
         ExprKind::Paren(inner) => expr_to_string(inner),
@@ -1941,11 +1960,23 @@ fn expr_to_string(expr: &AstExpr) -> String {
             )
         }
         ExprKind::InSubquery { expr, subquery, .. } => {
-            let from = subquery.from.as_ref().map(table_name).unwrap_or_default();
+            // Plan text only: the real compile reports a missing alias as
+            // `PlanError::Internal`; here it just renders as "".
+            let from = subquery
+                .from
+                .as_ref()
+                .and_then(|f| table_name(f).ok())
+                .unwrap_or_default();
             format!("{} IN (SELECT ... FROM {from})", expr_to_string(expr))
         }
         ExprKind::Exists { subquery, negated } => {
-            let from = subquery.from.as_ref().map(table_name).unwrap_or_default();
+            // Plan text only: the real compile reports a missing alias as
+            // `PlanError::Internal`; here it just renders as "".
+            let from = subquery
+                .from
+                .as_ref()
+                .and_then(|f| table_name(f).ok())
+                .unwrap_or_default();
             format!(
                 "{}EXISTS (SELECT ... FROM {from})",
                 if *negated { "NOT " } else { "" }
@@ -2011,12 +2042,12 @@ fn collect_expr_columns(expr: &AstExpr, out: &mut Vec<String>) {
 /// Every column name `select` references, in first-seen order (used for the
 /// `EXPLAIN` `LOAD COLUMNS` detail on paths that don't go through
 /// [`compile`], namely windowed queries).
-fn referenced_columns(select: &Select) -> Vec<String> {
+fn referenced_columns(select: &Select) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for name in select.group_by.iter().filter_map(expr_column_name) {
         push_unique(&mut out, name);
     }
-    let items = classify_items(select).unwrap_or_default();
+    let items = classify_items(select)?;
     for item in &items {
         match item {
             Item::Column(name) => push_unique(&mut out, name.clone()),
@@ -2054,7 +2085,7 @@ fn referenced_columns(select: &Select) -> Vec<String> {
         collect_expr_columns(where_clause, &mut out);
     }
     if let Some(from) = &select.from {
-        for join in extract_joins(from).unwrap_or_default() {
+        for join in extract_joins(from)? {
             push_unique(&mut out, join.left_col.clone());
             push_unique(&mut out, join.right_col.clone());
         }
@@ -2074,7 +2105,7 @@ fn referenced_columns(select: &Select) -> Vec<String> {
             push_unique(&mut out, column);
         }
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -2093,7 +2124,7 @@ mod tests {
 
     #[test]
     fn bounded_scan_limit_accepts_bare_limit() {
-        let program = compile(&sql::parse("SELECT id FROM t LIMIT 10").unwrap());
+        let program = compile(&sql::parse("SELECT id FROM t LIMIT 10").unwrap()).unwrap();
         assert_eq!(bounded_scan_limit(&program), Some(10));
     }
 
@@ -2106,7 +2137,7 @@ mod tests {
             "SELECT COUNT(*) FROM t LIMIT 10",
             "SELECT id FROM t",
         ] {
-            let program = compile(&sql::parse(q).unwrap());
+            let program = compile(&sql::parse(q).unwrap()).unwrap();
             assert_eq!(bounded_scan_limit(&program), None, "{q}");
         }
     }
@@ -2116,7 +2147,7 @@ mod tests {
         let query =
             sql::parse("SELECT region, SUM(amount) FROM t WHERE amount > 10 GROUP BY region")
                 .unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let columns = program.columns_to_load();
         assert!(columns.contains(&"region".to_string()));
         assert!(columns.contains(&"amount".to_string()));
@@ -2138,7 +2169,7 @@ mod tests {
     #[test]
     fn compile_projects_computed_select_list_expression_via_map_into_emit() {
         let query = sql::parse("SELECT x * 2 + 1, a || b FROM t").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let columns = program.columns_to_load();
         assert!(columns.contains(&"x".to_string()));
         assert!(columns.contains(&"a".to_string()));
@@ -2161,7 +2192,7 @@ mod tests {
     #[test]
     fn compile_distinct_sets_finalize_flag_without_group_reduce() {
         let query = sql::parse("SELECT DISTINCT a, b FROM t").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         assert!(matches!(
             program.opcodes().last(),
             Some(Opcode::Combine {
@@ -2180,7 +2211,7 @@ mod tests {
     fn compile_distinct_with_group_by_sets_both_finalize_flag_and_group_reduce() {
         let query = sql::parse("SELECT DISTINCT region, SUM(amount) FROM t GROUP BY region")
             .expect("DISTINCT + GROUP BY should parse (rewritten as a post-aggregate dedup)");
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         assert!(matches!(
             program.opcodes().last(),
             Some(Opcode::Combine {
@@ -2198,7 +2229,7 @@ mod tests {
     #[test]
     fn compile_encodes_order_by_and_limit_as_sort_and_limit_and_comments_instructions() {
         let query = sql::parse("SELECT id, val FROM t ORDER BY val DESC LIMIT 5").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let tail: Vec<&Instruction> = program.instructions.iter().rev().take(3).rev().collect();
         assert_eq!(
             tail[0].opcode,
@@ -2231,7 +2262,7 @@ mod tests {
              GROUP BY customer_id ORDER BY COUNT(event_id) DESC",
         )
         .unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let tail: Vec<&Instruction> = program.instructions.iter().rev().take(2).rev().collect();
         assert_eq!(
             tail[0].opcode,
@@ -2252,9 +2283,9 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_942__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__batch_954__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
         assert!(body
             .iter()
@@ -2263,9 +2294,9 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_942__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__batch_954__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
         assert!(body
             .iter()
@@ -2274,9 +2305,9 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_942__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__batch_954__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
         assert!(!body
             .iter()
@@ -2287,9 +2318,9 @@ mod tests {
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_982__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__batch_994__v1_group_by_without_agg_column_merges_partial_aggregates() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
         assert_eq!(fin.comment.as_deref(), Some("merge partial aggregates"));
     }
@@ -2297,9 +2328,9 @@ mod tests {
     /// MC/DC vector (obligation `batch_879`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_982__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__batch_994__v2_agg_column_without_group_by_merges_partial_aggregates() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
         assert_eq!(fin.comment.as_deref(), Some("merge partial aggregates"));
     }
@@ -2308,9 +2339,9 @@ mod tests {
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_982__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__batch_994__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
         assert_eq!(fin.comment.as_deref(), Some("concatenate segments"));
     }
@@ -2352,7 +2383,10 @@ mod tests {
                 .unwrap();
         let plan = compile_semi_join(&query).unwrap();
         assert_eq!(plan.key_column, "region_key");
-        assert_eq!(plan.subquery.from.as_ref().map(table_name), Some("regions"));
+        assert_eq!(
+            plan.subquery.from.as_ref().map(|f| table_name(f).unwrap()),
+            Some("regions")
+        );
         assert!(!plan
             .body
             .opcodes()
@@ -2407,7 +2441,7 @@ mod tests {
     #[test]
     fn explain_plain_filter_group_by_aggregate() {
         let query = sql::parse("SELECT region, SUM(amount), COUNT(*) FROM production WHERE id > 1000 GROUP BY region ORDER BY region").unwrap();
-        let nodes = explain(&query, stats);
+        let nodes = explain(&query, stats).unwrap();
 
         assert_eq!(nodes[0].detail, "QUERY PLAN");
         assert!(nodes[0].parent == nodes[0].id);
@@ -2439,7 +2473,7 @@ mod tests {
     #[test]
     fn explain_join_and_semi_join_and_window() {
         let query = sql::parse("SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.rkey ORDER BY orders.id").unwrap();
-        let nodes = explain(&query, stats);
+        let nodes = explain(&query, stats).unwrap();
         assert!(details(&nodes).contains(&"LOAD COLUMNS: orders.id, orders.region_key"));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: regions.budget, regions.rkey"));
         assert!(details(&nodes).contains(&"HASH JOIN: orders.region_key = regions.rkey"));
@@ -2448,7 +2482,7 @@ mod tests {
             "SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions) ORDER BY id",
         )
         .unwrap();
-        let nodes = explain(&query, stats);
+        let nodes = explain(&query, stats).unwrap();
         assert!(details(&nodes).contains(&"SEMI JOIN: region_key IN (SELECT rkey FROM regions)"));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: id, region_key"));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: rkey"));
@@ -2459,7 +2493,7 @@ mod tests {
              FROM orders ORDER BY id",
         )
         .unwrap();
-        let nodes = explain(&query, stats);
+        let nodes = explain(&query, stats).unwrap();
         assert!(details(&nodes)
             .contains(&"WINDOW: ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id)"));
         assert_eq!(
@@ -2471,7 +2505,7 @@ mod tests {
     #[test]
     fn explain_shows_distinct_node_for_plain_select_distinct() {
         let query = sql::parse("SELECT DISTINCT region FROM production").unwrap();
-        let nodes = explain(&query, stats);
+        let nodes = explain(&query, stats).unwrap();
         assert!(details(&nodes).contains(&"DISTINCT"));
         assert_eq!(nodes.last().unwrap().detail, "EMIT: region");
     }
@@ -2481,7 +2515,7 @@ mod tests {
         let query =
             sql::parse("SELECT DISTINCT region, SUM(amount) FROM production GROUP BY region")
                 .unwrap();
-        let nodes = explain(&query, stats);
+        let nodes = explain(&query, stats).unwrap();
         assert!(details(&nodes).contains(&"GROUP BY: region"));
         assert!(details(&nodes).contains(&"AGGREGATE: SUM(amount)"));
         assert!(details(&nodes).contains(&"DISTINCT"));
@@ -2503,7 +2537,7 @@ mod tests {
     #[test]
     fn explain_omits_distinct_node_for_non_distinct_query() {
         let query = sql::parse("SELECT region FROM production").unwrap();
-        let nodes = explain(&query, stats);
+        let nodes = explain(&query, stats).unwrap();
         assert!(!details(&nodes).contains(&"DISTINCT"));
     }
 
@@ -2516,7 +2550,7 @@ mod tests {
         let query =
             sql::parse("SELECT region, SUM(amount) FROM t WHERE amount > 10 GROUP BY region")
                 .unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let sections = explain_opcodes(&query).unwrap();
 
         assert_eq!(sections.len(), 1);
@@ -2533,7 +2567,7 @@ mod tests {
     #[test]
     fn explain_opcodes_order_by_limit_matches_compiled_program() {
         let query = sql::parse("SELECT id FROM t ORDER BY id LIMIT 5").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let sections = explain_opcodes(&query).unwrap();
 
         assert_eq!(sections.len(), 1);
@@ -2678,7 +2712,7 @@ mod tests {
         let schema = vec!["id".to_string(), "name".to_string()];
         let expanded = expand_star(&query, &schema).unwrap();
         assert_eq!(output_column_names(&expanded), vec!["id", "name"]);
-        let program = compile(&expanded);
+        let program = compile(&expanded).unwrap();
         assert_eq!(program.columns_to_load(), vec!["id", "name"]);
     }
 
@@ -2715,14 +2749,14 @@ mod tests {
     #[test]
     fn flat_sum_filter_excludes_non_matching_rows() {
         let query = sql::parse("SELECT SUM(amount) FILTER (WHERE amount > 10) FROM t").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         assert_eq!(run_program(&program), vec![vec![Value::Float(50.0)]]);
     }
 
     #[test]
     fn count_star_filter_counts_only_matching_rows() {
         let query = sql::parse("SELECT COUNT(*) FILTER (WHERE amount > 10) FROM t").unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         assert_eq!(run_program(&program), vec![vec![Value::Int(2)]]);
     }
 
@@ -2732,7 +2766,7 @@ mod tests {
             "SELECT region, SUM(amount) FILTER (WHERE amount > 10) FROM t GROUP BY region",
         )
         .unwrap();
-        let program = compile(&query);
+        let program = compile(&query).unwrap();
         let mut rows = run_program(&program);
         rows.sort_by(|a, b| format!("{:?}", a[0]).cmp(&format!("{:?}", b[0])));
         assert_eq!(

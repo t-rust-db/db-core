@@ -141,7 +141,7 @@ fn batch_codegen_survives_the_deepest_expression_nesting_the_parser_accepts() {
         // recurses over the accepted AST with its own frame sizes.
         for sql in [nested_paren(50), nested_and(50)] {
             let select = column::parse(&sql).unwrap();
-            let program = batch::compile(&select);
+            let program = batch::compile(&select).unwrap();
             assert!(program.opcodes().count() > 0, "{sql}");
         }
     });

@@ -13,7 +13,7 @@
 )]
 
 use db_core::codegen::batch::emit::{
-    generate, render_flat, render_joined, render_semi_join, render_windowed,
+    generate, render_flat, render_joined, render_semi_join, render_windowed, EmitError,
 };
 use db_core::codegen::batch::{compile, output_column_names};
 use db_core::parser::column::parse;
@@ -45,7 +45,7 @@ fn generate_renders_a_window_query_via_execute_windowed() {
 #[test]
 fn render_flat_embeds_the_program_and_column_names() {
     let select = parse("SELECT a, b FROM t").unwrap();
-    let program = compile(&select);
+    let program = compile(&select).unwrap();
     let columns = output_column_names(&select);
     let src = render_flat("column_rs", "SELECT a, b FROM t", "t", &program, &columns);
     assert!(src.contains("const PROGRAM"));
@@ -61,7 +61,8 @@ fn render_joined_embeds_a_reconstructed_select_and_execute_joined_call() {
         "column_rs",
         "SELECT a.x, b.y FROM a JOIN b ON a.id = b.fk",
         &select,
-    );
+    )
+    .unwrap();
     assert!(src.contains("execute_joined"));
     assert!(src.contains("Select"));
 }
@@ -74,7 +75,8 @@ fn render_semi_join_embeds_the_subquery_table_and_execute_semi_join_call() {
         "SELECT x FROM a WHERE id IN (SELECT id FROM b)",
         &select,
         "b",
-    );
+    )
+    .unwrap();
     assert!(src.contains("execute_semi_join"));
 }
 
@@ -85,7 +87,22 @@ fn render_windowed_embeds_a_reconstructed_select_and_execute_windowed_call() {
         "column_rs",
         "SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM t",
         &select,
-    );
+    )
+    .unwrap();
     assert!(src.contains("execute_windowed"));
     assert!(src.contains("Table: t"));
+}
+
+/// db-core#232: a query with no table to open is refused instead of being
+/// rendered as `TABLE = ""` (a generated program that could never bind a
+/// file).
+#[test]
+fn generate_refuses_a_select_without_a_from_clause() {
+    assert!(generate("demo", "SELECT 1").is_err());
+}
+
+#[test]
+fn a_plan_error_surfaces_through_emit_error() {
+    let e = EmitError::Plan(db_core::codegen::batch::PlanError::NoJoinClause);
+    assert_eq!(e.to_string(), "compile_join requires a JOIN clause");
 }
