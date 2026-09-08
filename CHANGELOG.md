@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.70.1] - 2026-09-08
+
+### Fixed
+
+- **`INTEGER PRIMARY KEY DESC` is no longer treated as a rowid alias** -- `TableSchema::with_computed_rowid_alias` (moved in 0.70.0) accepted any inline `PRIMARY KEY`; SQLite gives the `DESC` form its own index and stores the column normally, so the column must not be substituted by the rowid. db-storage's retired hand-rolled detector had this rule; sqlite-rs's dump tests caught the drift (t-rust-db/sqlite-rs#19).
+- **A string literal is accepted wherever an identifier is required** (`CREATE TABLE 't_data'(...)`, the form FTS5 writes for its shadow tables) -- `parser::row`'s `identifier()` now takes `TokenKind::String` as well as `TokenKind::Identifier`, matching SQLite's "string constant used as identifier" rule. Before, such a `CREATE TABLE` failed to parse and its rowid alias was silently `None`, so sqlite-rs's dump/export of the FTS5 fixture diverged from the oracle. MC/DC snapshot regenerated (the line shift re-tags 222 vectors).
+
 ## [0.70.0] - 2026-09-08
 
 ### Changed

@@ -73,8 +73,16 @@ impl TableSchema {
 }
 
 #[cfg(feature = "parser-row")]
+fn is_ascending_primary_key(constraint: &crate::parser::ast::ColumnConstraint) -> bool {
+    match constraint {
+        crate::parser::ast::ColumnConstraint::PrimaryKey { desc, .. } => *desc != Some(true),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "parser-row")]
 fn rowid_alias_from_sql(sql: &str) -> Option<usize> {
-    use crate::parser::ast::{ColumnConstraint, ExprKind, TableConstraint};
+    use crate::parser::ast::{ExprKind, TableConstraint};
     use crate::parser::row::error::ParseOutcome;
 
     let create = match crate::parser::row::parse_create_table(sql) {
@@ -90,10 +98,10 @@ fn rowid_alias_from_sql(sql: &str) -> Option<usize> {
             .is_some_and(|t| t.eq_ignore_ascii_case("INTEGER"))
     };
     for (idx, def) in create.columns.iter().enumerate() {
-        let inline_pk = def
-            .constraints
-            .iter()
-            .any(|c| matches!(c, ColumnConstraint::PrimaryKey { .. }));
+        // `INTEGER PRIMARY KEY DESC` is *not* a rowid alias: SQLite gives it
+        // its own index and stores the column normally ("ROWIDs and the
+        // INTEGER PRIMARY KEY"), so only an ASC/unspecified key qualifies.
+        let inline_pk = def.constraints.iter().any(is_ascending_primary_key);
         if inline_pk && is_integer(def) {
             return Some(idx);
         }
@@ -150,4 +158,45 @@ pub struct ViewSchema {
     pub name: String,
     /// The verbatim `CREATE VIEW ...` source text.
     pub sql: String,
+}
+
+#[cfg(all(test, feature = "parser-row"))]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::TableSchema;
+
+    fn alias(sql: &str) -> Option<usize> {
+        TableSchema {
+            sql: sql.to_string(),
+            ..TableSchema::default()
+        }
+        .with_computed_rowid_alias()
+        .rowid_alias
+    }
+
+    #[test]
+    fn integer_primary_key_is_the_alias() {
+        assert_eq!(
+            alias("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)"),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn integer_primary_key_desc_is_not_an_alias() {
+        // Found by sqlite-rs's dump tests after the type moved here (ADR 0014).
+        assert_eq!(
+            alias("CREATE TABLE t (id INTEGER PRIMARY KEY DESC, name TEXT)"),
+            None
+        );
+    }
+
+    #[test]
+    fn string_literal_table_name_still_yields_the_alias() {
+        // FTS5 shadow tables are created as `CREATE TABLE 't_data'(...)`.
+        assert_eq!(
+            alias("CREATE TABLE 't_data'(id INTEGER PRIMARY KEY, block BLOB)"),
+            Some(0)
+        );
+    }
 }
