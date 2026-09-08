@@ -9,6 +9,7 @@ use super::order_by::{order_by_target_for_expr, OrderByPlan, OrderByTarget};
 use super::*;
 use crate::codegen::row::index_maintenance::{valid_index_root_page, valid_table_root_page};
 use crate::codegen::row::{key_index, record_width};
+use std::rc::Rc;
 
 pub(crate) use accum::select_has_aggregate;
 use accum::FLUSH_CURSOR;
@@ -41,7 +42,7 @@ pub(crate) fn try_compile_index_only_count<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     catalog: &[TableSchema],
     sink: &mut F,
@@ -117,7 +118,7 @@ where
             open_instr.p5 = 1;
             em.emit(open_instr);
 
-            let scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+            let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
             let value_reg = compile_value(em, reg, &scope, operand)?;
             let leading_collation = index
                 .columns
@@ -313,7 +314,7 @@ pub(super) fn try_compile_direct_agg_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
@@ -327,7 +328,7 @@ where
         return Ok(false);
     }
 
-    let table_scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let table_scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     // #322: hoist any uncorrelated WHERE-clause subquery once, up
     // front — see `compile_grouped_scan`'s identical comment.
     let hoisted = match &select.where_clause {
@@ -743,7 +744,7 @@ pub(crate) fn compile_grouped_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
@@ -754,7 +755,7 @@ pub(crate) fn compile_grouped_scan<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
 {
-    let mut table_scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let mut table_scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     if let Some(outer) = outer_scope {
         table_scope = table_scope.with_outer(outer.clone());
     }
@@ -792,8 +793,7 @@ where
     let needed_order = ordered_needed_columns(&needed_columns, schema);
     let compact_of = compact_index_map(&needed_order, schema.columns.len());
     let pseudo_schema = compact_schema(schema, &needed_order)?;
-    let mut pseudo_scope =
-        Scope::single(&pseudo_schema, cursors.pseudo).with_catalog(catalog.to_vec());
+    let mut pseudo_scope = Scope::single(&pseudo_schema, cursors.pseudo).with_catalog(catalog);
     if let Some(outer) = outer_scope {
         pseudo_scope = pseudo_scope.with_outer(outer.clone());
     }
@@ -1200,7 +1200,7 @@ pub(super) fn try_compile_index_ordered_group_by<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
@@ -1236,7 +1236,7 @@ where
         return Ok(false);
     };
 
-    let table_scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let table_scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
 
     // No dedicated cursor slot exists for this path's index cursor —
     // reuse the sort cursor number, since `SorterOpen`/`SorterInsert`
@@ -1504,13 +1504,13 @@ mod mcdc_vectors {
     // Observable: the fast path emits `Opcode::Count`; the fallback scans.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_52__v1_bare_count_star_takes_the_count_fast_path() {
+    fn mcdc__aggregate_53__v1_bare_count_star_takes_the_count_fast_path() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_52__v2_having_falls_back_to_a_scan() {
+    fn mcdc__aggregate_53__v2_having_falls_back_to_a_scan() {
         let p = ok(
             "SELECT count(*) FROM t HAVING count(*) > 0",
             &[t_indexed_a()],
@@ -1519,7 +1519,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_52__v3_limit_falls_back_to_a_scan() {
+    fn mcdc__aggregate_53__v3_limit_falls_back_to_a_scan() {
         let p = ok("SELECT count(*) FROM t LIMIT 1", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
@@ -1528,7 +1528,7 @@ mod mcdc_vectors {
     /// with an aggregate (no GROUP BY)" before this decision is reached, so
     /// the fast path is never taken -- observed as the rejection itself.
     #[test]
-    fn mcdc__aggregate_52__v4_order_by_never_reaches_the_count_fast_path() {
+    fn mcdc__aggregate_53__v4_order_by_never_reaches_the_count_fast_path() {
         let e = err_text("SELECT count(*) FROM t ORDER BY 1", &[t_indexed_a()]);
         assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
     }
@@ -1538,25 +1538,25 @@ mod mcdc_vectors {
     // `*distinct || !name == count || !args == Star`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_67__v1_count_star_matches_the_shape() {
+    fn mcdc__aggregate_68__v1_count_star_matches_the_shape() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_67__v2_count_distinct_is_not_index_only() {
+    fn mcdc__aggregate_68__v2_count_distinct_is_not_index_only() {
         let p = ok("SELECT count(DISTINCT a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_67__v3_other_function_name_is_not_a_count() {
+    fn mcdc__aggregate_68__v3_other_function_name_is_not_a_count() {
         let p = ok("SELECT max(a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_67__v4_count_of_a_column_is_not_count_star() {
+    fn mcdc__aggregate_68__v4_count_of_a_column_is_not_count_star() {
         let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
@@ -1567,25 +1567,25 @@ mod mcdc_vectors {
     // only the index (root 5), never opening the table (root 2).
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_200__v1_bare_sum_reads_only_the_index() {
+    fn mcdc__aggregate_201__v1_bare_sum_reads_only_the_index() {
         let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
         assert!(index_only(&p), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_200__v2_where_opens_the_table() {
+    fn mcdc__aggregate_201__v2_where_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t WHERE b > 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_200__v3_having_opens_the_table() {
+    fn mcdc__aggregate_201__v3_having_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t HAVING sum(a) > 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_200__v4_limit_opens_the_table() {
+    fn mcdc__aggregate_201__v4_limit_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t LIMIT 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
@@ -1593,7 +1593,7 @@ mod mcdc_vectors {
     /// `ORDER BY` with an ungrouped aggregate is rejected upstream by
     /// `compile_select_scan`; the fast path is never consulted.
     #[test]
-    fn mcdc__aggregate_200__v5_order_by_never_reaches_the_sum_fast_path() {
+    fn mcdc__aggregate_201__v5_order_by_never_reaches_the_sum_fast_path() {
         let e = err_text("SELECT sum(a) FROM t ORDER BY 1", &[t_indexed_a()]);
         assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
     }
@@ -1603,7 +1603,7 @@ mod mcdc_vectors {
     /// scanned (or index-walked in key order) and the aggregate accumulated
     /// per group rather than summed off the index alone.
     #[test]
-    fn mcdc__aggregate_200__v6_group_by_never_reaches_the_sum_fast_path() {
+    fn mcdc__aggregate_201__v6_group_by_never_reaches_the_sum_fast_path() {
         let p = ok("SELECT b, sum(a) FROM t GROUP BY b", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
@@ -1613,19 +1613,19 @@ mod mcdc_vectors {
     // `*distinct || !(name == sum || name == avg)`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_221__v1_plain_sum_is_index_only() {
+    fn mcdc__aggregate_222__v1_plain_sum_is_index_only() {
         let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
         assert!(index_only(&p), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_221__v2_sum_distinct_opens_the_table() {
+    fn mcdc__aggregate_222__v2_sum_distinct_opens_the_table() {
         let p = ok("SELECT sum(DISTINCT a) FROM t", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_221__v3_count_is_neither_sum_nor_avg() {
+    fn mcdc__aggregate_222__v3_count_is_neither_sum_nor_avg() {
         let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
         assert!(!index_only(&p), "{p:?}");
     }

@@ -219,7 +219,7 @@ where
         bindings.push(TableBinding {
             alias: table_ref.alias.clone(),
             name: table_binding_name(table_ref),
-            schema: schema.clone(),
+            schema: std::rc::Rc::new(schema.clone()),
             cursor: 0,
             forced_null: false,
             stats: stats_by_table
@@ -451,7 +451,7 @@ where
 
     let full_scope = Scope {
         tables: bindings.clone(),
-        catalog: schemas.to_vec(),
+        catalog: std::rc::Rc::from(schemas),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -598,7 +598,7 @@ pub(super) fn join_scope(
                 })
             })
             .collect::<Result<Vec<_>, CodegenError>>()?,
-        catalog: catalog.to_vec(),
+        catalog: std::rc::Rc::from(catalog),
         outer: None,
         dedup_star: dedup_star.to_vec(),
         ..Scope::default()

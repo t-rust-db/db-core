@@ -382,7 +382,7 @@ where
     synthetic_columns.extend(synthetic_names.iter().cloned());
     let mut synthetic_types = schema.column_types.clone();
     synthetic_types.extend(synthetic_names.iter().map(|_| String::new()));
-    let synthetic_schema = TableSchema {
+    let synthetic_schema = std::rc::Rc::new(TableSchema {
         name: schema.name.clone(),
         root_page: 0,
         columns: synthetic_columns,
@@ -394,7 +394,7 @@ where
         sql: String::new(),
         indexes: Vec::new(),
         rowid_alias: None,
-    };
+    });
 
     // Allocate one fresh, contiguous register per snapshot/aggregate
     // field up front — `reg.alloc()` bump-allocates sequentially, so as
@@ -435,7 +435,7 @@ where
         0,
     ));
 
-    let flush_scope = Scope::single(&synthetic_schema, flush_cursor).with_catalog(catalog.to_vec());
+    let flush_scope = Scope::single_shared(&synthetic_schema, flush_cursor).with_catalog(catalog);
     let skip_label = em.new_label();
     if let Some(having) = &select.having {
         let rewritten = substitute_aggregates(having, agg_slots, &synthetic_names);

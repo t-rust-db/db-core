@@ -116,6 +116,7 @@ pub(crate) fn compile_scalar_subquery(
     };
 
     let sub_cursor = reg.alloc_cursor();
+    let schema = std::rc::Rc::new(schema);
 
     let root_page = valid_table_root_page(&schema)?;
     em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));

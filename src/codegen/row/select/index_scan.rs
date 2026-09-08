@@ -6,6 +6,7 @@ use super::projection::{compile_row_values, emit_row_via_sink, ResultColumnPlan}
 use super::*;
 use crate::codegen::row::index_maintenance::valid_index_root_page;
 use crate::codegen::row::{key_index, record_width};
+use std::rc::Rc;
 
 /// Finds a single index on `schema` whose declared column order is a
 /// prefix match (case-insensitively, column-for-column) for `plans` — the
@@ -144,7 +145,7 @@ pub(super) fn try_compile_index_ordered_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     order_by_plans: &[OrderByPlan],
     cursors: ScanCursors,
     end_label: Label,
@@ -179,7 +180,7 @@ where
     open_instr.p5 = 1;
     em.emit(open_instr);
 
-    let scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     let limit = compile_limit_setup(em, reg, &scope, select)?;
 
     let (rewind_op, next_op) = if forward {
@@ -237,7 +238,7 @@ fn drain_sorted_group<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     limit: &Option<LimitState>,
     end_label: Label,
@@ -309,7 +310,7 @@ pub(super) fn try_compile_partial_sorted_index_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     order_by_plans: &[OrderByPlan],
     cursors: ScanCursors,
     end_label: Label,
@@ -353,7 +354,7 @@ where
     open_instr.p5 = 1;
     em.emit(open_instr);
 
-    let scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     let limit = compile_limit_setup(em, reg, &scope, select)?;
 
     let have_group_reg = reg.alloc();

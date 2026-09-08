@@ -12,6 +12,7 @@ use super::order_by::{output_column_names, resolve_order_by, OrderByTarget};
 use super::projection::{compile_row_values, emit_dedup_check, result_columns};
 use super::*;
 use crate::codegen::row::index_maintenance::valid_table_root_page;
+use std::rc::Rc;
 /// Compiles `select` against `schema` (the resolved `FROM` table) into
 /// a `Program`. Single-table only — a `select.from` with a non-empty
 /// `joins` list (#237) has more than one table to resolve schemas for,
@@ -108,8 +109,11 @@ pub fn compile_select_with_catalog_and_stats(
         em.emit(Instruction::new(Opcode::ResultRow, first, count, 0));
         Ok(())
     };
+    // One shared copy of the schema for every `Scope` this compile
+    // builds (#252): the scan strategies below take `&Rc<TableSchema>`.
+    let schema = Rc::new(schema.clone());
     compile_select_scan(
-        &mut em, &mut reg, select, schema, cursors, end_label, catalog, stats, &mut sink,
+        &mut em, &mut reg, select, &schema, cursors, end_label, catalog, stats, &mut sink,
     )?;
 
     em.place(end_label);
@@ -175,6 +179,7 @@ pub(super) fn compile_select_no_from(
         indexes: vec![],
         rowid_alias: None,
     };
+    let no_table = Rc::new(no_table);
     let cols = result_columns(select, &no_table);
     let (first, count) =
         compile_row_values(&mut em, &mut reg, &no_table, &cols, -1, false, catalog)?;
@@ -201,7 +206,7 @@ pub(crate) fn compile_select_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
@@ -662,7 +667,7 @@ pub fn compile_select_compound(
             em,
             reg,
             select,
-            schema,
+            &Rc::new(schema.clone()),
             cursors,
             arm_end,
             catalog,
@@ -789,7 +794,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__entry_142__v1_bare_expression_list_compiles_to_one_row() {
+    fn mcdc__entry_146__v1_bare_expression_list_compiles_to_one_row() {
         let p = compile_no_from(&parsed("SELECT 1 + 1")).unwrap();
         assert!(
             has(&p, Opcode::ResultRow) && !has(&p, Opcode::OpenRead),
@@ -798,19 +803,19 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__entry_142__v2_where_is_rejected() {
+    fn mcdc__entry_146__v2_where_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t WHERE 1 = 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_142__v3_group_by_is_rejected() {
+    fn mcdc__entry_146__v3_group_by_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t GROUP BY 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_142__v4_having_is_rejected() {
+    fn mcdc__entry_146__v4_having_is_rejected() {
         let mut select = parsed("SELECT 1");
         select.having = parsed("SELECT 1 FROM t GROUP BY 1 HAVING 1 = 1").having;
         let e = compile_no_from(&select).unwrap_err();
@@ -818,25 +823,25 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__entry_142__v5_order_by_is_rejected() {
+    fn mcdc__entry_146__v5_order_by_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t ORDER BY 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_142__v6_limit_is_rejected() {
+    fn mcdc__entry_146__v6_limit_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t LIMIT 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_142__v7_distinct_is_rejected() {
+    fn mcdc__entry_146__v7_distinct_is_rejected() {
         let e = compile_no_from(&parsed("SELECT DISTINCT 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_142__v8_compound_is_rejected() {
+    fn mcdc__entry_146__v8_compound_is_rejected() {
         let mut select = parsed("SELECT 1");
         select.compound = from_less("SELECT 1 FROM t UNION ALL SELECT 2 FROM t").compound;
         let e = compile_no_from(&select).unwrap_err();

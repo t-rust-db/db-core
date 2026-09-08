@@ -513,7 +513,7 @@ pub fn compile_insert(
                     &mut em,
                     &mut reg,
                     select,
-                    select_schema,
+                    &std::rc::Rc::new(select_schema.clone()),
                     select_cursors,
                     end_label,
                     std::slice::from_ref(select_schema),

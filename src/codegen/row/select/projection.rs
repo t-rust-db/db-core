@@ -1,6 +1,7 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
+use std::rc::Rc;
 pub(super) enum ResultColumnPlan {
     Column(String),
     Expr(Expr),
@@ -60,7 +61,7 @@ fn result_column_collations(schema: &TableSchema, cols: &[ResultColumnPlan]) -> 
 pub(super) fn compile_row_values(
     em: &mut Emitter,
     reg: &mut RegAlloc,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cols: &[ResultColumnPlan],
     cursor: i32,
     pseudo: bool,
@@ -144,7 +145,7 @@ pub(super) fn compile_row_values(
                         compile_value(
                             em,
                             reg,
-                            &Scope::single(schema, cursor).with_catalog(catalog.to_vec()),
+                            &Scope::single_shared(schema, cursor).with_catalog(catalog),
                             expr,
                         )?
                     }
@@ -152,7 +153,7 @@ pub(super) fn compile_row_values(
                     compile_value(
                         em,
                         reg,
-                        &Scope::single(schema, cursor).with_catalog(catalog.to_vec()),
+                        &Scope::single_shared(schema, cursor).with_catalog(catalog),
                         expr,
                     )?
                 }
@@ -199,7 +200,7 @@ pub(super) fn emit_row_via_sink<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursor: i32,
     pseudo: bool,
     catalog: &[TableSchema],
@@ -218,7 +219,7 @@ pub(super) fn emit_distinct_guard(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursor: i32,
     pseudo: bool,
     distinct_cursor: i32,
@@ -331,7 +332,7 @@ mod mcdc_vectors {
 
     // --- projection_78: `pseudo && rowid_alias == idx` --------------------
     #[test]
-    fn mcdc__projection_78__v1_sorted_rowid_alias_is_re_read_as_a_pseudo_column() {
+    fn mcdc__projection_79__v1_sorted_rowid_alias_is_re_read_as_a_pseudo_column() {
         let p = compile(
             "SELECT a FROM t ORDER BY b",
             &schema("INTEGER", false, true),
@@ -348,14 +349,14 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__projection_78__v2_unsorted_rowid_alias_is_read_via_rowid() {
+    fn mcdc__projection_79__v2_unsorted_rowid_alias_is_read_via_rowid() {
         let p = compile("SELECT a FROM t", &schema("INTEGER", false, true));
         assert!(!has(&p, Opcode::OpenPseudo));
         assert!(has(&p, Opcode::Rowid));
     }
 
     #[test]
-    fn mcdc__projection_78__v3_sorted_ordinary_column_never_touches_rowid() {
+    fn mcdc__projection_79__v3_sorted_ordinary_column_never_touches_rowid() {
         let p = compile(
             "SELECT a FROM t ORDER BY b",
             &schema("INTEGER", false, false),

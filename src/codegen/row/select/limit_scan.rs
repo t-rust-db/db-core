@@ -8,6 +8,7 @@ use super::*;
 use crate::codegen::row::planner::{is_skip_scan_worthwhile, Stats};
 use crate::codegen::row::{key_index, record_width};
 use std::collections::HashMap;
+use std::rc::Rc;
 /// LIMIT/OFFSET counters, set up once before the scan loop starts.
 pub(super) struct LimitState {
     offset_reg: Option<i32>,
@@ -284,7 +285,7 @@ pub(super) fn try_compile_rowid_seek<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
@@ -333,7 +334,7 @@ where
         }
     };
 
-    let scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     let limit = compile_limit_setup(em, reg, &scope, select)?;
     let mut operands = operands.into_iter().peekable();
     while let Some(operand) = operands.next() {
@@ -515,7 +516,7 @@ pub(super) fn try_compile_covering_index_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
@@ -545,7 +546,7 @@ where
     open_instr.p5 = 1;
     em.emit(open_instr);
 
-    let scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     let limit = compile_limit_setup(em, reg, &scope, select)?;
     let leading_collation = index
         .columns
@@ -743,7 +744,7 @@ pub(super) fn try_compile_skip_scan_index<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
@@ -775,7 +776,7 @@ where
     open_instr.p5 = 1;
     em.emit(open_instr);
 
-    let scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     let limit = compile_limit_setup(em, reg, &scope, select)?;
     let probe_reg = compile_value(em, reg, &scope, &operand)?;
 
@@ -833,7 +834,7 @@ pub(super) fn compile_direct_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
@@ -883,7 +884,7 @@ where
             0,
         ));
     }
-    let scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     // #306: hoist any uncorrelated WHERE-clause IN/scalar subquery out
     // of the scan loop below, materializing it exactly once here rather
     // than on every outer row.
@@ -954,7 +955,7 @@ pub(super) fn compile_sorted_scan<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
-    schema: &TableSchema,
+    schema: &Rc<TableSchema>,
     order_by_plans: &[OrderByPlan],
     cursors: ScanCursors,
     end_label: Label,
@@ -973,7 +974,7 @@ where
         ));
     }
 
-    let scope = Scope::single(schema, cursors.table).with_catalog(catalog.to_vec());
+    let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     // #306: same hoist as `compile_direct_scan` — see its comment.
     let hoisted = match &select.where_clause {
         Some(where_expr) => crate::codegen::row::subquery::hoist_uncorrelated_where_subqueries(
@@ -1418,7 +1419,7 @@ mod mcdc_vectors {
 
     // --- limit_scan_101: rowid / _rowid_ / oid ----------------------------
     #[test]
-    fn mcdc__limit_scan_102__v1_rowid_is_a_rowid_reference() {
+    fn mcdc__limit_scan_103__v1_rowid_is_a_rowid_reference() {
         assert!(is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("ROWID")
@@ -1426,7 +1427,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__limit_scan_102__v2_underscore_rowid_is_a_rowid_reference() {
+    fn mcdc__limit_scan_103__v2_underscore_rowid_is_a_rowid_reference() {
         assert!(is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("_rowid_")
@@ -1434,7 +1435,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__limit_scan_102__v3_oid_is_a_rowid_reference() {
+    fn mcdc__limit_scan_103__v3_oid_is_a_rowid_reference() {
         assert!(is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("oid")
@@ -1442,7 +1443,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__limit_scan_102__v4_ordinary_column_without_alias_is_not() {
+    fn mcdc__limit_scan_103__v4_ordinary_column_without_alias_is_not() {
         assert!(!is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("b")

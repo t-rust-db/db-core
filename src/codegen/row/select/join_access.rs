@@ -870,7 +870,7 @@ mod tests {
         TableBinding {
             alias: alias.map(str::to_string),
             name: schema.name.clone(),
-            schema,
+            schema: std::rc::Rc::new(schema),
             cursor: 0,
             forced_null: false,
             stats: Stats::default(),

@@ -139,8 +139,7 @@ pub fn compile_update_with_catalog(
     ));
     open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR)?;
 
-    let scope =
-        crate::codegen::row::Scope::single(schema, TABLE_CURSOR).with_catalog(catalog.to_vec());
+    let scope = crate::codegen::row::Scope::single(schema, TABLE_CURSOR).with_catalog(catalog);
     let end_label = em.new_label();
 
     let rowid_seek_operand = update
@@ -680,13 +679,13 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__update_347__v1_range_seek_over_an_index_the_set_touches_uses_two_passes() {
+    fn mcdc__update_346__v1_range_seek_over_an_index_the_set_touches_uses_two_passes() {
         let p = update_program("UPDATE t SET a = 9 WHERE a BETWEEN 1 AND 5");
         assert!(has(&p, Opcode::OpenEphemeral), "{p:?}");
     }
 
     #[test]
-    fn mcdc__update_347__v2_range_seek_over_an_untouched_index_is_single_pass() {
+    fn mcdc__update_346__v2_range_seek_over_an_untouched_index_is_single_pass() {
         let p = update_program("UPDATE t SET b = 9 WHERE a BETWEEN 1 AND 5");
         assert!(
             has(&p, Opcode::IdxRowid) && !has(&p, Opcode::OpenEphemeral),
@@ -695,7 +694,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__update_347__v3_no_range_seek_is_a_plain_scan() {
+    fn mcdc__update_346__v3_no_range_seek_is_a_plain_scan() {
         let p = update_program("UPDATE t SET a = 9 WHERE b = 1");
         assert!(
             !has(&p, Opcode::IdxRowid) && !has(&p, Opcode::OpenEphemeral),

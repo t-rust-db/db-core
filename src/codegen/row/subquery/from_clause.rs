@@ -340,7 +340,7 @@ pub(crate) fn materialize_from_subquery(
             em,
             reg,
             subquery,
-            schema,
+            &std::rc::Rc::new(schema.clone()),
             cursors,
             end_label,
             catalog,
