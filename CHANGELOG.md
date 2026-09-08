@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.70.2] - 2026-09-08
+
+### Fixed
+
+- **Deeply nested subqueries no longer overflow the parser's stack** (#226) -- `MAX_EXPR_DEPTH` only counted expression recursion, so `SELECT a FROM (SELECT a FROM (...))` aborted the process at ~100 levels on a 2 MiB thread and `SELECT (SELECT (SELECT ...))` / `EXISTS (...)` at ~50, with the expression guard intact. `parse_select_stmt` now charges `SELECT_DEPTH_COST` (6) units against the same budget; runaway nesting is a typed `Invalid("subquery nesting too deep")`. Measured caps on a 2 MiB stack: 31 derived tables, 21 scalar subqueries (real SQL nests 2-4 deep); expression nesting unchanged at 63 parens. `tests/unit/nesting_depth_test.rs` proves `codegen::row` and `codegen::batch` survive the deepest input the parser now accepts.
+
+### Changed
+
+- **Clippy panic gate extended** (#225): `string_slice`, `unreachable`, `todo`, `unimplemented`, `cast_possible_truncation`, `cast_possible_wrap`, `cast_sign_loss` are now `deny`. Seven `&str[a..b]` sites and 38 `as` casts replaced with total equivalents (`get`/`split_at_checked`/`try_from`/`from_ne_bytes`; new saturating `value::len_to_i64`); `JoinHashTable::hash_of` returns `usize`. No behaviour change.
+
 ## [0.70.1] - 2026-09-08
 
 ### Fixed
