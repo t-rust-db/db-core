@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.75.1] - 2026-09-08
+
+### Changed
+
+- **Hot paths from the first profile** (#252, #253, #254; profiled with `make perf-profile`, #250). `codegen::row`: `TableBinding.schema` is `Rc<TableSchema>` and `Scope.catalog` is `Rc<[TableSchema]>`, threaded once from the planner entry through every scan strategy, so a `Scope` is one allocation instead of a deep copy (`compile_select_with_catalog` -24.5%). Parser: keyword lookup searches only the first-letter bucket, identifier scanning steps ASCII bytes directly, and `Parser::advance` no longer clones the consumed token (`tokenize/medium` -20%, `parse_select/medium` -14%). `vm::row`: `execute` hands rows over with the new `Vm::take_rows` instead of cloning them (a reused `Vm` starts each run empty), `Vm::reserve_registers` sizes the register file once from the program, and `EphemeralTableCursor` caches its current row index (`row::Column` scan loop -69%). Public signatures, program output and cursor contracts unchanged.
+- **`make perf` is `std`-only** (#245) -- `criterion` is gone; `benches/common.rs` is the crate's own harness (warm-up, batched samples, min/median/p95, JSON under `target/perf/`). `Cargo.lock` is back to one crate. `[profile.bench] debug = "line-tables-only"`, `PERF_BUDGET_MS`, and `make perf-profile BENCH=<bench>` (Instruments' Time Profiler via `tools/perf_profile.py`) support profiling the same binaries (#250).
+- **ADRs describe the architecture as it stands** (#227). All fourteen rewritten without provenance narration; six renamed; ADR 0015 records the testing strategy (tiers, gates, what gates a merge, what db-core leaves to db-storage, db-cli and the embedding engine). Makefile rationale comments point at it.
+
+### Fixed
+
+- `Cargo.lock` recorded db-core 0.74.1 after the v0.75.0 release commit; it is 0.75.0 again (and 0.75.1 with this release), so a plain `cargo` run no longer dirties the tree.
+
 ## [0.75.0] - 2026-09-08
 
 ### Changed
