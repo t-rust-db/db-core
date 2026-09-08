@@ -185,3 +185,9 @@ cast_sign_loss = "deny"
 # clippy error, not just discouraged. The opposite lint,
 # `self_named_module_files`, is its mirror image -- never enable both.
 mod_module_files = "deny"
+
+# `make perf` builds with this profile. Line tables make a sampling
+# profiler (`make perf-profile`, Instruments/samply) show function names
+# without changing codegen, so timings stay comparable (ADR 0015, tier 6).
+[profile.bench]
+debug = "line-tables-only"

@@ -59,7 +59,12 @@ exists for another crate's benefit.
    crate's own `std`-only harness (`benches/common`: warm-up, batched
    timed samples, min/median/p95 ns per call, JSON under
    `target/perf/`). Report only, never a gate; no benchmark asserts a
-   number.
+   number. `make perf-profile BENCH=<bench>` records the same binary
+   under a sampling profiler (`tools/perf_profile.py`, Instruments on
+   macOS) and ranks functions by self and inclusive time; the bench
+   profile carries line tables so frames resolve to names without
+   changing the measured codegen. `PERF_BUDGET_MS` lengthens a run for
+   the profiler.
 
 ### Static gates
 

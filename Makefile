@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf version
+.PHONY: help test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
 
 help: ## Show this help
 	@echo ""
@@ -161,6 +161,12 @@ perf: ## Run the parser/codegen/vm_opcodes benchmarks (report only, not a CI gat
 	cargo bench --bench parser
 	cargo bench --bench codegen
 	cargo bench --bench vm_opcodes
+
+BENCH ?= codegen
+
+perf-profile: ## Sampling profile of one bench (BENCH=parser|codegen|vm_opcodes) via Instruments' Time Profiler; prints hot functions (macOS; ADR 0015 tier 6)
+	@command -v xctrace >/dev/null 2>&1 || { echo "xctrace not found -- needs Xcode command line tools (macOS)"; exit 1; }
+	python3 tools/perf_profile.py $(BENCH)
 
 # === Release ===
 

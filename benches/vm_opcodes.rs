@@ -112,23 +112,26 @@ fn bench_batch_reduce(r: &mut common::Report) {
 
 fn bench_row_scan_column(r: &mut common::Report) {
     // A plain `Rewind`/`Column`/`Next` scan loop -- the row engine's
-    // cheapest, most-executed opcode sequence.
+    // cheapest, most-executed opcode sequence. The table is filled once,
+    // outside the timed region: `Rewind` repositions the cursor on every
+    // call, so only the scan itself is measured.
     let program = RowProgram::new(vec![
         RowInstruction::new(RowOpcode::Rewind, 0, 4, 0),
         RowInstruction::new(RowOpcode::Column, 0, 0, 1),
         RowInstruction::new(RowOpcode::Next, 0, 1, 0),
         RowInstruction::new(RowOpcode::Halt, 0, 0, 0),
     ]);
+    let mut vm = RowVm::new();
+    let mut table = EphemeralTableCursor::new();
+    for i in 0..ROWS {
+        table.insert(
+            i64::try_from(i).unwrap_or(i64::MAX),
+            vec![RowValue::Integer(i64::try_from(i).unwrap_or(i64::MAX))],
+        );
+    }
+    vm.open_cursor(0, Box::new(table)).unwrap();
+    assert!(execute(&mut vm, &program).is_ok());
     r.bench("vm_opcodes/row::Column (scan loop)", || {
-        let mut vm = RowVm::new();
-        let mut table = EphemeralTableCursor::new();
-        for i in 0..ROWS {
-            table.insert(
-                i64::try_from(i).unwrap_or(i64::MAX),
-                vec![RowValue::Integer(i64::try_from(i).unwrap_or(i64::MAX))],
-            );
-        }
-        vm.open_cursor(0, Box::new(table)).unwrap();
         execute(&mut vm, black_box(&program))
     });
 }
