@@ -4,7 +4,8 @@
 //! never asserts a number.
 //!
 //! Method: a short warm-up, then timed samples until both a minimum
-//! sample count and a minimum wall budget are met. Each sample times a
+//! sample count and a minimum wall budget (`PERF_BUDGET_MS`, default
+//! 300) are met. Each sample times a
 //! batch of `k` calls (sized so one batch takes about a millisecond,
 //! which keeps `Instant` overhead out of nanosecond-scale results) and
 //! records the per-call time. Reported: min, median and p95 in
@@ -16,7 +17,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 const WARMUP: Duration = Duration::from_millis(50);
-const BUDGET: Duration = Duration::from_millis(300);
+/// Default wall budget per benchmark; `PERF_BUDGET_MS` overrides it (a
+/// profiler wants seconds of samples, a report run wants speed).
+const DEFAULT_BUDGET_MS: u64 = 300;
 const MIN_SAMPLES: usize = 30;
 const TARGET_BATCH: Duration = Duration::from_millis(1);
 
@@ -54,10 +57,16 @@ impl Report {
         let per_call = start.elapsed().as_secs_f64() / warm_calls.max(1) as f64;
         let k = ((TARGET_BATCH.as_secs_f64() / per_call.max(1e-9)) as u64).clamp(1, 1_000_000);
 
+        let budget = Duration::from_millis(
+            std::env::var("PERF_BUDGET_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_BUDGET_MS),
+        );
         let mut samples: Vec<f64> = Vec::new();
         let mut calls: u64 = 0;
         let run = Instant::now();
-        while samples.len() < MIN_SAMPLES || run.elapsed() < BUDGET {
+        while samples.len() < MIN_SAMPLES || run.elapsed() < budget {
             let t = Instant::now();
             for _ in 0..k {
                 black_box(f());
