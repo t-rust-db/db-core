@@ -879,3 +879,96 @@ fn resolve_group_order_target(
     }
     joined_bare_column_offset(full_scope, stripped)
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::dispatch::{compile_statement, DispatchError};
+    use crate::codegen::row::TableSchema;
+    use crate::value::Collation;
+    use crate::vm::row::{Opcode, Program};
+
+    fn table(name: &str, root_page: u32, cols: &[&str]) -> TableSchema {
+        TableSchema {
+            name: name.to_string(),
+            root_page,
+            columns: cols.iter().map(|c| (*c).to_string()).collect(),
+            column_types: cols.iter().map(|_| "INTEGER".to_string()).collect(),
+            column_collations: cols.iter().map(|_| Collation::Binary).collect(),
+            sql: format!("CREATE TABLE {name} ({})", cols.join(", ")),
+            ..Default::default()
+        }
+    }
+
+    /// `a(k, v)` at root 2 and `b(k, w)` at root 3.
+    fn two_tables() -> Vec<TableSchema> {
+        vec![table("a", 2, &["k", "v"]), table("b", 3, &["k", "w"])]
+    }
+
+    fn compile(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+        compile_statement(sql, schemas, &[])
+    }
+
+    fn ok(sql: &str, schemas: &[TableSchema]) -> Program {
+        match compile(sql, schemas) {
+            Ok(p) => p,
+            Err(e) => panic!("{sql}: expected Ok, got {e:?}"),
+        }
+    }
+
+    fn err_text(sql: &str, schemas: &[TableSchema]) -> String {
+        match compile(sql, schemas) {
+            Ok(p) => panic!("{sql}: expected Err, got program {p:?}"),
+            Err(e) => format!("{e:?}"),
+        }
+    }
+
+    fn has(program: &Program, opcode: Opcode) -> bool {
+        program.instructions.iter().any(|i| i.opcode == opcode)
+    }
+
+    // ---------------------------------------------------------------------
+    // join_796 -- `matches_agg_slot`: an ORDER BY aggregate matches a
+    // collected slot only when `name` and `DISTINCT`-ness both agree
+    // (`!name_eq || distinct != slot_distinct`). A match sorts on the
+    // finalized aggregate; no match falls through to bare-column
+    // resolution, which rejects a function call.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__join_796__v1_same_name_and_distinctness_matches_the_slot() {
+        let p = ok(
+            "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k ORDER BY count(b.w)",
+            &two_tables(),
+        );
+        assert!(has(&p, Opcode::SorterOpen), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__join_796__v2_different_name_does_not_match() {
+        let e = err_text(
+            "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k ORDER BY sum(b.w)",
+            &two_tables(),
+        );
+        assert!(
+            e.contains("Unsupported") || e.contains("UnknownColumn"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn mcdc__join_796__v3_same_name_but_different_distinctness_does_not_match() {
+        let e = err_text(
+            "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k \
+             ORDER BY count(DISTINCT b.w)",
+            &two_tables(),
+        );
+        assert!(
+            e.contains("Unsupported") || e.contains("UnknownColumn"),
+            "{e}"
+        );
+    }
+}

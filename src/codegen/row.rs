@@ -23,8 +23,6 @@ pub mod ddl;
 pub mod dispatch;
 pub mod expr;
 pub(crate) mod index_maintenance;
-#[cfg(test)]
-mod mcdc;
 pub mod planner;
 pub mod pragma;
 pub mod select;

@@ -928,3 +928,73 @@ mod tests {
         assert!(matches!(&inner_from.first.kind, TableRefKind::Name(n) if n == "t"));
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::flatten_from_subqueries;
+    use crate::parser::ast::{Select, TableRefKind};
+    use crate::parser::row::{parse_select, ParseOutcome};
+
+    fn sel(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("{sql:?} must parse, got {other:?}"),
+        }
+    }
+
+    // flatten_173: the six-way "rows-changing clause" guard in
+    // `subquery_flatten_safe`. Observable: the FROM-subquery is replaced by
+    // the base table (`TableRefKind::Name`) only when every leaf is false.
+    fn flattened(inner: &str) -> bool {
+        let mut select = sel(&format!("SELECT x FROM ({inner}) AS s"));
+        flatten_from_subqueries(&mut select);
+        matches!(
+            select.from.as_ref().unwrap().first.kind,
+            TableRefKind::Name(_)
+        )
+    }
+
+    #[test]
+    fn mcdc__flatten_173__v1_plain_subquery_is_flattened() {
+        assert!(flattened("SELECT a AS x FROM u"));
+    }
+
+    #[test]
+    fn mcdc__flatten_173__v2_distinct_blocks_flattening() {
+        assert!(!flattened("SELECT DISTINCT a AS x FROM u"));
+    }
+
+    /// `HAVING` necessarily rides on a `GROUP BY`; the `having` leaf is the
+    /// one being exercised true here.
+    #[test]
+    fn mcdc__flatten_173__v3_having_blocks_flattening() {
+        assert!(!flattened("SELECT a AS x FROM u GROUP BY a HAVING a > 1"));
+    }
+
+    #[test]
+    fn mcdc__flatten_173__v4_group_by_blocks_flattening() {
+        assert!(!flattened("SELECT a AS x FROM u GROUP BY a"));
+    }
+
+    #[test]
+    fn mcdc__flatten_173__v5_limit_blocks_flattening() {
+        assert!(!flattened("SELECT a AS x FROM u LIMIT 1"));
+    }
+
+    #[test]
+    fn mcdc__flatten_173__v6_compound_blocks_flattening() {
+        assert!(!flattened(
+            "SELECT a AS x FROM u UNION ALL SELECT a AS x FROM u"
+        ));
+    }
+
+    #[test]
+    fn mcdc__flatten_173__v7_aggregate_blocks_flattening() {
+        assert!(!flattened("SELECT max(a) AS x FROM u"));
+    }
+}

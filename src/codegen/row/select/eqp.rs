@@ -557,3 +557,187 @@ fn graft_child_plan(
         rows.push(row);
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::{explain_query_plan, IndexSchema, IndexedColumn, TableSchema};
+    use crate::parser::ast::Select;
+    use crate::parser::row::{parse_select, ParseOutcome};
+    use std::collections::HashMap;
+
+    fn table(name: &str, root_page: u32, columns: &[&str]) -> TableSchema {
+        TableSchema {
+            name: name.to_string(),
+            root_page,
+            columns: columns.iter().map(|c| (*c).to_string()).collect(),
+            column_types: columns.iter().map(|_| "INTEGER".to_string()).collect(),
+            sql: format!("CREATE TABLE {name} ({})", columns.join(", ")),
+            ..Default::default()
+        }
+    }
+
+    fn with_index(
+        mut schema: TableSchema,
+        index: &str,
+        root_page: u32,
+        column: &str,
+    ) -> TableSchema {
+        schema.indexes.push(IndexSchema {
+            name: index.to_string(),
+            root_page,
+            unique: false,
+            columns: vec![IndexedColumn {
+                name: column.to_string(),
+                desc: false,
+                collation: Default::default(),
+            }],
+        });
+        schema
+    }
+
+    fn sel(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("{sql:?} must parse, got {other:?}"),
+        }
+    }
+
+    // eqp_251 / eqp_263 / eqp_273 / eqp_423 -- `explain_query_plan` details.
+    /// `t(a, b)` at root 2 with `ia(a)` at 5 and `ib(b)` at 6; `u(b)` at 3.
+    fn eqp_catalog() -> Vec<TableSchema> {
+        let t = with_index(
+            with_index(table("t", 2, &["a", "b"]), "ia", 5, "a"),
+            "ib",
+            6,
+            "b",
+        );
+        vec![t, with_index(table("u", 3, &["b"]), "iub", 7, "b")]
+    }
+
+    fn eqp_details(sql: &str) -> Vec<String> {
+        let catalog = eqp_catalog();
+        let select = sel(sql);
+        let mut schemas = vec![catalog[0].clone()];
+        if select.from.as_ref().is_some_and(|f| !f.joins.is_empty()) {
+            schemas.push(catalog[1].clone());
+        }
+        explain_query_plan(&select, &schemas, &HashMap::new(), &catalog)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.detail)
+            .collect()
+    }
+
+    // eqp_263 / eqp_273: `level == 0 && access.is_none() && covering.is_none()`
+    fn range_seek_detail_present(d: &[String]) -> bool {
+        d[0].contains("SEARCH t USING INDEX ib")
+    }
+
+    // eqp_423: `from.joins.is_empty() && !select.group_by.is_empty()`
+    const TEMP_BTREE: &str = "USE TEMP B-TREE FOR GROUP BY";
+
+    // eqp_251: `level == 0 && access.is_none()` (automatic-index probe)
+    #[test]
+    fn mcdc__eqp_251__v1_outer_table_without_a_seek_is_a_scan() {
+        let d = eqp_details("SELECT a FROM t WHERE a + b = 1");
+        assert!(d[0].starts_with("SCAN t"), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_251__v2_outer_table_with_a_rowid_seek_is_a_search() {
+        let d = eqp_details("SELECT a FROM t WHERE rowid = 1");
+        assert!(
+            d[0].contains("SEARCH t") && d[0].contains("rowid=?"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn mcdc__eqp_251__v3_inner_join_level_reports_its_own_access() {
+        let d = eqp_details("SELECT a FROM t JOIN u ON u.b = t.a");
+        assert!(d.iter().any(|x| x.contains('u')), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_263__v1_all_true_reaches_the_range_seek_report() {
+        let d = eqp_details("SELECT a, b FROM t WHERE b BETWEEN 1 AND 5");
+        assert!(range_seek_detail_present(&d), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_263__v2_inner_level_never_reports_a_range_seek() {
+        // Only the outermost table's WHERE is consulted for a range seek, so
+        // the inner level (`u`, indexed on `b`) reports its join access, never
+        // a `b>? AND b<?` range.
+        let d = eqp_details("SELECT a FROM t JOIN u ON u.b = t.a WHERE a + b = 1");
+        assert!(d.len() == 2 && !d[1].contains("b>?"), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_263__v3_rowid_seek_takes_precedence() {
+        let d = eqp_details("SELECT a, b FROM t WHERE rowid = 1");
+        assert!(
+            d[0].contains("rowid=?") && !range_seek_detail_present(&d),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn mcdc__eqp_263__v4_covering_index_takes_precedence() {
+        let d = eqp_details("SELECT a FROM t WHERE a = 1");
+        assert!(d[0].contains("COVERING INDEX ia"), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_273__v1_all_true_reaches_the_range_seek_report() {
+        let d = eqp_details("SELECT a, b FROM t WHERE b BETWEEN 1 AND 5");
+        assert!(range_seek_detail_present(&d), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_273__v2_inner_level_never_reports_a_range_seek() {
+        // Only the outermost table's WHERE is consulted for a range seek, so
+        // the inner level (`u`, indexed on `b`) reports its join access, never
+        // a `b>? AND b<?` range.
+        let d = eqp_details("SELECT a FROM t JOIN u ON u.b = t.a WHERE a + b = 1");
+        assert!(d.len() == 2 && !d[1].contains("b>?"), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_273__v3_rowid_seek_takes_precedence() {
+        let d = eqp_details("SELECT a, b FROM t WHERE rowid = 1");
+        assert!(
+            d[0].contains("rowid=?") && !range_seek_detail_present(&d),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn mcdc__eqp_273__v4_covering_index_takes_precedence() {
+        let d = eqp_details("SELECT a FROM t WHERE a = 1");
+        assert!(d[0].contains("COVERING INDEX ia"), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_423__v1_single_table_group_by_without_an_index_uses_a_temp_btree() {
+        let d = eqp_details("SELECT a + b, count(*) FROM t GROUP BY a + b");
+        assert!(d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_423__v2_joined_group_by_is_not_reported() {
+        let d = eqp_details("SELECT t.a, count(*) FROM t JOIN u ON u.b = t.a GROUP BY t.a");
+        assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_423__v3_single_table_without_group_by_is_not_reported() {
+        let d = eqp_details("SELECT a FROM t");
+        assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
+    }
+}

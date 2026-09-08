@@ -187,3 +187,65 @@ fn expand_table_ref(
         TableRefKind::Subquery(inner) => expand_views_in_select(inner, views, stack),
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::ExpandViews;
+    use crate::codegen::row::{resolve_views, ViewSchema};
+    use crate::parser::ast::{Select, TableRefKind};
+    use crate::parser::row::{parse_select, ParseOutcome};
+    use std::borrow::Cow;
+
+    fn sel(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("{sql:?} must parse, got {other:?}"),
+        }
+    }
+
+    // views_83: `views.is_empty() || !select_references_any_view(self, views)`
+    fn view_v() -> Vec<ViewSchema> {
+        vec![ViewSchema {
+            name: "v".to_string(),
+            sql: "CREATE VIEW v AS SELECT b FROM u".to_string(),
+        }]
+    }
+
+    #[test]
+    fn mcdc__views_83__v1_no_views_in_scope_borrows() {
+        let select = sel("SELECT b FROM v");
+        let resolved = resolve_views(&[]);
+        assert!(matches!(
+            select.expand_views(&resolved),
+            Ok(Cow::Borrowed(_))
+        ));
+    }
+
+    #[test]
+    fn mcdc__views_83__v2_views_in_scope_but_unreferenced_borrows() {
+        let select = sel("SELECT a FROM t");
+        let resolved = resolve_views(&view_v());
+        assert!(matches!(
+            select.expand_views(&resolved),
+            Ok(Cow::Borrowed(_))
+        ));
+    }
+
+    #[test]
+    fn mcdc__views_83__v3_referenced_view_is_expanded_into_an_owned_copy() {
+        let select = sel("SELECT b FROM v");
+        let resolved = resolve_views(&view_v());
+        match select.expand_views(&resolved) {
+            Ok(Cow::Owned(expanded)) => assert!(matches!(
+                expanded.from.as_ref().unwrap().first.kind,
+                TableRefKind::Subquery(_)
+            )),
+            other => panic!("expected an owned expansion, got {other:?}"),
+        }
+    }
+}

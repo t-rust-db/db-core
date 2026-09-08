@@ -982,3 +982,71 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::{compile_select_with_catalog, CodegenError, TableSchema};
+    use crate::parser::ast::Select;
+    use crate::parser::row::{parse_select, ParseOutcome};
+    use crate::vm::row::Program;
+
+    fn table(name: &str, root_page: u32, columns: &[&str]) -> TableSchema {
+        TableSchema {
+            name: name.to_string(),
+            root_page,
+            columns: columns.iter().map(|c| (*c).to_string()).collect(),
+            column_types: columns.iter().map(|_| "INTEGER".to_string()).collect(),
+            sql: format!("CREATE TABLE {name} ({})", columns.join(", ")),
+            ..Default::default()
+        }
+    }
+
+    fn sel(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("{sql:?} must parse, got {other:?}"),
+        }
+    }
+
+    /// `t(a, b)` at root 2, `u(b)` at root 3.
+    fn t_and_u() -> Vec<TableSchema> {
+        vec![table("t", 2, &["a", "b"]), table("u", 3, &["b"])]
+    }
+
+    fn compile_tu(sql: &str) -> Result<Program, CodegenError> {
+        let catalog = t_and_u();
+        compile_select_with_catalog(&sel(sql), &catalog[0], &catalog)
+    }
+
+    fn is_scalar_order_limit_rejection(result: &Result<Program, CodegenError>) -> bool {
+        matches!(
+            result,
+            Err(CodegenError::Unsupported { reason })
+                if reason.contains("ORDER BY/LIMIT in a scalar subquery")
+        )
+    }
+
+    // scalar_91: `!subselect.order_by.is_empty() || subselect.limit.is_some()`
+    #[test]
+    fn mcdc__scalar_91__v1_plain_scalar_subquery_compiles() {
+        let result = compile_tu("SELECT a FROM t WHERE a = (SELECT b FROM u)");
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn mcdc__scalar_91__v2_order_by_in_scalar_subquery_is_rejected() {
+        let result = compile_tu("SELECT a FROM t WHERE a = (SELECT b FROM u ORDER BY b)");
+        assert!(is_scalar_order_limit_rejection(&result), "{result:?}");
+    }
+
+    #[test]
+    fn mcdc__scalar_91__v3_limit_in_scalar_subquery_is_rejected() {
+        let result = compile_tu("SELECT a FROM t WHERE a = (SELECT b FROM u LIMIT 1)");
+        assert!(is_scalar_order_limit_rejection(&result), "{result:?}");
+    }
+}

@@ -11,8 +11,7 @@ so a test module never needs an allow either -- any allow found in a test
 region is dead weight, not a violation, and is left to review.
 
 "Production" = every line of `src/**/*.rs` before that file's first
-`#[cfg(test)]` / `#[cfg(all(test, ...))]`, minus the test-only
-`src/codegen/row/mcdc/` tree.
+`#[cfg(test)]` / `#[cfg(all(test, ...))]`.
 
 EXEMPT is empty since db-core#231 converted the last production `expect`s to
 typed errors; nothing may be added to it without an issue number and reason.
@@ -52,8 +51,6 @@ def main() -> int:
     exempt_hits: dict[str, int] = {}
     for path in sorted(Path("src").rglob("*.rs")):
         rel = path.as_posix()
-        if rel.startswith("src/codegen/row/mcdc/") or rel == "src/codegen/row/mcdc.rs":
-            continue
         prod = production_region(path)
         for m in ALLOW.finditer(prod):
             lints = LINT.findall(m.group(1))

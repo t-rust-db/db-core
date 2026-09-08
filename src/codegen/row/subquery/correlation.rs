@@ -278,3 +278,82 @@ pub(crate) fn hoist_uncorrelated_where_subqueries(
     }
     Ok(out)
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::{compile_select_with_catalog, CodegenError, TableSchema};
+    use crate::parser::ast::Select;
+    use crate::parser::row::{parse_select, ParseOutcome};
+    use crate::vm::row::{Opcode, Program};
+
+    fn table(name: &str, root_page: u32, columns: &[&str]) -> TableSchema {
+        TableSchema {
+            name: name.to_string(),
+            root_page,
+            columns: columns.iter().map(|c| (*c).to_string()).collect(),
+            column_types: columns.iter().map(|_| "INTEGER".to_string()).collect(),
+            sql: format!("CREATE TABLE {name} ({})", columns.join(", ")),
+            ..Default::default()
+        }
+    }
+
+    fn sel(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("{sql:?} must parse, got {other:?}"),
+        }
+    }
+
+    /// `t(a, b)` at root 2, `u(b)` at root 3.
+    fn t_and_u() -> Vec<TableSchema> {
+        vec![table("t", 2, &["a", "b"]), table("u", 3, &["b"])]
+    }
+
+    fn compile_tu(sql: &str) -> Result<Program, CodegenError> {
+        let catalog = t_and_u();
+        compile_select_with_catalog(&sel(sql), &catalog[0], &catalog)
+    }
+
+    // correlation_82: `!qualifier_ok || !schema.columns...any(name)` inside
+    // `subquery_is_correlated`. Observable through hoisting (#306): an
+    // uncorrelated scalar subquery in the outer WHERE is evaluated once,
+    // before the outer table's `Rewind`; a correlated one is re-evaluated
+    // per row, i.e. its `OpenRead` on `u` (root 3) comes after that
+    // `Rewind`.
+    fn subquery_open_precedes_outer_rewind(program: &Program) -> bool {
+        let rewind_t = program
+            .instructions
+            .iter()
+            .position(|i| i.opcode == Opcode::Rewind && i.p1 == 0)
+            .unwrap_or_else(|| panic!("no outer Rewind in {program:?}"));
+        let open_u = program
+            .instructions
+            .iter()
+            .position(|i| i.opcode == Opcode::OpenRead && i.p2 == 3)
+            .unwrap_or_else(|| panic!("no OpenRead on u in {program:?}"));
+        open_u < rewind_t
+    }
+
+    #[test]
+    fn mcdc__correlation_82__v1_outer_qualifier_marks_the_subquery_correlated() {
+        let p = compile_tu("SELECT a FROM t WHERE a = (SELECT b FROM u WHERE u.b = t.a)").unwrap();
+        assert!(!subquery_open_precedes_outer_rewind(&p), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__correlation_82__v2_bare_column_not_in_the_subquery_table_is_correlated() {
+        let p = compile_tu("SELECT a FROM t WHERE a = (SELECT b FROM u WHERE a = 1)").unwrap();
+        assert!(!subquery_open_precedes_outer_rewind(&p), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__correlation_82__v3_own_column_with_own_qualifier_is_uncorrelated_and_hoisted() {
+        let p = compile_tu("SELECT a FROM t WHERE a = (SELECT b FROM u WHERE u.b = 1)").unwrap();
+        assert!(subquery_open_precedes_outer_rewind(&p), "{p:?}");
+    }
+}

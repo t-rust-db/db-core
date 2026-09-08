@@ -199,3 +199,75 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::TableSchema;
+
+    // row_688: `self.is_virtual || self.without_rowid`
+    fn ipk_table() -> TableSchema {
+        TableSchema {
+            name: "t".to_string(),
+            columns: vec!["id".to_string(), "x".to_string()],
+            sql: "CREATE TABLE t (id INTEGER PRIMARY KEY, x)".to_string(),
+            ..Default::default()
+        }
+    }
+
+    // row_718: `inline_pk && is_integer(def)`
+    fn alias_of(sql: &str) -> Option<usize> {
+        TableSchema {
+            name: "t".to_string(),
+            sql: sql.to_string(),
+            ..Default::default()
+        }
+        .with_computed_rowid_alias()
+        .rowid_alias
+    }
+
+    #[test]
+    fn mcdc__schema_66__v1_virtual_table_has_no_rowid_alias() {
+        let schema = TableSchema {
+            is_virtual: true,
+            ..ipk_table()
+        };
+        assert_eq!(schema.with_computed_rowid_alias().rowid_alias, None);
+    }
+
+    #[test]
+    fn mcdc__schema_66__v2_without_rowid_table_has_no_rowid_alias() {
+        let schema = TableSchema {
+            without_rowid: true,
+            ..ipk_table()
+        };
+        assert_eq!(schema.with_computed_rowid_alias().rowid_alias, None);
+    }
+
+    #[test]
+    fn mcdc__schema_66__v3_ordinary_table_computes_the_alias_from_sql() {
+        assert_eq!(ipk_table().with_computed_rowid_alias().rowid_alias, Some(0));
+    }
+
+    #[test]
+    fn mcdc__schema_105__v1_integer_primary_key_column_is_the_alias() {
+        assert_eq!(
+            alias_of("CREATE TABLE t (x, id INTEGER PRIMARY KEY)"),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn mcdc__schema_105__v2_non_integer_primary_key_is_not_an_alias() {
+        assert_eq!(alias_of("CREATE TABLE t (x, id TEXT PRIMARY KEY)"), None);
+    }
+
+    #[test]
+    fn mcdc__schema_105__v3_integer_column_without_primary_key_is_not_an_alias() {
+        assert_eq!(alias_of("CREATE TABLE t (x, id INTEGER)"), None);
+    }
+}
