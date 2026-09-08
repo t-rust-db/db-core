@@ -360,7 +360,7 @@ fn decode_serial_value(
         0 => Ok((Value::Null, 0)),
         1 => {
             let [b0] = take_array(buf, pos)?;
-            Ok((Value::Integer(i64::from(b0 as i8)), 1))
+            Ok((Value::Integer(i64::from(i8::from_ne_bytes([b0]))), 1))
         }
         2 => {
             let b = take_array(buf, pos)?;
@@ -449,7 +449,9 @@ fn decode_utf16(bytes: &[u8], unit_from_bytes: fn([u8; 2]) -> u16) -> Result<Str
 /// body -- never decodes any column body.
 fn parse_header(payload: &[u8]) -> Result<Vec<(u64, usize)>, RecordError> {
     let (header_len, n) = decode_varint_at(payload, 0)?;
-    let header_len = header_len as usize;
+    // Saturate on a 32-bit target: an absurd header length then fails the
+    // `HeaderOverrun` bound check below instead of wrapping to a small one.
+    let header_len = usize::try_from(header_len).unwrap_or(usize::MAX);
     if header_len < n {
         return Err(RecordError::HeaderTooShort {
             declared: header_len,
@@ -481,7 +483,7 @@ fn parse_header(payload: &[u8]) -> Result<Vec<(u64, usize)>, RecordError> {
 /// panics -- any truncation or malformed serial type returns `Err`.
 pub fn decode_record(payload: &[u8], encoding: TextEncoding) -> Result<Vec<Value>, RecordError> {
     let (header_len, _) = decode_varint_at(payload, 0)?;
-    let mut body_pos = header_len as usize;
+    let mut body_pos = usize::try_from(header_len).unwrap_or(usize::MAX);
     let entries = parse_header(payload)?;
     let mut values = Vec::with_capacity(entries.len());
     for (serial_type, offset) in &entries {

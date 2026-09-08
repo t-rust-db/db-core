@@ -467,7 +467,7 @@ fn literal_value(lit: &AstLiteral) -> Value {
 fn select_limit(select: &Select) -> Option<usize> {
     let limit = select.limit.as_ref()?;
     match &limit.limit.kind {
-        ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0 => Some(*n as usize),
+        ExprKind::Literal(AstLiteral::Integer(n)) => usize::try_from(*n).ok(),
         _ => None,
     }
 }
