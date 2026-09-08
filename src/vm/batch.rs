@@ -657,6 +657,9 @@ fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec
                     break;
                 };
                 let result = f(item);
+                // Poison recovery is unreachable in practice: `thread::scope`
+                // re-raises any worker panic when the scope closes, so a
+                // poisoned lock never yields a short result set silently.
                 results
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -884,6 +887,17 @@ pub enum VmError {
         /// The window function that needed an argument register.
         func: WindowFunc,
     },
+    /// An opcode's operands break an invariant the planner guarantees
+    /// (`HashBuild` with no key columns, `Emit` with no registers, a join
+    /// payload narrower than its destinations, a non-numeric partial
+    /// aggregate). A planner bug, surfaced as an error instead of a
+    /// plausible-looking wrong result (db-core#232).
+    MalformedProgram {
+        /// Name of the [`Opcode`] variant (or engine phase) that failed.
+        opcode: &'static str,
+        /// Which invariant failed.
+        reason: String,
+    },
 }
 
 impl fmt::Display for VmError {
@@ -909,6 +923,9 @@ impl fmt::Display for VmError {
             }
             VmError::MissingWindowArgument { opcode, func } => {
                 write!(f, "{opcode}: {func:?} requires an argument register")
+            }
+            VmError::MalformedProgram { opcode, reason } => {
+                write!(f, "{opcode}: malformed program: {reason}")
             }
         }
     }
@@ -1173,6 +1190,12 @@ impl Vm {
                         src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len))
                     }) {
                         Some(len) => len?,
+                        // `COUNT(*)` alone: no key or source column carries
+                        // the row count, but every live register has the
+                        // post-`Filter` length (RegisterLengthMismatch guards
+                        // that), so any one of them is it; with no register
+                        // at all nothing was filtered and the batch's own
+                        // row count is exact.
                         None => self
                             .registers
                             .values()
@@ -1247,7 +1270,12 @@ impl Vm {
                     .iter()
                     .map(|r| self.reg(*r, opcode))
                     .collect::<Result<_>>()?;
-                let num_rows = key_columns.first().map_or(0, |c| c.len());
+                let num_rows = key_columns.first().map(|c| c.len()).ok_or_else(|| {
+                    VmError::MalformedProgram {
+                        opcode,
+                        reason: "hash build has no key columns".to_string(),
+                    }
+                })?;
 
                 let mut ht: JoinHashTable<JoinKey, Vec<Value>> =
                     JoinHashTable::with_capacity(num_rows);
@@ -1268,7 +1296,12 @@ impl Vm {
                     .iter()
                     .map(|r| self.reg(*r, opcode))
                     .collect::<Result<_>>()?;
-                let num_rows = key_columns.first().map_or(0, |c| c.len());
+                let num_rows = key_columns.first().map(|c| c.len()).ok_or_else(|| {
+                    VmError::MalformedProgram {
+                        opcode,
+                        reason: "hash probe has no key columns".to_string(),
+                    }
+                })?;
                 let ht = self
                     .join_tables
                     .get(table)
@@ -1317,10 +1350,19 @@ impl Vm {
                     let col: Vec<Value> = emitted
                         .iter()
                         .map(|(_, payload)| match payload {
-                            Some(p) => p.get(i).cloned().unwrap_or(Value::Null),
-                            None => Value::Null,
+                            // `None` is an unmatched LEFT JOIN probe row: NULL
+                            // by definition. A payload narrower than its
+                            // destinations is a planner bug, not NULL data.
+                            Some(p) => p.get(i).cloned().ok_or_else(|| VmError::MalformedProgram {
+                                opcode,
+                                reason: format!(
+                                    "join payload has {} columns but destination {i} was requested",
+                                    p.len()
+                                ),
+                            }),
+                            None => Ok(Value::Null),
                         })
-                        .collect();
+                        .collect::<Result<_>>()?;
                     self.registers.insert(*dst, col);
                 }
             }
@@ -1375,7 +1417,13 @@ impl Vm {
                     .iter()
                     .map(|r| self.reg(*r, opcode))
                     .collect::<Result<_>>()?;
-                let num_rows = cols.first().map_or(0, |c| c.len());
+                let num_rows =
+                    cols.first()
+                        .map(|c| c.len())
+                        .ok_or_else(|| VmError::MalformedProgram {
+                            opcode,
+                            reason: "emit has no registers".to_string(),
+                        })?;
                 let mut rows = Vec::with_capacity(num_rows);
                 for row in 0..num_rows {
                     rows.push(cols.iter().map(|c| c[row].clone()).collect());
@@ -1532,6 +1580,7 @@ fn compute_window(
                     let mut running_sum = 0.0;
                     let mut running_count = 0i64;
                     for &row in &indices {
+                        // Running frame: every row up to and including this one counts.
                         let counted = match arg_col {
                             Some(a) => !matches!(a[row], Value::Null),
                             None => true,
@@ -1931,7 +1980,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1672__v1_a_null_propagates() {
+    fn mcdc__batch_1721__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1959,7 +2008,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1672__v2_b_null_propagates() {
+    fn mcdc__batch_1721__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1987,7 +2036,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1672__v3_neither_null_computes_result() {
+    fn mcdc__batch_1721__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2015,7 +2064,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1723__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1772__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2043,7 +2092,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1723__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1772__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2071,7 +2120,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1723__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1772__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2099,7 +2148,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1723__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1772__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(

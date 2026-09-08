@@ -650,6 +650,28 @@ impl Tokenizer {
 
     /// Tokenizes the whole input, including the trailing [`TokenKind::Eof`].
     pub fn tokenize(src: &str) -> Vec<Token> {
+        // Spans carry `u32` offsets. Rather than let offsets past 4 GiB
+        // saturate (which would silently mis-slice `split_statements`),
+        // refuse the input up front; everything below may then assume
+        // every byte offset fits (db-core#232).
+        if u32::try_from(src.len()).is_err() {
+            let span = Span {
+                line: 1,
+                column: 1,
+                offset: 0,
+                len: 0,
+            };
+            return vec![
+                Token {
+                    kind: TokenKind::Error("SQL text longer than 4 GiB is not supported".into()),
+                    span,
+                },
+                Token {
+                    kind: TokenKind::Eof,
+                    span,
+                },
+            ];
+        }
         // A rough token-count estimate (one token per ~4 source bytes:
         // shortest real tokens are single-character punctuation/
         // operators, but identifiers/keywords/literals are typically
@@ -693,6 +715,8 @@ impl Tokenizer {
         Some(c)
     }
 
+    // `tokenize` refuses input longer than `u32::MAX` bytes, so these two
+    // saturations are unreachable; they only keep the conversion total.
     fn current_pos(&self) -> (u32, u32, u32) {
         (
             self.line,
@@ -1190,6 +1214,9 @@ pub fn split_statements(sql: &str) -> Vec<String> {
     for tok in &tokens {
         match tok.kind {
             TokenKind::Semicolon => {
+                // Offsets come from this same `sql` (and `tokenize` refused
+                // anything the `u32` cannot address), so the slices below
+                // always hit; `""` is the total-slicing fallback only.
                 let end = tok.span.offset as usize;
                 push_trimmed(&mut statements, sql.get(start..end).unwrap_or(""));
                 start = (tok.span.offset as usize).saturating_add(tok.span.len as usize);
@@ -1540,7 +1567,7 @@ mod tests {
     /// (`c == 'x'`) true.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_809__v1_lowercase_x() {
+    fn mcdc__tokenizer_833__v1_lowercase_x() {
         assert_eq!(
             kinds("x'41'"),
             vec![TokenKind::Blob(Box::new(vec![0x41])), TokenKind::Eof]
@@ -1550,10 +1577,10 @@ mod tests {
     /// #368 tagged MC/DC vector (obligation `tokenizer_816`): both
     /// leaves false — falls through to the identifier-start arm.
     /// Independence pair for A against
-    /// `mcdc__tokenizer_809__v1_lowercase_x`.
+    /// `mcdc__tokenizer_833__v1_lowercase_x`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_809__v2_neither_x_nor_capital_x() {
+    fn mcdc__tokenizer_833__v2_neither_x_nor_capital_x() {
         assert_eq!(
             kinds("y"),
             vec![TokenKind::Identifier("y".to_string()), TokenKind::Eof]
@@ -1562,10 +1589,10 @@ mod tests {
 
     /// #368 tagged MC/DC vector (obligation `tokenizer_816`): leaf B
     /// (`c == 'X'`) true, leaf A false. Independence pair for B against
-    /// `mcdc__tokenizer_809__v2_neither_x_nor_capital_x`.
+    /// `mcdc__tokenizer_833__v2_neither_x_nor_capital_x`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_809__v3_uppercase_x() {
+    fn mcdc__tokenizer_833__v3_uppercase_x() {
         assert_eq!(
             kinds("X'41'"),
             vec![TokenKind::Blob(Box::new(vec![0x41])), TokenKind::Eof]
@@ -1577,17 +1604,17 @@ mod tests {
     /// leaf A (odd digit count) true.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_857__v1_odd_digit_count() {
+    fn mcdc__tokenizer_881__v1_odd_digit_count() {
         assert!(matches!(kinds("x'411'")[0], TokenKind::Error(_)));
     }
 
     /// #368 tagged MC/DC vector (obligation `tokenizer_864`): both
     /// leaves false — a valid, even-length, all-hex blob literal.
     /// Independence pair for A against
-    /// `mcdc__tokenizer_857__v1_odd_digit_count`.
+    /// `mcdc__tokenizer_881__v1_odd_digit_count`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_857__v2_valid_hex() {
+    fn mcdc__tokenizer_881__v2_valid_hex() {
         assert_eq!(
             kinds("x'41'"),
             vec![TokenKind::Blob(Box::new(vec![0x41])), TokenKind::Eof]
@@ -1597,10 +1624,10 @@ mod tests {
     /// #368 tagged MC/DC vector (obligation `tokenizer_864`): leaf B
     /// (a non-hex-digit character) true, leaf A false — even length, but
     /// not all hex digits. Independence pair for B against
-    /// `mcdc__tokenizer_857__v2_valid_hex`.
+    /// `mcdc__tokenizer_881__v2_valid_hex`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_857__v3_even_length_non_hex_digit() {
+    fn mcdc__tokenizer_881__v3_even_length_non_hex_digit() {
         assert!(matches!(kinds("x'4g'")[0], TokenKind::Error(_)));
     }
 
@@ -1610,7 +1637,7 @@ mod tests {
     /// delimiter (`""`) inside a delimiter where open == close escapes.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_937__v1_escaped_doubled_delimiter() {
+    fn mcdc__tokenizer_961__v1_escaped_doubled_delimiter() {
         assert_eq!(
             kinds(r#""a""b""#),
             vec![TokenKind::Identifier("a\"b".to_string()), TokenKind::Eof]
@@ -1620,10 +1647,10 @@ mod tests {
     /// #368 tagged MC/DC vector (obligation `tokenizer_944`): leaf A
     /// (`escapes`) false — `[...]` has no escape mechanism (open != close),
     /// so leaf B is never even reached. Independence pair for A against
-    /// `mcdc__tokenizer_937__v1_escaped_doubled_delimiter`.
+    /// `mcdc__tokenizer_961__v1_escaped_doubled_delimiter`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_937__v2_bracket_identifier_does_not_escape() {
+    fn mcdc__tokenizer_961__v2_bracket_identifier_does_not_escape() {
         assert_eq!(
             kinds("[abc]"),
             vec![TokenKind::Identifier("abc".to_string()), TokenKind::Eof]
@@ -1633,10 +1660,10 @@ mod tests {
     /// #368 tagged MC/DC vector (obligation `tokenizer_944`): leaf A true,
     /// leaf B false — a simple double-quoted identifier with no doubled
     /// closing delimiter. Independence pair for B against
-    /// `mcdc__tokenizer_937__v1_escaped_doubled_delimiter`.
+    /// `mcdc__tokenizer_961__v1_escaped_doubled_delimiter`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_937__v3_unescaped_double_quoted() {
+    fn mcdc__tokenizer_961__v3_unescaped_double_quoted() {
         assert_eq!(
             kinds("\"abc\""),
             vec![TokenKind::Identifier("abc".to_string()), TokenKind::Eof]
@@ -1648,26 +1675,26 @@ mod tests {
     /// in `scan_number`): both leaves true — a hex literal.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_1006__v1_hex_prefix() {
+    fn mcdc__tokenizer_1030__v1_hex_prefix() {
         assert_eq!(kinds("0x1A"), vec![TokenKind::Integer(26), TokenKind::Eof]);
     }
 
     /// #368 tagged MC/DC vector (obligation `tokenizer_1013`): leaf A
     /// false — a number not starting with `0`. Independence pair for A
-    /// against `mcdc__tokenizer_1006__v1_hex_prefix`.
+    /// against `mcdc__tokenizer_1030__v1_hex_prefix`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_1006__v2_not_leading_zero() {
+    fn mcdc__tokenizer_1030__v2_not_leading_zero() {
         assert_eq!(kinds("123"), vec![TokenKind::Integer(123), TokenKind::Eof]);
     }
 
     /// #368 tagged MC/DC vector (obligation `tokenizer_1013`): leaf A
     /// true, leaf B false — a leading zero not followed by `x`/`X`,
     /// parsed as a plain decimal integer. Independence pair for B against
-    /// `mcdc__tokenizer_1006__v1_hex_prefix`.
+    /// `mcdc__tokenizer_1030__v1_hex_prefix`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__tokenizer_1006__v3_leading_zero_not_hex() {
+    fn mcdc__tokenizer_1030__v3_leading_zero_not_hex() {
         assert_eq!(kinds("05"), vec![TokenKind::Integer(5), TokenKind::Eof]);
     }
 }

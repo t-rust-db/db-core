@@ -2274,23 +2274,27 @@ impl Parser {
                     .get(self.pos.saturating_sub(1))
                     .map_or(tok.span, |t| t.span);
                 let span = join_span(tok.span, end);
-                let mut parts = parts.into_iter();
-                let kind = match parts.len() {
-                    1 => ExprKind::Column {
+                // Exactly one, two or three parts (db-core#232): the old
+                // wildcard arm also matched `a.b.c.d`, silently dropping
+                // the trailing parts, and `unwrap_or_default()` could
+                // mint an empty identifier.
+                let kind = match parts.as_slice() {
+                    [name] => ExprKind::Column {
                         table: None,
                         catalog: None,
-                        name: parts.next().unwrap_or_default(),
+                        name: name.clone(),
                     },
-                    2 => ExprKind::Column {
+                    [table, name] => ExprKind::Column {
                         catalog: None,
-                        table: Some(parts.next().unwrap_or_default()),
-                        name: parts.next().unwrap_or_default(),
+                        table: Some(table.clone()),
+                        name: name.clone(),
                     },
-                    _ => ExprKind::Column {
-                        catalog: Some(parts.next().unwrap_or_default()),
-                        table: Some(parts.next().unwrap_or_default()),
-                        name: parts.next().unwrap_or_default(),
+                    [catalog, table, name] => ExprKind::Column {
+                        catalog: Some(catalog.clone()),
+                        table: Some(table.clone()),
+                        name: name.clone(),
                     },
+                    _ => return self.invalid("a column reference has at most three dotted parts"),
                 };
                 Ok(Expr { kind, span })
             }
@@ -3198,20 +3202,20 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__grammar_2396__v1_no_filter_no_over_elides_the_tail() {
+    fn mcdc__grammar_2400__v1_no_filter_no_over_elides_the_tail() {
         assert!(function_tail_of("SELECT abs(x) FROM t").is_none());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__grammar_2396__v2_filter_alone_keeps_the_tail() {
+    fn mcdc__grammar_2400__v2_filter_alone_keeps_the_tail() {
         let tail = function_tail_of("SELECT count(x) FILTER (WHERE x > 1) FROM t").unwrap();
         assert!(tail.filter.is_some() && tail.over.is_none());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__grammar_2396__v3_over_alone_keeps_the_tail() {
+    fn mcdc__grammar_2400__v3_over_alone_keeps_the_tail() {
         let tail = function_tail_of("SELECT row_number() OVER (ORDER BY x) FROM t").unwrap();
         assert!(tail.filter.is_none() && tail.over.is_some());
     }

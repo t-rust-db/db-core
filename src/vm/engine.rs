@@ -81,14 +81,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<Vec<Vec<Valu
         )?,
         _ => run_parallel(segments, &body)?,
     };
-    Ok(finalize(
-        agg_parts,
-        *num_group_keys,
-        *distinct,
-        order_by,
-        limit,
-        rows,
-    ))
+    finalize(agg_parts, *num_group_keys, *distinct, order_by, limit, rows)
 }
 
 /// The `LIMIT` when `program` can be satisfied by a sequential prefix scan
@@ -158,7 +151,7 @@ pub fn finalize(
     order_by: Option<(usize, bool)>,
     limit: Option<usize>,
     rows: Vec<Vec<Value>>,
-) -> Vec<Vec<Value>> {
+) -> Result<Vec<Vec<Value>>> {
     let mut result_rows = if !agg_parts.is_empty() {
         let mut groups: Vec<(Vec<Value>, Vec<Value>)> = Vec::new();
         let mut index: HashMap<String, usize> = HashMap::new();
@@ -170,7 +163,7 @@ pub fn finalize(
                 .collect::<Vec<_>>()
                 .join("\u{0}");
             match index.get(&key_str) {
-                Some(&i) => merge_rows(agg_parts, &mut groups[i].1, &row),
+                Some(&i) => merge_rows(agg_parts, &mut groups[i].1, &row)?,
                 None => {
                     index.insert(key_str, groups.len());
                     groups.push((key, row));
@@ -180,7 +173,7 @@ pub fn finalize(
         groups
             .into_iter()
             .map(|(_, row)| finalize_row(agg_parts, row))
-            .collect()
+            .collect::<Result<Vec<_>>>()?
     } else {
         rows
     };
@@ -213,7 +206,7 @@ pub fn finalize(
         result_rows.truncate(limit);
     }
 
-    result_rows
+    Ok(result_rows)
 }
 
 /// Combine two emitted rows for the same group key, applying the
@@ -222,13 +215,12 @@ pub fn finalize(
     clippy::indexing_slicing,
     reason = "`parts` has one entry per emitted column, so `i` indexes both rows in range"
 )]
-fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) {
+fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) -> Result<()> {
     for (i, part) in parts.iter().enumerate() {
         match part {
             AggPart::GroupKey => {}
             AggPart::Sum | AggPart::Count => {
-                into[i] =
-                    Value::Float(into[i].as_f64().unwrap_or(0.0) + from[i].as_f64().unwrap_or(0.0));
+                into[i] = Value::Float(partial_f64(&into[i])? + partial_f64(&from[i])?);
             }
             AggPart::Min => {
                 if let (Some(a), Some(b)) = (into[i].as_f64(), from[i].as_f64()) {
@@ -247,13 +239,28 @@ fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) {
             AggPart::Avg(_, _) => {}
         }
     }
+    Ok(())
+}
+
+/// A partial SUM/COUNT/AVG slot as a number. NULL is the additive identity
+/// (a segment that saw no rows); anything else non-numeric is a planner
+/// bug -- before, it silently merged as `0.0` into a plausible wrong total
+/// (db-core#232).
+fn partial_f64(v: &Value) -> Result<f64> {
+    match v {
+        Value::Null => Ok(0.0),
+        other => other.as_f64().ok_or_else(|| VmError::MalformedProgram {
+            opcode: "Combine",
+            reason: format!("partial aggregate slot holds {other:?}, not a number"),
+        }),
+    }
 }
 
 #[allow(
     clippy::indexing_slicing,
     reason = "`parts` has one entry per emitted column and `Avg`'s sum/count positions were assigned by codegen within that width"
 )]
-fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Vec<Value> {
+fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Result<Vec<Value>> {
     let mut out = Vec::with_capacity(parts.len());
     let mut skip: Option<usize> = None;
     for (i, part) in parts.iter().enumerate() {
@@ -262,10 +269,7 @@ fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Vec<Value> {
         }
         match part {
             AggPart::Avg(sum_i, count_i) => {
-                let (sum, count) = (
-                    row[*sum_i].as_f64().unwrap_or(0.0),
-                    row[*count_i].as_f64().unwrap_or(0.0),
-                );
+                let (sum, count) = (partial_f64(&row[*sum_i])?, partial_f64(&row[*count_i])?);
                 out.push(if count == 0.0 {
                     Value::Null
                 } else {
@@ -276,7 +280,7 @@ fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Vec<Value> {
             _ => out.push(row[i].clone()),
         }
     }
-    out
+    Ok(out)
 }
 
 /// A planned two-table equi-join, as produced by
@@ -451,7 +455,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_114__v1_distinct_disqualifies_bounded_scan() {
+    fn mcdc__engine_107__v1_distinct_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -468,7 +472,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_114__v2_non_empty_agg_parts_disqualifies_bounded_scan() {
+    fn mcdc__engine_107__v2_non_empty_agg_parts_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -485,7 +489,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_114__v3_filter_in_body_disqualifies_bounded_scan() {
+    fn mcdc__engine_107__v3_filter_in_body_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -502,7 +506,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_114__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan() {
+    fn mcdc__engine_107__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -686,7 +690,8 @@ mod tests {
             None,
             None,
             rows,
-        );
+        )
+        .unwrap();
         assert_eq!(out, vec![vec![Value::Int(1), Value::Float(5.0)]]);
     }
 

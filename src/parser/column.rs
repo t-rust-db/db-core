@@ -453,19 +453,22 @@ enum ItemKind {
     Expr,
 }
 
-fn item_kind(col: &crate::parser::ast::ResultColumn) -> ItemKind {
+fn item_kind(col: &crate::parser::ast::ResultColumn) -> Result<ItemKind> {
     use crate::parser::ast::ResultColumn;
-    match col {
+    Ok(match col {
         ResultColumn::Star | ResultColumn::TableStar { .. } => ItemKind::Star,
         ResultColumn::Expr { expr, .. } => match &expr.kind {
-            ExprKind::Column { .. } => ItemKind::Column(column_name(expr).unwrap_or_default()),
+            // A catalog-qualified column is rejected here with its span,
+            // not folded into an empty name that the GROUP BY check would
+            // then compare against (db-core#232).
+            ExprKind::Column { .. } => ItemKind::Column(column_name(expr)?),
             ExprKind::FunctionCall { tail, .. } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
                 ItemKind::Window
             }
             ExprKind::FunctionCall { .. } => ItemKind::Agg,
             _ => ItemKind::Expr,
         },
-    }
+    })
 }
 
 fn validate_expr(expr: &mut AstExpr) -> Result<()> {
@@ -696,7 +699,11 @@ fn validate_select(select: &mut Select) -> Result<()> {
     // aggregate's single-row one in `Emit`, indexing past the end).
     // Window queries have their own, separate semantics and never reach
     // `compile` this way, so they're exempt.
-    let items: Vec<ItemKind> = select.columns.iter().map(item_kind).collect();
+    let items: Vec<ItemKind> = select
+        .columns
+        .iter()
+        .map(item_kind)
+        .collect::<Result<_>>()?;
     let has_window = items.iter().any(|c| matches!(c, ItemKind::Window));
     let has_agg = items.iter().any(|c| matches!(c, ItemKind::Agg));
     let has_expr = items.iter().any(|c| matches!(c, ItemKind::Expr));
@@ -720,11 +727,16 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 _ => None,
             })
             .collect();
+        // Every GROUP BY key must be a plain column here (the batch
+        // planner groups by column); an expression is rejected with its
+        // own span rather than silently dropped from the comparison,
+        // which used to make this check accept or reject the wrong
+        // queries (db-core#232).
         let group_by: Vec<String> = select
             .group_by
             .iter()
-            .filter_map(|e| column_name(e).ok())
-            .collect();
+            .map(column_name)
+            .collect::<Result<_>>()?;
         if select_bare != group_by.iter().collect::<Vec<_>>() {
             let message = if group_by.is_empty() {
                 "a plain column alongside an aggregate requires GROUP BY".to_string()
@@ -989,7 +1001,7 @@ mod tests {
     fn parses_group_by_aggregate() {
         let q = parse("SELECT region, SUM(amount) FROM t WHERE x > 10 GROUP BY region").unwrap();
         assert_eq!(col_names(&q), vec!["region".to_string()]);
-        assert!(matches!(item_kind(&q.columns[1]), ItemKind::Agg));
+        assert!(matches!(item_kind(&q.columns[1]).unwrap(), ItemKind::Agg));
         assert_eq!(
             q.group_by
                 .iter()
@@ -1148,7 +1160,7 @@ mod tests {
     #[test]
     fn parses_count_star() {
         let q = parse("SELECT COUNT(*) FROM t").unwrap();
-        assert!(matches!(item_kind(&q.columns[0]), ItemKind::Agg));
+        assert!(matches!(item_kind(&q.columns[0]).unwrap(), ItemKind::Agg));
     }
 
     #[test]
@@ -1200,7 +1212,10 @@ mod tests {
     #[test]
     fn row_number_over_partition_and_order_by() {
         let q = parse("SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY id) FROM t").unwrap();
-        assert!(matches!(item_kind(&q.columns[0]), ItemKind::Window));
+        assert!(matches!(
+            item_kind(&q.columns[0]).unwrap(),
+            ItemKind::Window
+        ));
     }
 
     #[test]
@@ -1214,7 +1229,10 @@ mod tests {
         for name in ["RANK", "DENSE_RANK"] {
             let q = parse(&format!("SELECT {name}() OVER (ORDER BY id) FROM t")).unwrap();
             assert_eq!(q.columns.len(), 1);
-            assert!(matches!(item_kind(&q.columns[0]), ItemKind::Window));
+            assert!(matches!(
+                item_kind(&q.columns[0]).unwrap(),
+                ItemKind::Window
+            ));
         }
     }
 
@@ -1236,7 +1254,7 @@ mod tests {
         ] {
             let q = parse(sql).unwrap();
             assert!(
-                matches!(item_kind(&q.columns[0]), ItemKind::Window),
+                matches!(item_kind(&q.columns[0]).unwrap(), ItemKind::Window),
                 "{sql:?}"
             );
         }
@@ -1270,13 +1288,16 @@ mod tests {
     fn window_filter_clause_parses() {
         let q = parse("SELECT SUM(amount) FILTER (WHERE amount > 0) OVER (ORDER BY id) FROM t")
             .unwrap();
-        assert!(matches!(item_kind(&q.columns[0]), ItemKind::Window));
+        assert!(matches!(
+            item_kind(&q.columns[0]).unwrap(),
+            ItemKind::Window
+        ));
     }
 
     #[test]
     fn sum_without_over_is_still_a_plain_aggregate() {
         let q = parse("SELECT SUM(amount) FROM t").unwrap();
-        assert!(matches!(item_kind(&q.columns[0]), ItemKind::Agg));
+        assert!(matches!(item_kind(&q.columns[0]).unwrap(), ItemKind::Agg));
     }
 
     #[test]
@@ -1353,7 +1374,7 @@ mod tests {
     /// the query is rejected.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_675__v1_cross_join_without_limit_is_rejected() {
+    fn mcdc__column_678__v1_cross_join_without_limit_is_rejected() {
         let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
@@ -1362,7 +1383,7 @@ mod tests {
     /// false with a CROSS JOIN present -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_675__v2_cross_join_with_limit_is_accepted() {
+    fn mcdc__column_678__v2_cross_join_with_limit_is_accepted() {
         let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();
         assert!(matches!(
             q.limit.as_ref().unwrap().limit.kind,
@@ -1374,28 +1395,28 @@ mod tests {
     /// false with no LIMIT -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_675__v3_non_cross_join_without_limit_is_accepted() {
+    fn mcdc__column_678__v3_non_cross_join_without_limit_is_accepted() {
         let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
         assert!(q.limit.is_none());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_715__v1_agg_without_window_validates_group_by_keys() {
+    fn mcdc__column_722__v1_agg_without_window_validates_group_by_keys() {
         let err = parse("SELECT foo, SUM(amount) FROM t").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_715__v2_no_agg_skips_group_by_key_validation() {
+    fn mcdc__column_722__v2_no_agg_skips_group_by_key_validation() {
         let q = parse("SELECT foo, bar FROM t").unwrap();
         assert_eq!(q.columns.len(), 2);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_715__v3_agg_with_window_skips_group_by_key_validation() {
+    fn mcdc__column_722__v3_agg_with_window_skips_group_by_key_validation() {
         let q =
             parse("SELECT region, SUM(amount), ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
         assert_eq!(q.columns.len(), 3);
@@ -1490,37 +1511,37 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_703__v1_window_beside_computed_expr_is_rejected() {
+    fn mcdc__column_710__v1_window_beside_computed_expr_is_rejected() {
         assert!(parse("SELECT id + 1, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_err());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_703__v2_window_beside_bare_column_is_accepted() {
+    fn mcdc__column_710__v2_window_beside_bare_column_is_accepted() {
         assert!(parse("SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_703__v3_computed_expr_without_window_is_accepted() {
+    fn mcdc__column_710__v3_computed_expr_without_window_is_accepted() {
         assert!(parse("SELECT id + 1 FROM t").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_709__v1_agg_beside_computed_expr_without_group_by_is_rejected() {
+    fn mcdc__column_716__v1_agg_beside_computed_expr_without_group_by_is_rejected() {
         assert!(parse("SELECT SUM(amount), id + 1 FROM t").is_err());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_709__v2_computed_expr_without_agg_is_accepted() {
+    fn mcdc__column_716__v2_computed_expr_without_agg_is_accepted() {
         assert!(parse("SELECT id + 1 FROM t").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_709__v3_agg_without_computed_expr_is_accepted() {
+    fn mcdc__column_716__v3_agg_without_computed_expr_is_accepted() {
         assert!(parse("SELECT region, SUM(amount) FROM t GROUP BY region").is_ok());
     }
 
@@ -1530,7 +1551,7 @@ mod tests {
     /// rejection rather than a pass through `column_706`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_709__v4_agg_with_window_and_expr_is_rejected_upstream() {
+    fn mcdc__column_716__v4_agg_with_window_and_expr_is_rejected_upstream() {
         assert!(
             parse("SELECT SUM(amount), id + 1, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_err()
         );
