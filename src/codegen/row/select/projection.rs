@@ -266,3 +266,101 @@ pub(super) fn emit_dedup_check(
         P4::SeekKey(collations),
     ));
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::{
+        compile_select_with_catalog, IndexSchema, IndexedColumn, TableSchema,
+    };
+    use crate::parser::ast::Select;
+    use crate::parser::row::error::{parse_select, ParseOutcome};
+    use crate::value::Collation;
+    use crate::vm::row::{Opcode, Program};
+
+    fn select(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(s) => *s,
+            other => panic!("expected {sql:?} to parse as a SELECT, got {other:?}"),
+        }
+    }
+
+    /// Table `t(a <a_type>, b TEXT)` rooted at page 2, with one index `idx`
+    /// on `a` (root page 3) when `indexed`, and `a` as the rowid alias when
+    /// `alias`.
+    fn schema(a_type: &str, indexed: bool, alias: bool) -> TableSchema {
+        let indexes = if indexed {
+            vec![IndexSchema {
+                name: "idx".to_string(),
+                unique: false,
+                columns: vec![IndexedColumn {
+                    name: "a".to_string(),
+                    desc: false,
+                    collation: Collation::Binary,
+                }],
+                root_page: 3,
+            }]
+        } else {
+            vec![]
+        };
+        TableSchema {
+            name: "t".to_string(),
+            root_page: 2,
+            columns: vec!["a".to_string(), "b".to_string()],
+            column_types: vec![a_type.to_string(), "TEXT".to_string()],
+            column_collations: vec![Collation::Binary, Collation::Binary],
+            sql: format!("CREATE TABLE t (a {a_type}, b TEXT)"),
+            indexes,
+            rowid_alias: if alias { Some(0) } else { None },
+            ..Default::default()
+        }
+    }
+
+    fn compile(sql: &str, schema: &TableSchema) -> Program {
+        compile_select_with_catalog(&select(sql), schema, std::slice::from_ref(schema))
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"))
+    }
+
+    fn has(program: &Program, opcode: Opcode) -> bool {
+        program.instructions.iter().any(|i| i.opcode == opcode)
+    }
+
+    // --- projection_78: `pseudo && rowid_alias == idx` --------------------
+    #[test]
+    fn mcdc__projection_78__v1_sorted_rowid_alias_is_re_read_as_a_pseudo_column() {
+        let p = compile(
+            "SELECT a FROM t ORDER BY b",
+            &schema("INTEGER", false, true),
+        );
+        assert!(has(&p, Opcode::OpenPseudo));
+        // Pass 1 reads the alias with `Rowid` off the real cursor exactly
+        // once; pass 2 (pseudo) reads it back as a plain `Column`.
+        let rowids = p
+            .instructions
+            .iter()
+            .filter(|i| i.opcode == Opcode::Rowid)
+            .count();
+        assert_eq!(rowids, 1);
+    }
+
+    #[test]
+    fn mcdc__projection_78__v2_unsorted_rowid_alias_is_read_via_rowid() {
+        let p = compile("SELECT a FROM t", &schema("INTEGER", false, true));
+        assert!(!has(&p, Opcode::OpenPseudo));
+        assert!(has(&p, Opcode::Rowid));
+    }
+
+    #[test]
+    fn mcdc__projection_78__v3_sorted_ordinary_column_never_touches_rowid() {
+        let p = compile(
+            "SELECT a FROM t ORDER BY b",
+            &schema("INTEGER", false, false),
+        );
+        assert!(has(&p, Opcode::OpenPseudo));
+        assert!(!has(&p, Opcode::Rowid));
+    }
+}

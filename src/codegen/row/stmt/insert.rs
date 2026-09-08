@@ -977,3 +977,68 @@ fn emit_unique_check(
     em.place(no_conflict);
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::{compile_insert, CodegenError, TableSchema};
+    use crate::parser::row::{parse_insert, ParseOutcome};
+    use crate::vm::row::Program;
+
+    fn table(name: &str, root_page: u32, columns: &[&str]) -> TableSchema {
+        TableSchema {
+            name: name.to_string(),
+            root_page,
+            columns: columns.iter().map(|c| (*c).to_string()).collect(),
+            column_types: columns.iter().map(|_| "INTEGER".to_string()).collect(),
+            sql: format!("CREATE TABLE {name} ({})", columns.join(", ")),
+            ..Default::default()
+        }
+    }
+
+    // insert_304: `!row.is_empty() && row.len() != target_columns.len()`
+    fn insert_result(sql: &str) -> Result<Program, CodegenError> {
+        let insert = match parse_insert(sql) {
+            ParseOutcome::Accepted(insert) => *insert,
+            other => panic!("{sql:?} must parse, got {other:?}"),
+        };
+        compile_insert(&insert, &table("t", 2, &["a", "b"]), None)
+    }
+
+    #[test]
+    fn mcdc__insert_304__v1_short_row_is_a_shape_mismatch() {
+        assert!(matches!(
+            insert_result("INSERT INTO t VALUES (1)"),
+            Err(CodegenError::RowShapeMismatch {
+                expected: 2,
+                found: 1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn mcdc__insert_304__v2_full_row_compiles() {
+        assert!(insert_result("INSERT INTO t VALUES (1, 2)").is_ok());
+    }
+
+    /// The `!row.is_empty()` leaf: an empty `VALUES ()` row is not a shape
+    /// mismatch at this check (whatever the later stages make of it). If the
+    /// grammar refuses an empty row outright the leaf is unreachable from
+    /// SQL, and this vector records that instead.
+    #[test]
+    fn mcdc__insert_304__v3_empty_row_is_not_a_shape_mismatch() {
+        let ParseOutcome::Accepted(insert) = parse_insert("INSERT INTO t VALUES ()") else {
+            return;
+        };
+        let result = compile_insert(&insert, &table("t", 2, &["a", "b"]), None);
+        assert!(!matches!(
+            result,
+            Err(CodegenError::RowShapeMismatch { .. })
+        ));
+    }
+}

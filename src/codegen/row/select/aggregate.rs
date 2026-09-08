@@ -1382,3 +1382,280 @@ where
     )?;
     Ok(true)
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::dispatch::{compile_statement, DispatchError};
+    use crate::codegen::row::{IndexSchema, IndexedColumn, TableSchema};
+    use crate::value::Collation;
+    use crate::vm::row::{Opcode, Program};
+
+    fn table(name: &str, root_page: u32, cols: &[&str]) -> TableSchema {
+        TableSchema {
+            name: name.to_string(),
+            root_page,
+            columns: cols.iter().map(|c| (*c).to_string()).collect(),
+            column_types: cols.iter().map(|_| "INTEGER".to_string()).collect(),
+            column_collations: cols.iter().map(|_| Collation::Binary).collect(),
+            sql: format!("CREATE TABLE {name} ({})", cols.join(", ")),
+            ..Default::default()
+        }
+    }
+
+    fn with_index(mut schema: TableSchema, index: &str, root_page: u32, col: &str) -> TableSchema {
+        schema.indexes.push(IndexSchema {
+            name: index.to_string(),
+            unique: false,
+            columns: vec![IndexedColumn {
+                name: col.to_string(),
+                desc: false,
+                collation: Collation::Binary,
+            }],
+            root_page,
+        });
+        schema
+    }
+
+    /// `t(a, b)` at root 2 with index `ia(a)` at root 5.
+    fn t_indexed_a() -> TableSchema {
+        with_index(table("t", 2, &["a", "b"]), "ia", 5, "a")
+    }
+
+    fn compile(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+        compile_statement(sql, schemas, &[])
+    }
+
+    fn ok(sql: &str, schemas: &[TableSchema]) -> Program {
+        match compile(sql, schemas) {
+            Ok(p) => p,
+            Err(e) => panic!("{sql}: expected Ok, got {e:?}"),
+        }
+    }
+
+    fn err_text(sql: &str, schemas: &[TableSchema]) -> String {
+        match compile(sql, schemas) {
+            Ok(p) => panic!("{sql}: expected Err, got program {p:?}"),
+            Err(e) => format!("{e:?}"),
+        }
+    }
+
+    fn has(program: &Program, opcode: Opcode) -> bool {
+        program.instructions.iter().any(|i| i.opcode == opcode)
+    }
+
+    /// Whether `program` opens a read cursor on `root_page`.
+    fn opens(program: &Program, root_page: i32) -> bool {
+        program
+            .instructions
+            .iter()
+            .any(|i| i.opcode == Opcode::OpenRead && i.p2 == root_page)
+    }
+
+    /// The index-only aggregate fast path: the table cursor is opened but
+    /// never walked -- every row visit is an `IdxRewind`/`IdxNext` over the
+    /// index and every `Column` read comes off that index cursor.
+    fn index_only(program: &Program) -> bool {
+        has(program, Opcode::IdxRewind)
+            && !has(program, Opcode::Rewind)
+            && program
+                .instructions
+                .iter()
+                .filter(|i| i.opcode == Opcode::Column)
+                .all(|i| i.p1 == 1)
+    }
+
+    // ---------------------------------------------------------------------
+    // aggregate_51 -- `try_compile_index_only_count`'s clause guard:
+    // `having.is_some() || limit.is_some() || !order_by.is_empty()`.
+    // Observable: the fast path emits `Opcode::Count`; the fallback scans.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__aggregate_51__v1_bare_count_star_takes_the_count_fast_path() {
+        let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
+        assert!(has(&p, Opcode::Count));
+    }
+
+    #[test]
+    fn mcdc__aggregate_51__v2_having_falls_back_to_a_scan() {
+        let p = ok(
+            "SELECT count(*) FROM t HAVING count(*) > 0",
+            &[t_indexed_a()],
+        );
+        assert!(!has(&p, Opcode::Count));
+    }
+
+    #[test]
+    fn mcdc__aggregate_51__v3_limit_falls_back_to_a_scan() {
+        let p = ok("SELECT count(*) FROM t LIMIT 1", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::Count));
+    }
+
+    /// The `ORDER BY` leaf: `compile_select_scan` rejects "ORDER BY combined
+    /// with an aggregate (no GROUP BY)" before this decision is reached, so
+    /// the fast path is never taken -- observed as the rejection itself.
+    #[test]
+    fn mcdc__aggregate_51__v4_order_by_never_reaches_the_count_fast_path() {
+        let e = err_text("SELECT count(*) FROM t ORDER BY 1", &[t_indexed_a()]);
+        assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
+    }
+
+    // ---------------------------------------------------------------------
+    // aggregate_66 -- the aggregate-shape guard of the same fast path:
+    // `*distinct || !name == count || !args == Star`.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__aggregate_66__v1_count_star_matches_the_shape() {
+        let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
+        assert!(has(&p, Opcode::Count));
+    }
+
+    #[test]
+    fn mcdc__aggregate_66__v2_count_distinct_is_not_index_only() {
+        let p = ok("SELECT count(DISTINCT a) FROM t", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::Count));
+    }
+
+    #[test]
+    fn mcdc__aggregate_66__v3_other_function_name_is_not_a_count() {
+        let p = ok("SELECT max(a) FROM t", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::Count));
+    }
+
+    #[test]
+    fn mcdc__aggregate_66__v4_count_of_a_column_is_not_count_star() {
+        let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::Count));
+    }
+
+    // ---------------------------------------------------------------------
+    // aggregate_198 -- `try_compile_index_only_sum`'s clause guard (WHERE /
+    // HAVING / LIMIT / ORDER BY / GROUP BY). Observable: the fast path reads
+    // only the index (root 5), never opening the table (root 2).
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__aggregate_198__v1_bare_sum_reads_only_the_index() {
+        let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
+        assert!(index_only(&p), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__aggregate_198__v2_where_opens_the_table() {
+        let p = ok("SELECT sum(a) FROM t WHERE b > 1", &[t_indexed_a()]);
+        assert!(opens(&p, 2), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__aggregate_198__v3_having_opens_the_table() {
+        let p = ok("SELECT sum(a) FROM t HAVING sum(a) > 1", &[t_indexed_a()]);
+        assert!(opens(&p, 2), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__aggregate_198__v4_limit_opens_the_table() {
+        let p = ok("SELECT sum(a) FROM t LIMIT 1", &[t_indexed_a()]);
+        assert!(opens(&p, 2), "{p:?}");
+    }
+
+    /// `ORDER BY` with an ungrouped aggregate is rejected upstream by
+    /// `compile_select_scan`; the fast path is never consulted.
+    #[test]
+    fn mcdc__aggregate_198__v5_order_by_never_reaches_the_sum_fast_path() {
+        let e = err_text("SELECT sum(a) FROM t ORDER BY 1", &[t_indexed_a()]);
+        assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
+    }
+
+    /// A `GROUP BY` routes to the grouped-scan branch of
+    /// `compile_select_scan` before the ungrouped fast paths; the table is
+    /// scanned (or index-walked in key order) and the aggregate accumulated
+    /// per group rather than summed off the index alone.
+    #[test]
+    fn mcdc__aggregate_198__v6_group_by_never_reaches_the_sum_fast_path() {
+        let p = ok("SELECT b, sum(a) FROM t GROUP BY b", &[t_indexed_a()]);
+        assert!(opens(&p, 2), "{p:?}");
+    }
+
+    // ---------------------------------------------------------------------
+    // aggregate_218 -- the same fast path's function guard:
+    // `*distinct || !(name == sum || name == avg)`.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__aggregate_218__v1_plain_sum_is_index_only() {
+        let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
+        assert!(index_only(&p), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__aggregate_218__v2_sum_distinct_opens_the_table() {
+        let p = ok("SELECT sum(DISTINCT a) FROM t", &[t_indexed_a()]);
+        assert!(opens(&p, 2), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__aggregate_218__v3_count_is_neither_sum_nor_avg() {
+        let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
+        assert!(!index_only(&p), "{p:?}");
+    }
+
+    // ---------------------------------------------------------------------
+    // aggregate_1117 -- `group_by_index_ordering`'s
+    // `implicit_group || select.group_by.is_empty()`. Only reached from
+    // `compile_select_scan`'s explicit-GROUP-BY branch (with
+    // `implicit_group == false`) and from EQP (same), so `(false, false)` is
+    // the one vector the code can produce; the other two leaves describe
+    // the routing that keeps them unreachable. Observable: an index-ordered
+    // GROUP BY needs no `SorterOpen`.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__aggregate_1117__v1_explicit_group_by_on_indexed_column_walks_the_index() {
+        let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::SorterOpen) && opens(&p, 5), "{p:?}");
+    }
+
+    /// `implicit_group == true` (an aggregate with no GROUP BY) never asks
+    /// for index ordering: there is one group, nothing to order.
+    #[test]
+    fn mcdc__aggregate_1117__v2_implicit_group_never_asks_for_index_ordering() {
+        let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::SorterOpen) && !opens(&p, 5), "{p:?}");
+    }
+
+    /// `group_by.is_empty()` with no aggregate is a plain scan; the grouped
+    /// branch (and with it this decision) is skipped entirely.
+    #[test]
+    fn mcdc__aggregate_1117__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
+        let p = ok("SELECT a FROM t", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
+    }
+
+    // ---------------------------------------------------------------------
+    // aggregate_1123 -- `select.where_clause.is_some() || schema.without_rowid`
+    // (same function): either disqualifies the index-ordered GROUP BY.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__aggregate_1123__v1_no_where_on_a_rowid_table_is_index_ordered() {
+        let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__aggregate_1123__v2_where_clause_needs_a_sorter() {
+        let p = ok(
+            "SELECT a, count(*) FROM t WHERE b > 0 GROUP BY a",
+            &[t_indexed_a()],
+        );
+        assert!(has(&p, Opcode::SorterOpen), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__aggregate_1123__v3_without_rowid_table_needs_a_sorter() {
+        let mut schema = t_indexed_a();
+        schema.without_rowid = true;
+        let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[schema]);
+        assert!(has(&p, Opcode::SorterOpen), "{p:?}");
+    }
+}

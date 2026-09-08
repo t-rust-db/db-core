@@ -668,3 +668,124 @@ pub(super) fn synthesize_equality_constraint(
     }
     Ok((acc, shared))
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::dispatch::{compile_statement, DispatchError};
+    use crate::codegen::row::TableSchema;
+    use crate::value::Collation;
+    use crate::vm::row::{Opcode, Program};
+
+    fn table(name: &str, root_page: u32, cols: &[&str]) -> TableSchema {
+        TableSchema {
+            name: name.to_string(),
+            root_page,
+            columns: cols.iter().map(|c| (*c).to_string()).collect(),
+            column_types: cols.iter().map(|_| "INTEGER".to_string()).collect(),
+            column_collations: cols.iter().map(|_| Collation::Binary).collect(),
+            sql: format!("CREATE TABLE {name} ({})", cols.join(", ")),
+            ..Default::default()
+        }
+    }
+
+    /// `a(k, v)` at root 2 and `b(k, w)` at root 3.
+    fn two_tables() -> Vec<TableSchema> {
+        vec![table("a", 2, &["k", "v"]), table("b", 3, &["k", "w"])]
+    }
+
+    fn compile(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+        compile_statement(sql, schemas, &[])
+    }
+
+    fn ok(sql: &str, schemas: &[TableSchema]) -> Program {
+        match compile(sql, schemas) {
+            Ok(p) => p,
+            Err(e) => panic!("{sql}: expected Ok, got {e:?}"),
+        }
+    }
+
+    fn err_text(sql: &str, schemas: &[TableSchema]) -> String {
+        match compile(sql, schemas) {
+            Ok(p) => panic!("{sql}: expected Err, got program {p:?}"),
+            Err(e) => format!("{e:?}"),
+        }
+    }
+
+    fn has(program: &Program, opcode: Opcode) -> bool {
+        program.instructions.iter().any(|i| i.opcode == opcode)
+    }
+
+    // ---------------------------------------------------------------------
+    // joins_81 -- `compile_select_joined`'s FULL JOIN dispatch:
+    // `joins.len() == 1 && first.op == Full`.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__joins_81__v1_single_full_join_takes_the_dedicated_emitter() {
+        let p = ok(
+            "SELECT a.k, b.k FROM a FULL JOIN b ON a.k = b.k",
+            &two_tables(),
+        );
+        // The two-pass FULL JOIN emitter tracks matched `b` rowids in an
+        // ephemeral index.
+        assert!(has(&p, Opcode::OpenEphemeral), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__joins_81__v2_full_join_among_two_joins_is_rejected() {
+        let mut schemas = two_tables();
+        schemas.push(table("c", 4, &["k", "x"]));
+        let e = err_text(
+            "SELECT a.k FROM a FULL JOIN b ON a.k = b.k JOIN c ON c.k = a.k",
+            &schemas,
+        );
+        assert!(e.contains("single two-table FULL JOIN"), "{e}");
+    }
+
+    #[test]
+    fn mcdc__joins_81__v3_single_inner_join_takes_the_ordinary_join_tree() {
+        let p = ok("SELECT a.k, b.k FROM a JOIN b ON a.k = b.k", &two_tables());
+        assert!(!has(&p, Opcode::OpenEphemeral), "{p:?}");
+    }
+
+    // ---------------------------------------------------------------------
+    // joins_443 -- `!group_by.is_empty() || select_has_aggregate(select)`
+    // routes a join to the grouped emitter, which rejects DISTINCT.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__joins_443__v1_group_by_routes_to_the_grouped_join() {
+        let e = err_text(
+            "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k GROUP BY a.k",
+            &two_tables(),
+        );
+        assert!(
+            e.contains("GROUP BY/aggregate combined with DISTINCT and a JOIN"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn mcdc__joins_443__v2_aggregate_without_group_by_routes_to_the_grouped_join() {
+        let e = err_text(
+            "SELECT DISTINCT count(*) FROM a JOIN b ON a.k = b.k",
+            &two_tables(),
+        );
+        assert!(
+            e.contains("GROUP BY/aggregate combined with DISTINCT and a JOIN"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn mcdc__joins_443__v3_neither_is_a_plain_joined_scan() {
+        let p = ok(
+            "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k",
+            &two_tables(),
+        );
+        assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
+    }
+}

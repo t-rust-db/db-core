@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.71.1] - 2026-09-08
+
+### Changed
+
+- **MC/DC vectors live with the code they test** (#235) -- the test-only `codegen::row::mcdc` module from #219 is gone; every tagged vector sits in a `mcdc_vectors` test module at the bottom of the file whose decision it discharges, with only the fixtures it uses. That module only existed to keep the moved files diff-able against sqlite-rs; db-core owns its own testing strategy (one of three core strategies, sqlite-rs holds a fourth). ADR 0013 amended to withdraw the drift-check clause; `tools/check_panic_allows.py` drops its `mcdc/` carve-out.
+
 ## [0.71.0] - 2026-09-08
 
 ### Changed

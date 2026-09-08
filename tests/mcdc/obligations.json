@@ -5994,6 +5994,15 @@
     "compiler_void": false
   },
   {
+    "id": "update_673",
+    "file": "src/codegen/row/stmt/update.rs",
+    "line": 673,
+    "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
     "id": "insert_123",
     "file": "src/codegen/row/stmt/insert.rs",
     "line": 123,
@@ -6250,6 +6259,15 @@
     "file": "src/codegen/row/stmt/insert.rs",
     "line": 938,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // The conflicting row's rowid was written into\n            // `conflict_rowid_reg` by `NoConflict` itself — seek the\n            // table cursor onto it, remove its index entries, then\n            // delete it, exactly like `emit_pk_conflict`'s `Replace`\n            // branch (which instead already had the cursor positioned\n            // via `SeekRowid`).\n            let seek_ok = em.new_label();\n            let seek_addr = em.emit(Instruction::new(\n                Opcode::SeekRowid,\n                TABLE_CURSOR,\n                0,\n                conflict_rowid_reg,\n            ));\n            em.patch_p2(seek_addr, seek_ok);\n            crate::codegen::row::index_maintenance::emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n            em.place(seek_ok);\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\"UNIQUE constraint failed: {}.{}\", schema.name, index.name);\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_UNIQUE,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "insert_1005",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 1005,
+    "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(insert) => *insert,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
@@ -6840,6 +6858,15 @@
     "compiler_void": true
   },
   {
+    "id": "scalar_1010",
+    "file": "src/codegen/row/subquery/scalar.rs",
+    "line": 1010,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
     "id": "flatten_55",
     "file": "src/codegen/row/subquery/flatten.rs",
     "line": 55,
@@ -7141,6 +7168,15 @@
     "file": "src/codegen/row/subquery/flatten.rs",
     "line": 635,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "flatten_944",
+    "file": "src/codegen/row/subquery/flatten.rs",
+    "line": 944,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
@@ -7479,6 +7515,24 @@
     "compiler_void": true
   },
   {
+    "id": "pushdown_514",
+    "file": "src/codegen/row/subquery/pushdown.rs",
+    "line": 514,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "pushdown_526",
+    "file": "src/codegen/row/subquery/pushdown.rs",
+    "line": 526,
+    "decision": "match &select.from.as_ref().unwrap().first.kind {\n            TableRefKind::Subquery(inner) => inner.where_clause.is_some(),\n            TableRefKind::Name(_) => panic!(\"pushdown must not flatten\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
     "id": "cte_84",
     "file": "src/codegen/row/subquery/cte.rs",
     "line": 84,
@@ -7558,6 +7612,24 @@
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
+  },
+  {
+    "id": "views_205",
+    "file": "src/codegen/row/subquery/views.rs",
+    "line": 205,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "views_243",
+    "file": "src/codegen/row/subquery/views.rs",
+    "line": 243,
+    "decision": "match select.expand_views(&resolved) {\n            Ok(Cow::Owned(expanded)) => assert!(matches!(\n                expanded.from.as_ref().unwrap().first.kind,\n                TableRefKind::Subquery(_)\n            )),\n            other => panic!(\"expected an owned expansion, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
   },
   {
     "id": "correlation_52",
@@ -7657,6 +7729,15 @@
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
+  },
+  {
+    "id": "correlation_306",
+    "file": "src/codegen/row/subquery/correlation.rs",
+    "line": 306,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
   },
   {
     "id": "create_index_34",
@@ -8577,123 +8658,6 @@
     "compiler_void": true
   },
   {
-    "id": "aggregate_joins_58",
-    "file": "src/codegen/row/mcdc/aggregate_joins.rs",
-    "line": 58,
-    "decision": "match compile(sql, schemas) {\n        Ok(p) => p,\n        Err(e) => panic!(\"{sql}: expected Ok, got {e:?}\"),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "aggregate_joins_65",
-    "file": "src/codegen/row/mcdc/aggregate_joins.rs",
-    "line": 65,
-    "decision": "match compile(sql, schemas) {\n        Ok(p) => panic!(\"{sql}: expected Err, got program {p:?}\"),\n        Err(e) => format!(\"{e:?}\"),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "aggregate_joins_97",
-    "file": "src/codegen/row/mcdc/aggregate_joins.rs",
-    "line": 97,
-    "decision": "match parse_select(sql) {\n        ParseOutcome::Accepted(s) => *s,\n        other => panic!(\"{sql}: {other:?}\"),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "scans_25",
-    "file": "src/codegen/row/mcdc/scans.rs",
-    "line": 25,
-    "decision": "match parse_select(sql) {\n        ParseOutcome::Accepted(s) => *s,\n        other => panic!(\"expected {sql:?} to parse as a SELECT, got {other:?}\"),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "scans_32",
-    "file": "src/codegen/row/mcdc/scans.rs",
-    "line": 32,
-    "decision": "match parse_update(sql) {\n        ParseOutcome::Accepted(u) => *u,\n        other => panic!(\"expected {sql:?} to parse as an UPDATE, got {other:?}\"),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "scans_62",
-    "file": "src/codegen/row/mcdc/scans.rs",
-    "line": 62,
-    "decision": "indexed",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "scans_84",
-    "file": "src/codegen/row/mcdc/scans.rs",
-    "line": 84,
-    "decision": "alias",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "subquery_stmt_eqp_44",
-    "file": "src/codegen/row/mcdc/subquery_stmt_eqp.rs",
-    "line": 44,
-    "decision": "match parse_select(sql) {\n        ParseOutcome::Accepted(select) => *select,\n        other => panic!(\"{sql:?} must parse, got {other:?}\"),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "subquery_stmt_eqp_151",
-    "file": "src/codegen/row/mcdc/subquery_stmt_eqp.rs",
-    "line": 151,
-    "decision": "match &select.from.as_ref().unwrap().first.kind {\n        TableRefKind::Subquery(inner) => inner.where_clause.is_some(),\n        TableRefKind::Name(_) => panic!(\"pushdown must not flatten\"),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "subquery_stmt_eqp_227",
-    "file": "src/codegen/row/mcdc/subquery_stmt_eqp.rs",
-    "line": 227,
-    "decision": "match select.expand_views(&resolved) {\n        Ok(Cow::Owned(expanded)) => assert!(matches!(\n            expanded.from.as_ref().unwrap().first.kind,\n            TableRefKind::Subquery(_)\n        )),\n        other => panic!(\"expected an owned expansion, got {other:?}\"),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "subquery_stmt_eqp_278",
-    "file": "src/codegen/row/mcdc/subquery_stmt_eqp.rs",
-    "line": 278,
-    "decision": "match parse_insert(sql) {\n        ParseOutcome::Accepted(insert) => *insert,\n        other => panic!(\"{sql:?} must parse, got {other:?}\"),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "subquery_stmt_eqp_322",
-    "file": "src/codegen/row/mcdc/subquery_stmt_eqp.rs",
-    "line": 322,
-    "decision": "match parse_update(sql) {\n        ParseOutcome::Accepted(update) => *update,\n        other => panic!(\"{sql:?} must parse, got {other:?}\"),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "subquery_stmt_eqp_371",
-    "file": "src/codegen/row/mcdc/subquery_stmt_eqp.rs",
-    "line": 371,
-    "decision": "select.from.as_ref().is_some_and(|f| !f.joins.is_empty())",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
     "id": "index_maintenance_104",
     "file": "src/codegen/row/index_maintenance.rs",
     "line": 104,
@@ -8982,6 +8946,24 @@
     "compiler_void": true
   },
   {
+    "id": "joins_706",
+    "file": "src/codegen/row/select/joins.rs",
+    "line": 706,
+    "decision": "match compile(sql, schemas) {\n            Ok(p) => p,\n            Err(e) => panic!(\"{sql}: expected Ok, got {e:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "joins_713",
+    "file": "src/codegen/row/select/joins.rs",
+    "line": 713,
+    "decision": "match compile(sql, schemas) {\n            Ok(p) => panic!(\"{sql}: expected Err, got program {p:?}\"),\n            Err(e) => format!(\"{e:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
     "id": "join_87",
     "file": "src/codegen/row/select/aggregate/join.rs",
     "line": 87,
@@ -9115,6 +9097,24 @@
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
+  },
+  {
+    "id": "join_917",
+    "file": "src/codegen/row/select/aggregate/join.rs",
+    "line": 917,
+    "decision": "match compile(sql, schemas) {\n            Ok(p) => p,\n            Err(e) => panic!(\"{sql}: expected Ok, got {e:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "join_924",
+    "file": "src/codegen/row/select/aggregate/join.rs",
+    "line": 924,
+    "decision": "match compile(sql, schemas) {\n            Ok(p) => panic!(\"{sql}: expected Err, got program {p:?}\"),\n            Err(e) => format!(\"{e:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
   },
   {
     "id": "accum_49",
@@ -9549,6 +9549,24 @@
     "compiler_void": false
   },
   {
+    "id": "eqp_604",
+    "file": "src/codegen/row/select/eqp.rs",
+    "line": 604,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "eqp_626",
+    "file": "src/codegen/row/select/eqp.rs",
+    "line": 626,
+    "decision": "select.from.as_ref().is_some_and(|f| !f.joins.is_empty())",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
     "id": "aggregate_51",
     "file": "src/codegen/row/select/aggregate.rs",
     "line": 51,
@@ -9790,6 +9808,24 @@
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
+  },
+  {
+    "id": "aggregate_1434",
+    "file": "src/codegen/row/select/aggregate.rs",
+    "line": 1434,
+    "decision": "match compile(sql, schemas) {\n            Ok(p) => p,\n            Err(e) => panic!(\"{sql}: expected Ok, got {e:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "aggregate_1441",
+    "file": "src/codegen/row/select/aggregate.rs",
+    "line": 1441,
+    "decision": "match compile(sql, schemas) {\n            Ok(p) => panic!(\"{sql}: expected Err, got program {p:?}\"),\n            Err(e) => format!(\"{e:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
   },
   {
     "id": "range_scan_60",
@@ -10224,6 +10260,42 @@
     "compiler_void": false
   },
   {
+    "id": "range_scan_1204",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 1204,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"expected {sql:?} to parse as a SELECT, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "range_scan_1211",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 1211,
+    "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(u) => *u,\n            other => panic!(\"expected {sql:?} to parse as an UPDATE, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "range_scan_1241",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 1241,
+    "decision": "indexed",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "range_scan_1263",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 1263,
+    "decision": "alias",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
     "id": "index_scan_33",
     "file": "src/codegen/row/select/index_scan.rs",
     "line": 33,
@@ -10570,6 +10642,33 @@
     "file": "src/codegen/row/select/projection.rs",
     "line": 228,
     "decision": "!matches!(select.distinct, Some(Distinctness::Distinct))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "projection_286",
+    "file": "src/codegen/row/select/projection.rs",
+    "line": 286,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"expected {sql:?} to parse as a SELECT, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "projection_296",
+    "file": "src/codegen/row/select/projection.rs",
+    "line": 296,
+    "decision": "indexed",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "projection_318",
+    "file": "src/codegen/row/select/projection.rs",
+    "line": 318,
+    "decision": "alias",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
@@ -11061,6 +11160,24 @@
     "compiler_void": true
   },
   {
+    "id": "limit_scan_1383",
+    "file": "src/codegen/row/select/limit_scan.rs",
+    "line": 1383,
+    "decision": "indexed",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "limit_scan_1405",
+    "file": "src/codegen/row/select/limit_scan.rs",
+    "line": 1405,
+    "decision": "alias",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
     "id": "entry_62",
     "file": "src/codegen/row/select/entry.rs",
     "line": 62,
@@ -11356,6 +11473,15 @@
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
+  },
+  {
+    "id": "entry_760",
+    "file": "src/codegen/row/select/entry.rs",
+    "line": 760,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"{sql}: {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
   },
   {
     "id": "join_access_36",
@@ -11952,19 +12078,28 @@
     "compiler_void": true
   },
   {
-    "id": "row_141",
+    "id": "row_139",
     "file": "src/codegen/row.rs",
-    "line": 141,
+    "line": 139,
     "decision": "match self.on_null {\n                NullTarget::True => NullTarget::False,\n                NullTarget::False => NullTarget::True,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "row_408",
+    "id": "row_406",
     "file": "src/codegen/row.rs",
-    "line": 408,
+    "line": 406,
     "decision": "match &self.alias {\n            Some(alias) => alias.eq_ignore_ascii_case(table),\n            None => self.name.eq_ignore_ascii_case(table),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_561",
+    "file": "src/codegen/row.rs",
+    "line": 561,
+    "decision": "match self.resolve_own(table, name) {\n            Ok(v) => Ok(v),\n            Err(own_err) => match &self.outer {\n                Some(outer) => outer.resolve(table, name),\n                None => Err(own_err),\n            },\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
@@ -11973,33 +12108,24 @@
     "id": "row_563",
     "file": "src/codegen/row.rs",
     "line": 563,
-    "decision": "match self.resolve_own(table, name) {\n            Ok(v) => Ok(v),\n            Err(own_err) => match &self.outer {\n                Some(outer) => outer.resolve(table, name),\n                None => Err(own_err),\n            },\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "row_565",
-    "file": "src/codegen/row.rs",
-    "line": 565,
     "decision": "match &self.outer {\n                Some(outer) => outer.resolve(table, name),\n                None => Err(own_err),\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "row_625",
+    "id": "row_623",
     "file": "src/codegen/row.rs",
-    "line": 625,
+    "line": 623,
     "decision": "expr::column_index(&binding.schema, name).is_some()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "row_626",
+    "id": "row_624",
     "file": "src/codegen/row.rs",
-    "line": 626,
+    "line": 624,
     "decision": "found.is_some()",
     "conditions": 1,
     "vectors_required": 2,

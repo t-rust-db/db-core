@@ -1346,3 +1346,97 @@ mod tests {
         assert!(or_chain_equality_operands(&where_expr, |e| where_col(e) == Some("x")).is_none());
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::select::is_rowid_reference;
+    use crate::codegen::row::{IndexSchema, IndexedColumn, TableSchema};
+    use crate::parser::ast::{Expr, ExprKind};
+    use crate::parser::Span;
+    use crate::value::Collation;
+
+    fn column_expr(name: &str) -> Expr {
+        Expr {
+            kind: ExprKind::Column {
+                table: None,
+                catalog: None,
+                name: name.to_string(),
+            },
+            span: Span {
+                line: 0,
+                column: 0,
+                offset: 0,
+                len: 0,
+            },
+        }
+    }
+
+    /// Table `t(a <a_type>, b TEXT)` rooted at page 2, with one index `idx`
+    /// on `a` (root page 3) when `indexed`, and `a` as the rowid alias when
+    /// `alias`.
+    fn schema(a_type: &str, indexed: bool, alias: bool) -> TableSchema {
+        let indexes = if indexed {
+            vec![IndexSchema {
+                name: "idx".to_string(),
+                unique: false,
+                columns: vec![IndexedColumn {
+                    name: "a".to_string(),
+                    desc: false,
+                    collation: Collation::Binary,
+                }],
+                root_page: 3,
+            }]
+        } else {
+            vec![]
+        };
+        TableSchema {
+            name: "t".to_string(),
+            root_page: 2,
+            columns: vec!["a".to_string(), "b".to_string()],
+            column_types: vec![a_type.to_string(), "TEXT".to_string()],
+            column_collations: vec![Collation::Binary, Collation::Binary],
+            sql: format!("CREATE TABLE t (a {a_type}, b TEXT)"),
+            indexes,
+            rowid_alias: if alias { Some(0) } else { None },
+            ..Default::default()
+        }
+    }
+
+    // --- limit_scan_101: rowid / _rowid_ / oid ----------------------------
+    #[test]
+    fn mcdc__limit_scan_101__v1_rowid_is_a_rowid_reference() {
+        assert!(is_rowid_reference(
+            &schema("INTEGER", false, false),
+            &column_expr("ROWID")
+        ));
+    }
+
+    #[test]
+    fn mcdc__limit_scan_101__v2_underscore_rowid_is_a_rowid_reference() {
+        assert!(is_rowid_reference(
+            &schema("INTEGER", false, false),
+            &column_expr("_rowid_")
+        ));
+    }
+
+    #[test]
+    fn mcdc__limit_scan_101__v3_oid_is_a_rowid_reference() {
+        assert!(is_rowid_reference(
+            &schema("INTEGER", false, false),
+            &column_expr("oid")
+        ));
+    }
+
+    #[test]
+    fn mcdc__limit_scan_101__v4_ordinary_column_without_alias_is_not() {
+        assert!(!is_rowid_reference(
+            &schema("INTEGER", false, false),
+            &column_expr("b")
+        ));
+    }
+}

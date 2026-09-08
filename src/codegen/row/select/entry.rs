@@ -739,3 +739,101 @@ pub fn compile_select_compound(
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
     Ok(em.finish())
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use crate::codegen::row::{compile_select_with_catalog, TableSchema};
+    use crate::parser::ast::Select;
+    use crate::parser::row::{parse_select, ParseOutcome};
+    use crate::vm::row::{Opcode, Program};
+
+    fn has(program: &Program, opcode: Opcode) -> bool {
+        program.instructions.iter().any(|i| i.opcode == opcode)
+    }
+
+    fn parsed(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(s) => *s,
+            other => panic!("{sql}: {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // entry_142 -- `compile_select_no_from`'s clause guard: any of WHERE /
+    // GROUP BY / HAVING / ORDER BY / LIMIT / DISTINCT / compound rejects a
+    // FROM-less SELECT. Each clause is grafted onto `SELECT 1` from a parsed
+    // donor so the parser's own FROM-less grammar isn't what's under test.
+    // ---------------------------------------------------------------------
+    const NO_FROM_REJECTION: &str = "a FROM-less SELECT only supports a bare expression list";
+
+    fn from_less(sql_with_from: &str) -> Select {
+        let mut select = parsed(sql_with_from);
+        select.from = None;
+        select
+    }
+
+    fn compile_no_from(select: &Select) -> Result<Program, String> {
+        compile_select_with_catalog(select, &TableSchema::default(), &[])
+            .map_err(|e| format!("{e:?}"))
+    }
+
+    #[test]
+    fn mcdc__entry_142__v1_bare_expression_list_compiles_to_one_row() {
+        let p = compile_no_from(&parsed("SELECT 1 + 1")).unwrap();
+        assert!(
+            has(&p, Opcode::ResultRow) && !has(&p, Opcode::OpenRead),
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn mcdc__entry_142__v2_where_is_rejected() {
+        let e = compile_no_from(&from_less("SELECT 1 FROM t WHERE 1 = 1")).unwrap_err();
+        assert!(e.contains(NO_FROM_REJECTION), "{e}");
+    }
+
+    #[test]
+    fn mcdc__entry_142__v3_group_by_is_rejected() {
+        let e = compile_no_from(&from_less("SELECT 1 FROM t GROUP BY 1")).unwrap_err();
+        assert!(e.contains(NO_FROM_REJECTION), "{e}");
+    }
+
+    #[test]
+    fn mcdc__entry_142__v4_having_is_rejected() {
+        let mut select = parsed("SELECT 1");
+        select.having = parsed("SELECT 1 FROM t GROUP BY 1 HAVING 1 = 1").having;
+        let e = compile_no_from(&select).unwrap_err();
+        assert!(e.contains(NO_FROM_REJECTION), "{e}");
+    }
+
+    #[test]
+    fn mcdc__entry_142__v5_order_by_is_rejected() {
+        let e = compile_no_from(&from_less("SELECT 1 FROM t ORDER BY 1")).unwrap_err();
+        assert!(e.contains(NO_FROM_REJECTION), "{e}");
+    }
+
+    #[test]
+    fn mcdc__entry_142__v6_limit_is_rejected() {
+        let e = compile_no_from(&from_less("SELECT 1 FROM t LIMIT 1")).unwrap_err();
+        assert!(e.contains(NO_FROM_REJECTION), "{e}");
+    }
+
+    #[test]
+    fn mcdc__entry_142__v7_distinct_is_rejected() {
+        let e = compile_no_from(&parsed("SELECT DISTINCT 1")).unwrap_err();
+        assert!(e.contains(NO_FROM_REJECTION), "{e}");
+    }
+
+    #[test]
+    fn mcdc__entry_142__v8_compound_is_rejected() {
+        let mut select = parsed("SELECT 1");
+        select.compound = from_less("SELECT 1 FROM t UNION ALL SELECT 2 FROM t").compound;
+        let e = compile_no_from(&select).unwrap_err();
+        assert!(e.contains(NO_FROM_REJECTION), "{e}");
+    }
+}

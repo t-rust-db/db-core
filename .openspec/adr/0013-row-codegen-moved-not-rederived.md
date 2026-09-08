@@ -66,16 +66,20 @@ codegen is moved from Lab271/sqlite-rs, never re-derived.**
   `explain_select_statement`, `compile_eqp_program`), which are the pure
   half of sqlite-rs's CLI `query.rs::compile_select_program` — sqlite-rs
   dispatches `SELECT` from its binary, db-core has no binary.
-- MC/DC vectors for the moved decisions live in the test-only
-  `codegen::row::mcdc` module, not inside the moved files, so those stay
-  byte-comparable with sqlite-rs's tree.
 - Ownership transfers on the move (sqlite-rs ADR-0039: "a path that has
   been repointed leaves the Lab271-leading regime"). Codegen changes now
   land in db-core; sqlite-rs consumes them through its facade.
 
-**Drift check** while sqlite-rs still carries a copy (until its #19
-facade PR lands): `diff -r` between the two trees must show only the
-path rewrites above, the `db-core#219`-marked blocks, and `shadow.rs`.
+**Amended 2026-09-08 (#235).** The original decision kept the moved
+files byte-comparable with sqlite-rs's tree (MC/DC vectors in a separate
+`codegen::row::mcdc` module, a `diff -r` drift check against sqlite-rs).
+That is withdrawn: db-core owns its own testing strategy, one of three
+core strategies (db-core, db-cli, db-storage) with sqlite-rs holding a
+fourth of its own. Nothing in db-core's layout exists for sqlite-rs's
+benefit -- MC/DC vectors live in the file whose decision they discharge,
+like everywhere else in the crate, and any drift check against sqlite-rs
+is sqlite-rs's concern. Only the core rule stands: this codegen was moved
+in, is owned here, and is never re-derived.
 
 ## Consequences
 
