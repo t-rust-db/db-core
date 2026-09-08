@@ -559,18 +559,10 @@ fn compact_schema(
                 reason: format!("compacted column {i} is outside {}'s schema", schema.name),
             })
     };
-    let column_type = |i: usize| {
-        schema
-            .column_types
-            .get(i)
-            .cloned()
-            .ok_or_else(|| CodegenError::Internal {
-                reason: format!(
-                    "compacted column {i} has no declared type in {}",
-                    schema.name
-                ),
-            })
-    };
+    // A column with no entry in `column_types` has no declared type --
+    // SQLite's "no affinity" case, spelled as an empty decltype -- so the
+    // empty string is the semantics here, not a fallback.
+    let column_type = |i: usize| schema.column_types.get(i).cloned().unwrap_or_default();
     Ok(TableSchema {
         name: schema.name.clone(),
         root_page: 0,
@@ -580,10 +572,7 @@ fn compact_schema(
             .collect::<Result<Vec<_>, _>>()?,
         without_rowid: schema.without_rowid,
         strict: false,
-        column_types: needed_order
-            .iter()
-            .map(|&i| column_type(i))
-            .collect::<Result<Vec<_>, _>>()?,
+        column_types: needed_order.iter().map(|&i| column_type(i)).collect(),
         column_collations: needed_order
             .iter()
             .map(|&i| {
@@ -1651,7 +1640,7 @@ mod mcdc_vectors {
     // GROUP BY needs no `SorterOpen`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1157__v1_explicit_group_by_on_indexed_column_walks_the_index() {
+    fn mcdc__aggregate_1146__v1_explicit_group_by_on_indexed_column_walks_the_index() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && opens(&p, 5), "{p:?}");
     }
@@ -1659,7 +1648,7 @@ mod mcdc_vectors {
     /// `implicit_group == true` (an aggregate with no GROUP BY) never asks
     /// for index ordering: there is one group, nothing to order.
     #[test]
-    fn mcdc__aggregate_1157__v2_implicit_group_never_asks_for_index_ordering() {
+    fn mcdc__aggregate_1146__v2_implicit_group_never_asks_for_index_ordering() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && !opens(&p, 5), "{p:?}");
     }
@@ -1667,7 +1656,7 @@ mod mcdc_vectors {
     /// `group_by.is_empty()` with no aggregate is a plain scan; the grouped
     /// branch (and with it this decision) is skipped entirely.
     #[test]
-    fn mcdc__aggregate_1157__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
+    fn mcdc__aggregate_1146__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
         let p = ok("SELECT a FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
@@ -1677,13 +1666,13 @@ mod mcdc_vectors {
     // (same function): either disqualifies the index-ordered GROUP BY.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1163__v1_no_where_on_a_rowid_table_is_index_ordered() {
+    fn mcdc__aggregate_1152__v1_no_where_on_a_rowid_table_is_index_ordered() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_1163__v2_where_clause_needs_a_sorter() {
+    fn mcdc__aggregate_1152__v2_where_clause_needs_a_sorter() {
         let p = ok(
             "SELECT a, count(*) FROM t WHERE b > 0 GROUP BY a",
             &[t_indexed_a()],
@@ -1692,7 +1681,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_1163__v3_without_rowid_table_needs_a_sorter() {
+    fn mcdc__aggregate_1152__v3_without_rowid_table_needs_a_sorter() {
         let mut schema = t_indexed_a();
         schema.without_rowid = true;
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[schema]);

@@ -173,7 +173,14 @@ pub fn resolve_from_table_schema(
             let table_refs = subquery_own_table_refs(subquery)?;
             let schemas = resolve_subquery_schemas(&table_refs, catalog)?;
             let mut schema = subquery_result_schema(subquery, &table_refs, &schemas);
-            schema.name = table_ref.alias.clone().unwrap_or_default();
+            // The grammar requires an alias on a FROM subquery, so `None`
+            // here is a planner bug, not an unnamed derived table (#232).
+            schema.name = table_ref
+                .alias
+                .clone()
+                .ok_or_else(|| CodegenError::Internal {
+                    reason: "FROM subquery reached codegen without an alias".to_string(),
+                })?;
             Ok(schema)
         }
     }

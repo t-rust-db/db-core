@@ -9,6 +9,7 @@ use super::joins::{emit_join_final_row, resolve_join_constraint};
 use super::limit_scan::{compile_limit_setup, emit_limit_guard, emit_offset_guard};
 use super::*;
 use crate::codegen::row::index_maintenance::valid_table_root_page;
+use crate::codegen::row::record_width;
 /// #250: `A FULL JOIN B ON cond` (or `USING (...)`/`NATURAL`),
 /// restricted to the two-table case — `compile_select_joined` only
 /// calls this when `FULL` is the sole join in the `FROM` clause; any
@@ -46,6 +47,14 @@ use crate::codegen::row::index_maintenance::valid_table_root_page;
 /// `OFFSET` there (post-sort, matching SQLite's own pipeline order).
 /// `ORDER BY` and `DISTINCT` combined stay rejected — `compile_select_joined`
 /// turns that away before ever reaching this function.
+/// The cursors and patch address a `FULL JOIN` with `ORDER BY` allocates
+/// up front, present exactly when the query has an ORDER BY.
+struct FullJoinSort {
+    sort_cursor: i32,
+    pseudo_cursor: i32,
+    open_addr: usize,
+}
+
 pub(super) fn compile_full_join_two_table(
     select: &Select,
     schemas: &[TableSchema],
@@ -131,10 +140,15 @@ pub(super) fn compile_full_join_two_table(
     if let Some(dc) = distinct_cursor {
         em.emit(Instruction::new(Opcode::OpenEphemeral, dc, 0, 0));
     }
-    let sort_cursor = has_order_by.then_some(3);
-    let pseudo_cursor = has_order_by.then_some(4);
-    let sorter_open_addr =
-        sort_cursor.map(|sc| em.emit(Instruction::with_p4(Opcode::SorterOpen, sc, 0, 0, P4::None)));
+    // The three ORDER BY resources travel together (db-core#232): one
+    // `Option` matched once per use site, instead of three `Option`s each
+    // `unwrap_or(0)`ed -- a default that would have aimed the sorter at
+    // table cursor 0 and patched instruction 0's P4.
+    let sort = has_order_by.then(|| FullJoinSort {
+        sort_cursor: 3,
+        pseudo_cursor: 4,
+        open_addr: em.emit(Instruction::with_p4(Opcode::SorterOpen, 3, 0, 0, P4::None)),
+    });
     // The sort-key descriptor is identical across all three emission
     // points (same buffered-row layout regardless of which table's
     // half is null-extended), so the `SorterOpen`'s placeholder P4 is
@@ -195,14 +209,14 @@ pub(super) fn compile_full_join_two_table(
         0,
         P4::Int(1),
     ));
-    if has_order_by {
+    if let Some(sort) = &sort {
         emit_full_join_sort_row(
             &mut em,
             &mut reg,
             select,
             &match_scope,
-            sort_cursor.unwrap_or(0),
-            sorter_open_addr.unwrap_or(0),
+            sort.sort_cursor,
+            sort.open_addr,
             &order_by_plans,
             &mut sort_key_patched,
         )?;
@@ -240,14 +254,14 @@ pub(super) fn compile_full_join_two_table(
         dedup_star: dedup_star.clone(),
         ..Scope::default()
     };
-    if has_order_by {
+    if let Some(sort) = &sort {
         emit_full_join_sort_row(
             &mut em,
             &mut reg,
             select,
             &b_null_scope,
-            sort_cursor.unwrap_or(0),
-            sorter_open_addr.unwrap_or(0),
+            sort.sort_cursor,
+            sort.open_addr,
             &order_by_plans,
             &mut sort_key_patched,
         )?;
@@ -298,14 +312,14 @@ pub(super) fn compile_full_join_two_table(
         dedup_star: dedup_star.clone(),
         ..Scope::default()
     };
-    if has_order_by {
+    if let Some(sort) = &sort {
         emit_full_join_sort_row(
             &mut em,
             &mut reg,
             select,
             &a_null_scope,
-            sort_cursor.unwrap_or(0),
-            sorter_open_addr.unwrap_or(0),
+            sort.sort_cursor,
+            sort.open_addr,
             &order_by_plans,
             &mut sort_key_patched,
         )?;
@@ -332,9 +346,9 @@ pub(super) fn compile_full_join_two_table(
     // `LIMIT`/`OFFSET` here (post-sort), mirroring
     // `compile_joined_sorted_scan`'s own pass 2 for the ordinary join
     // tree.
-    if has_order_by {
-        let sort_cursor = sort_cursor.unwrap_or(0);
-        let pseudo_cursor = pseudo_cursor.unwrap_or(0);
+    if let Some(sort) = &sort {
+        let sort_cursor = sort.sort_cursor;
+        let pseudo_cursor = sort.pseudo_cursor;
         let sort_addr = em.emit(Instruction::new(Opcode::SorterSort, sort_cursor, 0, 0));
         em.patch_p2(sort_addr, end_label);
 
@@ -426,7 +440,7 @@ fn emit_full_join_sort_row(
         em.patch_p4(sorter_open_addr, P4::SortKey(sort_keys));
         *patched = true;
     }
-    let count = usize::try_from(reg.peek().saturating_sub(first)).unwrap_or(0);
+    let count = record_width(reg.peek(), first)?;
     let record_reg = reg.alloc();
     em.emit(Instruction::new(
         Opcode::MakeRecord,

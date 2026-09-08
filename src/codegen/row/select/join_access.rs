@@ -275,14 +275,22 @@ pub(super) fn emit_join_column(
 /// binding's *full* schema column set, in `scope.tables` order, `*`-dedup
 /// notwithstanding — the sorter's row is the ORDER BY plan's raw
 /// material, not the final projection).
-pub(super) fn joined_column_offset(scope: &Scope, binding_idx: usize) -> usize {
-    scope
+pub(super) fn joined_column_offset(
+    scope: &Scope,
+    binding_idx: usize,
+) -> Result<usize, CodegenError> {
+    // `binding_idx == scope.tables.len()` is the total width; anything
+    // past that is a planner bug, not an offset of 0 (db-core#232).
+    let prior = scope
         .tables
         .get(..binding_idx)
-        .unwrap_or(&[])
-        .iter()
-        .map(|b| b.schema.columns.len())
-        .sum()
+        .ok_or_else(|| CodegenError::Internal {
+            reason: format!(
+                "binding {binding_idx} is outside the join scope of {} tables",
+                scope.tables.len()
+            ),
+        })?;
+    Ok(prior.iter().map(|b| b.schema.columns.len()).sum())
 }
 
 /// Resolves `table`/`name` (a bare, possibly-qualified column reference)
@@ -401,7 +409,7 @@ pub(super) fn resolve_join_order_by_target(
             }
             let (binding_idx, local_idx) = resolve_scope_column(scope, table.as_deref(), name)?;
             Ok(JoinOrderTarget::Offset(
-                joined_column_offset(scope, binding_idx).saturating_add(local_idx),
+                joined_column_offset(scope, binding_idx)?.saturating_add(local_idx),
             ))
         }
         _ => Ok(JoinOrderTarget::Expr(expr.clone())),
@@ -464,7 +472,7 @@ pub(super) fn emit_joined_pseudo_projection(
             ResultColumn::Star => {
                 for (i, binding) in scope.tables.iter().enumerate() {
                     let suppressed = scope.dedup_star.get(i);
-                    let base = joined_column_offset(scope, i);
+                    let base = joined_column_offset(scope, i)?;
                     for idx in 0..binding.schema.columns.len() {
                         let Some(name) = binding.schema.columns.get(idx) else {
                             continue;
@@ -484,7 +492,7 @@ pub(super) fn emit_joined_pseudo_projection(
                     .ok_or_else(|| CodegenError::UnknownColumn {
                         name: format!("{table}.*"),
                     })?;
-                let base = joined_column_offset(scope, i);
+                let base = joined_column_offset(scope, i)?;
                 // `i` was just found by name in `scope.tables`, so this
                 // lookup cannot miss; an empty expansion would be a bug.
                 let count = scope
@@ -507,7 +515,7 @@ pub(super) fn emit_joined_pseudo_projection(
                 ..
             } => {
                 let (binding_idx, local_idx) = resolve_scope_column(scope, table.as_deref(), name)?;
-                let abs = joined_column_offset(scope, binding_idx).saturating_add(local_idx);
+                let abs = joined_column_offset(scope, binding_idx)?.saturating_add(local_idx);
                 regs.push(read_offset(em, reg, abs));
             }
             ResultColumn::Expr { .. } => {
@@ -1059,9 +1067,9 @@ mod tests {
             ],
             ..Scope::default()
         };
-        assert_eq!(joined_column_offset(&scope, 0), 0);
-        assert_eq!(joined_column_offset(&scope, 1), 2);
-        assert_eq!(joined_column_offset(&scope, 2), 3);
+        assert_eq!(joined_column_offset(&scope, 0).unwrap(), 0);
+        assert_eq!(joined_column_offset(&scope, 1).unwrap(), 2);
+        assert_eq!(joined_column_offset(&scope, 2).unwrap(), 3);
     }
 
     #[test]

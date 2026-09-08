@@ -180,6 +180,18 @@ pub(crate) fn record_width(peek: i32, first: i32) -> Result<usize, select::Codeg
         })
 }
 
+/// The first of a row's column registers -- `MakeRecord`'s `p1`. A table
+/// always has at least one column, so an empty register list is a planner
+/// bug reported as [`select::CodegenError::Internal`], not a record built
+/// from register 0 (db-core#232).
+pub(crate) fn first_reg(regs: &[i32]) -> Result<i32, select::CodegenError> {
+    regs.first()
+        .copied()
+        .ok_or_else(|| select::CodegenError::Internal {
+            reason: "row has no column registers".to_string(),
+        })
+}
+
 /// Builds a [`Program`] with forward-referenceable jump targets:
 /// `new_label`/`place` mark an address, `patch_p2` records a pending
 /// fixup (every jump-carrying opcode this ticket emits targets `P2`),

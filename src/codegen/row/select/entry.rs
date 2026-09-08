@@ -371,7 +371,13 @@ pub(crate) fn select_result_column_count_joined(
                     .ok_or_else(|| CodegenError::UnknownColumn {
                         name: format!("{table}.*"),
                     })?;
-                let n = schemas.get(idx).map(|s| s.columns.len()).unwrap_or(0);
+                // `idx` was just found in `table_refs`, which `schemas`
+                // mirrors one-to-one; a miss here is a planner bug (#232).
+                let n = schemas.get(idx).map(|s| s.columns.len()).ok_or_else(|| {
+                    CodegenError::Internal {
+                        reason: format!("no schema for FROM item {idx} ({table}.*)"),
+                    }
+                })?;
                 count = count.saturating_add(n);
             }
             ResultColumn::Expr { .. } => count = count.saturating_add(1),

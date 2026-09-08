@@ -157,6 +157,9 @@ pub fn explain_query_plan(
                 Some(JoinConstraint::On(e)) => Some(e),
                 _ => None,
             };
+            // EQP is explanatory text, not the executed plan: a dangling
+            // reference falls back to level 0 rather than failing the
+            // EXPLAIN (the real compile reports it as `Internal`, #232).
             let level = match on_expr {
                 Some(e) => super::join_order::referenced_binding_indices(e, &bindings)
                     .into_iter()
@@ -643,13 +646,13 @@ mod mcdc_vectors {
 
     // eqp_251: `level == 0 && access.is_none()` (automatic-index probe)
     #[test]
-    fn mcdc__eqp_251__v1_outer_table_without_a_seek_is_a_scan() {
+    fn mcdc__eqp_254__v1_outer_table_without_a_seek_is_a_scan() {
         let d = eqp_details("SELECT a FROM t WHERE a + b = 1");
         assert!(d[0].starts_with("SCAN t"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_251__v2_outer_table_with_a_rowid_seek_is_a_search() {
+    fn mcdc__eqp_254__v2_outer_table_with_a_rowid_seek_is_a_search() {
         let d = eqp_details("SELECT a FROM t WHERE rowid = 1");
         assert!(
             d[0].contains("SEARCH t") && d[0].contains("rowid=?"),
@@ -658,19 +661,19 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_251__v3_inner_join_level_reports_its_own_access() {
+    fn mcdc__eqp_254__v3_inner_join_level_reports_its_own_access() {
         let d = eqp_details("SELECT a FROM t JOIN u ON u.b = t.a");
         assert!(d.iter().any(|x| x.contains('u')), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_263__v1_all_true_reaches_the_range_seek_report() {
+    fn mcdc__eqp_266__v1_all_true_reaches_the_range_seek_report() {
         let d = eqp_details("SELECT a, b FROM t WHERE b BETWEEN 1 AND 5");
         assert!(range_seek_detail_present(&d), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_263__v2_inner_level_never_reports_a_range_seek() {
+    fn mcdc__eqp_266__v2_inner_level_never_reports_a_range_seek() {
         // Only the outermost table's WHERE is consulted for a range seek, so
         // the inner level (`u`, indexed on `b`) reports its join access, never
         // a `b>? AND b<?` range.
@@ -679,7 +682,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_263__v3_rowid_seek_takes_precedence() {
+    fn mcdc__eqp_266__v3_rowid_seek_takes_precedence() {
         let d = eqp_details("SELECT a, b FROM t WHERE rowid = 1");
         assert!(
             d[0].contains("rowid=?") && !range_seek_detail_present(&d),
@@ -688,19 +691,19 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_263__v4_covering_index_takes_precedence() {
+    fn mcdc__eqp_266__v4_covering_index_takes_precedence() {
         let d = eqp_details("SELECT a FROM t WHERE a = 1");
         assert!(d[0].contains("COVERING INDEX ia"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_273__v1_all_true_reaches_the_range_seek_report() {
+    fn mcdc__eqp_276__v1_all_true_reaches_the_range_seek_report() {
         let d = eqp_details("SELECT a, b FROM t WHERE b BETWEEN 1 AND 5");
         assert!(range_seek_detail_present(&d), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_273__v2_inner_level_never_reports_a_range_seek() {
+    fn mcdc__eqp_276__v2_inner_level_never_reports_a_range_seek() {
         // Only the outermost table's WHERE is consulted for a range seek, so
         // the inner level (`u`, indexed on `b`) reports its join access, never
         // a `b>? AND b<?` range.
@@ -709,7 +712,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_273__v3_rowid_seek_takes_precedence() {
+    fn mcdc__eqp_276__v3_rowid_seek_takes_precedence() {
         let d = eqp_details("SELECT a, b FROM t WHERE rowid = 1");
         assert!(
             d[0].contains("rowid=?") && !range_seek_detail_present(&d),
@@ -718,25 +721,25 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_273__v4_covering_index_takes_precedence() {
+    fn mcdc__eqp_276__v4_covering_index_takes_precedence() {
         let d = eqp_details("SELECT a FROM t WHERE a = 1");
         assert!(d[0].contains("COVERING INDEX ia"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_423__v1_single_table_group_by_without_an_index_uses_a_temp_btree() {
+    fn mcdc__eqp_426__v1_single_table_group_by_without_an_index_uses_a_temp_btree() {
         let d = eqp_details("SELECT a + b, count(*) FROM t GROUP BY a + b");
         assert!(d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_423__v2_joined_group_by_is_not_reported() {
+    fn mcdc__eqp_426__v2_joined_group_by_is_not_reported() {
         let d = eqp_details("SELECT t.a, count(*) FROM t JOIN u ON u.b = t.a GROUP BY t.a");
         assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_423__v3_single_table_without_group_by_is_not_reported() {
+    fn mcdc__eqp_426__v3_single_table_without_group_by_is_not_reported() {
         let d = eqp_details("SELECT a FROM t");
         assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }

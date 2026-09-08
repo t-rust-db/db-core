@@ -180,6 +180,9 @@ pub(in crate::codegen::row::select) fn substitute_aggregates(
             kind: ExprKind::Column {
                 table: None,
                 catalog: None,
+                // `synthetic_names` is generated 1:1 from `agg_slots` at
+                // both construction sites (`__agg{i}`), so `pos` is always
+                // in range; an empty name here would be a planner bug.
                 name: synthetic_names.get(pos).cloned().unwrap_or_default(),
             },
             span: expr.span,

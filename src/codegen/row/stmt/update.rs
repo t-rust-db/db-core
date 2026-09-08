@@ -39,6 +39,7 @@
 //! INSERT/UPDATE compiles reuse the same schema.
 
 use crate::codegen::row::expr::{column_index, compile_cond, compile_value, emit_column_read};
+use crate::codegen::row::first_reg;
 use crate::codegen::row::index_maintenance::{
     emit_index_key_ops, emit_index_key_ops_from_regs, open_index_cursors, valid_table_root_page,
 };
@@ -531,7 +532,7 @@ fn emit_update_row_body(
     // reads differently before vs. after INTEGER-affinity coercion.
     let has_checks = !table_checks.is_empty() || plans.iter().any(|p| !p.checks.is_empty());
     if has_checks {
-        let base_reg = col_regs.first().copied().unwrap_or(0);
+        let base_reg = first_reg(&col_regs)?;
         let count = i32::try_from(col_regs.len()).unwrap_or(0);
         let check_record_reg = reg.alloc();
         em.emit(Instruction::new(
@@ -576,7 +577,7 @@ fn emit_update_row_body(
         }
     }
 
-    let base_reg = col_regs.first().copied().unwrap_or(0);
+    let base_reg = first_reg(&col_regs)?;
     let count = i32::try_from(col_regs.len()).unwrap_or(0);
     let record_reg = reg.alloc();
     let affinities: Vec<u8> = schema
@@ -679,13 +680,13 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__update_346__v1_range_seek_over_an_index_the_set_touches_uses_two_passes() {
+    fn mcdc__update_347__v1_range_seek_over_an_index_the_set_touches_uses_two_passes() {
         let p = update_program("UPDATE t SET a = 9 WHERE a BETWEEN 1 AND 5");
         assert!(has(&p, Opcode::OpenEphemeral), "{p:?}");
     }
 
     #[test]
-    fn mcdc__update_346__v2_range_seek_over_an_untouched_index_is_single_pass() {
+    fn mcdc__update_347__v2_range_seek_over_an_untouched_index_is_single_pass() {
         let p = update_program("UPDATE t SET b = 9 WHERE a BETWEEN 1 AND 5");
         assert!(
             has(&p, Opcode::IdxRowid) && !has(&p, Opcode::OpenEphemeral),
@@ -694,7 +695,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__update_346__v3_no_range_seek_is_a_plain_scan() {
+    fn mcdc__update_347__v3_no_range_seek_is_a_plain_scan() {
         let p = update_program("UPDATE t SET a = 9 WHERE b = 1");
         assert!(
             !has(&p, Opcode::IdxRowid) && !has(&p, Opcode::OpenEphemeral),

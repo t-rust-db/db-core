@@ -80,6 +80,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::codegen::row::expr::{column_index, compile_cond, compile_value};
+use crate::codegen::row::first_reg;
 use crate::codegen::row::index_maintenance::{
     emit_index_key_ops, emit_index_key_ops_from_regs, open_index_cursors, valid_table_root_page,
 };
@@ -441,7 +442,9 @@ pub fn compile_insert(
                 FIRST_INDEX_CURSOR.saturating_add(i32::try_from(schema.indexes.len()).unwrap_or(0));
             let end_label = em.new_label();
             let mut sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {
-                let count = usize::try_from(count).unwrap_or(0);
+                let count = usize::try_from(count).map_err(|_| CodegenError::Internal {
+                    reason: format!("INSERT ... SELECT produced a negative column count {count}"),
+                })?;
                 compile_row(
                     em,
                     reg,
@@ -711,7 +714,7 @@ fn compile_row(
     let has_checks = !table_checks.is_empty() || plans.iter().any(|p| !p.checks.is_empty());
     let needs_row_pseudo = has_checks || !unique_indexes.is_empty();
     if needs_row_pseudo {
-        let base_reg = col_regs.first().copied().unwrap_or(0);
+        let base_reg = first_reg(&col_regs)?;
         let count = i32::try_from(col_regs.len()).unwrap_or(0);
         let check_record_reg = reg.alloc();
         em.emit(Instruction::new(
@@ -771,7 +774,7 @@ fn compile_row(
         )?;
     }
 
-    let base_reg = col_regs.first().copied().unwrap_or(0);
+    let base_reg = first_reg(&col_regs)?;
     let count = i32::try_from(col_regs.len()).unwrap_or(0);
     let record_reg = reg.alloc();
     let affinities: Vec<u8> = schema
@@ -916,7 +919,9 @@ fn emit_unique_check(
         }
         crate::codegen::row::expr::emit_column_read(em, check_schema, CHECK_CURSOR, col_idx, r)?;
     }
-    let start = start.unwrap_or(0);
+    let start = start.ok_or_else(|| CodegenError::Internal {
+        reason: "unique index has no key columns to probe".to_string(),
+    })?;
     let count = i32::try_from(key_col_indices.len()).unwrap_or(0);
     // `NoConflict`'s contract (`src/vdbe/cursor.rs::no_conflict`): the
     // register immediately after the probe range receives the
@@ -1010,7 +1015,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__insert_304__v1_short_row_is_a_shape_mismatch() {
+    fn mcdc__insert_305__v1_short_row_is_a_shape_mismatch() {
         assert!(matches!(
             insert_result("INSERT INTO t VALUES (1)"),
             Err(CodegenError::RowShapeMismatch {
@@ -1022,7 +1027,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__insert_304__v2_full_row_compiles() {
+    fn mcdc__insert_305__v2_full_row_compiles() {
         assert!(insert_result("INSERT INTO t VALUES (1, 2)").is_ok());
     }
 
@@ -1031,7 +1036,7 @@ mod mcdc_vectors {
     /// grammar refuses an empty row outright the leaf is unreachable from
     /// SQL, and this vector records that instead.
     #[test]
-    fn mcdc__insert_304__v3_empty_row_is_not_a_shape_mismatch() {
+    fn mcdc__insert_305__v3_empty_row_is_not_a_shape_mismatch() {
         let ParseOutcome::Accepted(insert) = parse_insert("INSERT INTO t VALUES ()") else {
             return;
         };
