@@ -124,7 +124,7 @@ fn ephemeral_dup_sibling_can_mutate_while_the_original_is_mid_scan() {
     let mut b = a.dup().expect("ephemeral tables support OpenDup");
 
     assert!(a.rewind());
-    assert_eq!(a.rowid(), 1);
+    assert_eq!(a.rowid().unwrap(), 1);
 
     // Through the sibling, while `a` is positioned on row 1: delete the
     // row `a` would visit next-but-one, and append one past the end.
@@ -136,9 +136,9 @@ fn ephemeral_dup_sibling_can_mutate_while_the_original_is_mid_scan() {
     // false there is no current row, and `column()` on a positionless
     // cursor is one of the production `expect`s db-core#231 turns into
     // a typed error -- this test exercises the RefCell sharing, not that.
-    let mut visited = vec![(a.rowid(), a.column(0))];
+    let mut visited = vec![(a.rowid().unwrap(), a.column(0).unwrap())];
     while a.next() {
-        visited.push((a.rowid(), a.column(0)));
+        visited.push((a.rowid().unwrap(), a.column(0).unwrap()));
     }
     assert_eq!(
         visited,
@@ -155,9 +155,55 @@ fn ephemeral_dup_sibling_can_mutate_while_the_original_is_mid_scan() {
     assert!(b.rewind());
     assert!(a.seek(2));
     assert!(a.delete());
-    let mut visited = vec![b.rowid()];
+    let mut visited = vec![b.rowid().unwrap()];
     while b.next() {
-        visited.push(b.rowid());
+        visited.push(b.rowid().unwrap());
     }
     assert_eq!(visited, vec![1, 4, 5, 6]);
+}
+
+/// db-core#231: `Column` (and `Rowid`) against a cursor nothing has
+/// positioned is a typed error, not a panic -- before, every in-tree
+/// cursor `expect`ed here and a malformed program took the embedding
+/// process down with it.
+#[test]
+fn column_before_positioning_is_a_no_current_row_error() {
+    let cursor = InMemoryCursor::new(vec![vec![Value::Integer(1)]]);
+    let mut vm = Vm::new();
+    vm.open_cursor(0, Box::new(cursor)).unwrap();
+
+    // No Rewind/Seek before the read.
+    let program = Program::new(vec![
+        Instruction::new(Opcode::Column, 0, 0, 1),
+        Instruction::new(Opcode::Halt, 0, 0, 0),
+    ]);
+    assert!(matches!(
+        execute(&mut vm, &program),
+        Err(ExecError::NoCurrentRow {
+            opcode: "Column",
+            slot: 0
+        })
+    ));
+
+    // Same after a scan has run off the end.
+    let mut vm = Vm::new();
+    vm.open_cursor(
+        0,
+        Box::new(InMemoryCursor::new(vec![vec![Value::Integer(1)]])),
+    )
+    .unwrap();
+    let program = Program::new(vec![
+        Instruction::new(Opcode::Rewind, 0, 4, 0), // pc0
+        Instruction::new(Opcode::Next, 0, 3, 0),   // pc1: exhausted -> falls through
+        Instruction::new(Opcode::Rowid, 0, 1, 0),  // pc2: read with no current row
+        Instruction::new(Opcode::Halt, 0, 0, 0),   // pc3
+        Instruction::new(Opcode::Halt, 0, 0, 0),   // pc4
+    ]);
+    assert!(matches!(
+        execute(&mut vm, &program),
+        Err(ExecError::NoCurrentRow {
+            opcode: "Rowid",
+            slot: 0
+        })
+    ));
 }

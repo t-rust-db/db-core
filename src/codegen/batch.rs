@@ -156,6 +156,10 @@ pub enum PlanError {
     /// validator rejects every one of these with a `Span`-carrying error
     /// before this module ever sees the query).
     UnsupportedSelectItem(String),
+    /// [`compile_join`] was handed a `SELECT` with no `JOIN` clause --
+    /// dispatch routes only joined queries here, so this is a caller bug,
+    /// surfaced as an error rather than a panic (db-core#231).
+    NoJoinClause,
 }
 
 impl fmt::Display for PlanError {
@@ -172,6 +176,7 @@ impl fmt::Display for PlanError {
                 "SELECT * cannot be combined with GROUP BY, an aggregate, or a window function"
             ),
             PlanError::UnsupportedSelectItem(msg) => write!(f, "unsupported SELECT item: {msg}"),
+            PlanError::NoJoinClause => write!(f, "compile_join requires a JOIN clause"),
         }
     }
 }
@@ -349,11 +354,13 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
                 args,
                 tail,
             } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
-                #[allow(clippy::expect_used, reason = "guarded by the match's `if` above")]
-                let window_def = tail
-                    .as_deref()
-                    .and_then(|t| t.over.as_ref())
-                    .expect("guarded by the match's `if` above");
+                // The guard above makes the `else` unreachable; a typed
+                // error keeps it total without an `expect` (db-core#231).
+                let Some(window_def) = tail.as_deref().and_then(|t| t.over.as_ref()) else {
+                    return Err(PlanError::UnsupportedSelectItem(
+                        "window function call without an OVER clause".into(),
+                    ));
+                };
                 let mut spec = window_spec(name, args, window_def)?;
                 let filter = tail.as_deref().and_then(|t| t.filter.as_ref());
                 if let Some(f) = filter {
@@ -1023,13 +1030,9 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
         return Err(PlanError::UnknownColumn("SELECT without FROM".into()));
     };
     let joins = extract_joins(from)?;
-    #[allow(
-        clippy::expect_used,
-        reason = "dispatch only routes here for queries with a JOIN clause"
-    )]
-    let join = joins
-        .first()
-        .expect("compile_join requires at least one join");
+    let Some(join) = joins.first() else {
+        return Err(PlanError::NoJoinClause);
+    };
     if !matches!(join.op, JoinOp::Inner | JoinOp::Left) {
         return Err(PlanError::UnsupportedJoinKind(join.op));
     }
@@ -1179,7 +1182,7 @@ pub fn compile_semi_join(select: &Select) -> Result<SemiJoinProgram> {
 /// ROW`, per the SQL standard when `ORDER BY` is present in `OVER`) makes
 /// it return the *current* row's value, not the partition's true last row
 /// -- that's implemented literally, ignoring `RANGE` peer-group ties.
-pub fn compile_window(select: &Select) -> Program {
+pub fn compile_window(select: &Select) -> Result<Program> {
     let items = classify_items(select).unwrap_or_default();
 
     let mut needed: Vec<String> = Vec::new();
@@ -1208,15 +1211,15 @@ pub fn compile_window(select: &Select) -> Program {
 
     // `needed[i]` is loaded into register `i`; each `Opcode::Window`
     // writes its result into a fresh register past those.
-    #[allow(
-        clippy::expect_used,
-        reason = "`needed` is built from the same window specs a few lines above"
-    )]
-    let column_reg = |name: &str| {
-        needed
-            .iter()
-            .position(|n| n == name)
-            .expect("needed columns include every window spec's arg/partition_by/order_by column")
+    // `needed` is built from the same window specs a few lines above, so
+    // the `Err` is unreachable -- kept typed rather than `expect`ed
+    // (db-core#231).
+    let column_reg = |name: &str| -> Result<usize> {
+        needed.iter().position(|n| n == name).ok_or_else(|| {
+            PlanError::UnsupportedSelectItem(format!(
+                "window column {name} is not in the load list"
+            ))
+        })
     };
 
     let program: Vec<Instruction> = needed
@@ -1266,7 +1269,7 @@ pub fn compile_window(select: &Select) -> Program {
     let mut emit_regs = Vec::with_capacity(items.len());
     for (item, filtered_arg) in items.iter().zip(&filtered_arg) {
         match item {
-            Item::Column(name) => emit_regs.push(column_reg(name)),
+            Item::Column(name) => emit_regs.push(column_reg(name)?),
             Item::Window(spec) => {
                 let dst = next_reg;
                 next_reg = next_reg.saturating_add(1);
@@ -1283,13 +1286,13 @@ pub fn compile_window(select: &Select) -> Program {
                             .partition_by
                             .iter()
                             .map(|p| column_reg(p))
-                            .collect::<Vec<_>>()
+                            .collect::<Result<Vec<_>>>()?
                             .into(),
                         order_by: spec
                             .order_by
                             .iter()
-                            .map(|(o, desc)| (column_reg(o), *desc))
-                            .collect::<Vec<_>>()
+                            .map(|(o, desc)| Ok((column_reg(o)?, *desc)))
+                            .collect::<Result<Vec<_>>>()?
                             .into(),
                         dst,
                     },
@@ -1346,7 +1349,7 @@ pub fn compile_window(select: &Select) -> Program {
         ));
     }
 
-    Program::new(program)
+    Ok(Program::new(program))
 }
 
 /// `crate::codegen::batch::WindowFunc` and `crate::vm::batch::WindowFunc`
@@ -1801,7 +1804,7 @@ pub fn explain_opcodes(select: &Select) -> Result<Vec<OpcodeSection>> {
     } else if has_window {
         Ok(vec![OpcodeSection {
             label: "body".to_string(),
-            rows: render_program(&compile_window(select)),
+            rows: render_program(&compile_window(select)?),
         }])
     } else {
         Ok(vec![OpcodeSection {
@@ -2078,6 +2081,14 @@ fn referenced_columns(select: &Select) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::parser as sql;
+
+    /// db-core#231: dispatch only routes joined queries to `compile_join`;
+    /// a caller that doesn't gets a typed error, not a panic.
+    #[test]
+    fn compile_join_without_a_join_clause_is_a_plan_error() {
+        let query = sql::parse("SELECT a FROM t").unwrap();
+        assert_eq!(compile_join(&query).err(), Some(PlanError::NoJoinClause));
+    }
     use crate::vm::engine::bounded_scan_limit;
 
     #[test]
@@ -2241,7 +2252,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_935__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__batch_942__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query);
         let (body, ..) = program.split_finalize();
@@ -2252,7 +2263,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_935__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__batch_942__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query);
         let (body, ..) = program.split_finalize();
@@ -2263,7 +2274,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_935__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__batch_942__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query);
         let (body, ..) = program.split_finalize();
@@ -2276,7 +2287,7 @@ mod tests {
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_975__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__batch_982__v1_group_by_without_agg_column_merges_partial_aggregates() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query);
         let fin = program.instructions.last().unwrap();
@@ -2286,7 +2297,7 @@ mod tests {
     /// MC/DC vector (obligation `batch_879`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_975__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__batch_982__v2_agg_column_without_group_by_merges_partial_aggregates() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query);
         let fin = program.instructions.last().unwrap();
@@ -2297,7 +2308,7 @@ mod tests {
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_975__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__batch_982__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query);
         let fin = program.instructions.last().unwrap();
@@ -2361,7 +2372,7 @@ mod tests {
              FROM orders ORDER BY id",
         )
         .unwrap();
-        let program = compile_window(&query);
+        let program = compile_window(&query).unwrap();
         assert_eq!(program.columns_to_load(), vec!["id", "region_key"]);
         let (body, combine, sort, limit) = program.split_finalize();
         assert!(matches!(combine, Some(Opcode::Combine { .. })));
@@ -2591,7 +2602,7 @@ mod tests {
              FROM orders",
         )
         .unwrap();
-        let program = compile_window(&query);
+        let program = compile_window(&query).unwrap();
         let sections = explain_opcodes(&query).unwrap();
 
         assert_eq!(sections.len(), 1);
@@ -2739,7 +2750,7 @@ mod tests {
             "SELECT SUM(amount) FILTER (WHERE amount > 10) OVER (PARTITION BY region) FROM t",
         )
         .unwrap();
-        let program = compile_window(&query);
+        let program = compile_window(&query).unwrap();
         assert_eq!(
             run_program(&program),
             vec![

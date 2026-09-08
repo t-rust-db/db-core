@@ -14,9 +14,8 @@ region is dead weight, not a violation, and is left to review.
 `#[cfg(test)]` / `#[cfg(all(test, ...))]`, minus the test-only
 `src/codegen/row/mcdc/` tree.
 
-EXEMPT lists the files whose production `expect(...)`s db-core#231 converts
-to typed errors; it shrinks to empty as that issue lands, and nothing may be
-added to it without an issue number.
+EXEMPT is empty since db-core#231 converted the last production `expect`s to
+typed errors; nothing may be added to it without an issue number and reason.
 
 Usage: python3 tools/check_panic_allows.py   (exit 1 on any violation)
 """
@@ -34,13 +33,8 @@ PANIC_LINTS = (
     "unimplemented",
 )
 
-# db-core#231 -- remove each entry as its `expect`s become typed errors.
-EXEMPT = {
-    "src/parser/column.rs": "#231 guarded expect in window-def match",
-    "src/codegen/batch.rs": "#231 compile_join / compile_window / window-def expects",
-    "src/vm/batch.rs": "#231 Lag/Lead/FirstValue/LastValue arg_col expects",
-    "src/vm/row/cursor.rs": "#231 column()/rowid() with no current row",
-}
+# Emptied by db-core#231. Any new entry needs an issue number and a reason.
+EXEMPT: dict[str, str] = {}
 
 TEST_REGION = re.compile(r"^\s*#\[cfg\((all\()?test", re.M)
 ALLOW = re.compile(r"#!?\[allow\(([^\]]*?)\)\]", re.S)

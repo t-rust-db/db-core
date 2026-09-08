@@ -414,11 +414,14 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
                         "DISTINCT inside a window function".into(),
                     ));
                 }
-                #[allow(clippy::expect_used, reason = "guarded by the match's `if` above")]
-                let window_def = tail
-                    .as_deref()
-                    .and_then(|t| t.over.as_ref())
-                    .expect("guarded by the match's `if` above");
+                // The guard above makes the `else` unreachable; a typed
+                // error keeps it total without an `expect` (db-core#231).
+                let Some(window_def) = tail.as_deref().and_then(|t| t.over.as_ref()) else {
+                    return Err(unsupported(
+                        expr.span,
+                        "window function call without an OVER clause".into(),
+                    ));
+                };
                 validate_window_call(expr.span, name, args, window_def)
             }
             ExprKind::FunctionCall {
@@ -1350,7 +1353,7 @@ mod tests {
     /// the query is rejected.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_672__v1_cross_join_without_limit_is_rejected() {
+    fn mcdc__column_675__v1_cross_join_without_limit_is_rejected() {
         let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
@@ -1359,7 +1362,7 @@ mod tests {
     /// false with a CROSS JOIN present -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_672__v2_cross_join_with_limit_is_accepted() {
+    fn mcdc__column_675__v2_cross_join_with_limit_is_accepted() {
         let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();
         assert!(matches!(
             q.limit.as_ref().unwrap().limit.kind,
@@ -1371,28 +1374,28 @@ mod tests {
     /// false with no LIMIT -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_672__v3_non_cross_join_without_limit_is_accepted() {
+    fn mcdc__column_675__v3_non_cross_join_without_limit_is_accepted() {
         let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
         assert!(q.limit.is_none());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_712__v1_agg_without_window_validates_group_by_keys() {
+    fn mcdc__column_715__v1_agg_without_window_validates_group_by_keys() {
         let err = parse("SELECT foo, SUM(amount) FROM t").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_712__v2_no_agg_skips_group_by_key_validation() {
+    fn mcdc__column_715__v2_no_agg_skips_group_by_key_validation() {
         let q = parse("SELECT foo, bar FROM t").unwrap();
         assert_eq!(q.columns.len(), 2);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_712__v3_agg_with_window_skips_group_by_key_validation() {
+    fn mcdc__column_715__v3_agg_with_window_skips_group_by_key_validation() {
         let q =
             parse("SELECT region, SUM(amount), ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
         assert_eq!(q.columns.len(), 3);
@@ -1487,37 +1490,37 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_700__v1_window_beside_computed_expr_is_rejected() {
+    fn mcdc__column_703__v1_window_beside_computed_expr_is_rejected() {
         assert!(parse("SELECT id + 1, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_err());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_700__v2_window_beside_bare_column_is_accepted() {
+    fn mcdc__column_703__v2_window_beside_bare_column_is_accepted() {
         assert!(parse("SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_700__v3_computed_expr_without_window_is_accepted() {
+    fn mcdc__column_703__v3_computed_expr_without_window_is_accepted() {
         assert!(parse("SELECT id + 1 FROM t").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_706__v1_agg_beside_computed_expr_without_group_by_is_rejected() {
+    fn mcdc__column_709__v1_agg_beside_computed_expr_without_group_by_is_rejected() {
         assert!(parse("SELECT SUM(amount), id + 1 FROM t").is_err());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_706__v2_computed_expr_without_agg_is_accepted() {
+    fn mcdc__column_709__v2_computed_expr_without_agg_is_accepted() {
         assert!(parse("SELECT id + 1 FROM t").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_706__v3_agg_without_computed_expr_is_accepted() {
+    fn mcdc__column_709__v3_agg_without_computed_expr_is_accepted() {
         assert!(parse("SELECT region, SUM(amount) FROM t GROUP BY region").is_ok());
     }
 
@@ -1527,7 +1530,7 @@ mod tests {
     /// rejection rather than a pass through `column_706`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_706__v4_agg_with_window_and_expr_is_rejected_upstream() {
+    fn mcdc__column_709__v4_agg_with_window_and_expr_is_rejected_upstream() {
         assert!(
             parse("SELECT SUM(amount), id + 1, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_err()
         );

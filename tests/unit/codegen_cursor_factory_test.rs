@@ -59,12 +59,12 @@ impl Cursor for SharedTableCursor {
         self.pos.is_some()
     }
 
-    fn column(&self, col: usize) -> Value {
-        self.store.borrow()[self.pos.expect("no current row")].1[col].clone()
+    fn column(&self, col: usize) -> Option<Value> {
+        Some(self.store.borrow()[self.pos?].1[col].clone())
     }
 
-    fn rowid(&self) -> i64 {
-        self.store.borrow()[self.pos.expect("no current row")].0
+    fn rowid(&self) -> Option<i64> {
+        Some(self.store.borrow()[self.pos?].0)
     }
 
     fn seek(&mut self, rowid: i64) -> bool {

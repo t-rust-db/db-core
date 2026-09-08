@@ -95,6 +95,16 @@ pub enum ExecError {
         /// The cursor-slot table index that was empty.
         slot: i32,
     },
+    /// `Column`/`Rowid`/`AutoIndexRowid` read a cursor that has no current
+    /// row -- nothing positioned it, or its last `Rewind`/`Next`/`Seek`
+    /// returned false. A codegen bug (sqlite-rs's own programs never do
+    /// this), surfaced as an error rather than a panic (db-core#231).
+    NoCurrentRow {
+        /// Name of the opcode that read the cursor.
+        opcode: &'static str,
+        /// The cursor slot that had no current row.
+        slot: i32,
+    },
     /// A jump or fall-through moved the program counter past the end of
     /// the program's instructions.
     ProgramCounterOutOfRange {
@@ -169,6 +179,9 @@ impl std::fmt::Display for ExecError {
                 write!(f, "opcode {opcode:?} is not yet implemented by this VM")
             }
             ExecError::CursorNotOpen { slot } => write!(f, "cursor slot {slot} is not open"),
+            ExecError::NoCurrentRow { opcode, slot } => {
+                write!(f, "{opcode}: cursor slot {slot} has no current row")
+            }
             ExecError::ProgramCounterOutOfRange { pc } => {
                 write!(f, "program counter {pc} is out of range")
             }
@@ -1184,7 +1197,12 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             } else if let Some(reg) = vm.pseudo_reg(instr.p1) {
                 vm.pseudo_column(reg, col, "Column")?
             } else {
-                vm.cursor(instr.p1)?.column(col)
+                vm.cursor(instr.p1)?
+                    .column(col)
+                    .ok_or(ExecError::NoCurrentRow {
+                        opcode: "Column",
+                        slot: instr.p1,
+                    })?
             };
             vm.set_register(instr.p3, value)?;
             Ok(Step::Next)
@@ -1194,7 +1212,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             let value = if vm.is_null_row(instr.p1)? {
                 Value::Null
             } else {
-                Value::Integer(vm.cursor(instr.p1)?.rowid())
+                Value::Integer(
+                    vm.cursor(instr.p1)?
+                        .rowid()
+                        .ok_or(ExecError::NoCurrentRow {
+                            opcode: "Rowid",
+                            slot: instr.p1,
+                        })?,
+                )
             };
             vm.set_register(instr.p2, value)?;
             Ok(Step::Next)
@@ -1264,7 +1289,13 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
         Opcode::AutoIndexRowid => {
-            let rowid = vm.cursor(instr.p1)?.rowid();
+            let rowid = vm
+                .cursor(instr.p1)?
+                .rowid()
+                .ok_or(ExecError::NoCurrentRow {
+                    opcode: "AutoIndexRowid",
+                    slot: instr.p1,
+                })?;
             vm.set_register(instr.p2, Value::Integer(rowid))?;
             Ok(Step::Next)
         }
@@ -3812,11 +3843,11 @@ mod tests {
             fn next(&mut self) -> bool {
                 false
             }
-            fn column(&self, _: usize) -> Value {
-                Value::Null
+            fn column(&self, _: usize) -> Option<Value> {
+                Some(Value::Null)
             }
-            fn rowid(&self) -> i64 {
-                0
+            fn rowid(&self) -> Option<i64> {
+                Some(0)
             }
             fn insert_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
                 *self.0.borrow_mut() = Some((rowid, Rc::clone(payload)));
@@ -4031,7 +4062,7 @@ mod tests {
     /// 0 || reg as usize > MAX_REGISTERS`): leaf A (`reg < 0`) true.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_491__v1_negative_register_is_out_of_range() {
+    fn mcdc__vm_504__v1_negative_register_is_out_of_range() {
         let vm = Vm::new();
         assert!(matches!(
             vm.register(-1),
@@ -4041,20 +4072,20 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_491`): both leaves false -- an
     /// ordinary in-range register. Independence pair for A against
-    /// `mcdc__vm_491__v1_negative_register_is_out_of_range`.
+    /// `mcdc__vm_504__v1_negative_register_is_out_of_range`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_491__v2_in_range_register_is_ok() {
+    fn mcdc__vm_504__v2_in_range_register_is_ok() {
         let vm = Vm::new();
         assert!(vm.register(0).is_ok());
     }
 
     /// MC/DC vector (obligation `vm_491`): leaf B (`reg as usize >
     /// MAX_REGISTERS`) true, leaf A false. Independence pair for B
-    /// against `mcdc__vm_491__v2_in_range_register_is_ok`.
+    /// against `mcdc__vm_504__v2_in_range_register_is_ok`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_491__v3_register_past_the_cap_is_out_of_range() {
+    fn mcdc__vm_504__v3_register_past_the_cap_is_out_of_range() {
         let vm = Vm::new();
         let past_cap = i32::try_from(MAX_REGISTERS).unwrap().saturating_add(1);
         assert!(matches!(
@@ -4068,7 +4099,7 @@ mod tests {
     /// (`a` is NULL) true -- no jump is taken regardless of `b`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_669__v1_lhs_null_suppresses_the_jump() {
+    fn mcdc__vm_682__v1_lhs_null_suppresses_the_jump() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4083,10 +4114,10 @@ mod tests {
     /// MC/DC vector (obligation `vm_670`): both leaves false -- neither
     /// operand is NULL, so the comparison runs normally and the jump is
     /// taken on equality. Independence pair for A against
-    /// `mcdc__vm_669__v1_lhs_null_suppresses_the_jump`.
+    /// `mcdc__vm_682__v1_lhs_null_suppresses_the_jump`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_669__v2_neither_null_lets_the_comparison_decide() {
+    fn mcdc__vm_682__v2_neither_null_lets_the_comparison_decide() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4100,10 +4131,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_670`): leaf B (`b` is NULL) true,
     /// leaf A false -- no jump. Independence pair for B against
-    /// `mcdc__vm_669__v2_neither_null_lets_the_comparison_decide`.
+    /// `mcdc__vm_682__v2_neither_null_lets_the_comparison_decide`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_669__v3_rhs_null_suppresses_the_jump() {
+    fn mcdc__vm_682__v3_rhs_null_suppresses_the_jump() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4120,7 +4151,7 @@ mod tests {
     /// true -- the result is NULL regardless of `b`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_718__v1_lhs_null_forces_null_result() {
+    fn mcdc__vm_731__v1_lhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4133,10 +4164,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_719`): both leaves false -- the
     /// underlying operation actually runs. Independence pair for A
-    /// against `mcdc__vm_718__v1_lhs_null_forces_null_result`.
+    /// against `mcdc__vm_731__v1_lhs_null_forces_null_result`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_718__v2_neither_null_runs_the_operation() {
+    fn mcdc__vm_731__v2_neither_null_runs_the_operation() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 2, 0, 0),
             Instruction::new(Opcode::Integer, 3, 1, 0),
@@ -4149,10 +4180,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_719`): leaf B true, leaf A false --
     /// the result is NULL. Independence pair for B against
-    /// `mcdc__vm_718__v2_neither_null_runs_the_operation`.
+    /// `mcdc__vm_731__v2_neither_null_runs_the_operation`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_718__v3_rhs_null_forces_null_result() {
+    fn mcdc__vm_731__v3_rhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4168,7 +4199,7 @@ mod tests {
     /// leaf A (`p1`'s operand) true -- the result is NULL.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_738__v1_lhs_null_forces_null_result() {
+    fn mcdc__vm_751__v1_lhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 10, 1, 0),
@@ -4181,10 +4212,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_739`): both leaves false -- the
     /// reversed subtraction (`p2 - p1`) actually runs. Independence pair
-    /// for A against `mcdc__vm_738__v1_lhs_null_forces_null_result`.
+    /// for A against `mcdc__vm_751__v1_lhs_null_forces_null_result`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_738__v2_neither_null_runs_the_operation() {
+    fn mcdc__vm_751__v2_neither_null_runs_the_operation() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 3, 0, 0),
             Instruction::new(Opcode::Integer, 10, 1, 0),
@@ -4197,10 +4228,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_739`): leaf B (`p2`'s operand) true,
     /// leaf A false -- the result is NULL. Independence pair for B
-    /// against `mcdc__vm_738__v2_neither_null_runs_the_operation`.
+    /// against `mcdc__vm_751__v2_neither_null_runs_the_operation`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_738__v3_rhs_null_forces_null_result() {
+    fn mcdc__vm_751__v3_rhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 3, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4216,16 +4247,16 @@ mod tests {
     /// all three leaves true -- a whole, finite, in-range REAL converts.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_870__v1_whole_finite_in_range_converts() {
+    fn mcdc__vm_883__v1_whole_finite_in_range_converts() {
         assert_eq!(try_to_integer(&Value::Real(5.0)), Some(5));
     }
 
     /// MC/DC vector (obligation `vm_871`): leaf A (`fract() == 0.0`)
     /// false -- a fractional REAL never converts. Independence pair for
-    /// A against `mcdc__vm_870__v1_whole_finite_in_range_converts`.
+    /// A against `mcdc__vm_883__v1_whole_finite_in_range_converts`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_870__v2_fractional_real_does_not_convert() {
+    fn mcdc__vm_883__v2_fractional_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(5.5)), None);
     }
 
@@ -4235,17 +4266,17 @@ mod tests {
     /// whole-valued). Exercises B's false branch alongside A's.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_870__v3_infinite_real_does_not_convert() {
+    fn mcdc__vm_883__v3_infinite_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(f64::INFINITY)), None);
     }
 
     /// MC/DC vector (obligation `vm_871`): leaf C (`in_i64_range`) false,
     /// leaves A and B true -- a whole, finite REAL outside `i64`'s range
     /// never converts. Independence pair for C against
-    /// `mcdc__vm_870__v1_whole_finite_in_range_converts`.
+    /// `mcdc__vm_883__v1_whole_finite_in_range_converts`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_870__v4_out_of_range_whole_real_does_not_convert() {
+    fn mcdc__vm_883__v4_out_of_range_whole_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(1e30)), None);
     }
 

@@ -19,7 +19,9 @@
     reason = "test code fails fast (db-core#230); clippy.toml's allow-*-in-tests does not reach helper fns outside #[test]"
 )]
 
-use db_core::vm::batch::{Batch, Instruction, JoinKind, MapOp, Opcode, Program, Value, VmError};
+use db_core::vm::batch::{
+    Batch, Instruction, JoinKind, MapOp, Opcode, Program, Value, VmError, WindowFunc,
+};
 use db_core::vm::engine::{run, run_join, InMemorySegment, JoinProgram};
 
 #[test]
@@ -166,5 +168,49 @@ fn loading_an_unknown_column_is_a_vm_error() {
     match err {
         VmError::UnknownColumn { column, .. } => assert_eq!(column, "missing"),
         other => panic!("expected VmError::UnknownColumn, got {other:?}"),
+    }
+}
+
+/// db-core#231: an `Opcode::Window` for a function that needs an argument
+/// register but was planned with `arg: None` is a typed error, not a
+/// panic -- codegen guarantees the argument, so this only happens with a
+/// hand-built (or buggy) program, which is exactly when the process must
+/// not abort.
+#[test]
+fn window_function_without_its_argument_register_is_a_vm_error() {
+    let batch = Batch::new(2).with_column("id", vec![Value::Int(1), Value::Int(2)]);
+    let segments = [InMemorySegment(batch)];
+    for func in [
+        WindowFunc::Lag,
+        WindowFunc::Lead,
+        WindowFunc::FirstValue,
+        WindowFunc::LastValue,
+    ] {
+        let program = Program::new(vec![
+            Instruction::new(Opcode::LoadColumn {
+                reg: 0,
+                column: "id".into(),
+            }),
+            Instruction::new(Opcode::Window {
+                func,
+                arg: None,
+                offset: None,
+                partition_by: vec![].into(),
+                order_by: vec![(0, false)].into(),
+                dst: 1,
+            }),
+            Instruction::new(Opcode::Emit {
+                registers: vec![1].into(),
+            }),
+            Instruction::new(Opcode::Halt),
+        ]);
+        assert_eq!(
+            run(&segments, &program).err(),
+            Some(VmError::MissingWindowArgument {
+                opcode: "Window",
+                func
+            }),
+            "{func:?}"
+        );
     }
 }

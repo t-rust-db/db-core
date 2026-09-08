@@ -42,15 +42,17 @@ pub trait Cursor {
         false
     }
 
-    /// Reads column `col` of the current row. Panics if the cursor has
-    /// no current row (`rewind`/`next` last returned `false`) -- callers
-    /// (the dispatch loop) never call this except right after a
-    /// successful `rewind`/`next`, matching sqlite-rs's own invariant
-    /// that `Column` never runs against an empty cursor.
-    fn column(&self, col: usize) -> Value;
+    /// Reads column `col` of the current row; `None` if the cursor has no
+    /// current row (`rewind`/`next` last returned `false`, or nothing has
+    /// positioned it yet). The dispatch loop turns `None` into
+    /// `ExecError::NoCurrentRow` -- a malformed program is a typed error,
+    /// never a panic (db-core#231). A `col` past the row's width reads
+    /// `Value::Null`, as in SQLite.
+    fn column(&self, col: usize) -> Option<Value>;
 
-    /// The current row's rowid.
-    fn rowid(&self) -> i64;
+    /// The current row's rowid; `None` if there is no current row
+    /// (db-core#231, same contract as [`Self::column`]).
+    fn rowid(&self) -> Option<i64>;
 
     /// Seeks directly to the row with `rowid`, without a linear
     /// `rewind`/`next` scan (`Opcode::SeekRowid`). Returns `true` (and
@@ -332,29 +334,13 @@ impl Cursor for InMemoryCursor {
         self.pos.is_some()
     }
 
-    fn column(&self, col: usize) -> Value {
-        #[allow(
-            clippy::expect_used,
-            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
-        )]
-        let pos = self.pos.expect("column read with no current row");
-        self.rows
-            .get(pos)
-            .and_then(|row| row.get(col))
-            .cloned()
-            .unwrap_or(Value::Null)
+    fn column(&self, col: usize) -> Option<Value> {
+        let row = self.rows.get(self.pos?)?;
+        Some(row.get(col).cloned().unwrap_or(Value::Null))
     }
 
-    fn rowid(&self) -> i64 {
-        #[allow(
-            clippy::expect_used,
-            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
-        )]
-        let pos = self.pos.expect("rowid read with no current row");
-        #[allow(clippy::cast_possible_wrap)]
-        {
-            (pos as i64).saturating_add(1)
-        }
+    fn rowid(&self) -> Option<i64> {
+        Some(i64::try_from(self.pos?).ok()?.saturating_add(1))
     }
 
     fn seek(&mut self, rowid: i64) -> bool {
@@ -502,33 +488,21 @@ impl Cursor for EphemeralTableCursor {
         self.position_at(found)
     }
 
-    fn column(&self, col: usize) -> Value {
-        assert!(self.at_row, "column read with no current row");
-        #[allow(
-            clippy::expect_used,
-            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
-        )]
-        let rowid = self.current_rowid.expect("column read with no current row");
-        #[allow(
-            clippy::expect_used,
-            reason = "at_row true implies current_rowid still names a live row"
-        )]
-        let idx = self.row_index(rowid).expect("current row vanished");
-        self.rows
-            .borrow()
-            .get(idx)
-            .and_then(|(_, values)| values.get(col))
-            .cloned()
-            .unwrap_or(Value::Null)
+    fn column(&self, col: usize) -> Option<Value> {
+        let rowid = self.rowid()?;
+        // `at_row` says the rowid names a live row; if a sibling `OpenDup`
+        // cursor deleted it meanwhile, that is "no current row" too.
+        let idx = self.row_index(rowid)?;
+        let rows = self.rows.borrow();
+        let (_, values) = rows.get(idx)?;
+        Some(values.get(col).cloned().unwrap_or(Value::Null))
     }
 
-    fn rowid(&self) -> i64 {
-        assert!(self.at_row, "rowid read with no current row");
-        #[allow(
-            clippy::expect_used,
-            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
-        )]
-        self.current_rowid.expect("rowid read with no current row")
+    fn rowid(&self) -> Option<i64> {
+        if !self.at_row {
+            return None;
+        }
+        self.current_rowid
     }
 
     fn seek(&mut self, rowid: i64) -> bool {
@@ -554,12 +528,7 @@ impl Cursor for EphemeralTableCursor {
         if !self.at_row {
             return false;
         }
-        #[allow(
-            clippy::expect_used,
-            reason = "at_row true implies current_rowid still names a live row"
-        )]
-        let rowid = self.current_rowid.expect("at_row implies current_rowid");
-        let Some(idx) = self.row_index(rowid) else {
+        let Some(idx) = self.current_rowid.and_then(|rowid| self.row_index(rowid)) else {
             return false;
         };
         self.rows.borrow_mut().remove(idx);
@@ -665,17 +634,13 @@ impl Cursor for EphemeralIndexCursor {
         false
     }
 
-    fn column(&self, col: usize) -> Value {
-        self.last_key
-            .as_ref()
-            .and_then(|k| self.entries.get(k))
-            .and_then(|values| values.get(col))
-            .cloned()
-            .unwrap_or(Value::Null)
+    fn column(&self, col: usize) -> Option<Value> {
+        let values = self.entries.get(self.last_key.as_ref()?)?;
+        Some(values.get(col).cloned().unwrap_or(Value::Null))
     }
 
-    fn rowid(&self) -> i64 {
-        0
+    fn rowid(&self) -> Option<i64> {
+        Some(0)
     }
 
     fn found(&mut self, key: &[Value], collations: &[Collation]) -> Option<bool> {
@@ -848,21 +813,18 @@ impl Cursor for SorterCursor {
         }
     }
 
-    fn column(&self, col: usize) -> Value {
-        #[allow(
-            clippy::expect_used,
-            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
-        )]
-        let pos = self.pos.expect("column read with no current row");
-        self.buffer
-            .get(pos)
-            .and_then(|(blob, _)| decode_record(blob, TextEncoding::Utf8).ok())
-            .and_then(|values| values.get(col).cloned())
-            .unwrap_or(Value::Null)
+    fn column(&self, col: usize) -> Option<Value> {
+        let (blob, _) = self.buffer.get(self.pos?)?;
+        Some(
+            decode_record(blob, TextEncoding::Utf8)
+                .ok()
+                .and_then(|values| values.get(col).cloned())
+                .unwrap_or(Value::Null),
+        )
     }
 
-    fn rowid(&self) -> i64 {
-        0 // sorters have no rowid concept; sqlite-rs never calls Rowid on one either
+    fn rowid(&self) -> Option<i64> {
+        Some(0) // sorters have no rowid concept; sqlite-rs never calls Rowid on one either
     }
 
     fn sorter_insert(&mut self, blob: Rc<[u8]>) -> bool {
@@ -998,22 +960,18 @@ impl Cursor for HashAggCursor {
         }
     }
 
-    fn column(&self, col: usize) -> Value {
-        #[allow(
-            clippy::expect_used,
-            reason = "Cursor contract: column/rowid are only read after a successful rewind/next"
-        )]
-        let pos = self.pos.expect("column read with no current row");
-        self.order
-            .get(pos)
-            .and_then(|&i| self.groups.get(i))
-            .and_then(|g| decode_record(&g.row, TextEncoding::Utf8).ok())
-            .and_then(|values| values.get(col).cloned())
-            .unwrap_or(Value::Null)
+    fn column(&self, col: usize) -> Option<Value> {
+        let group = self.groups.get(*self.order.get(self.pos?)?)?;
+        Some(
+            decode_record(&group.row, TextEncoding::Utf8)
+                .ok()
+                .and_then(|values| values.get(col).cloned())
+                .unwrap_or(Value::Null),
+        )
     }
 
-    fn rowid(&self) -> i64 {
-        0 // groups have no rowid concept, same as SorterCursor
+    fn rowid(&self) -> Option<i64> {
+        Some(0) // groups have no rowid concept, same as SorterCursor
     }
 
     fn current_blob(&self) -> Option<Value> {
@@ -1130,12 +1088,12 @@ impl Cursor for PseudoCursor {
         false
     }
 
-    fn column(&self, col: usize) -> Value {
-        self.values.get(col).cloned().unwrap_or(Value::Null)
+    fn column(&self, col: usize) -> Option<Value> {
+        Some(self.values.get(col).cloned().unwrap_or(Value::Null))
     }
 
-    fn rowid(&self) -> i64 {
-        0
+    fn rowid(&self) -> Option<i64> {
+        Some(0)
     }
 }
 
@@ -1173,16 +1131,13 @@ impl Cursor for AutoIndexCursor {
         false
     }
 
-    fn column(&self, _col: usize) -> Value {
-        Value::Null
+    fn column(&self, _col: usize) -> Option<Value> {
+        Some(Value::Null)
     }
 
-    fn rowid(&self) -> i64 {
-        self.current
-            .as_ref()
-            .and_then(|(key, pos)| self.entries.get(key).and_then(|r| r.get(*pos)))
-            .copied()
-            .unwrap_or(0)
+    fn rowid(&self) -> Option<i64> {
+        let (key, pos) = self.current.as_ref()?;
+        self.entries.get(key)?.get(*pos).copied()
     }
 
     fn auto_index_insert(&mut self, key: Vec<Value>, collations: &[Collation], rowid: i64) -> bool {
@@ -1283,29 +1238,14 @@ impl Cursor for InMemoryIndexCursor {
         self.pos.is_some()
     }
 
-    fn column(&self, col: usize) -> Value {
-        #[allow(
-            clippy::expect_used,
-            reason = "Cursor contract: column/rowid are only read after a successful positioning call"
-        )]
-        let pos = self.pos.expect("column read with no current entry");
-        self.entries
-            .get(pos)
-            .and_then(|(key, _)| key.get(col))
-            .cloned()
-            .unwrap_or(Value::Null)
+    fn column(&self, col: usize) -> Option<Value> {
+        let (key, _) = self.entries.get(self.pos?)?;
+        Some(key.get(col).cloned().unwrap_or(Value::Null))
     }
 
-    fn rowid(&self) -> i64 {
-        #[allow(
-            clippy::expect_used,
-            reason = "Cursor contract: column/rowid are only read after a successful positioning call"
-        )]
-        let (_, rowid) = self
-            .pos
-            .and_then(|pos| self.entries.get(pos))
-            .expect("rowid read with no current entry");
-        *rowid
+    fn rowid(&self) -> Option<i64> {
+        let (_, rowid) = self.entries.get(self.pos?)?;
+        Some(*rowid)
     }
 
     /// Inserts `values` (the row's indexed columns; extra columns
@@ -1381,12 +1321,12 @@ mod tests {
             vec![Value::Integer(3)],
         ]);
         assert!(c.rewind());
-        assert_eq!(c.column(0), Value::Integer(1));
-        assert_eq!(c.rowid(), 1);
+        assert_eq!(c.column(0).unwrap(), Value::Integer(1));
+        assert_eq!(c.rowid().unwrap(), 1);
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Integer(2));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Integer(3));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(3));
         assert!(!c.next());
     }
 
@@ -1394,7 +1334,7 @@ mod tests {
     fn missing_column_reads_as_null() {
         let mut c = InMemoryCursor::new(vec![vec![Value::Integer(1)]]);
         c.rewind();
-        assert_eq!(c.column(5), Value::Null);
+        assert_eq!(c.column(5).unwrap(), Value::Null);
     }
 
     #[test]
@@ -1411,11 +1351,11 @@ mod tests {
             vec![Value::Integer(3)],
         ]);
         assert!(c.last());
-        assert_eq!(c.column(0), Value::Integer(3));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(3));
         assert!(c.prev());
-        assert_eq!(c.column(0), Value::Integer(2));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
         assert!(c.prev());
-        assert_eq!(c.column(0), Value::Integer(1));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(1));
         assert!(!c.prev());
     }
 
@@ -1431,7 +1371,7 @@ mod tests {
         c.rewind();
         assert!(c.delete());
         assert!(c.rewind());
-        assert_eq!(c.column(0), Value::Integer(2));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
     }
 
     #[test]
@@ -1448,7 +1388,7 @@ mod tests {
             vec![Value::Integer(30)],
         ]);
         assert!(c.seek(2));
-        assert_eq!(c.column(0), Value::Integer(20));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(20));
     }
 
     #[test]
@@ -1470,11 +1410,11 @@ mod tests {
         assert!(c.insert(10, vec![Value::Integer(1)]));
         assert!(c.insert(20, vec![Value::Integer(2)]));
         assert!(c.rewind());
-        assert_eq!(c.column(0), Value::Integer(1));
-        assert_eq!(c.rowid(), 10);
+        assert_eq!(c.column(0).unwrap(), Value::Integer(1));
+        assert_eq!(c.rowid().unwrap(), 10);
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Integer(2));
-        assert_eq!(c.rowid(), 20);
+        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
+        assert_eq!(c.rowid().unwrap(), 20);
         assert!(!c.next());
     }
 
@@ -1496,11 +1436,11 @@ mod tests {
             assert!(c.sorter_insert(blob.into()));
         }
         assert!(c.rewind());
-        assert_eq!(c.column(0), Value::Integer(10));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(10));
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Integer(20));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(20));
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Integer(30));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(30));
         assert!(!c.next());
     }
 
@@ -1518,11 +1458,11 @@ mod tests {
             c.sorter_insert(blob.into());
         }
         assert!(c.rewind());
-        assert_eq!(c.column(0), Value::Null);
+        assert_eq!(c.column(0).unwrap(), Value::Null);
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Integer(5));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(5));
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Integer(-7));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(-7));
         assert!(!c.next());
     }
 
@@ -1557,17 +1497,17 @@ mod tests {
         }
         assert!(c.rewind());
         assert_eq!(
-            (c.column(0), c.column(1)),
+            (c.column(0).unwrap(), c.column(1).unwrap()),
             (Value::Integer(0), Value::Integer(5))
         );
         assert!(c.next());
         assert_eq!(
-            (c.column(0), c.column(1)),
+            (c.column(0).unwrap(), c.column(1).unwrap()),
             (Value::Integer(1), Value::Integer(10))
         );
         assert!(c.next());
         assert_eq!(
-            (c.column(0), c.column(1)),
+            (c.column(0).unwrap(), c.column(1).unwrap()),
             (Value::Integer(1), Value::Integer(20))
         );
         assert!(!c.next());
@@ -1582,9 +1522,9 @@ mod tests {
             c.sorter_insert(blob.into());
         }
         assert!(c.rewind());
-        assert_eq!(c.column(0), Value::Integer(1));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(1));
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Integer(2));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
         assert!(!c.next());
     }
 
@@ -1602,9 +1542,9 @@ mod tests {
         c.insert(10, vec![Value::Integer(1)]);
         c.insert(20, vec![Value::Integer(2)]);
         assert!(c.last());
-        assert_eq!(c.rowid(), 20);
+        assert_eq!(c.rowid().unwrap(), 20);
         assert!(c.prev());
-        assert_eq!(c.rowid(), 10);
+        assert_eq!(c.rowid().unwrap(), 10);
         assert!(!c.prev());
     }
 
@@ -1616,7 +1556,7 @@ mod tests {
         c.rewind();
         assert!(c.delete());
         assert!(c.rewind());
-        assert_eq!(c.rowid(), 20);
+        assert_eq!(c.rowid().unwrap(), 20);
     }
 
     #[test]
@@ -1625,7 +1565,7 @@ mod tests {
         c.insert(10, vec![Value::Integer(1)]);
         c.insert(20, vec![Value::Integer(2)]);
         assert!(c.seek(20));
-        assert_eq!(c.column(0), Value::Integer(2));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
     }
 
     #[test]
@@ -1654,11 +1594,11 @@ mod tests {
             assert!(c.hash_agg_find(make_row(&[Value::Text(group.to_string().into())])));
         }
         assert!(c.rewind());
-        assert_eq!(c.column(0), Value::Text("a".to_string().into()));
+        assert_eq!(c.column(0).unwrap(), Value::Text("a".to_string().into()));
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Text("b".to_string().into()));
+        assert_eq!(c.column(0).unwrap(), Value::Text("b".to_string().into()));
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Text("c".to_string().into()));
+        assert_eq!(c.column(0).unwrap(), Value::Text("c".to_string().into()));
         assert!(!c.next());
     }
 
@@ -1668,7 +1608,7 @@ mod tests {
         assert!(c.hash_agg_find(make_row(&[Value::Integer(1), Value::Integer(100)])));
         assert!(c.hash_agg_find(make_row(&[Value::Integer(1), Value::Integer(200)])));
         assert!(c.rewind());
-        assert_eq!(c.column(1), Value::Integer(100));
+        assert_eq!(c.column(1).unwrap(), Value::Integer(100));
     }
 
     #[test]
@@ -1699,13 +1639,13 @@ mod tests {
         .unwrap();
 
         assert!(c.rewind());
-        assert_eq!(c.column(0), Value::Text("x".to_string().into()));
+        assert_eq!(c.column(0).unwrap(), Value::Text("x".to_string().into()));
         assert_eq!(
             c.hash_agg_group_accumulators(),
             Some([Some(AggState::Count(2))].as_slice())
         );
         assert!(c.next());
-        assert_eq!(c.column(0), Value::Text("y".to_string().into()));
+        assert_eq!(c.column(0).unwrap(), Value::Text("y".to_string().into()));
         assert_eq!(
             c.hash_agg_group_accumulators(),
             Some([Some(AggState::Count(1))].as_slice())
@@ -1745,7 +1685,7 @@ mod tests {
         c.insert(1, vec![Value::Integer(10)]);
         c.insert(2, vec![Value::Integer(30)]);
         assert!(c.seek_index_ge(&[Value::Integer(20)], &[]));
-        assert_eq!(c.column(0), Value::Integer(30));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(30));
         assert!(!c.seek_index_ge(&[Value::Integer(999)], &[]));
     }
 
@@ -1781,7 +1721,7 @@ mod tests {
         assert!(c.auto_index_insert(vec![Value::Integer(1)], &[], 100));
         assert!(c.auto_index_insert(vec![Value::Integer(2)], &[], 200));
         assert!(c.auto_index_seek(&[Value::Integer(2)], &[]));
-        assert_eq!(c.rowid(), 200);
+        assert_eq!(c.rowid().unwrap(), 200);
         assert!(!c.auto_index_seek(&[Value::Integer(99)], &[]));
     }
 
@@ -1792,9 +1732,9 @@ mod tests {
         assert!(c.auto_index_insert(vec![Value::Integer(1)], &[], 200));
         assert!(c.auto_index_insert(vec![Value::Integer(2)], &[], 300));
         assert!(c.auto_index_seek(&[Value::Integer(1)], &[]));
-        let first = c.rowid();
+        let first = c.rowid().unwrap();
         assert!(c.auto_index_next());
-        let second = c.rowid();
+        let second = c.rowid().unwrap();
         assert_eq!(
             [first, second]
                 .iter()
@@ -1813,11 +1753,11 @@ mod tests {
         );
         let mut c = PseudoCursor::new(&blob);
         assert!(c.rewind());
-        assert_eq!(c.column(0), Value::Integer(7));
-        assert_eq!(c.column(1), Value::Text("x".to_string().into()));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(7));
+        assert_eq!(c.column(1).unwrap(), Value::Text("x".to_string().into()));
         assert!(!c.next());
         assert!(c.rewind());
-        assert_eq!(c.column(0), Value::Integer(7));
+        assert_eq!(c.column(0).unwrap(), Value::Integer(7));
     }
 
     #[test]
@@ -1834,9 +1774,9 @@ mod tests {
         )
         .unwrap();
         assert!(c.rewind());
-        assert_eq!(c.column(1), Value::Integer(1));
+        assert_eq!(c.column(1).unwrap(), Value::Integer(1));
         assert!(c.next());
-        assert_eq!(c.column(1), Value::Integer(2));
+        assert_eq!(c.column(1).unwrap(), Value::Integer(2));
         assert!(!c.next());
     }
 
@@ -1850,7 +1790,7 @@ mod tests {
     /// matters here, not the entries' actual content.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_695__v1_new_key_at_capacity_is_rejected() {
+    fn mcdc__cursor_660__v1_new_key_at_capacity_is_rejected() {
         let mut c = EphemeralIndexCursor {
             entries: (0..MAX_EPHEMERAL_ROWS)
                 .map(|i| (i.to_le_bytes().to_vec(), Vec::new()))
@@ -1868,10 +1808,10 @@ mod tests {
     /// MC/DC vector (obligation `cursor_695`): leaf A (`!contains_key`)
     /// true, leaf B (`len() >= MAX_EPHEMERAL_ROWS`) false -- an ordinary
     /// insert under capacity succeeds. Independence pair for B against
-    /// `mcdc__cursor_695__v1_new_key_at_capacity_is_rejected`.
+    /// `mcdc__cursor_660__v1_new_key_at_capacity_is_rejected`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_695__v2_new_key_under_capacity_is_accepted() {
+    fn mcdc__cursor_660__v2_new_key_under_capacity_is_accepted() {
         let mut c = EphemeralIndexCursor::new();
         let key = [Value::Integer(1)];
         let collations = [Collation::Binary];
@@ -1885,10 +1825,10 @@ mod tests {
     /// already-present key is accepted (an update, not a new row) even
     /// with the table at capacity, since leaf B is never reached.
     /// Independence pair for A against
-    /// `mcdc__cursor_695__v1_new_key_at_capacity_is_rejected`.
+    /// `mcdc__cursor_660__v1_new_key_at_capacity_is_rejected`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_695__v3_existing_key_at_capacity_is_still_accepted() {
+    fn mcdc__cursor_660__v3_existing_key_at_capacity_is_still_accepted() {
         let key = [Value::Integer(-1)];
         let collations = [Collation::Binary];
         let encoded = encode_key(&key, &collations);
