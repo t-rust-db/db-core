@@ -12006,78 +12006,6 @@
     "compiler_void": false
   },
   {
-    "id": "row_688",
-    "file": "src/codegen/row.rs",
-    "line": 688,
-    "decision": "self.is_virtual || self.without_rowid",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false
-  },
-  {
-    "id": "row_701",
-    "file": "src/codegen/row.rs",
-    "line": 701,
-    "decision": "match crate::parser::row::parse_create_table(sql) {\n        ParseOutcome::Accepted(create) => *create,\n        _ => return None,\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "row_705",
-    "file": "src/codegen/row.rs",
-    "line": 705,
-    "decision": "create.without_rowid",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "row_718",
-    "file": "src/codegen/row.rs",
-    "line": 718,
-    "decision": "inline_pk && is_integer(def)",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false
-  },
-  {
-    "id": "row_723",
-    "file": "src/codegen/row.rs",
-    "line": 723,
-    "decision": "is_integer(only)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "row_724",
-    "file": "src/codegen/row.rs",
-    "line": 724,
-    "decision": "match c {\n                TableConstraint::PrimaryKey(cols) => match cols.as_slice() {\n                    [col] => matches!(&col.expr.kind, ExprKind::Column { name, .. } if name.eq_ignore_ascii_case(&only.name)),\n                    _ => false,\n                },\n                _ => false,\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "row_725",
-    "file": "src/codegen/row.rs",
-    "line": 725,
-    "decision": "match cols.as_slice() {\n                    [col] => matches!(&col.expr.kind, ExprKind::Column { name, .. } if name.eq_ignore_ascii_case(&only.name)),\n                    _ => false,\n                }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "row_731",
-    "file": "src/codegen/row.rs",
-    "line": 731,
-    "decision": "named",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
     "id": "compare_14",
     "file": "src/compare.rs",
     "line": 14,
@@ -15250,6 +15178,78 @@
     "file": "src/vm/engine.rs",
     "line": 449,
     "decision": "with_filter",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "schema_66",
+    "file": "src/schema.rs",
+    "line": 66,
+    "decision": "self.is_virtual || self.without_rowid",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false
+  },
+  {
+    "id": "schema_80",
+    "file": "src/schema.rs",
+    "line": 80,
+    "decision": "match crate::parser::row::parse_create_table(sql) {\n        ParseOutcome::Accepted(create) => *create,\n        _ => return None,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "schema_84",
+    "file": "src/schema.rs",
+    "line": 84,
+    "decision": "create.without_rowid",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "schema_97",
+    "file": "src/schema.rs",
+    "line": 97,
+    "decision": "inline_pk && is_integer(def)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false
+  },
+  {
+    "id": "schema_102",
+    "file": "src/schema.rs",
+    "line": 102,
+    "decision": "is_integer(only)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "schema_103",
+    "file": "src/schema.rs",
+    "line": 103,
+    "decision": "match c {\n                TableConstraint::PrimaryKey(cols) => match cols.as_slice() {\n                    [col] => matches!(&col.expr.kind, ExprKind::Column { name, .. } if name.eq_ignore_ascii_case(&only.name)),\n                    _ => false,\n                },\n                _ => false,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "schema_104",
+    "file": "src/schema.rs",
+    "line": 104,
+    "decision": "match cols.as_slice() {\n                    [col] => matches!(&col.expr.kind, ExprKind::Column { name, .. } if name.eq_ignore_ascii_case(&only.name)),\n                    _ => false,\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "schema_110",
+    "file": "src/schema.rs",
+    "line": 110,
+    "decision": "named",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
