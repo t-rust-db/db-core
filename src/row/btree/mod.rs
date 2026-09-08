@@ -1246,6 +1246,21 @@ pub(super) fn write_page_common(
     header_len: usize,
     cells: &[Vec<u8>],
 ) -> Result<(), BtreeError> {
+    let ptr_base = header_start.saturating_add(header_len);
+    let num_cells = cells.len();
+
+    // Refuse, before touching the page, when the cells cannot fit (#31):
+    // with saturating offsets an overfull page would silently lay its
+    // content area over its own header and pointer array, and the damage
+    // would only surface as a read error many inserts later.
+    let needed: usize = cells
+        .iter()
+        .map(|c| c.len().saturating_add(2))
+        .fold(ptr_base, usize::saturating_add);
+    if needed > buf.len() {
+        return Err(BtreeError::Internal("cells do not fit in page"));
+    }
+
     // Only the b-tree page portion is cleared — for page 1, bytes
     // 0..header_start hold the 100-byte file header, which must survive
     // every leaf/interior rewrite of that page's b-tree content.
@@ -1255,8 +1270,6 @@ pub(super) fn write_page_common(
         .fill(0);
     put_u8(buf, header_start, page_type, page_num)?;
     // bytes header_start+1..+3 (first freeblock) stay 0 — see module doc.
-    let ptr_base = header_start.saturating_add(header_len);
-    let num_cells = cells.len();
 
     let mut content_end = buf.len();
     let mut ptr_offsets = Vec::with_capacity(num_cells);
