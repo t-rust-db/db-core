@@ -495,11 +495,10 @@ impl Vm {
     }
 
     pub(crate) fn bounded_count(opcode: &'static str, count: i32) -> Result<usize, ExecError> {
-        if !(0..=MAX_REGISTERS as i32).contains(&count) {
-            return Err(ExecError::RegisterRangeTooLarge { opcode, count });
+        match usize::try_from(count) {
+            Ok(n) if n <= MAX_REGISTERS => Ok(n),
+            _ => Err(ExecError::RegisterRangeTooLarge { opcode, count }),
         }
-        #[allow(clippy::cast_sign_loss)]
-        Ok(count as usize)
     }
 
     /// Reads register `reg`. An unwritten register reads as NULL.
@@ -1116,9 +1115,9 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             };
             let mut values = Vec::with_capacity(count);
             for i in 0..count {
-                let reg = instr
-                    .p1
-                    .checked_add(i as i32)
+                let reg = i32::try_from(i)
+                    .ok()
+                    .and_then(|i| instr.p1.checked_add(i))
                     .ok_or(ExecError::RegisterOutOfRange {
                         opcode: "MakeRecord",
                         index: instr.p1,
@@ -1137,9 +1136,9 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             let count = Vm::bounded_count("ResultRow", instr.p2)?;
             let mut row = Vec::with_capacity(count);
             for i in 0..count {
-                let reg = instr
-                    .p1
-                    .checked_add(i as i32)
+                let reg = i32::try_from(i)
+                    .ok()
+                    .and_then(|i| instr.p1.checked_add(i))
                     .ok_or(ExecError::RegisterOutOfRange {
                         opcode: "ResultRow",
                         index: instr.p1,
@@ -4076,7 +4075,7 @@ mod tests {
     /// (`a` is NULL) true -- no jump is taken regardless of `b`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_670__v1_lhs_null_suppresses_the_jump() {
+    fn mcdc__vm_669__v1_lhs_null_suppresses_the_jump() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4091,10 +4090,10 @@ mod tests {
     /// MC/DC vector (obligation `vm_670`): both leaves false -- neither
     /// operand is NULL, so the comparison runs normally and the jump is
     /// taken on equality. Independence pair for A against
-    /// `mcdc__vm_670__v1_lhs_null_suppresses_the_jump`.
+    /// `mcdc__vm_669__v1_lhs_null_suppresses_the_jump`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_670__v2_neither_null_lets_the_comparison_decide() {
+    fn mcdc__vm_669__v2_neither_null_lets_the_comparison_decide() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4108,10 +4107,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_670`): leaf B (`b` is NULL) true,
     /// leaf A false -- no jump. Independence pair for B against
-    /// `mcdc__vm_670__v2_neither_null_lets_the_comparison_decide`.
+    /// `mcdc__vm_669__v2_neither_null_lets_the_comparison_decide`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_670__v3_rhs_null_suppresses_the_jump() {
+    fn mcdc__vm_669__v3_rhs_null_suppresses_the_jump() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4128,7 +4127,7 @@ mod tests {
     /// true -- the result is NULL regardless of `b`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_719__v1_lhs_null_forces_null_result() {
+    fn mcdc__vm_718__v1_lhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4141,10 +4140,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_719`): both leaves false -- the
     /// underlying operation actually runs. Independence pair for A
-    /// against `mcdc__vm_719__v1_lhs_null_forces_null_result`.
+    /// against `mcdc__vm_718__v1_lhs_null_forces_null_result`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_719__v2_neither_null_runs_the_operation() {
+    fn mcdc__vm_718__v2_neither_null_runs_the_operation() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 2, 0, 0),
             Instruction::new(Opcode::Integer, 3, 1, 0),
@@ -4157,10 +4156,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_719`): leaf B true, leaf A false --
     /// the result is NULL. Independence pair for B against
-    /// `mcdc__vm_719__v2_neither_null_runs_the_operation`.
+    /// `mcdc__vm_718__v2_neither_null_runs_the_operation`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_719__v3_rhs_null_forces_null_result() {
+    fn mcdc__vm_718__v3_rhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4176,7 +4175,7 @@ mod tests {
     /// leaf A (`p1`'s operand) true -- the result is NULL.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_739__v1_lhs_null_forces_null_result() {
+    fn mcdc__vm_738__v1_lhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 10, 1, 0),
@@ -4189,10 +4188,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_739`): both leaves false -- the
     /// reversed subtraction (`p2 - p1`) actually runs. Independence pair
-    /// for A against `mcdc__vm_739__v1_lhs_null_forces_null_result`.
+    /// for A against `mcdc__vm_738__v1_lhs_null_forces_null_result`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_739__v2_neither_null_runs_the_operation() {
+    fn mcdc__vm_738__v2_neither_null_runs_the_operation() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 3, 0, 0),
             Instruction::new(Opcode::Integer, 10, 1, 0),
@@ -4205,10 +4204,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_739`): leaf B (`p2`'s operand) true,
     /// leaf A false -- the result is NULL. Independence pair for B
-    /// against `mcdc__vm_739__v2_neither_null_runs_the_operation`.
+    /// against `mcdc__vm_738__v2_neither_null_runs_the_operation`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_739__v3_rhs_null_forces_null_result() {
+    fn mcdc__vm_738__v3_rhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 3, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4224,16 +4223,16 @@ mod tests {
     /// all three leaves true -- a whole, finite, in-range REAL converts.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_871__v1_whole_finite_in_range_converts() {
+    fn mcdc__vm_870__v1_whole_finite_in_range_converts() {
         assert_eq!(try_to_integer(&Value::Real(5.0)), Some(5));
     }
 
     /// MC/DC vector (obligation `vm_871`): leaf A (`fract() == 0.0`)
     /// false -- a fractional REAL never converts. Independence pair for
-    /// A against `mcdc__vm_871__v1_whole_finite_in_range_converts`.
+    /// A against `mcdc__vm_870__v1_whole_finite_in_range_converts`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_871__v2_fractional_real_does_not_convert() {
+    fn mcdc__vm_870__v2_fractional_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(5.5)), None);
     }
 
@@ -4243,17 +4242,17 @@ mod tests {
     /// whole-valued). Exercises B's false branch alongside A's.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_871__v3_infinite_real_does_not_convert() {
+    fn mcdc__vm_870__v3_infinite_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(f64::INFINITY)), None);
     }
 
     /// MC/DC vector (obligation `vm_871`): leaf C (`in_i64_range`) false,
     /// leaves A and B true -- a whole, finite REAL outside `i64`'s range
     /// never converts. Independence pair for C against
-    /// `mcdc__vm_871__v1_whole_finite_in_range_converts`.
+    /// `mcdc__vm_870__v1_whole_finite_in_range_converts`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_871__v4_out_of_range_whole_real_does_not_convert() {
+    fn mcdc__vm_870__v4_out_of_range_whole_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(1e30)), None);
     }
 

@@ -31,7 +31,14 @@
 // would otherwise force bounds checks and checked arithmetic that
 // change the very thing being timed. Mirrors 001_neon_batch_kernels'
 // own rationale for this same allow-list.
-#![allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+#![allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::string_slice
+)]
 
 use db_core::vm::batch::Value;
 use std::collections::HashMap;

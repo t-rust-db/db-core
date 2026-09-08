@@ -92,8 +92,15 @@ impl<K: Hash + Eq, V, S: BuildHasher> JoinHashTable<K, V, S> {
         self.entries.len()
     }
 
-    fn hash_of(&self, key: &K) -> u64 {
-        self.hasher.hash_one(key)
+    /// Slot-space hash of `key`. Truncating the `u64` hash to `usize` on
+    /// a 32-bit target only discards high bits that the power-of-two
+    /// `mask` in every caller would have dropped anyway.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "callers mask to `entries.len() - 1`; high bits are never used"
+    )]
+    fn hash_of(&self, key: &K) -> usize {
+        self.hasher.hash_one(key) as usize
     }
 
     /// Insert one `(key, value)` pair. Never overwrites an existing entry
@@ -105,7 +112,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> JoinHashTable<K, V, S> {
             self.grow();
         }
         let mask = self.entries.len() - 1;
-        let mut idx = (self.hash_of(&key) as usize) & mask;
+        let mut idx = self.hash_of(&key) & mask;
         loop {
             if self.entries[idx].is_none() {
                 self.entries[idx] = Some(Entry { key, value });
@@ -131,7 +138,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> JoinHashTable<K, V, S> {
     /// used by [`Self::grow`] to avoid re-triggering growth mid-rehash.
     fn insert_no_grow(&mut self, key: K, value: V) {
         let mask = self.entries.len() - 1;
-        let mut idx = (self.hash_of(&key) as usize) & mask;
+        let mut idx = self.hash_of(&key) & mask;
         loop {
             if self.entries[idx].is_none() {
                 self.entries[idx] = Some(Entry { key, value });
@@ -148,7 +155,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> JoinHashTable<K, V, S> {
     pub fn get(&self, key: &K) -> Option<&V> {
         let mask = self.entries.len() - 1;
         let cap = self.entries.len();
-        let mut idx = (self.hash_of(key) as usize) & mask;
+        let mut idx = self.hash_of(key) & mask;
         let mut steps = 0;
         while steps < cap {
             // empty slot proves no further match
@@ -177,7 +184,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> JoinHashTable<K, V, S> {
     pub fn get_all(&self, key: &K) -> Vec<&V> {
         let mask = self.entries.len() - 1;
         let cap = self.entries.len();
-        let mut idx = (self.hash_of(key) as usize) & mask;
+        let mut idx = self.hash_of(key) & mask;
         let mut steps = 0;
         let mut matches = Vec::new();
         while steps < cap {

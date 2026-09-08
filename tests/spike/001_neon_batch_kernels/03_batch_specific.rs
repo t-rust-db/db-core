@@ -30,6 +30,10 @@
 // crate-wide `[lints.clippy]` bar (#82) would otherwise force bounds
 // checks and checked arithmetic that change the very thing being timed.
 #![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::string_slice,
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
     clippy::unwrap_used

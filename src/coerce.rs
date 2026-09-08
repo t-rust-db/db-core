@@ -67,7 +67,12 @@ pub fn coerce_text_to_numeric(s: &str) -> Value {
     let Some((start, end, is_float)) = scan_number_prefix(s) else {
         return Value::Integer(0);
     };
-    let literal = &s[start..end];
+    // `scan_number_prefix` only advances over ASCII, so `start..end` is
+    // always a char boundary; the `else` is unreachable but keeps the
+    // slice total (db-core#225).
+    let Some(literal) = s.get(start..end) else {
+        return Value::Integer(0);
+    };
     if is_float {
         return literal
             .parse::<f64>()

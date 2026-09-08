@@ -25,7 +25,14 @@
 // Same rationale as 01_groupreduce_key_hashing.rs: this spike measures
 // raw hashing/allocation cost, so the crate-wide `[lints.clippy]` bar
 // (#82) would change the very thing being timed.
-#![allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
+#![allow(
+    clippy::indexing_slicing,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::string_slice
+)]
 
 use db_core::vm::batch::Value;
 use std::collections::HashMap;

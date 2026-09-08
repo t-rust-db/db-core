@@ -130,6 +130,20 @@ expect_used = "deny"
 indexing_slicing = "deny"
 panic = "deny"
 arithmetic_side_effects = "deny"
+# db-core#225: the tier below the sqlite-rs bar. `indexing_slicing` does
+# not cover `&str[a..b]` (panics on a non-char boundary); the three
+# `cast_*` lints catch the silent-wrong-value family `as` hides
+# (`usize -> i64` wrap, `i64 -> usize` sign loss); `unreachable`/`todo`/
+# `unimplemented` lock in the existing zero-count. (`missing_panics_doc`
+# was evaluated and rejected: it cannot tell a guarded `expect` with a
+# `reason` from a real panic, so every hit was a false positive.)
+string_slice = "deny"
+unreachable = "deny"
+todo = "deny"
+unimplemented = "deny"
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
 # Rust 2018 module style (db-core#192): a self-named `mod.rs` file is a
 # clippy error, not just discouraged. The opposite lint,
 # `self_named_module_files`, is its mirror image -- never enable both.

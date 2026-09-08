@@ -53,6 +53,18 @@ pub enum Collation {
     RTrim,
 }
 
+/// A length or count as a SQL `INTEGER`, saturating at `i64::MAX`
+/// rather than wrapping negative (db-core#225 -- replaces the bare
+/// `len as i64` the `cast_possible_wrap` lint now rejects). Unreachable
+/// on any real allocation, but total. Lives here rather than in
+/// `vm::batch` because `functions` (always compiled) needs it too, and
+/// `value` is the one module every executor depends on (ADR 0010).
+/// Saturating rather than erroring matches SQLite's own 64-bit `length()`.
+#[inline]
+pub(crate) fn len_to_i64(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
 /// Compares two strings under the given collation.
 #[inline]
 pub fn compare_text(a: &str, b: &str, collation: Collation) -> Ordering {
@@ -100,24 +112,30 @@ pub fn format_real(x: f64) -> String {
         };
     }
 
-    let sci = format!("{:.14e}", ax);
+    let sci = format!("{ax:.14e}");
     let (mantissa, exp_str) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
     let exp: i32 = exp_str.parse().unwrap_or(0);
     let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    // `digits` is ASCII (`{:e}` output minus the '.'), so every byte
+    // offset below is a char boundary; the checked splits keep the
+    // slicing total anyway (db-core#225).
+    let (lead, rest) = digits.split_at_checked(1).unwrap_or((digits.as_str(), ""));
 
     let body = if !(-4..15).contains(&exp) {
-        let mantissa_trimmed = trim_trailing_zeros(&digits[1..]);
+        let mantissa_trimmed = trim_trailing_zeros(rest);
         let mantissa_part = if mantissa_trimmed.is_empty() {
-            format!("{}.0", &digits[..1])
+            format!("{lead}.0")
         } else {
-            format!("{}.{}", &digits[..1], mantissa_trimmed)
+            format!("{lead}.{mantissa_trimmed}")
         };
         let exp_sign = if exp >= 0 { "+" } else { "-" };
         format!("{mantissa_part}e{exp_sign}{:02}", exp.abs())
     } else if exp >= 0 {
-        let split = (exp as usize).saturating_add(1);
-        let int_part = &digits[..split];
-        let frac_part = trim_trailing_zeros(&digits[split..]);
+        let split = usize::try_from(exp).unwrap_or(0).saturating_add(1);
+        let (int_part, frac_digits) = digits
+            .split_at_checked(split)
+            .unwrap_or((digits.as_str(), ""));
+        let frac_part = trim_trailing_zeros(frac_digits);
         if frac_part.is_empty() {
             format!("{int_part}.0")
         } else {

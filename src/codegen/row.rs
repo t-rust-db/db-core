@@ -213,8 +213,9 @@ impl Emitter {
             let Some(&resolved) = self.labels.get(label) else {
                 continue; // Every patched label is always placed by construction; skip defensively rather than panic.
             };
-            #[allow(clippy::cast_possible_wrap)]
-            let target = resolved as i32;
+            let Ok(target) = i32::try_from(resolved) else {
+                continue; // A program can't outgrow i32 addresses; same defensive skip as above.
+            };
             if let Some(instr) = self.instructions.get_mut(*addr) {
                 instr.p2 = target;
             }

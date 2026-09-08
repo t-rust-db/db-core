@@ -24,6 +24,7 @@
 //! (`Vec<Value>`, one entry per row). Opcodes operate on whole registers at
 //! once rather than row-by-row.
 
+use crate::value::len_to_i64;
 pub use crate::vm::join::JoinKind;
 use crate::vm::join::{should_emit, JoinHashTable};
 use std::borrow::Cow;
@@ -721,6 +722,7 @@ pub fn compare_for_order(a: &Value, b: &Value, descending: bool) -> std::cmp::Or
                 (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
                 _ => a.to_string().cmp(&b.to_string()),
             };
+            // ORDER BY direction flips the comparison, not the sort itself.
             if descending {
                 ord.reverse()
             } else {
@@ -931,6 +933,7 @@ impl Eq for JoinKey {}
 impl Hash for JoinKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         for value in &self.0 {
+            // Hash by variant too, so Int(1) and Str("1") never collide as keys.
             match value {
                 Value::Int(v) => {
                     0u8.hash(state);
@@ -1210,7 +1213,7 @@ impl Vm {
                         .iter()
                         .map(|vals| {
                             if src.is_none() {
-                                Value::Int(vals.len() as i64)
+                                Value::Int(len_to_i64(vals.len()))
                             } else {
                                 reduce_values(*func, vals)
                             }
@@ -1431,7 +1434,7 @@ fn compute_window(
         match func {
             WindowFunc::RowNumber => {
                 for (pos, &row) in indices.iter().enumerate() {
-                    output[row] = Value::Int((pos + 1) as i64);
+                    output[row] = Value::Int(len_to_i64(pos + 1));
                 }
             }
             WindowFunc::Rank | WindowFunc::DenseRank => {
@@ -1446,7 +1449,7 @@ fn compute_window(
                             .any(|(col, _)| col[row].to_string() != col[prev_row].to_string()),
                     };
                     if is_new {
-                        rank = (pos + 1) as i64;
+                        rank = len_to_i64(pos + 1);
                         dense += 1;
                     }
                     output[row] = Value::Int(if func == WindowFunc::Rank {
@@ -1464,18 +1467,20 @@ fn compute_window(
                     reason = "codegen guarantees the argument column for this window function"
                 )]
                 let arg = arg_col.expect("Lag/Lead always have an argument column");
-                let n = indices.len() as i64;
                 for (pos, &row) in indices.iter().enumerate() {
+                    let pos = len_to_i64(pos);
                     let target = if func == WindowFunc::Lag {
-                        pos as i64 - offset
+                        pos - offset
                     } else {
-                        pos as i64 + offset
+                        pos + offset
                     };
-                    output[row] = if target >= 0 && target < n {
-                        arg[indices[target as usize]].clone()
-                    } else {
-                        Value::Null
-                    };
+                    // A negative or past-the-end target is out of frame
+                    // -> NULL; `try_from` folds the `>= 0` check into the
+                    // `get`.
+                    output[row] = usize::try_from(target)
+                        .ok()
+                        .and_then(|t| indices.get(t))
+                        .map_or(Value::Null, |&r| arg[r].clone());
                 }
             }
             WindowFunc::FirstValue => {
@@ -1574,7 +1579,7 @@ fn whole_partition_aggregate(
                 .count(),
             None => indices.len(),
         };
-        return Ok(Value::Int(count as i64));
+        return Ok(Value::Int(len_to_i64(count)));
     }
     let values: Vec<f64> = indices
         .iter()
@@ -1596,8 +1601,9 @@ fn whole_partition_aggregate(
 }
 
 fn reduce_count_star(func: AggFunc, num_rows: usize) -> Value {
+    // COUNT(*) is the one aggregate that counts rows, not non-NULL values.
     match func {
-        AggFunc::Count => Value::Int(num_rows as i64),
+        AggFunc::Count => Value::Int(len_to_i64(num_rows)),
         _ => Value::Null,
     }
 }
@@ -1605,9 +1611,9 @@ fn reduce_count_star(func: AggFunc, num_rows: usize) -> Value {
 fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
     let non_null: Vec<f64> = values.iter().filter_map(Value::as_f64).collect();
     match func {
-        AggFunc::Count => {
-            Value::Int(values.iter().filter(|v| !matches!(v, Value::Null)).count() as i64)
-        }
+        AggFunc::Count => Value::Int(len_to_i64(
+            values.iter().filter(|v| !matches!(v, Value::Null)).count(),
+        )),
         AggFunc::Sum => {
             if non_null.is_empty() {
                 Value::Null
@@ -1680,6 +1686,7 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
         MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),
         MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),
         MapOp::MaskIf => {
+            // MaskIf keeps `a` wherever the predicate register is true.
             if matches!(b, Value::Bool(true)) {
                 a.clone()
             } else {
@@ -1697,6 +1704,12 @@ fn arithmetic(op: MapOp, a: &Value, b: &Value, f: impl Fn(f64, f64) -> f64) -> V
     };
     let result = f(x, y);
     if matches!(a, Value::Int(_)) && matches!(b, Value::Int(_)) && op != MapOp::Div {
+        // `as` from `f64` saturates at the `i64` bounds and maps NaN to
+        // 0 -- the intended overflow behavior for Int arithmetic here.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "saturating f64 -> i64 is the documented overflow semantics"
+        )]
         Value::Int(result as i64)
     } else {
         Value::Float(result)
@@ -1908,7 +1921,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1649__v1_a_null_propagates() {
+    fn mcdc__batch_1655__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1936,7 +1949,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1649__v2_b_null_propagates() {
+    fn mcdc__batch_1655__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1964,7 +1977,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1649__v3_neither_null_computes_result() {
+    fn mcdc__batch_1655__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -1992,7 +2005,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1699__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1706__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2020,7 +2033,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1699__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1706__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2048,7 +2061,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1699__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1706__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2076,7 +2089,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1699__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1706__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2770,8 +2783,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__batch_1474__v1_target_in_bounds_yields_source_value() {
+    fn lag_lead_target_in_bounds_yields_source_value() {
         let batch = Batch::new(3)
             .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
             .with_column(
@@ -2798,8 +2810,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__batch_1474__v2_target_below_zero_yields_null() {
+    fn lag_lead_target_below_zero_yields_null() {
         let batch = Batch::new(3)
             .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
             .with_column(
@@ -2826,8 +2837,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__batch_1474__v3_target_at_or_past_len_yields_null() {
+    fn lag_lead_target_at_or_past_len_yields_null() {
         let batch = Batch::new(3)
             .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
             .with_column(

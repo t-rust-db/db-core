@@ -39,7 +39,7 @@
 use std::cmp::Ordering;
 
 use crate::compare::compare;
-use crate::value::{Collation, Value};
+use crate::value::{len_to_i64, Collation, Value};
 
 /// The ways a scalar function call can fail to evaluate.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,9 +97,9 @@ fn value_f64(v: &Value) -> f64 {
 fn length(args: &[Value]) -> Result<Value, FunctionError> {
     Ok(match &args[0] {
         Value::Null => Value::Null,
-        Value::Blob(b) => Value::Integer(b.len() as i64),
-        Value::Text(s) => Value::Integer(s.chars().count() as i64),
-        other => Value::Integer(as_text(other).chars().count() as i64),
+        Value::Blob(b) => Value::Integer(len_to_i64(b.len())),
+        Value::Text(s) => Value::Integer(len_to_i64(s.chars().count())),
+        other => Value::Integer(len_to_i64(as_text(other).chars().count())),
     })
 }
 
@@ -325,10 +325,10 @@ fn instr(args: &[Value]) -> Result<Value, FunctionError> {
             .char_indices()
             .map(|(i, _)| i)
             .chain(std::iter::once(haystack.len()))
-            .position(|i| haystack[i..].starts_with(&needle))
+            .position(|i| haystack.get(i..).is_some_and(|h| h.starts_with(&needle)))
     };
     Ok(Value::Integer(
-        pos.map_or(0, |p| (p as i64).saturating_add(1)),
+        pos.map_or(0, |p| len_to_i64(p).saturating_add(1)),
     ))
 }
 
@@ -374,9 +374,9 @@ fn substr(args: &[Value]) -> Result<Value, FunctionError> {
         _ => None,
     };
     let len: i64 = if let Some(b) = blob {
-        b.len() as i64
+        len_to_i64(b.len())
     } else if p1 < 0 {
-        as_text(&args[0]).chars().count() as i64
+        len_to_i64(as_text(&args[0]).chars().count())
     } else {
         0
     };
@@ -945,7 +945,7 @@ mod tests {
         let Value::Blob(b) = v("zeroblob", &[Value::Integer(i64::MAX)]) else {
             panic!("expected blob");
         };
-        assert_eq!(b.len() as i64, MAX_BLOB_LEN);
+        assert_eq!(i64::try_from(b.len()).unwrap(), MAX_BLOB_LEN);
         assert_eq!(
             v("zeroblob", &[Value::Integer(-1)]),
             Value::Blob(vec![].into())

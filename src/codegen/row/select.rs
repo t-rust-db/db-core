@@ -159,6 +159,11 @@ impl ScanCursors {
     /// arms in order. Each arm gets 4 cursor numbers to itself so an
     /// arm using its own ORDER BY sort cursor or DISTINCT ephemeral
     /// index never collides with another arm's.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "`const fn` cannot use `try_from`; a compound has a handful of arms, never 2^31"
+    )]
     const fn for_arm(index: usize) -> Self {
         let base = (index as i32).saturating_mul(4);
         Self {

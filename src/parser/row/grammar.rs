@@ -2614,7 +2614,7 @@ mod tests {
         let sql = "INSERT INTO t VALUES (1)";
         let insert = parser(sql).parse_insert_stmt().unwrap();
         // `end` comes from the last value expr's span, not the closing paren.
-        assert_eq!(insert.span.len, (sql.len() - 1) as u32);
+        assert_eq!(insert.span.len, u32::try_from(sql.len() - 1).unwrap());
     }
 
     /// #368 tagged MC/DC vector (obligation `grammar_474`,
