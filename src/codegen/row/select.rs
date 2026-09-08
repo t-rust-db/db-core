@@ -90,6 +90,16 @@ pub enum CodegenError {
         /// Name of the view that references itself.
         name: String,
     },
+
+    /// db-core#232: a planner invariant did not hold -- a register, cursor
+    /// or column position the compiler had just established could not be
+    /// looked up again. This is a codegen bug, never a property of the
+    /// SQL; before, these sites silently fell back to register/column 0
+    /// and compiled a wrong program.
+    Internal {
+        /// Which invariant failed, for the bug report.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for CodegenError {
@@ -120,6 +130,7 @@ impl std::fmt::Display for CodegenError {
                  result columns: expected {expected}, found {found}"
             ),
             Self::CircularView { name } => write!(f, "view {name} is circularly defined"),
+            Self::Internal { reason } => write!(f, "planner invariant violated: {reason}"),
         }
     }
 }

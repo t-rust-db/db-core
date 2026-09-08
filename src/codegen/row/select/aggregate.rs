@@ -8,6 +8,7 @@ use super::limit_scan::compile_limit_setup;
 use super::order_by::{order_by_target_for_expr, OrderByPlan, OrderByTarget};
 use super::*;
 use crate::codegen::row::index_maintenance::{valid_index_root_page, valid_table_root_page};
+use crate::codegen::row::{key_index, record_width};
 
 pub(crate) use accum::select_has_aggregate;
 use accum::FLUSH_CURSOR;
@@ -195,6 +196,7 @@ pub(crate) fn try_compile_index_only_sum<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
 {
+    // Any WHERE/GROUP BY/ORDER BY rules the covering-index fast path out.
     if select.where_clause.is_some()
         || select.having.is_some()
         || select.limit.is_some()
@@ -215,6 +217,7 @@ where
     else {
         return Ok(false);
     };
+    // Only SUM/AVG (non-DISTINCT) have a covering-index shortcut here.
     if *distinct || !(name.eq_ignore_ascii_case("sum") || name.eq_ignore_ascii_case("avg")) {
         return Ok(false);
     }
@@ -541,20 +544,46 @@ fn compact_index_map(needed_order: &[usize], schema_len: usize) -> Vec<Option<us
 /// Only the handful of call sites that address a column by raw original
 /// `schema` index (not by name) still need [`compact_index_map`]
 /// directly — see [`compile_grouped_scan`]'s pass 2.
-fn compact_schema(schema: &TableSchema, needed_order: &[usize]) -> TableSchema {
-    TableSchema {
+fn compact_schema(
+    schema: &TableSchema,
+    needed_order: &[usize],
+) -> Result<TableSchema, CodegenError> {
+    // `needed_order` is built from `schema` a few lines up; an index past
+    // its width is a planner bug, not an unnamed/untyped column (#232).
+    let column = |i: usize| {
+        schema
+            .columns
+            .get(i)
+            .cloned()
+            .ok_or_else(|| CodegenError::Internal {
+                reason: format!("compacted column {i} is outside {}'s schema", schema.name),
+            })
+    };
+    let column_type = |i: usize| {
+        schema
+            .column_types
+            .get(i)
+            .cloned()
+            .ok_or_else(|| CodegenError::Internal {
+                reason: format!(
+                    "compacted column {i} has no declared type in {}",
+                    schema.name
+                ),
+            })
+    };
+    Ok(TableSchema {
         name: schema.name.clone(),
         root_page: 0,
         columns: needed_order
             .iter()
-            .map(|&i| schema.columns.get(i).cloned().unwrap_or_default())
-            .collect(),
+            .map(|&i| column(i))
+            .collect::<Result<Vec<_>, _>>()?,
         without_rowid: schema.without_rowid,
         strict: false,
         column_types: needed_order
             .iter()
-            .map(|&i| schema.column_types.get(i).cloned().unwrap_or_default())
-            .collect(),
+            .map(|&i| column_type(i))
+            .collect::<Result<Vec<_>, _>>()?,
         column_collations: needed_order
             .iter()
             .map(|&i| {
@@ -571,7 +600,7 @@ fn compact_schema(schema: &TableSchema, needed_order: &[usize]) -> TableSchema {
         rowid_alias: schema
             .rowid_alias
             .and_then(|orig| needed_order.iter().position(|&i| i == orig)),
-    }
+    })
 }
 
 /// #665: pass 1's `MakeRecord` source registers — a real `Column`/
@@ -773,7 +802,7 @@ where
     // only the couple of by-index reads below do.
     let needed_order = ordered_needed_columns(&needed_columns, schema);
     let compact_of = compact_index_map(&needed_order, schema.columns.len());
-    let pseudo_schema = compact_schema(schema, &needed_order);
+    let pseudo_schema = compact_schema(schema, &needed_order)?;
     let mut pseudo_scope =
         Scope::single(&pseudo_schema, cursors.pseudo).with_catalog(catalog.to_vec());
     if let Some(outer) = outer_scope {
@@ -813,16 +842,23 @@ where
 
     let mut sort_keys = Vec::with_capacity(group_targets.len());
     for (expr, target) in select.group_by.iter().zip(&group_targets) {
-        let index = match target {
-            // Always resolves: `needed_columns` includes every column
-            // `select.group_by` references (`columns_needed_for_projection`),
-            // so `idx` always has a compacted position.
-            OrderByTarget::Column(idx) => compact_of.get(*idx).copied().flatten().unwrap_or(0),
-            OrderByTarget::Expr(e) => {
-                let r = compile_value(em, reg, &table_scope, e)?;
-                usize::try_from(r.saturating_sub(first)).unwrap_or(0)
-            }
-        };
+        let index =
+            match target {
+                // Always resolves: `needed_columns` includes every column
+                // `select.group_by` references (`columns_needed_for_projection`),
+                // so `idx` always has a compacted position.
+                OrderByTarget::Column(idx) => {
+                    compact_of.get(*idx).copied().flatten().ok_or_else(|| {
+                        CodegenError::Internal {
+                            reason: format!("GROUP BY column {idx} has no compacted position"),
+                        }
+                    })?
+                }
+                OrderByTarget::Expr(e) => {
+                    let r = compile_value(em, reg, &table_scope, e)?;
+                    key_index(r, first)?
+                }
+            };
         sort_keys.push(SortKeyColumn {
             index,
             descending: false,
@@ -834,7 +870,7 @@ where
     }
     em.patch_p4(sorter_open_addr, P4::SortKey(sort_keys));
 
-    let count = usize::try_from(reg.peek().saturating_sub(first)).unwrap_or(0);
+    let count = record_width(reg.peek(), first)?;
     let record_reg = reg.alloc();
     em.emit(Instruction::new(
         Opcode::MakeRecord,
@@ -942,7 +978,11 @@ where
                 let r = reg.alloc();
                 // Always resolves — see the identical comment on
                 // pass 1's `sort_keys` loop above.
-                let compact_idx = compact_of.get(*idx).copied().flatten().unwrap_or(0);
+                let compact_idx = compact_of.get(*idx).copied().flatten().ok_or_else(|| {
+                    CodegenError::Internal {
+                        reason: format!("GROUP BY column {idx} has no compacted position"),
+                    }
+                })?;
                 read_pseudo_column(em, &pseudo_schema, cursors.pseudo, compact_idx, r)?;
                 Ok(r)
             }
@@ -1475,13 +1515,13 @@ mod mcdc_vectors {
     // Observable: the fast path emits `Opcode::Count`; the fallback scans.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_51__v1_bare_count_star_takes_the_count_fast_path() {
+    fn mcdc__aggregate_52__v1_bare_count_star_takes_the_count_fast_path() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_51__v2_having_falls_back_to_a_scan() {
+    fn mcdc__aggregate_52__v2_having_falls_back_to_a_scan() {
         let p = ok(
             "SELECT count(*) FROM t HAVING count(*) > 0",
             &[t_indexed_a()],
@@ -1490,7 +1530,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_51__v3_limit_falls_back_to_a_scan() {
+    fn mcdc__aggregate_52__v3_limit_falls_back_to_a_scan() {
         let p = ok("SELECT count(*) FROM t LIMIT 1", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
@@ -1499,7 +1539,7 @@ mod mcdc_vectors {
     /// with an aggregate (no GROUP BY)" before this decision is reached, so
     /// the fast path is never taken -- observed as the rejection itself.
     #[test]
-    fn mcdc__aggregate_51__v4_order_by_never_reaches_the_count_fast_path() {
+    fn mcdc__aggregate_52__v4_order_by_never_reaches_the_count_fast_path() {
         let e = err_text("SELECT count(*) FROM t ORDER BY 1", &[t_indexed_a()]);
         assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
     }
@@ -1509,25 +1549,25 @@ mod mcdc_vectors {
     // `*distinct || !name == count || !args == Star`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_66__v1_count_star_matches_the_shape() {
+    fn mcdc__aggregate_67__v1_count_star_matches_the_shape() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_66__v2_count_distinct_is_not_index_only() {
+    fn mcdc__aggregate_67__v2_count_distinct_is_not_index_only() {
         let p = ok("SELECT count(DISTINCT a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_66__v3_other_function_name_is_not_a_count() {
+    fn mcdc__aggregate_67__v3_other_function_name_is_not_a_count() {
         let p = ok("SELECT max(a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_66__v4_count_of_a_column_is_not_count_star() {
+    fn mcdc__aggregate_67__v4_count_of_a_column_is_not_count_star() {
         let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
@@ -1538,25 +1578,25 @@ mod mcdc_vectors {
     // only the index (root 5), never opening the table (root 2).
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_198__v1_bare_sum_reads_only_the_index() {
+    fn mcdc__aggregate_200__v1_bare_sum_reads_only_the_index() {
         let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
         assert!(index_only(&p), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_198__v2_where_opens_the_table() {
+    fn mcdc__aggregate_200__v2_where_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t WHERE b > 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_198__v3_having_opens_the_table() {
+    fn mcdc__aggregate_200__v3_having_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t HAVING sum(a) > 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_198__v4_limit_opens_the_table() {
+    fn mcdc__aggregate_200__v4_limit_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t LIMIT 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
@@ -1564,7 +1604,7 @@ mod mcdc_vectors {
     /// `ORDER BY` with an ungrouped aggregate is rejected upstream by
     /// `compile_select_scan`; the fast path is never consulted.
     #[test]
-    fn mcdc__aggregate_198__v5_order_by_never_reaches_the_sum_fast_path() {
+    fn mcdc__aggregate_200__v5_order_by_never_reaches_the_sum_fast_path() {
         let e = err_text("SELECT sum(a) FROM t ORDER BY 1", &[t_indexed_a()]);
         assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
     }
@@ -1574,7 +1614,7 @@ mod mcdc_vectors {
     /// scanned (or index-walked in key order) and the aggregate accumulated
     /// per group rather than summed off the index alone.
     #[test]
-    fn mcdc__aggregate_198__v6_group_by_never_reaches_the_sum_fast_path() {
+    fn mcdc__aggregate_200__v6_group_by_never_reaches_the_sum_fast_path() {
         let p = ok("SELECT b, sum(a) FROM t GROUP BY b", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
@@ -1584,19 +1624,19 @@ mod mcdc_vectors {
     // `*distinct || !(name == sum || name == avg)`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_218__v1_plain_sum_is_index_only() {
+    fn mcdc__aggregate_221__v1_plain_sum_is_index_only() {
         let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
         assert!(index_only(&p), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_218__v2_sum_distinct_opens_the_table() {
+    fn mcdc__aggregate_221__v2_sum_distinct_opens_the_table() {
         let p = ok("SELECT sum(DISTINCT a) FROM t", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_218__v3_count_is_neither_sum_nor_avg() {
+    fn mcdc__aggregate_221__v3_count_is_neither_sum_nor_avg() {
         let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
         assert!(!index_only(&p), "{p:?}");
     }
@@ -1611,7 +1651,7 @@ mod mcdc_vectors {
     // GROUP BY needs no `SorterOpen`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1117__v1_explicit_group_by_on_indexed_column_walks_the_index() {
+    fn mcdc__aggregate_1157__v1_explicit_group_by_on_indexed_column_walks_the_index() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && opens(&p, 5), "{p:?}");
     }
@@ -1619,7 +1659,7 @@ mod mcdc_vectors {
     /// `implicit_group == true` (an aggregate with no GROUP BY) never asks
     /// for index ordering: there is one group, nothing to order.
     #[test]
-    fn mcdc__aggregate_1117__v2_implicit_group_never_asks_for_index_ordering() {
+    fn mcdc__aggregate_1157__v2_implicit_group_never_asks_for_index_ordering() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && !opens(&p, 5), "{p:?}");
     }
@@ -1627,7 +1667,7 @@ mod mcdc_vectors {
     /// `group_by.is_empty()` with no aggregate is a plain scan; the grouped
     /// branch (and with it this decision) is skipped entirely.
     #[test]
-    fn mcdc__aggregate_1117__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
+    fn mcdc__aggregate_1157__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
         let p = ok("SELECT a FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
@@ -1637,13 +1677,13 @@ mod mcdc_vectors {
     // (same function): either disqualifies the index-ordered GROUP BY.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1123__v1_no_where_on_a_rowid_table_is_index_ordered() {
+    fn mcdc__aggregate_1163__v1_no_where_on_a_rowid_table_is_index_ordered() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_1123__v2_where_clause_needs_a_sorter() {
+    fn mcdc__aggregate_1163__v2_where_clause_needs_a_sorter() {
         let p = ok(
             "SELECT a, count(*) FROM t WHERE b > 0 GROUP BY a",
             &[t_indexed_a()],
@@ -1652,7 +1692,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_1123__v3_without_rowid_table_needs_a_sorter() {
+    fn mcdc__aggregate_1163__v3_without_rowid_table_needs_a_sorter() {
         let mut schema = t_indexed_a();
         schema.without_rowid = true;
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[schema]);

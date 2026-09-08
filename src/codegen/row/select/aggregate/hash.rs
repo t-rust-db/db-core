@@ -11,6 +11,7 @@ use super::super::*;
 use super::{
     collect_aggregates, columns_needed_for_projection, flush_group, read_row_columns_into, AggSlot,
 };
+use crate::codegen::row::{key_index, record_width};
 
 /// This spike's own pre-#665 copy of what was `compile_grouped_scan`'s
 /// `compile_row_values_pruned`: one register per `schema` column in
@@ -172,7 +173,7 @@ where
             OrderByTarget::Column(idx) => *idx,
             OrderByTarget::Expr(e) => {
                 let r = compile_value(em, reg, &table_scope, e)?;
-                usize::try_from(r.saturating_sub(first)).unwrap_or(0)
+                key_index(r, first)?
             }
         };
         // The same collation and comparison affinity the sort strategy
@@ -191,7 +192,7 @@ where
     }
     em.patch_p4(open_addr, P4::GroupKey(group_keys));
 
-    let count = usize::try_from(reg.peek().saturating_sub(first)).unwrap_or(0);
+    let count = record_width(reg.peek(), first)?;
     let record_reg = reg.alloc();
     em.emit(Instruction::new(
         Opcode::MakeRecord,

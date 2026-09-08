@@ -152,6 +152,34 @@ impl CondTargets {
     }
 }
 
+/// Position of value register `reg` inside a record whose first register
+/// is `first` -- the sort/group key index `SortKeyColumn::index` wants.
+/// A register below `first` cannot be part of that record; it is a
+/// planner bug, reported as [`select::CodegenError::Internal`] rather than
+/// silently keyed on position 0 (db-core#232).
+pub(crate) fn key_index(reg: i32, first: i32) -> Result<usize, select::CodegenError> {
+    usize::try_from(reg.wrapping_sub(first))
+        .ok()
+        .filter(|_| reg >= first)
+        .ok_or_else(|| select::CodegenError::Internal {
+            reason: format!(
+                "record key register r{reg} lies before the record's first register r{first}"
+            ),
+        })
+}
+
+/// Width of the record spanning `first..peek` (`peek` being the next
+/// unallocated register). Negative means the record's registers were never
+/// allocated -- a planner bug, not a zero-width record (db-core#232).
+pub(crate) fn record_width(peek: i32, first: i32) -> Result<usize, select::CodegenError> {
+    usize::try_from(peek.wrapping_sub(first))
+        .ok()
+        .filter(|_| peek >= first)
+        .ok_or_else(|| select::CodegenError::Internal {
+            reason: format!("record spans r{first}..r{peek}, a negative width"),
+        })
+}
+
 /// Builds a [`Program`] with forward-referenceable jump targets:
 /// `new_label`/`place` mark an address, `patch_p2` records a pending
 /// fixup (every jump-carrying opcode this ticket emits targets `P2`),
@@ -579,7 +607,13 @@ impl Scope {
                 .ok_or_else(|| select::CodegenError::UnknownColumn {
                     name: name.to_string(),
                 })?;
-        let idx = expr::column_index(&binding.schema, name).unwrap_or(0);
+        let idx = expr::column_index(&binding.schema, name).ok_or_else(|| {
+            select::CodegenError::Internal {
+                reason: format!(
+                    "column {name} resolved to binding {binding_idx} but is not in its schema"
+                ),
+            }
+        })?;
         Ok((binding.cursor, idx, &binding.schema, binding.forced_null))
     }
 
@@ -636,3 +670,41 @@ impl Scope {
 }
 
 pub use crate::schema::{IndexSchema, IndexedColumn, TableSchema, ViewSchema};
+
+#[cfg(test)]
+mod invariant_tests {
+    use super::select::CodegenError;
+    use super::{key_index, record_width};
+
+    #[test]
+    fn key_index_is_the_offset_from_the_record_start() {
+        assert_eq!(key_index(5, 5).unwrap(), 0);
+        assert_eq!(key_index(8, 5).unwrap(), 3);
+    }
+
+    #[test]
+    fn key_index_below_the_record_start_is_an_internal_error_not_position_zero() {
+        assert!(matches!(
+            key_index(3, 5),
+            Err(CodegenError::Internal { .. })
+        ));
+    }
+
+    #[test]
+    fn record_width_is_total_and_never_zero_by_accident() {
+        assert_eq!(record_width(9, 5).unwrap(), 4);
+        assert_eq!(record_width(5, 5).unwrap(), 0);
+        assert!(matches!(
+            record_width(4, 5),
+            Err(CodegenError::Internal { .. })
+        ));
+    }
+
+    #[test]
+    fn internal_error_names_the_invariant() {
+        let e = CodegenError::Internal {
+            reason: "x".to_string(),
+        };
+        assert_eq!(e.to_string(), "planner invariant violated: x");
+    }
+}

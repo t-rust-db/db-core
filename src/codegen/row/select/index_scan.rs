@@ -5,6 +5,7 @@ use super::order_by::{OrderByPlan, OrderByTarget};
 use super::projection::{compile_row_values, emit_row_via_sink, ResultColumnPlan};
 use super::*;
 use crate::codegen::row::index_maintenance::valid_index_root_page;
+use crate::codegen::row::{key_index, record_width};
 
 /// Finds a single index on `schema` whose declared column order is a
 /// prefix match (case-insensitively, column-for-column) for `plans` — the
@@ -426,7 +427,7 @@ where
             OrderByTarget::Column(idx) => *idx,
             OrderByTarget::Expr(expr) => {
                 let r = compile_value(em, reg, &scope, expr)?;
-                usize::try_from(r.saturating_sub(first)).unwrap_or(0)
+                key_index(r, first)?
             }
         };
         sort_keys.push(SortKeyColumn {
@@ -436,7 +437,7 @@ where
             nulls_first: plan.nulls_first,
         });
     }
-    let record_count = usize::try_from(reg.peek().saturating_sub(first)).unwrap_or(0);
+    let record_count = record_width(reg.peek(), first)?;
     let record_reg = reg.alloc();
     em.emit(Instruction::new(
         Opcode::MakeRecord,

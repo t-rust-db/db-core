@@ -6,6 +6,7 @@ use super::projection::{
 };
 use super::*;
 use crate::codegen::row::planner::{is_skip_scan_worthwhile, Stats};
+use crate::codegen::row::{key_index, record_width};
 use std::collections::HashMap;
 /// LIMIT/OFFSET counters, set up once before the scan loop starts.
 pub(super) struct LimitState {
@@ -1003,24 +1004,32 @@ where
     // *after* the sort, so a bound applied before dedup could evict a
     // row DISTINCT would have deduped away, undercounting the result.
     let limit = compile_limit_setup(em, reg, &scope, select)?;
-    let bound_reg = if matches!(select.distinct, Some(Distinctness::Distinct)) {
-        None
-    } else {
-        limit.as_ref().map(|limit_state| {
+    let bound_reg = match limit.as_ref() {
+        Some(limit_state) if !matches!(select.distinct, Some(Distinctness::Distinct)) => {
+            // No OFFSET clause -> offset 0 (SQL default).
             let offset_reg = limit_state.offset_reg.unwrap_or_else(|| {
                 let zero = reg.alloc();
                 em.emit(Instruction::new(Opcode::Integer, 0, zero, 0));
                 zero
             });
+            // The grammar only accepts OFFSET inside a LIMIT clause, so a
+            // limit state without a limit register is a planner bug, not a
+            // bound of "register 0" (db-core#232).
+            let limit_reg = limit_state
+                .limit_reg
+                .ok_or_else(|| CodegenError::Internal {
+                    reason: "LIMIT state has an OFFSET register but no LIMIT register".to_string(),
+                })?;
             let combined = reg.alloc();
             em.emit(Instruction::new(
                 Opcode::OffsetLimit,
-                limit_state.limit_reg.unwrap_or(0),
+                limit_reg,
                 combined,
                 offset_reg,
             ));
-            combined
-        })
+            Some(combined)
+        }
+        _ => None,
     };
 
     // The sort-key descriptor (which register each term reads) isn't
@@ -1088,7 +1097,7 @@ where
             OrderByTarget::Column(idx) => *idx,
             OrderByTarget::Expr(expr) => {
                 let r = compile_value(em, reg, &scope, expr)?;
-                usize::try_from(r.saturating_sub(first)).unwrap_or(0)
+                key_index(r, first)?
             }
         };
         sort_keys.push(SortKeyColumn {
@@ -1100,7 +1109,7 @@ where
     }
     em.patch_p4(sorter_open_addr, P4::SortKey(sort_keys));
 
-    let count = usize::try_from(reg.peek().saturating_sub(first)).unwrap_or(0);
+    let count = record_width(reg.peek(), first)?;
     let record_reg = reg.alloc();
     em.emit(Instruction::new(
         Opcode::MakeRecord,
@@ -1409,7 +1418,7 @@ mod mcdc_vectors {
 
     // --- limit_scan_101: rowid / _rowid_ / oid ----------------------------
     #[test]
-    fn mcdc__limit_scan_101__v1_rowid_is_a_rowid_reference() {
+    fn mcdc__limit_scan_102__v1_rowid_is_a_rowid_reference() {
         assert!(is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("ROWID")
@@ -1417,7 +1426,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__limit_scan_101__v2_underscore_rowid_is_a_rowid_reference() {
+    fn mcdc__limit_scan_102__v2_underscore_rowid_is_a_rowid_reference() {
         assert!(is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("_rowid_")
@@ -1425,7 +1434,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__limit_scan_101__v3_oid_is_a_rowid_reference() {
+    fn mcdc__limit_scan_102__v3_oid_is_a_rowid_reference() {
         assert!(is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("oid")
@@ -1433,7 +1442,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__limit_scan_101__v4_ordinary_column_without_alias_is_not() {
+    fn mcdc__limit_scan_102__v4_ordinary_column_without_alias_is_not() {
         assert!(!is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("b")
