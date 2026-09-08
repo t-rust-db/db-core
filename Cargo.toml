@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.72.0"
+version = "0.73.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/t-rust-db/db-core"
@@ -83,6 +83,21 @@ name = "02_groupreduce_key_hashing_adjusted"
 path = "tests/spike/002_arrow_optimization/02_groupreduce_key_hashing_adjusted.rs"
 
 [dependencies]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "parser"
+harness = false
+
+[[bench]]
+name = "codegen"
+harness = false
+
+[[bench]]
+name = "vm_opcodes"
+harness = false
 
 [features]
 # Every feature on by default (db-core#111): `cargo-mvl-mcdc harvest`

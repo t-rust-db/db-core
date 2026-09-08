@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.73.0] - 2026-09-08
+
+### Added
+
+- **Phase-level performance report via `make perf`** (#224) -- three criterion benchmark suites (`benches/{parser,codegen,vm_opcodes}.rs`): tokenize + `parser::row::parse_select` over a short/medium/deep-nesting corpus, `codegen::row`/`codegen::batch`'s planner entry points over already-parsed ASTs, and ns/op for a representative opcode per execution shape in both `vm::batch::Opcode` and `vm::row::Opcode`. Report only, not wired into `make ci`; JSON estimates land under `target/criterion/`.
+
 ## [0.72.0] - 2026-09-08
 
 ### Added

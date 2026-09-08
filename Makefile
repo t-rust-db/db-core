@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci version
+.PHONY: help test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf version
 
 help: ## Show this help
 	@echo ""
@@ -153,6 +153,13 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) check-mvl-limit
 	$(MAKE) test
 	@echo "all CI gates passed"
+
+# === Performance ===
+
+perf: ## Run the parser/codegen/vm_opcodes benchmarks (report only, not a CI gate; JSON under target/criterion/)
+	cargo bench --bench parser
+	cargo bench --bench codegen
+	cargo bench --bench vm_opcodes
 
 # === Release ===
 
