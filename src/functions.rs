@@ -681,6 +681,27 @@ fn iif(args: &[Value]) -> Result<Value, FunctionError> {
     })
 }
 
+/// Every overlapping 3-byte window of `text`'s UTF-8 bytes, in order.
+/// Pure byte-level windowing, not grapheme- or even char-boundary-aware
+/// -- deliberately: this matches how SQLite's own FTS trigram tokenizer
+/// and tools like ripgrep/tgrep define a trigram, so an index built
+/// from this stays comparable with theirs. `text` shorter than 3 bytes
+/// yields no trigrams. Not a SQL scalar function (no caller needs one
+/// yet) -- a shared primitive for a future trigram-accelerated `LIKE`/
+/// `GLOB` index here, and for sqlite-rs's `sqlgrep` (t-rust-db/sqlite-rs#34).
+pub fn trigrams(text: &str) -> impl Iterator<Item = [u8; 3]> + '_ {
+    text.as_bytes().windows(3).filter_map(|w| w.try_into().ok())
+}
+
+/// Packs a trigram into an `i64` b-tree rowid key (big-endian byte
+/// order, zero-extended) -- the natural key for a trigram->posting-list
+/// table, whether that table lives in this crate's own future index or
+/// in an external cache file (`sqlgrep`'s `trigrams` table,
+/// t-rust-db/sqlite-rs#34).
+pub fn trigram_key(t: [u8; 3]) -> i64 {
+    i64::from(t[0]) << 16 | i64::from(t[1]) << 8 | i64::from(t[2])
+}
+
 type ScalarFn = fn(&[Value]) -> Result<Value, FunctionError>;
 
 /// Dispatches `name(args)` by name and arity into this module's
@@ -1617,5 +1638,49 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__functions_623__v3_above_upper_bound() {
         assert!(!glob_match("~", "[a-z]"));
+    }
+
+    #[test]
+    fn trigrams_yields_every_overlapping_three_byte_window() {
+        let got: Vec<[u8; 3]> = trigrams("abcd").collect();
+        assert_eq!(got, vec![*b"abc", *b"bcd"]);
+    }
+
+    #[test]
+    fn trigrams_windows_raw_utf8_bytes_not_chars() {
+        // "é" is 2 UTF-8 bytes (0xC3 0xA9); trigrams windows the raw
+        // bytes, so a multi-byte character contributes to more than
+        // one trigram, same as ripgrep/tgrep's own byte-level trigrams.
+        let text = "aébc";
+        let bytes = text.as_bytes();
+        assert_eq!(bytes.len(), 5);
+        let got: Vec<[u8; 3]> = trigrams(text).collect();
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], [bytes[0], bytes[1], bytes[2]]);
+        assert_eq!(got[1], [bytes[1], bytes[2], bytes[3]]);
+        assert_eq!(got[2], [bytes[2], bytes[3], bytes[4]]);
+    }
+
+    #[test]
+    fn trigrams_of_under_three_bytes_is_empty() {
+        assert_eq!(trigrams("").count(), 0);
+        assert_eq!(trigrams("a").count(), 0);
+        assert_eq!(trigrams("ab").count(), 0);
+    }
+
+    #[test]
+    fn trigrams_of_exactly_three_bytes_yields_one() {
+        let got: Vec<[u8; 3]> = trigrams("xyz").collect();
+        assert_eq!(got, vec![*b"xyz"]);
+    }
+
+    #[test]
+    fn trigram_key_packs_bytes_big_endian_and_stays_distinct() {
+        assert_eq!(trigram_key(*b"abc"), trigram_key(*b"abc"));
+        assert_ne!(trigram_key(*b"abc"), trigram_key(*b"abd"));
+        assert_eq!(trigram_key([0, 0, 0]), 0);
+        assert_eq!(trigram_key([0, 0, 1]), 1);
+        assert_eq!(trigram_key([0, 1, 0]), 0x100);
+        assert_eq!(trigram_key([1, 0, 0]), 0x1_0000);
     }
 }
