@@ -84,7 +84,7 @@ fn ipk_table() -> TableSchema {
 }
 
 #[test]
-fn mcdc__row_688__v1_virtual_table_has_no_rowid_alias() {
+fn mcdc__schema_66__v1_virtual_table_has_no_rowid_alias() {
     let schema = TableSchema {
         is_virtual: true,
         ..ipk_table()
@@ -93,7 +93,7 @@ fn mcdc__row_688__v1_virtual_table_has_no_rowid_alias() {
 }
 
 #[test]
-fn mcdc__row_688__v2_without_rowid_table_has_no_rowid_alias() {
+fn mcdc__schema_66__v2_without_rowid_table_has_no_rowid_alias() {
     let schema = TableSchema {
         without_rowid: true,
         ..ipk_table()
@@ -102,7 +102,7 @@ fn mcdc__row_688__v2_without_rowid_table_has_no_rowid_alias() {
 }
 
 #[test]
-fn mcdc__row_688__v3_ordinary_table_computes_the_alias_from_sql() {
+fn mcdc__schema_66__v3_ordinary_table_computes_the_alias_from_sql() {
     assert_eq!(ipk_table().with_computed_rowid_alias().rowid_alias, Some(0));
 }
 
@@ -119,7 +119,7 @@ fn alias_of(sql: &str) -> Option<usize> {
 }
 
 #[test]
-fn mcdc__row_718__v1_integer_primary_key_column_is_the_alias() {
+fn mcdc__schema_97__v1_integer_primary_key_column_is_the_alias() {
     assert_eq!(
         alias_of("CREATE TABLE t (x, id INTEGER PRIMARY KEY)"),
         Some(1)
@@ -127,11 +127,11 @@ fn mcdc__row_718__v1_integer_primary_key_column_is_the_alias() {
 }
 
 #[test]
-fn mcdc__row_718__v2_non_integer_primary_key_is_not_an_alias() {
+fn mcdc__schema_97__v2_non_integer_primary_key_is_not_an_alias() {
     assert_eq!(alias_of("CREATE TABLE t (x, id TEXT PRIMARY KEY)"), None);
 }
 
 #[test]
-fn mcdc__row_718__v3_integer_column_without_primary_key_is_not_an_alias() {
+fn mcdc__schema_97__v3_integer_column_without_primary_key_is_not_an_alias() {
     assert_eq!(alias_of("CREATE TABLE t (x, id INTEGER)"), None);
 }

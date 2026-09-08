@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.70.0] - 2026-09-08
+
+### Changed
+
+- **Row schema catalog types have one home: `db_core::schema`** (ADR 0014, t-rust-db/sqlite-rs#19) -- `TableSchema`, `IndexSchema`, `IndexedColumn` and `ViewSchema` move out of `codegen/row.rs` into a feature-free leaf module; `codegen::row` re-exports them, so every existing path keeps resolving. `TableSchema::with_computed_rowid_alias` (needs the SQL parser) is gated on `parser-row`. db-storage re-exports the same four types instead of defining its own (its 0.6.0), the ADR 0010 pattern for `Value`, which is what lets sqlite-rs turn `src/codegen`/`src/planner` into facades without a per-statement schema copy.
+
 ## [0.69.0] - 2026-09-08
 
 ### Changed
