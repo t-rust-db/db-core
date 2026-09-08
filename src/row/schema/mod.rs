@@ -9,6 +9,5 @@ mod ddl_reader;
 
 pub use ddl_reader::{
     column_defs, column_type, read_schema, read_schema_and_views, read_table_and_view_names,
-    read_views, rowid_alias_from_sql, DdlError, IndexSchema, IndexedColumn, TableSchema,
-    ViewSchema,
+    read_views, DdlError, IndexSchema, IndexedColumn, TableSchema, ViewSchema,
 };

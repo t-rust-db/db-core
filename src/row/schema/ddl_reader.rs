@@ -24,7 +24,13 @@
 
 use crate::row::btree::{BtreeError, TableCursor};
 use crate::row::record::{decode_record, Collation, RecordError, TextEncoding, Value};
+
 use crate::row::vfs::PageSource;
+/// The schema catalog types are defined once in db-core (`db_core::schema`,
+/// db-core ADR 0014) and re-exported here, exactly as [`Value`]/[`Collation`]
+/// are (db-core ADR 0010): a schema this reader returns is the very type
+/// db-core's row codegen consumes, so no consumer converts.
+pub use db_core::schema::{IndexSchema, IndexedColumn, TableSchema, ViewSchema};
 
 /// Failure walking or decoding `sqlite_master`.
 #[derive(Debug)]
@@ -63,104 +69,6 @@ impl From<RecordError> for DdlError {
     fn from(e: RecordError) -> Self {
         DdlError::Record(e)
     }
-}
-
-/// A minimally-parsed table schema entry: everything Tier 0 needs to
-/// read a table without the full SQL parser.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TableSchema {
-    /// The table's name.
-    pub name: String,
-    /// The table's b-tree root page (`sqlite_master.rootpage`).
-    pub root_page: u32,
-    /// Column names, in declared order.
-    pub columns: Vec<String>,
-    /// Whether the table was declared `WITHOUT ROWID`.
-    pub without_rowid: bool,
-    /// Whether the table was declared `STRICT`.
-    pub strict: bool,
-    /// Each column's declared type text, position-for-position with
-    /// `columns` (empty string when a column has none) — the
-    /// substring `affinity_of` (spec 008 Requirement 1) derives
-    /// column affinity from. Comparison-affinity derivation (#138)
-    /// needs this; `dump.rs` re-derives its own full column text from
-    /// `sql` instead via [`column_defs`], so this is naive on purpose:
-    /// same textual scope as `columns`, no dialect edge cases beyond
-    /// what the corpus exercises.
-    pub column_types: Vec<String>,
-    /// Each column's declared `COLLATE` (default [`Collation::Binary`]
-    /// when absent), position-for-position with `columns` — the
-    /// crate-wide fallback #500 introduces for comparisons that don't
-    /// spell out an explicit `COLLATE` in the query itself.
-    pub column_collations: Vec<Collation>,
-    /// `CREATE VIRTUAL TABLE ...` — DDL this reader deliberately does not
-    /// parse. `columns` is always empty and `root_page` is `0` (virtual
-    /// tables have no b-tree storage of their own).
-    pub is_virtual: bool,
-    /// The raw `sql` column text from `sqlite_master` — the verbatim
-    /// `CREATE TABLE`/`CREATE VIRTUAL TABLE` statement, needed by callers
-    /// that reproduce schema DDL verbatim (e.g. a `dump` CLI).
-    pub sql: String,
-    /// Every `CREATE INDEX`/`CREATE UNIQUE INDEX` entry in `sqlite_master`
-    /// whose `tbl_name` is this table. Auto-indexes created implicitly for
-    /// `PRIMARY KEY`/`UNIQUE` column constraints have a `NULL` `sql`
-    /// column in `sqlite_master` and are not captured here — same
-    /// graceful-degradation rule as unparseable DDL elsewhere in this
-    /// reader (#211).
-    pub indexes: Vec<IndexSchema>,
-    /// The rowid-alias column index (0-based into `columns`), resolved
-    /// once at schema-decode time by [`rowid_alias_from_sql`] — SQLite's
-    /// single-`INTEGER PRIMARY KEY` special case (see
-    /// `src/btree/mod.rs`'s module doc). Codegen reads this field per
-    /// column reference, so it must be a field, not a re-parse of `sql`
-    /// on every call (#589).
-    pub rowid_alias: Option<usize>,
-}
-
-impl TableSchema {
-    /// Recomputes [`TableSchema::rowid_alias`] from `sql`/`without_rowid`
-    /// — for callers (tests, synthetic schemas) that build a
-    /// `TableSchema` literal by hand instead of going through
-    /// [`read_schema`], which resolves the field at decode time (#589).
-    #[must_use]
-    pub fn with_computed_rowid_alias(mut self) -> Self {
-        self.rowid_alias = if self.is_virtual {
-            None
-        } else {
-            rowid_alias_from_sql(&self.sql, self.without_rowid)
-        };
-        self
-    }
-}
-
-/// A minimally-parsed `CREATE INDEX` entry, naive in the same sense as
-/// [`TableSchema`]: column list and ASC/DESC/uniqueness only, nothing more
-/// (#211).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IndexSchema {
-    /// The index's name.
-    pub name: String,
-    /// Whether the index was declared `UNIQUE`.
-    pub unique: bool,
-    /// The indexed columns, in declared key order.
-    pub columns: Vec<IndexedColumn>,
-    /// The index b-tree's root page (`sqlite_master.rootpage`), needed
-    /// to `OpenWrite` a write cursor onto it (#196).
-    pub root_page: u32,
-}
-
-/// One column (or expression, kept as raw text) in an index's key,
-/// position-for-position with the index's declared column order.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IndexedColumn {
-    /// The column's (unquoted) name, or raw expression text for an
-    /// expression index.
-    pub name: String,
-    /// Whether this key part is sorted `DESC`.
-    pub desc: bool,
-    /// The key part's declared `COLLATE` (default [`Collation::Binary`]
-    /// when absent).
-    pub collation: Collation,
 }
 
 /// Walks `sqlite_master` via `cursor` (which callers MUST construct with
@@ -245,21 +153,6 @@ pub fn read_table_and_view_names<P: PageSource>(
     Ok(names)
 }
 
-/// A minimally-decoded `sqlite_master` view entry (#380): just the
-/// name and verbatim `CREATE VIEW ...` source text.
-/// `codegen::expand_views` re-parses `sql` into a `CreateView` AST
-/// (query + optional explicit column list) when it needs to substitute
-/// a `FROM`-clause reference to this view — kept as a plain string here
-/// rather than an eagerly-parsed AST so this module (per the module doc)
-/// stays independent of the full SQL parser.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ViewSchema {
-    /// The view's name.
-    pub name: String,
-    /// The verbatim `CREATE VIEW ...` source text.
-    pub sql: String,
-}
-
 /// Walks `sqlite_master` via `cursor` (root_page = 1) and returns every
 /// `type = 'view'` entry as a [`ViewSchema`] — the catalog counterpart
 /// to [`read_schema`]'s tables, used by `codegen::expand_views` to
@@ -312,7 +205,6 @@ fn table_schema(values: &[Value]) -> TableSchema {
     }
 
     let parsed = parse_create_table(sql).unwrap_or_default();
-    let rowid_alias = rowid_alias_from_sql(sql, parsed.without_rowid);
     TableSchema {
         name,
         root_page,
@@ -324,8 +216,9 @@ fn table_schema(values: &[Value]) -> TableSchema {
         is_virtual: false,
         sql: sql.to_string(),
         indexes: Vec::new(),
-        rowid_alias,
+        rowid_alias: None,
     }
+    .with_computed_rowid_alias()
 }
 
 /// Parses a `sqlite_master` row with `type = 'index'` into the owning
@@ -629,7 +522,7 @@ fn column_list_span(sql: &str) -> Option<(usize, usize)> {
 
 /// The single top-level-comma splitter behind both
 /// [`parse_create_table`]'s `columns` and [`column_defs`]. These two
-/// MUST agree position-for-position: [`rowid_alias_from_sql`] returns an
+/// MUST agree position-for-position: [`TableSchema::with_computed_rowid_alias`] returns an
 /// index into `column_defs`, and `src/codegen/expr.rs` resolves that
 /// index against `TableSchema::columns`. Two copies of this loop would
 /// let the lists drift and silently mis-target the rowid substitution,
@@ -699,7 +592,7 @@ pub fn column_type(def: &str) -> String {
 /// list into raw per-column definition strings, in declared order —
 /// re-derived from `schema.sql` rather than kept alongside `columns`,
 /// which holds names only — `src/dump.rs` needs each column's declared
-/// type text, and [`rowid_alias_from_sql`] needs its full constraint
+/// type text, and [`TableSchema::with_computed_rowid_alias`] needs its full constraint
 /// text. Shares [`split_top_level_commas`] and [`is_table_constraint`]
 /// with [`parse_create_table`], so the two column lists cannot drift.
 pub fn column_defs(schema: &TableSchema) -> Vec<&str> {
@@ -711,7 +604,7 @@ pub fn column_defs(schema: &TableSchema) -> Vec<&str> {
 
 /// Every top-level def in the column list, column definitions and
 /// table-level constraints alike — the raw material [`column_defs`]
-/// filters down and [`rowid_alias_from_sql`] additionally needs the
+/// filters down and [`TableSchema::with_computed_rowid_alias`] additionally needs the
 /// constraint side of (to recognize a table-level `PRIMARY KEY(col)`).
 fn all_defs(schema: &TableSchema) -> Vec<&str> {
     let Some((start, end)) = column_list_span(&schema.sql) else {
@@ -721,118 +614,6 @@ fn all_defs(schema: &TableSchema) -> Vec<&str> {
         return Vec::new();
     };
     split_top_level_commas(inner)
-}
-
-/// Whether `def` is a column definition carrying an inline
-/// `INTEGER PRIMARY KEY` (excluding the `DESC` form, which SQLite does
-/// not treat as a rowid alias). Scans the quote/comment-masked text
-/// (#135) so a string literal mentioning "primary key" — e.g.
-/// `DEFAULT 'primary key'` — can't be mistaken for the real constraint.
-fn is_integer_primary_key_inline(def: &str) -> bool {
-    let masked = mask_quotes_and_comments(def);
-    let masked = std::str::from_utf8(&masked).unwrap_or_default();
-    let is_pk = masked
-        .split(|c: char| !c.is_alphanumeric())
-        .collect::<Vec<_>>()
-        .windows(2)
-        .any(|w| matches!(w, [a, b] if a.eq_ignore_ascii_case("PRIMARY") && b.eq_ignore_ascii_case("KEY")));
-    is_pk
-        && masked
-            .split_whitespace()
-            .any(|w| w.eq_ignore_ascii_case("INTEGER"))
-        // `INTEGER PRIMARY KEY DESC` is deliberately NOT a rowid
-        // alias in SQLite — the DESC form gets its own b-tree index
-        // and the column is stored normally, so substituting the
-        // cursor's rowid would return values that aren't there.
-        && !masked
-            .split_whitespace()
-            .any(|w| w.eq_ignore_ascii_case("DESC"))
-}
-
-/// Whether `def` declares an `INTEGER` type (masked, so a string literal
-/// can't supply the word), regardless of any inline constraint.
-fn is_integer_column(def: &str) -> bool {
-    let masked = mask_quotes_and_comments(def);
-    let masked = std::str::from_utf8(&masked).unwrap_or_default();
-    masked
-        .split_whitespace()
-        .any(|w| w.eq_ignore_ascii_case("INTEGER"))
-}
-
-/// If `constraint` is a table-level `PRIMARY KEY(col)` naming exactly
-/// one column, returns that column's (unquoted) name.
-fn primary_key_single_column(constraint: &str) -> Option<String> {
-    if !starts_with_ignore_case(constraint.trim_start(), "PRIMARY KEY") {
-        return None;
-    }
-    let open = constraint.find('(')?;
-    let close = constraint.rfind(')')?;
-    if close <= open {
-        return None;
-    }
-    let inner = constraint.get(open.saturating_add(1)..close)?;
-    let cols = split_top_level_commas(inner);
-    match cols.as_slice() {
-        [only] => Some(column_name(only)),
-        _ => None,
-    }
-}
-
-/// The one-column special case SQLite calls the rowid alias: a table
-/// declared with a single `INTEGER PRIMARY KEY` column (not `WITHOUT
-/// ROWID`) stores that column as a NULL placeholder in every record and
-/// expects the reader to substitute the cursor's own rowid instead (see
-/// `src/btree/mod.rs`'s module doc and spike 003 finding 1). Returns the
-/// 0-based column index to substitute, if any.
-///
-/// Detection is textual and shares this module's documented naivety —
-/// see the `known_fragile_*` tests in `src/dump.rs` for the two forms it
-/// still gets wrong. That matters more than it used to:
-/// `src/codegen/expr.rs` now emits `Rowid` instead of `Column` based on
-/// this answer, so a wrong index is a wrong query result, not just wrong
-/// `dump` output.
-///
-/// Runs once per table at schema-decode time ([`TableSchema::rowid_alias`]
-/// caches the answer); everything after decode reads the field (#589).
-pub fn rowid_alias_from_sql(sql: &str, without_rowid: bool) -> Option<usize> {
-    if without_rowid {
-        return None;
-    }
-    let (start, end) = column_list_span(sql)?;
-    let inner = sql.get(start..end)?;
-    // Partition column defs from table-level constraints in one pass —
-    // the pre-#589 code derived each list with its own full re-parse.
-    let mut columns: Vec<&str> = Vec::new();
-    let mut constraints: Vec<&str> = Vec::new();
-    for def in split_top_level_commas(inner) {
-        if is_table_constraint(def) {
-            constraints.push(def);
-        } else {
-            columns.push(def);
-        }
-    }
-    for (idx, def) in columns.iter().enumerate() {
-        if is_integer_primary_key_inline(def) {
-            return Some(idx);
-        }
-    }
-    // The table-level `PRIMARY KEY(col)` form: SQLite only treats this
-    // as a rowid alias when it names the table's one and only column,
-    // and that column is INTEGER-typed (a composite key, or a second
-    // column, rules it out).
-    if let [only] = columns.as_slice() {
-        if is_integer_column(only) {
-            let col_name = column_name(only);
-            let is_alias = constraints
-                .iter()
-                .filter_map(|c| primary_key_single_column(c))
-                .any(|pk_col| pk_col.eq_ignore_ascii_case(&col_name));
-            if is_alias {
-                return Some(0);
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]
