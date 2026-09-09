@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.76.4] - 2026-09-09
+
+### Changed
+
+- **Allocation-free `ORDER BY` compare and typed window partition key** (#266). `compare_for_order` compares `Str`/`Str` directly as `&str` instead of allocating two `String`s via `to_string()` (byte-identical ordering); `compute_window`'s partition key reuses the typed `GroupKey` (#263) instead of stringifying and joining every partition column per row, and `Rank`/`DenseRank`'s tie-break reuses `compare_for_order` directly. String `ORDER BY` is ~8x faster; string `PARTITION BY` is ~1.13x faster.
+
 ## [0.76.3] - 2026-09-09
 
 ### Changed
