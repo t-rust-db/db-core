@@ -667,6 +667,224 @@ impl Program {
     }
 }
 
+/// Which of an instruction's `p1`/`p2`/`p3` name a register (as opposed
+/// to a cursor slot, jump target, literal, count, root page, affinity
+/// byte or flag). Exhaustive over [`Opcode`] so a new variant cannot
+/// land unclassified (#257).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegisterOperands {
+    /// `p1` is a register.
+    pub p1: bool,
+    /// `p2` is a register.
+    pub p2: bool,
+    /// `p3` is a register.
+    pub p3: bool,
+}
+
+const NONE: RegisterOperands = RegisterOperands {
+    p1: false,
+    p2: false,
+    p3: false,
+};
+const P1: RegisterOperands = RegisterOperands {
+    p1: true,
+    p2: false,
+    p3: false,
+};
+const P2: RegisterOperands = RegisterOperands {
+    p1: false,
+    p2: true,
+    p3: false,
+};
+const P3: RegisterOperands = RegisterOperands {
+    p1: false,
+    p2: false,
+    p3: true,
+};
+const P1_P2: RegisterOperands = RegisterOperands {
+    p1: true,
+    p2: true,
+    p3: false,
+};
+const P1_P3: RegisterOperands = RegisterOperands {
+    p1: true,
+    p2: false,
+    p3: true,
+};
+const P2_P3: RegisterOperands = RegisterOperands {
+    p1: false,
+    p2: true,
+    p3: true,
+};
+const P1_P2_P3: RegisterOperands = RegisterOperands {
+    p1: true,
+    p2: true,
+    p3: true,
+};
+
+impl Opcode {
+    /// Which integer operands of this opcode are register numbers, per
+    /// `vm::row`'s dispatch (#257). A range's *first* register counts
+    /// (`ResultRow`'s `p1`, `Function`'s `p2`); the range length lives in
+    /// a count operand or `P4` and is not a register.
+    pub fn register_operands(self) -> RegisterOperands {
+        match self {
+            // Control: jump targets, flags, modes -- no registers.
+            Opcode::Init
+            | Opcode::Goto
+            | Opcode::Once
+            | Opcode::BeginSubrtn
+            | Opcode::Halt
+            | Opcode::Transaction
+            | Opcode::AutoCommit
+            | Opcode::SetJournalMode
+            | Opcode::IntegrityCheck
+            | Opcode::Synchronous => NONE,
+            Opcode::Return
+            | Opcode::IfNot
+            | Opcode::IfNotZero
+            | Opcode::IfPos
+            | Opcode::DecrJumpZero
+            | Opcode::IsNull
+            | Opcode::NotNull
+            | Opcode::MustBeInt
+            | Opcode::RealAffinity
+            | Opcode::Cast => P1,
+            Opcode::OffsetLimit => P1_P2_P3,
+
+            // Cursors: `p1` is the slot; `p2` a root page / jump target /
+            // source slot unless noted.
+            Opcode::OpenRead
+            | Opcode::OpenWrite
+            | Opcode::OpenEphemeral
+            | Opcode::OpenDup
+            | Opcode::Rewind
+            | Opcode::Last
+            | Opcode::Next
+            | Opcode::NullRow
+            | Opcode::Delete
+            | Opcode::IdxRewind
+            | Opcode::IdxLast
+            | Opcode::IdxNext
+            | Opcode::IdxPrev
+            | Opcode::AutoIndexNext
+            | Opcode::SorterSort
+            | Opcode::SorterNext
+            | Opcode::Sort
+            | Opcode::HashAggOpen
+            | Opcode::HashAggRewind
+            | Opcode::HashAggNext
+            | Opcode::CreateTable
+            | Opcode::DropTable
+            | Opcode::CreateIndex
+            | Opcode::DropIndex
+            | Opcode::CreateView
+            | Opcode::Analyze => NONE,
+            Opcode::OpenPseudo
+            | Opcode::Rowid
+            | Opcode::Sequence
+            | Opcode::NewRowid
+            | Opcode::Count
+            | Opcode::IdxRowid
+            | Opcode::AutoIndexRowid
+            | Opcode::IdxInsert
+            | Opcode::IdxDelete
+            | Opcode::SorterInsert
+            | Opcode::SorterData
+            | Opcode::HashAggFind
+            | Opcode::HashAggData => P2,
+            // `SorterOpen`'s `p2` is the LIMIT register when `p5 != 0`;
+            // treating it as a register when `p5 == 0` (codegen emits 0
+            // there) over-reserves nothing.
+            Opcode::SorterOpen => P2,
+            Opcode::Column
+            | Opcode::SeekRowid
+            | Opcode::Found
+            | Opcode::IdxLE
+            | Opcode::NoConflict
+            | Opcode::SeekIndexEq
+            | Opcode::SeekIndexGE
+            | Opcode::IdxCompareGT
+            | Opcode::AutoIndexSeek
+            | Opcode::AggFinal => P3,
+            Opcode::Insert | Opcode::AutoIndexInsert => P2_P3,
+
+            // Compare: `r[p1] <op> r[p3]`, jump `p2`.
+            Opcode::Eq | Opcode::Ge | Opcode::Gt | Opcode::Le | Opcode::Lt => P1_P3,
+
+            // Arithmetic: two sources, one destination.
+            Opcode::Add
+            | Opcode::Subtract
+            | Opcode::Multiply
+            | Opcode::Divide
+            | Opcode::Remainder
+            | Opcode::BitAnd
+            | Opcode::BitOr
+            | Opcode::ShiftLeft
+            | Opcode::ShiftRight
+            | Opcode::Concat => P1_P2_P3,
+            Opcode::Not | Opcode::BitNot | Opcode::Copy => P1_P2,
+
+            // Functions/aggregates: `p2` is the first argument register;
+            // `AggStep`'s `p1` is an aggregate slot, `HashAggStep`'s `p3` a
+            // cursor slot.
+            Opcode::Function => P2_P3,
+            Opcode::AggStep | Opcode::HashAggStep => P2,
+
+            // Loads: `p1` is the literal for `Integer`, unused otherwise.
+            Opcode::Integer
+            | Opcode::Int64
+            | Opcode::Real
+            | Opcode::Blob
+            | Opcode::String8
+            | Opcode::Variable => P2,
+            Opcode::Null => P2_P3,
+            // `p1..p1+p2` source range, `p3` destination / `p2` count.
+            Opcode::MakeRecord => P1_P3,
+            Opcode::ResultRow => P1,
+        }
+    }
+}
+
+impl Instruction {
+    /// The highest register this instruction statically names, `None`
+    /// if it names no register (#257). Counted ranges whose length is an
+    /// operand (`ResultRow`/`MakeRecord`'s `p1..p1+p2`, `Null`'s
+    /// `p2..=p3`) are included; ranges whose length lives in `P4`
+    /// (`Function`, `AggStep`, the index-key opcodes) contribute only
+    /// their first register -- the VM's lazy register growth covers the
+    /// rest.
+    pub fn max_register(&self) -> Option<i32> {
+        let ops = self.opcode.register_operands();
+        let mut max: Option<i32> = None;
+        let mut consider = |reg: i32| {
+            max = Some(max.map_or(reg, |m| m.max(reg)));
+        };
+        if ops.p1 {
+            consider(self.p1);
+        }
+        if ops.p2 {
+            consider(self.p2);
+        }
+        if ops.p3 {
+            consider(self.p3);
+        }
+        if matches!(self.opcode, Opcode::ResultRow | Opcode::MakeRecord) {
+            // `p1..p1+p2`: the last register is `p1 + p2 - 1`; a
+            // non-positive count names only `p1`.
+            if let Some(last) = self
+                .p2
+                .checked_sub(1)
+                .filter(|n| *n >= 0)
+                .and_then(|n| self.p1.checked_add(n))
+            {
+                consider(last);
+            }
+        }
+        max
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,6 +897,51 @@ mod tests {
             .push(Instruction::new(Opcode::Halt, 0, 0, 0));
         assert_eq!(program.instructions.len(), 2);
         assert_eq!(program.instructions[1].opcode, Opcode::Halt);
+    }
+
+    #[test]
+    fn max_register_ignores_literal_and_slot_operands() {
+        // `Integer`'s p1 is the value, not a register (#257).
+        assert_eq!(
+            Instruction::new(Opcode::Integer, 1_000_000, 3, 0).max_register(),
+            Some(3)
+        );
+        // `Column`: p1 cursor slot, p2 column index, p3 register.
+        assert_eq!(
+            Instruction::new(Opcode::Column, 0, 99, 4).max_register(),
+            Some(4)
+        );
+        // `OpenRead`: root page in p2 is not a register.
+        assert_eq!(
+            Instruction::new(Opcode::OpenRead, 0, 5000, 0).max_register(),
+            None
+        );
+        // Jumps name no registers; compares name p1/p3 but not the target.
+        assert_eq!(
+            Instruction::new(Opcode::Goto, 0, 500, 0).max_register(),
+            None
+        );
+        assert_eq!(
+            Instruction::new(Opcode::Eq, 2, 500, 7).max_register(),
+            Some(7)
+        );
+        // Counted ranges reach their last register.
+        assert_eq!(
+            Instruction::new(Opcode::ResultRow, 10, 3, 0).max_register(),
+            Some(12)
+        );
+        assert_eq!(
+            Instruction::new(Opcode::MakeRecord, 10, 3, 2).max_register(),
+            Some(12)
+        );
+        assert_eq!(
+            Instruction::new(Opcode::ResultRow, 10, 0, 0).max_register(),
+            Some(10)
+        );
+        assert_eq!(
+            Instruction::new(Opcode::Null, 0, 4, 9).max_register(),
+            Some(9)
+        );
     }
 
     #[test]
