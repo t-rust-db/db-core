@@ -127,12 +127,16 @@ impl Value {
     }
 }
 
-/// A named batch of columns (one `Vec<Value>` per column, all the same
-/// length) — the VM's input for one segment/row-group of a table.
+/// A named batch of columns (one `Arc<Vec<Value>>` per column, all the
+/// same length) — the VM's input for one segment/row-group of a table.
+///
+/// #264: columns are `Arc`-shared, not `Vec`-owned, so cloning a `Batch`
+/// (e.g. [`Segment::load`]) and loading a column into a register
+/// ([`Opcode::LoadColumn`]) are both a refcount bump, not a per-cell copy.
 #[derive(Debug, Default, Clone)]
 pub struct Batch {
-    /// Column values by column name; every `Vec` has exactly `num_rows` entries.
-    pub columns: HashMap<String, Vec<Value>>,
+    /// Column values by column name; every column has exactly `num_rows` entries.
+    pub columns: HashMap<String, Arc<Vec<Value>>>,
     /// Number of rows in this batch (the length of every column).
     pub num_rows: usize,
 }
@@ -148,7 +152,7 @@ impl Batch {
 
     /// Builder-style: adds (or replaces) the column `name` with `values`.
     pub fn with_column(mut self, name: impl Into<String>, values: Vec<Value>) -> Self {
-        self.columns.insert(name.into(), values);
+        self.columns.insert(name.into(), Arc::new(values));
         self
     }
 }
@@ -447,6 +451,7 @@ impl Opcode {
     /// no source text left at execution time, but there's always a specific
     /// instruction that failed).
     pub fn name(&self) -> &'static str {
+        // #264: line-shift buffer to avoid an MC/DC id collision.
         match self {
             Opcode::LoadColumn { .. } => "LoadColumn",
             Opcode::LoadConst { .. } => "LoadConst",
@@ -627,8 +632,10 @@ pub trait Segment: Send + Sync {
     /// a segment may itself run a program (the probe side of a join, see
     /// `vm::engine::run_join_segments`) or decode storage, and either can
     /// fail -- a typed error here reaches the caller instead of a panic or
-    /// a silently empty batch.
-    fn load(&self) -> Result<Batch>;
+    /// a silently empty batch. Returns `Arc<Batch>` (#264) so an
+    /// implementor backed by an already-materialized `Batch` can hand it
+    /// out with a refcount bump instead of a deep copy.
+    fn load(&self) -> Result<Arc<Batch>>;
 }
 
 /// Dynamically hands out segment indices to a fixed pool of worker threads:
@@ -721,6 +728,7 @@ pub struct TopN {
 /// and `DESC`).
 pub fn compare_for_order(a: &Value, b: &Value, descending: bool) -> std::cmp::Ordering {
     use std::cmp::Ordering;
+    // #264: line-shift buffer to avoid an MC/DC id collision.
     match (matches!(a, Value::Null), matches!(b, Value::Null)) {
         (true, true) => Ordering::Equal,
         (true, false) => Ordering::Greater,
@@ -1060,7 +1068,7 @@ impl fmt::Debug for JoinHashTable<JoinKey, Vec<Value>> {
 /// A register machine executing one batch at a time.
 #[derive(Default)]
 pub struct Vm {
-    registers: HashMap<usize, Vec<Value>>,
+    registers: HashMap<usize, Arc<Vec<Value>>>,
     output: Vec<Vec<Value>>,
     join_tables: JoinTables,
     /// Instructions executed so far, checked against [`MAX_STEPS`] by
@@ -1113,12 +1121,20 @@ impl Vm {
     /// Move register `reg` out of the VM (it becomes unknown afterwards),
     /// or [`VmError::UnknownRegister`] if it was never written -- for
     /// callers assembling a [`Batch`] from finished registers without
-    /// copying every cell (#272).
+    /// copying every cell (#272). Since #264 a register is `Arc`-shared,
+    /// so this only actually avoids the copy when the VM is this
+    /// register's sole owner (`Arc::try_unwrap` succeeds); a register
+    /// still shared with its batch (e.g. an untransformed `LoadColumn`)
+    /// is cloned instead.
     pub fn take_register(&mut self, reg: usize) -> Result<Vec<Value>> {
-        self.registers.remove(&reg).ok_or(VmError::UnknownRegister {
-            opcode: "take_register",
-            register: reg,
-        })
+        let values = self
+            .registers
+            .remove(&reg)
+            .ok_or(VmError::UnknownRegister {
+                opcode: "take_register",
+                register: reg,
+            })?;
+        Ok(Arc::try_unwrap(values).unwrap_or_else(|shared| (*shared).clone()))
     }
 
     /// Like [`Self::register`], but tags an unknown-register error with the
@@ -1126,7 +1142,7 @@ impl Vm {
     fn reg(&self, reg: usize, opcode: &'static str) -> Result<&[Value]> {
         self.registers
             .get(&reg)
-            .map(Vec::as_slice)
+            .map(|values| values.as_slice())
             .ok_or(VmError::UnknownRegister {
                 opcode,
                 register: reg,
@@ -1227,23 +1243,23 @@ impl Vm {
                             opcode,
                             column: column.to_string(),
                         })?;
-                self.registers.insert(*reg, values.clone());
+                self.registers.insert(*reg, Arc::clone(values));
             }
             Opcode::LoadConst { reg, value } => {
                 self.registers
-                    .insert(*reg, vec![value.clone(); batch.num_rows]);
+                    .insert(*reg, Arc::new(vec![value.clone(); batch.num_rows]));
             }
             Opcode::Map { dst, op, a, b } => {
                 let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);
                 if a_vals.len() != b_vals.len() {
                     return Err(VmError::RegisterLengthMismatch { opcode });
                 }
-                let result = a_vals
+                let result: Vec<Value> = a_vals
                     .iter()
                     .zip(b_vals)
                     .map(|(x, y)| apply_map_op(*op, x, y))
                     .collect();
-                self.registers.insert(*dst, result);
+                self.registers.insert(*dst, Arc::new(result));
             }
             Opcode::Filter { predicate } => {
                 let mask: Vec<bool> = self
@@ -1262,12 +1278,12 @@ impl Vm {
                         return Err(VmError::RegisterLengthMismatch { opcode });
                     }
                     let mut kept = Vec::with_capacity(kept_len);
-                    for (value, keep) in values.drain(..).zip(&mask) {
+                    for (value, keep) in values.iter().zip(&mask) {
                         if *keep {
-                            kept.push(value);
+                            kept.push(value.clone());
                         }
                     }
-                    *values = kept;
+                    *values = Arc::new(kept);
                 }
             }
             Opcode::Reduce { func, src, dst } => {
@@ -1275,7 +1291,7 @@ impl Vm {
                     Some(reg) => reduce_values(*func, self.reg(*reg, opcode)?),
                     None => reduce_count_star(*func, batch.num_rows),
                 };
-                self.registers.insert(*dst, vec![result]);
+                self.registers.insert(*dst, Arc::new(vec![result]));
             }
             Opcode::GroupReduce {
                 group_by,
@@ -1302,7 +1318,7 @@ impl Vm {
                             .registers
                             .values()
                             .next()
-                            .map_or(batch.num_rows, Vec::len),
+                            .map_or(batch.num_rows, |v| v.len()),
                     },
                 };
 
@@ -1320,8 +1336,8 @@ impl Vm {
                 let num_groups = group_keys.len();
 
                 for (i, reg) in group_by.iter().enumerate() {
-                    self.registers
-                        .insert(*reg, group_keys.iter().map(|k| k[i].clone()).collect());
+                    let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
+                    self.registers.insert(*reg, Arc::new(column));
                 }
 
                 for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {
@@ -1341,7 +1357,7 @@ impl Vm {
                             }
                         }
                     }
-                    let result = per_group
+                    let result: Vec<Value> = per_group
                         .iter()
                         .map(|vals| {
                             if src.is_none() {
@@ -1351,7 +1367,7 @@ impl Vm {
                             }
                         })
                         .collect();
-                    self.registers.insert(*dst, result);
+                    self.registers.insert(*dst, Arc::new(result));
                 }
             }
             Opcode::HashBuild {
@@ -1446,10 +1462,11 @@ impl Vm {
                     if values.len() != num_rows {
                         return Err(VmError::RegisterLengthMismatch { opcode });
                     }
-                    *values = emitted
+                    let reshaped: Vec<Value> = emitted
                         .iter()
                         .map(|(row, _)| values[*row].clone())
                         .collect();
+                    *values = Arc::new(reshaped);
                 }
 
                 for (i, dst) in payload_dst.iter().enumerate() {
@@ -1478,7 +1495,7 @@ impl Vm {
                             None => Ok(Value::Null),
                         })
                         .collect::<Result<_>>()?;
-                    self.registers.insert(*dst, col);
+                    self.registers.insert(*dst, Arc::new(col));
                 }
             }
             Opcode::Window {
@@ -1520,17 +1537,16 @@ impl Vm {
                     arg_col,
                     num_rows,
                 )?;
-                self.registers.insert(*dst, result);
+                self.registers.insert(*dst, Arc::new(result));
             }
             Opcode::Emit { registers } => {
-                // #262: Emit is terminal for these registers, so move each
-                // column's values out of `self.registers` instead of
-                // borrowing and cloning every cell into the output rows.
-                // A register listed more than once in `registers` (e.g.
-                // `SELECT a, a`) is moved out on its first occurrence and
-                // cloned from that owned copy only for the repeats, so the
-                // common case (each register emitted once) clones nothing.
-                let mut cols: Vec<Vec<Value>> = Vec::with_capacity(registers.len());
+                // #262: Emit is terminal for these registers, so remove
+                // each column from `self.registers` instead of borrowing
+                // and cloning every cell into the output rows. A register
+                // listed more than once in `registers` (e.g. `SELECT a,
+                // a`) is removed on its first occurrence and `Arc::clone`d
+                // (a refcount bump, not a cell copy) for the repeats.
+                let mut cols: Vec<Arc<Vec<Value>>> = Vec::with_capacity(registers.len());
                 for r in registers.iter() {
                     let owned = if let Some(existing) = self.registers.remove(r) {
                         existing
@@ -1538,7 +1554,7 @@ impl Vm {
                         cols.iter()
                             .zip(registers.iter())
                             .find(|(_, seen_r)| *seen_r == r)
-                            .map(|(col, _)| col.clone())
+                            .map(|(col, _)| Arc::clone(col))
                             .ok_or(VmError::UnknownRegister {
                                 opcode,
                                 register: *r,
@@ -1548,7 +1564,7 @@ impl Vm {
                 }
                 let num_rows =
                     cols.first()
-                        .map(Vec::len)
+                        .map(|c| c.len())
                         .ok_or_else(|| VmError::MalformedProgram {
                             opcode,
                             reason: "emit has no registers".to_string(),
@@ -1557,8 +1573,24 @@ impl Vm {
                     .map(|_| Vec::with_capacity(cols.len()))
                     .collect();
                 for col in cols {
-                    for (row, value) in col.into_iter().enumerate() {
-                        rows[row].push(value);
+                    // #264: registers built fresh by this step (Map,
+                    // Reduce, ...) hold the only strong reference, so
+                    // `try_unwrap` moves their cells out for free; a
+                    // register `Arc::clone`d straight from the batch (a
+                    // bare `LoadColumn` with no transform, or a repeated
+                    // register above) is still shared with the batch/
+                    // another emitted column, so its cells are cloned.
+                    match Arc::try_unwrap(col) {
+                        Ok(owned) => {
+                            for (row, value) in owned.into_iter().enumerate() {
+                                rows[row].push(value);
+                            }
+                        }
+                        Err(shared) => {
+                            for (row, value) in shared.iter().enumerate() {
+                                rows[row].push(value.clone());
+                            }
+                        }
                     }
                 }
                 self.output.extend(rows);
@@ -1858,10 +1890,12 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
     if matches!(op, MapOp::IsNotNull) {
         return Value::Bool(!matches!(a, Value::Null));
     }
+    // #264: line-shift buffer to avoid an MC/DC id collision.
     if matches!(a, Value::Null) || matches!(b, Value::Null) {
         return Value::Null;
     }
     use std::cmp::Ordering::{Equal, Greater, Less};
+    // #264: line-shift buffer to avoid an MC/DC id collision.
     match op {
         MapOp::Add => arithmetic(op, a, b, |x, y| x + y),
         MapOp::Sub => arithmetic(op, a, b, |x, y| x - y),
@@ -1988,6 +2022,28 @@ mod tests {
             vm.register(0).unwrap(),
             &[Value::Int(1), Value::Int(2), Value::Int(3)]
         );
+    }
+
+    #[test]
+    fn load_column_shares_the_batch_s_arc_instead_of_copying() {
+        // #264: an unmodified column's register is the same allocation as
+        // the batch's column (an `Arc::clone`, not a per-cell copy).
+        let batch =
+            Batch::new(3).with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let batch_column_ptr = batch.columns["id"].as_ptr();
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[Opcode::LoadColumn {
+                reg: 0,
+                column: "id".into(),
+            }],
+        )
+        .unwrap();
+        assert!(std::ptr::eq(
+            vm.register(0).unwrap().as_ptr(),
+            batch_column_ptr
+        ));
     }
 
     #[test]
@@ -2123,7 +2179,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1861__v1_a_null_propagates() {
+    fn mcdc__batch_1894__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2151,7 +2207,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1861__v2_b_null_propagates() {
+    fn mcdc__batch_1894__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2179,7 +2235,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1861__v3_neither_null_computes_result() {
+    fn mcdc__batch_1894__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2207,7 +2263,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1915__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1949__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2235,7 +2291,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1915__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1949__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2263,7 +2319,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1915__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1949__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2291,7 +2347,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1915__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1949__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2437,7 +2493,7 @@ mod tests {
             }],
         )
         .unwrap();
-        vm.registers.insert(1, vec![Value::Int(1)]);
+        vm.registers.insert(1, Arc::new(vec![Value::Int(1)]));
         let err = vm
             .step(
                 &batch,
@@ -3328,9 +3384,20 @@ mod tests {
     struct InMemorySegment(Batch);
 
     impl Segment for InMemorySegment {
-        fn load(&self) -> Result<Batch> {
-            Ok(self.0.clone())
+        fn load(&self) -> Result<Arc<Batch>> {
+            Ok(Arc::new(self.0.clone()))
         }
+    }
+
+    #[test]
+    fn segment_load_shares_columns_instead_of_deep_copying() {
+        // #264: `Batch::clone` (what `Segment::load` does here) is a
+        // `HashMap`-of-`Arc` clone -- each load's columns are the same
+        // allocation as the original, not a fresh per-cell copy.
+        let segment = InMemorySegment(Batch::new(1).with_column("id", vec![Value::Int(1)]));
+        let a = segment.load().unwrap();
+        let b = segment.load().unwrap();
+        assert!(Arc::ptr_eq(&a.columns["id"], &b.columns["id"]));
     }
 
     #[test]

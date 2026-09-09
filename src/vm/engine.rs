@@ -30,8 +30,12 @@ use std::sync::Arc;
 pub struct InMemorySegment(pub Batch);
 
 impl Segment for InMemorySegment {
-    fn load(&self) -> Result<Batch> {
-        Ok(self.0.clone())
+    fn load(&self) -> Result<Arc<Batch>> {
+        // #264: `Batch::clone` is a `HashMap<String, Arc<Vec<Value>>>`
+        // clone (refcount bumps) since columns are `Arc`-shared, not a
+        // per-cell copy -- cheap even though this allocates a fresh
+        // `Batch`/`Arc` per call.
+        Ok(Arc::new(self.0.clone()))
     }
 }
 
@@ -395,7 +399,7 @@ struct JoinedSegment<S: Segment> {
 }
 
 impl<S: Segment> Segment for JoinedSegment<S> {
-    fn load(&self) -> Result<Batch> {
+    fn load(&self) -> Result<Arc<Batch>> {
         let batch = self.left.load()?;
         let mut vm = Vm::with_join_tables(self.tables.clone());
         vm.execute(&batch, &self.shape.probe)?;
@@ -403,12 +407,16 @@ impl<S: Segment> Segment for JoinedSegment<S> {
         let num_rows = vm.register(0)?.len();
         let mut joined = Batch::new(num_rows);
         for (reg, name) in self.shape.left_columns.iter().enumerate() {
-            joined.columns.insert(name.clone(), vm.take_register(reg)?);
+            joined
+                .columns
+                .insert(name.clone(), Arc::new(vm.take_register(reg)?));
         }
         for (name, &reg) in self.shape.right_columns.iter().zip(&self.shape.payload_dst) {
-            joined.columns.insert(name.clone(), vm.take_register(reg)?);
+            joined
+                .columns
+                .insert(name.clone(), Arc::new(vm.take_register(reg)?));
         }
-        Ok(joined)
+        Ok(Arc::new(joined))
     }
 }
 
@@ -433,10 +441,8 @@ pub fn semi_filter(batch: &Batch, key_column: &str, allowed: &HashSet<String>) -
 
     let mut filtered = Batch::new(keep.len());
     for (name, column) in &batch.columns {
-        filtered.columns.insert(
-            name.clone(),
-            keep.iter().map(|&i| column[i].clone()).collect(),
-        );
+        let values: Vec<Value> = keep.iter().map(|&i| column[i].clone()).collect();
+        filtered.columns.insert(name.clone(), Arc::new(values));
     }
     Ok(filtered)
 }
@@ -532,7 +538,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_108__v1_distinct_disqualifies_bounded_scan() {
+    fn mcdc__engine_112__v1_distinct_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -549,7 +555,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_108__v2_non_empty_agg_parts_disqualifies_bounded_scan() {
+    fn mcdc__engine_112__v2_non_empty_agg_parts_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -566,7 +572,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_108__v3_filter_in_body_disqualifies_bounded_scan() {
+    fn mcdc__engine_112__v3_filter_in_body_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -583,7 +589,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_108__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan() {
+    fn mcdc__engine_112__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -604,9 +610,9 @@ mod tests {
         static LOADS: AtomicUsize = AtomicUsize::new(0);
         struct Counting(Batch);
         impl Segment for Counting {
-            fn load(&self) -> Result<Batch> {
+            fn load(&self) -> Result<Arc<Batch>> {
                 LOADS.fetch_add(1, Ordering::SeqCst);
-                Ok(self.0.clone())
+                Ok(Arc::new(self.0.clone()))
             }
         }
         let mk = |n: i64| -> Counting {
@@ -829,7 +835,10 @@ mod tests {
         let allowed: HashSet<String> = ["1", "3"].iter().map(|s| s.to_string()).collect();
         let out = semi_filter(&batch, "k", &allowed).unwrap();
         assert_eq!(out.num_rows, 2);
-        assert_eq!(out.columns["v"], vec![Value::Int(10), Value::Int(30)]);
+        assert_eq!(
+            out.columns["v"].as_slice(),
+            &[Value::Int(10), Value::Int(30)]
+        );
         assert!(semi_filter(&batch, "nope", &allowed).is_err());
     }
 }

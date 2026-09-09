@@ -44,6 +44,7 @@ use db_core::vm::batch::{
 };
 use std::borrow::Cow;
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Total rows across all segments -- same order of magnitude as rounds
@@ -81,11 +82,14 @@ fn report(kernel: &str, vm: Duration, raw: Duration) {
 struct PrebuiltSegment(Batch);
 
 impl Segment for PrebuiltSegment {
-    fn load(&self) -> db_core::vm::batch::Result<Batch> {
+    fn load(&self) -> db_core::vm::batch::Result<Arc<Batch>> {
         // A real `Segment` re-materializes a batch per call (e.g. decoding
         // a Parquet row group); cloning the prebuilt one here stands in
-        // for that cost rather than eliding it.
-        Ok(self.0.clone())
+        // for that cost rather than eliding it. Since db-core#264,
+        // `Batch::clone()` itself is a column-`Arc` refcount bump, not a
+        // per-cell copy -- this spike's own historical premise (measuring
+        // that clone's cost) predates that fix.
+        Ok(Arc::new(self.0.clone()))
     }
 }
 
