@@ -1,7 +1,9 @@
 [package]
 name = "db-storage"
-version = "0.6.3"
+version = "0.6.4"
 edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/t-rust-db/db-storage"
 
 [lib]
 name = "db_storage"
