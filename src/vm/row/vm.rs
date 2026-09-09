@@ -2191,14 +2191,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
 /// Runs `program` to completion (or the first error/step-limit),
 /// returning the rows [`Opcode::ResultRow`] emitted.
 pub fn execute(vm: &mut Vm, program: &Program) -> Result<Vec<Vec<Value>>, ExecError> {
-    // Every register operand is one of `p1..p3`; sizing the register
-    // file to their maximum up front is a cheap linear pass and keeps
-    // `set_register` from resizing inside the loop (#254). Jump targets
-    // in `p2` over-reserve by at most the program length.
+    // Sizing the register file to the highest register the program
+    // names is a cheap linear pass that keeps `set_register` from
+    // resizing inside the loop (#254). Only register operands count:
+    // an `Integer` literal or a root page in `p1`/`p2` must not (#257).
     let max_operand = program
         .instructions
         .iter()
-        .map(|i| i.p1.max(i.p2).max(i.p3))
+        .filter_map(Instruction::max_register)
         .max()
         .unwrap_or(0);
     vm.reserve_registers(max_operand);
@@ -4917,5 +4917,33 @@ mod tests {
             ]);
             assert!(execute(&mut vm, &program).is_ok());
         }
+    }
+
+    #[test]
+    fn execute_does_not_size_the_register_file_from_literal_operands() {
+        // #257: `Integer 1_000_000 -> r[1]` used to reserve a million
+        // registers because the pre-pass read `p1` as a register number.
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 1_000_000, 1, 0),
+            Instruction::with_p4(Opcode::OpenEphemeral, 0, 700_000, 0, P4::None),
+            Instruction::new(Opcode::ResultRow, 1, 1, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let rows = execute(&mut vm, &program).unwrap();
+        assert_eq!(rows, vec![vec![Value::Integer(1_000_000)]]);
+        assert_eq!(vm.registers.len(), 2, "r[0..=1] only");
+    }
+
+    #[test]
+    fn execute_still_presizes_to_the_highest_real_register() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Integer, 1, 40, 0),
+            Instruction::new(Opcode::ResultRow, 40, 3, 0), // r[40..=42]
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        execute(&mut vm, &program).unwrap();
+        assert_eq!(vm.registers.len(), 43);
     }
 }

@@ -15030,6 +15030,51 @@
     "compiler_void": false
   },
   {
+    "id": "program_731",
+    "file": "src/vm/row/program.rs",
+    "line": 731,
+    "decision": "match self {\n            // Control: jump targets, flags, modes -- no registers.\n            Opcode::Init\n            | Opcode::Goto\n            | Opcode::Once\n            | Opcode::BeginSubrtn\n            | Opcode::Halt\n            | Opcode::Transaction\n            | Opcode::AutoCommit\n            | Opcode::SetJournalMode\n            | Opcode::IntegrityCheck\n            | Opcode::Synchronous => NONE,\n            Opcode::Return\n            | Opcode::IfNot\n            | Opcode::IfNotZero\n            | Opcode::IfPos\n            | Opcode::DecrJumpZero\n            | Opcode::IsNull\n            | Opcode::NotNull\n            | Opcode::MustBeInt\n            | Opcode::RealAffinity\n            | Opcode::Cast => P1,\n            Opcode::OffsetLimit => P1_P2_P3,\n\n            // Cursors: `p1` is the slot; `p2` a root page / jump target /\n            // source slot unless noted.\n            Opcode::OpenRead\n            | Opcode::OpenWrite\n            | Opcode::OpenEphemeral\n            | Opcode::OpenDup\n            | Opcode::Rewind\n            | Opcode::Last\n            | Opcode::Next\n            | Opcode::NullRow\n            | Opcode::Delete\n            | Opcode::IdxRewind\n            | Opcode::IdxLast\n            | Opcode::IdxNext\n            | Opcode::IdxPrev\n            | Opcode::AutoIndexNext\n            | Opcode::SorterSort\n            | Opcode::SorterNext\n            | Opcode::Sort\n            | Opcode::HashAggOpen\n            | Opcode::HashAggRewind\n            | Opcode::HashAggNext\n            | Opcode::CreateTable\n            | Opcode::DropTable\n            | Opcode::CreateIndex\n            | Opcode::DropIndex\n            | Opcode::CreateView\n            | Opcode::Analyze => NONE,\n            Opcode::OpenPseudo\n            | Opcode::Rowid\n            | Opcode::Sequence\n            | Opcode::NewRowid\n            | Opcode::Count\n            | Opcode::IdxRowid\n            | Opcode::AutoIndexRowid\n            | Opcode::IdxInsert\n            | Opcode::IdxDelete\n            | Opcode::SorterInsert\n            | Opcode::SorterData\n            | Opcode::HashAggFind\n            | Opcode::HashAggData => P2,\n            // `SorterOpen`'s `p2` is the LIMIT register when `p5 != 0`;\n            // treating it as a register when `p5 == 0` (codegen emits 0\n            // there) over-reserves nothing.\n            Opcode::SorterOpen => P2,\n            Opcode::Column\n            | Opcode::SeekRowid\n            | Opcode::Found\n            | Opcode::IdxLE\n            | Opcode::NoConflict\n            | Opcode::SeekIndexEq\n            | Opcode::SeekIndexGE\n            | Opcode::IdxCompareGT\n            | Opcode::AutoIndexSeek\n            | Opcode::AggFinal => P3,\n            Opcode::Insert | Opcode::AutoIndexInsert => P2_P3,\n\n            // Compare: `r[p1] <op> r[p3]`, jump `p2`.\n            Opcode::Eq | Opcode::Ge | Opcode::Gt | Opcode::Le | Opcode::Lt => P1_P3,\n\n            // Arithmetic: two sources, one destination.\n            Opcode::Add\n            | Opcode::Subtract\n            | Opcode::Multiply\n            | Opcode::Divide\n            | Opcode::Remainder\n            | Opcode::BitAnd\n            | Opcode::BitOr\n            | Opcode::ShiftLeft\n            | Opcode::ShiftRight\n            | Opcode::Concat => P1_P2_P3,\n            Opcode::Not | Opcode::BitNot | Opcode::Copy => P1_P2,\n\n            // Functions/aggregates: `p2` is the first argument register;\n            // `AggStep`'s `p1` is an aggregate slot, `HashAggStep`'s `p3` a\n            // cursor slot.\n            Opcode::Function => P2_P3,\n            Opcode::AggStep | Opcode::HashAggStep => P2,\n\n            // Loads: `p1` is the literal for `Integer`, unused otherwise.\n            Opcode::Integer\n            | Opcode::Int64\n            | Opcode::Real\n            | Opcode::Blob\n            | Opcode::String8\n            | Opcode::Variable => P2,\n            Opcode::Null => P2_P3,\n            // `p1..p1+p2` source range, `p3` destination / `p2` count.\n            Opcode::MakeRecord => P1_P3,\n            Opcode::ResultRow => P1,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "program_863",
+    "file": "src/vm/row/program.rs",
+    "line": 863,
+    "decision": "ops.p1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "program_866",
+    "file": "src/vm/row/program.rs",
+    "line": 866,
+    "decision": "ops.p2",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "program_869",
+    "file": "src/vm/row/program.rs",
+    "line": 869,
+    "decision": "ops.p3",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "program_872",
+    "file": "src/vm/row/program.rs",
+    "line": 872,
+    "decision": "matches!(self.opcode, Opcode::ResultRow | Opcode::MakeRecord)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
     "id": "record_56",
     "file": "src/vm/row/record.rs",
     "line": 56,
