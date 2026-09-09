@@ -161,6 +161,56 @@ fn where_clause_scalar_subquery() {
     assert_eq!(rows, vec![vec![Value::Integer(15)]]);
 }
 
+/// #281: the implicit-group aggregate scan peels its first matching row
+/// out of the loop. The first *match* is not the first *row*, later
+/// matches fold, a bare column snapshots the first matching row, and a
+/// zero-match scan still flushes one row (`count(*) = 0`, others NULL).
+#[test]
+fn implicit_group_aggregate_peels_first_match_and_keeps_zero_row_flush() {
+    let t = || schema("t", &["a", "b"]);
+    let seed = || -> Vec<(i64, Vec<Value>)> {
+        (1..=6)
+            .map(|i| {
+                (
+                    i,
+                    vec![Value::Integer(i * 10), Value::Text(format!("b{i}").into())],
+                )
+            })
+            .collect()
+    };
+    // rows 1-2 fail the predicate; first match is row 3 (a = 30, b = "b3").
+    let rows = run(
+        &[t()],
+        "SELECT count(*), sum(a), b FROM t WHERE a > 25",
+        seed(),
+    );
+    assert_eq!(
+        rows,
+        vec![vec![
+            Value::Integer(4),
+            Value::Integer(30 + 40 + 50 + 60),
+            Value::Text("b3".into()),
+        ]]
+    );
+    // only the last row matches: the steady-state pass runs zero times.
+    let rows = run(
+        &[t()],
+        "SELECT count(*), max(a) FROM t WHERE a > 55",
+        seed(),
+    );
+    assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(60)]]);
+    // nothing matches: one row, count 0, other aggregates NULL.
+    let rows = run(
+        &[t()],
+        "SELECT count(*), sum(a) FROM t WHERE a > 100",
+        seed(),
+    );
+    assert_eq!(rows, vec![vec![Value::Integer(0), Value::Null]]);
+    // no WHERE: every row folds.
+    let rows = run(&[t()], "SELECT count(*), min(a) FROM t", seed());
+    assert_eq!(rows, vec![vec![Value::Integer(6), Value::Integer(10)]]);
+}
+
 #[test]
 fn insert_then_group_by_select_sees_the_new_row() {
     let schemas = [schema("t", &["k", "v"])];

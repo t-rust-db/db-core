@@ -344,8 +344,6 @@ where
 
     let limit = compile_limit_setup(em, reg, &table_scope, select)?;
 
-    let zero_reg = reg.alloc();
-    em.emit(Instruction::new(Opcode::Integer, 0, zero_reg, 0));
     let have_group_reg = reg.alloc();
     em.emit(Instruction::new(Opcode::Integer, 0, have_group_reg, 0));
 
@@ -369,31 +367,31 @@ where
         })
         .collect();
 
-    let scan_rewind = em.emit(Instruction::new(Opcode::Rewind, cursors.table, 0, 0));
+    // #281: the first matching row is peeled out of the scan loop. It
+    // sets `have_group_reg`, resets the accumulators and snapshots the
+    // implicit group's "arbitrary row"; every later match only folds.
+    // Before, one loop carried an `Eq have_group_reg, 0` + `Goto` on every
+    // row to tell the two cases apart -- two opcodes per row whose
+    // outcome is fixed after the first match. `flush_group` sees exactly
+    // the registers it did before, so the zero-row behaviour (#287) and
+    // the bare-column snapshot are unchanged.
     let tail_label = em.new_label();
+    let scan_rewind = em.emit(Instruction::new(Opcode::Rewind, cursors.table, 0, 0));
     em.patch_p2(scan_rewind, tail_label);
-    let scan_loop = em.new_label();
-    em.place(scan_loop);
 
-    let scan_skip = em.new_label();
+    // Pass 1: advance to the first matching row.
+    let first_loop = em.new_label();
+    em.place(first_loop);
+    let first_skip = em.new_label();
     if let Some(where_expr) = &select.where_clause {
         compile_cond(
             em,
             reg,
             &table_scope,
             where_expr,
-            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(scan_skip)),
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(first_skip)),
         )?;
     }
-
-    let boundary_label = em.new_label();
-    let not_boundary_label = em.new_label();
-    let first_row_check = em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
-    em.patch_p2(first_row_check, boundary_label);
-    let goto_not_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-    em.patch_p2(goto_not_boundary, not_boundary_label);
-
-    em.place(boundary_label);
     em.emit(Instruction::new(Opcode::Integer, 1, have_group_reg, 0));
     // This table's first matching row: fold with `reset: true` so a
     // freshly-numbered slot starts a fresh accumulator — see
@@ -411,19 +409,34 @@ where
     for (idx, &r) in snapshot_regs.iter().enumerate() {
         emit_column_read(em, schema, cursors.table, idx, r)?;
     }
-    let after_accumulate = em.new_label();
-    let goto_after_accumulate = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-    em.patch_p2(goto_after_accumulate, after_accumulate);
+    let steady_next = em.new_label();
+    let goto_steady_next = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+    em.patch_p2(goto_steady_next, steady_next);
+    em.place(first_skip);
+    let first_next = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
+    em.patch_p2(first_next, first_loop);
+    // Cursor exhausted before any row matched: straight to the flush.
+    let goto_tail = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+    em.patch_p2(goto_tail, tail_label);
 
-    em.place(not_boundary_label);
+    // Pass 2: steady state -- WHERE, fold, next.
+    let steady_loop = em.new_label();
+    em.place(steady_loop);
+    if let Some(where_expr) = &select.where_clause {
+        compile_cond(
+            em,
+            reg,
+            &table_scope,
+            where_expr,
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(steady_next)),
+        )?;
+    }
     for agg in &agg_slots {
         emit_agg_step(em, reg, &table_scope, agg, false)?;
     }
-
-    em.place(after_accumulate);
-    em.place(scan_skip);
-    let scan_next = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
-    em.patch_p2(scan_next, scan_loop);
+    em.place(steady_next);
+    let steady_next_op = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
+    em.patch_p2(steady_next_op, steady_loop);
 
     // Tail flush: always exactly one row (#287), whether or not any
     // row ever matched — `have_group_reg`/`snapshot_regs`' NULL
@@ -1503,6 +1516,25 @@ mod mcdc_vectors {
     // `having.is_some() || limit.is_some() || !order_by.is_empty()`.
     // Observable: the fast path emits `Opcode::Count`; the fallback scans.
     // ---------------------------------------------------------------------
+    /// #281: the implicit-group aggregate scan peels its first matching
+    /// row, so the steady-state loop has no per-row `Eq have_group, 0`
+    /// check -- and the program carries two `Next`s (one per pass).
+    #[test]
+    fn direct_agg_scan_has_no_first_row_check_in_the_loop() {
+        let program = compile(
+            "SELECT count(*), sum(b) FROM t WHERE a > 1",
+            &[table("t", 2, &["a", "b"])],
+        )
+        .unwrap();
+        assert!(!has(&program, Opcode::Eq), "{program:?}");
+        let nexts = program
+            .instructions
+            .iter()
+            .filter(|i| i.opcode == Opcode::Next)
+            .count();
+        assert_eq!(nexts, 2, "{program:?}");
+    }
+
     #[test]
     fn mcdc__aggregate_53__v1_bare_count_star_takes_the_count_fast_path() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
@@ -1640,7 +1672,7 @@ mod mcdc_vectors {
     // GROUP BY needs no `SorterOpen`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1146__v1_explicit_group_by_on_indexed_column_walks_the_index() {
+    fn mcdc__aggregate_1159__v1_explicit_group_by_on_indexed_column_walks_the_index() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && opens(&p, 5), "{p:?}");
     }
@@ -1648,7 +1680,7 @@ mod mcdc_vectors {
     /// `implicit_group == true` (an aggregate with no GROUP BY) never asks
     /// for index ordering: there is one group, nothing to order.
     #[test]
-    fn mcdc__aggregate_1146__v2_implicit_group_never_asks_for_index_ordering() {
+    fn mcdc__aggregate_1159__v2_implicit_group_never_asks_for_index_ordering() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && !opens(&p, 5), "{p:?}");
     }
@@ -1656,7 +1688,7 @@ mod mcdc_vectors {
     /// `group_by.is_empty()` with no aggregate is a plain scan; the grouped
     /// branch (and with it this decision) is skipped entirely.
     #[test]
-    fn mcdc__aggregate_1146__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
+    fn mcdc__aggregate_1159__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
         let p = ok("SELECT a FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
@@ -1666,13 +1698,13 @@ mod mcdc_vectors {
     // (same function): either disqualifies the index-ordered GROUP BY.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1152__v1_no_where_on_a_rowid_table_is_index_ordered() {
+    fn mcdc__aggregate_1165__v1_no_where_on_a_rowid_table_is_index_ordered() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_1152__v2_where_clause_needs_a_sorter() {
+    fn mcdc__aggregate_1165__v2_where_clause_needs_a_sorter() {
         let p = ok(
             "SELECT a, count(*) FROM t WHERE b > 0 GROUP BY a",
             &[t_indexed_a()],
@@ -1681,7 +1713,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_1152__v3_without_rowid_table_needs_a_sorter() {
+    fn mcdc__aggregate_1165__v3_without_rowid_table_needs_a_sorter() {
         let mut schema = t_indexed_a();
         schema.without_rowid = true;
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[schema]);

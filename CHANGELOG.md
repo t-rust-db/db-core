@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.76.6] - 2026-09-09
+
+### Changed
+
+- **Direct aggregate scan peels its first matching row out of the loop** (#281). `try_compile_direct_agg_scan` (implicit-group aggregates, no `GROUP BY`) carried an `Eq have_group, 0` + `Goto` on every scanned row to tell "first match: reset accumulators, snapshot the arbitrary row" from "later match: fold". The first match is now a separate pass, so the steady-state loop is `<WHERE> ; AggStep ; Next` -- two opcodes fewer per row; the `WHERE` predicate is compiled twice (its uncorrelated subqueries were already hoisted, so nothing runs twice). Result rows, zero-row behaviour (#287) and the bare-column snapshot are unchanged.
+
 ## [0.76.5] - 2026-09-09
 
 ### Changed
