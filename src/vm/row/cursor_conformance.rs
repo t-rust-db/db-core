@@ -199,8 +199,8 @@ mod tests {
 
     use super::super::cursor::EphemeralTableCursor;
     use super::super::record::{decode_column, decode_record, encode_record};
-    use crate::value::TextEncoding;
     use super::*;
+    use crate::value::TextEncoding;
 
     #[test]
     fn ephemeral_table_cursor_satisfies_the_conformance_suite() {

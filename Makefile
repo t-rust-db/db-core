@@ -112,6 +112,19 @@ lint: ## Run clippy (deny warnings), check formatting, and the panic-allow polic
 check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see tools/check_panic_allows.py)
 	@python3 tools/check_panic_allows.py
 
+# Every feature must build on its own (with its declared implications and
+# nothing else). `--all-features` hides a missing implication; a consumer
+# enabling one feature finds it. 0.78.0 shipped `storage-row` without
+# `parser-row` this way.
+FEATURES := storage-row storage-column parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
+
+check-features: ## Each Cargo feature builds standalone (cargo check --no-default-features --features X)
+	@for f in $(FEATURES); do \
+		printf '  %-16s' "$$f"; \
+		if out=$$(cargo check -q --no-default-features --features $$f 2>&1); then echo ok; \
+		else echo FAIL; echo "$$out" | grep -E '^error' | head -5; exit 1; fi; \
+	done
+
 check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 	@command -v cargo-deny >/dev/null 2>&1 || { \
 		echo "cargo-deny not found — install with: cargo install cargo-deny --locked"; \
@@ -160,6 +173,7 @@ check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the
 ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) lint
 	$(MAKE) check-deny
+	$(MAKE) check-features
 	$(MAKE) check-mvl-limit
 	$(MAKE) test
 	@echo "all CI gates passed"

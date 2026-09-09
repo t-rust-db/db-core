@@ -4,6 +4,14 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.78.1] - 2026-09-09
+
+### Fixed
+
+- **`storage-row` implies `parser-row`.** 0.78.0 did not compile with `--no-default-features --features storage-row`: `storage::row::schema::ddl_reader` calls `TableSchema::with_computed_rowid_alias`, which is `parser-row`-gated. db-storage had carried this as `db-core = { features = ["parser-row"] }`; the #290 merge dropped the implication. Caught by trigrep (the only consumer that enables `storage-row` alone).
+- `benches/vm_opcodes.rs` imported `vm::row::Value`, removed in 0.78.0 (that change updated the changelog, not the bench) — `cargo clippy --all-targets`, i.e. `make lint`/`make ci`, failed on tagged `main`. Now `db_core::value::Value`.
+- `make check-features` (in `make ci`): `cargo check --no-default-features` for each of `storage-row`, `storage-column`, `parser-row`, `vm-row`, `codegen-row`, `vm-batch`, `codegen-batch`, `emit-batch` — every feature must build standalone.
+
 ## [0.78.0] - 2026-09-09
 
 ### Changed
