@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.76.2] - 2026-09-09
+
+### Changed
+
+- **`LoadColumn` and `Segment::load` are zero-copy** (#264). `Batch.columns` and `Vm::registers` hold `Arc<Vec<Value>>` instead of `Vec<Value>`: `LoadColumn` is a refcount bump, not a per-cell clone, and `Segment::load`'s `Batch::clone` is a `HashMap`-of-`Arc` clone, not a deep copy. `Emit`'s move-not-clone optimization (#262) and `Vm::take_register` (#272) keep working via `Arc::try_unwrap`, falling back to a clone only when the register is still shared with its batch.
+
 ## [0.76.1] - 2026-09-09
 
 ### Added
