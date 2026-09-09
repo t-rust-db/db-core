@@ -1473,6 +1473,9 @@ impl Vm {
     clippy::arithmetic_side_effects,
     reason = "every column slice holds `num_rows` values and every index in `indices`/`partitions` was drawn from `0..num_rows`; `pos + 1` and the running counters are bounded by `num_rows`"
 )]
+// #262: this blank comment line exists only to shift the line numbers of
+// the MC/DC decisions below off the same-basename collision with
+// `src/codegen/batch.rs` (`cargo-mvl-mcdc` ids by basename+line, not path).
 fn compute_window(
     func: WindowFunc,
     offset: Option<i64>,
@@ -1767,6 +1770,9 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
         // `Null`); the same semantics here keep this match total without
         // an `unreachable!` the qualified subset forbids.
         MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),
+        // #262: keep this on its own line -- collides on line number
+        // (basename+line id) with an unrelated decision in
+        // src/codegen/batch.rs otherwise.
         MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),
         MapOp::MaskIf => {
             // MaskIf keeps `a` wherever the predicate register is true.
@@ -1997,7 +2003,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1738__v1_a_null_propagates() {
+    fn mcdc__batch_1741__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2025,7 +2031,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1738__v2_b_null_propagates() {
+    fn mcdc__batch_1741__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2053,7 +2059,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1738__v3_neither_null_computes_result() {
+    fn mcdc__batch_1741__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2081,7 +2087,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1789__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1795__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2109,7 +2115,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1789__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1795__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2137,7 +2143,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1789__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1795__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2165,7 +2171,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1789__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1795__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
