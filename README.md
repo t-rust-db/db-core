@@ -5,8 +5,11 @@ Shared SQL language/execution layer for the t-rust-db family of engines
 engines share types/expr/parser/join/vm/codegen/emit without duplicating them,
 each gated behind Cargo features so a consumer builds only what it uses.
 
-Physical storage is **not** here — see `db-storage` (`row`/`column`/
-`stream` modules, per [ADR 0006](.openspec/adr/0006-storage-consolidation-into-db-storage.md)).
+Physical storage is **not** in the `db-core` crate itself — see the
+`db-storage/` workspace member (`row`/`column`/`stream` modules, per
+[ADR 0006](.openspec/adr/0006-storage-consolidation-into-db-storage.md),
+absorbed as a workspace member per
+[ADR 0016](.openspec/adr/0016-absorb-db-storage-as-workspace-member.md)).
 `db-core` is storage-agnostic by design.
 
 Was six separate crates (`sql-types`, `sql-expr`, `sql-parser`,

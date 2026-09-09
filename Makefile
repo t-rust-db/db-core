@@ -27,22 +27,27 @@ build: ## Build with all features
 # `make test-spike` to run them explicitly.
 NON_SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
 	| python3 -c "import json,sys; \
-	  print(' '.join('--test '+t['name'] for t in json.load(sys.stdin)['packages'][0]['targets'] \
+	  pkg = next(p for p in json.load(sys.stdin)['packages'] if p['name'] == 'db-core'); \
+	  print(' '.join('--test '+t['name'] for t in pkg['targets'] \
 	    if 'test' in t['kind'] and '/tests/spike/' not in t['src_path']))")
 
-test: ## Run the full test suite with all features (spikes excluded; see make test-spike)
-	cargo test --all-features --lib $(NON_SPIKE_TESTS)
+test: ## Run db-core's test suite with all features (spikes excluded; see make test-spike)
+	cargo test -p db-core --all-features --lib $(NON_SPIKE_TESTS)
 
-test-lib: ## Just the library unit tests (fastest inner loop)
-	cargo test --all-features --lib
+test-lib: ## Just db-core's library unit tests (fastest inner loop)
+	cargo test -p db-core --all-features --lib
+
+test-storage: ## Run db-storage's test suite (workspace member, absorbed #287)
+	$(MAKE) -C db-storage test
 
 SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
 	| python3 -c "import json,sys; \
-	  print(' '.join('--test '+t['name'] for t in json.load(sys.stdin)['packages'][0]['targets'] \
+	  pkg = next(p for p in json.load(sys.stdin)['packages'] if p['name'] == 'db-core'); \
+	  print(' '.join('--test '+t['name'] for t in pkg['targets'] \
 	    if 'test' in t['kind'] and '/tests/spike/' in t['src_path']))")
 
 test-spike: ## Run only the throwaway experiments under tests/spike/
-	cargo test --all-features $(SPIKE_TESTS)
+	cargo test -p db-core --all-features $(SPIKE_TESTS)
 
 # Scanned file set for `test-mcdc`: all of `src/`, not a curated subset --
 # no obligation is exempted by file selection (ADR 0015, tier 3).
@@ -153,6 +158,8 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) check-deny
 	$(MAKE) check-mvl-limit
 	$(MAKE) test
+	$(MAKE) -C db-storage lint
+	$(MAKE) test-storage
 	@echo "all CI gates passed"
 
 # === Performance ===
