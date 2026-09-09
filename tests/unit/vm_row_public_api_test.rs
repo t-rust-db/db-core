@@ -23,9 +23,10 @@
     reason = "test code fails fast (db-core#230); clippy.toml's allow-*-in-tests does not reach helper fns outside #[test]"
 )]
 
+use db_core::value::Value;
 use db_core::vm::row::{
     execute, Cursor, EphemeralTableCursor, ExecError, InMemoryCursor, Instruction, Opcode, Program,
-    Value, Vm, P4,
+    Vm, P4,
 };
 
 #[test]

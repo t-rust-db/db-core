@@ -21,9 +21,10 @@
     reason = "test code fails fast (db-core#230); clippy.toml's allow-*-in-tests does not reach helper fns outside #[test]"
 )]
 
+use db_core::value::Collation;
 use db_core::vm::row::{
-    AnalyzeTarget, Collation, Cursor, CursorFactory, CursorFactoryError, InMemoryCursor,
-    SchemaStorage, SchemaStorageError, SortKeyColumn, Transaction, TransactionError,
+    AnalyzeTarget, Cursor, CursorFactory, CursorFactoryError, InMemoryCursor, SchemaStorage,
+    SchemaStorageError, SortKeyColumn, Transaction, TransactionError,
 };
 
 // --- CursorFactory ---------------------------------------------------------

@@ -1,12 +1,12 @@
 //! NULL propagation and three-valued logic. `None` represents SQL NULL
 //! throughout this module's `Option<bool>` results -- never a boolean.
 //! Ported from sqlite-rs's `vdbe::value` (renamed to avoid colliding
-//! with [`super::value`]'s `Value` type, ADR 0008).
+//! with [`crate::value`]'s `Value` type, ADR 0008).
 
 use std::cmp::Ordering;
 
 use super::compare::compare;
-use super::value::{Collation, Value};
+use crate::value::{Collation, Value};
 
 /// `=`: NULL propagates (a NULL operand yields `None`, not a boolean).
 pub fn sql_eq(a: &Value, b: &Value, collation: Collation) -> Option<bool> {

@@ -14,7 +14,8 @@ use std::process::{Command, Stdio};
 
 use db_core::codegen::row::dispatch::compile_statement;
 use db_core::codegen::row::TableSchema;
-use db_core::vm::row::{execute, Cursor, EphemeralTableCursor, Value, Vm};
+use db_core::value::Value;
+use db_core::vm::row::{execute, Cursor, EphemeralTableCursor, Vm};
 
 fn schema() -> TableSchema {
     TableSchema {

@@ -403,7 +403,7 @@ impl RegAlloc {
 }
 
 pub(crate) fn p4_coll_seq(
-    collation: crate::vm::row::Collation,
+    collation: crate::value::Collation,
     affinity: crate::vm::row::Affinity,
 ) -> P4 {
     P4::CollSeq {

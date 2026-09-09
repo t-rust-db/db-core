@@ -6,7 +6,8 @@ use super::cond::compile_cond;
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{CodegenError, CondTargets, Emitter, RegAlloc, Scope, Target};
 use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, ParamKind, UnaryOp};
-use crate::vm::row::{affinity_of, Affinity, Collation, Instruction, Opcode, P4};
+use crate::value::Collation;
+use crate::vm::row::{affinity_of, Affinity, Instruction, Opcode, P4};
 
 /// Reads column `idx` of the row at `cursor` into `dest`, emitting
 /// `Rowid` rather than `Column` for a rowid-alias column. A table's

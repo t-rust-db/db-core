@@ -15,7 +15,7 @@ use std::cmp::Ordering;
 
 use super::coerce::coerce_text_to_numeric;
 use super::compare::compare;
-use super::value::{Collation, Value};
+use crate::value::{Collation, Value};
 
 /// Errors from stepping/finalizing an aggregate -- a minimal local
 /// error type rather than porting sqlite-rs's full `functions::
