@@ -26,6 +26,7 @@ use db_core::vm::batch::{
     Source, TopN, Value, Vm, VmError, WindowFunc,
 };
 use db_core::vm::engine::{run, run_join, run_join_segments, InMemorySegment, JoinProgram};
+use std::sync::Arc;
 
 #[test]
 fn scan_filter_and_emit_over_a_single_segment() {
@@ -193,15 +194,21 @@ fn join_fixture() -> (Vec<Batch>, Batch) {
 }
 
 fn concat(batches: &[Batch]) -> Batch {
-    let mut all = Batch::new(0);
+    let mut merged: std::collections::HashMap<String, Vec<Value>> =
+        std::collections::HashMap::new();
+    let mut num_rows = 0;
     for b in batches {
-        all.num_rows += b.num_rows;
+        num_rows += b.num_rows;
         for (name, values) in &b.columns {
-            all.columns
+            merged
                 .entry(name.clone())
                 .or_default()
                 .extend(values.iter().cloned());
         }
+    }
+    let mut all = Batch::new(num_rows);
+    for (name, values) in merged {
+        all = all.with_column(name, values);
     }
     all
 }
@@ -399,7 +406,7 @@ fn count_merged_across_segments_stays_an_integer() {
 fn a_failing_segment_load_is_a_segment_load_error() {
     struct Broken;
     impl Segment for Broken {
-        fn load(&self) -> Result<Batch, VmError> {
+        fn load(&self) -> Result<Arc<Batch>, VmError> {
             Err(VmError::SegmentLoad {
                 reason: "orders.parquet row group 3: column `amount`: bad page".to_string(),
             })
@@ -501,8 +508,8 @@ impl Source for OneShotSource {
 struct StaticSegment(Batch);
 
 impl Segment for StaticSegment {
-    fn load(&self) -> Result<Batch, VmError> {
-        Ok(self.0.clone())
+    fn load(&self) -> Result<Arc<Batch>, VmError> {
+        Ok(Arc::new(self.0.clone()))
     }
 }
 

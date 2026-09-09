@@ -71,8 +71,8 @@ fn semi_filter_keeps_only_rows_whose_key_is_allowed() {
     let filtered = semi_filter(&batch, "id", &allowed).unwrap();
     assert_eq!(filtered.num_rows, 2);
     assert_eq!(
-        filtered.columns.get("id").unwrap(),
-        &vec![Value::Int(1), Value::Int(3)]
+        filtered.columns.get("id").unwrap().as_slice(),
+        &[Value::Int(1), Value::Int(3)]
     );
 }
 

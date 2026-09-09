@@ -68,6 +68,7 @@ use db_core::vm::batch::{
 };
 use std::borrow::Cow;
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const ROWS_TOTAL: usize = 1_000_000;
@@ -128,10 +129,12 @@ fn build_segments(rows_total: usize) -> Vec<Batch> {
 struct PrebuiltSegment(Batch);
 
 impl Segment for PrebuiltSegment {
-    fn load(&self) -> db_core::vm::batch::Result<Batch> {
+    fn load(&self) -> db_core::vm::batch::Result<Arc<Batch>> {
         // Stands in for real decode cost (e.g. a Parquet row group) --
-        // deliberately not free, see round 3's doc comment.
-        Ok(self.0.clone())
+        // deliberately not free, see round 3's doc comment. Since
+        // db-core#264, `Batch::clone()` is a column-`Arc` refcount bump,
+        // not a per-cell copy -- this spike's premise predates that fix.
+        Ok(Arc::new(self.0.clone()))
     }
 }
 
