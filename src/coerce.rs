@@ -263,10 +263,21 @@ pub fn shift_right(a: &Value, b: &Value) -> Value {
 pub fn concat(a: &Value, b: &Value) -> Value {
     // One allocation for the result (#259): text operands are appended
     // straight from their `Rc<str>`, numbers render into the same buffer.
-    let mut out = String::new();
+    let mut out = String::with_capacity(text_len_hint(a).saturating_add(text_len_hint(b)));
     push_text(&mut out, a);
     push_text(&mut out, b);
     Value::Text(out.into())
+}
+
+/// Upper-bound byte length of `v`'s TEXT rendering, so `concat` sizes
+/// its buffer once (`i64`/`f64` renderings never exceed 24 bytes).
+fn text_len_hint(v: &Value) -> usize {
+    match v {
+        Value::Null => 0,
+        Value::Integer(_) | Value::Real(_) => 24,
+        Value::Text(s) => s.len(),
+        Value::Blob(b) => b.len(),
+    }
 }
 
 /// Appends `v`'s TEXT rendering (same rules as `as_text`) to `out`.
