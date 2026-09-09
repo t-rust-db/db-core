@@ -163,7 +163,7 @@ fn every_obligation_id_in_the_snapshot_is_unique_across_files() {
          tests/mcdc/obligations.json -- `cargo-mvl-mcdc harvest` joins tagged tests \
          to obligations by id alone, so a shared id silently misattributes discharged \
          vectors between the files (typically two files with the same basename, e.g. \
-         a module move that leaves both `src/codegen/row/select/aggregate.rs` and `src/vm/row/aggregate.rs` \
+         a module move that leaves both `src/codegen/batch.rs` and `src/vm/batch.rs` \
          with a decision on the same line number). `cargo-mvl-mcdc`'s id scheme can't \
          disambiguate this on its own -- rename one file, or move one of the colliding \
          decisions to a different line, then re-run `make mcdc-obligations`:\n{}",
