@@ -110,6 +110,46 @@ fn bench_batch_reduce(r: &mut common::Report) {
     });
 }
 
+fn bench_batch_emit(r: &mut common::Report) {
+    // Isolates Emit's per-row transpose cost (#262): a bare
+    // LoadColumn+Emit program, so the increment over LoadColumn alone
+    // (bench_batch_load_column) is ~all Emit.
+    let batch = batch_fixture();
+    let program = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "id".into(),
+        },
+        BatchOpcode::Emit {
+            registers: vec![0].into(),
+        },
+    ];
+    r.bench("vm_opcodes/batch::Emit", || {
+        let mut vm = BatchVm::new();
+        vm.execute(black_box(&batch), &program)
+    });
+}
+
+fn bench_batch_emit_duplicate_register(r: &mut common::Report) {
+    // Same register emitted twice (e.g. `SELECT a, a`) -- exercises the
+    // clone-on-repeat path added in #262, distinct from the single-use
+    // move path measured by `bench_batch_emit`.
+    let batch = batch_fixture();
+    let program = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "id".into(),
+        },
+        BatchOpcode::Emit {
+            registers: vec![0, 0].into(),
+        },
+    ];
+    r.bench("vm_opcodes/batch::Emit (duplicate register)", || {
+        let mut vm = BatchVm::new();
+        vm.execute(black_box(&batch), &program)
+    });
+}
+
 fn bench_row_scan_column(r: &mut common::Report) {
     // A plain `Rewind`/`Column`/`Next` scan loop -- the row engine's
     // cheapest, most-executed opcode sequence. The table is filled once,
@@ -154,6 +194,8 @@ fn main() {
     bench_batch_load_column(&mut report);
     bench_batch_map_and_filter(&mut report);
     bench_batch_reduce(&mut report);
+    bench_batch_emit(&mut report);
+    bench_batch_emit_duplicate_register(&mut report);
     bench_row_scan_column(&mut report);
     bench_row_compare(&mut report);
     report.finish();
