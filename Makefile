@@ -126,7 +126,7 @@ check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see
 # nothing else). `--all-features` hides a missing implication; a consumer
 # enabling one feature finds it. 0.78.0 shipped `storage-row` without
 # `parser-row` this way.
-FEATURES := storage-row storage-column storage-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
+FEATURES := storage-row storage-column storage-stream engine-row parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
 
 check-features: ## Each Cargo feature builds standalone (cargo check --no-default-features --features X)
 	@for f in $(FEATURES); do \
@@ -167,7 +167,12 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # page sources, VFS traits) and the two audited `unsafe` carve-outs
 # (`column::mmap`, `row::vfs::fcntl`). Excluded as a unit, tracked as a
 # worklist in db-core#289; `src/storage.rs` itself stays in the scan.
-MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/storage/*
+#
+# `src/engine/row.rs` and `src/engine/row/adapter.rs` (ADR 0017): the
+# implementors of that same ADR 0008 boundary -- they hand `Box<dyn
+# CursorFactory>`/`Box<dyn Transaction>`/`Box<dyn SchemaStorage>` to the Vm
+# and hold `Rc<dyn PageSource>`. Same exemption, same reason, as vm.rs.
+MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/storage/* src/engine/row.rs src/engine/row/adapter.rs
 
 check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
 	@command -v cargo-mvl-limit >/dev/null 2>&1 || { \

@@ -4,6 +4,24 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.81.0] - 2026-09-09
+
+### Added
+
+- **`engine` -- the client-facing seam over the execution modes** (#295, ADR 0017). `trait Engine { open, mode, run_query, explain_plan, explain_opcodes, stats }`, object-safe (`Box<dyn Engine>` is how db-studio switches the live engine per file), with one concrete `EngineError { kind: Open | Parse | Compile | Execute | Unsupported, message }`. Client types, owned and mode-independent: `Cell` (lossless `From` both `value::Value` and `vm::batch::Value`; shell-style `Display`), `QueryResult { columns, rows }`, `PlanRow { id, parent, detail }` (row's `EqpRow` and batch's `PlanNode` are already this shape), `OpcodeSection { label, rows: Vec<OpcodeRow> }`, `FileStats::{Row, Batch, Stream}`.
+- **`engine::row::RowEngine`** (`engine-row`, on by default; implies `storage-row`, `parser-row`, `vm-row`, `codegen-row`): a SQLite-format file through `storage::row` + `vm::row`. The ADR 0008 boundary implementors (`StorageFactory`, `PagerTransaction`, `BtreeSchemaStorage`, cursor adapters) and the `sqlite_stat1` reader moved in from sqlite-rs (`src/vdbe/adapter.rs`, `src/planner.rs`) as `engine::row::{adapter, stats}` -- db-core can now open a `.sqlite` file and run SQL end-to-end without sqlite-rs. Multi-statement `run_query`, catalog cache invalidated by DDL, autocommit carried across calls.
+- `make check-features` covers `engine-row`; `src/engine/row.rs` and `adapter.rs` join `MVL_LIMIT_EXCLUDE` as ADR 0008 boundary implementors.
+
+### Fixed
+
+- `Cargo.lock` regenerated for 0.80.0 (a4789b8 bumped `Cargo.toml` without it; `--locked` builds failed on `main` and on the `v0.80.0` tag).
+
+## [0.80.0] - 2026-09-09
+
+### Added
+
+- `storage::stream`: `Facility` enum and full syslog field extraction (#296). (Entry added retroactively in 0.81.0 -- the release commit carried no changelog.)
+
 ## [0.79.0] - 2026-09-09
 
 ### Added

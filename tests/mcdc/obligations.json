@@ -12294,90 +12294,108 @@
     "compiler_void": false
   },
   {
-    "id": "batch_36",
+    "id": "batch_64",
     "file": "src/storage/stream/batch.rs",
-    "line": 36,
+    "line": 64,
+    "decision": "match code {\n            0 => Some(Self::Kern),\n            1 => Some(Self::User),\n            2 => Some(Self::Mail),\n            3 => Some(Self::Daemon),\n            4 => Some(Self::Auth),\n            5 => Some(Self::Syslog),\n            6 => Some(Self::Lpr),\n            7 => Some(Self::News),\n            8 => Some(Self::Uucp),\n            9 => Some(Self::Cron),\n            10 => Some(Self::AuthPriv),\n            11 => Some(Self::Ftp),\n            16 => Some(Self::Local0),\n            17 => Some(Self::Local1),\n            18 => Some(Self::Local2),\n            19 => Some(Self::Local3),\n            20 => Some(Self::Local4),\n            21 => Some(Self::Local5),\n            22 => Some(Self::Local6),\n            23 => Some(Self::Local7),\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_92",
+    "file": "src/storage/stream/batch.rs",
+    "line": 92,
+    "decision": "match self {\n            Self::Kern => \"kern\",\n            Self::User => \"user\",\n            Self::Mail => \"mail\",\n            Self::Daemon => \"daemon\",\n            Self::Auth => \"auth\",\n            Self::Syslog => \"syslog\",\n            Self::Lpr => \"lpr\",\n            Self::News => \"news\",\n            Self::Uucp => \"uucp\",\n            Self::Cron => \"cron\",\n            Self::AuthPriv => \"authpriv\",\n            Self::Ftp => \"ftp\",\n            Self::Local0 => \"local0\",\n            Self::Local1 => \"local1\",\n            Self::Local2 => \"local2\",\n            Self::Local3 => \"local3\",\n            Self::Local4 => \"local4\",\n            Self::Local5 => \"local5\",\n            Self::Local6 => \"local6\",\n            Self::Local7 => \"local7\",\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_139",
+    "file": "src/storage/stream/batch.rs",
+    "line": 139,
     "decision": "match s.to_ascii_lowercase().as_str() {\n            \"trace\" | \"trc\" | \"verbose\" => Some(Self::Trace),\n            \"debug\" | \"dbg\" => Some(Self::Debug),\n            \"info\" | \"information\" | \"notice\" => Some(Self::Info),\n            \"warn\" | \"warning\" => Some(Self::Warn),\n            \"error\" | \"err\" | \"severe\" => Some(Self::Error),\n            \"fatal\" | \"critical\" | \"crit\" | \"panic\" | \"emerg\" | \"alert\" => Some(Self::Fatal),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_50",
+    "id": "batch_153",
     "file": "src/storage/stream/batch.rs",
-    "line": 50,
+    "line": 153,
     "decision": "match severity {\n            0 | 1 => Some(Self::Fatal), // emerg, alert\n            2 => Some(Self::Fatal),     // crit\n            3 => Some(Self::Error),     // err\n            4 => Some(Self::Warn),      // warning\n            5 => Some(Self::Info),      // notice\n            6 => Some(Self::Info),      // info\n            7 => Some(Self::Debug),     // debug\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_65",
+    "id": "batch_168",
     "file": "src/storage/stream/batch.rs",
-    "line": 65,
+    "line": 168,
     "decision": "match self {\n            Self::Trace => \"TRACE\",\n            Self::Debug => \"DEBUG\",\n            Self::Info => \"INFO\",\n            Self::Warn => \"WARN\",\n            Self::Error => \"ERROR\",\n            Self::Fatal => \"FATAL\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_297",
+    "id": "batch_408",
     "file": "src/storage/stream/batch.rs",
-    "line": 297,
+    "line": 408,
     "decision": "match self {\n            Self::Dict { dict, indices } => {\n                if let Some(v) = value {\n                    // Look up or insert into dictionary\n                    let idx = dict.iter().position(|&d| d == v);\n                    let idx = match idx {\n                        Some(i) => i,\n                        None => {\n                            if dict.len() >= DICT_CARDINALITY_THRESHOLD {\n                                // Degrade to Str\n                                let mut strs: Vec<Option<&'a str>> =\n                                    Vec::with_capacity(indices.len().saturating_add(1));\n                                for opt_idx in indices.iter() {\n                                    strs.push(\n                                        opt_idx.and_then(|i| dict.get(usize::from(i)).copied()),\n                                    );\n                                }\n                                strs.push(Some(v));\n                                *self = Self::Str(strs);\n                                return;\n                            }\n                            dict.push(v);\n                            dict.len().saturating_sub(1)\n                        }\n                    };\n                    // Safe: idx < DICT_CARDINALITY_THRESHOLD < u16::MAX\n                    #[allow(clippy::cast_possible_truncation)]\n                    indices.push(Some(idx as u16));\n                } else {\n                    indices.push(None);\n                }\n            }\n            Self::Str(strs) => strs.push(value),\n            _ => {} // Type mismatch, ignore\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_302",
+    "id": "batch_413",
     "file": "src/storage/stream/batch.rs",
-    "line": 302,
+    "line": 413,
     "decision": "match idx {\n                        Some(i) => i,\n                        None => {\n                            if dict.len() >= DICT_CARDINALITY_THRESHOLD {\n                                // Degrade to Str\n                                let mut strs: Vec<Option<&'a str>> =\n                                    Vec::with_capacity(indices.len().saturating_add(1));\n                                for opt_idx in indices.iter() {\n                                    strs.push(\n                                        opt_idx.and_then(|i| dict.get(usize::from(i)).copied()),\n                                    );\n                                }\n                                strs.push(Some(v));\n                                *self = Self::Str(strs);\n                                return;\n                            }\n                            dict.push(v);\n                            dict.len().saturating_sub(1)\n                        }\n                    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_305",
+    "id": "batch_416",
     "file": "src/storage/stream/batch.rs",
-    "line": 305,
+    "line": 416,
     "decision": "dict.len() >= DICT_CARDINALITY_THRESHOLD",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "batch_337",
+    "id": "batch_448",
     "file": "src/storage/stream/batch.rs",
-    "line": 337,
+    "line": 448,
     "decision": "match self {\n            Self::Str(v) => v.len(),\n            Self::Dict { indices, .. } => indices.len(),\n            Self::Int(v) => v.len(),\n            Self::Float(v) => v.len(),\n            Self::Bool(v) => v.len(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_354",
+    "id": "batch_465",
     "file": "src/storage/stream/batch.rs",
-    "line": 354,
+    "line": 465,
     "decision": "match self {\n            Self::Str(v) => v.clear(),\n            Self::Dict { dict, indices } => {\n                dict.clear();\n                indices.clear();\n            }\n            Self::Int(v) => v.clear(),\n            Self::Float(v) => v.clear(),\n            Self::Bool(v) => v.clear(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_402",
+    "id": "batch_513",
     "file": "src/storage/stream/batch.rs",
-    "line": 402,
+    "line": 513,
     "decision": "col.len() < row",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "batch_477",
+    "id": "batch_589",
     "file": "src/storage/stream/batch.rs",
-    "line": 477,
+    "line": 589,
     "decision": "match col {\n            FieldColumn::Dict { dict, indices } => {\n                assert_eq!(dict.len(), 2); // nginx, postgres\n                assert_eq!(indices.len(), 3);\n            }\n            _ => panic!(\"Expected Dict encoding\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12414,7 +12432,7 @@
     "id": "syslog_65",
     "file": "src/storage/stream/syslog.rs",
     "line": 65,
-    "decision": "match std::str::from_utf8(line) {\n            Ok(s) => s,\n            Err(_) => {\n                // Non-UTF8 line: store raw only\n                batch.push_line(line, None, None, None);\n                return;\n            }\n        }",
+    "decision": "match std::str::from_utf8(line) {\n            Ok(s) => s,\n            Err(_) => {\n                // Non-UTF8 line: store raw only\n                batch.push_line(line, None, None, None, None);\n                return;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
@@ -12423,114 +12441,114 @@
     "id": "syslog_75",
     "file": "src/storage/stream/syslog.rs",
     "line": 75,
-    "decision": "match self.parse_pri(line_str) {\n            Some(p) => p,\n            None => {\n                // No PRI: store as-is\n                batch.push_line(line, None, None, Some(line_str));\n                return;\n            }\n        }",
+    "decision": "match self.parse_pri(line_str) {\n            Some(p) => p,\n            None => {\n                // No PRI: store as-is\n                batch.push_line(line, None, None, None, Some(line_str));\n                return;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "syslog_96",
+    "id": "syslog_98",
     "file": "src/storage/stream/syslog.rs",
-    "line": 96,
+    "line": 98,
     "decision": "batch.resource.hostname.is_none()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "syslog_117",
+    "id": "syslog_126",
     "file": "src/storage/stream/syslog.rs",
-    "line": 117,
+    "line": 126,
     "decision": "!s.starts_with('<')",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "syslog_131",
+    "id": "syslog_140",
     "file": "src/storage/stream/syslog.rs",
-    "line": 131,
+    "line": 140,
     "decision": "s.len() < 16",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "syslog_136",
+    "id": "syslog_145",
     "file": "src/storage/stream/syslog.rs",
-    "line": 136,
+    "line": 145,
     "decision": "match month_str {\n            \"Jan\" => 1,\n            \"Feb\" => 2,\n            \"Mar\" => 3,\n            \"Apr\" => 4,\n            \"May\" => 5,\n            \"Jun\" => 6,\n            \"Jul\" => 7,\n            \"Aug\" => 8,\n            \"Sep\" => 9,\n            \"Oct\" => 10,\n            \"Nov\" => 11,\n            \"Dec\" => 12,\n            _ => return (None, s),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "syslog_154",
+    "id": "syslog_163",
     "file": "src/storage/stream/syslog.rs",
-    "line": 154,
+    "line": 163,
     "decision": "match day_str.parse() {\n            Ok(d) => d,\n            Err(_) => return (None, s),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "syslog_161",
+    "id": "syslog_170",
     "file": "src/storage/stream/syslog.rs",
-    "line": 161,
+    "line": 170,
     "decision": "match self.parse_time(time_str) {\n            Some(t) => t,\n            None => return (None, s),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "syslog_176",
+    "id": "syslog_185",
     "file": "src/storage/stream/syslog.rs",
-    "line": 176,
+    "line": 185,
     "decision": "s.len() < 8",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "syslog_198",
+    "id": "syslog_207",
     "file": "src/storage/stream/syslog.rs",
-    "line": 198,
+    "line": 207,
     "decision": "month == 0 || month > 12 || day == 0 || day > 31",
     "conditions": 4,
     "vectors_required": 5,
     "compiler_void": false
   },
   {
-    "id": "syslog_229",
+    "id": "syslog_238",
     "file": "src/storage/stream/syslog.rs",
-    "line": 229,
+    "line": 238,
     "decision": "s.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "syslog_232",
+    "id": "syslog_241",
     "file": "src/storage/stream/syslog.rs",
-    "line": 232,
+    "line": 241,
     "decision": "match s.find(char::is_whitespace) {\n            Some(i) => {\n                let word = s.get(..i).unwrap_or(\"\");\n                let rest = s.get(i..).unwrap_or(\"\").trim_start();\n                (Some(word), rest)\n            }\n            None => (Some(s), \"\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "syslog_251",
+    "id": "syslog_260",
     "file": "src/storage/stream/syslog.rs",
-    "line": 251,
+    "line": 260,
     "decision": "end == 0",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "syslog_259",
+    "id": "syslog_268",
     "file": "src/storage/stream/syslog.rs",
-    "line": 259,
+    "line": 268,
     "decision": "rest.starts_with('[')",
     "conditions": 1,
     "vectors_required": 2,
@@ -21285,6 +21303,240 @@
     "compiler_void": false
   },
   {
+    "id": "adapter_117",
+    "file": "src/engine/row/adapter.rs",
+    "line": 117,
+    "decision": "match &self.cached {\n            Some((_, values)) => Some(values.get(col).cloned().unwrap_or(Value::Null)),\n            None => {\n                self.current_rowid?;\n                let payload = self.cursor.current_payload().ok()?;\n                let values = decode_record(&payload, self.header.text_encoding).ok()?;\n                Some(values.get(col).cloned().unwrap_or(Value::Null))\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "adapter_226",
+    "file": "src/engine/row/adapter.rs",
+    "line": 226,
+    "decision": "values.len() <= probe.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "adapter_277",
+    "file": "src/engine/row/adapter.rs",
+    "line": 277,
+    "decision": "match values.last()? {\n            Value::Integer(rowid) => Some(*rowid),\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "adapter_285",
+    "file": "src/engine/row/adapter.rs",
+    "line": 285,
+    "decision": "!self.set_current(r)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "adapter_289",
+    "file": "src/engine/row/adapter.rs",
+    "line": 289,
+    "decision": "!matched",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "adapter_405",
+    "file": "src/engine/row/adapter.rs",
+    "line": 405,
+    "decision": "self.writer.is_none()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "adapter_471",
+    "file": "src/engine/row/adapter.rs",
+    "line": 471,
+    "decision": "match mode {\n            crate::vm::row::TRANSACTION_MODE_IMMEDIATE => pager.begin_immediate(),\n            crate::vm::row::TRANSACTION_MODE_EXCLUSIVE => pager.begin_exclusive(),\n            _ => Ok(()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "adapter_480",
+    "file": "src/engine/row/adapter.rs",
+    "line": 480,
+    "decision": "match self.writer.as_ref() {\n            Some(writer) => writer\n                .borrow_mut()\n                .flush()\n                .map_err(|e| TransactionError(storage_err(e))),\n            None => Ok(()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "adapter_490",
+    "file": "src/engine/row/adapter.rs",
+    "line": 490,
+    "decision": "match self.writer.as_ref() {\n            Some(writer) => writer\n                .borrow_mut()\n                .rollback()\n                .map_err(|e| TransactionError(storage_err(e))),\n            None => Ok(()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "adapter_503",
+    "file": "src/engine/row/adapter.rs",
+    "line": 503,
+    "decision": "mode == JOURNAL_MODE_WAL",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "adapter_521",
+    "file": "src/engine/row/adapter.rs",
+    "line": 521,
+    "decision": "match level {\n                SYNCHRONOUS_OFF => SynchronousMode::Off,\n                SYNCHRONOUS_NORMAL => SynchronousMode::Normal,\n                _ => SynchronousMode::Full,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "adapter_575",
+    "file": "src/engine/row/adapter.rs",
+    "line": 575,
+    "decision": "prev_leading.as_ref() != leading.as_ref()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "adapter_700",
+    "file": "src/engine/row/adapter.rs",
+    "line": 700,
+    "decision": "&**n == table",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "stats_49",
+    "file": "src/engine/row/stats.rs",
+    "line": 49,
+    "decision": "match values.first() {\n                Some(Value::Text(s)) => Some(s.to_string()),\n                _ => None,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "stats_54",
+    "file": "src/engine/row/stats.rs",
+    "line": 54,
+    "decision": "match values.get(1) {\n                    Some(Value::Text(s)) => Some(s.to_string()),\n                    _ => None,\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "stats_58",
+    "file": "src/engine/row/stats.rs",
+    "line": 58,
+    "decision": "match values.get(2) {\n                    Some(Value::Text(s)) => s.to_string(),\n                    _ => String::new(),\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "stats_65",
+    "file": "src/engine/row/stats.rs",
+    "line": 65,
+    "decision": "match cursor.next_row() {\n            Ok(r) => r,\n            Err(_) => break,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_109",
+    "file": "src/engine/row.rs",
+    "line": 109,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => Ok(*select),\n            ParseOutcome::Unsupported { message, span } => Err(EngineError::new(\n                ErrorKind::Unsupported,\n                format!(\n                    \"not yet supported (line {}, column {}): {message}\",\n                    span.line, span.column\n                ),\n            )),\n            ParseOutcome::Invalid { message, span } => Err(EngineError::new(\n                ErrorKind::Parse,\n                format!(\n                    \"syntax error (line {}, column {}): {message}\",\n                    span.line, span.column\n                ),\n            )),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "row_183",
+    "file": "src/engine/row.rs",
+    "line": 183,
+    "decision": "single_table",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "row_220",
+    "file": "src/engine/row.rs",
+    "line": 220,
+    "decision": "vm.autocommit()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "row_240",
+    "file": "src/engine/row.rs",
+    "line": 240,
+    "decision": "Self::is_select(stmt)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "row_282",
+    "file": "src/engine/row.rs",
+    "line": 282,
+    "decision": "Self::is_select(&stmt)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "row_289",
+    "file": "src/engine/row.rs",
+    "line": 289,
+    "decision": "Self::is_schema_changing(&stmt)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "row_292",
+    "file": "src/engine/row.rs",
+    "line": 292,
+    "decision": "!result.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "row_301",
+    "file": "src/engine/row.rs",
+    "line": 301,
+    "decision": "!Self::is_select(&stmt)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "row_352",
+    "file": "src/engine/row.rs",
+    "line": 352,
+    "decision": "match (stmts.next(), stmts.next()) {\n        (Some(one), None) => Ok(one),\n        (None, _) => Err(EngineError::new(ErrorKind::Parse, \"empty statement\")),\n        (Some(_), Some(_)) => Err(EngineError::new(\n            ErrorKind::Unsupported,\n            \"EXPLAIN takes a single statement\",\n        )),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
     "id": "coerce_15",
     "file": "src/coerce.rs",
     "line": 15,
@@ -21559,6 +21811,69 @@
     "file": "src/coerce.rs",
     "line": 340,
     "decision": "match checked_mul(&max, &Value::Integer(2)) {\n            Value::Real(r) => assert!(r > i64::MAX as f64),\n            other => panic!(\"expected REAL promotion, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "engine_49",
+    "file": "src/engine.rs",
+    "line": 49,
+    "decision": "match self {\n            Mode::Row => \"row\",\n            Mode::Batch => \"batch\",\n            Mode::Stream => \"stream\",\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "engine_80",
+    "file": "src/engine.rs",
+    "line": 80,
+    "decision": "match self {\n            Cell::Null => Ok(()),\n            Cell::Int(n) => write!(f, \"{n}\"),\n            Cell::Real(x) => f.write_str(&crate::value::format_real(*x)),\n            Cell::Bool(b) => f.write_str(if *b { \"1\" } else { \"0\" }),\n            Cell::Text(s) => f.write_str(s),\n            Cell::Blob(bytes) => {\n                f.write_str(\"X'\")?;\n                for b in bytes {\n                    write!(f, \"{b:02X}\")?;\n                }\n                f.write_str(\"'\")\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "engine_84",
+    "file": "src/engine.rs",
+    "line": 84,
+    "decision": "*b",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "engine_99",
+    "file": "src/engine.rs",
+    "line": 99,
+    "decision": "match v {\n            crate::value::Value::Null => Cell::Null,\n            crate::value::Value::Integer(n) => Cell::Int(n),\n            crate::value::Value::Real(x) => Cell::Real(x),\n            crate::value::Value::Text(s) => Cell::Text(s.to_string()),\n            crate::value::Value::Blob(b) => Cell::Blob(b.to_vec()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "engine_111",
+    "file": "src/engine.rs",
+    "line": 111,
+    "decision": "match v {\n            crate::value::Value::Null => Cell::Null,\n            crate::value::Value::Integer(n) => Cell::Int(*n),\n            crate::value::Value::Real(x) => Cell::Real(*x),\n            crate::value::Value::Text(s) => Cell::Text(s.to_string()),\n            crate::value::Value::Blob(b) => Cell::Blob(b.to_vec()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "engine_124",
+    "file": "src/engine.rs",
+    "line": 124,
+    "decision": "match v {\n            crate::vm::batch::Value::Null => Cell::Null,\n            crate::vm::batch::Value::Int(n) => Cell::Int(n),\n            crate::vm::batch::Value::Float(x) => Cell::Real(x),\n            crate::vm::batch::Value::Bool(b) => Cell::Bool(b),\n            crate::vm::batch::Value::Str(s) => Cell::Text(s.into_owned()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "engine_240",
+    "file": "src/engine.rs",
+    "line": 240,
+    "decision": "match self {\n            ErrorKind::Open => \"open\",\n            ErrorKind::Parse => \"parse\",\n            ErrorKind::Compile => \"compile\",\n            ErrorKind::Execute => \"execute\",\n            ErrorKind::Unsupported => \"unsupported\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
