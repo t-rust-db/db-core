@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted. Resolves `#227`.
+Accepted. Resolves `#227`, `#228`.
 
 ## Context
 
@@ -46,7 +46,12 @@ exists for another crate's benefit.
 
 4. **Coverage** -- `make coverage` / `make check-coverage`
    (`cargo-llvm-cov`, `COVERAGE_MIN` = 80% line coverage over the library
-   and `tests/unit`). A local floor, not a CI gate.
+   and `tests/unit`). A local floor, not a CI gate: an instrumented run
+   is a second full test pass (`cargo llvm-cov clean` + a fresh
+   `--no-report` build), and unlike `check-mvl-limit`'s pinned-rev
+   install there is no cached-binary pattern yet for `cargo-llvm-cov` in
+   CI. Enforced before a PR, not on every push, until that cost is
+   revisited (`#228`).
 
 5. **Spikes** -- `tests/spike/`: throwaway experiments. Excluded from
    `make test` and from coverage; run only via `make test-spike`. A
