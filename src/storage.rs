@@ -38,6 +38,14 @@ pub use column::{
 #[cfg(feature = "storage-row")]
 pub mod row;
 
+#[cfg(feature = "storage-stream")]
+pub mod stream;
+
+#[cfg(feature = "storage-stream")]
+pub use stream::{
+    FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind, SyslogParser,
+};
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
