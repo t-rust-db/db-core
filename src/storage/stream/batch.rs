@@ -11,6 +11,109 @@ use std::sync::Arc;
 /// Default batch size (rows per batch).
 pub const BATCH_SIZE: usize = 256;
 
+/// Syslog facility (RFC 3164/5424).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Facility {
+    /// Kernel messages.
+    Kern = 0,
+    /// User-level messages.
+    User = 1,
+    /// Mail system.
+    Mail = 2,
+    /// System daemons.
+    Daemon = 3,
+    /// Security/authorization.
+    Auth = 4,
+    /// Syslog internal.
+    Syslog = 5,
+    /// Line printer.
+    Lpr = 6,
+    /// Network news.
+    News = 7,
+    /// UUCP.
+    Uucp = 8,
+    /// Clock daemon.
+    Cron = 9,
+    /// Security/authorization (private).
+    AuthPriv = 10,
+    /// FTP daemon.
+    Ftp = 11,
+    /// Local use 0.
+    Local0 = 16,
+    /// Local use 1.
+    Local1 = 17,
+    /// Local use 2.
+    Local2 = 18,
+    /// Local use 3.
+    Local3 = 19,
+    /// Local use 4.
+    Local4 = 20,
+    /// Local use 5.
+    Local5 = 21,
+    /// Local use 6.
+    Local6 = 22,
+    /// Local use 7.
+    Local7 = 23,
+}
+
+impl Facility {
+    /// Parse from syslog facility code (0-23).
+    #[must_use]
+    pub fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Kern),
+            1 => Some(Self::User),
+            2 => Some(Self::Mail),
+            3 => Some(Self::Daemon),
+            4 => Some(Self::Auth),
+            5 => Some(Self::Syslog),
+            6 => Some(Self::Lpr),
+            7 => Some(Self::News),
+            8 => Some(Self::Uucp),
+            9 => Some(Self::Cron),
+            10 => Some(Self::AuthPriv),
+            11 => Some(Self::Ftp),
+            16 => Some(Self::Local0),
+            17 => Some(Self::Local1),
+            18 => Some(Self::Local2),
+            19 => Some(Self::Local3),
+            20 => Some(Self::Local4),
+            21 => Some(Self::Local5),
+            22 => Some(Self::Local6),
+            23 => Some(Self::Local7),
+            _ => None,
+        }
+    }
+
+    /// Name for display.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Kern => "kern",
+            Self::User => "user",
+            Self::Mail => "mail",
+            Self::Daemon => "daemon",
+            Self::Auth => "auth",
+            Self::Syslog => "syslog",
+            Self::Lpr => "lpr",
+            Self::News => "news",
+            Self::Uucp => "uucp",
+            Self::Cron => "cron",
+            Self::AuthPriv => "authpriv",
+            Self::Ftp => "ftp",
+            Self::Local0 => "local0",
+            Self::Local1 => "local1",
+            Self::Local2 => "local2",
+            Self::Local3 => "local3",
+            Self::Local4 => "local4",
+            Self::Local5 => "local5",
+            Self::Local6 => "local6",
+            Self::Local7 => "local7",
+        }
+    }
+}
+
 /// Log severity levels, aligned with OpenTelemetry SeverityNumber (1-24 scale).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
@@ -172,7 +275,11 @@ pub struct LogBatch<'a> {
     /// Extracted message body (may differ from raw if structured).
     pub message: Vec<Option<&'a str>>,
 
-    // === Tier 2b: Correlation IDs (fixed-size) ===
+    // === Tier 2b: Format-specific typed ===
+    /// Syslog facility (syslog only).
+    pub facility: Vec<Option<Facility>>,
+
+    // === Tier 2c: Correlation IDs (fixed-size) ===
     /// W3C trace ID (128-bit).
     pub trace_id: Vec<Option<[u8; 16]>>,
     /// W3C span ID (64-bit).
@@ -195,6 +302,7 @@ impl<'a> LogBatch<'a> {
             timestamp_ns: Vec::with_capacity(BATCH_SIZE),
             severity: Vec::with_capacity(BATCH_SIZE),
             message: Vec::with_capacity(BATCH_SIZE),
+            facility: Vec::with_capacity(BATCH_SIZE),
             trace_id: Vec::with_capacity(BATCH_SIZE),
             span_id: Vec::with_capacity(BATCH_SIZE),
             fields: FieldStore::new(),
@@ -219,17 +327,19 @@ impl<'a> LogBatch<'a> {
         self.len >= BATCH_SIZE
     }
 
-    /// Push a raw line with minimal parsing (timestamp, severity, message).
+    /// Push a raw line with Tier 2 fields.
     pub fn push_line(
         &mut self,
         raw: &'a [u8],
         timestamp_ns: Option<i64>,
         severity: Option<Severity>,
+        facility: Option<Facility>,
         message: Option<&'a str>,
     ) {
         self.raw.push(raw);
         self.timestamp_ns.push(timestamp_ns);
         self.severity.push(severity);
+        self.facility.push(facility);
         self.message.push(message);
         self.trace_id.push(None);
         self.span_id.push(None);
@@ -253,6 +363,7 @@ impl<'a> LogBatch<'a> {
         self.raw.clear();
         self.timestamp_ns.clear();
         self.severity.clear();
+        self.facility.clear();
         self.message.clear();
         self.trace_id.clear();
         self.span_id.clear();
@@ -455,6 +566,7 @@ mod tests {
             line,
             Some(1_234_567_890_000_000_000),
             Some(Severity::Info),
+            Some(Facility::Daemon),
             Some("test line"),
         );
 

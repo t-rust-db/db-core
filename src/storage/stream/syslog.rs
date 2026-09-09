@@ -4,7 +4,7 @@
 //!
 //! Example: `<134>Sep  9 14:23:01 webserver nginx[1234]: GET /api/health 200`
 
-use super::batch::{LogBatch, Severity, Source, BATCH_SIZE};
+use super::batch::{Facility, LogBatch, Severity, Source, BATCH_SIZE};
 
 /// Syslog parser that fills `LogBatch` from raw lines.
 pub struct SyslogParser {
@@ -66,7 +66,7 @@ impl SyslogParser {
             Ok(s) => s,
             Err(_) => {
                 // Non-UTF8 line: store raw only
-                batch.push_line(line, None, None, None);
+                batch.push_line(line, None, None, None, None);
                 return;
             }
         };
@@ -76,13 +76,15 @@ impl SyslogParser {
             Some(p) => p,
             None => {
                 // No PRI: store as-is
-                batch.push_line(line, None, None, Some(line_str));
+                batch.push_line(line, None, None, None, Some(line_str));
                 return;
             }
         };
 
-        // Extract severity from PRI (PRI = facility * 8 + severity)
-        let syslog_severity = pri & 0x07;
+        // Extract facility and severity from PRI (PRI = facility * 8 + severity)
+        let facility_code = pri >> 3; // Upper 5 bits
+        let syslog_severity = pri & 0x07; // Lower 3 bits
+        let facility = Facility::from_code(facility_code);
         let severity = Severity::from_syslog(syslog_severity);
 
         // Parse timestamp (e.g., "Sep  9 14:23:01")
@@ -99,16 +101,23 @@ impl SyslogParser {
         }
 
         // Parse tag[pid]: (e.g., "nginx[1234]:")
-        let (tag, rest) = self.parse_tag(rest);
+        let (tag, pid, rest) = self.parse_tag_pid(rest);
 
         // Rest is the message
         let message = rest.trim();
 
-        batch.push_line(line, timestamp_ns, severity, Some(message));
+        // Tier 2: push core fields
+        batch.push_line(line, timestamp_ns, severity, facility, Some(message));
 
-        // Store tag as dynamic field
+        // Tier 3: dynamic fields
         if let Some(t) = tag {
             batch.set_field("tag", t);
+        }
+        if let Some(p) = pid {
+            batch.set_field("pid", p);
+        }
+        if let Some(h) = hostname {
+            batch.set_field("hostname", h);
         }
     }
 
@@ -239,8 +248,8 @@ impl SyslogParser {
         }
     }
 
-    /// Parse tag[pid]: returning (tag, rest).
-    fn parse_tag<'a>(&self, s: &'a str) -> (Option<&'a str>, &'a str) {
+    /// Parse tag[pid]: returning (tag, pid, rest).
+    fn parse_tag_pid<'a>(&self, s: &'a str) -> (Option<&'a str>, Option<&'a str>, &'a str) {
         let s = s.trim_start();
 
         // Find end of tag (bracket, colon, or space)
@@ -249,25 +258,26 @@ impl SyslogParser {
             .unwrap_or(s.len());
 
         if end == 0 {
-            return (None, s);
+            return (None, None, s);
         }
 
-        let tag = s.get(..end).unwrap_or("");
+        let tag = s.get(..end);
 
-        // Skip past [pid] if present
+        // Extract [pid] if present
         let rest = s.get(end..).unwrap_or("");
-        let rest = if rest.starts_with('[') {
-            rest.find(']')
-                .and_then(|i| rest.get(i.saturating_add(1)..))
-                .unwrap_or(rest)
+        let (pid, rest) = if rest.starts_with('[') {
+            let pid_end = rest.find(']').unwrap_or(0);
+            let pid = rest.get(1..pid_end);
+            let rest = rest.get(pid_end.saturating_add(1)..).unwrap_or("");
+            (pid, rest)
         } else {
-            rest
+            (None, rest)
         };
 
         // Skip colon and space
         let rest = rest.trim_start_matches(':').trim_start();
 
-        (Some(tag), rest)
+        (tag, pid, rest)
     }
 }
 
