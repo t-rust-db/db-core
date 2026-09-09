@@ -19,11 +19,13 @@
     reason = "test code fails fast (db-core#230); clippy.toml's allow-*-in-tests does not reach helper fns outside #[test]"
 )]
 
+use db_core::codegen::batch::compile_join;
+use db_core::parser::column::parse;
 use db_core::vm::batch::{
     compare_for_order, AggFunc, Batch, Instruction, JoinKind, MapOp, Opcode, Program, Segment,
     Source, TopN, Value, Vm, VmError, WindowFunc,
 };
-use db_core::vm::engine::{run, run_join, InMemorySegment, JoinProgram};
+use db_core::vm::engine::{run, run_join, run_join_segments, InMemorySegment, JoinProgram};
 
 #[test]
 fn scan_filter_and_emit_over_a_single_segment() {
@@ -154,6 +156,243 @@ fn run_join_assembles_a_joined_batch_from_build_and_probe_programs() {
     );
 }
 
+/// #272: the probe side split into segments must give exactly the rows a
+/// single-segment `run_join` gives -- INNER and LEFT, with a `GROUP BY`
+/// body whose per-segment partial aggregates the trailing `Combine` merges.
+/// Keys are spread so every group has rows in more than one segment, and
+/// some fact rows have no matching customer to exercise the LEFT path.
+fn join_fixture() -> (Vec<Batch>, Batch) {
+    let customers = Batch::new(3)
+        .with_column(
+            "bench_customers.customer_id",
+            vec![Value::Int(0), Value::Int(1), Value::Int(2)],
+        )
+        .with_column(
+            "bench_customers.tier",
+            vec![
+                Value::Str("bronze".into()),
+                Value::Str("silver".into()),
+                Value::Str("gold".into()),
+            ],
+        );
+    // 12 fact rows over 3 segments; customer_id 3 has no dimension row.
+    let facts: Vec<Batch> = (0..3i32)
+        .map(|seg| {
+            let ids: Vec<Value> = (0..4i32)
+                .map(|i| Value::Int(i64::from((seg * 4 + i) % 4)))
+                .collect();
+            let amounts: Vec<Value> = (0..4i32)
+                .map(|i| Value::Float(f64::from(seg * 4 + i)))
+                .collect();
+            Batch::new(4)
+                .with_column("bench.customer_id", ids)
+                .with_column("bench.amount", amounts)
+        })
+        .collect();
+    (facts, customers)
+}
+
+fn concat(batches: &[Batch]) -> Batch {
+    let mut all = Batch::new(0);
+    for b in batches {
+        all.num_rows += b.num_rows;
+        for (name, values) in &b.columns {
+            all.columns
+                .entry(name.clone())
+                .or_default()
+                .extend(values.iter().cloned());
+        }
+    }
+    all
+}
+
+fn sorted(mut rows: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
+    rows.sort_by(|a, b| compare_for_order(&a[0], &b[0], false));
+    rows
+}
+
+#[test]
+fn run_join_segments_matches_single_segment_run_join_for_inner_join_group_by() {
+    let (facts, customers) = join_fixture();
+    let plan = compile_join(
+        &parse(
+            "SELECT bench_customers.tier, SUM(bench.amount) FROM bench \
+             JOIN bench_customers ON bench.customer_id = bench_customers.customer_id \
+             GROUP BY bench_customers.tier",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    let single = run_join(&concat(&facts), &customers, &plan).unwrap();
+    let segmented = run_join_segments(
+        facts.into_iter().map(InMemorySegment).collect(),
+        &customers,
+        &plan,
+    )
+    .unwrap();
+
+    assert_eq!(sorted(segmented), sorted(single.clone()));
+    // Sanity: three tiers, customer 3's rows dropped by the INNER join.
+    assert_eq!(single.len(), 3);
+}
+
+#[test]
+fn run_join_segments_matches_single_segment_run_join_for_left_join_group_by() {
+    let (facts, customers) = join_fixture();
+    let plan = compile_join(
+        &parse(
+            "SELECT bench_customers.tier, COUNT(bench.amount) FROM bench \
+             LEFT JOIN bench_customers ON bench.customer_id = bench_customers.customer_id \
+             GROUP BY bench_customers.tier",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    let single = run_join(&concat(&facts), &customers, &plan).unwrap();
+    let segmented = run_join_segments(
+        facts.into_iter().map(InMemorySegment).collect(),
+        &customers,
+        &plan,
+    )
+    .unwrap();
+
+    assert_eq!(sorted(segmented), sorted(single.clone()));
+    // LEFT keeps customer 3 as a NULL-tier group: four groups.
+    assert_eq!(single.len(), 4);
+    assert!(single.iter().any(|row| row[0] == Value::Null));
+}
+
+/// #272: a probe-side error inside a segment (here: the left column the
+/// probe program loads does not exist) is a typed `VmError`, not a panic
+/// or an empty result -- `Segment::load` is fallible for exactly this.
+#[test]
+fn run_join_segments_reports_a_probe_error_from_inside_a_segment() {
+    let (_, customers) = join_fixture();
+    let plan = compile_join(
+        &parse(
+            "SELECT bench_customers.tier FROM bench \
+             JOIN bench_customers ON bench.customer_id = bench_customers.customer_id",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let bad_left = Batch::new(1).with_column("bench.not_customer_id", vec![Value::Int(1)]);
+    let err = run_join_segments(vec![InMemorySegment(bad_left)], &customers, &plan).unwrap_err();
+    assert!(
+        matches!(err, VmError::UnknownColumn { .. }),
+        "expected UnknownColumn, got {err:?}"
+    );
+}
+
+/// #272: `Vm::with_join_tables` shares a built table by `Arc`; a probe VM
+/// seeded with it finds the table, and taking a register moves it out.
+#[test]
+fn vm_join_tables_are_shared_between_build_and_probe_vms() {
+    let right = Batch::new(1)
+        .with_column("id", vec![Value::Int(7)])
+        .with_column("payload", vec![Value::Str("seven".into())]);
+    let mut builder = Vm::new();
+    builder
+        .execute(
+            &right,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "id".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "payload".into(),
+                },
+                Opcode::HashBuild {
+                    key_cols: vec![0].into(),
+                    payload_cols: vec![1].into(),
+                    table: 0,
+                },
+            ],
+        )
+        .unwrap();
+
+    let left = Batch::new(2).with_column("fk", vec![Value::Int(7), Value::Int(8)]);
+    let mut prober = Vm::with_join_tables(builder.join_tables());
+    prober
+        .execute(
+            &left,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "fk".into(),
+                },
+                Opcode::HashProbe {
+                    key_cols: vec![0].into(),
+                    table: 0,
+                    payload_dst: vec![1].into(),
+                    kind: JoinKind::Inner,
+                },
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        prober.take_register(1).unwrap(),
+        vec![Value::Str("seven".into())]
+    );
+    assert!(
+        matches!(
+            prober.take_register(1),
+            Err(VmError::UnknownRegister { register: 1, .. })
+        ),
+        "a taken register is gone"
+    );
+}
+
+/// #272 (found by the per-segment join tests): a `COUNT` merged across
+/// segments must stay `Int`, exactly as a single segment's `COUNT` is --
+/// `Combine` used to sum partial counts as `Float`, so the result *type*
+/// depended on how many segments the scan happened to have.
+#[test]
+fn count_merged_across_segments_stays_an_integer() {
+    let seg = |ids: Vec<i64>| {
+        InMemorySegment(
+            Batch::new(ids.len()).with_column("k", ids.into_iter().map(Value::Int).collect()),
+        )
+    };
+    let segments = vec![seg(vec![1, 1, 2]), seg(vec![1, 2, 2]), seg(vec![])];
+    let program = Program::new(vec![
+        Instruction::new(Opcode::LoadColumn {
+            reg: 0,
+            column: "k".into(),
+        }),
+        Instruction::new(Opcode::GroupReduce {
+            group_by: vec![0].into(),
+            aggs: vec![(AggFunc::Count, None)].into(),
+            agg_dst: vec![1].into(),
+        }),
+        Instruction::new(Opcode::Emit {
+            registers: vec![0, 1].into(),
+        }),
+        Instruction::new(Opcode::Combine {
+            agg_parts: vec![
+                db_core::vm::batch::AggPart::GroupKey,
+                db_core::vm::batch::AggPart::Count,
+            ]
+            .into(),
+            num_group_keys: 1,
+            distinct: false,
+        }),
+    ]);
+    let mut rows = run(&segments, &program).unwrap();
+    rows.sort_by(|a, b| compare_for_order(&a[0], &b[0], false));
+    assert_eq!(
+        rows,
+        vec![
+            vec![Value::Int(1), Value::Int(3)],
+            vec![Value::Int(2), Value::Int(3)],
+        ]
+    );
+}
+
 #[test]
 fn loading_an_unknown_column_is_a_vm_error() {
     let batch = Batch::new(1).with_column("id", vec![Value::Int(1)]);
@@ -232,8 +471,8 @@ impl Source for OneShotSource {
 struct StaticSegment(Batch);
 
 impl Segment for StaticSegment {
-    fn load(&self) -> Batch {
-        self.0.clone()
+    fn load(&self) -> Result<Batch, VmError> {
+        Ok(self.0.clone())
     }
 }
 

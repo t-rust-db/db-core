@@ -200,6 +200,38 @@ impl<K: Hash + Eq, V, S: BuildHasher> JoinHashTable<K, V, S> {
         matches
     }
 
+    /// Call `f` with the slot index of every entry matching `key`, in
+    /// insertion order -- [`Self::get_all`] without the per-probe `Vec`
+    /// allocation (#272: the probe side of a fact/dimension join calls
+    /// this once per fact row, so that allocation was one of the largest
+    /// per-row costs in `Opcode::HashProbe`). Read a slot back with
+    /// [`Self::value_at`]; slots stay valid until the next `insert`
+    /// (which may grow and rehash). Same termination rule as `get_all`:
+    /// stops at the first empty slot along the probe sequence.
+    pub fn for_each_match_slot(&self, key: &K, mut f: impl FnMut(usize)) {
+        let mask = self.entries.len() - 1;
+        let cap = self.entries.len();
+        let mut idx = self.hash_of(key) & mask;
+        let mut steps = 0;
+        while steps < cap {
+            let Some(entry) = self.entries[idx].as_ref() else {
+                break; // empty slot proves no further match
+            };
+            if &entry.key == key {
+                f(idx);
+            }
+            idx = (idx + 1) & mask;
+            steps += 1;
+        }
+    }
+
+    /// The value stored in `slot` (as reported by
+    /// [`Self::for_each_match_slot`]), or `None` for an empty or
+    /// out-of-range slot.
+    pub fn value_at(&self, slot: usize) -> Option<&V> {
+        self.entries.get(slot)?.as_ref().map(|e| &e.value)
+    }
+
     /// Batch probe, first match only per key -- a straightforward loop
     /// over [`Self::get`] for now; a real SIMD-batched probe (hash many
     /// keys at once, gather matches) is future work, tracked as the next
@@ -291,6 +323,21 @@ mod tests {
             ht.insert(1, i);
         }
         assert_eq!(ht.get_all(&1).len(), 50);
+        let mut seen = Vec::new();
+        ht.for_each_match_slot(&1, |slot| seen.push(slot));
+        assert_eq!(
+            seen.len(),
+            50,
+            "for_each_match_slot must visit every duplicate get_all returns"
+        );
+        let mut values: Vec<i64> = seen
+            .iter()
+            .map(|&slot| *ht.value_at(slot).unwrap())
+            .collect();
+        values.sort_unstable();
+        assert_eq!(values, (0..50).collect::<Vec<i64>>());
+        ht.for_each_match_slot(&999, |_| panic!("no entry for 999"));
+        assert_eq!(ht.value_at(usize::MAX), None);
         assert_eq!(ht.get(&2), None);
     }
 }

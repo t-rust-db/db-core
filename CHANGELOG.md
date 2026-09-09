@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.76.0] - 2026-09-09
+
+### Changed
+
+- **Joins run per segment, in parallel, without materializing the joined table** (#272). New `vm::engine::run_join_segments(left: Vec<S: Segment>, right, plan)`: the build side runs once into an `Arc`-shared `JoinTables` handle (`Vm::with_join_tables`/`Vm::join_tables`), then `probe ++ body` runs per left segment through the same morsel-driven `run` every single-table query uses, so the trailing `Combine` merges per-segment aggregates. Each segment's probe registers move straight into the body's `Batch` (`Vm::take_register`) -- the old `to_vec` + `InMemorySegment` clone round trip is gone. `run_join(&Batch, &Batch, plan)` stays as a single-segment wrapper. Motivation: the `t-rust-db/benchmark` parity `join` at 10M rows ran on one core at 108x DuckDB and 4.4 GB peak RSS.
+- **`Opcode::HashProbe` allocates nothing per probe row for integer keys**: one reused key buffer, `JoinHashTable::for_each_match_slot` (no `Vec` per probe) + `value_at`, and payload cells cloned once into their destination column instead of a full payload-row clone per match.
+- **BREAKING: `Segment::load` returns `Result<Batch>`** -- a segment may run a program (the join probe) or decode storage, and either failure is now a typed `VmError` instead of a panic. Implementors wrap their batch in `Ok`.
+
+### Fixed
+
+- **`COUNT` merged across segments came back as `Float`** (found by #272's per-segment join tests). `Combine` summed partial counts through the `SUM` path, so `SELECT COUNT(*)` over a multi-row-group file returned `3.0` where a single-segment scan returned `3`. Partial counts now merge as integers (typed error on `i64` overflow).
+
 ## [0.75.3] - 2026-09-09
 
 ### Changed

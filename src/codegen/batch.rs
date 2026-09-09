@@ -55,6 +55,38 @@ use crate::vm::batch::{AggFunc, AggPart, Instruction, MapOp, Opcode, Program, Va
 use crate::vm::engine::JoinProgram;
 use std::collections::HashMap;
 use std::fmt;
+// MC/DC obligation ids are `<basename>_<line>`, and `src/vm/batch.rs` shares this file's
+// basename, so a decision here on the same line as one there is misattributed by
+// `cargo-mvl-mcdc harvest` (tests/unit/mcdc_discharge_test.rs guards this). These
+// spacer lines shift every decision below to a line no `vm/batch.rs` decision uses.
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
+//
 
 /// A window function kind (#74 follow-up), local to this planner --
 /// mirrors `ast::ExprKind::FunctionCall`'s `OVER (...)` tail once resolved
@@ -2283,7 +2315,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_954__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__batch_986__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2294,7 +2326,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_954__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__batch_986__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2305,7 +2337,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_954__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__batch_986__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2318,7 +2350,7 @@ mod tests {
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_994__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__batch_1026__v1_group_by_without_agg_column_merges_partial_aggregates() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
@@ -2328,7 +2360,7 @@ mod tests {
     /// MC/DC vector (obligation `batch_879`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_994__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__batch_1026__v2_agg_column_without_group_by_merges_partial_aggregates() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
@@ -2339,7 +2371,7 @@ mod tests {
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_994__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__batch_1026__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();

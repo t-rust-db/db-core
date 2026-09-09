@@ -31,6 +31,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 /// Rows per batch that opcodes operate on at once.
 pub const BATCH_SIZE: usize = 1024;
@@ -622,8 +623,12 @@ pub trait Source {
 /// One independently-loadable unit of work for [`run_parallel`] — typically
 /// a single row group's worth of columns.
 pub trait Segment: Send + Sync {
-    /// Loads this segment's columns into a [`Batch`].
-    fn load(&self) -> Batch;
+    /// Loads this segment's columns into a [`Batch`]. Fallible since #272:
+    /// a segment may itself run a program (the probe side of a join, see
+    /// `vm::engine::run_join_segments`) or decode storage, and either can
+    /// fail -- a typed error here reaches the caller instead of a panic or
+    /// a silently empty batch.
+    fn load(&self) -> Result<Batch>;
 }
 
 /// Dynamically hands out segment indices to a fixed pool of worker threads:
@@ -685,7 +690,7 @@ fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec
 /// aggregates across segments is not performed here.
 pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
     let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments, |segment| {
-        let batch = segment.load();
+        let batch = segment.load()?;
         let mut vm = Vm::new();
         vm.execute(&batch, program)?;
         Ok(std::mem::take(&mut vm.output))
@@ -809,7 +814,7 @@ pub fn run_parallel_top_n<S: Segment>(
     spec: &TopN,
 ) -> Result<Vec<Vec<Value>>> {
     let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments, |segment| {
-        let batch = segment.load();
+        let batch = segment.load()?;
         let mut vm = Vm::new();
         vm.execute(&batch, program)?;
         Ok(top_n_reduce(std::mem::take(&mut vm.output), spec))
@@ -1025,12 +1030,30 @@ impl Hash for GroupKey {
     }
 }
 
+/// The join hash tables a [`Vm`] has built (`Opcode::HashBuild`), keyed
+/// by table id -- an opaque, cheaply clonable handle (#272). Build once,
+/// then hand a clone to every probe-side [`Vm`] via
+/// [`Vm::with_join_tables`] so parallel workers share one table instead
+/// of each rebuilding (or cloning) it. Cloning is an `Arc` bump per
+/// table, never a copy of the entries.
+#[derive(Debug, Clone, Default)]
+pub struct JoinTables(HashMap<usize, Arc<JoinHashTable<JoinKey, Vec<Value>>>>);
+
+impl fmt::Debug for JoinHashTable<JoinKey, Vec<Value>> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JoinHashTable")
+            .field("len", &self.len())
+            .field("capacity", &self.capacity())
+            .finish()
+    }
+}
+
 /// A register machine executing one batch at a time.
 #[derive(Default)]
 pub struct Vm {
     registers: HashMap<usize, Vec<Value>>,
     output: Vec<Vec<Value>>,
-    join_tables: HashMap<usize, JoinHashTable<JoinKey, Vec<Value>>>,
+    join_tables: JoinTables,
     /// Instructions executed so far, checked against [`MAX_STEPS`] by
     /// [`Vm::execute`]/[`Vm::run`].
     steps: usize,
@@ -1041,7 +1064,10 @@ impl fmt::Debug for Vm {
         f.debug_struct("Vm")
             .field("registers", &self.registers)
             .field("output", &self.output)
-            .field("join_tables", &self.join_tables.keys().collect::<Vec<_>>())
+            .field(
+                "join_tables",
+                &self.join_tables.0.keys().collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -1052,10 +1078,38 @@ impl Vm {
         Vm::default()
     }
 
+    /// A fresh VM that already holds `tables` -- the probe side of a join
+    /// whose build side ran in another [`Vm`] (#272). Sharing is by `Arc`,
+    /// so many probe VMs (one per segment, on as many threads) read one
+    /// built table.
+    pub fn with_join_tables(tables: JoinTables) -> Self {
+        Vm {
+            join_tables: tables,
+            ..Vm::default()
+        }
+    }
+
+    /// The join tables built so far, as a shareable handle; the VM keeps
+    /// its own reference too. See [`Vm::with_join_tables`].
+    pub fn join_tables(&self) -> JoinTables {
+        self.join_tables.clone()
+    }
+
     /// The current contents of register `reg`, or
     /// [`VmError::UnknownRegister`] if it has never been written.
     pub fn register(&self, reg: usize) -> Result<&[Value]> {
         self.reg(reg, "register")
+    }
+
+    /// Move register `reg` out of the VM (it becomes unknown afterwards),
+    /// or [`VmError::UnknownRegister`] if it was never written -- for
+    /// callers assembling a [`Batch`] from finished registers without
+    /// copying every cell (#272).
+    pub fn take_register(&mut self, reg: usize) -> Result<Vec<Value>> {
+        self.registers.remove(&reg).ok_or(VmError::UnknownRegister {
+            opcode: "take_register",
+            register: reg,
+        })
     }
 
     /// Like [`Self::register`], but tags an unknown-register error with the
@@ -1318,7 +1372,7 @@ impl Vm {
                     let payload = payload_columns.iter().map(|c| c[row].clone()).collect();
                     ht.insert(key, payload);
                 }
-                self.join_tables.insert(*table, ht);
+                self.join_tables.0.insert(*table, Arc::new(ht));
             }
             Opcode::HashProbe {
                 key_cols,
@@ -1336,23 +1390,38 @@ impl Vm {
                         reason: "hash probe has no key columns".to_string(),
                     }
                 })?;
-                let ht = self
-                    .join_tables
-                    .get(table)
-                    .ok_or(VmError::UnknownJoinTable {
+                // An `Arc` bump, so `ht` is a local the payload columns
+                // below can read from after the reshape has mutably
+                // borrowed `self.registers` (#272: no payload clone per
+                // matched row -- `emitted` records the table slot, and
+                // each payload cell is cloned once, straight into its
+                // destination column).
+                let ht = Arc::clone(self.join_tables.0.get(table).ok_or(
+                    VmError::UnknownJoinTable {
                         opcode,
                         table: *table,
-                    })?;
+                    },
+                )?);
 
-                // Owned so the borrow of `self.join_tables` (via `ht`) and
-                // of `self.registers` (via `key_columns`) both end here,
-                // before the reshape below needs to mutably borrow
-                // `self.registers`.
-                let mut emitted: Vec<(usize, Option<Vec<Value>>)> = Vec::with_capacity(num_rows);
+                // #272: one reusable key buffer instead of a fresh `Vec`
+                // per probe row, and `for_each_match_slot` instead of the
+                // `Vec`-returning `get_all` -- zero per-row allocations for
+                // integer keys.
+                let mut key = JoinKey(Vec::with_capacity(key_columns.len()));
+                let mut emitted: Vec<(usize, Option<usize>)> = Vec::with_capacity(num_rows);
                 for row in 0..num_rows {
-                    let key = JoinKey(key_columns.iter().map(|c| c[row].clone()).collect());
-                    let matches: Vec<&Vec<Value>> = ht.get_all(&key);
-                    if matches.is_empty() {
+                    key.0.clear();
+                    key.0.extend(key_columns.iter().map(|c| c[row].clone()));
+                    let mut matched = false;
+                    let emit_payload =
+                        !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
+                    ht.for_each_match_slot(&key, |slot| {
+                        matched = true;
+                        if emit_payload {
+                            emitted.push((row, Some(slot)));
+                        }
+                    });
+                    if !matched {
                         if should_emit(*kind, false, false) {
                             emitted.push((row, None));
                         }
@@ -1361,12 +1430,6 @@ impl Vm {
                         // of build-side fanout; no payload (see doc comment
                         // on `Opcode::HashProbe`).
                         emitted.push((row, None));
-                    } else {
-                        for m in matches {
-                            if should_emit(*kind, true, true) {
-                                emitted.push((row, Some(m.clone())));
-                            }
-                        }
                     }
                 }
 
@@ -1383,17 +1446,26 @@ impl Vm {
                 for (i, dst) in payload_dst.iter().enumerate() {
                     let col: Vec<Value> = emitted
                         .iter()
-                        .map(|(_, payload)| match payload {
+                        .map(|(_, slot)| match slot {
                             // `None` is an unmatched LEFT JOIN probe row: NULL
                             // by definition. A payload narrower than its
-                            // destinations is a planner bug, not NULL data.
-                            Some(p) => p.get(i).cloned().ok_or_else(|| VmError::MalformedProgram {
-                                opcode,
-                                reason: format!(
-                                    "join payload has {} columns but destination {i} was requested",
-                                    p.len()
-                                ),
-                            }),
+                            // destinations is a planner bug, not NULL data;
+                            // a slot the table no longer knows is impossible
+                            // (nothing inserts between probe and here) but
+                            // is reported the same way rather than assumed.
+                            Some(slot) => {
+                                let p = ht.value_at(*slot).ok_or_else(|| VmError::MalformedProgram {
+                                    opcode,
+                                    reason: format!("join table slot {slot} vanished between probe and payload"),
+                                })?;
+                                p.get(i).cloned().ok_or_else(|| VmError::MalformedProgram {
+                                    opcode,
+                                    reason: format!(
+                                        "join payload has {} columns but destination {i} was requested",
+                                        p.len()
+                                    ),
+                                })
+                            }
                             None => Ok(Value::Null),
                         })
                         .collect::<Result<_>>()?;
@@ -2042,7 +2114,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1780__v1_a_null_propagates() {
+    fn mcdc__batch_1852__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2070,7 +2142,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1780__v2_b_null_propagates() {
+    fn mcdc__batch_1852__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2098,7 +2170,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1780__v3_neither_null_computes_result() {
+    fn mcdc__batch_1852__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2126,7 +2198,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1834__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1906__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2154,7 +2226,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1834__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1906__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2182,7 +2254,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1834__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1906__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2210,7 +2282,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1834__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1906__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -3247,8 +3319,8 @@ mod tests {
     struct InMemorySegment(Batch);
 
     impl Segment for InMemorySegment {
-        fn load(&self) -> Batch {
-            self.0.clone()
+        fn load(&self) -> Result<Batch> {
+            Ok(self.0.clone())
         }
     }
 
