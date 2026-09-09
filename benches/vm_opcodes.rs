@@ -37,9 +37,10 @@ use db_core::vm::batch::{
     compare_for_order, Batch, MapOp, Opcode as BatchOpcode, Value as BatchValue, Vm as BatchVm,
     WindowFunc,
 };
+use db_core::value::Value as RowValue;
 use db_core::vm::row::{
     execute, Cursor, EphemeralTableCursor, Instruction as RowInstruction, Opcode as RowOpcode,
-    Program as RowProgram, Value as RowValue, Vm as RowVm,
+    Program as RowProgram, Vm as RowVm,
 };
 
 const ROWS: usize = 4096;
