@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.76.3] - 2026-09-09
+
+### Changed
+
+- **`Filter` produces a selection vector instead of eagerly compacting registers** (#265). `Opcode::Filter` records surviving row indices on the `Vm` instead of draining and rebuilding every live register; `Emit`/`GroupReduce`/`HashBuild` resolve it lazily (only the registers they actually read), while `Map`/`Reduce`/`Window`/`HashProbe`'s key-column input force an eager compaction first, reproducing prior behavior exactly. `Filter` alone with unused live registers is ~2.3x faster; a realistic `Map+Filter+Emit` shape is ~1.2x faster.
+
 ## [0.76.2] - 2026-09-09
 
 ### Changed
