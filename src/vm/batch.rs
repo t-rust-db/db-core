@@ -903,6 +903,14 @@ pub enum VmError {
         /// Which invariant failed.
         reason: String,
     },
+    /// A [`Segment::load`] failed for a reason outside the VM -- a storage
+    /// decode error, a row group that does not exist. Storage backends
+    /// return this instead of a panic or a silently NULL-filled column
+    /// (t-rust-db/column-rs#27).
+    SegmentLoad {
+        /// What failed, in the backend's own words (file, column, cause).
+        reason: String,
+    },
 }
 
 impl fmt::Display for VmError {
@@ -932,6 +940,7 @@ impl fmt::Display for VmError {
             VmError::MalformedProgram { opcode, reason } => {
                 write!(f, "{opcode}: malformed program: {reason}")
             }
+            VmError::SegmentLoad { reason } => write!(f, "segment load failed: {reason}"),
         }
     }
 }
@@ -2114,7 +2123,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1852__v1_a_null_propagates() {
+    fn mcdc__batch_1861__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2142,7 +2151,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1852__v2_b_null_propagates() {
+    fn mcdc__batch_1861__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2170,7 +2179,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1852__v3_neither_null_computes_result() {
+    fn mcdc__batch_1861__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2198,7 +2207,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1906__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1915__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2226,7 +2235,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1906__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1915__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2254,7 +2263,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1906__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1915__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2282,7 +2291,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1906__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1915__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(

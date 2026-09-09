@@ -1622,6 +1622,7 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
         // DISTINCT runs as a post-Finalize dedup pass, after GROUP BY's
         // hash-aggregate merge and before ORDER BY/LIMIT (see
         // `compile`'s `distinct` handling) -- the plan reflects that order.
+        // MC/DC: this decision must not share a line number with one in `src/vm/batch.rs` (ids are basename+line).
         if matches!(select.distinct, Some(Distinctness::Distinct)) {
             b.push(0, "DISTINCT".to_string());
         }
@@ -1820,6 +1821,7 @@ pub fn explain_opcodes(select: &Select) -> Result<Vec<OpcodeSection>> {
                 rows: render_program(&join.body),
             },
         ])
+    // MC/DC: this decision must not share a line number with one in `src/vm/batch.rs` (ids are basename+line).
     } else if has_window {
         Ok(vec![OpcodeSection {
             label: "body".to_string(),
