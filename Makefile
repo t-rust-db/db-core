@@ -61,6 +61,16 @@ mcdc-obligations: ## Regenerate the committed MC/DC obligations snapshot (tests/
 	@cargo-mvl-mcdc scan -o tests/mcdc/obligations.json $(MCDC_FILES)
 	@echo "wrote tests/mcdc/obligations.json — commit it alongside the source change that shifted line numbers"
 
+# The committed snapshot must match the source: `unit_mcdc_discharge` only
+# checks that tagged tests name ids that exist, so a stale snapshot passes
+# until the next regeneration surfaces every collision at once (0.78.1's
+# main had two). Regenerate to a scratch file and compare byte-for-byte.
+check-mcdc-fresh: ## tests/mcdc/obligations.json matches a fresh scan of src/
+	@cargo-mvl-mcdc scan -o target/obligations.fresh.json $(MCDC_FILES) \
+		&& cmp -s target/obligations.fresh.json tests/mcdc/obligations.json \
+		&& echo "check-mcdc-fresh: snapshot is current" \
+		|| { echo "check-mcdc-fresh: tests/mcdc/obligations.json is stale -- run make mcdc-obligations and commit it"; exit 1; }
+
 test-mcdc: mcdc-obligations ## MC/DC dashboard for all of src/; fails if any multi-leaf obligation is undischarged (VERBOSE=1 for per-obligation detail)
 	# `harvest` re-runs `cargo test` itself (it has no `--features` flag
 	# of its own) and joins on tagged test names regardless of overall
@@ -116,7 +126,7 @@ check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see
 # nothing else). `--all-features` hides a missing implication; a consumer
 # enabling one feature finds it. 0.78.0 shipped `storage-row` without
 # `parser-row` this way.
-FEATURES := storage-row storage-column parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
+FEATURES := storage-row storage-column storage-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
 
 check-features: ## Each Cargo feature builds standalone (cargo check --no-default-features --features X)
 	@for f in $(FEATURES); do \
@@ -174,6 +184,7 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) lint
 	$(MAKE) check-deny
 	$(MAKE) check-features
+	$(MAKE) check-mcdc-fresh
 	$(MAKE) check-mvl-limit
 	$(MAKE) test
 	@echo "all CI gates passed"

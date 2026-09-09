@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.79.0] - 2026-09-09
+
+### Added
+
+- **`storage::stream`** (`storage-stream`, ADR 0006's third mode): stream-oriented storage for push-driven log sources — `SyslogParser` (RFC 3164/5424 line parser) filling a `LogBatch` (columnar per-field store: timestamp, severity, source, resource, message, plus `FieldStore` for structured fields) that `vm::stream::StreamFilter` consumes. Std-only. `storage-stream` implies `vm-stream`; on by default.
+
+### Fixed
+
+- MC/DC snapshot drift on `main`: `src/value.rs` and `codegen/row/expr/value.rs` collided on `value_106`/`value_108` after 0.78.0's line shifts, and `scalar_91` had moved to `scalar_92`. `codegen/row/expr/value.rs` is now `expr_value.rs` (module name unchanged via `#[path]`); tags remapped; snapshot regenerated.
+- `make check-mcdc-fresh` (in `make ci`): regenerates the obligations snapshot to a scratch file and compares it byte-for-byte with `tests/mcdc/obligations.json`. `unit_mcdc_discharge` only checks that tagged tests name ids that *exist*, so a stale snapshot passed until the next regeneration surfaced every collision at once — which is how the drift above shipped in 0.78.0 and 0.78.1.
+- `make check-features` now includes `storage-stream`.
+
 ## [0.78.1] - 2026-09-09
 
 ### Fixed

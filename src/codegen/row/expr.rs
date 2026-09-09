@@ -22,6 +22,9 @@
 //! mode, e.g. column reads and affinity/collation lookups).
 
 mod cond;
+// File is `expr_value.rs`, not `value.rs`: MC/DC obligation ids are keyed by
+// basename+line and this module collided with the crate-level `src/value.rs`.
+#[path = "expr/expr_value.rs"]
 mod value;
 
 pub(crate) use cond::{column_index, compile_cond, ensure_label};

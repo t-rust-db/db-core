@@ -6633,270 +6633,270 @@
     "compiler_void": false
   },
   {
-    "id": "scalar_24",
+    "id": "scalar_25",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 24,
+    "line": 25,
     "decision": "match subselect.columns.as_slice() {\n        [ResultColumn::Expr { expr, .. }] => Ok(expr),\n        _ => Err(CodegenError::Unsupported {\n            reason: \"a scalar/IN subquery must project exactly one expression column\".to_string(),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_39",
+    "id": "scalar_40",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 39,
+    "line": 40,
     "decision": "match c {\n            ResultColumn::Expr { expr, .. } => Ok(expr),\n            _ => Err(CodegenError::Unsupported {\n                reason: \"a multi-column IN subquery's result columns must be plain expressions \\\n                         (no * / table.*)\"\n                    .to_string(),\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_71",
+    "id": "scalar_72",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 71,
+    "line": 72,
     "decision": "*r != want",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_91",
+    "id": "scalar_92",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 91,
+    "line": 92,
     "decision": "!subselect.order_by.is_empty() || subselect.limit.is_some()",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false
   },
   {
-    "id": "scalar_104",
+    "id": "scalar_105",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 104,
+    "line": 105,
     "decision": "subselect.where_clause.is_some()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_124",
+    "id": "scalar_125",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 124,
+    "line": 125,
     "decision": "select_has_aggregate(subselect)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_150",
+    "id": "scalar_151",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 150,
+    "line": 151,
     "decision": "try_compile_index_only_count(em, reg, subselect, &schema, cursors, &catalog, &mut sink)?",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_154",
+    "id": "scalar_155",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 154,
+    "line": 155,
     "decision": "try_compile_index_only_sum(em, reg, subselect, &schema, cursors, &mut sink)?",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_200",
+    "id": "scalar_201",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 200,
+    "line": 201,
     "decision": "match &access {\n            JoinAccess::Rowid(operand) | JoinAccess::UniqueIndex { operand, .. } => {\n                compile_value(em, reg, outer_scope, operand)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_211",
+    "id": "scalar_212",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 211,
+    "line": 212,
     "decision": "match access {\n            JoinAccess::Rowid(_) => {\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    sub_cursor,\n                    0,\n                    value_reg,\n                ));\n                em.patch_p2(seek_addr, end_label);\n            }\n            JoinAccess::UniqueIndex { index, .. } => {\n                let index_cursor = reg.alloc_cursor();\n                let root_page = valid_index_root_page(&index)?;\n                let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);\n                open_instr.p5 = 1;\n                em.emit(open_instr);\n                let leading_collation = index\n                    .columns\n                    .first()\n                    .map_or(Collation::Binary, |c| c.collation);\n                let seek_instr = Instruction::with_p4(\n                    Opcode::SeekIndexEq,\n                    index_cursor,\n                    0,\n                    value_reg,\n                    P4::SeekKey(vec![leading_collation]),\n                );\n                let seek_addr = em.emit(seek_instr);\n                em.patch_p2(seek_addr, end_label);\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::IdxRowid,\n                    index_cursor,\n                    rowid_reg,\n                    0,\n                ));\n                let table_seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    sub_cursor,\n                    0,\n                    rowid_reg,\n                ));\n                em.patch_p2(table_seek_addr, end_label);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_323",
+    "id": "scalar_324",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 323,
+    "line": 324,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_337",
+    "id": "scalar_338",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 337,
+    "line": 338,
     "decision": "match &access {\n            JoinAccess::Rowid(operand) | JoinAccess::UniqueIndex { operand, .. } => {\n                compile_value(em, reg, outer_scope, operand)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_350",
+    "id": "scalar_351",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 350,
+    "line": 351,
     "decision": "match access {\n            JoinAccess::Rowid(_) => {\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    sub_cursor,\n                    0,\n                    value_reg,\n                ));\n                em.patch_p2(seek_addr, not_found);\n            }\n            JoinAccess::UniqueIndex { index, .. } => {\n                let index_cursor = reg.alloc_cursor();\n                let root_page = valid_index_root_page(&index)?;\n                let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);\n                open_instr.p5 = 1;\n                em.emit(open_instr);\n                let leading_collation = index\n                    .columns\n                    .first()\n                    .map_or(Collation::Binary, |c| c.collation);\n                let seek_instr = Instruction::with_p4(\n                    Opcode::SeekIndexEq,\n                    index_cursor,\n                    0,\n                    value_reg,\n                    P4::SeekKey(vec![leading_collation]),\n                );\n                let seek_addr = em.emit(seek_instr);\n                em.patch_p2(seek_addr, not_found);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_386",
+    "id": "scalar_387",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 386,
+    "line": 387,
     "decision": "t_is_new",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_419",
+    "id": "scalar_420",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 419,
+    "line": 420,
     "decision": "t_is_new",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_472",
+    "id": "scalar_473",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 472,
+    "line": 473,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_477",
+    "id": "scalar_478",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 477,
+    "line": 478,
     "decision": "match targets.on_null {\n        NullTarget::True => true_label,\n        NullTarget::False => false_label,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_494",
+    "id": "scalar_495",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 494,
+    "line": 495,
     "decision": "false_is_new",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_497",
+    "id": "scalar_498",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 497,
+    "line": 498,
     "decision": "true_is_new",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_592",
+    "id": "scalar_593",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 592,
+    "line": 593,
     "decision": "col_exprs.len() != lhs_exprs.len()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_656",
+    "id": "scalar_657",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 656,
+    "line": 657,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_661",
+    "id": "scalar_662",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 661,
+    "line": 662,
     "decision": "match targets.on_null {\n        NullTarget::True => true_label,\n        NullTarget::False => false_label,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_681",
+    "id": "scalar_682",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 681,
+    "line": 682,
     "decision": "false_is_new",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_684",
+    "id": "scalar_685",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 684,
+    "line": 685,
     "decision": "true_is_new",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "scalar_715",
+    "id": "scalar_716",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 715,
+    "line": 716,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"failed to parse {sql:?}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_854",
+    "id": "scalar_855",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 854,
+    "line": 855,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"exactly one expression column\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_911",
+    "id": "scalar_912",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 911,
+    "line": 912,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"EXISTS (SELECT ...) requires a FROM clause\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_962",
+    "id": "scalar_963",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 962,
+    "line": 963,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"left-hand tuple has 2 column(s)\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_978",
+    "id": "scalar_979",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 978,
+    "line": 979,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"no * / table.*\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "scalar_1011",
+    "id": "scalar_1012",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 1011,
+    "line": 1012,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8028,251 +8028,521 @@
     "compiler_void": true
   },
   {
-    "id": "value_30",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 30,
+    "id": "expr_value_31",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 31,
     "decision": "schema.rowid_alias == Some(idx)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_49",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 49,
+    "id": "expr_value_50",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 50,
     "decision": "schema\n        .column_types\n        .get(idx)\n        .is_some_and(|t| affinity_of(t) == Affinity::Real)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_64",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 64,
+    "id": "expr_value_65",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 65,
     "decision": "match args {\n        crate::parser::ast::FunctionArgs::Star => 0,\n        crate::parser::ast::FunctionArgs::List(list) => list.len(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_68",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 68,
+    "id": "expr_value_69",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 69,
     "decision": "match name.to_ascii_lowercase().as_str() {\n        \"avg\" | \"count\" | \"group_concat\" | \"string_agg\" | \"sum\" | \"total\" => true,\n        \"max\" | \"min\" => arity <= 1,\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_83",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 83,
+    "id": "expr_value_84",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 84,
     "decision": "match &expr.kind {\n        ExprKind::Column { table, name, .. } => {\n            let (_, idx, schema, _) = scope.resolve(table.as_deref(), name).ok()?;\n            let declared = schema.column_types.get(idx)?;\n            Some(affinity_of(declared))\n        }\n        ExprKind::Cast { type_name, .. } => Some(affinity_of(type_name)),\n        ExprKind::Paren(inner) => expr_affinity(scope, inner),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_98",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 98,
+    "id": "expr_value_99",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 99,
     "decision": "match &expr.kind {\n        ExprKind::Collate { collation, .. } => {\n            // `eq_ignore_ascii_case` rather than an uppercased copy —\n            // collation names are ASCII, and this runs per COLLATE\n            // expression during codegen (#590 item 8).\n            if collation.eq_ignore_ascii_case(\"BINARY\") {\n                Some(Collation::Binary)\n            } else if collation.eq_ignore_ascii_case(\"NOCASE\") {\n                Some(Collation::NoCase)\n            } else if collation.eq_ignore_ascii_case(\"RTRIM\") {\n                Some(Collation::RTrim)\n            } else {\n                None\n            }\n        }\n        ExprKind::Paren(inner) => collation_of(inner),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_103",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 103,
+    "id": "expr_value_104",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 104,
     "decision": "collation.eq_ignore_ascii_case(\"BINARY\")",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_105",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 105,
+    "id": "expr_value_106",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 106,
     "decision": "collation.eq_ignore_ascii_case(\"NOCASE\")",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_107",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 107,
+    "id": "expr_value_108",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 108,
     "decision": "collation.eq_ignore_ascii_case(\"RTRIM\")",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_127",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 127,
+    "id": "expr_value_128",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 128,
     "decision": "match &expr.kind {\n        ExprKind::Column { table, name, .. } => {\n            let (_, idx, schema, _) = scope.resolve(table.as_deref(), name).ok()?;\n            schema.column_collations.get(idx).copied()\n        }\n        ExprKind::Paren(inner) => expr_collation(scope, inner),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_146",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 146,
+    "id": "expr_value_147",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 147,
     "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => compile_value(em, reg, scope, inner),\n        ExprKind::Collate { expr: inner, .. } => compile_value(em, reg, scope, inner),\n\n        ExprKind::Literal(lit) => {\n            let r = reg.alloc();\n            match lit {\n                Literal::Integer(i) => {\n                    // #142: `Opcode::Integer`'s P1 is i32-only, so a\n                    // literal outside that range (but within i64) loads\n                    // via `Int64`'s P4-carried i64 immediate instead —\n                    // the harvested 64-bit counterpart, not a codegen\n                    // error.\n                    match i32::try_from(*i) {\n                        Ok(p1) => {\n                            em.emit(Instruction::new(Opcode::Integer, p1, r, 0));\n                        }\n                        Err(_) => {\n                            em.emit(Instruction::with_p4(Opcode::Int64, 0, r, 0, P4::Int(*i)));\n                        }\n                    }\n                }\n                Literal::True => {\n                    em.emit(Instruction::new(Opcode::Integer, 1, r, 0));\n                }\n                Literal::False => {\n                    em.emit(Instruction::new(Opcode::Integer, 0, r, 0));\n                }\n                Literal::Str(s) => {\n                    em.emit(Instruction::with_p4(\n                        Opcode::String8,\n                        0,\n                        r,\n                        0,\n                        P4::Str(s.clone()),\n                    ));\n                }\n                // #142: a real literal loads as an actual `Value::Real`\n                // via the harvested `Real` opcode, not `String8` text\n                // relying on coercion at comparison/arithmetic time\n                // (the #138 bug this used to cause).\n                Literal::Float(f) => {\n                    em.emit(Instruction::with_p4(Opcode::Real, 0, r, 0, P4::Real(*f)));\n                }\n                // #142: a blob literal loads as an actual `Value::Blob`\n                // via the harvested `Blob` opcode — hex-text never\n                // actually coerced back to a blob (BLOB affinity never\n                // converts text to blob, matching SQLite), so\n                // `WHERE b = x'41'` always failed under the old scheme.\n                Literal::Blob(bytes) => {\n                    let len =\n                        i32::try_from(bytes.len()).map_err(|_| CodegenError::Unsupported {\n                            reason: format!(\n                                \"blob literal of {} bytes does not fit in a P1 operand\",\n                                bytes.len()\n                            ),\n                        })?;\n                    em.emit(Instruction::with_p4(\n                        Opcode::Blob,\n                        len,\n                        r,\n                        0,\n                        P4::Blob(bytes.clone()),\n                    ));\n                }\n                Literal::Null => {} // Fresh registers already read as NULL.\n            }\n            Ok(r)\n        }\n\n        // `?` and `?NNN` compile to `Variable`, reading whatever the\n        // caller bound via `Vm::bind_params`/`execute_with_params`\n        // (#137). Named forms (`:name`/`@name`/`$name`) aren't wired to\n        // an index yet — out of #137's bounded scope — so they still\n        // compile to an always-NULL register (known simplification,\n        // same as before).\n        ExprKind::Param(kind) => {\n            let r = reg.alloc();\n            let index = match kind {\n                ParamKind::Anonymous => Some(reg.anonymous_param()),\n                ParamKind::Numbered(n) => Some(reg.numbered_param(*n)),\n                ParamKind::Colon(_) | ParamKind::At(_) | ParamKind::Dollar(_) => None,\n            };\n            if let Some(index) = index {\n                let p1 = i32::try_from(index).map_err(|_| CodegenError::Unsupported {\n                    reason: format!(\"parameter index {index} is out of range\"),\n                })?;\n                em.emit(Instruction::new(Opcode::Variable, p1, r, 0));\n            }\n            Ok(r)\n        }\n\n        ExprKind::Column { table, name, .. } => {\n            let (cursor, idx, schema, forced_null) = scope.resolve(table.as_deref(), name)?;\n            let r = reg.alloc();\n            if forced_null {\n                // #237's LEFT JOIN null-extension: this binding has no\n                // matching row (or `cursor` may not even be positioned\n                // on live data at all), so every column reads as NULL\n                // rather than going through a real `Column`/`Rowid`\n                // read.\n                em.emit(Instruction::new(Opcode::Null, 0, r, 0));\n            } else {\n                emit_column_read(em, schema, cursor, idx, r)?;\n            }\n            Ok(r)\n        }\n\n        ExprKind::FunctionCall {\n            name, args, tail, ..\n        } => {\n            // The parser (db-core's `parser::row`, #17) accepts inline\n            // `OVER (...)` and `FILTER (WHERE ...)` (db-core#67); the\n            // planner has no window pass yet (V9) and no FILTER support,\n            // and compiling the call as a plain scalar/aggregate would\n            // return wrong rows silently — refuse instead.\n            if let Some(tail) = tail.as_deref() {\n                let reason = if tail.over.is_some() {\n                    \"window functions (OVER) not yet supported\"\n                } else {\n                    \"FILTER (WHERE ...) on a function call not yet supported\"\n                };\n                return Err(CodegenError::Unsupported {\n                    reason: reason.to_string(),\n                });\n            }\n            // Aggregates need a grouping/accumulator pass this V2\n            // compiler doesn't have. Rejecting them is not just a\n            // missing-feature guard: compiling one as an ordinary\n            // scalar `Function` call emits it *per row*, so\n            // `SELECT count(*) FROM t` silently returns one row per\n            // input row instead of a single count — wrong output is\n            // worse than a refusal.\n            if is_aggregate_call(name, args) {\n                return Err(CodegenError::Unsupported {\n                    reason: format!(\"aggregate function {}\", name.to_ascii_lowercase()),\n                });\n            }\n            let arg_exprs = match args {\n                crate::parser::ast::FunctionArgs::Star => &[][..],\n                crate::parser::ast::FunctionArgs::List(list) => list.as_slice(),\n            };\n            // `Function` reads its arguments from a contiguous register\n            // window starting at P2, so the args must land next to each\n            // other. Reserving the window up front and *then* compiling\n            // into it does not work: `compile_value` allocates its own\n            // destination, so every argument landed past the reservation.\n            // Instead, compile the args first and take the window from\n            // where they actually landed — consecutive simple args are\n            // naturally adjacent this way. When that does not hold (an\n            // argument whose own lowering allocates its destination\n            // before its operands, e.g. `coalesce(i, -1)` alongside\n            // another such call), fall back to copying each arg into a\n            // freshly reserved contiguous run (#141).\n            let mut arg_regs = Vec::with_capacity(arg_exprs.len());\n            for arg in arg_exprs.iter() {\n                arg_regs.push(compile_value(em, reg, scope, arg)?);\n            }\n            let mut first = match arg_regs.first().copied() {\n                Some(r) => r,\n                // Zero-arg call (or `f(*)`): P2 still has to point at a\n                // register, and nothing reads it.\n                None => reg.alloc(),\n            };\n            let already_contiguous = arg_regs\n                .iter()\n                .enumerate()\n                .all(|(i, &r)| r == first.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)));\n            if !already_contiguous {\n                let dests: Vec<i32> = (0..arg_regs.len()).map(|_| reg.alloc()).collect();\n                if let Some(&dest_first) = dests.first() {\n                    first = dest_first;\n                }\n                for (&r, &dest) in arg_regs.iter().zip(&dests) {\n                    em.emit(Instruction::new(Opcode::Copy, r, dest, 0));\n                }\n            }\n            let dest = reg.alloc();\n            em.emit(Instruction::with_p4(\n                Opcode::Function,\n                0,\n                first,\n                dest,\n                P4::Str(format!(\n                    \"{}({})\",\n                    name.to_ascii_lowercase(),\n                    arg_exprs.len()\n                )),\n            ));\n            Ok(dest)\n        }\n\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            glob,\n            negated,\n            escape,\n        } => {\n            let (name, arity) = match escape {\n                Some(_) if !*glob => (\"like\", 3),\n                _ if *glob => (\"glob\", 2),\n                _ => (\"like\", 2),\n            };\n            // Registry argument order is (pattern, text[, escape]) —\n            // the reverse of SQL's `text LIKE pattern` syntax. Compile\n            // operands in that order so the bump allocator hands out a\n            // contiguous run matching `Function`'s expected layout.\n            let pat_r = compile_value(em, reg, scope, pattern)?;\n            let txt_r = compile_value(em, reg, scope, inner)?;\n            if txt_r != pat_r.saturating_add(1) {\n                return Err(CodegenError::Unsupported {\n                    reason: \"LIKE/GLOB text operand did not land in the register contiguous \\\n                             with its pattern operand\"\n                        .to_string(),\n                });\n            }\n            if let Some(e) = escape {\n                let esc_r = compile_value(em, reg, scope, e)?;\n                if esc_r != pat_r.saturating_add(2) {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"LIKE ESCAPE operand did not land in the register contiguous \\\n                                 with its pattern/text operands\"\n                            .to_string(),\n                    });\n                }\n            }\n            let dest = reg.alloc();\n            let p4 = P4::Str(format!(\"{name}({arity})\"));\n            em.emit(Instruction::with_p4(Opcode::Function, 0, pat_r, dest, p4));\n            if *negated {\n                let out = compile_negate_value(em, reg, dest);\n                return Ok(out);\n            }\n            Ok(dest)\n        }\n\n        ExprKind::Unary { op, expr: inner } => match op {\n            UnaryOp::Plus => compile_value(em, reg, scope, inner),\n            UnaryOp::Minus => {\n                let r = compile_value(em, reg, scope, inner)?;\n                let zero = reg.alloc();\n                em.emit(Instruction::new(Opcode::Integer, 0, zero, 0));\n                let dest = reg.alloc();\n                // Subtract: r[P3] = r[P2] - r[P1] -> 0 - r = -r via\n                // P1=r, P2=zero.\n                em.emit(Instruction::new(Opcode::Subtract, r, zero, dest));\n                Ok(dest)\n            }\n            // `Not` is the whole reason this is not routed through\n            // `compile_bool_to_value`: it is the oracle's own lowering\n            // for `SELECT NOT x` (one instruction, verified against the\n            // pinned 3.53.4 `EXPLAIN`), and it propagates NULL in a\n            // register, which jump-mode code cannot do at all.\n            UnaryOp::Not => {\n                let r = compile_value(em, reg, scope, inner)?;\n                let dest = reg.alloc();\n                em.emit(Instruction::new(Opcode::Not, r, dest, 0));\n                Ok(dest)\n            }\n            UnaryOp::BitNot => {\n                let r = compile_value(em, reg, scope, inner)?;\n                let dest = reg.alloc();\n                em.emit(Instruction::new(Opcode::BitNot, r, dest, 0));\n                Ok(dest)\n            }\n        },\n\n        ExprKind::Binary { op, lhs, rhs }\n            if matches!(\n                op,\n                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod\n            ) =>\n        {\n            let l = compile_value(em, reg, scope, lhs)?;\n            let r = compile_value(em, reg, scope, rhs)?;\n            let dest = reg.alloc();\n            // The caller's own `matches!` filter guarantees `op` is one\n            // of these five; any other value is a codegen-internal\n            // error, not a reachable SQL-input case.\n            let opcode = match op {\n                BinaryOp::Add => Opcode::Add,\n                BinaryOp::Sub => Opcode::Subtract,\n                BinaryOp::Mul => Opcode::Multiply,\n                BinaryOp::Div => Opcode::Divide,\n                BinaryOp::Mod => Opcode::Remainder,\n                _ => {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"arithmetic lowering reached with a non-arithmetic operator\"\n                            .to_string(),\n                    })\n                }\n            };\n            // Subtract/Divide/Remainder read as `r[P2] <op> r[P1]`\n            // (SQLite's own operand order, per arithmetic.rs) — pass\n            // (rhs=P1, lhs=P2) so `lhs <op> rhs` is what's computed.\n            match opcode {\n                Opcode::Subtract | Opcode::Divide | Opcode::Remainder => {\n                    em.emit(Instruction::new(opcode, r, l, dest));\n                }\n                _ => {\n                    em.emit(Instruction::new(opcode, l, r, dest));\n                }\n            }\n            Ok(dest)\n        }\n\n        ExprKind::Binary { op, lhs, rhs }\n            if matches!(\n                op,\n                BinaryOp::BitAnd\n                    | BinaryOp::BitOr\n                    | BinaryOp::Shl\n                    | BinaryOp::Shr\n                    | BinaryOp::Concat\n            ) =>\n        {\n            let l = compile_value(em, reg, scope, lhs)?;\n            let r = compile_value(em, reg, scope, rhs)?;\n            let dest = reg.alloc();\n            let opcode = match op {\n                BinaryOp::BitAnd => Opcode::BitAnd,\n                BinaryOp::BitOr => Opcode::BitOr,\n                BinaryOp::Shl => Opcode::ShiftLeft,\n                BinaryOp::Shr => Opcode::ShiftRight,\n                BinaryOp::Concat => Opcode::Concat,\n                _ => {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bitwise/concat lowering reached with a non-bitwise operator\"\n                            .to_string(),\n                    })\n                }\n            };\n            // ShiftLeft/ShiftRight/Concat read as `r[P2] <op> r[P1]`\n            // (SQLite's own operand order, verified against harvested\n            // EXPLAIN) — pass (rhs=P1, lhs=P2) so `lhs <op> rhs` is what's\n            // computed. BitAnd/BitOr are commutative, so operand order\n            // doesn't change the result.\n            match opcode {\n                Opcode::ShiftLeft | Opcode::ShiftRight | Opcode::Concat => {\n                    em.emit(Instruction::new(opcode, r, l, dest));\n                }\n                _ => {\n                    em.emit(Instruction::new(opcode, l, r, dest));\n                }\n            }\n            Ok(dest)\n        }\n\n        // Comparisons and the logical connectives are conditions used\n        // in a value context: they answer true/false/unknown, which\n        // `compile_bool_to_value` materializes three-valued. Before\n        // #134 they fell into the catch-all below and compiled to a\n        // bare NULL register, so `SELECT price = 10` answered NULL for\n        // every row, NULL operand or not.\n        ExprKind::Binary {\n            op:\n                BinaryOp::Eq\n                | BinaryOp::Ne\n                | BinaryOp::Lt\n                | BinaryOp::Le\n                | BinaryOp::Gt\n                | BinaryOp::Ge\n                | BinaryOp::And\n                | BinaryOp::Or,\n            ..\n        } => compile_bool_to_value(em, reg, scope, expr),\n\n        // Unreachable in practice: `BinaryOp` has no variant left\n        // uncovered by the two arms above (#139). Kept as a defensive\n        // fallback rather than a `_ => unreachable!()` so a future\n        // `BinaryOp` addition fails soft (wrong answer) instead of\n        // panicking mid-query.\n        ExprKind::Binary { .. } => {\n            let r = reg.alloc();\n            em.emit(Instruction::new(Opcode::Null, 0, r, 0));\n            Ok(r)\n        }\n\n        // #142: `CAST` forces its target affinity via the harvested\n        // `Cast` opcode (P2 = the affinity's ASCII byte, matching the\n        // oracle's own `EXPLAIN` shape: `Cast r[N], affinity(r[N])`),\n        // never `MustBeInt`/`RealAffinity` — those are a guard opcode\n        // (aborts instead of truncating, wrong for `CAST('apple' AS\n        // INTEGER)` = `0`) and a column-load coercion opcode\n        // respectively, neither of which implements `CAST`'s own lossy\n        // conversion rule (`src/vdbe/cast.rs`).\n        ExprKind::Cast {\n            expr: inner,\n            type_name,\n        } => {\n            let r = compile_value(em, reg, scope, inner)?;\n            let affinity = affinity_of(type_name);\n            let p2 = i32::from(affinity.to_p4_byte());\n            em.emit(Instruction::new(Opcode::Cast, r, p2, 0));\n            Ok(r)\n        }\n\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            let dest = reg.alloc();\n            let end_label = em.new_label();\n            for (when_expr, then_expr) in whens {\n                let next_label = em.new_label();\n                let cond = match operand {\n                    Some(op_expr) => Expr {\n                        kind: ExprKind::Binary {\n                            op: BinaryOp::Eq,\n                            lhs: op_expr.clone(),\n                            rhs: Box::new(when_expr.clone()),\n                        },\n                        span: when_expr.span,\n                    },\n                    None => when_expr.clone(),\n                };\n                // A `WHEN` whose condition is unknown is not a match,\n                // exactly like a false one — `NullTarget::False`, the\n                // same setting `WHERE` uses.\n                compile_cond(\n                    em,\n                    reg,\n                    scope,\n                    &cond,\n                    CondTargets::null_is_false(Target::Fallthrough, Target::Jump(next_label)),\n                )?;\n                emit_branch_into(em, reg, scope, then_expr, dest)?;\n                em.goto(end_label);\n                em.place(next_label);\n            }\n            // `dest` is a register slot the scan loop reuses every\n            // iteration — a prior row's CASE result would otherwise\n            // leak into this row's output when no WHEN matches and\n            // there's no ELSE (registers don't reset between loop\n            // iterations), so the no-match path always explicitly\n            // (re)writes NULL rather than relying on \"never written\".\n            match else_ {\n                Some(else_expr) => emit_branch_into(em, reg, scope, else_expr, dest)?,\n                None => {\n                    // This used to fake a NULL with an out-of-range\n                    // `Column` read; `Null` (#134) says what it means,\n                    // and is what the oracle emits here.\n                    em.emit(Instruction::new(Opcode::Null, 0, dest, 0));\n                }\n            }\n            em.place(end_label);\n            Ok(dest)\n        }\n\n        // Boolean-valued expressions used in a value context (e.g. `a\n        // = b` as a result column) materialize 0/1 via the jump-mode\n        // compiler, matching Requirement 11's shape even when the\n        // condition's answer must land in a register.\n        ExprKind::Is { .. }\n        | ExprKind::IsNull { .. }\n        | ExprKind::Between { .. }\n        | ExprKind::In { .. }\n        | ExprKind::Exists { .. }\n        | ExprKind::InSubquery { .. }\n        | ExprKind::InSubqueryMulti { .. } => compile_bool_to_value(em, reg, scope, expr),\n\n        // #238: a scalar subquery in value position — `SELECT (SELECT\n        // max(x) FROM t)`, `x = (SELECT ...)`, etc. #306: if this\n        // subquery was hoisted (materialized once, before the enclosing\n        // scan's `Rewind`, because it's uncorrelated), its result is\n        // already sitting in a register — reuse it instead of\n        // re-running the subquery's whole scan on every outer row.\n        ExprKind::Subquery(subquery) => {\n            let key = crate::codegen::row::subquery::select_id(subquery);\n            match scope.hoisted.get(&key) {\n                Some(crate::codegen::row::subquery::HoistedSubquery::Scalar { reg: r }) => Ok(*r),\n                _ => match scope.memoized.get(&key) {\n                    // #314: correlated, but memoized per distinct value\n                    // of the one outer column it's correlated against.\n                    Some(memo) => crate::codegen::row::subquery::compile_memoized_scalar_subquery(\n                        em, reg, scope, subquery, memo,\n                    ),\n                    None => crate::codegen::row::subquery::compile_scalar_subquery(\n                        em, reg, scope, subquery,\n                    ),\n                },\n            }\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_415",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 415,
+    "id": "expr_value_416",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 416,
     "decision": "matches!(\n                op,\n                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod\n            )",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_454",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 454,
+    "id": "expr_value_455",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 455,
     "decision": "matches!(\n                op,\n                BinaryOp::BitAnd\n                    | BinaryOp::BitOr\n                    | BinaryOp::Shl\n                    | BinaryOp::Shr\n                    | BinaryOp::Concat\n            )",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_152",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 152,
+    "id": "expr_value_153",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 153,
     "decision": "match lit {\n                Literal::Integer(i) => {\n                    // #142: `Opcode::Integer`'s P1 is i32-only, so a\n                    // literal outside that range (but within i64) loads\n                    // via `Int64`'s P4-carried i64 immediate instead —\n                    // the harvested 64-bit counterpart, not a codegen\n                    // error.\n                    match i32::try_from(*i) {\n                        Ok(p1) => {\n                            em.emit(Instruction::new(Opcode::Integer, p1, r, 0));\n                        }\n                        Err(_) => {\n                            em.emit(Instruction::with_p4(Opcode::Int64, 0, r, 0, P4::Int(*i)));\n                        }\n                    }\n                }\n                Literal::True => {\n                    em.emit(Instruction::new(Opcode::Integer, 1, r, 0));\n                }\n                Literal::False => {\n                    em.emit(Instruction::new(Opcode::Integer, 0, r, 0));\n                }\n                Literal::Str(s) => {\n                    em.emit(Instruction::with_p4(\n                        Opcode::String8,\n                        0,\n                        r,\n                        0,\n                        P4::Str(s.clone()),\n                    ));\n                }\n                // #142: a real literal loads as an actual `Value::Real`\n                // via the harvested `Real` opcode, not `String8` text\n                // relying on coercion at comparison/arithmetic time\n                // (the #138 bug this used to cause).\n                Literal::Float(f) => {\n                    em.emit(Instruction::with_p4(Opcode::Real, 0, r, 0, P4::Real(*f)));\n                }\n                // #142: a blob literal loads as an actual `Value::Blob`\n                // via the harvested `Blob` opcode — hex-text never\n                // actually coerced back to a blob (BLOB affinity never\n                // converts text to blob, matching SQLite), so\n                // `WHERE b = x'41'` always failed under the old scheme.\n                Literal::Blob(bytes) => {\n                    let len =\n                        i32::try_from(bytes.len()).map_err(|_| CodegenError::Unsupported {\n                            reason: format!(\n                                \"blob literal of {} bytes does not fit in a P1 operand\",\n                                bytes.len()\n                            ),\n                        })?;\n                    em.emit(Instruction::with_p4(\n                        Opcode::Blob,\n                        len,\n                        r,\n                        0,\n                        P4::Blob(bytes.clone()),\n                    ));\n                }\n                Literal::Null => {} // Fresh registers already read as NULL.\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_159",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 159,
+    "id": "expr_value_160",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 160,
     "decision": "match i32::try_from(*i) {\n                        Ok(p1) => {\n                            em.emit(Instruction::new(Opcode::Integer, p1, r, 0));\n                        }\n                        Err(_) => {\n                            em.emit(Instruction::with_p4(Opcode::Int64, 0, r, 0, P4::Int(*i)));\n                        }\n                    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_224",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 224,
+    "id": "expr_value_225",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 225,
     "decision": "match kind {\n                ParamKind::Anonymous => Some(reg.anonymous_param()),\n                ParamKind::Numbered(n) => Some(reg.numbered_param(*n)),\n                ParamKind::Colon(_) | ParamKind::At(_) | ParamKind::Dollar(_) => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_241",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 241,
+    "id": "expr_value_242",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 242,
     "decision": "forced_null",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_263",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 263,
+    "id": "expr_value_264",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 264,
     "decision": "tail.over.is_some()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_279",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 279,
+    "id": "expr_value_280",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 280,
     "decision": "is_aggregate_call(name, args)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_284",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 284,
+    "id": "expr_value_285",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 285,
     "decision": "match args {\n                crate::parser::ast::FunctionArgs::Star => &[][..],\n                crate::parser::ast::FunctionArgs::List(list) => list.as_slice(),\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_304",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 304,
+    "id": "expr_value_305",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 305,
     "decision": "match arg_regs.first().copied() {\n                Some(r) => r,\n                // Zero-arg call (or `f(*)`): P2 still has to point at a\n                // register, and nothing reads it.\n                None => reg.alloc(),\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_314",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 314,
+    "id": "expr_value_315",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 315,
     "decision": "!already_contiguous",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_345",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 345,
+    "id": "expr_value_346",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 346,
     "decision": "match escape {\n                Some(_) if !*glob => (\"like\", 3),\n                _ if *glob => (\"glob\", 2),\n                _ => (\"like\", 2),\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "value_346",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 346,
+    "id": "expr_value_347",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 347,
     "decision": "!*glob",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_347",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 347,
+    "id": "expr_value_348",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 348,
     "decision": "*glob",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_356",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 356,
+    "id": "expr_value_357",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 357,
     "decision": "txt_r != pat_r.saturating_add(1)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_365",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 365,
+    "id": "expr_value_366",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 366,
     "decision": "esc_r != pat_r.saturating_add(2)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "value_376",
-    "file": "src/codegen/row/expr/value.rs",
+    "id": "expr_value_377",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 377,
+    "decision": "*negated",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "expr_value_384",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 384,
+    "decision": "match op {\n            UnaryOp::Plus => compile_value(em, reg, scope, inner),\n            UnaryOp::Minus => {\n                let r = compile_value(em, reg, scope, inner)?;\n                let zero = reg.alloc();\n                em.emit(Instruction::new(Opcode::Integer, 0, zero, 0));\n                let dest = reg.alloc();\n                // Subtract: r[P3] = r[P2] - r[P1] -> 0 - r = -r via\n                // P1=r, P2=zero.\n                em.emit(Instruction::new(Opcode::Subtract, r, zero, dest));\n                Ok(dest)\n            }\n            // `Not` is the whole reason this is not routed through\n            // `compile_bool_to_value`: it is the oracle's own lowering\n            // for `SELECT NOT x` (one instruction, verified against the\n            // pinned 3.53.4 `EXPLAIN`), and it propagates NULL in a\n            // register, which jump-mode code cannot do at all.\n            UnaryOp::Not => {\n                let r = compile_value(em, reg, scope, inner)?;\n                let dest = reg.alloc();\n                em.emit(Instruction::new(Opcode::Not, r, dest, 0));\n                Ok(dest)\n            }\n            UnaryOp::BitNot => {\n                let r = compile_value(em, reg, scope, inner)?;\n                let dest = reg.alloc();\n                em.emit(Instruction::new(Opcode::BitNot, r, dest, 0));\n                Ok(dest)\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_427",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 427,
+    "decision": "match op {\n                BinaryOp::Add => Opcode::Add,\n                BinaryOp::Sub => Opcode::Subtract,\n                BinaryOp::Mul => Opcode::Multiply,\n                BinaryOp::Div => Opcode::Divide,\n                BinaryOp::Mod => Opcode::Remainder,\n                _ => {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"arithmetic lowering reached with a non-arithmetic operator\"\n                            .to_string(),\n                    })\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_443",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 443,
+    "decision": "match opcode {\n                Opcode::Subtract | Opcode::Divide | Opcode::Remainder => {\n                    em.emit(Instruction::new(opcode, r, l, dest));\n                }\n                _ => {\n                    em.emit(Instruction::new(opcode, l, r, dest));\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_467",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 467,
+    "decision": "match op {\n                BinaryOp::BitAnd => Opcode::BitAnd,\n                BinaryOp::BitOr => Opcode::BitOr,\n                BinaryOp::Shl => Opcode::ShiftLeft,\n                BinaryOp::Shr => Opcode::ShiftRight,\n                BinaryOp::Concat => Opcode::Concat,\n                _ => {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bitwise/concat lowering reached with a non-bitwise operator\"\n                            .to_string(),\n                    })\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_485",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 485,
+    "decision": "match opcode {\n                Opcode::ShiftLeft | Opcode::ShiftRight | Opcode::Concat => {\n                    em.emit(Instruction::new(opcode, r, l, dest));\n                }\n                _ => {\n                    em.emit(Instruction::new(opcode, l, r, dest));\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_554",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 554,
+    "decision": "match operand {\n                    Some(op_expr) => Expr {\n                        kind: ExprKind::Binary {\n                            op: BinaryOp::Eq,\n                            lhs: op_expr.clone(),\n                            rhs: Box::new(when_expr.clone()),\n                        },\n                        span: when_expr.span,\n                    },\n                    None => when_expr.clone(),\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_585",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 585,
+    "decision": "match else_ {\n                Some(else_expr) => emit_branch_into(em, reg, scope, else_expr, dest)?,\n                None => {\n                    // This used to fake a NULL with an out-of-range\n                    // `Column` read; `Null` (#134) says what it means,\n                    // and is what the oracle emits here.\n                    em.emit(Instruction::new(Opcode::Null, 0, dest, 0));\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_618",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 618,
+    "decision": "match scope.hoisted.get(&key) {\n                Some(crate::codegen::row::subquery::HoistedSubquery::Scalar { reg: r }) => Ok(*r),\n                _ => match scope.memoized.get(&key) {\n                    // #314: correlated, but memoized per distinct value\n                    // of the one outer column it's correlated against.\n                    Some(memo) => crate::codegen::row::subquery::compile_memoized_scalar_subquery(\n                        em, reg, scope, subquery, memo,\n                    ),\n                    None => crate::codegen::row::subquery::compile_scalar_subquery(\n                        em, reg, scope, subquery,\n                    ),\n                },\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_620",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 620,
+    "decision": "match scope.memoized.get(&key) {\n                    // #314: correlated, but memoized per distinct value\n                    // of the one outer column it's correlated against.\n                    Some(memo) => crate::codegen::row::subquery::compile_memoized_scalar_subquery(\n                        em, reg, scope, subquery, memo,\n                    ),\n                    None => crate::codegen::row::subquery::compile_scalar_subquery(\n                        em, reg, scope, subquery,\n                    ),\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_660",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 660,
+    "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Integer(i)) => match i32::try_from(*i) {\n            Ok(p1) => {\n                em.emit(Instruction::new(Opcode::Integer, p1, dest, 0));\n            }\n            Err(_) => {\n                em.emit(Instruction::with_p4(Opcode::Int64, 0, dest, 0, P4::Int(*i)));\n            }\n        },\n        ExprKind::Literal(Literal::True) => {\n            em.emit(Instruction::new(Opcode::Integer, 1, dest, 0));\n        }\n        ExprKind::Literal(Literal::False) => {\n            em.emit(Instruction::new(Opcode::Integer, 0, dest, 0));\n        }\n        ExprKind::Literal(Literal::Str(s)) => {\n            em.emit(Instruction::with_p4(\n                Opcode::String8,\n                0,\n                dest,\n                0,\n                P4::Str(s.clone()),\n            ));\n        }\n        ExprKind::Literal(Literal::Float(f)) => {\n            em.emit(Instruction::with_p4(Opcode::Real, 0, dest, 0, P4::Real(*f)));\n        }\n        ExprKind::Literal(Literal::Blob(bytes)) => {\n            let len = i32::try_from(bytes.len()).map_err(|_| CodegenError::Unsupported {\n                reason: format!(\n                    \"blob literal of {} bytes does not fit in a P1 operand\",\n                    bytes.len()\n                ),\n            })?;\n            em.emit(Instruction::with_p4(\n                Opcode::Blob,\n                len,\n                dest,\n                0,\n                P4::Blob(bytes.clone()),\n            ));\n        }\n        // `dest` is shared across branches and reused every scan\n        // iteration, so an explicit NULL branch has to overwrite it.\n        // Emitting nothing (the pre-#134 behavior, correct only for a\n        // never-written fresh register) leaked the previous row's\n        // result out of `SELECT CASE WHEN c THEN x ELSE NULL END`.\n        ExprKind::Literal(Literal::Null) => {\n            em.emit(Instruction::new(Opcode::Null, 0, dest, 0));\n        }\n        ExprKind::Column { table, name, .. } => {\n            let (cursor, idx, schema, forced_null) = scope.resolve(table.as_deref(), name)?;\n            if forced_null {\n                em.emit(Instruction::new(Opcode::Null, 0, dest, 0));\n            } else {\n                emit_column_read(em, schema, cursor, idx, dest)?;\n            }\n        }\n        _ => {\n            let r = compile_value(em, reg, scope, expr)?;\n            em.emit(Instruction::new(Opcode::Copy, r, dest, 0));\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_661",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 661,
+    "decision": "match i32::try_from(*i) {\n            Ok(p1) => {\n                em.emit(Instruction::new(Opcode::Integer, p1, dest, 0));\n            }\n            Err(_) => {\n                em.emit(Instruction::with_p4(Opcode::Int64, 0, dest, 0, P4::Int(*i)));\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_712",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 712,
+    "decision": "forced_null",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "expr_value_732",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 732,
+    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => is_definite(inner),\n        // #238: EXISTS is always definitely true or false (see\n        // `subquery::compile_exists`'s doc comment) — unlike\n        // `InSubquery`, whose NULL-LHS case really is unknown.\n        ExprKind::Is { .. } | ExprKind::IsNull { .. } | ExprKind::Exists { .. } => true,\n        _ => false,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "expr_value_765",
+    "file": "src/codegen/row/expr/expr_value.rs",
+    "line": 765,
+    "decision": "is_definite(expr)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_36",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 36,
+    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => cost_class(inner),\n        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column { .. } => 0,\n        ExprKind::Unary { expr: inner, .. } => cost_class(inner).max(1),\n        ExprKind::Binary { op, lhs, rhs } => {\n            let base = match op {\n                BinaryOp::And | BinaryOp::Or => 0,\n                _ => 1,\n            };\n            cost_class(lhs).max(cost_class(rhs)).max(base)\n        }\n        ExprKind::FunctionCall { .. } => 2,\n        ExprKind::Subquery(_)\n        | ExprKind::Exists { .. }\n        | ExprKind::InSubquery { .. }\n        | ExprKind::InSubqueryMulti { .. } => 3,\n        _ => 1,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "cond_41",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 41,
+    "decision": "match op {\n                BinaryOp::And | BinaryOp::Or => 0,\n                _ => 1,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "cond_88",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 88,
+    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => compile_cond(em, reg, scope, inner, targets),\n\n        // Swapping the targets is right — it is what SQLite's own\n        // `sqlite3ExprIfTrue`/`sqlite3ExprIfFalse` pair does for\n        // `TK_NOT` — but only once `on_null` comes along for the\n        // ride. Flipping it keeps the unknown outcome on the same\n        // address across the swap; without that (the #134 bug) NULL\n        // silently inherited whichever target had just become \"false\",\n        // i.e. the keep-the-row one, and `WHERE NOT (x = 5)` returned\n        // rows where `x IS NULL`.\n        ExprKind::Unary {\n            op: UnaryOp::Not,\n            expr: inner,\n        } => compile_cond(em, reg, scope, inner, targets.negate()),\n\n        ExprKind::Binary {\n            op: BinaryOp::And,\n            lhs,\n            rhs,\n        } => {\n            // `on_false` must be a real label before `lhs` compiles\n            // — if it were left as `Fallthrough`, \"fall through\" would\n            // wrongly mean \"continue into rhs's test code\" (the next\n            // thing physically emitted) rather than the AND's actual\n            // false continuation, which only exists after `rhs` compiles.\n            //\n            // `on_null` passes to both operands unchanged, and that\n            // is exactly three-valued AND, both ways round. With\n            // `NullTarget::False`: an unknown `lhs` goes straight to\n            // the false continuation, which is right because every\n            // completion of `unknown AND rhs` (false, or unknown) lands\n            // there too. With `NullTarget::True`: an unknown `lhs`\n            // falls through into `rhs`'s test, which is also right —\n            // `unknown AND false` is false and reaches `false_label`\n            // via `rhs`, while `unknown AND true`/`unknown AND unknown`\n            // are unknown and reach `on_true`, where NULL belongs\n            // under this setting.\n            //\n            // #581: AND is commutative under three-valued logic, so\n            // whichever operand is cheaper (by [`cost_class`]) compiles\n            // first — the eagerly-evaluated slot — letting the pricier\n            // operand's evaluation be skipped whenever the cheap one\n            // already resolves the jump.\n            let (first, second) = if rhs_is_cheaper(lhs, rhs) {\n                (rhs, lhs)\n            } else {\n                (lhs, rhs)\n            };\n            let (false_label, is_new) = ensure_label(em, targets.on_false);\n            let operand = targets.with_false(Target::Jump(false_label));\n            compile_cond(\n                em,\n                reg,\n                scope,\n                first,\n                operand.with_true(Target::Fallthrough),\n            )?;\n            compile_cond(em, reg, scope, second, operand)?;\n            if is_new {\n                em.place(false_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Binary {\n            op: BinaryOp::Or,\n            lhs,\n            rhs,\n        } => {\n            // Symmetric to `And` above: `on_true` must be a real\n            // label before `lhs` compiles, or a `Fallthrough` true\n            // would wrongly land in `rhs`'s test code instead of OR's\n            // actual true continuation. `on_null` threads through\n            // unchanged for the mirror-image reason: under\n            // `NullTarget::True` an unknown `lhs` jumps straight to\n            // `true_label` (every completion of `unknown OR rhs` is\n            // true or unknown, and both belong there), and under\n            // `NullTarget::False` it falls into `rhs`, which decides\n            // between true and the false/unknown continuation.\n            //\n            // #581: same cheapest-first reordering as AND above — OR\n            // is equally commutative under three-valued logic.\n            let (first, second) = if rhs_is_cheaper(lhs, rhs) {\n                (rhs, lhs)\n            } else {\n                (lhs, rhs)\n            };\n            let (true_label, is_new) = ensure_label(em, targets.on_true);\n            let operand = targets.with_true(Target::Jump(true_label));\n            compile_cond(\n                em,\n                reg,\n                scope,\n                first,\n                operand.with_false(Target::Fallthrough),\n            )?;\n            compile_cond(em, reg, scope, second, operand)?;\n            if is_new {\n                em.place(true_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Binary { op, lhs, rhs }\n            if matches!(\n                op,\n                BinaryOp::Eq\n                    | BinaryOp::Ne\n                    | BinaryOp::Lt\n                    | BinaryOp::Le\n                    | BinaryOp::Gt\n                    | BinaryOp::Ge\n            ) =>\n        {\n            let collation = collation_of(lhs)\n                .or_else(|| collation_of(rhs))\n                .or_else(|| expr_collation(scope, lhs))\n                .or_else(|| expr_collation(scope, rhs));\n            let affinity =\n                comparison_affinity(expr_affinity(scope, lhs), expr_affinity(scope, rhs));\n            let l = compile_value(em, reg, scope, lhs)?;\n            let r = compile_value(em, reg, scope, rhs)?;\n            emit_compare_false_jump(em, *op, l, r, collation, affinity, targets)\n        }\n\n        ExprKind::Is { lhs, rhs, negated } => {\n            // `a IS b`: true when both NULL, or both non-NULL and\n            // equal — unlike `=`, never propagates NULL to \"unknown\".\n            // No single opcode expresses this; compute it into a\n            // 0/1 register first, then test truthiness like any other\n            // value-mode boolean (LIKE/GLOB take the same shape).\n            // `on_null` is deliberately ignored here and in the\n            // `IsNull` arm below: these two are the only conditions in\n            // SQL that are always definitely true or definitely false,\n            // so they have no unknown outcome to route, and swapping\n            // the targets for `negated` is sound without flipping it.\n            let (t, f) = if *negated {\n                (targets.on_false, targets.on_true)\n            } else {\n                (targets.on_true, targets.on_false)\n            };\n            let l = compile_value(em, reg, scope, lhs)?;\n            let r = compile_value(em, reg, scope, rhs)?;\n            let result = reg.alloc();\n            let both_null = em.new_label();\n            let done = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));\n            em.patch_p2(addr, both_null);\n\n            let eq_true = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::Eq, l, 0, r));\n            em.patch_p2(addr, eq_true);\n            em.emit(Instruction::new(Opcode::Integer, 0, result, 0));\n            em.goto(done);\n            em.place(eq_true);\n            em.emit(Instruction::new(Opcode::Integer, 1, result, 0));\n            em.goto(done);\n\n            em.place(both_null);\n            let r_null = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));\n            em.patch_p2(addr, r_null);\n            em.emit(Instruction::new(Opcode::Integer, 0, result, 0));\n            em.goto(done);\n            em.place(r_null);\n            em.emit(Instruction::new(Opcode::Integer, 1, result, 0));\n\n            em.place(done);\n            finish_bool(em, t, f, |em, false_label| {\n                let addr = em.emit(Instruction::new(Opcode::IfNot, result, 0, 1));\n                em.patch_p2(addr, false_label);\n            });\n            Ok(())\n        }\n\n        ExprKind::IsNull {\n            expr: inner,\n            negated,\n        } => {\n            let r = compile_value(em, reg, scope, inner)?;\n            // negated=false is `IS NULL` (condition true when NULL);\n            // negated=true is `IS NOT NULL` (condition true when not\n            // NULL). Emit the opcode matching \"jump when condition is\n            // false\" so `finish_bool` sees a uniform false-jump\n            // primitive.\n            // negated=false (IS NULL): condition true iff NULL, so its\n            // false-jump primitive fires when NOT null -> `NotNull`.\n            // negated=true (IS NOT NULL): condition true iff not NULL,\n            // so its false-jump primitive fires when NULL -> `IsNull`.\n            let false_jump_op = if *negated {\n                Opcode::IsNull\n            } else {\n                Opcode::NotNull\n            };\n            finish_bool(em, targets.on_true, targets.on_false, |em, false_label| {\n                let addr = em.emit(Instruction::new(false_jump_op, r, 0, 0));\n                em.patch_p2(addr, false_label);\n            });\n            Ok(())\n        }\n\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            negated,\n        } => {\n            // Lowered per SQLite's own rule: `x BETWEEN lo AND hi` is\n            // `x >= lo AND x <= hi`, and `x NOT BETWEEN lo AND hi` is\n            // `x < lo OR x > hi` — NOT the same shape with true/false\n            // swapped. Swapping targets would make a NULL `x` (where\n            // neither comparison jumps at all, per\n            // `emit_compare_false_jump`'s three-valued contract) come\n            // out *true* for `NOT BETWEEN`, when the honest answer is\n            // \"unknown\", which WHERE excludes just like false.\n            let cmp = |op, rhs: &Expr| Expr {\n                kind: ExprKind::Binary {\n                    op,\n                    lhs: inner.clone(),\n                    rhs: Box::new(rhs.clone()),\n                },\n                span: expr.span,\n            };\n\n            if *negated {\n                let lt_lo = cmp(BinaryOp::Lt, lo);\n                let gt_hi = cmp(BinaryOp::Gt, hi);\n                let (t_label, t_is_new) = ensure_label(em, targets.on_true);\n                let arm = targets.with_true(Target::Jump(t_label));\n                compile_cond(em, reg, scope, &lt_lo, arm.with_false(Target::Fallthrough))?;\n                compile_cond(em, reg, scope, &gt_hi, arm)?;\n                if t_is_new {\n                    em.place(t_label);\n                }\n            } else {\n                let ge_lo = cmp(BinaryOp::Ge, lo);\n                let le_hi = cmp(BinaryOp::Le, hi);\n                let (f_label, f_is_new) = ensure_label(em, targets.on_false);\n                let arm = targets.with_false(Target::Jump(f_label));\n                compile_cond(em, reg, scope, &ge_lo, arm.with_true(Target::Fallthrough))?;\n                compile_cond(em, reg, scope, &le_hi, arm)?;\n                if f_is_new {\n                    em.place(f_label);\n                }\n            }\n            Ok(())\n        }\n\n        ExprKind::In {\n            expr: inner,\n            list,\n            negated,\n        } => {\n            if list.is_empty() {\n                // `x IN ()` is always false, even for a NULL `x` — an\n                // empty list leaves nothing to be uncertain against.\n                let (t, f) = if *negated {\n                    (targets.on_false, targets.on_true)\n                } else {\n                    (targets.on_true, targets.on_false)\n                };\n                return compile_always_false(em, t, f);\n            }\n\n            // `IN`'s three outcomes — a definite match, a definite\n            // non-match, or \"unknown\" (no match found, but `inner` or\n            // some list item was NULL along the way) — don't collapse\n            // to a single true/false jump the way other comparisons\n            // do: `NOT IN`'s definite-non-match and unknown outcomes\n            // diverge (`NOT FALSE` = true, `NOT NULL` = still NULL),\n            // so a per-item comparison can't just swap targets like\n            // `emit_compare_false_jump` does. `saw_null` is a small\n            // exception to this module's \"never an intermediate\n            // boolean register\" rule (shared with the `Is`/`IsNot`\n            // handling above), needed to remember that exception past\n            // the loop that discovers it.\n            let l = compile_value(em, reg, scope, inner)?;\n            let saw_null = reg.alloc();\n            em.emit(Instruction::new(Opcode::Integer, 0, saw_null, 0));\n\n            let (true_label, true_is_new) = ensure_label(em, targets.on_true);\n            let (false_label, false_is_new) = ensure_label(em, targets.on_false);\n            // A match found means IN is true; exhausting the list\n            // without one means IN is false — `negated` (`NOT IN`)\n            // swaps which final label each of those routes to. An\n            // unknown outcome, below, always routes to `false_label`\n            // regardless of `negated`: NULL is never true.\n            let (found_label, unmatched_label) = if *negated {\n                (false_label, true_label)\n            } else {\n                (true_label, false_label)\n            };\n            // `negated` does not move the unknown outcome — `NOT\n            // unknown` is still unknown — so it routes by `on_null`\n            // alone, exactly like every other arm (#134). Before that\n            // ticket this was hardcoded to `false_label`, which was\n            // right only because `WHERE` was the sole caller.\n            let null_label = match targets.on_null {\n                NullTarget::True => true_label,\n                NullTarget::False => false_label,\n            };\n\n            let inner_null_addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));\n            em.patch_p2(inner_null_addr, null_label);\n\n            for item in list.iter() {\n                let collation = collation_of(inner)\n                    .or_else(|| collation_of(item))\n                    .or_else(|| expr_collation(scope, inner))\n                    .or_else(|| expr_collation(scope, item));\n                let affinity =\n                    comparison_affinity(expr_affinity(scope, inner), expr_affinity(scope, item));\n                let p4 = p4_coll_seq(collation.unwrap_or(Collation::Binary), affinity);\n                let r = compile_value(em, reg, scope, item)?;\n\n                let item_null_label = em.new_label();\n                let skip_label = em.new_label();\n                let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));\n                em.patch_p2(addr, item_null_label);\n                let addr = em.emit(Instruction::with_p4(Opcode::Eq, l, 0, r, p4));\n                em.patch_p2(addr, found_label);\n                em.goto(skip_label);\n\n                em.place(item_null_label);\n                em.emit(Instruction::new(Opcode::Integer, 1, saw_null, 0));\n                em.place(skip_label);\n            }\n\n            // Exhausted the list without a match: route to\n            // `unmatched_label` only if every comparison was a clean\n            // non-match (`saw_null` still 0); otherwise at least one\n            // comparison was against NULL, so the honest answer is\n            // \"unknown\", which goes wherever `on_null` says.\n            let addr = em.emit(Instruction::new(Opcode::IfNot, saw_null, 0, 0));\n            em.patch_p2(addr, unmatched_label);\n            em.goto(null_label);\n\n            if false_is_new {\n                em.place(false_label);\n            }\n            if true_is_new {\n                em.place(true_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Like { .. } => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n\n        // #238: EXISTS/NOT EXISTS never has an unknown outcome (see\n        // `subquery::compile_exists`'s doc comment), so `targets` is\n        // handed through as-is rather than materialized via\n        // `compile_bool_to_value`.\n        ExprKind::Exists { subquery, negated } => crate::codegen::row::subquery::compile_exists(\n            em, reg, scope, subquery, *negated, targets,\n        ),\n\n        ExprKind::InSubquery {\n            expr: inner,\n            subquery,\n            negated,\n        } => crate::codegen::row::subquery::compile_in_subquery(\n            em, reg, scope, inner, subquery, *negated, targets,\n        ),\n\n        ExprKind::InSubqueryMulti {\n            exprs,\n            subquery,\n            negated,\n        } => crate::codegen::row::subquery::compile_in_subquery_multi(\n            em, reg, scope, exprs, subquery, *negated, targets,\n        ),\n\n        // A scalar subquery used directly as a boolean condition (e.g.\n        // `WHERE (SELECT x FROM t)`): compute its value, then test\n        // truthiness like any other value-mode boolean.\n        ExprKind::Subquery(_) => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n\n        // Any other expression used in boolean context (a bare column,\n        // a function call, CASE, etc.): evaluate to a value and test\n        // truthiness the same way as LIKE above.\n        _ => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "cond_193",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 193,
+    "decision": "matches!(\n                op,\n                BinaryOp::Eq\n                    | BinaryOp::Ne\n                    | BinaryOp::Lt\n                    | BinaryOp::Le\n                    | BinaryOp::Gt\n                    | BinaryOp::Ge\n            )",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_132",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 132,
+    "decision": "rhs_is_cheaper(lhs, rhs)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_147",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 147,
+    "decision": "is_new",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_171",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 171,
+    "decision": "rhs_is_cheaper(lhs, rhs)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_186",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 186,
+    "decision": "is_new",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_225",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 225,
+    "decision": "*negated",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_278",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 278,
+    "decision": "*negated",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_313",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 313,
+    "decision": "*negated",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_320",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 320,
+    "decision": "t_is_new",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_330",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 330,
+    "decision": "f_is_new",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_342",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 342,
+    "decision": "list.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_345",
+    "file": "src/codegen/row/expr/cond.rs",
+    "line": 345,
+    "decision": "*negated",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "cond_376",
+    "file": "src/codegen/row/expr/cond.rs",
     "line": 376,
     "decision": "*negated",
     "conditions": 1,
@@ -8280,360 +8550,90 @@
     "compiler_void": false
   },
   {
-    "id": "value_383",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 383,
-    "decision": "match op {\n            UnaryOp::Plus => compile_value(em, reg, scope, inner),\n            UnaryOp::Minus => {\n                let r = compile_value(em, reg, scope, inner)?;\n                let zero = reg.alloc();\n                em.emit(Instruction::new(Opcode::Integer, 0, zero, 0));\n                let dest = reg.alloc();\n                // Subtract: r[P3] = r[P2] - r[P1] -> 0 - r = -r via\n                // P1=r, P2=zero.\n                em.emit(Instruction::new(Opcode::Subtract, r, zero, dest));\n                Ok(dest)\n            }\n            // `Not` is the whole reason this is not routed through\n            // `compile_bool_to_value`: it is the oracle's own lowering\n            // for `SELECT NOT x` (one instruction, verified against the\n            // pinned 3.53.4 `EXPLAIN`), and it propagates NULL in a\n            // register, which jump-mode code cannot do at all.\n            UnaryOp::Not => {\n                let r = compile_value(em, reg, scope, inner)?;\n                let dest = reg.alloc();\n                em.emit(Instruction::new(Opcode::Not, r, dest, 0));\n                Ok(dest)\n            }\n            UnaryOp::BitNot => {\n                let r = compile_value(em, reg, scope, inner)?;\n                let dest = reg.alloc();\n                em.emit(Instruction::new(Opcode::BitNot, r, dest, 0));\n                Ok(dest)\n            }\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_426",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 426,
-    "decision": "match op {\n                BinaryOp::Add => Opcode::Add,\n                BinaryOp::Sub => Opcode::Subtract,\n                BinaryOp::Mul => Opcode::Multiply,\n                BinaryOp::Div => Opcode::Divide,\n                BinaryOp::Mod => Opcode::Remainder,\n                _ => {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"arithmetic lowering reached with a non-arithmetic operator\"\n                            .to_string(),\n                    })\n                }\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_442",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 442,
-    "decision": "match opcode {\n                Opcode::Subtract | Opcode::Divide | Opcode::Remainder => {\n                    em.emit(Instruction::new(opcode, r, l, dest));\n                }\n                _ => {\n                    em.emit(Instruction::new(opcode, l, r, dest));\n                }\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_466",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 466,
-    "decision": "match op {\n                BinaryOp::BitAnd => Opcode::BitAnd,\n                BinaryOp::BitOr => Opcode::BitOr,\n                BinaryOp::Shl => Opcode::ShiftLeft,\n                BinaryOp::Shr => Opcode::ShiftRight,\n                BinaryOp::Concat => Opcode::Concat,\n                _ => {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bitwise/concat lowering reached with a non-bitwise operator\"\n                            .to_string(),\n                    })\n                }\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_484",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 484,
-    "decision": "match opcode {\n                Opcode::ShiftLeft | Opcode::ShiftRight | Opcode::Concat => {\n                    em.emit(Instruction::new(opcode, r, l, dest));\n                }\n                _ => {\n                    em.emit(Instruction::new(opcode, l, r, dest));\n                }\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_553",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 553,
-    "decision": "match operand {\n                    Some(op_expr) => Expr {\n                        kind: ExprKind::Binary {\n                            op: BinaryOp::Eq,\n                            lhs: op_expr.clone(),\n                            rhs: Box::new(when_expr.clone()),\n                        },\n                        span: when_expr.span,\n                    },\n                    None => when_expr.clone(),\n                }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_584",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 584,
-    "decision": "match else_ {\n                Some(else_expr) => emit_branch_into(em, reg, scope, else_expr, dest)?,\n                None => {\n                    // This used to fake a NULL with an out-of-range\n                    // `Column` read; `Null` (#134) says what it means,\n                    // and is what the oracle emits here.\n                    em.emit(Instruction::new(Opcode::Null, 0, dest, 0));\n                }\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_617",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 617,
-    "decision": "match scope.hoisted.get(&key) {\n                Some(crate::codegen::row::subquery::HoistedSubquery::Scalar { reg: r }) => Ok(*r),\n                _ => match scope.memoized.get(&key) {\n                    // #314: correlated, but memoized per distinct value\n                    // of the one outer column it's correlated against.\n                    Some(memo) => crate::codegen::row::subquery::compile_memoized_scalar_subquery(\n                        em, reg, scope, subquery, memo,\n                    ),\n                    None => crate::codegen::row::subquery::compile_scalar_subquery(\n                        em, reg, scope, subquery,\n                    ),\n                },\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_619",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 619,
-    "decision": "match scope.memoized.get(&key) {\n                    // #314: correlated, but memoized per distinct value\n                    // of the one outer column it's correlated against.\n                    Some(memo) => crate::codegen::row::subquery::compile_memoized_scalar_subquery(\n                        em, reg, scope, subquery, memo,\n                    ),\n                    None => crate::codegen::row::subquery::compile_scalar_subquery(\n                        em, reg, scope, subquery,\n                    ),\n                }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_659",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 659,
-    "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Integer(i)) => match i32::try_from(*i) {\n            Ok(p1) => {\n                em.emit(Instruction::new(Opcode::Integer, p1, dest, 0));\n            }\n            Err(_) => {\n                em.emit(Instruction::with_p4(Opcode::Int64, 0, dest, 0, P4::Int(*i)));\n            }\n        },\n        ExprKind::Literal(Literal::True) => {\n            em.emit(Instruction::new(Opcode::Integer, 1, dest, 0));\n        }\n        ExprKind::Literal(Literal::False) => {\n            em.emit(Instruction::new(Opcode::Integer, 0, dest, 0));\n        }\n        ExprKind::Literal(Literal::Str(s)) => {\n            em.emit(Instruction::with_p4(\n                Opcode::String8,\n                0,\n                dest,\n                0,\n                P4::Str(s.clone()),\n            ));\n        }\n        ExprKind::Literal(Literal::Float(f)) => {\n            em.emit(Instruction::with_p4(Opcode::Real, 0, dest, 0, P4::Real(*f)));\n        }\n        ExprKind::Literal(Literal::Blob(bytes)) => {\n            let len = i32::try_from(bytes.len()).map_err(|_| CodegenError::Unsupported {\n                reason: format!(\n                    \"blob literal of {} bytes does not fit in a P1 operand\",\n                    bytes.len()\n                ),\n            })?;\n            em.emit(Instruction::with_p4(\n                Opcode::Blob,\n                len,\n                dest,\n                0,\n                P4::Blob(bytes.clone()),\n            ));\n        }\n        // `dest` is shared across branches and reused every scan\n        // iteration, so an explicit NULL branch has to overwrite it.\n        // Emitting nothing (the pre-#134 behavior, correct only for a\n        // never-written fresh register) leaked the previous row's\n        // result out of `SELECT CASE WHEN c THEN x ELSE NULL END`.\n        ExprKind::Literal(Literal::Null) => {\n            em.emit(Instruction::new(Opcode::Null, 0, dest, 0));\n        }\n        ExprKind::Column { table, name, .. } => {\n            let (cursor, idx, schema, forced_null) = scope.resolve(table.as_deref(), name)?;\n            if forced_null {\n                em.emit(Instruction::new(Opcode::Null, 0, dest, 0));\n            } else {\n                emit_column_read(em, schema, cursor, idx, dest)?;\n            }\n        }\n        _ => {\n            let r = compile_value(em, reg, scope, expr)?;\n            em.emit(Instruction::new(Opcode::Copy, r, dest, 0));\n        }\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_660",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 660,
-    "decision": "match i32::try_from(*i) {\n            Ok(p1) => {\n                em.emit(Instruction::new(Opcode::Integer, p1, dest, 0));\n            }\n            Err(_) => {\n                em.emit(Instruction::with_p4(Opcode::Int64, 0, dest, 0, P4::Int(*i)));\n            }\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_711",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 711,
-    "decision": "forced_null",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "value_731",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 731,
-    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => is_definite(inner),\n        // #238: EXISTS is always definitely true or false (see\n        // `subquery::compile_exists`'s doc comment) — unlike\n        // `InSubquery`, whose NULL-LHS case really is unknown.\n        ExprKind::Is { .. } | ExprKind::IsNull { .. } | ExprKind::Exists { .. } => true,\n        _ => false,\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "value_764",
-    "file": "src/codegen/row/expr/value.rs",
-    "line": 764,
-    "decision": "is_definite(expr)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_35",
+    "id": "cond_386",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 35,
-    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => cost_class(inner),\n        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column { .. } => 0,\n        ExprKind::Unary { expr: inner, .. } => cost_class(inner).max(1),\n        ExprKind::Binary { op, lhs, rhs } => {\n            let base = match op {\n                BinaryOp::And | BinaryOp::Or => 0,\n                _ => 1,\n            };\n            cost_class(lhs).max(cost_class(rhs)).max(base)\n        }\n        ExprKind::FunctionCall { .. } => 2,\n        ExprKind::Subquery(_)\n        | ExprKind::Exists { .. }\n        | ExprKind::InSubquery { .. }\n        | ExprKind::InSubqueryMulti { .. } => 3,\n        _ => 1,\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "cond_40",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 40,
-    "decision": "match op {\n                BinaryOp::And | BinaryOp::Or => 0,\n                _ => 1,\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "cond_87",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 87,
-    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => compile_cond(em, reg, scope, inner, targets),\n\n        // Swapping the targets is right — it is what SQLite's own\n        // `sqlite3ExprIfTrue`/`sqlite3ExprIfFalse` pair does for\n        // `TK_NOT` — but only once `on_null` comes along for the\n        // ride. Flipping it keeps the unknown outcome on the same\n        // address across the swap; without that (the #134 bug) NULL\n        // silently inherited whichever target had just become \"false\",\n        // i.e. the keep-the-row one, and `WHERE NOT (x = 5)` returned\n        // rows where `x IS NULL`.\n        ExprKind::Unary {\n            op: UnaryOp::Not,\n            expr: inner,\n        } => compile_cond(em, reg, scope, inner, targets.negate()),\n\n        ExprKind::Binary {\n            op: BinaryOp::And,\n            lhs,\n            rhs,\n        } => {\n            // `on_false` must be a real label before `lhs` compiles\n            // — if it were left as `Fallthrough`, \"fall through\" would\n            // wrongly mean \"continue into rhs's test code\" (the next\n            // thing physically emitted) rather than the AND's actual\n            // false continuation, which only exists after `rhs` compiles.\n            //\n            // `on_null` passes to both operands unchanged, and that\n            // is exactly three-valued AND, both ways round. With\n            // `NullTarget::False`: an unknown `lhs` goes straight to\n            // the false continuation, which is right because every\n            // completion of `unknown AND rhs` (false, or unknown) lands\n            // there too. With `NullTarget::True`: an unknown `lhs`\n            // falls through into `rhs`'s test, which is also right —\n            // `unknown AND false` is false and reaches `false_label`\n            // via `rhs`, while `unknown AND true`/`unknown AND unknown`\n            // are unknown and reach `on_true`, where NULL belongs\n            // under this setting.\n            //\n            // #581: AND is commutative under three-valued logic, so\n            // whichever operand is cheaper (by [`cost_class`]) compiles\n            // first — the eagerly-evaluated slot — letting the pricier\n            // operand's evaluation be skipped whenever the cheap one\n            // already resolves the jump.\n            let (first, second) = if rhs_is_cheaper(lhs, rhs) {\n                (rhs, lhs)\n            } else {\n                (lhs, rhs)\n            };\n            let (false_label, is_new) = ensure_label(em, targets.on_false);\n            let operand = targets.with_false(Target::Jump(false_label));\n            compile_cond(\n                em,\n                reg,\n                scope,\n                first,\n                operand.with_true(Target::Fallthrough),\n            )?;\n            compile_cond(em, reg, scope, second, operand)?;\n            if is_new {\n                em.place(false_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Binary {\n            op: BinaryOp::Or,\n            lhs,\n            rhs,\n        } => {\n            // Symmetric to `And` above: `on_true` must be a real\n            // label before `lhs` compiles, or a `Fallthrough` true\n            // would wrongly land in `rhs`'s test code instead of OR's\n            // actual true continuation. `on_null` threads through\n            // unchanged for the mirror-image reason: under\n            // `NullTarget::True` an unknown `lhs` jumps straight to\n            // `true_label` (every completion of `unknown OR rhs` is\n            // true or unknown, and both belong there), and under\n            // `NullTarget::False` it falls into `rhs`, which decides\n            // between true and the false/unknown continuation.\n            //\n            // #581: same cheapest-first reordering as AND above — OR\n            // is equally commutative under three-valued logic.\n            let (first, second) = if rhs_is_cheaper(lhs, rhs) {\n                (rhs, lhs)\n            } else {\n                (lhs, rhs)\n            };\n            let (true_label, is_new) = ensure_label(em, targets.on_true);\n            let operand = targets.with_true(Target::Jump(true_label));\n            compile_cond(\n                em,\n                reg,\n                scope,\n                first,\n                operand.with_false(Target::Fallthrough),\n            )?;\n            compile_cond(em, reg, scope, second, operand)?;\n            if is_new {\n                em.place(true_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Binary { op, lhs, rhs }\n            if matches!(\n                op,\n                BinaryOp::Eq\n                    | BinaryOp::Ne\n                    | BinaryOp::Lt\n                    | BinaryOp::Le\n                    | BinaryOp::Gt\n                    | BinaryOp::Ge\n            ) =>\n        {\n            let collation = collation_of(lhs)\n                .or_else(|| collation_of(rhs))\n                .or_else(|| expr_collation(scope, lhs))\n                .or_else(|| expr_collation(scope, rhs));\n            let affinity =\n                comparison_affinity(expr_affinity(scope, lhs), expr_affinity(scope, rhs));\n            let l = compile_value(em, reg, scope, lhs)?;\n            let r = compile_value(em, reg, scope, rhs)?;\n            emit_compare_false_jump(em, *op, l, r, collation, affinity, targets)\n        }\n\n        ExprKind::Is { lhs, rhs, negated } => {\n            // `a IS b`: true when both NULL, or both non-NULL and\n            // equal — unlike `=`, never propagates NULL to \"unknown\".\n            // No single opcode expresses this; compute it into a\n            // 0/1 register first, then test truthiness like any other\n            // value-mode boolean (LIKE/GLOB take the same shape).\n            // `on_null` is deliberately ignored here and in the\n            // `IsNull` arm below: these two are the only conditions in\n            // SQL that are always definitely true or definitely false,\n            // so they have no unknown outcome to route, and swapping\n            // the targets for `negated` is sound without flipping it.\n            let (t, f) = if *negated {\n                (targets.on_false, targets.on_true)\n            } else {\n                (targets.on_true, targets.on_false)\n            };\n            let l = compile_value(em, reg, scope, lhs)?;\n            let r = compile_value(em, reg, scope, rhs)?;\n            let result = reg.alloc();\n            let both_null = em.new_label();\n            let done = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));\n            em.patch_p2(addr, both_null);\n\n            let eq_true = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::Eq, l, 0, r));\n            em.patch_p2(addr, eq_true);\n            em.emit(Instruction::new(Opcode::Integer, 0, result, 0));\n            em.goto(done);\n            em.place(eq_true);\n            em.emit(Instruction::new(Opcode::Integer, 1, result, 0));\n            em.goto(done);\n\n            em.place(both_null);\n            let r_null = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));\n            em.patch_p2(addr, r_null);\n            em.emit(Instruction::new(Opcode::Integer, 0, result, 0));\n            em.goto(done);\n            em.place(r_null);\n            em.emit(Instruction::new(Opcode::Integer, 1, result, 0));\n\n            em.place(done);\n            finish_bool(em, t, f, |em, false_label| {\n                let addr = em.emit(Instruction::new(Opcode::IfNot, result, 0, 1));\n                em.patch_p2(addr, false_label);\n            });\n            Ok(())\n        }\n\n        ExprKind::IsNull {\n            expr: inner,\n            negated,\n        } => {\n            let r = compile_value(em, reg, scope, inner)?;\n            // negated=false is `IS NULL` (condition true when NULL);\n            // negated=true is `IS NOT NULL` (condition true when not\n            // NULL). Emit the opcode matching \"jump when condition is\n            // false\" so `finish_bool` sees a uniform false-jump\n            // primitive.\n            // negated=false (IS NULL): condition true iff NULL, so its\n            // false-jump primitive fires when NOT null -> `NotNull`.\n            // negated=true (IS NOT NULL): condition true iff not NULL,\n            // so its false-jump primitive fires when NULL -> `IsNull`.\n            let false_jump_op = if *negated {\n                Opcode::IsNull\n            } else {\n                Opcode::NotNull\n            };\n            finish_bool(em, targets.on_true, targets.on_false, |em, false_label| {\n                let addr = em.emit(Instruction::new(false_jump_op, r, 0, 0));\n                em.patch_p2(addr, false_label);\n            });\n            Ok(())\n        }\n\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            negated,\n        } => {\n            // Lowered per SQLite's own rule: `x BETWEEN lo AND hi` is\n            // `x >= lo AND x <= hi`, and `x NOT BETWEEN lo AND hi` is\n            // `x < lo OR x > hi` — NOT the same shape with true/false\n            // swapped. Swapping targets would make a NULL `x` (where\n            // neither comparison jumps at all, per\n            // `emit_compare_false_jump`'s three-valued contract) come\n            // out *true* for `NOT BETWEEN`, when the honest answer is\n            // \"unknown\", which WHERE excludes just like false.\n            let cmp = |op, rhs: &Expr| Expr {\n                kind: ExprKind::Binary {\n                    op,\n                    lhs: inner.clone(),\n                    rhs: Box::new(rhs.clone()),\n                },\n                span: expr.span,\n            };\n\n            if *negated {\n                let lt_lo = cmp(BinaryOp::Lt, lo);\n                let gt_hi = cmp(BinaryOp::Gt, hi);\n                let (t_label, t_is_new) = ensure_label(em, targets.on_true);\n                let arm = targets.with_true(Target::Jump(t_label));\n                compile_cond(em, reg, scope, &lt_lo, arm.with_false(Target::Fallthrough))?;\n                compile_cond(em, reg, scope, &gt_hi, arm)?;\n                if t_is_new {\n                    em.place(t_label);\n                }\n            } else {\n                let ge_lo = cmp(BinaryOp::Ge, lo);\n                let le_hi = cmp(BinaryOp::Le, hi);\n                let (f_label, f_is_new) = ensure_label(em, targets.on_false);\n                let arm = targets.with_false(Target::Jump(f_label));\n                compile_cond(em, reg, scope, &ge_lo, arm.with_true(Target::Fallthrough))?;\n                compile_cond(em, reg, scope, &le_hi, arm)?;\n                if f_is_new {\n                    em.place(f_label);\n                }\n            }\n            Ok(())\n        }\n\n        ExprKind::In {\n            expr: inner,\n            list,\n            negated,\n        } => {\n            if list.is_empty() {\n                // `x IN ()` is always false, even for a NULL `x` — an\n                // empty list leaves nothing to be uncertain against.\n                let (t, f) = if *negated {\n                    (targets.on_false, targets.on_true)\n                } else {\n                    (targets.on_true, targets.on_false)\n                };\n                return compile_always_false(em, t, f);\n            }\n\n            // `IN`'s three outcomes — a definite match, a definite\n            // non-match, or \"unknown\" (no match found, but `inner` or\n            // some list item was NULL along the way) — don't collapse\n            // to a single true/false jump the way other comparisons\n            // do: `NOT IN`'s definite-non-match and unknown outcomes\n            // diverge (`NOT FALSE` = true, `NOT NULL` = still NULL),\n            // so a per-item comparison can't just swap targets like\n            // `emit_compare_false_jump` does. `saw_null` is a small\n            // exception to this module's \"never an intermediate\n            // boolean register\" rule (shared with the `Is`/`IsNot`\n            // handling above), needed to remember that exception past\n            // the loop that discovers it.\n            let l = compile_value(em, reg, scope, inner)?;\n            let saw_null = reg.alloc();\n            em.emit(Instruction::new(Opcode::Integer, 0, saw_null, 0));\n\n            let (true_label, true_is_new) = ensure_label(em, targets.on_true);\n            let (false_label, false_is_new) = ensure_label(em, targets.on_false);\n            // A match found means IN is true; exhausting the list\n            // without one means IN is false — `negated` (`NOT IN`)\n            // swaps which final label each of those routes to. An\n            // unknown outcome, below, always routes to `false_label`\n            // regardless of `negated`: NULL is never true.\n            let (found_label, unmatched_label) = if *negated {\n                (false_label, true_label)\n            } else {\n                (true_label, false_label)\n            };\n            // `negated` does not move the unknown outcome — `NOT\n            // unknown` is still unknown — so it routes by `on_null`\n            // alone, exactly like every other arm (#134). Before that\n            // ticket this was hardcoded to `false_label`, which was\n            // right only because `WHERE` was the sole caller.\n            let null_label = match targets.on_null {\n                NullTarget::True => true_label,\n                NullTarget::False => false_label,\n            };\n\n            let inner_null_addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));\n            em.patch_p2(inner_null_addr, null_label);\n\n            for item in list.iter() {\n                let collation = collation_of(inner)\n                    .or_else(|| collation_of(item))\n                    .or_else(|| expr_collation(scope, inner))\n                    .or_else(|| expr_collation(scope, item));\n                let affinity =\n                    comparison_affinity(expr_affinity(scope, inner), expr_affinity(scope, item));\n                let p4 = p4_coll_seq(collation.unwrap_or(Collation::Binary), affinity);\n                let r = compile_value(em, reg, scope, item)?;\n\n                let item_null_label = em.new_label();\n                let skip_label = em.new_label();\n                let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));\n                em.patch_p2(addr, item_null_label);\n                let addr = em.emit(Instruction::with_p4(Opcode::Eq, l, 0, r, p4));\n                em.patch_p2(addr, found_label);\n                em.goto(skip_label);\n\n                em.place(item_null_label);\n                em.emit(Instruction::new(Opcode::Integer, 1, saw_null, 0));\n                em.place(skip_label);\n            }\n\n            // Exhausted the list without a match: route to\n            // `unmatched_label` only if every comparison was a clean\n            // non-match (`saw_null` still 0); otherwise at least one\n            // comparison was against NULL, so the honest answer is\n            // \"unknown\", which goes wherever `on_null` says.\n            let addr = em.emit(Instruction::new(Opcode::IfNot, saw_null, 0, 0));\n            em.patch_p2(addr, unmatched_label);\n            em.goto(null_label);\n\n            if false_is_new {\n                em.place(false_label);\n            }\n            if true_is_new {\n                em.place(true_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Like { .. } => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n\n        // #238: EXISTS/NOT EXISTS never has an unknown outcome (see\n        // `subquery::compile_exists`'s doc comment), so `targets` is\n        // handed through as-is rather than materialized via\n        // `compile_bool_to_value`.\n        ExprKind::Exists { subquery, negated } => crate::codegen::row::subquery::compile_exists(\n            em, reg, scope, subquery, *negated, targets,\n        ),\n\n        ExprKind::InSubquery {\n            expr: inner,\n            subquery,\n            negated,\n        } => crate::codegen::row::subquery::compile_in_subquery(\n            em, reg, scope, inner, subquery, *negated, targets,\n        ),\n\n        ExprKind::InSubqueryMulti {\n            exprs,\n            subquery,\n            negated,\n        } => crate::codegen::row::subquery::compile_in_subquery_multi(\n            em, reg, scope, exprs, subquery, *negated, targets,\n        ),\n\n        // A scalar subquery used directly as a boolean condition (e.g.\n        // `WHERE (SELECT x FROM t)`): compute its value, then test\n        // truthiness like any other value-mode boolean.\n        ExprKind::Subquery(_) => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n\n        // Any other expression used in boolean context (a bare column,\n        // a function call, CASE, etc.): evaluate to a value and test\n        // truthiness the same way as LIKE above.\n        _ => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
-  },
-  {
-    "id": "cond_192",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 192,
-    "decision": "matches!(\n                op,\n                BinaryOp::Eq\n                    | BinaryOp::Ne\n                    | BinaryOp::Lt\n                    | BinaryOp::Le\n                    | BinaryOp::Gt\n                    | BinaryOp::Ge\n            )",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_131",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 131,
-    "decision": "rhs_is_cheaper(lhs, rhs)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_146",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 146,
-    "decision": "is_new",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_170",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 170,
-    "decision": "rhs_is_cheaper(lhs, rhs)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_185",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 185,
-    "decision": "is_new",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_224",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 224,
-    "decision": "*negated",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_277",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 277,
-    "decision": "*negated",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_312",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 312,
-    "decision": "*negated",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_319",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 319,
-    "decision": "t_is_new",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_329",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 329,
-    "decision": "f_is_new",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_341",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 341,
-    "decision": "list.is_empty()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_344",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 344,
-    "decision": "*negated",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_375",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 375,
-    "decision": "*negated",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false
-  },
-  {
-    "id": "cond_385",
-    "file": "src/codegen/row/expr/cond.rs",
-    "line": 385,
+    "line": 386,
     "decision": "match targets.on_null {\n                NullTarget::True => true_label,\n                NullTarget::False => false_label,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "cond_425",
+    "id": "cond_426",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 425,
+    "line": 426,
     "decision": "false_is_new",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "cond_428",
+    "id": "cond_429",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 428,
+    "line": 429,
     "decision": "true_is_new",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "cond_490",
+    "id": "cond_491",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 490,
+    "line": 491,
     "decision": "match targets.on_null {\n        NullTarget::False => {\n            finish_bool(em, targets.on_true, targets.on_false, |em, false_label| {\n                let addr = em.emit(Instruction::new(Opcode::IfNot, r, 0, 1));\n                em.patch_p2(addr, false_label);\n            });\n        }\n        NullTarget::True => {\n            let (t_label, t_is_new) = ensure_label(em, targets.on_true);\n            let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));\n            em.patch_p2(addr, t_label);\n            // NULL is already gone, so `IfNot`'s P3 stays 0 and the\n            // remaining test is the plain two-valued one.\n            finish_bool(\n                em,\n                Target::Jump(t_label),\n                targets.on_false,\n                |em, false_label| {\n                    let addr = em.emit(Instruction::new(Opcode::IfNot, r, 0, 0));\n                    em.patch_p2(addr, false_label);\n                },\n            );\n            if t_is_new {\n                em.place(t_label);\n            }\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "cond_512",
+    "id": "cond_513",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 512,
+    "line": 513,
     "decision": "t_is_new",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "cond_543",
+    "id": "cond_544",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 543,
+    "line": 544,
     "decision": "match (true_target, false_target) {\n        (Target::Fallthrough, Target::Jump(f)) => emit_false_jump(em, f),\n        (Target::Jump(t), Target::Fallthrough) => {\n            let synth = em.new_label();\n            emit_false_jump(em, synth);\n            em.goto(t);\n            em.place(synth);\n        }\n        (Target::Jump(t), Target::Jump(f)) => {\n            emit_false_jump(em, f);\n            em.goto(t);\n        }\n        (Target::Fallthrough, Target::Fallthrough) => {\n            // Both branches continue at the same point — the condition\n            // was evaluated only for a side effect (never emitted by\n            // this module), so give false-jump a label that resolves to\n            // \"here\" too.\n            let synth = em.new_label();\n            emit_false_jump(em, synth);\n            em.place(synth);\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "cond_576",
+    "id": "cond_577",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 576,
+    "line": 577,
     "decision": "match target {\n        Target::Jump(l) => (l, false),\n        Target::Fallthrough => (em.new_label(), true),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "cond_613",
+    "id": "cond_614",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 613,
+    "line": 614,
     "decision": "match op {\n        BinaryOp::Ne => Some((Opcode::Eq, targets.negate())),\n        BinaryOp::Eq => Some((Opcode::Eq, targets)),\n        BinaryOp::Lt => Some((Opcode::Lt, targets)),\n        BinaryOp::Le => Some((Opcode::Le, targets)),\n        BinaryOp::Gt => Some((Opcode::Gt, targets)),\n        BinaryOp::Ge => Some((Opcode::Ge, targets)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "cond_633",
+    "id": "cond_634",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 633,
+    "line": 634,
     "decision": "targets.on_null == NullTarget::True",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "cond_644",
+    "id": "cond_645",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 644,
+    "line": 645,
     "decision": "t_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -8685,9 +8685,9 @@
     "compiler_void": true
   },
   {
-    "id": "select_107",
+    "id": "select_108",
     "file": "src/codegen/row/select.rs",
-    "line": 107,
+    "line": 108,
     "decision": "match self {\n            Self::NoFromClause => {\n                write!(\n                    f,\n                    \"SELECT has no FROM clause — not supported by this V2-scope compiler\"\n                )\n            }\n            Self::UnknownColumn { name } => write!(f, \"unknown column {name:?}\"),\n            Self::AmbiguousColumn { name } => write!(f, \"ambiguous column name: {name:?}\"),\n            Self::Unsupported { reason } => write!(f, \"unsupported: {reason}\"),\n            Self::RowShapeMismatch {\n                table,\n                expected,\n                found,\n            } => {\n                write!(\n                    f,\n                    \"{table} has {expected} columns but {found} values were supplied\"\n                )\n            }\n            Self::CompoundColumnMismatch { expected, found } => write!(\n                f,\n                \"SELECTs to the left and right of UNION ALL do not have the same number of \\\n                 result columns: expected {expected}, found {found}\"\n            ),\n            Self::CircularView { name } => write!(f, \"view {name} is circularly defined\"),\n            Self::Internal { reason } => write!(f, \"planner invariant violated: {reason}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12294,6 +12294,249 @@
     "compiler_void": false
   },
   {
+    "id": "batch_36",
+    "file": "src/storage/stream/batch.rs",
+    "line": 36,
+    "decision": "match s.to_ascii_lowercase().as_str() {\n            \"trace\" | \"trc\" | \"verbose\" => Some(Self::Trace),\n            \"debug\" | \"dbg\" => Some(Self::Debug),\n            \"info\" | \"information\" | \"notice\" => Some(Self::Info),\n            \"warn\" | \"warning\" => Some(Self::Warn),\n            \"error\" | \"err\" | \"severe\" => Some(Self::Error),\n            \"fatal\" | \"critical\" | \"crit\" | \"panic\" | \"emerg\" | \"alert\" => Some(Self::Fatal),\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_50",
+    "file": "src/storage/stream/batch.rs",
+    "line": 50,
+    "decision": "match severity {\n            0 | 1 => Some(Self::Fatal), // emerg, alert\n            2 => Some(Self::Fatal),     // crit\n            3 => Some(Self::Error),     // err\n            4 => Some(Self::Warn),      // warning\n            5 => Some(Self::Info),      // notice\n            6 => Some(Self::Info),      // info\n            7 => Some(Self::Debug),     // debug\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_65",
+    "file": "src/storage/stream/batch.rs",
+    "line": 65,
+    "decision": "match self {\n            Self::Trace => \"TRACE\",\n            Self::Debug => \"DEBUG\",\n            Self::Info => \"INFO\",\n            Self::Warn => \"WARN\",\n            Self::Error => \"ERROR\",\n            Self::Fatal => \"FATAL\",\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_297",
+    "file": "src/storage/stream/batch.rs",
+    "line": 297,
+    "decision": "match self {\n            Self::Dict { dict, indices } => {\n                if let Some(v) = value {\n                    // Look up or insert into dictionary\n                    let idx = dict.iter().position(|&d| d == v);\n                    let idx = match idx {\n                        Some(i) => i,\n                        None => {\n                            if dict.len() >= DICT_CARDINALITY_THRESHOLD {\n                                // Degrade to Str\n                                let mut strs: Vec<Option<&'a str>> =\n                                    Vec::with_capacity(indices.len().saturating_add(1));\n                                for opt_idx in indices.iter() {\n                                    strs.push(\n                                        opt_idx.and_then(|i| dict.get(usize::from(i)).copied()),\n                                    );\n                                }\n                                strs.push(Some(v));\n                                *self = Self::Str(strs);\n                                return;\n                            }\n                            dict.push(v);\n                            dict.len().saturating_sub(1)\n                        }\n                    };\n                    // Safe: idx < DICT_CARDINALITY_THRESHOLD < u16::MAX\n                    #[allow(clippy::cast_possible_truncation)]\n                    indices.push(Some(idx as u16));\n                } else {\n                    indices.push(None);\n                }\n            }\n            Self::Str(strs) => strs.push(value),\n            _ => {} // Type mismatch, ignore\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_302",
+    "file": "src/storage/stream/batch.rs",
+    "line": 302,
+    "decision": "match idx {\n                        Some(i) => i,\n                        None => {\n                            if dict.len() >= DICT_CARDINALITY_THRESHOLD {\n                                // Degrade to Str\n                                let mut strs: Vec<Option<&'a str>> =\n                                    Vec::with_capacity(indices.len().saturating_add(1));\n                                for opt_idx in indices.iter() {\n                                    strs.push(\n                                        opt_idx.and_then(|i| dict.get(usize::from(i)).copied()),\n                                    );\n                                }\n                                strs.push(Some(v));\n                                *self = Self::Str(strs);\n                                return;\n                            }\n                            dict.push(v);\n                            dict.len().saturating_sub(1)\n                        }\n                    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_305",
+    "file": "src/storage/stream/batch.rs",
+    "line": 305,
+    "decision": "dict.len() >= DICT_CARDINALITY_THRESHOLD",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "batch_337",
+    "file": "src/storage/stream/batch.rs",
+    "line": 337,
+    "decision": "match self {\n            Self::Str(v) => v.len(),\n            Self::Dict { indices, .. } => indices.len(),\n            Self::Int(v) => v.len(),\n            Self::Float(v) => v.len(),\n            Self::Bool(v) => v.len(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_354",
+    "file": "src/storage/stream/batch.rs",
+    "line": 354,
+    "decision": "match self {\n            Self::Str(v) => v.clear(),\n            Self::Dict { dict, indices } => {\n                dict.clear();\n                indices.clear();\n            }\n            Self::Int(v) => v.clear(),\n            Self::Float(v) => v.clear(),\n            Self::Bool(v) => v.clear(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_402",
+    "file": "src/storage/stream/batch.rs",
+    "line": 402,
+    "decision": "col.len() < row",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "batch_477",
+    "file": "src/storage/stream/batch.rs",
+    "line": 477,
+    "decision": "match col {\n            FieldColumn::Dict { dict, indices } => {\n                assert_eq!(dict.len(), 2); // nginx, postgres\n                assert_eq!(indices.len(), 3);\n            }\n            _ => panic!(\"Expected Dict encoding\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "syslog_44",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 44,
+    "decision": "byte == b'\\n'",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "syslog_45",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 45,
+    "decision": "start < i",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "syslog_53",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 53,
+    "decision": "lines_parsed >= limit",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "syslog_65",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 65,
+    "decision": "match std::str::from_utf8(line) {\n            Ok(s) => s,\n            Err(_) => {\n                // Non-UTF8 line: store raw only\n                batch.push_line(line, None, None, None);\n                return;\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "syslog_75",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 75,
+    "decision": "match self.parse_pri(line_str) {\n            Some(p) => p,\n            None => {\n                // No PRI: store as-is\n                batch.push_line(line, None, None, Some(line_str));\n                return;\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "syslog_96",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 96,
+    "decision": "batch.resource.hostname.is_none()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "syslog_117",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 117,
+    "decision": "!s.starts_with('<')",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "syslog_131",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 131,
+    "decision": "s.len() < 16",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "syslog_136",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 136,
+    "decision": "match month_str {\n            \"Jan\" => 1,\n            \"Feb\" => 2,\n            \"Mar\" => 3,\n            \"Apr\" => 4,\n            \"May\" => 5,\n            \"Jun\" => 6,\n            \"Jul\" => 7,\n            \"Aug\" => 8,\n            \"Sep\" => 9,\n            \"Oct\" => 10,\n            \"Nov\" => 11,\n            \"Dec\" => 12,\n            _ => return (None, s),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "syslog_154",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 154,
+    "decision": "match day_str.parse() {\n            Ok(d) => d,\n            Err(_) => return (None, s),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "syslog_161",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 161,
+    "decision": "match self.parse_time(time_str) {\n            Some(t) => t,\n            None => return (None, s),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "syslog_176",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 176,
+    "decision": "s.len() < 8",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "syslog_198",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 198,
+    "decision": "month == 0 || month > 12 || day == 0 || day > 31",
+    "conditions": 4,
+    "vectors_required": 5,
+    "compiler_void": false
+  },
+  {
+    "id": "syslog_229",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 229,
+    "decision": "s.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "syslog_232",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 232,
+    "decision": "match s.find(char::is_whitespace) {\n            Some(i) => {\n                let word = s.get(..i).unwrap_or(\"\");\n                let rest = s.get(i..).unwrap_or(\"\").trim_start();\n                (Some(word), rest)\n            }\n            None => (Some(s), \"\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "syslog_251",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 251,
+    "decision": "end == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "syslog_259",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 259,
+    "decision": "rest.starts_with('[')",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
     "id": "memory_59",
     "file": "src/storage/column/memory.rs",
     "line": 59,
@@ -14112,9 +14355,9 @@
     "compiler_void": true
   },
   {
-    "id": "test_lock_probe_30",
+    "id": "test_lock_probe_26",
     "file": "src/storage/row/vfs/test_lock_probe.rs",
-    "line": 30,
+    "line": 26,
     "decision": "deps_dir.file_name().and_then(|n| n.to_str()) == Some(\"deps\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -19848,7 +20091,7 @@
     "id": "explain_66",
     "file": "src/vm/row/explain.rs",
     "line": 66,
-    "decision": "match p4 {\n        P4::None => String::new(),\n        P4::Int(i) => i.to_string(),\n        P4::Real(r) => super::value::format_real(*r),\n        P4::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),\n        P4::Str(s) => s.clone(),\n        P4::CollSeq {\n            collation,\n            affinity,\n        } => {\n            format!(\"{}-{affinity}\", collation_name(*collation))\n        }\n        P4::AggFunc {\n            name,\n            arity,\n            collation,\n        } => format!(\"{name}({arity})-{}\", collation_name(*collation)),\n        P4::SortKey(cols) => render_sort_key(cols),\n        P4::GroupKey(cols) => render_group_key(cols),\n        P4::Affinity(bytes) => String::from_utf8_lossy(bytes).into_owned(),\n        P4::SeekKey(collations) => collations\n            .iter()\n            .map(|c| format!(\"{c:?}\").to_ascii_uppercase())\n            .collect::<Vec<_>>()\n            .join(\",\"),\n        P4::Bool(b) => i32::from(*b).to_string(),\n        P4::CreateTable { name, sql } => format!(\"{name}: {sql}\"),\n        P4::CreateView { name, sql } => format!(\"{name}: {sql}\"),\n        P4::DropTable { name, .. } => name.clone(),\n        P4::CreateIndex { name, sql, .. } => format!(\"{name}: {sql}\"),\n        P4::DropIndex { name, .. } => name.clone(),\n        P4::Analyze { targets } => targets\n            .iter()\n            .map(|t| t.table_name.as_str())\n            .collect::<Vec<_>>()\n            .join(\",\"),\n    }",
+    "decision": "match p4 {\n        P4::None => String::new(),\n        P4::Int(i) => i.to_string(),\n        P4::Real(r) => crate::value::format_real(*r),\n        P4::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),\n        P4::Str(s) => s.clone(),\n        P4::CollSeq {\n            collation,\n            affinity,\n        } => {\n            format!(\"{}-{affinity}\", collation_name(*collation))\n        }\n        P4::AggFunc {\n            name,\n            arity,\n            collation,\n        } => format!(\"{name}({arity})-{}\", collation_name(*collation)),\n        P4::SortKey(cols) => render_sort_key(cols),\n        P4::GroupKey(cols) => render_group_key(cols),\n        P4::Affinity(bytes) => String::from_utf8_lossy(bytes).into_owned(),\n        P4::SeekKey(collations) => collations\n            .iter()\n            .map(|c| format!(\"{c:?}\").to_ascii_uppercase())\n            .collect::<Vec<_>>()\n            .join(\",\"),\n        P4::Bool(b) => i32::from(*b).to_string(),\n        P4::CreateTable { name, sql } => format!(\"{name}: {sql}\"),\n        P4::CreateView { name, sql } => format!(\"{name}: {sql}\"),\n        P4::DropTable { name, .. } => name.clone(),\n        P4::CreateIndex { name, sql, .. } => format!(\"{name}: {sql}\"),\n        P4::DropIndex { name, .. } => name.clone(),\n        P4::Analyze { targets } => targets\n            .iter()\n            .map(|t| t.table_name.as_str())\n            .collect::<Vec<_>>()\n            .join(\",\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
