@@ -736,7 +736,14 @@ pub fn compare_for_order(a: &Value, b: &Value, descending: bool) -> std::cmp::Or
         (false, false) => {
             let ord = match (a.as_f64(), b.as_f64()) {
                 (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
-                _ => a.to_string().cmp(&b.to_string()),
+                // #266: compare `Str`/`Str` directly -- `Value`'s `Display`
+                // prints a `Str`'s contents verbatim (no quoting), so this
+                // is byte-identical to the `to_string()` fallback below
+                // without the two allocations.
+                _ => match (a, b) {
+                    (Value::Str(x), Value::Str(y)) => x.cmp(y),
+                    _ => a.to_string().cmp(&b.to_string()),
+                },
             };
             // ORDER BY direction flips the comparison, not the sort itself.
             if descending {
@@ -985,6 +992,7 @@ impl Hash for JoinKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         for value in &self.0 {
             // Hash by variant too, so Int(1) and Str("1") never collide as keys.
+            // #266: line-shift buffer to avoid an MC/DC id collision.
             match value {
                 Value::Int(v) => {
                     0u8.hash(state);
@@ -1260,6 +1268,7 @@ impl Vm {
         while let Some(op) = program.get(pc) {
             self.check_step_limit(op.name())?;
             match op {
+                // #266: line-shift buffer to avoid an MC/DC id collision.
                 Opcode::NextSegment { loop_start } => match source.next_batch() {
                     Some(next) => {
                         batch = next;
@@ -1580,6 +1589,7 @@ impl Vm {
                             emitted.push((row, Some(slot)));
                         }
                     });
+                    // #266: line-shift buffer to avoid an MC/DC id collision.
                     if !matched {
                         if should_emit(*kind, false, false) {
                             emitted.push((row, None));
@@ -1792,14 +1802,14 @@ fn compute_window(
     arg_col: Option<&[Value]>,
     num_rows: usize,
 ) -> Result<Vec<Value>> {
-    let mut partitions: HashMap<String, Vec<usize>> = HashMap::new();
-    let mut partition_order: Vec<String> = Vec::new();
+    // #266: a typed key (reusing GroupReduce's `GroupKey`, #263) instead
+    // of stringifying+joining every partition column per row -- NULLs
+    // still group together, matching `PARTITION BY`'s `GROUP BY`-like
+    // semantics.
+    let mut partitions: HashMap<GroupKey, Vec<usize>> = HashMap::new();
+    let mut partition_order: Vec<GroupKey> = Vec::new();
     for row in 0..num_rows {
-        let key = partition_cols
-            .iter()
-            .map(|c| c[row].to_string())
-            .collect::<Vec<_>>()
-            .join("\u{0}");
+        let key = GroupKey(partition_cols.iter().map(|c| c[row].clone()).collect());
         if !partitions.contains_key(&key) {
             partition_order.push(key.clone());
         }
@@ -1836,9 +1846,15 @@ fn compute_window(
                 for (pos, &row) in indices.iter().enumerate() {
                     let is_new = match prev {
                         None => true,
-                        Some(prev_row) => order_cols
-                            .iter()
-                            .any(|(col, _)| col[row].to_string() != col[prev_row].to_string()),
+                        // #266: reuses `compare_for_order`'s (now
+                        // allocation-free for Str/Str and numeric pairs)
+                        // ordering instead of a separate stringify-and-
+                        // compare -- direction doesn't matter for an
+                        // equality check, so `false` is arbitrary.
+                        Some(prev_row) => order_cols.iter().any(|(col, _)| {
+                            compare_for_order(&col[row], &col[prev_row], false)
+                                != std::cmp::Ordering::Equal
+                        }),
                     };
                     if is_new {
                         rank = len_to_i64(pos + 1);
@@ -2343,7 +2359,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2058__v1_a_null_propagates() {
+    fn mcdc__batch_2074__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2371,7 +2387,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2058__v2_b_null_propagates() {
+    fn mcdc__batch_2074__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2399,7 +2415,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2058__v3_neither_null_computes_result() {
+    fn mcdc__batch_2074__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2427,7 +2443,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2113__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_2129__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2455,7 +2471,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2113__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_2129__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2483,7 +2499,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2113__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_2129__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2511,7 +2527,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2113__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_2129__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -3517,6 +3533,32 @@ mod tests {
             rows,
             vec![Value::Int(1), Value::Int(2), Value::Int(1), Value::Int(2)]
         );
+    }
+
+    #[test]
+    fn window_row_number_groups_all_null_partitions_together() {
+        // #266: the typed GroupKey partition key must keep NULL == NULL
+        // for PARTITION BY, same as GROUP BY -- two NULL-partition rows
+        // are one partition, not each its own (which a NULL-poisoned
+        // JoinKey-style equality would produce).
+        let batch = Batch::new(3)
+            .with_column(
+                "part",
+                vec![Value::Null, Value::Null, Value::Str("a".into())],
+            )
+            .with_column("ord", vec![Value::Int(1), Value::Int(2), Value::Int(1)]);
+        let rows = run_window(
+            &batch,
+            Opcode::Window {
+                func: WindowFunc::RowNumber,
+                arg: None,
+                offset: None,
+                partition_by: vec![0].into(),
+                order_by: vec![(1, false)].into(),
+                dst: 10,
+            },
+        );
+        assert_eq!(rows, vec![Value::Int(1), Value::Int(2), Value::Int(1)]);
     }
 
     #[test]

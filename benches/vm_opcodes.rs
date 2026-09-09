@@ -33,7 +33,10 @@ mod common;
 
 use std::hint::black_box;
 
-use db_core::vm::batch::{Batch, MapOp, Opcode as BatchOpcode, Value as BatchValue, Vm as BatchVm};
+use db_core::vm::batch::{
+    compare_for_order, Batch, MapOp, Opcode as BatchOpcode, Value as BatchValue, Vm as BatchVm,
+    WindowFunc,
+};
 use db_core::vm::row::{
     execute, Cursor, EphemeralTableCursor, Instruction as RowInstruction, Opcode as RowOpcode,
     Program as RowProgram, Value as RowValue, Vm as RowVm,
@@ -135,6 +138,56 @@ fn bench_batch_filter_many_registers(r: &mut common::Report) {
             vm.execute(black_box(&batch), &program)
         },
     );
+}
+
+fn bench_string_order_by_sort(r: &mut common::Report) {
+    // #266: isolates compare_for_order's Str/Str case -- pre-#266 every
+    // comparison allocated two Strings via to_string(); now it's a direct
+    // &str compare. Sorts the same shuffled string column each call
+    // (Vec::sort_by doesn't mutate its input's identity, only order).
+    let values: Vec<BatchValue> = (0..ROWS)
+        .map(|i| BatchValue::Str(format!("row-{:06}", (i * 2654435761) % ROWS).into()))
+        .collect();
+    r.bench("vm_opcodes/batch::compare_for_order (Str/Str sort)", || {
+        let mut rows = values.clone();
+        rows.sort_by(|a, b| compare_for_order(black_box(a), black_box(b), false));
+        rows
+    });
+}
+
+fn bench_window_partition_by_string(r: &mut common::Report) {
+    // #266: isolates compute_window's partition-key building -- pre-#266
+    // this stringified+joined every partition column per row; now it's a
+    // typed GroupKey (#263) with no stringify at all.
+    let ids: Vec<BatchValue> = (0..ROWS as i64).map(BatchValue::Int).collect();
+    let parts: Vec<BatchValue> = (0..ROWS)
+        .map(|i| BatchValue::Str(format!("group-{}", i % 100).into()))
+        .collect();
+    let batch = Batch::new(ROWS)
+        .with_column("id", ids)
+        .with_column("part", parts);
+    let program = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "id".into(),
+        },
+        BatchOpcode::LoadColumn {
+            reg: 1,
+            column: "part".into(),
+        },
+        BatchOpcode::Window {
+            func: WindowFunc::RowNumber,
+            arg: None,
+            offset: None,
+            partition_by: vec![1].into(),
+            order_by: vec![(0, false)].into(),
+            dst: 2,
+        },
+    ];
+    r.bench("vm_opcodes/batch::Window (PARTITION BY Str)", || {
+        let mut vm = BatchVm::new();
+        vm.execute(black_box(&batch), &program)
+    });
 }
 
 fn bench_batch_reduce(r: &mut common::Report) {
@@ -344,6 +397,8 @@ fn main() {
     bench_batch_filter_many_registers(&mut report);
     bench_batch_reduce(&mut report);
     bench_batch_group_reduce(&mut report);
+    bench_string_order_by_sort(&mut report);
+    bench_window_partition_by_string(&mut report);
     bench_batch_hash_join(&mut report);
     bench_batch_emit(&mut report);
     bench_batch_emit_duplicate_register(&mut report);
