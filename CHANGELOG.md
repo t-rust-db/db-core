@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.76.7] - 2026-09-09
+
+### Fixed
+
+- **`EXPLAIN QUERY PLAN` follows the compiled scan strategy** (#282). The plan was derived from the predicate and schema, not from the arm `compile_select_scan` dispatches to, so an aggregate, `GROUP BY` or `ORDER BY` query over an indexed range predicate reported `SEARCH ... USING INDEX` while the program `Rewind`s the table. `entry::scan_dispatch` now gates the direct-scan seek reports; `aggregate::find_index_only_count`/`find_index_only_sum` share the index-only fast paths' eligibility with EQP, which reports `SEARCH t USING COVERING INDEX ix (col=?)`, `SCAN t USING COVERING INDEX ix` and (index-ordered `GROUP BY`) `SCAN t USING INDEX ix` exactly when those compile. Scalar subqueries in top-level `WHERE` conjuncts get their own `SCALAR SUBQUERY n` / `CORRELATED SCALAR SUBQUERY n` node with the subquery's plan nested underneath. A program-vs-plan invariant test compiles every single-table scan shape and asserts `SEARCH` <-> seek opcodes, `SCAN` <-> `Rewind`.
+
 ## [0.76.6] - 2026-09-09
 
 ### Changed

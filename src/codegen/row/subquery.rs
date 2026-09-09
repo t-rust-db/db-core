@@ -58,8 +58,12 @@ pub use from_clause::resolve_from_table_schema;
 pub use pushdown::push_down_where_predicates;
 pub use views::{resolve_views, ExpandViews, ResolvedView};
 
-pub(crate) use correlation::hoist_uncorrelated_where_subqueries;
+pub(crate) use correlation::{
+    hoist_uncorrelated_where_subqueries, is_comparison_op, subquery_is_correlated,
+    top_level_and_conjuncts,
+};
 pub(crate) use from_clause::materialize_from_subquery;
+pub(crate) use from_clause::resolve_subquery_schema;
 pub(crate) use memoize::{compile_memoized_scalar_subquery, memoize_correlated_where_subqueries};
 pub(crate) use scalar::{
     compile_exists, compile_in_subquery, compile_in_subquery_multi, compile_scalar_subquery,
