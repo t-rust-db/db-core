@@ -31,5 +31,7 @@
 pub mod batch;
 pub mod syslog;
 
-pub use batch::{FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind};
+pub use batch::{
+    Facility, FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind,
+};
 pub use syslog::SyslogParser;
