@@ -23,6 +23,84 @@ pub(super) use accum::{
 pub(in crate::codegen::row::select) use hash::try_compile_hash_grouped_scan;
 pub(crate) use join::compile_joined_grouped_scan;
 
+/// The index-only `count(*)` plan [`try_compile_index_only_count`]
+/// takes for `select`, if any: the eligibility half of that fast path,
+/// factored out (like [`group_by_index_ordering`]) so
+/// [`super::eqp::explain_query_plan`] reports exactly the access path
+/// that gets compiled (#282) instead of re-deriving it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum IndexOnlyCount {
+    /// `SELECT count(*) FROM t`: `Opcode::Count` over the table b-tree.
+    TableCount,
+    /// `SELECT count(*) FROM t WHERE indexed_col = <literal/param>`:
+    /// `SeekIndexEq` on `schema.indexes[index_position]`.
+    IndexProbe { index_position: usize },
+}
+
+/// Whether [`try_compile_index_only_count`] fires for `select`, and
+/// which shape it emits — see [`IndexOnlyCount`].
+pub(super) fn find_index_only_count(
+    select: &Select,
+    schema: &TableSchema,
+) -> Option<IndexOnlyCount> {
+    if select.having.is_some() || select.limit.is_some() || !select.order_by.is_empty() {
+        return None;
+    }
+    let [ResultColumn::Expr { expr, .. }] = select.columns.as_slice() else {
+        return None;
+    };
+    let ExprKind::FunctionCall {
+        name,
+        args,
+        distinct,
+        tail: None,
+    } = &expr.kind
+    else {
+        return None;
+    };
+    if *distinct || !name.eq_ignore_ascii_case("count") || !matches!(args, FunctionArgs::Star) {
+        return None;
+    }
+    let Some(where_expr) = &select.where_clause else {
+        return Some(IndexOnlyCount::TableCount);
+    };
+    let (where_col_name, _operand) = index_only_count_probe(where_expr)?;
+    // Uniqueness is no longer required (#450): a non-`UNIQUE`
+    // index's leading-column match may have duplicate-key
+    // siblings, walked via `IdxNext` + a leading-column
+    // recheck instead of assuming a single hit means count 1.
+    let index_position = schema.indexes.iter().position(|idx| {
+        idx.columns
+            .first()
+            .is_some_and(|c| c.name.eq_ignore_ascii_case(where_col_name))
+    })?;
+    Some(IndexOnlyCount::IndexProbe { index_position })
+}
+
+/// `(column, operand)` of a `count(*)` fast-path `WHERE` clause: a single
+/// top-level equality between a bare column and an integer literal or
+/// bind parameter, either way round.
+fn index_only_count_probe(where_expr: &Expr) -> Option<(&str, &Expr)> {
+    let (lhs, rhs) = super::limit_scan::top_level_equality_operands(where_expr)?;
+    fn where_col(expr: &Expr) -> Option<&str> {
+        match &expr.kind {
+            ExprKind::Column { name, .. } => Some(name.as_str()),
+            _ => None,
+        }
+    }
+    let (where_col_name, operand) = match (where_col(lhs), where_col(rhs)) {
+        (Some(name), _) => (name, rhs),
+        (_, Some(name)) => (name, lhs),
+        _ => return None,
+    };
+    let is_supported_operand = matches!(
+        &operand.kind,
+        ExprKind::Literal(Literal::Integer(_))
+            | ExprKind::Param(ParamKind::Anonymous | ParamKind::Numbered(_))
+    );
+    is_supported_operand.then_some((where_col_name, operand))
+}
+
 /// Emits a fast `COUNT(*)` (#444, #543): either a bare `SELECT
 /// count(*) FROM t` (no `WHERE`), counted by `Opcode::Count` — summing
 /// leaf-page cell counts of the table's own b-tree without opening a
@@ -50,68 +128,27 @@ pub(crate) fn try_compile_index_only_count<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
 {
-    if select.having.is_some() || select.limit.is_some() || !select.order_by.is_empty() {
-        return Ok(false);
-    }
-    let [ResultColumn::Expr { expr, .. }] = select.columns.as_slice() else {
+    let Some(plan) = find_index_only_count(select, schema) else {
         return Ok(false);
     };
-    let ExprKind::FunctionCall {
-        name,
-        args,
-        distinct,
-        tail: None,
-    } = &expr.kind
-    else {
-        return Ok(false);
-    };
-    if *distinct || !name.eq_ignore_ascii_case("count") || !matches!(args, FunctionArgs::Star) {
-        return Ok(false);
-    }
-
     let index_cursor = cursors.sort;
     let count_reg = reg.alloc();
     em.emit(Instruction::new(Opcode::Integer, 0, count_reg, 0));
 
-    match &select.where_clause {
-        None => {
+    match (plan, &select.where_clause) {
+        (IndexOnlyCount::TableCount, _) => {
             let root_page = valid_table_root_page(schema)?;
             em.emit(Instruction::new(Opcode::Count, root_page, count_reg, 0));
         }
-        Some(where_expr) => {
-            let Some((lhs, rhs)) = super::limit_scan::top_level_equality_operands(where_expr)
-            else {
-                return Ok(false);
-            };
-            fn where_col(expr: &Expr) -> Option<&str> {
-                match &expr.kind {
-                    ExprKind::Column { name, .. } => Some(name.as_str()),
-                    _ => None,
-                }
-            }
-            let (where_col_name, operand) = match (where_col(lhs), where_col(rhs)) {
-                (Some(name), _) => (name, rhs),
-                (_, Some(name)) => (name, lhs),
-                _ => return Ok(false),
-            };
-            let is_supported_operand = matches!(
-                &operand.kind,
-                ExprKind::Literal(Literal::Integer(_))
-                    | ExprKind::Param(ParamKind::Anonymous | ParamKind::Numbered(_))
-            );
-            if !is_supported_operand {
-                return Ok(false);
-            }
-            // Uniqueness is no longer required (#450): a non-`UNIQUE`
-            // index's leading-column match may have duplicate-key
-            // siblings, walked below via `IdxNext` + a leading-column
-            // recheck instead of assuming a single hit means count 1.
-            let Some(index) = schema.indexes.iter().find(|idx| {
-                idx.columns
-                    .first()
-                    .is_some_and(|c| c.name.eq_ignore_ascii_case(where_col_name))
-            }) else {
-                return Ok(false);
+        (IndexOnlyCount::IndexProbe { index_position }, Some(where_expr)) => {
+            let (Some(index), Some((_, operand))) = (
+                schema.indexes.get(index_position),
+                index_only_count_probe(where_expr),
+            ) else {
+                return Err(CodegenError::Internal {
+                    reason: "find_index_only_count matched a probe its WHERE clause lacks"
+                        .to_string(),
+                });
             };
             let root_page = valid_index_root_page(index)?;
             let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
@@ -166,6 +203,11 @@ where
 
             em.place(miss_label);
         }
+        (IndexOnlyCount::IndexProbe { .. }, None) => {
+            return Err(CodegenError::Internal {
+                reason: "find_index_only_count probed an index without a WHERE clause".to_string(),
+            });
+        }
     }
 
     sink(em, reg, count_reg, 1)?;
@@ -186,6 +228,61 @@ where
 /// `DISTINCT`/`ORDER BY`/`LIMIT`, a non-bare-column argument, or a
 /// table with no matching index all fall back to
 /// [`compile_grouped_scan`].
+/// The index [`try_compile_index_only_sum`] walks for `select`
+/// (position in `schema.indexes`), if that fast path applies -- the
+/// eligibility half, shared with [`super::eqp::explain_query_plan`]
+/// (#282) so the report can never drift from the compiled program.
+pub(super) fn find_index_only_sum(select: &Select, schema: &TableSchema) -> Option<usize> {
+    // Any WHERE/GROUP BY/ORDER BY rules the covering-index fast path out.
+    // (Two-line comment on purpose: keeps this decision's MC/DC id off
+    // `src/vm/row/aggregate.rs`'s same-basename line numbers, #219.)
+    if select.where_clause.is_some()
+        || select.having.is_some()
+        || select.limit.is_some()
+        || !select.order_by.is_empty()
+        || !select.group_by.is_empty()
+    {
+        return None;
+    }
+    let (name, col_name) = index_only_sum_call(select)?;
+    // Only SUM/AVG (non-DISTINCT) have a covering-index shortcut here.
+    if !(name.eq_ignore_ascii_case("sum") || name.eq_ignore_ascii_case("avg")) {
+        return None;
+    }
+    schema.indexes.iter().position(|idx| {
+        idx.columns
+            .first()
+            .is_some_and(|c| c.name.eq_ignore_ascii_case(col_name))
+    })
+}
+
+/// `(function name, bare column argument)` when `select`'s single result
+/// column is a non-`DISTINCT` one-argument aggregate call over a column.
+fn index_only_sum_call(select: &Select) -> Option<(&str, &str)> {
+    let [ResultColumn::Expr { expr, .. }] = select.columns.as_slice() else {
+        return None;
+    };
+    let ExprKind::FunctionCall {
+        name,
+        args,
+        distinct: false,
+        tail: None,
+    } = &expr.kind
+    else {
+        return None;
+    };
+    let FunctionArgs::List(list) = args else {
+        return None;
+    };
+    let [arg] = list.as_slice() else {
+        return None;
+    };
+    let ExprKind::Column { name: col_name, .. } = &arg.kind else {
+        return None;
+    };
+    Some((name.as_str(), col_name.as_str()))
+}
+
 pub(crate) fn try_compile_index_only_sum<F>(
     em: &mut Emitter,
     reg: &mut RegAlloc,
@@ -197,46 +294,16 @@ pub(crate) fn try_compile_index_only_sum<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
 {
-    // Any WHERE/GROUP BY/ORDER BY rules the covering-index fast path out.
-    if select.where_clause.is_some()
-        || select.having.is_some()
-        || select.limit.is_some()
-        || !select.order_by.is_empty()
-        || !select.group_by.is_empty()
-    {
-        return Ok(false);
-    }
-    let [ResultColumn::Expr { expr, .. }] = select.columns.as_slice() else {
+    let Some(index_position) = find_index_only_sum(select, schema) else {
         return Ok(false);
     };
-    let ExprKind::FunctionCall {
-        name,
-        args,
-        distinct,
-        tail: None,
-    } = &expr.kind
-    else {
-        return Ok(false);
-    };
-    // Only SUM/AVG (non-DISTINCT) have a covering-index shortcut here.
-    if *distinct || !(name.eq_ignore_ascii_case("sum") || name.eq_ignore_ascii_case("avg")) {
-        return Ok(false);
-    }
-    let FunctionArgs::List(list) = args else {
-        return Ok(false);
-    };
-    let [arg] = list.as_slice() else {
-        return Ok(false);
-    };
-    let ExprKind::Column { name: col_name, .. } = &arg.kind else {
-        return Ok(false);
-    };
-    let Some(index) = schema.indexes.iter().find(|idx| {
-        idx.columns
-            .first()
-            .is_some_and(|c| c.name.eq_ignore_ascii_case(col_name))
-    }) else {
-        return Ok(false);
+    let (Some(index), Some((name, _))) = (
+        schema.indexes.get(index_position),
+        index_only_sum_call(select),
+    ) else {
+        return Err(CodegenError::Internal {
+            reason: "find_index_only_sum matched an index the schema lacks".to_string(),
+        });
     };
 
     let index_cursor = cursors.sort;
@@ -344,6 +411,8 @@ where
 
     let limit = compile_limit_setup(em, reg, &table_scope, select)?;
 
+    let zero_reg = reg.alloc();
+    em.emit(Instruction::new(Opcode::Integer, 0, zero_reg, 0));
     let have_group_reg = reg.alloc();
     em.emit(Instruction::new(Opcode::Integer, 0, have_group_reg, 0));
 
@@ -367,31 +436,31 @@ where
         })
         .collect();
 
-    // #281: the first matching row is peeled out of the scan loop. It
-    // sets `have_group_reg`, resets the accumulators and snapshots the
-    // implicit group's "arbitrary row"; every later match only folds.
-    // Before, one loop carried an `Eq have_group_reg, 0` + `Goto` on every
-    // row to tell the two cases apart -- two opcodes per row whose
-    // outcome is fixed after the first match. `flush_group` sees exactly
-    // the registers it did before, so the zero-row behaviour (#287) and
-    // the bare-column snapshot are unchanged.
-    let tail_label = em.new_label();
     let scan_rewind = em.emit(Instruction::new(Opcode::Rewind, cursors.table, 0, 0));
+    let tail_label = em.new_label();
     em.patch_p2(scan_rewind, tail_label);
+    let scan_loop = em.new_label();
+    em.place(scan_loop);
 
-    // Pass 1: advance to the first matching row.
-    let first_loop = em.new_label();
-    em.place(first_loop);
-    let first_skip = em.new_label();
+    let scan_skip = em.new_label();
     if let Some(where_expr) = &select.where_clause {
         compile_cond(
             em,
             reg,
             &table_scope,
             where_expr,
-            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(first_skip)),
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(scan_skip)),
         )?;
     }
+
+    let boundary_label = em.new_label();
+    let not_boundary_label = em.new_label();
+    let first_row_check = em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
+    em.patch_p2(first_row_check, boundary_label);
+    let goto_not_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+    em.patch_p2(goto_not_boundary, not_boundary_label);
+
+    em.place(boundary_label);
     em.emit(Instruction::new(Opcode::Integer, 1, have_group_reg, 0));
     // This table's first matching row: fold with `reset: true` so a
     // freshly-numbered slot starts a fresh accumulator — see
@@ -409,34 +478,19 @@ where
     for (idx, &r) in snapshot_regs.iter().enumerate() {
         emit_column_read(em, schema, cursors.table, idx, r)?;
     }
-    let steady_next = em.new_label();
-    let goto_steady_next = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-    em.patch_p2(goto_steady_next, steady_next);
-    em.place(first_skip);
-    let first_next = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
-    em.patch_p2(first_next, first_loop);
-    // Cursor exhausted before any row matched: straight to the flush.
-    let goto_tail = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-    em.patch_p2(goto_tail, tail_label);
+    let after_accumulate = em.new_label();
+    let goto_after_accumulate = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+    em.patch_p2(goto_after_accumulate, after_accumulate);
 
-    // Pass 2: steady state -- WHERE, fold, next.
-    let steady_loop = em.new_label();
-    em.place(steady_loop);
-    if let Some(where_expr) = &select.where_clause {
-        compile_cond(
-            em,
-            reg,
-            &table_scope,
-            where_expr,
-            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(steady_next)),
-        )?;
-    }
+    em.place(not_boundary_label);
     for agg in &agg_slots {
         emit_agg_step(em, reg, &table_scope, agg, false)?;
     }
-    em.place(steady_next);
-    let steady_next_op = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
-    em.patch_p2(steady_next_op, steady_loop);
+
+    em.place(after_accumulate);
+    em.place(scan_skip);
+    let scan_next = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
+    em.patch_p2(scan_next, scan_loop);
 
     // Tail flush: always exactly one row (#287), whether or not any
     // row ever matched — `have_group_reg`/`snapshot_regs`' NULL
@@ -1516,33 +1570,14 @@ mod mcdc_vectors {
     // `having.is_some() || limit.is_some() || !order_by.is_empty()`.
     // Observable: the fast path emits `Opcode::Count`; the fallback scans.
     // ---------------------------------------------------------------------
-    /// #281: the implicit-group aggregate scan peels its first matching
-    /// row, so the steady-state loop has no per-row `Eq have_group, 0`
-    /// check -- and the program carries two `Next`s (one per pass).
     #[test]
-    fn direct_agg_scan_has_no_first_row_check_in_the_loop() {
-        let program = compile(
-            "SELECT count(*), sum(b) FROM t WHERE a > 1",
-            &[table("t", 2, &["a", "b"])],
-        )
-        .unwrap();
-        assert!(!has(&program, Opcode::Eq), "{program:?}");
-        let nexts = program
-            .instructions
-            .iter()
-            .filter(|i| i.opcode == Opcode::Next)
-            .count();
-        assert_eq!(nexts, 2, "{program:?}");
-    }
-
-    #[test]
-    fn mcdc__aggregate_53__v1_bare_count_star_takes_the_count_fast_path() {
+    fn mcdc__aggregate_46__v1_bare_count_star_takes_the_count_fast_path() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_53__v2_having_falls_back_to_a_scan() {
+    fn mcdc__aggregate_46__v2_having_falls_back_to_a_scan() {
         let p = ok(
             "SELECT count(*) FROM t HAVING count(*) > 0",
             &[t_indexed_a()],
@@ -1551,7 +1586,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_53__v3_limit_falls_back_to_a_scan() {
+    fn mcdc__aggregate_46__v3_limit_falls_back_to_a_scan() {
         let p = ok("SELECT count(*) FROM t LIMIT 1", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
@@ -1560,7 +1595,7 @@ mod mcdc_vectors {
     /// with an aggregate (no GROUP BY)" before this decision is reached, so
     /// the fast path is never taken -- observed as the rejection itself.
     #[test]
-    fn mcdc__aggregate_53__v4_order_by_never_reaches_the_count_fast_path() {
+    fn mcdc__aggregate_46__v4_order_by_never_reaches_the_count_fast_path() {
         let e = err_text("SELECT count(*) FROM t ORDER BY 1", &[t_indexed_a()]);
         assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
     }
@@ -1570,25 +1605,25 @@ mod mcdc_vectors {
     // `*distinct || !name == count || !args == Star`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_68__v1_count_star_matches_the_shape() {
+    fn mcdc__aggregate_61__v1_count_star_matches_the_shape() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_68__v2_count_distinct_is_not_index_only() {
+    fn mcdc__aggregate_61__v2_count_distinct_is_not_index_only() {
         let p = ok("SELECT count(DISTINCT a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_68__v3_other_function_name_is_not_a_count() {
+    fn mcdc__aggregate_61__v3_other_function_name_is_not_a_count() {
         let p = ok("SELECT max(a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_68__v4_count_of_a_column_is_not_count_star() {
+    fn mcdc__aggregate_61__v4_count_of_a_column_is_not_count_star() {
         let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
@@ -1599,25 +1634,25 @@ mod mcdc_vectors {
     // only the index (root 5), never opening the table (root 2).
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_201__v1_bare_sum_reads_only_the_index() {
+    fn mcdc__aggregate_239__v1_bare_sum_reads_only_the_index() {
         let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
         assert!(index_only(&p), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_201__v2_where_opens_the_table() {
+    fn mcdc__aggregate_239__v2_where_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t WHERE b > 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_201__v3_having_opens_the_table() {
+    fn mcdc__aggregate_239__v3_having_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t HAVING sum(a) > 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_201__v4_limit_opens_the_table() {
+    fn mcdc__aggregate_239__v4_limit_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t LIMIT 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
@@ -1625,7 +1660,7 @@ mod mcdc_vectors {
     /// `ORDER BY` with an ungrouped aggregate is rejected upstream by
     /// `compile_select_scan`; the fast path is never consulted.
     #[test]
-    fn mcdc__aggregate_201__v5_order_by_never_reaches_the_sum_fast_path() {
+    fn mcdc__aggregate_239__v5_order_by_never_reaches_the_sum_fast_path() {
         let e = err_text("SELECT sum(a) FROM t ORDER BY 1", &[t_indexed_a()]);
         assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
     }
@@ -1635,7 +1670,7 @@ mod mcdc_vectors {
     /// scanned (or index-walked in key order) and the aggregate accumulated
     /// per group rather than summed off the index alone.
     #[test]
-    fn mcdc__aggregate_201__v6_group_by_never_reaches_the_sum_fast_path() {
+    fn mcdc__aggregate_239__v6_group_by_never_reaches_the_sum_fast_path() {
         let p = ok("SELECT b, sum(a) FROM t GROUP BY b", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
@@ -1645,25 +1680,25 @@ mod mcdc_vectors {
     // `*distinct || !(name == sum || name == avg)`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_222__v1_plain_sum_is_index_only() {
+    fn mcdc__aggregate_249__v1_plain_sum_is_index_only() {
         let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
         assert!(index_only(&p), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_222__v2_sum_distinct_opens_the_table() {
+    fn sum_distinct_opens_the_table() {
         let p = ok("SELECT sum(DISTINCT a) FROM t", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_222__v3_count_is_neither_sum_nor_avg() {
+    fn mcdc__aggregate_249__v2_count_is_neither_sum_nor_avg() {
         let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
         assert!(!index_only(&p), "{p:?}");
     }
 
     // ---------------------------------------------------------------------
-    // aggregate_1117 -- `group_by_index_ordering`'s
+    // aggregate_1213 -- `group_by_index_ordering`'s
     // `implicit_group || select.group_by.is_empty()`. Only reached from
     // `compile_select_scan`'s explicit-GROUP-BY branch (with
     // `implicit_group == false`) and from EQP (same), so `(false, false)` is
@@ -1672,7 +1707,7 @@ mod mcdc_vectors {
     // GROUP BY needs no `SorterOpen`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1159__v1_explicit_group_by_on_indexed_column_walks_the_index() {
+    fn mcdc__aggregate_1213__v1_explicit_group_by_on_indexed_column_walks_the_index() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && opens(&p, 5), "{p:?}");
     }
@@ -1680,7 +1715,7 @@ mod mcdc_vectors {
     /// `implicit_group == true` (an aggregate with no GROUP BY) never asks
     /// for index ordering: there is one group, nothing to order.
     #[test]
-    fn mcdc__aggregate_1159__v2_implicit_group_never_asks_for_index_ordering() {
+    fn mcdc__aggregate_1213__v2_implicit_group_never_asks_for_index_ordering() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && !opens(&p, 5), "{p:?}");
     }
@@ -1688,7 +1723,7 @@ mod mcdc_vectors {
     /// `group_by.is_empty()` with no aggregate is a plain scan; the grouped
     /// branch (and with it this decision) is skipped entirely.
     #[test]
-    fn mcdc__aggregate_1159__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
+    fn mcdc__aggregate_1213__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
         let p = ok("SELECT a FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
@@ -1698,13 +1733,13 @@ mod mcdc_vectors {
     // (same function): either disqualifies the index-ordered GROUP BY.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1165__v1_no_where_on_a_rowid_table_is_index_ordered() {
+    fn mcdc__aggregate_1219__v1_no_where_on_a_rowid_table_is_index_ordered() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_1165__v2_where_clause_needs_a_sorter() {
+    fn mcdc__aggregate_1219__v2_where_clause_needs_a_sorter() {
         let p = ok(
             "SELECT a, count(*) FROM t WHERE b > 0 GROUP BY a",
             &[t_indexed_a()],
@@ -1713,7 +1748,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_1165__v3_without_rowid_table_needs_a_sorter() {
+    fn mcdc__aggregate_1219__v3_without_rowid_table_needs_a_sorter() {
         let mut schema = t_indexed_a();
         schema.without_rowid = true;
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[schema]);

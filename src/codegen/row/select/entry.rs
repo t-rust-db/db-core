@@ -194,6 +194,40 @@ pub(super) fn compile_select_no_from(
     Ok(em.finish())
 }
 
+/// Which arm of [`compile_select_scan`]'s dispatch a single-table
+/// `select` takes -- the decision [`super::eqp::explain_query_plan`]
+/// must agree with (#282): only [`ScanDispatch::Direct`] ever reaches
+/// `compile_direct_scan`'s rowid/covering-index/range/skip-scan seeks;
+/// every other arm `Rewind`s the table (or, for the aggregate arm's
+/// index-only fast paths, walks an index -- see
+/// `aggregate::find_index_only_count`/`find_index_only_sum`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScanDispatch {
+    /// `GROUP BY`: `try_compile_index_ordered_group_by`/`compile_grouped_scan`.
+    GroupBy,
+    /// An aggregate with no `GROUP BY` (#287's implicit whole-table group).
+    Aggregate,
+    /// No aggregate, no `ORDER BY`: `compile_direct_scan`.
+    Direct,
+    /// `ORDER BY`: index-ordered or `Sorter`-backed scan, never a seek.
+    Sorted,
+}
+
+/// Mirrors the `if` chain at the top of [`compile_select_scan`] exactly
+/// -- keep the two in step (`eqp.rs`'s program-vs-plan invariant test
+/// fails otherwise).
+pub(super) fn scan_dispatch(select: &Select) -> ScanDispatch {
+    if !select.group_by.is_empty() {
+        ScanDispatch::GroupBy
+    } else if select_has_aggregate(select) {
+        ScanDispatch::Aggregate
+    } else if select.order_by.is_empty() {
+        ScanDispatch::Direct
+    } else {
+        ScanDispatch::Sorted
+    }
+}
+
 /// The scan/filter/project core of `compile_select`, minus the
 /// `Init`/`OpenRead`/`Halt` bracketing — factored out so #208's `INSERT
 /// ... SELECT` codegen can drive the same scan (with its own cursor

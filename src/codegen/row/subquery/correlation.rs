@@ -153,7 +153,7 @@ fn walk_expr_for_correlation(
     }
 }
 
-pub(super) fn is_comparison_op(op: BinaryOp) -> bool {
+pub(crate) fn is_comparison_op(op: BinaryOp) -> bool {
     matches!(
         op,
         BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
@@ -182,7 +182,7 @@ fn subquery_hoistable(subquery: &Select, outer_scope: &Scope) -> bool {
 /// [`hoist_uncorrelated_where_subqueries`] to find a WHERE clause's
 /// directly-AND-joined subquery conjuncts without having to reason
 /// about deeper nesting.
-pub(super) fn top_level_and_conjuncts(expr: &Expr) -> Vec<&Expr> {
+pub(crate) fn top_level_and_conjuncts(expr: &Expr) -> Vec<&Expr> {
     match &expr.kind {
         ExprKind::Binary {
             op: BinaryOp::And,

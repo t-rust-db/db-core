@@ -1,11 +1,16 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
+use super::aggregate::{find_index_only_count, find_index_only_sum, IndexOnlyCount};
+use super::entry::{scan_dispatch, ScanDispatch};
 use super::join_access::{choose_auto_index_probe, choose_join_access, AutoIndexProbe, JoinAccess};
 use super::limit_scan::{
     find_covering_index, find_skip_scan_index, is_rowid_reference, top_level_equality_operands,
 };
 use super::*;
-use crate::codegen::row::subquery::resolve_from_table_schema;
+use crate::codegen::row::subquery::{
+    is_comparison_op, resolve_from_table_schema, resolve_subquery_schema, subquery_is_correlated,
+    top_level_and_conjuncts,
+};
 /// One row of `EXPLAIN QUERY PLAN` output (#243) -- SQLite's own EQP
 /// shape (`id, parent, notused, detail`), distinct from plain
 /// `EXPLAIN`'s per-instruction [`crate::vm::row::explain::ExplainRow`].
@@ -175,6 +180,7 @@ pub fn explain_query_plan(
         }
     }
 
+    let dispatch = scan_dispatch(select);
     let mut rows = Vec::with_capacity(n);
     let mut next_id: i32 = 0;
     for (level, &orig) in execution_order.iter().enumerate() {
@@ -213,7 +219,15 @@ pub fn explain_query_plan(
             bindings.get(..level).unwrap_or(&[]).to_vec()
         };
         let prior_bindings = prior_bindings.as_slice();
-        let access = if level == 0 {
+        // #282: `compile_direct_scan`'s seeks (rowid, covering index,
+        // range, skip-scan) are only ever compiled when
+        // `compile_select_scan` dispatches there -- an aggregate,
+        // `GROUP BY` or `ORDER BY` single-table query `Rewind`s the
+        // table (or walks an index end to end) instead, so reporting
+        // those seeks for it would describe a plan the program never
+        // took. The joined path is left as before.
+        let direct_scan = !from.joins.is_empty() || dispatch == ScanDispatch::Direct;
+        let access = if level == 0 && direct_scan {
             // The outermost table has no `ON` clause to seek against --
             // an equality `WHERE` predicate against its rowid still
             // gets `try_compile_rowid_seek`'s single-table fast path
@@ -251,7 +265,7 @@ pub fn explain_query_plan(
         // `find_covering_index` only fires for a non-rowid indexed
         // column, so the two never actually overlap, but checking
         // `access.is_none()` keeps this branch's precedence explicit.
-        let covering = if level == 0 && access.is_none() {
+        let covering = if level == 0 && direct_scan && access.is_none() {
             find_covering_index(&binding.schema, select)
         } else {
             None
@@ -263,7 +277,7 @@ pub fn explain_query_plan(
         // dispatch precedence (rowid seek, then covering index, then
         // skip-scan, then plain scan) exactly, so this report can
         // never drift from what actually gets compiled.
-        let skip_scan = if level == 0 && access.is_none() && covering.is_none() {
+        let skip_scan = if level == 0 && direct_scan && access.is_none() && covering.is_none() {
             find_skip_scan_index(&binding.schema, select, &binding.stats)
         } else {
             None
@@ -273,7 +287,7 @@ pub fn explain_query_plan(
         // (rowid seek, covering index, then these) — only applies to
         // the outermost table's own `WHERE` clause, like the checks
         // above.
-        let range_seek = if level == 0 && access.is_none() && covering.is_none() {
+        let range_seek = if level == 0 && direct_scan && access.is_none() && covering.is_none() {
             super::range_scan::find_range_seek_detail(
                 &binding.schema,
                 select,
@@ -282,7 +296,19 @@ pub fn explain_query_plan(
         } else {
             None
         };
-        let detail = if let Some(range_detail) = range_seek {
+        let index_walk = if level == 0 && from.joins.is_empty() {
+            aggregate_index_walk_detail(
+                select,
+                &binding.schema,
+                dispatch,
+                &eqp_display_name(table_ref),
+            )?
+        } else {
+            None
+        };
+        let detail = if let Some(index_walk_detail) = index_walk {
+            index_walk_detail
+        } else if let Some(range_detail) = range_seek {
             range_detail
         } else {
             match (
@@ -412,6 +438,37 @@ pub fn explain_query_plan(
             }
         }
     }
+    // #282: every scalar subquery compared against in a top-level
+    // `WHERE` conjunct gets its own node with the subquery's own plan
+    // nested underneath, like sqlite3's `SCALAR SUBQUERY n` rows --
+    // until now it was invisible in EQP. `CORRELATED` mirrors whether
+    // `hoist_uncorrelated_where_subqueries` evaluates it once up front
+    // (uncorrelated) or the scan re-evaluates it per row (`Once`-less).
+    if let Some(where_expr) = &select.where_clause {
+        let mut subquery_no: i32 = 0;
+        for conjunct in top_level_and_conjuncts(where_expr) {
+            let ExprKind::Binary { op, lhs, rhs } = &conjunct.kind else {
+                continue;
+            };
+            if !is_comparison_op(*op) {
+                continue;
+            }
+            for side in [lhs.as_ref(), rhs.as_ref()] {
+                let ExprKind::Subquery(inner) = &side.kind else {
+                    continue;
+                };
+                subquery_no = subquery_no.saturating_add(1);
+                explain_scalar_subquery(
+                    inner,
+                    subquery_no,
+                    stats_by_table,
+                    catalog,
+                    &mut rows,
+                    &mut next_id,
+                );
+            }
+        }
+    }
     // #654: a single-table `GROUP BY` that can't walk an existing index
     // in key order needs a `Sorter` (`compile_grouped_scan`'s own doc
     // comment) to group rows -- reusing
@@ -439,6 +496,118 @@ pub fn explain_query_plan(
         }
     }
     Ok(rows)
+}
+
+/// The `SCAN t USING [COVERING] INDEX ix` detail for a single-table
+/// aggregate or `GROUP BY` whose compiled program walks an index instead
+/// of `Rewind`ing the table (#282): `find_index_only_count`'s
+/// `SeekIndexEq` probe (a `SEARCH`), `find_index_only_sum`'s end-to-end
+/// `IdxRewind`/`IdxNext` walk, or `group_by_index_ordering`'s
+/// key-ordered walk with per-entry rowid lookups. `None` when the arm
+/// `Rewind`s the table (plain `SCAN`) or isn't an aggregate arm at all.
+fn aggregate_index_walk_detail(
+    select: &Select,
+    schema: &TableSchema,
+    dispatch: ScanDispatch,
+    table_display: &str,
+) -> Result<Option<String>, CodegenError> {
+    let index_name = |position: usize| {
+        schema
+            .indexes
+            .get(position)
+            .map(|index| index.name.clone())
+            .ok_or_else(|| CodegenError::Internal {
+                reason: format!("EQP index-walk plan names index #{position} the schema lacks"),
+            })
+    };
+    match dispatch {
+        ScanDispatch::Aggregate => {
+            match find_index_only_count(select, schema) {
+                Some(IndexOnlyCount::TableCount) => Ok(None),
+                Some(IndexOnlyCount::IndexProbe { index_position }) => {
+                    let index = schema.indexes.get(index_position).ok_or_else(|| {
+                        CodegenError::Internal {
+                            reason: format!(
+                                "EQP count(*) probe names index #{index_position} the schema lacks"
+                            ),
+                        }
+                    })?;
+                    Ok(Some(format!(
+                        "SEARCH {table_display} USING COVERING INDEX {} ({}=?)",
+                        index.name,
+                        index
+                            .columns
+                            .first()
+                            .map_or_else(String::new, |c| c.name.clone())
+                    )))
+                }
+                None => match find_index_only_sum(select, schema) {
+                    Some(index_position) => Ok(Some(format!(
+                        "SCAN {table_display} USING COVERING INDEX {}",
+                        index_name(index_position)?
+                    ))),
+                    None => Ok(None),
+                },
+            }
+        }
+        ScanDispatch::GroupBy => {
+            match super::aggregate::group_by_index_ordering(select, schema, false)? {
+                Some((index_position, _forward)) => Ok(Some(format!(
+                    "SCAN {table_display} USING INDEX {}",
+                    index_name(index_position)?
+                ))),
+                None => Ok(None),
+            }
+        }
+        ScanDispatch::Direct | ScanDispatch::Sorted => Ok(None),
+    }
+}
+
+/// Appends a `SCALAR SUBQUERY n` node (#282) for `inner` -- a scalar
+/// subquery operand of a top-level `WHERE` comparison -- with the
+/// subquery's own plan grafted underneath. `CORRELATED` iff the
+/// compiled scan re-evaluates it per outer row, i.e. exactly when
+/// `hoist_uncorrelated_where_subqueries`' `subquery_hoistable` check
+/// declines to hoist it (a `FROM`-less or joined subquery, or one
+/// referencing the outer table). EQP is explanatory text: a subquery
+/// whose `FROM` this can't resolve gets a node without children rather
+/// than failing the EXPLAIN.
+fn explain_scalar_subquery(
+    inner: &Select,
+    subquery_no: i32,
+    stats_by_table: &std::collections::HashMap<String, crate::codegen::row::planner::Stats>,
+    catalog: &[TableSchema],
+    rows: &mut Vec<EqpRow>,
+    next_id: &mut i32,
+) {
+    let hoisted = match resolve_subquery_schema(inner, catalog) {
+        Ok(Some(schema)) => !subquery_is_correlated(inner, Some(&schema)),
+        Ok(None) | Err(_) => false,
+    };
+    let node_id = *next_id;
+    *next_id = next_id.saturating_add(1);
+    rows.push(EqpRow {
+        id: node_id,
+        parent: 0,
+        notused: 0,
+        detail: if hoisted {
+            format!("SCALAR SUBQUERY {subquery_no}")
+        } else {
+            format!("CORRELATED SCALAR SUBQUERY {subquery_no}")
+        },
+    });
+    let Some(inner_from) = &inner.from else {
+        return;
+    };
+    let inner_schemas: Result<Vec<TableSchema>, CodegenError> = std::iter::once(&inner_from.first)
+        .chain(inner_from.joins.iter().map(|j| &j.table))
+        .map(|table_ref| resolve_from_table_schema(table_ref, catalog))
+        .collect();
+    if let Ok(inner_schemas) = inner_schemas {
+        if let Ok(child_rows) = explain_query_plan(inner, &inner_schemas, stats_by_table, catalog) {
+            graft_child_plan(rows, next_id, node_id, child_rows);
+        }
+    }
 }
 
 /// A `CompoundSelect` arm carries the same core fields as a `Select`
@@ -610,7 +779,7 @@ mod mcdc_vectors {
         }
     }
 
-    // eqp_251 / eqp_263 / eqp_273 / eqp_423 -- `explain_query_plan` details.
+    // eqp_230 / eqp_268 / eqp_280 / eqp_290 / eqp_299 / eqp_483 -- `explain_query_plan` details.
     /// `t(a, b)` at root 2 with `ia(a)` at 5 and `ib(b)` at 6; `u(b)` at 3.
     fn eqp_catalog() -> Vec<TableSchema> {
         let t = with_index(
@@ -636,23 +805,23 @@ mod mcdc_vectors {
             .collect()
     }
 
-    // eqp_263 / eqp_273: `level == 0 && access.is_none() && covering.is_none()`
+    // eqp_280 / eqp_290: `level == 0 && direct_scan && access.is_none() && covering.is_none()`
     fn range_seek_detail_present(d: &[String]) -> bool {
         d[0].contains("SEARCH t USING INDEX ib")
     }
 
-    // eqp_423: `from.joins.is_empty() && !select.group_by.is_empty()`
+    // eqp_483: `from.joins.is_empty() && !select.group_by.is_empty()`
     const TEMP_BTREE: &str = "USE TEMP B-TREE FOR GROUP BY";
 
-    // eqp_251: `level == 0 && access.is_none()` (automatic-index probe)
+    // eqp_268: `level == 0 && direct_scan && access.is_none()` (covering index)
     #[test]
-    fn mcdc__eqp_254__v1_outer_table_without_a_seek_is_a_scan() {
+    fn mcdc__eqp_268__v1_outer_table_without_a_seek_is_a_scan() {
         let d = eqp_details("SELECT a FROM t WHERE a + b = 1");
         assert!(d[0].starts_with("SCAN t"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_254__v2_outer_table_with_a_rowid_seek_is_a_search() {
+    fn mcdc__eqp_268__v2_outer_table_with_a_rowid_seek_is_a_search() {
         let d = eqp_details("SELECT a FROM t WHERE rowid = 1");
         assert!(
             d[0].contains("SEARCH t") && d[0].contains("rowid=?"),
@@ -661,19 +830,19 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_254__v3_inner_join_level_reports_its_own_access() {
+    fn mcdc__eqp_268__v3_inner_join_level_reports_its_own_access() {
         let d = eqp_details("SELECT a FROM t JOIN u ON u.b = t.a");
         assert!(d.iter().any(|x| x.contains('u')), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_266__v1_all_true_reaches_the_range_seek_report() {
+    fn mcdc__eqp_280__v1_all_true_reaches_the_range_seek_report() {
         let d = eqp_details("SELECT a, b FROM t WHERE b BETWEEN 1 AND 5");
         assert!(range_seek_detail_present(&d), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_266__v2_inner_level_never_reports_a_range_seek() {
+    fn mcdc__eqp_280__v2_inner_level_never_reports_a_range_seek() {
         // Only the outermost table's WHERE is consulted for a range seek, so
         // the inner level (`u`, indexed on `b`) reports its join access, never
         // a `b>? AND b<?` range.
@@ -682,7 +851,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_266__v3_rowid_seek_takes_precedence() {
+    fn mcdc__eqp_280__v3_rowid_seek_takes_precedence() {
         let d = eqp_details("SELECT a, b FROM t WHERE rowid = 1");
         assert!(
             d[0].contains("rowid=?") && !range_seek_detail_present(&d),
@@ -691,19 +860,19 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_266__v4_covering_index_takes_precedence() {
+    fn mcdc__eqp_280__v4_covering_index_takes_precedence() {
         let d = eqp_details("SELECT a FROM t WHERE a = 1");
         assert!(d[0].contains("COVERING INDEX ia"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_276__v1_all_true_reaches_the_range_seek_report() {
+    fn mcdc__eqp_290__v1_all_true_reaches_the_range_seek_report() {
         let d = eqp_details("SELECT a, b FROM t WHERE b BETWEEN 1 AND 5");
         assert!(range_seek_detail_present(&d), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_276__v2_inner_level_never_reports_a_range_seek() {
+    fn mcdc__eqp_290__v2_inner_level_never_reports_a_range_seek() {
         // Only the outermost table's WHERE is consulted for a range seek, so
         // the inner level (`u`, indexed on `b`) reports its join access, never
         // a `b>? AND b<?` range.
@@ -712,7 +881,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_276__v3_rowid_seek_takes_precedence() {
+    fn mcdc__eqp_290__v3_rowid_seek_takes_precedence() {
         let d = eqp_details("SELECT a, b FROM t WHERE rowid = 1");
         assert!(
             d[0].contains("rowid=?") && !range_seek_detail_present(&d),
@@ -721,26 +890,219 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_276__v4_covering_index_takes_precedence() {
+    fn mcdc__eqp_290__v4_covering_index_takes_precedence() {
         let d = eqp_details("SELECT a FROM t WHERE a = 1");
         assert!(d[0].contains("COVERING INDEX ia"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_426__v1_single_table_group_by_without_an_index_uses_a_temp_btree() {
+    fn mcdc__eqp_483__v1_single_table_group_by_without_an_index_uses_a_temp_btree() {
         let d = eqp_details("SELECT a + b, count(*) FROM t GROUP BY a + b");
         assert!(d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_426__v2_joined_group_by_is_not_reported() {
+    fn mcdc__eqp_483__v2_joined_group_by_is_not_reported() {
         let d = eqp_details("SELECT t.a, count(*) FROM t JOIN u ON u.b = t.a GROUP BY t.a");
         assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_426__v3_single_table_without_group_by_is_not_reported() {
+    fn mcdc__eqp_483__v3_single_table_without_group_by_is_not_reported() {
         let d = eqp_details("SELECT a FROM t");
         assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_268__v4_aggregate_never_reports_a_covering_index_seek() {
+        let d = eqp_details("SELECT sum(b) FROM t WHERE a = 1");
+        assert_eq!(d[0], "SCAN t", "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_280__v5_aggregate_never_reports_a_skip_scan() {
+        let d = eqp_details("SELECT count(*) FROM t WHERE b > 5");
+        assert_eq!(d[0], "SCAN t", "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_290__v5_aggregate_never_reports_a_range_seek() {
+        let d = eqp_details("SELECT count(*) FROM t WHERE b BETWEEN 1 AND 5");
+        assert_eq!(d[0], "SCAN t", "{d:?}");
+    }
+
+    // eqp_230: `level == 0 && direct_scan` (rowid seek)
+    #[test]
+    fn mcdc__eqp_230__v1_direct_outer_table_reports_its_rowid_seek() {
+        let d = eqp_details("SELECT a FROM t WHERE rowid = 5");
+        assert!(d[0].contains("rowid=?"), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_230__v2_inner_level_uses_join_access_not_the_where_clause() {
+        let d = eqp_details("SELECT t.a FROM t JOIN u ON u.b = t.a WHERE t.rowid = 5");
+        assert_eq!(d.len(), 2, "{d:?}");
+        assert!(!d[1].contains("rowid=?"), "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_230__v3_aggregate_outer_table_scans_despite_a_rowid_equality() {
+        let d = eqp_details("SELECT count(*) FROM t WHERE rowid = 5");
+        assert_eq!(d[0], "SCAN t", "{d:?}");
+    }
+
+    // eqp_299: `level == 0 && from.joins.is_empty()` (aggregate index walk)
+    #[test]
+    fn mcdc__eqp_299__v1_single_table_index_only_sum_reports_the_index_walk() {
+        let d = eqp_details("SELECT sum(a) FROM t");
+        assert_eq!(d[0], "SCAN t USING COVERING INDEX ia", "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_299__v2_joined_outer_table_is_not_an_index_walk() {
+        let d = eqp_details("SELECT sum(t.a) FROM t JOIN u ON u.b = t.a");
+        assert_eq!(d[0], "SCAN t", "{d:?}");
+    }
+
+    #[test]
+    fn mcdc__eqp_299__v3_inner_level_is_not_an_index_walk() {
+        let d = eqp_details("SELECT sum(t.a) FROM t JOIN u ON u.b = t.a");
+        assert!(!d[1].contains("COVERING INDEX"), "{d:?}");
+    }
+
+    // ---- #282: the plan must describe the program that was compiled ----
+
+    use crate::codegen::row::compile_select_with_catalog;
+    use crate::vm::row::{Opcode, Program};
+
+    fn compile(sql: &str) -> Program {
+        let catalog = eqp_catalog();
+        compile_select_with_catalog(&sel(sql), &catalog[0], &catalog).unwrap()
+    }
+
+    fn has(program: &Program, opcode: Opcode) -> bool {
+        program.instructions.iter().any(|i| i.opcode == opcode)
+    }
+
+    /// Whether `program` seeks (a `SEARCH`) rather than walking a b-tree
+    /// end to end (a `SCAN`): a `SeekIndex*` probe, or a `SeekRowid` that
+    /// isn't the per-entry rowid lookup of an `IdxRewind`/`Rewind` walk.
+    fn program_seeks(program: &Program) -> bool {
+        has(program, Opcode::SeekIndexEq)
+            || has(program, Opcode::SeekIndexGE)
+            || (has(program, Opcode::SeekRowid)
+                && !has(program, Opcode::Rewind)
+                && !has(program, Opcode::IdxRewind))
+    }
+
+    /// Acceptance criterion 1 of #282: for every single-table scan
+    /// strategy `compile_select_scan` dispatches to, the outermost EQP
+    /// row says `SEARCH` iff the compiled program seeks and `SCAN` iff
+    /// it `Rewind`s (or `Count`s) -- `find_range_seek_detail` and friends
+    /// used to fire for aggregate/`GROUP BY`/`ORDER BY` shapes whose
+    /// programs never reach `compile_direct_scan`.
+    #[test]
+    fn eqp_outer_row_matches_the_compiled_programs_access_path() {
+        let shapes = [
+            // compile_direct_scan
+            "SELECT a FROM t WHERE a + b = 1",
+            "SELECT a FROM t WHERE rowid = 5",
+            "SELECT a FROM t WHERE a = 1",
+            "SELECT a FROM t WHERE b > 5",
+            "SELECT a FROM t WHERE b BETWEEN 1 AND 5",
+            "SELECT a FROM t WHERE b IN (1, 2)",
+            // sorted scans
+            "SELECT a FROM t WHERE b > 5 ORDER BY a",
+            "SELECT a FROM t ORDER BY a",
+            // implicit-group aggregates
+            "SELECT count(*) FROM t",
+            "SELECT count(*) FROM t WHERE b = 5",
+            "SELECT count(*) FROM t WHERE b > 5",
+            "SELECT count(*) FROM t WHERE b BETWEEN 1 AND 5",
+            "SELECT count(*) FROM t WHERE b IN (1, 2)",
+            "SELECT sum(a) FROM t",
+            "SELECT sum(a) FROM t WHERE b > 5",
+            "SELECT count(*) FROM t WHERE b > (SELECT avg(b) FROM t)",
+            // GROUP BY
+            "SELECT a, count(*) FROM t GROUP BY a",
+            "SELECT a, count(*) FROM t WHERE b > 5 GROUP BY a",
+        ];
+        for sql in shapes {
+            let program = compile(sql);
+            let d = eqp_details(sql);
+            let outer = d.first().expect("at least one EQP row");
+            let says_search = outer.starts_with("SEARCH t");
+            let says_scan = outer.starts_with("SCAN t");
+            assert!(says_search || says_scan, "{sql}: {outer}");
+            assert_eq!(
+                says_search,
+                program_seeks(&program),
+                "{sql}: EQP says {outer:?} but the program's opcodes are {:?}",
+                program
+                    .instructions
+                    .iter()
+                    .map(|i| i.opcode)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// The issue's own reproduction: an aggregate over a range predicate
+    /// is a full scan until #279 lands, and EQP must say so.
+    #[test]
+    fn aggregate_over_range_predicate_reports_a_scan() {
+        let d = eqp_details("SELECT count(*) FROM t WHERE b > 5");
+        assert_eq!(d[0], "SCAN t", "{d:?}");
+        let d = eqp_details("SELECT sum(a) FROM t WHERE b BETWEEN 1 AND 5");
+        assert_eq!(d[0], "SCAN t", "{d:?}");
+    }
+
+    #[test]
+    fn index_only_aggregate_fast_paths_report_their_index() {
+        let d = eqp_details("SELECT count(*) FROM t WHERE b = 5");
+        assert_eq!(d[0], "SEARCH t USING COVERING INDEX ib (b=?)", "{d:?}");
+        let d = eqp_details("SELECT sum(a) FROM t");
+        assert_eq!(d[0], "SCAN t USING COVERING INDEX ia", "{d:?}");
+        let d = eqp_details("SELECT a, count(*) FROM t GROUP BY a");
+        assert_eq!(d[0], "SCAN t USING INDEX ia", "{d:?}");
+    }
+
+    #[test]
+    fn order_by_with_range_predicate_reports_a_scan() {
+        let d = eqp_details("SELECT a FROM t WHERE b > 5 ORDER BY a");
+        assert_eq!(d[0], "SCAN t", "{d:?}");
+    }
+
+    /// Acceptance criterion 2 of #282: a scalar subquery is its own EQP
+    /// node, with its plan nested underneath (sqlite3's own shape).
+    #[test]
+    fn scalar_subquery_in_where_is_its_own_node() {
+        let catalog = eqp_catalog();
+        let select = sel("SELECT count(*) FROM t WHERE b > (SELECT avg(b) FROM t)");
+        let rows = explain_query_plan(&select, &catalog[..1], &HashMap::new(), &catalog).unwrap();
+        let details: Vec<&str> = rows.iter().map(|r| r.detail.as_str()).collect();
+        // The hoisted `avg(b)` takes `try_compile_index_only_sum`'s
+        // `IdxRewind` walk of `ib` -- and its nested plan says so.
+        let program = compile("SELECT count(*) FROM t WHERE b > (SELECT avg(b) FROM t)");
+        assert!(has(&program, Opcode::IdxRewind), "{program:?}");
+        assert_eq!(
+            details,
+            [
+                "SCAN t",
+                "SCALAR SUBQUERY 1",
+                "SCAN t USING COVERING INDEX ib"
+            ],
+            "{rows:?}"
+        );
+        assert_eq!(rows[1].parent, 0);
+        assert_eq!(rows[2].parent, rows[1].id, "{rows:?}");
+        assert_ne!(rows[2].id, rows[1].id);
+    }
+
+    #[test]
+    fn correlated_scalar_subquery_is_labelled_correlated() {
+        let d = eqp_details("SELECT a FROM t WHERE b = (SELECT max(u.b) FROM u WHERE u.b = t.a)");
+        assert_eq!(d[1], "CORRELATED SCALAR SUBQUERY 1", "{d:?}");
+        assert_eq!(d[2], "SCAN u", "{d:?}");
     }
 }
