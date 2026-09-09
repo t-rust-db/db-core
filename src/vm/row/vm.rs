@@ -4400,4 +4400,522 @@ mod tests {
         vm.reserve_registers(3);
         assert_eq!(vm.registers.len(), 8);
     }
+
+    /// Direct dispatch tests for the opcodes that, until #261, were
+    /// exercised only through codegen roundtrips. One test per opcode
+    /// pins the current semantics (result rows, NULL rule, error
+    /// variant) so the performance work in #257/#258/#259 has an
+    /// equivalence baseline to diff against.
+    mod direct_dispatch {
+        use super::*;
+
+        fn run_err(instructions: Vec<Instruction>) -> ExecError {
+            let mut vm = Vm::new();
+            execute(&mut vm, &Program::new(instructions)).unwrap_err()
+        }
+
+        /// `r[2] = r[0] <op> r[1]` (operand order as the opcode defines
+        /// it), then emit `r[2]`.
+        fn binary(op: Opcode, a: Value, b: Value) -> Value {
+            let mut vm = Vm::new();
+            vm.set_register(0, a).unwrap();
+            vm.set_register(1, b).unwrap();
+            let program = Program::new(vec![
+                Instruction::new(op, 0, 1, 2),
+                Instruction::new(Opcode::ResultRow, 2, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            let mut rows = execute(&mut vm, &program).unwrap();
+            rows.remove(0).remove(0)
+        }
+
+        /// Runs a conditional jump (already-loaded registers, target
+        /// `p2 = 3`) and reports whether it jumped: the fall-through path
+        /// writes `r[9] = 0` and skips the target, the target writes
+        /// `r[9] = 1`.
+        fn jumps(mut vm: Vm, instr: Instruction) -> bool {
+            let program = Program::new(vec![
+                instr,                                        // pc 0
+                Instruction::new(Opcode::Integer, 0, 9, 0),   // pc 1: fell through
+                Instruction::new(Opcode::Goto, 0, 4, 0),      // pc 2
+                Instruction::new(Opcode::Integer, 1, 9, 0),   // pc 3: jump target
+                Instruction::new(Opcode::ResultRow, 9, 1, 0), // pc 4
+                Instruction::new(Opcode::Halt, 0, 0, 0),      // pc 5
+            ]);
+            let rows = execute(&mut vm, &program).unwrap();
+            rows == vec![vec![Value::Integer(1)]]
+        }
+
+        fn vm_with(reg: i32, v: Value) -> Vm {
+            let mut vm = Vm::new();
+            vm.set_register(reg, v).unwrap();
+            vm
+        }
+
+        fn int(i: i64) -> Value {
+            Value::Integer(i)
+        }
+
+        fn text(s: &str) -> Value {
+            Value::Text(s.into())
+        }
+
+        // -- control flow ------------------------------------------------
+
+        #[test]
+        fn if_pos_decrements_by_p3_and_jumps_when_positive() {
+            let mut vm = vm_with(0, int(5));
+            let program = Program::new(vec![
+                Instruction::new(Opcode::IfPos, 0, 2, 2),
+                Instruction::new(Opcode::Halt, 1, 0, 0), // skipped
+                Instruction::new(Opcode::ResultRow, 0, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            let rows = execute(&mut vm, &program).unwrap();
+            assert_eq!(rows, vec![vec![int(3)]]);
+        }
+
+        #[test]
+        fn if_pos_falls_through_and_leaves_the_register_alone_when_not_positive() {
+            for v in [0, -4] {
+                assert!(!jumps(
+                    vm_with(0, int(v)),
+                    Instruction::new(Opcode::IfPos, 0, 3, 1)
+                ));
+            }
+        }
+
+        #[test]
+        fn if_pos_requires_an_integer_register() {
+            let mut vm = vm_with(0, text("5"));
+            let err = execute(
+                &mut vm,
+                &Program::new(vec![Instruction::new(Opcode::IfPos, 0, 1, 0)]),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(err, ExecError::TypeMismatch { found: "TEXT", .. }),
+                "{err:?}"
+            );
+        }
+
+        #[test]
+        fn if_not_zero_jumps_and_decrements_a_positive_counter() {
+            let mut vm = vm_with(0, int(2));
+            let program = Program::new(vec![
+                Instruction::new(Opcode::IfNotZero, 0, 2, 0),
+                Instruction::new(Opcode::Halt, 1, 0, 0),
+                Instruction::new(Opcode::ResultRow, 0, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            assert_eq!(execute(&mut vm, &program).unwrap(), vec![vec![int(1)]]);
+        }
+
+        #[test]
+        fn if_not_zero_jumps_without_decrementing_a_negative_counter() {
+            let mut vm = vm_with(0, int(-1));
+            let program = Program::new(vec![
+                Instruction::new(Opcode::IfNotZero, 0, 2, 0),
+                Instruction::new(Opcode::Halt, 1, 0, 0),
+                Instruction::new(Opcode::ResultRow, 0, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            assert_eq!(execute(&mut vm, &program).unwrap(), vec![vec![int(-1)]]);
+        }
+
+        #[test]
+        fn if_not_zero_falls_through_on_zero() {
+            assert!(!jumps(
+                vm_with(0, int(0)),
+                Instruction::new(Opcode::IfNotZero, 0, 3, 0)
+            ));
+        }
+
+        #[test]
+        fn must_be_int_normalizes_integral_real_and_numeric_text_in_place() {
+            for (input, expected) in [
+                (int(7), int(7)),
+                (Value::Real(3.0), int(3)),
+                (text(" 42 "), int(42)),
+            ] {
+                let mut vm = vm_with(0, input);
+                let program = Program::new(vec![
+                    Instruction::new(Opcode::MustBeInt, 0, 0, 0),
+                    Instruction::new(Opcode::ResultRow, 0, 1, 0),
+                    Instruction::new(Opcode::Halt, 0, 0, 0),
+                ]);
+                assert_eq!(execute(&mut vm, &program).unwrap(), vec![vec![expected]]);
+            }
+        }
+
+        #[test]
+        fn must_be_int_jumps_to_p2_on_a_non_integer_when_p2_is_set() {
+            assert!(jumps(
+                vm_with(0, Value::Real(3.5)),
+                Instruction::new(Opcode::MustBeInt, 0, 3, 0)
+            ));
+        }
+
+        #[test]
+        fn must_be_int_errors_on_a_non_integer_when_p2_is_zero() {
+            let mut vm = vm_with(0, text("abc"));
+            let err = execute(
+                &mut vm,
+                &Program::new(vec![Instruction::new(Opcode::MustBeInt, 0, 0, 0)]),
+            )
+            .unwrap_err();
+            assert!(matches!(err, ExecError::MustBeInt), "{err:?}");
+        }
+
+        #[test]
+        fn offset_limit_combines_limit_and_offset() {
+            // r[p2] = r[p1] + max(0, r[p3]) when r[p1] > 0, else -1.
+            for (limit, offset, expected) in [(10, 5, 15), (10, -3, 10), (0, 5, -1), (-1, 5, -1)] {
+                let mut vm = vm_with(0, int(limit));
+                vm.set_register(1, int(offset)).unwrap();
+                let program = Program::new(vec![
+                    Instruction::new(Opcode::OffsetLimit, 0, 2, 1),
+                    Instruction::new(Opcode::ResultRow, 2, 1, 0),
+                    Instruction::new(Opcode::Halt, 0, 0, 0),
+                ]);
+                assert_eq!(
+                    execute(&mut vm, &program).unwrap(),
+                    vec![vec![int(expected)]],
+                    "limit {limit} offset {offset}"
+                );
+            }
+        }
+
+        #[test]
+        fn return_jumps_to_the_address_held_in_p1() {
+            // Current semantics: the target is r[p1] itself (sqlite-rs
+            // parity), not SQLite's r[p1]+1 -- see #260.
+            let mut vm = vm_with(0, int(3));
+            let program = Program::new(vec![
+                Instruction::new(Opcode::Return, 0, 0, 0),
+                Instruction::new(Opcode::Halt, 1, 0, 0),
+                Instruction::new(Opcode::Halt, 2, 0, 0),
+                Instruction::new(Opcode::Integer, 7, 1, 0),
+                Instruction::new(Opcode::ResultRow, 1, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            assert_eq!(execute(&mut vm, &program).unwrap(), vec![vec![int(7)]]);
+        }
+
+        #[test]
+        fn return_rejects_a_non_integer_address() {
+            let mut vm = vm_with(0, text("3"));
+            let err = execute(
+                &mut vm,
+                &Program::new(vec![Instruction::new(Opcode::Return, 0, 0, 0)]),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ExecError::TypeMismatch {
+                        opcode: "Return",
+                        found: "TEXT"
+                    }
+                ),
+                "{err:?}"
+            );
+        }
+
+        #[test]
+        fn begin_subrtn_is_a_fall_through_no_op() {
+            let rows = run(vec![
+                Instruction::new(Opcode::BeginSubrtn, 0, 5, 0),
+                Instruction::new(Opcode::Integer, 1, 0, 0),
+                Instruction::new(Opcode::ResultRow, 0, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            assert_eq!(rows, vec![vec![int(1)]]);
+        }
+
+        // -- compares ----------------------------------------------------
+
+        #[test]
+        fn ordered_compares_jump_exactly_when_the_relation_holds() {
+            // (opcode, r[p1], r[p3], expected jump)
+            let cases = [
+                (Opcode::Lt, 1, 2, true),
+                (Opcode::Lt, 2, 2, false),
+                (Opcode::Le, 2, 2, true),
+                (Opcode::Le, 3, 2, false),
+                (Opcode::Gt, 3, 2, true),
+                (Opcode::Gt, 2, 2, false),
+                (Opcode::Ge, 2, 2, true),
+                (Opcode::Ge, 1, 2, false),
+            ];
+            for (op, a, b, expected) in cases {
+                let mut vm = vm_with(0, int(a));
+                vm.set_register(1, int(b)).unwrap();
+                assert_eq!(
+                    jumps(vm, Instruction::new(op, 0, 3, 1)),
+                    expected,
+                    "{op:?} {a} {b}"
+                );
+            }
+        }
+
+        #[test]
+        fn ordered_compares_never_jump_on_a_null_operand() {
+            for op in [Opcode::Lt, Opcode::Le, Opcode::Gt, Opcode::Ge] {
+                let mut vm = vm_with(0, Value::Null);
+                vm.set_register(1, int(1)).unwrap();
+                assert!(!jumps(vm, Instruction::new(op, 0, 3, 1)), "{op:?} NULL lhs");
+                let mut vm = vm_with(0, int(1));
+                vm.set_register(1, Value::Null).unwrap();
+                assert!(!jumps(vm, Instruction::new(op, 0, 3, 1)), "{op:?} NULL rhs");
+            }
+        }
+
+        #[test]
+        fn ordered_compares_apply_p4_numeric_affinity_to_text() {
+            // Under NUMERIC affinity '9' < '10' (as numbers); under the
+            // default BLOB affinity the text compare says '9' > '10'.
+            let coll = P4::CollSeq {
+                collation: Collation::Binary,
+                affinity: Affinity::Numeric.to_p4_byte(),
+            };
+            let mut vm = vm_with(0, text("9"));
+            vm.set_register(1, text("10")).unwrap();
+            assert!(jumps(vm, Instruction::with_p4(Opcode::Lt, 0, 3, 1, coll)));
+            let mut vm = vm_with(0, text("9"));
+            vm.set_register(1, text("10")).unwrap();
+            assert!(!jumps(vm, Instruction::new(Opcode::Lt, 0, 3, 1)));
+        }
+
+        #[test]
+        fn real_affinity_promotes_an_integer_and_numeric_text_leaves_others() {
+            for (input, expected) in [
+                (int(3), Value::Real(3.0)),
+                (text("2.5"), Value::Real(2.5)),
+                (text("abc"), text("abc")),
+                (Value::Null, Value::Null),
+            ] {
+                let mut vm = vm_with(0, input.clone());
+                let program = Program::new(vec![
+                    Instruction::new(Opcode::RealAffinity, 0, 0, 0),
+                    Instruction::new(Opcode::ResultRow, 0, 1, 0),
+                    Instruction::new(Opcode::Halt, 0, 0, 0),
+                ]);
+                assert_eq!(
+                    execute(&mut vm, &program).unwrap(),
+                    vec![vec![expected]],
+                    "{input:?}"
+                );
+            }
+        }
+
+        // -- arithmetic / bitwise / concat ------------------------------
+
+        #[test]
+        fn multiply_is_commutative_and_promotes_on_overflow() {
+            assert_eq!(binary(Opcode::Multiply, int(6), int(7)), int(42));
+            assert_eq!(
+                binary(Opcode::Multiply, int(i64::MAX), int(2)),
+                Value::Real(i64::MAX as f64 * 2.0)
+            );
+        }
+
+        #[test]
+        fn divide_uses_reversed_operand_order_and_nulls_on_zero_divisor() {
+            // r[p3] = r[p2] / r[p1]
+            assert_eq!(binary(Opcode::Divide, int(4), int(10)), int(2));
+            assert_eq!(binary(Opcode::Divide, int(0), int(10)), Value::Null);
+            assert_eq!(
+                binary(Opcode::Divide, Value::Real(4.0), int(10)),
+                Value::Real(2.5)
+            );
+        }
+
+        #[test]
+        fn remainder_uses_reversed_operand_order_and_nulls_on_zero_divisor() {
+            // r[p3] = r[p2] % r[p1]
+            assert_eq!(binary(Opcode::Remainder, int(3), int(10)), int(1));
+            assert_eq!(binary(Opcode::Remainder, int(0), int(10)), Value::Null);
+        }
+
+        #[test]
+        fn bit_and_and_bit_or_coerce_to_integer() {
+            assert_eq!(binary(Opcode::BitAnd, int(12), int(10)), int(8));
+            assert_eq!(binary(Opcode::BitOr, int(12), int(10)), int(14));
+            assert_eq!(
+                binary(Opcode::BitAnd, text("12"), Value::Real(10.9)),
+                int(8)
+            );
+        }
+
+        #[test]
+        fn shifts_use_reversed_operand_order() {
+            // r[p3] = r[p2] << r[p1]  /  r[p3] = r[p2] >> r[p1]
+            assert_eq!(binary(Opcode::ShiftLeft, int(4), int(1)), int(16));
+            assert_eq!(binary(Opcode::ShiftRight, int(2), int(16)), int(4));
+            // A shift of 64 or more collapses rather than panicking.
+            assert_eq!(binary(Opcode::ShiftLeft, int(64), int(1)), int(0));
+        }
+
+        #[test]
+        fn bit_not_inverts_and_propagates_null() {
+            let mut vm = vm_with(0, int(0));
+            let program = Program::new(vec![
+                Instruction::new(Opcode::BitNot, 0, 1, 0),
+                Instruction::new(Opcode::ResultRow, 1, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            assert_eq!(execute(&mut vm, &program).unwrap(), vec![vec![int(-1)]]);
+            let mut vm = vm_with(0, Value::Null);
+            assert_eq!(execute(&mut vm, &program).unwrap(), vec![vec![Value::Null]]);
+        }
+
+        #[test]
+        fn concat_appends_p1_after_p2_and_renders_numbers() {
+            // r[p3] = r[p2] || r[p1]
+            assert_eq!(binary(Opcode::Concat, text("cd"), text("ab")), text("abcd"));
+            assert_eq!(
+                binary(Opcode::Concat, int(2), Value::Real(1.5)),
+                text("1.52")
+            );
+        }
+
+        #[test]
+        fn binary_opcodes_all_propagate_null() {
+            for op in [
+                Opcode::Multiply,
+                Opcode::Divide,
+                Opcode::Remainder,
+                Opcode::BitAnd,
+                Opcode::BitOr,
+                Opcode::ShiftLeft,
+                Opcode::ShiftRight,
+                Opcode::Concat,
+            ] {
+                assert_eq!(
+                    binary(op, Value::Null, int(1)),
+                    Value::Null,
+                    "{op:?} NULL lhs"
+                );
+                assert_eq!(
+                    binary(op, int(1), Value::Null),
+                    Value::Null,
+                    "{op:?} NULL rhs"
+                );
+            }
+        }
+
+        // -- constant loads / copy --------------------------------------
+
+        #[test]
+        fn int64_loads_its_p4_and_rejects_any_other_p4() {
+            let rows = run(vec![
+                Instruction::with_p4(Opcode::Int64, 0, 0, 0, P4::Int(i64::MAX)),
+                Instruction::new(Opcode::ResultRow, 0, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            assert_eq!(rows, vec![vec![int(i64::MAX)]]);
+            let err = run_err(vec![Instruction::new(Opcode::Int64, 0, 0, 0)]);
+            assert!(
+                matches!(
+                    err,
+                    ExecError::MalformedInstruction {
+                        opcode: "Int64",
+                        ..
+                    }
+                ),
+                "{err:?}"
+            );
+        }
+
+        #[test]
+        fn real_loads_its_p4_and_rejects_any_other_p4() {
+            let rows = run(vec![
+                Instruction::with_p4(Opcode::Real, 0, 0, 0, P4::Real(1.5)),
+                Instruction::new(Opcode::ResultRow, 0, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            assert_eq!(rows, vec![vec![Value::Real(1.5)]]);
+            let err = run_err(vec![Instruction::with_p4(
+                Opcode::Real,
+                0,
+                0,
+                0,
+                P4::Int(1),
+            )]);
+            assert!(
+                matches!(err, ExecError::MalformedInstruction { opcode: "Real", .. }),
+                "{err:?}"
+            );
+        }
+
+        #[test]
+        fn blob_loads_its_p4_and_rejects_any_other_p4() {
+            let rows = run(vec![
+                Instruction::with_p4(Opcode::Blob, 0, 0, 0, P4::Blob(vec![1, 2, 3])),
+                Instruction::new(Opcode::ResultRow, 0, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            assert_eq!(rows, vec![vec![Value::Blob(vec![1, 2, 3].into())]]);
+            let err = run_err(vec![Instruction::with_p4(
+                Opcode::Blob,
+                0,
+                0,
+                0,
+                P4::Str("x".to_string()),
+            )]);
+            assert!(
+                matches!(err, ExecError::MalformedInstruction { opcode: "Blob", .. }),
+                "{err:?}"
+            );
+        }
+
+        #[test]
+        fn copy_duplicates_the_value_and_leaves_the_source_intact() {
+            let rows = run(vec![
+                Instruction::with_p4(Opcode::String8, 0, 0, 0, P4::Str("x".to_string())),
+                Instruction::new(Opcode::Copy, 0, 1, 0),
+                Instruction::new(Opcode::ResultRow, 0, 2, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]);
+            assert_eq!(rows, vec![vec![text("x"), text("x")]]);
+        }
+
+        // -- automatic index ---------------------------------------------
+
+        #[test]
+        fn auto_index_next_walks_every_rowid_sharing_the_key_then_falls_through() {
+            // Two rows with key 42 (rowids 7 and 8); a seek positions on the
+            // first, AutoIndexNext jumps back once for the second and then
+            // falls through.
+            let mut vm = Vm::new();
+            let program = Program::new(vec![
+                Instruction::new(Opcode::Integer, 42, 1, 0),
+                Instruction::new(Opcode::Integer, 7, 2, 0),
+                Instruction::with_p4(Opcode::AutoIndexInsert, 0, 1, 2, P4::Int(1)),
+                Instruction::new(Opcode::Integer, 8, 2, 0),
+                Instruction::with_p4(Opcode::AutoIndexInsert, 0, 1, 2, P4::Int(1)),
+                Instruction::with_p4(Opcode::AutoIndexSeek, 0, 9, 1, P4::Int(1)), // pc 5
+                Instruction::new(Opcode::AutoIndexRowid, 0, 3, 0),                // pc 6
+                Instruction::new(Opcode::ResultRow, 3, 1, 0),                     // pc 7
+                Instruction::new(Opcode::AutoIndexNext, 0, 6, 0),                 // pc 8
+                Instruction::new(Opcode::Halt, 0, 0, 0),                          // pc 9
+            ]);
+            let rows = execute(&mut vm, &program).unwrap();
+            assert_eq!(rows, vec![vec![int(7)], vec![int(8)]]);
+        }
+
+        #[test]
+        fn auto_index_next_falls_through_on_a_non_auto_index_cursor() {
+            let mut vm = Vm::new();
+            vm.open_cursor(0, Box::new(InMemoryCursor::new(vec![])))
+                .unwrap();
+            let program = Program::new(vec![
+                Instruction::new(Opcode::AutoIndexNext, 0, 2, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+                Instruction::new(Opcode::Halt, 1, 0, 0),
+            ]);
+            assert!(execute(&mut vm, &program).is_ok());
+        }
+    }
 }
