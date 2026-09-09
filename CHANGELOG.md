@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.75.3] - 2026-09-09
+
+### Changed
+
+- **`GroupReduce` hashes a typed key instead of `to_string`/`join`** (#263). Adds `GroupKey(Vec<Value>)` alongside the existing `JoinKey`: same variant-tagged `Hash`, but derived equality (`Null == Null`) since `GROUP BY` groups NULLs together, unlike a join key. ~1.65x-1.71x at low/medium cardinality; a documented, accepted ~1.4x regression at unique-key cardinality (every row its own group), matching spike #183's finding.
+
 ## [0.75.2] - 2026-09-09
 
 ### Changed
