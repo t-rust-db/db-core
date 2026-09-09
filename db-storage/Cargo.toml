@@ -1,0 +1,46 @@
+[package]
+name = "db-storage"
+version = "0.6.4"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/t-rust-db/db-storage"
+
+[lib]
+name = "db_storage"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lock_probe"
+path = "src/row/vfs/bin/lock_probe.rs"
+required-features = ["row"]
+
+[features]
+default = ["column"]
+column = []
+row = []
+# Test-support helpers (e.g. `row::btree::test_minimal_db`) for consumers'
+# own test suites — enable from `[dev-dependencies]` only (#13).
+test-support = []
+
+[dependencies]
+# The row value model (Value/TextEncoding/Collation/compare_text/format_real)
+# is defined once in db-core and re-exported here (db-core ADR 0010,
+# t-rust-db/db-core#83). default-features = false compiles only db-core's
+# leaf modules and pulls in no third-party crate.
+db-core = { version = "0.71.1", git = "https://github.com/t-rust-db/db-core", tag = "v0.71.1", default-features = false, features = ["parser-row"] }
+memmap2 = "0.9.11"
+ruzstd = "0.7"
+
+# sqlite-rs's lint bar, adopted crate-wide (#9; the row module is sqlite-rs's
+# storage stack and was written under exactly these). `mod_module_files` is
+# deliberately absent until #16 settles the module-layout convention.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+let_underscore_must_use = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+arithmetic_side_effects = "deny"
