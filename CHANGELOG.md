@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.77.0] - 2026-09-09
+
+### Changed
+
+- **Absorbed db-storage as a workspace member** (#287, ADR 0016). Merged via `git subtree` (history preserved) into `db-storage/`, now a workspace member with a `path` dependency on db-core instead of a git/tag pin. `make ci` runs both crates' gates; `make test-storage` runs db-storage's suite alone. The standalone `t-rust-db/db-storage` repo is superseded — downstream consumers (sqlite-rs, column-rs, trigrep) need to repoint at this repo's `db-storage/` subdirectory.
+
 ## [0.76.9] - 2026-09-09
 
 ### Fixed

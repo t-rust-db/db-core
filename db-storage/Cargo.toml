@@ -27,7 +27,7 @@ test-support = []
 # is defined once in db-core and re-exported here (db-core ADR 0010,
 # t-rust-db/db-core#83). default-features = false compiles only db-core's
 # leaf modules and pulls in no third-party crate.
-db-core = { version = "0.71.1", git = "https://github.com/t-rust-db/db-core", tag = "v0.71.1", default-features = false, features = ["parser-row"] }
+db-core = { path = "..", default-features = false, features = ["parser-row"] }
 memmap2 = "0.9.11"
 ruzstd = "0.7"
 

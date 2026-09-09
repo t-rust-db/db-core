@@ -624,14 +624,23 @@ mod tests {
         // Uniform sizes: the count median.
         assert_eq!(split_groups_by_bytes(&[10, 10, 10, 10], 500), vec![2, 4]);
         // One big cell at the tail: everything small goes left.
-        assert_eq!(split_groups_by_bytes(&[4, 4, 4, 4, 4, 4, 100], 500), vec![6, 7]);
+        assert_eq!(
+            split_groups_by_bytes(&[4, 4, 4, 4, 4, 4, 100], 500),
+            vec![6, 7]
+        );
         // One big cell at the head: it goes left alone.
-        assert_eq!(split_groups_by_bytes(&[100, 4, 4, 4, 4, 4, 4], 500), vec![1, 7]);
+        assert_eq!(
+            split_groups_by_bytes(&[100, 4, 4, 4, 4, 4, 4], 500),
+            vec![1, 7]
+        );
         // Never an empty side.
         assert_eq!(split_groups_by_bytes(&[1, 1000], 500), vec![1, 2]);
         // No two-way cut fits: three groups.
         assert_eq!(split_groups_by_bytes(&[240, 273, 240], 500), vec![1, 2, 3]);
-        assert_eq!(split_groups_by_bytes(&[100, 100, 100, 273, 100, 100], 500), vec![3, 6]);
+        assert_eq!(
+            split_groups_by_bytes(&[100, 100, 100, 273, 100, 100], 500),
+            vec![3, 6]
+        );
     }
 
     /// #31: cells that cannot fit are refused up front instead of being
