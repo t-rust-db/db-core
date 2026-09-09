@@ -292,6 +292,7 @@ pub fn explain_query_plan(
                 &binding.schema,
                 select,
                 &eqp_display_name(table_ref),
+                catalog,
             )
         } else {
             None
@@ -302,6 +303,7 @@ pub fn explain_query_plan(
                 &binding.schema,
                 dispatch,
                 &eqp_display_name(table_ref),
+                catalog,
             )?
         } else {
             None
@@ -510,6 +512,7 @@ fn aggregate_index_walk_detail(
     schema: &TableSchema,
     dispatch: ScanDispatch,
     table_display: &str,
+    catalog: &[TableSchema],
 ) -> Result<Option<String>, CodegenError> {
     let index_name = |position: usize| {
         schema
@@ -546,7 +549,12 @@ fn aggregate_index_walk_detail(
                         "SCAN {table_display} USING COVERING INDEX {}",
                         index_name(index_position)?
                     ))),
-                    None => Ok(aggregate_range_seek_detail(select, schema, table_display)),
+                    None => Ok(aggregate_range_seek_detail(
+                        select,
+                        schema,
+                        table_display,
+                        catalog,
+                    )),
                 },
             }
         }
@@ -556,7 +564,12 @@ fn aggregate_index_walk_detail(
                     "SCAN {table_display} USING INDEX {}",
                     index_name(index_position)?
                 ))),
-                None => Ok(aggregate_range_seek_detail(select, schema, table_display)),
+                None => Ok(aggregate_range_seek_detail(
+                    select,
+                    schema,
+                    table_display,
+                    catalog,
+                )),
             }
         }
         ScanDispatch::Direct | ScanDispatch::Sorted => Ok(None),
@@ -572,10 +585,11 @@ fn aggregate_range_seek_detail(
     select: &Select,
     schema: &TableSchema,
     table_display: &str,
+    catalog: &[TableSchema],
 ) -> Option<String> {
     let where_expr = select.where_clause.as_ref()?;
-    super::range_scan::range_row_seek_index_position(where_expr, schema)?;
-    super::range_scan::find_range_seek_detail(schema, select, table_display)
+    super::range_scan::range_row_seek_index_position(where_expr, schema, catalog)?;
+    super::range_scan::find_range_seek_detail(schema, select, table_display, catalog)
 }
 
 /// Appends a `SCALAR SUBQUERY n` node (#282) for `inner` -- a scalar
@@ -825,7 +839,7 @@ mod mcdc_vectors {
         d[0].contains("SEARCH t USING INDEX ib")
     }
 
-    // eqp_483: `from.joins.is_empty() && !select.group_by.is_empty()`
+    // eqp_485: `from.joins.is_empty() && !select.group_by.is_empty()`
     const TEMP_BTREE: &str = "USE TEMP B-TREE FOR GROUP BY";
 
     // eqp_268: `level == 0 && direct_scan && access.is_none()` (covering index)
@@ -911,19 +925,19 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_483__v1_single_table_group_by_without_an_index_uses_a_temp_btree() {
+    fn mcdc__eqp_485__v1_single_table_group_by_without_an_index_uses_a_temp_btree() {
         let d = eqp_details("SELECT a + b, count(*) FROM t GROUP BY a + b");
         assert!(d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_483__v2_joined_group_by_is_not_reported() {
+    fn mcdc__eqp_485__v2_joined_group_by_is_not_reported() {
         let d = eqp_details("SELECT t.a, count(*) FROM t JOIN u ON u.b = t.a GROUP BY t.a");
         assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_483__v3_single_table_without_group_by_is_not_reported() {
+    fn mcdc__eqp_485__v3_single_table_without_group_by_is_not_reported() {
         let d = eqp_details("SELECT a FROM t");
         assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }
@@ -968,21 +982,21 @@ mod mcdc_vectors {
         assert_eq!(d[0], "SCAN t", "{d:?}");
     }
 
-    // eqp_299: `level == 0 && from.joins.is_empty()` (aggregate index walk)
+    // eqp_300: `level == 0 && from.joins.is_empty()` (aggregate index walk)
     #[test]
-    fn mcdc__eqp_299__v1_single_table_index_only_sum_reports_the_index_walk() {
+    fn mcdc__eqp_300__v1_single_table_index_only_sum_reports_the_index_walk() {
         let d = eqp_details("SELECT sum(a) FROM t");
         assert_eq!(d[0], "SCAN t USING COVERING INDEX ia", "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_299__v2_joined_outer_table_is_not_an_index_walk() {
+    fn mcdc__eqp_300__v2_joined_outer_table_is_not_an_index_walk() {
         let d = eqp_details("SELECT sum(t.a) FROM t JOIN u ON u.b = t.a");
         assert_eq!(d[0], "SCAN t", "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_299__v3_inner_level_is_not_an_index_walk() {
+    fn mcdc__eqp_300__v3_inner_level_is_not_an_index_walk() {
         let d = eqp_details("SELECT sum(t.a) FROM t JOIN u ON u.b = t.a");
         assert!(!d[1].contains("COVERING INDEX"), "{d:?}");
     }
@@ -1109,13 +1123,18 @@ mod mcdc_vectors {
         let rows = explain_query_plan(&select, &catalog[..1], &HashMap::new(), &catalog).unwrap();
         let details: Vec<&str> = rows.iter().map(|r| r.detail.as_str()).collect();
         // The hoisted `avg(b)` takes `try_compile_index_only_sum`'s
-        // `IdxRewind` walk of `ib` -- and its nested plan says so.
+        // `IdxRewind` walk of `ib` -- and its nested plan says so. #280
+        // additionally makes the outer `b > (SELECT avg(b) FROM t)` a
+        // real range seek against `ib` (the subquery bound is
+        // uncorrelated, hence loop-constant), so the outer plan is a
+        // `SEARCH`, not a `SCAN`.
         let program = compile("SELECT count(*) FROM t WHERE b > (SELECT avg(b) FROM t)");
         assert!(has(&program, Opcode::IdxRewind), "{program:?}");
+        assert!(has(&program, Opcode::SeekIndexGE), "{program:?}");
         assert_eq!(
             details,
             [
-                "SCAN t",
+                "SEARCH t USING INDEX ib (b>?)",
                 "SCALAR SUBQUERY 1",
                 "SCAN t USING COVERING INDEX ib"
             ],

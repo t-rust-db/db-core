@@ -1705,10 +1705,12 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn range_seek_279_unindexed_range_column_falls_back_to_a_scan() {
+    fn range_seek_279_computed_bound_seeks() {
+        // #280: a constant-arithmetic bound is loop-constant, computed
+        // once before the seek same as a bare literal.
         let p = ok("SELECT count(*) FROM t WHERE a > (5 + 1)", &[t_indexed_a()]);
-        assert!(!has(&p, Opcode::SeekIndexGE));
-        assert!(has(&p, Opcode::Rewind));
+        assert!(has(&p, Opcode::SeekIndexGE));
+        assert!(!has(&p, Opcode::Rewind));
     }
 
     // ---------------------------------------------------------------------

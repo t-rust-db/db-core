@@ -163,7 +163,7 @@ pub(crate) fn is_comparison_op(op: BinaryOp) -> bool {
 /// Whether `subquery` is a candidate for #306's hoist: it has a
 /// (non-joined, single-table) `FROM` this pass can resolve, and it's
 /// not correlated against the enclosing query.
-fn subquery_hoistable(subquery: &Select, outer_scope: &Scope) -> bool {
+pub(crate) fn subquery_hoistable(subquery: &Select, outer_scope: &Scope) -> bool {
     let Ok(resolved) = resolve_subquery_schema(subquery, &outer_scope.catalog) else {
         return false;
     };

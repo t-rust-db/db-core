@@ -59,8 +59,8 @@ pub use pushdown::push_down_where_predicates;
 pub use views::{resolve_views, ExpandViews, ResolvedView};
 
 pub(crate) use correlation::{
-    hoist_uncorrelated_where_subqueries, is_comparison_op, subquery_is_correlated,
-    top_level_and_conjuncts,
+    hoist_uncorrelated_where_subqueries, is_comparison_op, subquery_hoistable,
+    subquery_is_correlated, top_level_and_conjuncts,
 };
 pub(crate) use from_clause::materialize_from_subquery;
 pub(crate) use from_clause::resolve_subquery_schema;
