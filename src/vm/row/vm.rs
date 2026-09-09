@@ -24,8 +24,10 @@
 //! Everything else in [`super::program::Opcode`] returns
 //! `ExecError::Unimplemented`.
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use super::affinity::{apply_affinity, Affinity};
 use super::aggregate::{self, AggState};
@@ -36,7 +38,7 @@ use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, PseudoCursor, S
 use super::cursor_factory::{CursorFactory, CursorFactoryError};
 use super::functions;
 use super::program::{Instruction, Opcode, Program, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY};
-use super::record::{decode_column, decode_record, encode_record};
+use super::record::{decode_column_with, decode_record, encode_record, parse_header};
 use super::schema_storage::{SchemaStorage, SchemaStorageError};
 use super::transaction::Transaction;
 use super::value::{Collation, TextEncoding, Value};
@@ -287,6 +289,10 @@ pub(crate) fn is_falsy(v: &Value) -> bool {
     }
 }
 
+/// A pseudo slot's header cache (#258): the record blob last decoded
+/// through it and that blob's parsed `(serial_type, offset)` entries.
+type PseudoHeader = (Rc<[u8]>, Vec<(u64, usize)>);
+
 /// The VM's mutable execution state: a register file of `Value` cells,
 /// a disjoint cursor-slot table, a disjoint aggregate-context slot
 /// table (`AggStep`/`AggFinal`'s `p1`, same shape as `cursors`), plus
@@ -326,6 +332,11 @@ pub struct Vm {
     /// Per-slot register an `OpenPseudo` cursor reads its row from, lazily
     /// at `Column` time (sqlite-rs `CursorSlot::Pseudo`, #134).
     pseudo_regs: Vec<Option<i32>>,
+    /// Per pseudo slot, the record blob last decoded through it and that
+    /// blob's parsed header, so consecutive `Column`s over one row parse
+    /// the header once (#258). Holding the `Rc` keeps the allocation
+    /// alive, which makes the `Rc::ptr_eq` hit test sound.
+    pseudo_headers: Vec<Option<PseudoHeader>>,
     /// A consumer's schema-write hook, installed via
     /// [`Self::set_schema_storage`] (db-core#128). `None` (the
     /// default) means `CreateTable`/`CreateIndex`/`DropTable`/
@@ -361,6 +372,7 @@ impl Default for Vm {
             cursor_factory: None,
             cursor_roots: Vec::new(),
             pseudo_regs: Vec::new(),
+            pseudo_headers: Vec::new(),
             schema_storage: None,
             null_rows: Vec::new(),
             sequences: Vec::new(),
@@ -579,6 +591,9 @@ impl Vm {
         if let Some(cell) = self.pseudo_regs.get_mut(idx) {
             *cell = reg;
         }
+        if let Some(cache) = self.pseudo_headers.get_mut(idx) {
+            *cache = None;
+        }
         Ok(())
     }
 
@@ -591,24 +606,52 @@ impl Vm {
             .and_then(|idx| self.pseudo_regs.get(idx).copied().flatten())
     }
 
-    /// `Column` on a pseudo cursor: decode `col` out of the bound
-    /// register's current record blob (re-read on every call, since the
-    /// register is rewritten between rows — `SorterData`/`MakeRecord`).
+    /// `Column` on pseudo cursor `slot`: decode `col` out of the bound
+    /// register's current record blob. The register is rewritten between
+    /// rows (`SorterData`/`MakeRecord`), so the blob is re-read on every
+    /// call; its header is parsed once per distinct blob and cached on
+    /// the slot (#258).
     fn pseudo_column(
-        &self,
+        &mut self,
+        slot: i32,
         reg: i32,
         col: usize,
         opcode: &'static str,
     ) -> Result<Value, ExecError> {
-        match self.register(reg)? {
-            Value::Blob(bytes) => decode_column(bytes, col, self.text_encoding)
-                .map_err(|source| ExecError::RecordDecode { opcode, source }),
-            Value::Null => Ok(Value::Null),
-            other => Err(ExecError::MalformedInstruction {
-                opcode,
-                reason: format!("pseudo-cursor register holds {other:?}, not a record blob"),
-            }),
+        let bytes = match self.register(reg)? {
+            Value::Blob(bytes) => Rc::clone(bytes),
+            Value::Null => return Ok(Value::Null),
+            other => {
+                return Err(ExecError::MalformedInstruction {
+                    opcode,
+                    reason: format!("pseudo-cursor register holds {other:?}, not a record blob"),
+                })
+            }
+        };
+        let idx = Self::index("cursor slot write", slot)?;
+        if idx >= self.pseudo_headers.len() {
+            self.pseudo_headers
+                .resize_with(idx.saturating_add(1), || None);
         }
+        let encoding = self.text_encoding;
+        let Some(cache) = self.pseudo_headers.get_mut(idx) else {
+            // Unreachable after the resize above; decode without caching.
+            let header = parse_header(&bytes)
+                .map_err(|source| ExecError::RecordDecode { opcode, source })?;
+            return decode_column_with(&bytes, &header, col, encoding)
+                .map_err(|source| ExecError::RecordDecode { opcode, source });
+        };
+        let hit = matches!(cache, Some((cached, _)) if Rc::ptr_eq(cached, &bytes));
+        if !hit {
+            let header = parse_header(&bytes)
+                .map_err(|source| ExecError::RecordDecode { opcode, source })?;
+            *cache = Some((Rc::clone(&bytes), header));
+        }
+        let Some((_, header)) = cache.as_ref() else {
+            return Ok(Value::Null); // unreachable: just populated
+        };
+        decode_column_with(&bytes, header, col, encoding)
+            .map_err(|source| ExecError::RecordDecode { opcode, source })
     }
 
     /// Places `cursor` in cursor slot `slot` (growing the slot table as
@@ -665,6 +708,15 @@ impl Vm {
             *cell = Some(value);
         }
         Ok(())
+    }
+
+    /// Takes aggregate-context slot `slot`'s accumulator out, leaving
+    /// `None` -- `AggStep`'s hand-off to `aggregate::step`, which takes
+    /// the state by value and returns the updated one, so no clone per
+    /// row (#258).
+    fn take_agg_context(&mut self, slot: i32) -> Result<Option<AggState>, ExecError> {
+        let idx = Self::index("agg context read", slot)?;
+        Ok(self.agg_contexts.get_mut(idx).and_then(Option::take))
     }
 
     /// Clears aggregate-context slot `slot` back to `None` -- used by
@@ -734,20 +786,37 @@ fn compare_jump(
         } => (*collation, Affinity::from_p4_byte(*affinity)),
         _ => (Collation::Binary, Affinity::Blob),
     };
-    let ord = if matches!(affinity, Affinity::Blob) {
-        compare(a, b, collation)
-    } else {
-        let mut a = a.clone();
-        let mut b = b.clone();
-        apply_affinity(&mut a, affinity);
-        apply_affinity(&mut b, affinity);
-        compare(&a, &b, collation)
-    };
+    // Clone an operand only when `apply_affinity` could actually change
+    // it (#259): most compares codegen emits are numeric-vs-numeric under
+    // NUMERIC affinity, or anything under BLOB, and coerce nothing.
+    let a = with_affinity(a, affinity);
+    let b = with_affinity(b, affinity);
+    let ord = compare(&a, &b, collation);
     Ok(if holds(ord) {
         Step::Jump(to_pc(instr.p2))
     } else {
         Step::Next
     })
+}
+
+/// `value` with `affinity` applied -- borrowed unchanged when
+/// `apply_affinity` would leave it alone (its coercions: TEXT renders
+/// numbers, the numeric affinities parse text, REAL also widens
+/// integers), cloned and coerced otherwise (#259).
+fn with_affinity(value: &Value, affinity: Affinity) -> Cow<'_, Value> {
+    let may_change = match affinity {
+        Affinity::Blob => false,
+        Affinity::Text => matches!(value, Value::Integer(_) | Value::Real(_)),
+        Affinity::Numeric | Affinity::Integer => matches!(value, Value::Text(_)),
+        Affinity::Real => matches!(value, Value::Text(_) | Value::Integer(_)),
+    };
+    if may_change {
+        let mut owned = value.clone();
+        apply_affinity(&mut owned, affinity);
+        Cow::Owned(owned)
+    } else {
+        Cow::Borrowed(value)
+    }
 }
 
 fn real_affinity(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
@@ -854,9 +923,12 @@ fn register_as_i64(vm: &Vm, reg: i32) -> Result<i64, ExecError> {
 /// The per-column collations an index-key opcode's `P4` names (sqlite-rs
 /// `cursor::seek_key_collations`, #134): `P4::SeekKey(c)` is `c`;
 /// `P4::Int(n)` is `n` BINARY columns.
-fn seek_key_collations(opcode: &'static str, p4: &P4) -> Result<Vec<Collation>, ExecError> {
+fn seek_key_collations<'p>(
+    opcode: &'static str,
+    p4: &'p P4,
+) -> Result<Cow<'p, [Collation]>, ExecError> {
     match p4 {
-        P4::SeekKey(collations) => Ok(collations.clone()),
+        P4::SeekKey(collations) => Ok(Cow::Borrowed(collations.as_slice())),
         P4::Int(n) => {
             let count = Vm::bounded_count(
                 opcode,
@@ -865,7 +937,7 @@ fn seek_key_collations(opcode: &'static str, p4: &P4) -> Result<Vec<Collation>, 
                     reason: format!("key count {n} does not fit in p4"),
                 })?,
             )?;
-            Ok(vec![Collation::Binary; count])
+            Ok(Cow::Owned(vec![Collation::Binary; count]))
         }
         other => Err(ExecError::MalformedInstruction {
             opcode,
@@ -896,12 +968,12 @@ fn register_range(
 
 /// An index-key operand: the key values from `first_reg` plus the
 /// collations `p4` names (one per key column).
-fn key_from_registers(
+fn key_from_registers<'p>(
     vm: &Vm,
     opcode: &'static str,
     first_reg: i32,
-    p4: &P4,
-) -> Result<(Vec<Value>, Vec<Collation>), ExecError> {
+    p4: &'p P4,
+) -> Result<(Vec<Value>, Cow<'p, [Collation]>), ExecError> {
     let collations = seek_key_collations(opcode, p4)?;
     let count = collations.len();
     let mut key = Vec::with_capacity(count);
@@ -1123,8 +1195,9 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::Blob => {
-            let bytes = match &instr.p4 {
-                P4::Blob(bytes) => bytes.clone(),
+            // One allocation: straight from the P4 slice into the `Rc` (#259).
+            let bytes: &[u8] = match &instr.p4 {
+                P4::Blob(bytes) => bytes.as_slice(),
                 other => {
                     return Err(ExecError::MalformedInstruction {
                         opcode: "Blob",
@@ -1132,7 +1205,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     })
                 }
             };
-            vm.set_register(instr.p2, Value::Blob(bytes.into()))?;
+            vm.set_register(instr.p2, Value::Blob(Rc::from(bytes)))?;
             Ok(Step::Next)
         }
         Opcode::Null => {
@@ -1143,8 +1216,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::String8 => {
-            let s = match &instr.p4 {
-                P4::Str(s) => s.clone(),
+            let s: &str = match &instr.p4 {
+                P4::Str(s) => s.as_str(),
                 other => {
                     return Err(ExecError::MalformedInstruction {
                         opcode: "String8",
@@ -1152,7 +1225,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     })
                 }
             };
-            vm.set_register(instr.p2, Value::Text(s.into()))?;
+            vm.set_register(instr.p2, Value::Text(Rc::from(s)))?;
             Ok(Step::Next)
         }
         Opcode::Variable => {
@@ -1162,8 +1235,26 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
         Opcode::Copy => {
-            let value = vm.register(instr.p1)?.clone();
-            vm.set_register(instr.p2, value)?;
+            // `p3` extra registers beyond the first (SQLite `OP_Copy`, #260).
+            let extra = usize::try_from(instr.p3).map_err(|_| ExecError::MalformedInstruction {
+                opcode: "Copy",
+                reason: format!("register count {} is negative", instr.p3),
+            })?;
+            for i in 0..=extra {
+                let offset = i32::try_from(i).unwrap_or(i32::MAX);
+                let (src, dst) = match (instr.p1.checked_add(offset), instr.p2.checked_add(offset))
+                {
+                    (Some(src), Some(dst)) => (src, dst),
+                    _ => {
+                        return Err(ExecError::RegisterOutOfRange {
+                            opcode: "Copy",
+                            index: instr.p1,
+                        })
+                    }
+                };
+                let value = vm.register(src)?.clone();
+                vm.set_register(dst, value)?;
+            }
             Ok(Step::Next)
         }
         Opcode::MakeRecord => {
@@ -1236,12 +1327,16 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
         Opcode::Column => {
-            #[allow(clippy::cast_sign_loss)]
-            let col = instr.p2 as usize;
+            // A negative column index used to read as NULL through the
+            // `as usize` wrap; it is a malformed program (#260).
+            let col = usize::try_from(instr.p2).map_err(|_| ExecError::MalformedInstruction {
+                opcode: "Column",
+                reason: format!("column index {} is negative", instr.p2),
+            })?;
             let value = if vm.is_null_row(instr.p1)? {
                 Value::Null
             } else if let Some(reg) = vm.pseudo_reg(instr.p1) {
-                vm.pseudo_column(reg, col, "Column")?
+                vm.pseudo_column(instr.p1, reg, col, "Column")?
             } else {
                 vm.cursor(instr.p1)?
                     .column(col)
@@ -1704,7 +1799,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 args.push(vm.register(reg)?.clone());
             }
             let current = if instr.p5 == 0 {
-                vm.agg_context(instr.p1)?.cloned()
+                vm.take_agg_context(instr.p1)?
             } else {
                 None
             };
@@ -3154,6 +3249,148 @@ mod tests {
     }
 
     #[test]
+    fn column_with_a_negative_index_is_a_malformed_instruction() {
+        // #260: used to wrap through `as usize` and read as NULL.
+        let mut vm = Vm::new();
+        vm.open_cursor(
+            0,
+            Box::new(InMemoryCursor::new(vec![vec![Value::Integer(1)]])),
+        )
+        .unwrap();
+        let program = Program::new(vec![
+            Instruction::new(Opcode::Rewind, 0, 3, 0),
+            Instruction::new(Opcode::Column, 0, -1, 1),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        let err = execute(&mut vm, &program).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ExecError::MalformedInstruction {
+                    opcode: "Column",
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn copy_with_p3_copies_that_many_extra_registers() {
+        // #260: SQLite `OP_Copy` shape -- r[p2..=p2+p3] = r[p1..=p1+p3].
+        let rows = run(vec![
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::Integer, 2, 1, 0),
+            Instruction::new(Opcode::Integer, 3, 2, 0),
+            Instruction::new(Opcode::Copy, 0, 10, 2),
+            Instruction::new(Opcode::ResultRow, 10, 3, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(
+            rows,
+            vec![vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3)
+            ]]
+        );
+    }
+
+    #[test]
+    fn copy_with_a_negative_p3_is_a_malformed_instruction() {
+        let mut vm = Vm::new();
+        let err = execute(
+            &mut vm,
+            &Program::new(vec![Instruction::new(Opcode::Copy, 0, 1, -1)]),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ExecError::MalformedInstruction { opcode: "Copy", .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn pseudo_column_header_cache_follows_the_register_being_rewritten() {
+        // #258: two MakeRecords into the same register through one pseudo
+        // slot; the second row's columns must come from the second blob.
+        let rows = run(vec![
+            Instruction::new(Opcode::OpenPseudo, 0, 5, 0),
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::Integer, 2, 1, 0),
+            Instruction::new(Opcode::MakeRecord, 0, 2, 5),
+            Instruction::new(Opcode::Column, 0, 0, 6),
+            Instruction::new(Opcode::Column, 0, 1, 7),
+            Instruction::new(Opcode::ResultRow, 6, 2, 0),
+            Instruction::with_p4(Opcode::String8, 0, 0, 0, P4::Str("x".to_string())),
+            Instruction::new(Opcode::Integer, 9, 1, 0),
+            Instruction::new(Opcode::MakeRecord, 0, 2, 5),
+            Instruction::new(Opcode::Column, 0, 0, 6),
+            Instruction::new(Opcode::Column, 0, 1, 7),
+            Instruction::new(Opcode::ResultRow, 6, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Integer(1), Value::Integer(2)],
+                vec![Value::Text("x".into()), Value::Integer(9)],
+            ]
+        );
+    }
+
+    #[test]
+    fn pseudo_column_cache_resets_when_the_slot_is_reopened() {
+        // Reopening slot 0 onto another register must not serve the old
+        // blob's header.
+        let rows = run(vec![
+            Instruction::new(Opcode::Integer, 1, 0, 0),
+            Instruction::new(Opcode::MakeRecord, 0, 1, 5),
+            Instruction::new(Opcode::OpenPseudo, 0, 5, 0),
+            Instruction::new(Opcode::Column, 0, 0, 6),
+            Instruction::with_p4(Opcode::String8, 0, 0, 0, P4::Str("ab".to_string())),
+            Instruction::new(Opcode::Integer, 2, 1, 0),
+            Instruction::new(Opcode::MakeRecord, 0, 2, 8),
+            Instruction::new(Opcode::OpenPseudo, 0, 8, 0),
+            Instruction::new(Opcode::Column, 0, 1, 7),
+            Instruction::new(Opcode::ResultRow, 6, 2, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(rows, vec![vec![Value::Integer(1), Value::Integer(2)]]);
+    }
+
+    #[test]
+    fn compare_under_numeric_affinity_still_coerces_text_operands() {
+        // #259: `Eq` clones only operands `apply_affinity` would change;
+        // '10' vs 10 under NUMERIC must still compare equal, and 9 vs 10
+        // must not.
+        let coll = P4::CollSeq {
+            collation: Collation::Binary,
+            affinity: Affinity::Numeric.to_p4_byte(),
+        };
+        let mut vm = Vm::new();
+        vm.set_register(0, Value::Text("10".into())).unwrap();
+        vm.set_register(1, Value::Integer(10)).unwrap();
+        let program = Program::new(vec![
+            Instruction::with_p4(Opcode::Eq, 0, 3, 1, coll.clone()),
+            Instruction::new(Opcode::Halt, 1, 0, 0), // not equal -> error halt
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert!(execute(&mut vm, &program).is_ok());
+        let mut vm = Vm::new();
+        vm.set_register(0, Value::Integer(9)).unwrap();
+        vm.set_register(1, Value::Integer(10)).unwrap();
+        let program = Program::new(vec![
+            Instruction::with_p4(Opcode::Eq, 0, 2, 1, coll),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+            Instruction::new(Opcode::Halt, 1, 0, 0), // equal -> error halt
+        ]);
+        assert!(execute(&mut vm, &program).is_ok());
+    }
+
+    #[test]
     fn open_pseudo_reads_columns_from_the_makerecord_blob_in_p2() {
         let mut vm = Vm::new();
         let program = Program::new(vec![
@@ -4136,7 +4373,7 @@ mod tests {
     /// 0 || reg as usize > MAX_REGISTERS`): leaf A (`reg < 0`) true.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_526__v1_negative_register_is_out_of_range() {
+    fn mcdc__vm_538__v1_negative_register_is_out_of_range() {
         let vm = Vm::new();
         assert!(matches!(
             vm.register(-1),
@@ -4146,20 +4383,20 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_491`): both leaves false -- an
     /// ordinary in-range register. Independence pair for A against
-    /// `mcdc__vm_526__v1_negative_register_is_out_of_range`.
+    /// `mcdc__vm_538__v1_negative_register_is_out_of_range`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_526__v2_in_range_register_is_ok() {
+    fn mcdc__vm_538__v2_in_range_register_is_ok() {
         let vm = Vm::new();
         assert!(vm.register(0).is_ok());
     }
 
     /// MC/DC vector (obligation `vm_491`): leaf B (`reg as usize >
     /// MAX_REGISTERS`) true, leaf A false. Independence pair for B
-    /// against `mcdc__vm_526__v2_in_range_register_is_ok`.
+    /// against `mcdc__vm_538__v2_in_range_register_is_ok`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_526__v3_register_past_the_cap_is_out_of_range() {
+    fn mcdc__vm_538__v3_register_past_the_cap_is_out_of_range() {
         let vm = Vm::new();
         let past_cap = i32::try_from(MAX_REGISTERS).unwrap().saturating_add(1);
         assert!(matches!(
@@ -4173,7 +4410,7 @@ mod tests {
     /// (`a` is NULL) true -- no jump is taken regardless of `b`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_727__v1_lhs_null_suppresses_the_jump() {
+    fn mcdc__vm_779__v1_lhs_null_suppresses_the_jump() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4188,10 +4425,10 @@ mod tests {
     /// MC/DC vector (obligation `vm_670`): both leaves false -- neither
     /// operand is NULL, so the comparison runs normally and the jump is
     /// taken on equality. Independence pair for A against
-    /// `mcdc__vm_727__v1_lhs_null_suppresses_the_jump`.
+    /// `mcdc__vm_779__v1_lhs_null_suppresses_the_jump`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_727__v2_neither_null_lets_the_comparison_decide() {
+    fn mcdc__vm_779__v2_neither_null_lets_the_comparison_decide() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4205,10 +4442,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_670`): leaf B (`b` is NULL) true,
     /// leaf A false -- no jump. Independence pair for B against
-    /// `mcdc__vm_727__v2_neither_null_lets_the_comparison_decide`.
+    /// `mcdc__vm_779__v2_neither_null_lets_the_comparison_decide`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_727__v3_rhs_null_suppresses_the_jump() {
+    fn mcdc__vm_779__v3_rhs_null_suppresses_the_jump() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4225,7 +4462,7 @@ mod tests {
     /// true -- the result is NULL regardless of `b`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_776__v1_lhs_null_forces_null_result() {
+    fn mcdc__vm_845__v1_lhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 5, 1, 0),
@@ -4238,10 +4475,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_719`): both leaves false -- the
     /// underlying operation actually runs. Independence pair for A
-    /// against `mcdc__vm_776__v1_lhs_null_forces_null_result`.
+    /// against `mcdc__vm_845__v1_lhs_null_forces_null_result`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_776__v2_neither_null_runs_the_operation() {
+    fn mcdc__vm_845__v2_neither_null_runs_the_operation() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 2, 0, 0),
             Instruction::new(Opcode::Integer, 3, 1, 0),
@@ -4254,10 +4491,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_719`): leaf B true, leaf A false --
     /// the result is NULL. Independence pair for B against
-    /// `mcdc__vm_776__v2_neither_null_runs_the_operation`.
+    /// `mcdc__vm_845__v2_neither_null_runs_the_operation`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_776__v3_rhs_null_forces_null_result() {
+    fn mcdc__vm_845__v3_rhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 5, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4273,7 +4510,7 @@ mod tests {
     /// leaf A (`p1`'s operand) true -- the result is NULL.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_796__v1_lhs_null_forces_null_result() {
+    fn mcdc__vm_865__v1_lhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Null, 0, 0, 0),
             Instruction::new(Opcode::Integer, 10, 1, 0),
@@ -4286,10 +4523,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_739`): both leaves false -- the
     /// reversed subtraction (`p2 - p1`) actually runs. Independence pair
-    /// for A against `mcdc__vm_796__v1_lhs_null_forces_null_result`.
+    /// for A against `mcdc__vm_865__v1_lhs_null_forces_null_result`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_796__v2_neither_null_runs_the_operation() {
+    fn mcdc__vm_865__v2_neither_null_runs_the_operation() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 3, 0, 0),
             Instruction::new(Opcode::Integer, 10, 1, 0),
@@ -4302,10 +4539,10 @@ mod tests {
 
     /// MC/DC vector (obligation `vm_739`): leaf B (`p2`'s operand) true,
     /// leaf A false -- the result is NULL. Independence pair for B
-    /// against `mcdc__vm_796__v2_neither_null_runs_the_operation`.
+    /// against `mcdc__vm_865__v2_neither_null_runs_the_operation`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_796__v3_rhs_null_forces_null_result() {
+    fn mcdc__vm_865__v3_rhs_null_forces_null_result() {
         let rows = run(vec![
             Instruction::new(Opcode::Integer, 3, 0, 0),
             Instruction::new(Opcode::Null, 0, 1, 0),
@@ -4321,16 +4558,16 @@ mod tests {
     /// all three leaves true -- a whole, finite, in-range REAL converts.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_928__v1_whole_finite_in_range_converts() {
+    fn mcdc__vm_1000__v1_whole_finite_in_range_converts() {
         assert_eq!(try_to_integer(&Value::Real(5.0)), Some(5));
     }
 
     /// MC/DC vector (obligation `vm_871`): leaf A (`fract() == 0.0`)
     /// false -- a fractional REAL never converts. Independence pair for
-    /// A against `mcdc__vm_928__v1_whole_finite_in_range_converts`.
+    /// A against `mcdc__vm_1000__v1_whole_finite_in_range_converts`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_928__v2_fractional_real_does_not_convert() {
+    fn mcdc__vm_1000__v2_fractional_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(5.5)), None);
     }
 
@@ -4340,17 +4577,17 @@ mod tests {
     /// whole-valued). Exercises B's false branch alongside A's.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_928__v3_infinite_real_does_not_convert() {
+    fn mcdc__vm_1000__v3_infinite_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(f64::INFINITY)), None);
     }
 
     /// MC/DC vector (obligation `vm_871`): leaf C (`in_i64_range`) false,
     /// leaves A and B true -- a whole, finite REAL outside `i64`'s range
     /// never converts. Independence pair for C against
-    /// `mcdc__vm_928__v1_whole_finite_in_range_converts`.
+    /// `mcdc__vm_1000__v1_whole_finite_in_range_converts`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_928__v4_out_of_range_whole_real_does_not_convert() {
+    fn mcdc__vm_1000__v4_out_of_range_whole_real_does_not_convert() {
         assert_eq!(try_to_integer(&Value::Real(1e30)), None);
     }
 
@@ -4378,7 +4615,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_709__v1_reserving_past_the_current_file_grows_it() {
+    fn mcdc__vm_761__v1_reserving_past_the_current_file_grows_it() {
         let mut vm = Vm::new();
         vm.reserve_registers(7);
         assert_eq!(vm.registers.len(), 8);
@@ -4386,7 +4623,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_709__v2_reserving_past_max_registers_is_ignored() {
+    fn mcdc__vm_761__v2_reserving_past_max_registers_is_ignored() {
         let mut vm = Vm::new();
         vm.reserve_registers(i32::MAX);
         assert!(vm.registers.is_empty());
@@ -4394,7 +4631,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_709__v3_reserving_within_the_current_file_leaves_it_alone() {
+    fn mcdc__vm_761__v3_reserving_within_the_current_file_leaves_it_alone() {
         let mut vm = Vm::new();
         vm.reserve_registers(7);
         vm.reserve_registers(3);

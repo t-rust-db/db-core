@@ -867,9 +867,9 @@ impl Cursor for SorterCursor {
         self.sorted = false;
         if let Some(bound) = self.bound {
             if self.buffer.len() > bound {
-                let keys = self.keys.clone();
+                let keys = &self.keys;
                 self.buffer
-                    .sort_by(|(_, a), (_, b)| compare_keys(a, b, &keys));
+                    .sort_by(|(_, a), (_, b)| compare_keys(a, b, keys));
                 self.buffer.truncate(bound);
                 self.sorted = true;
             }
