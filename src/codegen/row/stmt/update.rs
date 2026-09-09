@@ -228,7 +228,7 @@ pub fn compile_update_with_catalog(
     let range_seek_touches_scanned_index = update
         .where_clause
         .as_ref()
-        .and_then(|where_expr| range_seek_index_position(where_expr, schema))
+        .and_then(|where_expr| range_seek_index_position(where_expr, schema, catalog))
         .and_then(|position| schema.indexes.get(position))
         .is_some_and(|index| {
             index.columns.iter().any(|c| {
