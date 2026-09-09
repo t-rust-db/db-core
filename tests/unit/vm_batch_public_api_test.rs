@@ -631,6 +631,81 @@ fn compare_for_order_sorts_null_last_both_directions() {
     );
 }
 
+/// #266: `compare_for_order`'s `Str`/`Str` case compares `&str` directly
+/// instead of `a.to_string().cmp(&b.to_string())` -- this reimplements
+/// the old, pre-#266 logic verbatim as a reference and checks the two
+/// agree on every pair drawn from a pool spanning every `Value` variant
+/// (including `NULL`, `NaN`, and mixed-type pairs), both directions, over
+/// many random combinations. A deterministic xorshift PRNG keeps this
+/// dependency-free and reproducible (a fixed seed always exercises the
+/// same pairs) rather than pulling in a property-testing crate for one
+/// test.
+#[test]
+fn compare_for_order_agrees_with_the_old_stringify_based_comparator() {
+    use std::cmp::Ordering;
+
+    fn reference_compare_for_order(a: &Value, b: &Value, descending: bool) -> Ordering {
+        let ord = match (matches!(a, Value::Null), matches!(b, Value::Null)) {
+            (true, true) => return Ordering::Equal,
+            (true, false) => return Ordering::Greater,
+            (false, true) => return Ordering::Less,
+            (false, false) => match (a.as_f64(), b.as_f64()) {
+                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+                _ => a.to_string().cmp(&b.to_string()),
+            },
+        };
+        if descending {
+            ord.reverse()
+        } else {
+            ord
+        }
+    }
+
+    let pool = [
+        Value::Null,
+        Value::Int(0),
+        Value::Int(1),
+        Value::Int(-5),
+        Value::Int(i64::MIN),
+        Value::Int(i64::MAX),
+        Value::Float(0.0),
+        Value::Float(-0.0),
+        Value::Float(1.5),
+        Value::Float(-2.25),
+        Value::Float(f64::NAN),
+        Value::Float(f64::INFINITY),
+        Value::Float(f64::NEG_INFINITY),
+        Value::Bool(true),
+        Value::Bool(false),
+        Value::Str("".into()),
+        Value::Str("a".into()),
+        Value::Str("abc".into()),
+        Value::Str("ABC".into()),
+        Value::Str("\u{0}".into()),
+        Value::Str("z".into()),
+    ];
+
+    // xorshift64: tiny, deterministic, no external crate.
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+
+    for _ in 0..5000 {
+        let a = &pool[(next() as usize) % pool.len()];
+        let b = &pool[(next() as usize) % pool.len()];
+        let descending = next() % 2 == 0;
+        assert_eq!(
+            compare_for_order(a, b, descending),
+            reference_compare_for_order(a, b, descending),
+            "a={a:?} b={b:?} descending={descending}"
+        );
+    }
+}
+
 /// db-core#232: an `Emit` with no registers used to emit zero rows -- a
 /// planner bug read as an empty result. It is a typed error now, as are
 /// `HashBuild`/`HashProbe` with no key columns.
