@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.78.0"
+version = "0.78.1"
 # The three [[bench]] targets are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -131,6 +131,7 @@ default = [
     "emit-batch",
     "storage-row",
     "storage-column",
+    "storage-stream",
 ]
 
 # `parser`: one grammar section per Cargo feature, mirroring `vm`'s own
@@ -172,8 +173,13 @@ emit-batch = ["codegen-batch"]
 # physical storage, one feature-gated module per execution mode
 # (`row`/`column`/`stream` -- ADR 0006), independent of the parser/vm/
 # codegen split above.
-storage-row = []
+# `storage::row::schema::ddl_reader` parses `sqlite_master` DDL through
+# `TableSchema::with_computed_rowid_alias` (`parser-row`); db-storage carried
+# this as `db-core = { features = ["parser-row"] }` and the merge dropped it
+# (0.78.0 did not compile with `storage-row` alone).
+storage-row = ["parser-row"]
 storage-column = ["dep:memmap2", "dep:ruzstd"]
+storage-stream = ["vm-stream"]
 # Test-support helpers (e.g. `storage::row::btree::test_minimal_db`)
 # for consumers' own test suites -- enable from `[dev-dependencies]`
 # only (db-storage#13).
