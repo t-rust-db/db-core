@@ -257,22 +257,38 @@ pub fn shift_right(a: &Value, b: &Value) -> Value {
     Value::Integer(shift(x, y, false))
 }
 
-/// Renders `v` as `CAST(v AS TEXT)` would, for `||` operands.
-fn as_text(v: &Value) -> String {
-    match v {
-        Value::Null => String::new(),
-        Value::Integer(i) => i.to_string(),
-        Value::Real(r) => format_real(*r),
-        Value::Text(s) => s.to_string(),
-        Value::Blob(b) => String::from_utf8_lossy(b).into_owned(),
-    }
-}
-
 /// String concatenation (`||`): both operands coerce to TEXT; NULL
 /// propagation is handled by the caller, same as every other binary
 /// opcode.
 pub fn concat(a: &Value, b: &Value) -> Value {
-    Value::Text(format!("{}{}", as_text(a), as_text(b)).into())
+    // One allocation for the result (#259): text operands are appended
+    // straight from their `Rc<str>`, numbers render into the same buffer.
+    let mut out = String::with_capacity(text_len_hint(a).saturating_add(text_len_hint(b)));
+    push_text(&mut out, a);
+    push_text(&mut out, b);
+    Value::Text(out.into())
+}
+
+/// Upper-bound byte length of `v`'s TEXT rendering, so `concat` sizes
+/// its buffer once (`i64`/`f64` renderings never exceed 24 bytes).
+fn text_len_hint(v: &Value) -> usize {
+    match v {
+        Value::Null => 0,
+        Value::Integer(_) | Value::Real(_) => 24,
+        Value::Text(s) => s.len(),
+        Value::Blob(b) => b.len(),
+    }
+}
+
+/// Appends `v`'s TEXT rendering (same rules as `as_text`) to `out`.
+fn push_text(out: &mut String, v: &Value) {
+    match v {
+        Value::Null => {}
+        Value::Integer(i) => out.push_str(&i.to_string()),
+        Value::Real(r) => out.push_str(&format_real(*r)),
+        Value::Text(s) => out.push_str(s),
+        Value::Blob(b) => out.push_str(&String::from_utf8_lossy(b)),
+    }
 }
 
 #[cfg(test)]

@@ -138,7 +138,10 @@ pub enum Opcode {
     Once,
     /// Marks a subroutine's entry point; falls through.
     BeginSubrtn,
-    /// Jumps to the address stored (as an integer) in register `p1`.
+    /// Jumps to the address stored (as an integer) in register `p1`
+    /// -- the address itself, as sqlite-rs does, not SQLite's
+    /// `r[p1] + 1`; a future `Gosub` emitter stores the target it wants
+    /// resumed at (#260). No codegen emits this yet.
     Return,
     /// Terminates execution. `p1` is the result code; `p4` may carry an
     /// error message.
@@ -345,7 +348,9 @@ pub enum Opcode {
     MakeRecord,
     /// Emits registers `p1..p1+p2` as one output row.
     ResultRow,
-    /// `r[p2] = r[p1]` verbatim.
+    /// `r[p2..=p2+p3] = r[p1..=p1+p3]` verbatim -- `p3` extra registers
+    /// beyond the first, SQLite's `OP_Copy` shape (#260); codegen emits
+    /// `p3 = 0`.
     Copy,
     // sorter
     /// Opens a sorter on cursor `p1`, keyed per `p4`.

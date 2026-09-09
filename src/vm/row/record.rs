@@ -447,7 +447,7 @@ fn decode_utf16(bytes: &[u8], unit_from_bytes: fn([u8; 2]) -> u16) -> Result<Str
 /// Walks a record payload's header once, returning each column's serial
 /// type paired with the byte offset (into `payload`) of that column's
 /// body -- never decodes any column body.
-fn parse_header(payload: &[u8]) -> Result<Vec<(u64, usize)>, RecordError> {
+pub(crate) fn parse_header(payload: &[u8]) -> Result<Vec<(u64, usize)>, RecordError> {
     let (header_len, n) = decode_varint_at(payload, 0)?;
     // Saturate on a 32-bit target: an absurd header length then fails the
     // `HeaderOverrun` bound check below instead of wrapping to a small one.
@@ -509,7 +509,19 @@ pub fn decode_column(
     encoding: TextEncoding,
 ) -> Result<Value, RecordError> {
     let entries = parse_header(payload)?;
-    match entries.get(idx) {
+    decode_column_with(payload, &entries, idx, encoding)
+}
+
+/// [`decode_column`] over an already-parsed header (`parse_header`'s
+/// `(serial_type, offset)` entries), so a caller reading several columns
+/// of one record parses its header once (#258).
+pub(crate) fn decode_column_with(
+    payload: &[u8],
+    header: &[(u64, usize)],
+    idx: usize,
+    encoding: TextEncoding,
+) -> Result<Value, RecordError> {
+    match header.get(idx) {
         Some(&(serial_type, offset)) => {
             let (value, _) = decode_serial_value(serial_type, payload, offset, encoding)?;
             Ok(value)
