@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.76.5] - 2026-09-09
+
+### Changed
+
+- **`vm::row` opcode audit, performance pass** (#257, #258, #259). `execute` sizes the register file from register operands only (`Opcode::register_operands`, `Instruction::max_register`), so an `Integer` literal or root page no longer reserves that many cells per run (`SELECT 1000000` 459 us -> 73 us). `AggStep` takes its accumulator instead of cloning it per row; pseudo cursors cache the parsed record header per slot (`GROUP BY` ~1.12x faster); `String8`/`Blob` allocate once; index-key opcodes borrow their `P4` collations; `compare_jump` clones only operands affinity can change; `concat` renders into one pre-sized buffer (a filtered `WHERE` scan ~1.3x faster). Result rows, error variants and `EXPLAIN` output unchanged.
+- **Direct dispatch tests** for the 25 `vm::row` opcodes previously covered only through codegen roundtrips (#261).
+
+### Fixed
+
+- `Column` with a negative column index is `ExecError::MalformedInstruction` instead of a silent NULL; `Copy` honours `p3` extra registers (SQLite `OP_Copy` shape) and rejects a negative `p3`; `Return`'s `r[p1]` target is documented as sqlite-rs parity (#260).
+
 ## [0.76.4] - 2026-09-09
 
 ### Changed
