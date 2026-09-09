@@ -35,6 +35,10 @@
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "codegen-batch")]
+// File is `batch_plan.rs`, not `batch.rs`: `cargo-mvl-mcdc` ids obligations by
+// `<file-stem>_<line>`, and `src/vm/batch.rs` would otherwise share every id
+// (#272). The module path stays `codegen::batch`.
+#[path = "codegen/batch_plan.rs"]
 pub mod batch;
 #[cfg(feature = "codegen-row")]
 pub mod row;
