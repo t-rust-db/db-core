@@ -1408,27 +1408,44 @@ impl Vm {
                 self.registers.insert(*dst, result);
             }
             Opcode::Emit { registers } => {
-                // #110: borrow each register instead of `.to_vec()`-ing it
-                // first -- the transpose loop below already clones every
-                // cell once to build each output row, so cloning the whole
-                // column again first (the previous `.to_vec()`) doubled the
-                // clone cost of every surviving value for no reason.
-                let cols: Vec<&[Value]> = registers
-                    .iter()
-                    .map(|r| self.reg(*r, opcode))
-                    .collect::<Result<_>>()?;
+                // #262: Emit is terminal for these registers, so move each
+                // column's values out of `self.registers` instead of
+                // borrowing and cloning every cell into the output rows.
+                // A register listed more than once in `registers` (e.g.
+                // `SELECT a, a`) is moved out on its first occurrence and
+                // cloned from that owned copy only for the repeats, so the
+                // common case (each register emitted once) clones nothing.
+                let mut cols: Vec<Vec<Value>> = Vec::with_capacity(registers.len());
+                for r in registers.iter() {
+                    let owned = if let Some(existing) = self.registers.remove(r) {
+                        existing
+                    } else {
+                        cols.iter()
+                            .zip(registers.iter())
+                            .find(|(_, seen_r)| *seen_r == r)
+                            .map(|(col, _)| col.clone())
+                            .ok_or(VmError::UnknownRegister {
+                                opcode,
+                                register: *r,
+                            })?
+                    };
+                    cols.push(owned);
+                }
                 let num_rows =
                     cols.first()
-                        .map(|c| c.len())
+                        .map(Vec::len)
                         .ok_or_else(|| VmError::MalformedProgram {
                             opcode,
                             reason: "emit has no registers".to_string(),
                         })?;
-                let mut rows = Vec::with_capacity(num_rows);
-                for row in 0..num_rows {
-                    rows.push(cols.iter().map(|c| c[row].clone()).collect());
+                let mut rows: Vec<Vec<Value>> = (0..num_rows)
+                    .map(|_| Vec::with_capacity(cols.len()))
+                    .collect();
+                for col in cols {
+                    for (row, value) in col.into_iter().enumerate() {
+                        rows[row].push(value);
+                    }
                 }
-                drop(cols);
                 self.output.extend(rows);
             }
             // Meaningful only as loop markers interpreted by `run` --
@@ -1456,6 +1473,9 @@ impl Vm {
     clippy::arithmetic_side_effects,
     reason = "every column slice holds `num_rows` values and every index in `indices`/`partitions` was drawn from `0..num_rows`; `pos + 1` and the running counters are bounded by `num_rows`"
 )]
+// #262: this blank comment line exists only to shift the line numbers of
+// the MC/DC decisions below off the same-basename collision with
+// `src/codegen/batch.rs` (`cargo-mvl-mcdc` ids by basename+line, not path).
 fn compute_window(
     func: WindowFunc,
     offset: Option<i64>,
@@ -1750,6 +1770,9 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
         // `Null`); the same semantics here keep this match total without
         // an `unreachable!` the qualified subset forbids.
         MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),
+        // #262: keep this on its own line -- collides on line number
+        // (basename+line id) with an unrelated decision in
+        // src/codegen/batch.rs otherwise.
         MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),
         MapOp::MaskIf => {
             // MaskIf keeps `a` wherever the predicate register is true.
@@ -1980,7 +2003,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1721__v1_a_null_propagates() {
+    fn mcdc__batch_1741__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2008,7 +2031,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1721__v2_b_null_propagates() {
+    fn mcdc__batch_1741__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2036,7 +2059,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1721__v3_neither_null_computes_result() {
+    fn mcdc__batch_1741__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2064,7 +2087,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1772__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1795__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2092,7 +2115,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1772__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1795__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2120,7 +2143,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1772__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1795__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2148,7 +2171,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1772__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1795__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -3095,6 +3118,33 @@ mod tests {
                 vec![Value::Int(1)],
                 vec![Value::Int(2)],
                 vec![Value::Int(3)]
+            ]
+        );
+    }
+
+    #[test]
+    fn emit_repeated_register_clones_only_the_repeat() {
+        let batches = vec![Batch::new(2).with_column("id", vec![Value::Int(1), Value::Int(2)])];
+        let mut source = VecSource::new(batches);
+        let mut vm = Vm::new();
+        let program = vec![
+            Opcode::Scan,
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "id".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0, 0].into(),
+            },
+            Opcode::NextSegment { loop_start: 1 },
+            Opcode::Halt,
+        ];
+        let rows = vm.run(&mut source, &program).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(1), Value::Int(1)],
+                vec![Value::Int(2), Value::Int(2)],
             ]
         );
     }

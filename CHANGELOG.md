@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.75.2] - 2026-09-09
+
+### Changed
+
+- **`Emit` moves registers instead of cloning cells** (#262). Emit is terminal for the registers it lists, so each column is now removed (moved) out of the register map instead of borrowed and cloned into every output row; a register listed more than once in one `Emit` (e.g. `SELECT a, a`) clones only from the already-owned copy for the repeats. No change to `run_parallel`'s or `Vm::output`'s row-major shape.
+
 ## [0.75.1] - 2026-09-08
 
 ### Changed
