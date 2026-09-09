@@ -110,6 +110,45 @@ fn bench_batch_reduce(r: &mut common::Report) {
     });
 }
 
+/// A `GroupReduce` key column cycling through `cardinality` distinct
+/// values -- `cardinality == ROWS` is the worst case (every row its own
+/// group), `cardinality << ROWS` the common low/medium-cardinality case.
+fn group_key_column(rows: usize, cardinality: usize) -> Vec<BatchValue> {
+    (0..rows as i64)
+        .map(|i| BatchValue::Int(i % cardinality as i64))
+        .collect()
+}
+
+fn bench_batch_group_reduce(r: &mut common::Report) {
+    // #263: typed GroupKey vs. the old to_string/join string key --
+    // low/medium cardinality should land near the ~2-3x #183 spike found;
+    // unique cardinality (every row its own group) is the spike's
+    // documented regression case, kept here so a real run always reports
+    // both instead of only the favorable one.
+    for (label, cardinality) in [
+        ("low (100 groups)", 100),
+        ("medium (1% of rows)", ROWS / 100),
+        ("unique (no grouping)", ROWS),
+    ] {
+        let batch = Batch::new(ROWS).with_column("key", group_key_column(ROWS, cardinality.max(1)));
+        let program = [
+            BatchOpcode::LoadColumn {
+                reg: 0,
+                column: "key".into(),
+            },
+            BatchOpcode::GroupReduce {
+                group_by: vec![0].into(),
+                aggs: vec![(db_core::vm::batch::AggFunc::Count, None)].into(),
+                agg_dst: vec![1].into(),
+            },
+        ];
+        r.bench(&format!("vm_opcodes/batch::GroupReduce ({label})"), || {
+            let mut vm = BatchVm::new();
+            vm.execute(black_box(&batch), &program)
+        });
+    }
+}
+
 fn bench_batch_emit(r: &mut common::Report) {
     // Isolates Emit's per-row transpose cost (#262): a bare
     // LoadColumn+Emit program, so the increment over LoadColumn alone
@@ -194,6 +233,7 @@ fn main() {
     bench_batch_load_column(&mut report);
     bench_batch_map_and_filter(&mut report);
     bench_batch_reduce(&mut report);
+    bench_batch_group_reduce(&mut report);
     bench_batch_emit(&mut report);
     bench_batch_emit_duplicate_register(&mut report);
     bench_row_scan_column(&mut report);

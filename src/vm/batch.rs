@@ -986,6 +986,45 @@ impl Hash for JoinKey {
     }
 }
 
+/// #263: `Opcode::GroupReduce`'s key -- unlike [`JoinKey`], NULLs must
+/// group together (`GROUP BY` semantics), so `PartialEq`/`Eq` are derived
+/// (plain [`Value`] equality, where `Null == Null`) rather than
+/// hand-written. `Hash` reuses `JoinKey`'s variant-tagged scheme so
+/// `Int(1)` and `Str("1")` still never collide.
+#[derive(Debug, Clone, PartialEq)]
+struct GroupKey(Vec<Value>);
+
+// `Value::Float` isn't `Eq` (NaN), so `Eq` can't be derived -- but the
+// `Hash` impl below never inspects a float's ordering, only its bit
+// pattern, so `Eq`'s reflexivity requirement still holds in practice.
+impl Eq for GroupKey {}
+
+impl Hash for GroupKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for value in &self.0 {
+            match value {
+                Value::Int(v) => {
+                    0u8.hash(state);
+                    v.hash(state);
+                }
+                Value::Float(v) => {
+                    1u8.hash(state);
+                    v.to_bits().hash(state);
+                }
+                Value::Bool(v) => {
+                    2u8.hash(state);
+                    v.hash(state);
+                }
+                Value::Str(v) => {
+                    3u8.hash(state);
+                    v.hash(state);
+                }
+                Value::Null => 4u8.hash(state),
+            }
+        }
+    }
+}
+
 /// A register machine executing one batch at a time.
 #[derive(Default)]
 pub struct Vm {
@@ -1204,17 +1243,12 @@ impl Vm {
                     },
                 };
 
-                let mut group_index: HashMap<String, usize> = HashMap::new();
+                let mut group_index: HashMap<GroupKey, usize> = HashMap::new();
                 let mut group_keys: Vec<Vec<Value>> = Vec::new();
                 let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
                 for row in 0..num_rows {
                     let key: Vec<Value> = key_columns.iter().map(|c| c[row].clone()).collect();
-                    let key_str = key
-                        .iter()
-                        .map(Value::to_string)
-                        .collect::<Vec<_>>()
-                        .join("\u{0}");
-                    let group = *group_index.entry(key_str).or_insert_with(|| {
+                    let group = *group_index.entry(GroupKey(key.clone())).or_insert_with(|| {
                         group_keys.push(key);
                         group_keys.len() - 1
                     });
@@ -1502,6 +1536,9 @@ fn compute_window(
     for key in &partition_order {
         let mut indices = partitions[key].clone();
         indices.sort_by(|&a, &b| {
+            // #263: keep this loop on its own line -- otherwise its
+            // decision collides on line number (basename+line id) with
+            // an unrelated one in src/codegen/batch.rs.
             for (col, descending) in order_cols {
                 let ord = compare_for_order(&col[a], &col[b], *descending);
                 if ord != std::cmp::Ordering::Equal {
@@ -1550,6 +1587,7 @@ fn compute_window(
                 };
                 for (pos, &row) in indices.iter().enumerate() {
                     let pos = len_to_i64(pos);
+                    // #263: line-shift buffer, see the comment above `compute_window`.
                     let target = if func == WindowFunc::Lag {
                         pos - offset
                     } else {
@@ -1657,6 +1695,7 @@ fn whole_partition_aggregate(
     arg_col: Option<&[Value]>,
     indices: &[usize],
 ) -> Result<Value> {
+    // #263: line-shift buffer to avoid an MC/DC id collision.
     if func == WindowFunc::Count {
         let count = match arg_col {
             Some(a) => indices
@@ -2003,7 +2042,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1741__v1_a_null_propagates() {
+    fn mcdc__batch_1780__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2031,7 +2070,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1741__v2_b_null_propagates() {
+    fn mcdc__batch_1780__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2059,7 +2098,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1741__v3_neither_null_computes_result() {
+    fn mcdc__batch_1780__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2087,7 +2126,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1795__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_1834__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2115,7 +2154,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1795__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_1834__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2143,7 +2182,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1795__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_1834__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2171,7 +2210,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1795__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_1834__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2494,6 +2533,54 @@ mod tests {
             &[Value::Float(30.0), Value::Float(20.0)]
         );
         assert_eq!(vm.register(3).unwrap(), &[Value::Int(2), Value::Int(2)]);
+    }
+
+    #[test]
+    fn group_reduce_groups_all_null_keys_together() {
+        // Unlike a join key (`hash_probe_null_keys_never_match`), a
+        // `GROUP BY` key groups every NULL into the same group (#263).
+        let batch = Batch::new(4)
+            .with_column(
+                "region",
+                vec![
+                    Value::Null,
+                    Value::Str("east".into()),
+                    Value::Null,
+                    Value::Null,
+                ],
+            )
+            .with_column(
+                "amount",
+                vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "region".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "amount".into(),
+                },
+                Opcode::GroupReduce {
+                    group_by: vec![0].into(),
+                    aggs: vec![(AggFunc::Sum, Some(1))].into(),
+                    agg_dst: vec![2].into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Null, Value::Str("east".into())]
+        );
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Float(8.0), Value::Float(2.0)]
+        );
     }
 
     fn build_and_probe(kind: JoinKind, left: Batch, right: Batch) -> Vm {
