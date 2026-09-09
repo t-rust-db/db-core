@@ -546,7 +546,7 @@ fn aggregate_index_walk_detail(
                         "SCAN {table_display} USING COVERING INDEX {}",
                         index_name(index_position)?
                     ))),
-                    None => Ok(None),
+                    None => Ok(aggregate_range_seek_detail(select, schema, table_display)),
                 },
             }
         }
@@ -556,11 +556,26 @@ fn aggregate_index_walk_detail(
                     "SCAN {table_display} USING INDEX {}",
                     index_name(index_position)?
                 ))),
-                None => Ok(None),
+                None => Ok(aggregate_range_seek_detail(select, schema, table_display)),
             }
         }
         ScanDispatch::Direct | ScanDispatch::Sorted => Ok(None),
     }
+}
+
+/// #279: `try_compile_direct_agg_scan`/`compile_grouped_scan` try
+/// `try_compile_range_row_seek` before falling back to a full `Rewind`
+/// -- report the `SEARCH ... USING INDEX` it emits exactly when its
+/// shared eligibility check (`range_row_seek_index_position`) fires,
+/// reusing the direct-scan report's own wording.
+fn aggregate_range_seek_detail(
+    select: &Select,
+    schema: &TableSchema,
+    table_display: &str,
+) -> Option<String> {
+    let where_expr = select.where_clause.as_ref()?;
+    super::range_scan::range_row_seek_index_position(where_expr, schema)?;
+    super::range_scan::find_range_seek_detail(schema, select, table_display)
 }
 
 /// Appends a `SCALAR SUBQUERY n` node (#282) for `inner` -- a scalar
@@ -919,15 +934,17 @@ mod mcdc_vectors {
         assert_eq!(d[0], "SCAN t", "{d:?}");
     }
 
+    // `IN` is a direct-scan range shape but not a #279 row-seek shape, so
+    // an aggregate over it is the one range predicate that must still SCAN.
     #[test]
-    fn mcdc__eqp_280__v5_aggregate_never_reports_a_skip_scan() {
-        let d = eqp_details("SELECT count(*) FROM t WHERE b > 5");
+    fn mcdc__eqp_280__v5_aggregate_never_reports_the_direct_scans_skip_scan() {
+        let d = eqp_details("SELECT sum(a) FROM t WHERE b IN (1, 2)");
         assert_eq!(d[0], "SCAN t", "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_290__v5_aggregate_never_reports_a_range_seek() {
-        let d = eqp_details("SELECT count(*) FROM t WHERE b BETWEEN 1 AND 5");
+    fn mcdc__eqp_290__v5_aggregate_never_reports_the_direct_scans_in_list_seek() {
+        let d = eqp_details("SELECT count(*) FROM t WHERE b IN (1, 2)");
         assert_eq!(d[0], "SCAN t", "{d:?}");
     }
 
@@ -1023,9 +1040,14 @@ mod mcdc_vectors {
             "SELECT sum(a) FROM t",
             "SELECT sum(a) FROM t WHERE b > 5",
             "SELECT count(*) FROM t WHERE b > (SELECT avg(b) FROM t)",
+            "SELECT count(*) FROM t WHERE b >= 5 AND a = 1",
+            "SELECT sum(a) FROM t WHERE b < 5",
+            "SELECT count(DISTINCT a) FROM t WHERE b > 5",
             // GROUP BY
             "SELECT a, count(*) FROM t GROUP BY a",
             "SELECT a, count(*) FROM t WHERE b > 5 GROUP BY a",
+            "SELECT a, count(*) FROM t WHERE b BETWEEN 1 AND 5 GROUP BY a",
+            "SELECT a, count(*) FROM t WHERE b IN (1, 2) GROUP BY a",
         ];
         for sql in shapes {
             let program = compile(sql);
@@ -1047,13 +1069,18 @@ mod mcdc_vectors {
         }
     }
 
-    /// The issue's own reproduction: an aggregate over a range predicate
-    /// is a full scan until #279 lands, and EQP must say so.
+    /// The issue's own reproduction: with #279's aggregate range seek
+    /// compiled, EQP reports the seek; the `IN` shape the row seek doesn't
+    /// recognize stays a scan.
     #[test]
-    fn aggregate_over_range_predicate_reports_a_scan() {
+    fn aggregate_over_range_predicate_reports_the_compiled_seek() {
         let d = eqp_details("SELECT count(*) FROM t WHERE b > 5");
-        assert_eq!(d[0], "SCAN t", "{d:?}");
+        assert_eq!(d[0], "SEARCH t USING INDEX ib (b>?)", "{d:?}");
         let d = eqp_details("SELECT sum(a) FROM t WHERE b BETWEEN 1 AND 5");
+        assert_eq!(d[0], "SEARCH t USING INDEX ib (b>? AND b<?)", "{d:?}");
+        let d = eqp_details("SELECT a, count(*) FROM t WHERE b > 5 GROUP BY a");
+        assert_eq!(d[0], "SEARCH t USING INDEX ib (b>?)", "{d:?}");
+        let d = eqp_details("SELECT count(*) FROM t WHERE b IN (1, 2)");
         assert_eq!(d[0], "SCAN t", "{d:?}");
     }
 

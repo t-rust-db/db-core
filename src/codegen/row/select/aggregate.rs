@@ -1717,13 +1717,13 @@ mod mcdc_vectors {
     // Observable: the fast path emits `Opcode::Count`; the fallback scans.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_46__v1_bare_count_star_takes_the_count_fast_path() {
+    fn mcdc__aggregate_47__v1_bare_count_star_takes_the_count_fast_path() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_46__v2_having_falls_back_to_a_scan() {
+    fn mcdc__aggregate_47__v2_having_falls_back_to_a_scan() {
         let p = ok(
             "SELECT count(*) FROM t HAVING count(*) > 0",
             &[t_indexed_a()],
@@ -1732,7 +1732,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_46__v3_limit_falls_back_to_a_scan() {
+    fn mcdc__aggregate_47__v3_limit_falls_back_to_a_scan() {
         let p = ok("SELECT count(*) FROM t LIMIT 1", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
@@ -1741,7 +1741,7 @@ mod mcdc_vectors {
     /// with an aggregate (no GROUP BY)" before this decision is reached, so
     /// the fast path is never taken -- observed as the rejection itself.
     #[test]
-    fn mcdc__aggregate_46__v4_order_by_never_reaches_the_count_fast_path() {
+    fn mcdc__aggregate_47__v4_order_by_never_reaches_the_count_fast_path() {
         let e = err_text("SELECT count(*) FROM t ORDER BY 1", &[t_indexed_a()]);
         assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
     }
@@ -1751,25 +1751,25 @@ mod mcdc_vectors {
     // `*distinct || !name == count || !args == Star`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_61__v1_count_star_matches_the_shape() {
+    fn mcdc__aggregate_62__v1_count_star_matches_the_shape() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_61__v2_count_distinct_is_not_index_only() {
+    fn mcdc__aggregate_62__v2_count_distinct_is_not_index_only() {
         let p = ok("SELECT count(DISTINCT a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_61__v3_other_function_name_is_not_a_count() {
+    fn mcdc__aggregate_62__v3_other_function_name_is_not_a_count() {
         let p = ok("SELECT max(a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_61__v4_count_of_a_column_is_not_count_star() {
+    fn mcdc__aggregate_62__v4_count_of_a_column_is_not_count_star() {
         let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
@@ -1780,25 +1780,25 @@ mod mcdc_vectors {
     // only the index (root 5), never opening the table (root 2).
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_239__v1_bare_sum_reads_only_the_index() {
+    fn mcdc__aggregate_240__v1_bare_sum_reads_only_the_index() {
         let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
         assert!(index_only(&p), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_239__v2_where_opens_the_table() {
+    fn mcdc__aggregate_240__v2_where_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t WHERE b > 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_239__v3_having_opens_the_table() {
+    fn mcdc__aggregate_240__v3_having_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t HAVING sum(a) > 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_239__v4_limit_opens_the_table() {
+    fn mcdc__aggregate_240__v4_limit_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t LIMIT 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
@@ -1806,7 +1806,7 @@ mod mcdc_vectors {
     /// `ORDER BY` with an ungrouped aggregate is rejected upstream by
     /// `compile_select_scan`; the fast path is never consulted.
     #[test]
-    fn mcdc__aggregate_239__v5_order_by_never_reaches_the_sum_fast_path() {
+    fn mcdc__aggregate_240__v5_order_by_never_reaches_the_sum_fast_path() {
         let e = err_text("SELECT sum(a) FROM t ORDER BY 1", &[t_indexed_a()]);
         assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
     }
@@ -1816,7 +1816,7 @@ mod mcdc_vectors {
     /// scanned (or index-walked in key order) and the aggregate accumulated
     /// per group rather than summed off the index alone.
     #[test]
-    fn mcdc__aggregate_239__v6_group_by_never_reaches_the_sum_fast_path() {
+    fn mcdc__aggregate_240__v6_group_by_never_reaches_the_sum_fast_path() {
         let p = ok("SELECT b, sum(a) FROM t GROUP BY b", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
@@ -1826,7 +1826,7 @@ mod mcdc_vectors {
     // `*distinct || !(name == sum || name == avg)`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_249__v1_plain_sum_is_index_only() {
+    fn mcdc__aggregate_250__v1_plain_sum_is_index_only() {
         let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
         assert!(index_only(&p), "{p:?}");
     }
@@ -1838,13 +1838,13 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_249__v2_count_is_neither_sum_nor_avg() {
+    fn mcdc__aggregate_250__v2_count_is_neither_sum_nor_avg() {
         let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
         assert!(!index_only(&p), "{p:?}");
     }
 
     // ---------------------------------------------------------------------
-    // aggregate_1213 -- `group_by_index_ordering`'s
+    // aggregate_1311 -- `group_by_index_ordering`'s
     // `implicit_group || select.group_by.is_empty()`. Only reached from
     // `compile_select_scan`'s explicit-GROUP-BY branch (with
     // `implicit_group == false`) and from EQP (same), so `(false, false)` is
@@ -1853,7 +1853,7 @@ mod mcdc_vectors {
     // GROUP BY needs no `SorterOpen`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1213__v1_explicit_group_by_on_indexed_column_walks_the_index() {
+    fn mcdc__aggregate_1311__v1_explicit_group_by_on_indexed_column_walks_the_index() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && opens(&p, 5), "{p:?}");
     }
@@ -1861,7 +1861,7 @@ mod mcdc_vectors {
     /// `implicit_group == true` (an aggregate with no GROUP BY) never asks
     /// for index ordering: there is one group, nothing to order.
     #[test]
-    fn mcdc__aggregate_1213__v2_implicit_group_never_asks_for_index_ordering() {
+    fn mcdc__aggregate_1311__v2_implicit_group_never_asks_for_index_ordering() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && !opens(&p, 5), "{p:?}");
     }
@@ -1869,7 +1869,7 @@ mod mcdc_vectors {
     /// `group_by.is_empty()` with no aggregate is a plain scan; the grouped
     /// branch (and with it this decision) is skipped entirely.
     #[test]
-    fn mcdc__aggregate_1213__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
+    fn mcdc__aggregate_1311__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
         let p = ok("SELECT a FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
@@ -1879,13 +1879,13 @@ mod mcdc_vectors {
     // (same function): either disqualifies the index-ordered GROUP BY.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1219__v1_no_where_on_a_rowid_table_is_index_ordered() {
+    fn mcdc__aggregate_1317__v1_no_where_on_a_rowid_table_is_index_ordered() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_1219__v2_where_clause_needs_a_sorter() {
+    fn mcdc__aggregate_1317__v2_where_clause_needs_a_sorter() {
         let p = ok(
             "SELECT a, count(*) FROM t WHERE b > 0 GROUP BY a",
             &[t_indexed_a()],
@@ -1894,7 +1894,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_1219__v3_without_rowid_table_needs_a_sorter() {
+    fn mcdc__aggregate_1317__v3_without_rowid_table_needs_a_sorter() {
         let mut schema = t_indexed_a();
         schema.without_rowid = true;
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[schema]);
