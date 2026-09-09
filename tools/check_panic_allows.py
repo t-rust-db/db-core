@@ -33,7 +33,20 @@ PANIC_LINTS = (
 )
 
 # Emptied by db-core#231. Any new entry needs an issue number and a reason.
-EXEMPT: dict[str, str] = {}
+# db-core#289: two test-support sites that arrived with src/storage (#288)
+# and that this gate's `#[cfg(test)]`-marker heuristic cannot see.
+EXEMPT: dict[str, str] = {
+    "src/storage/row/btree.rs": (
+        "db-core#289: `test_minimal_db` is `#[cfg(any(test, feature = "
+        "\"storage-test-support\"))]` -- the allow is needed for the "
+        "feature-enabled non-test build"
+    ),
+    "src/storage/row/vfs/bin/lock_probe.rs": (
+        "db-core#289: `[[bin]]` test helper (second OS process for fcntl "
+        "contention tests) built as a production target; to move under "
+        "tests/helpers/"
+    ),
+}
 
 TEST_REGION = re.compile(r"^\s*#\[cfg\((all\()?test", re.M)
 ALLOW = re.compile(r"#!?\[allow\(([^\]]*?)\)\]", re.S)
@@ -72,7 +85,7 @@ def main() -> int:
             print(f"  {v}")
         return 1
     n = sum(exempt_hits.values())
-    tail = f" ({n} exempt under db-core#231 in {len(exempt_hits)} files)" if n else ""
+    tail = f" ({n} exempt via EXEMPT in {len(exempt_hits)} files)" if n else ""
     print(f"check-panic-allows: no panic-lint allows in production src/{tail}")
     return 0
 

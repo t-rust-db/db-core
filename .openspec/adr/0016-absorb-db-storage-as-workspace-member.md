@@ -1,36 +1,50 @@
-# ADR 0016: Absorb db-storage as a workspace member
+# ADR 0016: db-storage is the `storage` module of db-core
 
 ## Status
 
-Accepted (#287)
+Accepted (#287, #288)
 
 ## Decision
 
-db-storage is merged into this repo as a Cargo workspace member
-(`db-storage/`), history preserved via `git subtree`. db-storage's
-`db-core` dependency is a path dependency (`{ path = ".." }`) instead of
-a git/tag dependency. One repo, one Cargo.lock, one compiler pass.
+The db-storage crate is a module of db-core: `src/storage/` (history
+preserved via `git subtree`). One crate, one `Cargo.toml`, one lint bar.
+No `db-storage` crate, workspace member, or git dependency exists.
 
 ## Structure
 
-- Root `Cargo.toml`: `[workspace] members = [".", "db-storage"]`, root
-  package remains `db-core`.
-- `db-storage/`: unchanged crate contents, own `Cargo.toml`, `Makefile`,
-  `clippy.toml`, `deny.toml` — its own gates still run from within that
-  directory.
-- Root `Makefile`: `test`/`test-lib`/`test-spike` scoped to `-p db-core`
-  explicitly. `test-storage` runs `db-storage`'s suite
-  (`$(MAKE) -C db-storage test`). `ci` runs both crates' lint and test
-  targets.
+- `src/storage.rs` — module root; `storage::row`, `storage::column`
+  (`storage::stream` planned, ADR 0006).
+- `storage` depends on `crate::value` and `crate::schema` only.
+  `parser`/`vm`/`codegen` never import `storage`.
+- Features: `storage-row`, `storage-column` (= `dep:memmap2`,
+  `dep:ruzstd` — the crate's only third-party dependencies, optional),
+  `storage-test-support`. `storage-row` and `storage-column` are in
+  `default`.
+- `[[bin]] lock_probe` (`src/storage/row/vfs/bin/lock_probe.rs`,
+  `required-features = ["storage-row"]`) — test helper, second OS process.
+- Test fixtures: `tests/corpus/fixtures/`.
+- `unsafe_code = "deny"` crate-wide; two audited `#[allow(unsafe_code)]`
+  carve-outs: `storage::column::mmap`, `storage::row::vfs::fcntl`.
+
+## Gates
+
+- `cast_possible_truncation`/`cast_possible_wrap`/`cast_sign_loss`
+  (db-core#225) — `#![allow]` on `storage` only.
+- `check-mvl-limit` — `src/storage/*` in `MVL_LIMIT_EXCLUDE`;
+  `src/storage.rs` scanned.
+- `check-panic-allows` — `EXEMPT`: `storage/row/btree.rs`
+  (`test_minimal_db`, `cfg(any(test, feature))`),
+  `storage/row/vfs/bin/lock_probe.rs`.
+- MC/DC obligation ids are basename-keyed: `storage::row::btree::{table,
+  index}` submodule files carry a `table_`/`index_` prefix.
+
+All four are a worklist in db-core#289.
 
 ## Consequences
 
-- `cargo build/test/clippy --workspace` covers both crates in one pass.
-- The standalone `t-rust-db/db-storage` repo is superseded. Consumers
-  (sqlite-rs, column-rs, trigrep) repoint their `db-storage` git
-  dependency at this repo's `db-storage/` subdirectory
-  (`package = "db-storage"`, path `db-storage`) — tracked as separate
-  tickets in each consumer repo.
-- ADR-0040 (sqlite-rs)'s "first-party crates pinned by tag, independent
-  repos" convention no longer applies to the db-core/db-storage pair;
-  it still holds for every other first-party dependency.
+- Consumers (sqlite-rs, column-rs, trigrep): drop the `db-storage`
+  dependency; enable `storage-row` or `storage-column` on `db-core`;
+  `db_storage::` → `db_core::storage::`.
+- The standalone `t-rust-db/db-storage` repo is archived.
+- ADR-0040 (sqlite-rs) "first-party crates pinned by tag" applies to
+  `db-core`, `db-cli`; there is no separate storage crate to pin.

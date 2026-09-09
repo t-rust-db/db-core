@@ -1,9 +1,6 @@
-[workspace]
-members = [".", "db-storage"]
-
 [package]
 name = "db-core"
-version = "0.77.0"
+version = "0.78.0"
 # The three [[bench]] targets are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -89,8 +86,18 @@ name = "02_groupreduce_key_hashing_adjusted"
 path = "tests/spike/002_arrow_optimization/02_groupreduce_key_hashing_adjusted.rs"
 
 [dependencies]
+# Storage backends (ADR 0016: db-storage absorbed as the `storage` module).
+# Both optional, pulled in only by storage-column (the only consumer of
+# either today).
+memmap2 = { version = "0.9.11", optional = true }
+ruzstd = { version = "0.7", optional = true }
 
 [dev-dependencies]
+
+[[bin]]
+name = "lock_probe"
+path = "src/storage/row/vfs/bin/lock_probe.rs"
+required-features = ["storage-row"]
 
 [[bench]]
 name = "parser"
@@ -122,6 +129,8 @@ default = [
     "codegen-row",
     "codegen-stream",
     "emit-batch",
+    "storage-row",
+    "storage-column",
 ]
 
 # `parser`: one grammar section per Cargo feature, mirroring `vm`'s own
@@ -159,8 +168,22 @@ codegen-stream = []
 # `vm-batch`'s `Opcode`/`Value` types).
 emit-batch = ["codegen-batch"]
 
+# `storage` (ADR 0016: absorbed from the standalone db-storage repo):
+# physical storage, one feature-gated module per execution mode
+# (`row`/`column`/`stream` -- ADR 0006), independent of the parser/vm/
+# codegen split above.
+storage-row = []
+storage-column = ["dep:memmap2", "dep:ruzstd"]
+# Test-support helpers (e.g. `storage::row::btree::test_minimal_db`)
+# for consumers' own test suites -- enable from `[dev-dependencies]`
+# only (db-storage#13).
+storage-test-support = []
+
 # sqlite-rs's lint bar (#82).
 [lints.rust]
+# `deny` rather than `forbid`: storage::column::mmap and
+# storage::row::vfs::fcntl each carry one documented, audited
+# `#[allow(unsafe_code)]` carve-out (ADR 0016).
 unsafe_code = "deny"
 
 [lints.clippy]
