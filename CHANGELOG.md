@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.76.9] - 2026-09-09
+
+### Fixed
+
+- **Range-seek bounds accept constants beyond bare literals** (#280). `is_supported_operand` only recognized a plain literal or bind parameter as a range-seek bound, so an uncorrelated scalar subquery (`x > (SELECT avg(x) FROM t)`), constant arithmetic (`x > 1 + 2`), or a `CAST` of a literal forced the whole predicate back to a full scan even though the value is loop-constant and already computed into a register once, before the seek. `try_compile_between_seek`, `try_compile_forward_comparison_seek`, and `try_compile_range_row_seek` now accept those shapes via the new `is_constant_operand`; a NULL bound (only reachable now) seeks an empty range instead of matching everything. `EXPLAIN QUERY PLAN`'s own mirror of this eligibility check is widened identically so it keeps reporting `SEARCH` rather than `SCAN` for these queries.
+
 ## [0.76.8] - 2026-09-09
 
 ### Changed
