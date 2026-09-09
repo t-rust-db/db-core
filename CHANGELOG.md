@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.76.1] - 2026-09-09
+
+### Added
+
+- **`VmError::SegmentLoad { reason }`** -- the error a `Segment::load` implementation returns when the failure is outside the VM (a storage decode error, a missing row group). Exists so column-rs can stop NULL-filling a column whose Parquet decode failed (t-rust-db/column-rs#27); exhaustive `match`es on `VmError` gain an arm.
+
 ## [0.76.0] - 2026-09-09
 
 ### Changed

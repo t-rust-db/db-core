@@ -393,6 +393,36 @@ fn count_merged_across_segments_stays_an_integer() {
     );
 }
 
+/// 0.76.1: a segment whose `load` fails (storage-side, not a VM invariant)
+/// surfaces through `run` as `VmError::SegmentLoad`, and `Display` names it.
+#[test]
+fn a_failing_segment_load_is_a_segment_load_error() {
+    struct Broken;
+    impl Segment for Broken {
+        fn load(&self) -> Result<Batch, VmError> {
+            Err(VmError::SegmentLoad {
+                reason: "orders.parquet row group 3: column `amount`: bad page".to_string(),
+            })
+        }
+    }
+    let program = Program::new(vec![
+        Instruction::new(Opcode::LoadColumn {
+            reg: 0,
+            column: "amount".into(),
+        }),
+        Instruction::new(Opcode::Emit {
+            registers: vec![0].into(),
+        }),
+        Instruction::new(Opcode::Halt),
+    ]);
+    let err = run(&[Broken], &program).unwrap_err();
+    assert!(matches!(err, VmError::SegmentLoad { .. }), "got {err:?}");
+    assert_eq!(
+        err.to_string(),
+        "segment load failed: orders.parquet row group 3: column `amount`: bad page"
+    );
+}
+
 #[test]
 fn loading_an_unknown_column_is_a_vm_error() {
     let batch = Batch::new(1).with_column("id", vec![Value::Int(1)]);
