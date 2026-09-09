@@ -1065,12 +1065,31 @@ impl fmt::Debug for JoinHashTable<JoinKey, Vec<Value>> {
     }
 }
 
+/// A pending, not-yet-applied [`Opcode::Filter`] result (#265): `indices`
+/// are the surviving row positions in the space every live register
+/// still occupies -- `Filter` no longer eagerly compacts every register,
+/// so `base_len` is the length they are still expected to have. Resolved
+/// lazily by whichever opcode actually needs dense rows ([`Opcode::Emit`],
+/// [`Opcode::GroupReduce`], [`Opcode::HashBuild`], indexing through
+/// `indices` only for the registers it reads); every other
+/// register-reading opcode forces an eager compaction first via
+/// [`Vm::resolve_selection`], reproducing pre-#265 behavior exactly from
+/// that point on.
+#[derive(Debug)]
+struct Selection {
+    base_len: usize,
+    indices: Vec<u32>,
+}
+
 /// A register machine executing one batch at a time.
 #[derive(Default)]
 pub struct Vm {
     registers: HashMap<usize, Arc<Vec<Value>>>,
     output: Vec<Vec<Value>>,
     join_tables: JoinTables,
+    /// A pending `Filter` result not yet applied to `registers`. See
+    /// [`Selection`].
+    selection: Option<Selection>,
     /// Instructions executed so far, checked against [`MAX_STEPS`] by
     /// [`Vm::execute`]/[`Vm::run`].
     steps: usize,
@@ -1085,6 +1104,7 @@ impl fmt::Debug for Vm {
                 "join_tables",
                 &self.join_tables.0.keys().collect::<Vec<_>>(),
             )
+            .field("selection", &self.selection)
             .finish()
     }
 }
@@ -1179,9 +1199,39 @@ impl Vm {
     /// program and a probe-side program against a different batch/row
     /// count, since [`Opcode::Filter`] and [`Opcode::HashProbe`] reshape
     /// *every* live register and would otherwise choke on leftover
-    /// build-side registers with the wrong length.
+    /// build-side registers with the wrong length. Also drops any pending
+    /// selection (#265): a build-side `Vec<u32>` of row indices is just as
+    /// meaningless against the next program's batch as a leftover register.
     pub fn clear_registers(&mut self) {
         self.registers.clear();
+        self.selection = None;
+    }
+
+    /// Eagerly compacts every live register down to the pending
+    /// [`Selection`] (if any) -- `Filter`'s pre-#265 behavior, now invoked
+    /// lazily by opcodes that read registers elementwise rather than by
+    /// row index (`Map`, `Reduce`, `Window`, and `HashProbe`'s key
+    /// columns) instead of unconditionally by `Filter` itself. A no-op
+    /// once nothing is pending.
+    fn resolve_selection(&mut self, opcode: &'static str) -> Result<()> {
+        let Some(selection) = self.selection.take() else {
+            return Ok(());
+        };
+        for values in self.registers.values_mut() {
+            if values.len() != selection.base_len {
+                return Err(VmError::RegisterLengthMismatch { opcode });
+            }
+            let mut compacted = Vec::with_capacity(selection.indices.len());
+            for &idx in &selection.indices {
+                let value = values.get(idx as usize).ok_or(VmError::MalformedProgram {
+                    opcode,
+                    reason: "selection index out of range".to_string(),
+                })?;
+                compacted.push(value.clone());
+            }
+            *values = Arc::new(compacted);
+        }
+        Ok(())
     }
 
     /// Take (and clear) the rows collected so far by [`Opcode::Emit`] --
@@ -1205,6 +1255,7 @@ impl Vm {
             Some(b) => b,
             None => return Ok(Vec::new()),
         };
+        self.selection = None;
         let mut pc = 0usize;
         while let Some(op) = program.get(pc) {
             self.check_step_limit(op.name())?;
@@ -1212,6 +1263,11 @@ impl Vm {
                 Opcode::NextSegment { loop_start } => match source.next_batch() {
                     Some(next) => {
                         batch = next;
+                        // #265: a new segment's registers start over
+                        // (`LoadColumn` re-loads full columns at the top
+                        // of the loop body), so any selection pending
+                        // from the previous segment is meaningless here.
+                        self.selection = None;
                         pc = *loop_start;
                     }
                     None => pc = pc.saturating_add(1),
@@ -1250,6 +1306,10 @@ impl Vm {
                     .insert(*reg, Arc::new(vec![value.clone(); batch.num_rows]));
             }
             Opcode::Map { dst, op, a, b } => {
+                // #265: reads registers elementwise (no row-index
+                // concept), so any pending selection must be resolved
+                // (compacted) first rather than taught to this opcode.
+                self.resolve_selection(opcode)?;
                 let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);
                 if a_vals.len() != b_vals.len() {
                     return Err(VmError::RegisterLengthMismatch { opcode });
@@ -1262,31 +1322,48 @@ impl Vm {
                 self.registers.insert(*dst, Arc::new(result));
             }
             Opcode::Filter { predicate } => {
+                // #265: produces a selection vector (surviving row
+                // indices) instead of eagerly compacting every live
+                // register -- registers stay exactly as they are;
+                // whichever opcode later actually needs dense rows
+                // resolves this (see `Selection`).
                 let mask: Vec<bool> = self
                     .reg(*predicate, opcode)?
                     .iter()
                     .map(|v| matches!(v, Value::Bool(true)))
                     .collect();
-                // #110: size each kept-values buffer to the actual survivor
-                // count (not the pre-filter length) -- at 50% selectivity on
-                // a 10M-row scan, over-allocating by 2x per live register is
-                // real peak-RSS waste for no benefit (the excess capacity is
-                // never used, just reserved).
-                let kept_len = mask.iter().filter(|&&keep| keep).count();
-                for values in self.registers.values_mut() {
-                    if values.len() != mask.len() {
+                let base_len = mask.len();
+                for values in self.registers.values() {
+                    if values.len() != base_len {
                         return Err(VmError::RegisterLengthMismatch { opcode });
                     }
-                    let mut kept = Vec::with_capacity(kept_len);
-                    for (value, keep) in values.iter().zip(&mask) {
-                        if *keep {
-                            kept.push(value.clone());
-                        }
-                    }
-                    *values = Arc::new(kept);
                 }
+                let source_indices: Vec<u32> = match self.selection.take() {
+                    Some(existing) => {
+                        if existing.base_len != base_len {
+                            return Err(VmError::RegisterLengthMismatch { opcode });
+                        }
+                        existing.indices
+                    }
+                    // #110: size the surviving-index buffer to the actual
+                    // survivor count up front (not the pre-filter length)
+                    // -- at 50% selectivity on a 10M-row scan, over-
+                    // allocating by 2x is real peak-RSS waste for no
+                    // benefit (the excess capacity is never used).
+                    None => (0..u32::try_from(base_len).unwrap_or(u32::MAX)).collect(),
+                };
+                let kept_len = mask.iter().filter(|&&keep| keep).count();
+                let mut indices = Vec::with_capacity(kept_len);
+                for idx in source_indices {
+                    if mask.get(idx as usize).copied().unwrap_or(false) {
+                        indices.push(idx);
+                    }
+                }
+                self.selection = Some(Selection { base_len, indices });
             }
             Opcode::Reduce { func, src, dst } => {
+                // #265: see the comment on `Map`'s same call.
+                self.resolve_selection(opcode)?;
                 let result = match src {
                     Some(reg) => reduce_values(*func, self.reg(*reg, opcode)?),
                     None => reduce_count_star(*func, batch.num_rows),
@@ -1298,35 +1375,58 @@ impl Vm {
                 aggs,
                 agg_dst,
             } => {
-                let key_columns: Vec<Vec<Value>> = group_by
+                // #265: lazily resolves any pending selection -- only the
+                // group-key and per-aggregate source registers this
+                // opcode actually reads are indexed through it, instead
+                // of every live register being eagerly compacted back in
+                // `Filter`. Taken up front so the borrows below are of
+                // `self.registers` alone, not all of `self`.
+                let selection = self.selection.take();
+                let key_columns: Vec<&[Value]> = group_by
                     .iter()
-                    .map(|reg| self.reg(*reg, opcode).map(<[Value]>::to_vec))
+                    .map(|reg| self.reg(*reg, opcode))
                     .collect::<Result<_>>()?;
-                let num_rows = match key_columns.first() {
-                    Some(c) => c.len(),
-                    None => match aggs.iter().find_map(|(_, src)| {
-                        src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len))
-                    }) {
-                        Some(len) => len?,
-                        // `COUNT(*)` alone: no key or source column carries
-                        // the row count, but every live register has the
-                        // post-`Filter` length (RegisterLengthMismatch guards
-                        // that), so any one of them is it; with no register
-                        // at all nothing was filtered and the batch's own
-                        // row count is exact.
-                        None => self
-                            .registers
-                            .values()
-                            .next()
-                            .map_or(batch.num_rows, |v| v.len()),
+                let base_len = match &selection {
+                    Some(sel) => sel.base_len,
+                    None => match key_columns.first() {
+                        Some(c) => c.len(),
+                        None => match aggs.iter().find_map(|(_, src)| {
+                            src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len))
+                        }) {
+                            Some(len) => len?,
+                            // `COUNT(*)` alone: no key or source column
+                            // carries the row count, but every live
+                            // register has the post-`Filter` length
+                            // (RegisterLengthMismatch guards that), so any
+                            // one of them is it; with no register at all
+                            // nothing was filtered and the batch's own row
+                            // count is exact.
+                            None => self
+                                .registers
+                                .values()
+                                .next()
+                                .map_or(batch.num_rows, |v| v.len()),
+                        },
                     },
+                };
+                for c in &key_columns {
+                    if c.len() != base_len {
+                        return Err(VmError::RegisterLengthMismatch { opcode });
+                    }
+                }
+                let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());
+                let physical = |row: usize| {
+                    selection
+                        .as_ref()
+                        .map_or(row, |sel| sel.indices[row] as usize)
                 };
 
                 let mut group_index: HashMap<GroupKey, usize> = HashMap::new();
                 let mut group_keys: Vec<Vec<Value>> = Vec::new();
                 let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
                 for row in 0..num_rows {
-                    let key: Vec<Value> = key_columns.iter().map(|c| c[row].clone()).collect();
+                    let p = physical(row);
+                    let key: Vec<Value> = key_columns.iter().map(|c| c[p].clone()).collect();
                     let group = *group_index.entry(GroupKey(key.clone())).or_insert_with(|| {
                         group_keys.push(key);
                         group_keys.len() - 1
@@ -1347,8 +1447,11 @@ impl Vm {
                             // #110: borrow instead of `.to_vec()` -- same
                             // redundant-clone pattern as the old `Emit`.
                             let values = self.reg(*reg, opcode)?;
+                            if values.len() != base_len {
+                                return Err(VmError::RegisterLengthMismatch { opcode });
+                            }
                             for (row, group) in row_group.iter().enumerate() {
-                                per_group[*group].push(values[row].clone());
+                                per_group[*group].push(values[physical(row)].clone());
                             }
                         }
                         None => {
@@ -1375,6 +1478,13 @@ impl Vm {
                 payload_cols,
                 table,
             } => {
+                // #265: lazily resolves any pending selection -- only the
+                // key/payload registers this opcode actually reads are
+                // indexed through it, rather than every live register
+                // being eagerly compacted back in `Filter`. Taken up
+                // front so the borrows below are of `self.registers`
+                // alone, not all of `self`.
+                let selection = self.selection.take();
                 let key_columns: Vec<&[Value]> = key_cols
                     .iter()
                     .map(|r| self.reg(*r, opcode))
@@ -1383,18 +1493,36 @@ impl Vm {
                     .iter()
                     .map(|r| self.reg(*r, opcode))
                     .collect::<Result<_>>()?;
-                let num_rows = key_columns.first().map(|c| c.len()).ok_or_else(|| {
+                let base_len = key_columns.first().map(|c| c.len()).ok_or_else(|| {
                     VmError::MalformedProgram {
                         opcode,
                         reason: "hash build has no key columns".to_string(),
                     }
                 })?;
+                for c in key_columns.iter().chain(&payload_columns) {
+                    // #265: line-shift buffer to avoid an MC/DC id collision.
+                    if c.len() != base_len {
+                        return Err(VmError::RegisterLengthMismatch { opcode });
+                    }
+                }
+                if let Some(sel) = &selection {
+                    if sel.base_len != base_len {
+                        return Err(VmError::RegisterLengthMismatch { opcode });
+                    }
+                }
+                let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());
+                let physical = |row: usize| {
+                    selection
+                        .as_ref()
+                        .map_or(row, |sel| sel.indices[row] as usize)
+                };
 
                 let mut ht: JoinHashTable<JoinKey, Vec<Value>> =
                     JoinHashTable::with_capacity(num_rows);
                 for row in 0..num_rows {
-                    let key = JoinKey(key_columns.iter().map(|c| c[row].clone()).collect());
-                    let payload = payload_columns.iter().map(|c| c[row].clone()).collect();
+                    let p = physical(row);
+                    let key = JoinKey(key_columns.iter().map(|c| c[p].clone()).collect());
+                    let payload = payload_columns.iter().map(|c| c[p].clone()).collect();
                     ht.insert(key, payload);
                 }
                 self.join_tables.0.insert(*table, Arc::new(ht));
@@ -1405,6 +1533,12 @@ impl Vm {
                 payload_dst,
                 kind,
             } => {
+                // #265: HashProbe already reshapes every live register
+                // itself (below) based on its own match/fan-out indices,
+                // a different and richer concept than a plain `Filter`
+                // selection vector -- resolve any pending selection first
+                // so the rest of this arm is unchanged from before #265.
+                self.resolve_selection(opcode)?;
                 let key_columns: Vec<&[Value]> = key_cols
                     .iter()
                     .map(|r| self.reg(*r, opcode))
@@ -1506,6 +1640,8 @@ impl Vm {
                 order_by,
                 dst,
             } => {
+                // #265: see the comment on `Map`'s same call.
+                self.resolve_selection(opcode)?;
                 let partition_cols: Vec<&[Value]> = partition_by
                     .iter()
                     .map(|r| self.reg(*r, opcode))
@@ -1562,17 +1698,42 @@ impl Vm {
                     };
                     cols.push(owned);
                 }
-                let num_rows =
+                let base_len =
                     cols.first()
                         .map(|c| c.len())
                         .ok_or_else(|| VmError::MalformedProgram {
                             opcode,
                             reason: "emit has no registers".to_string(),
                         })?;
+                for c in &cols {
+                    if c.len() != base_len {
+                        return Err(VmError::RegisterLengthMismatch { opcode });
+                    }
+                }
+                // #265: lazily resolves any pending selection, indexing
+                // straight into the (still uncompacted) emitted columns
+                // instead of `Filter` having eagerly compacted every live
+                // register up front.
+                let selection = self.selection.take();
+                if let Some(sel) = &selection {
+                    if sel.base_len != base_len {
+                        return Err(VmError::RegisterLengthMismatch { opcode });
+                    }
+                }
+                let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());
                 let mut rows: Vec<Vec<Value>> = (0..num_rows)
                     .map(|_| Vec::with_capacity(cols.len()))
                     .collect();
                 for col in cols {
+                    if let Some(sel) = &selection {
+                        // A selected subset can't be moved out of the
+                        // `Arc` without leaving the unselected cells
+                        // behind, so this always clones.
+                        for (row, &idx) in sel.indices.iter().enumerate() {
+                            rows[row].push(col[idx as usize].clone());
+                        }
+                        continue;
+                    }
                     // #264: registers built fresh by this step (Map,
                     // Reduce, ...) hold the only strong reference, so
                     // `try_unwrap` moves their cells out for free; a
@@ -1661,6 +1822,7 @@ fn compute_window(
             std::cmp::Ordering::Equal
         });
 
+        // #265: line-shift buffer to avoid an MC/DC id collision.
         match func {
             WindowFunc::RowNumber => {
                 for (pos, &row) in indices.iter().enumerate() {
@@ -1742,6 +1904,7 @@ fn compute_window(
             }
             WindowFunc::Sum | WindowFunc::Avg | WindowFunc::Count => {
                 // No ORDER BY: the frame is the whole partition -- one aggregate value for every row.
+                // #265: line-shift buffer to avoid an MC/DC id collision.
                 if order_cols.is_empty() {
                     let agg = whole_partition_aggregate(func, arg_col, &indices)?;
                     for &row in &indices {
@@ -1860,6 +2023,7 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
             }
         }
         AggFunc::Avg => {
+            // #265: line-shift buffer to avoid an MC/DC id collision.
             if non_null.is_empty() {
                 Value::Null
             } else {
@@ -2179,7 +2343,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1894__v1_a_null_propagates() {
+    fn mcdc__batch_2058__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2207,7 +2371,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1894__v2_b_null_propagates() {
+    fn mcdc__batch_2058__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2235,7 +2399,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1894__v3_neither_null_computes_result() {
+    fn mcdc__batch_2058__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2263,7 +2427,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1949__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_2113__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2291,7 +2455,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1949__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_2113__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2319,7 +2483,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1949__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_2113__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2347,7 +2511,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1949__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_2113__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2517,6 +2681,52 @@ mod tests {
                 vec![Value::Int(5), Value::Int(15), Value::Int(25)],
             );
         let mut vm = Vm::new();
+        let program = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "id".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "amount".into(),
+            },
+            Opcode::LoadConst {
+                reg: 2,
+                value: Value::Int(10),
+            },
+            Opcode::Map {
+                dst: 3,
+                op: MapOp::Gt,
+                a: 1,
+                b: 2,
+            },
+            Opcode::Filter { predicate: 3 },
+            Opcode::Emit {
+                registers: vec![0, 1].into(),
+            },
+        ];
+        vm.execute(&batch, &program).unwrap();
+        assert_eq!(
+            vm.take_output(),
+            vec![
+                vec![Value::Int(2), Value::Int(15)],
+                vec![Value::Int(3), Value::Int(25)],
+            ]
+        );
+    }
+
+    #[test]
+    fn filter_defers_compaction_until_a_consumer_resolves_it() {
+        // #265: Filter alone doesn't touch registers -- it only records a
+        // selection vector; a register is still the full, pre-filter
+        // length until something (Emit here) resolves it.
+        let batch = Batch::new(3)
+            .with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+            .with_column(
+                "keep",
+                vec![Value::Bool(false), Value::Bool(true), Value::Bool(true)],
+            );
+        let mut vm = Vm::new();
         vm.execute(
             &batch,
             &[
@@ -2526,24 +2736,141 @@ mod tests {
                 },
                 Opcode::LoadColumn {
                     reg: 1,
-                    column: "amount".into(),
+                    column: "keep".into(),
                 },
-                Opcode::LoadConst {
-                    reg: 2,
-                    value: Value::Int(10),
-                },
-                Opcode::Map {
-                    dst: 3,
-                    op: MapOp::Gt,
-                    a: 1,
-                    b: 2,
-                },
-                Opcode::Filter { predicate: 3 },
+                Opcode::Filter { predicate: 1 },
             ],
         )
         .unwrap();
-        assert_eq!(vm.register(0).unwrap(), &[Value::Int(2), Value::Int(3)]);
-        assert_eq!(vm.register(1).unwrap(), &[Value::Int(15), Value::Int(25)]);
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Int(1), Value::Int(2), Value::Int(3)]
+        );
+    }
+
+    #[test]
+    fn a_second_filter_intersects_the_pending_selection() {
+        // #265: two `Filter`s back to back (no consumer resolving the
+        // first one's selection in between) intersect rather than the
+        // second silently overwriting the first.
+        let batch = Batch::new(4)
+            .with_column(
+                "id",
+                vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+            )
+            .with_column(
+                "gt1",
+                vec![
+                    Value::Bool(false),
+                    Value::Bool(true),
+                    Value::Bool(true),
+                    Value::Bool(true),
+                ],
+            )
+            .with_column(
+                "lt4",
+                vec![
+                    Value::Bool(true),
+                    Value::Bool(true),
+                    Value::Bool(true),
+                    Value::Bool(false),
+                ],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "id".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "gt1".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 2,
+                    column: "lt4".into(),
+                },
+                Opcode::Filter { predicate: 1 },
+                Opcode::Filter { predicate: 2 },
+                Opcode::Emit {
+                    registers: vec![0].into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.take_output(),
+            vec![vec![Value::Int(2)], vec![Value::Int(3)]]
+        );
+    }
+
+    #[test]
+    fn filter_length_mismatch_errors() {
+        let batch = Batch::new(2).with_column("a", vec![Value::Int(1), Value::Int(2)]);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[Opcode::LoadColumn {
+                reg: 0,
+                column: "a".into(),
+            }],
+        )
+        .unwrap();
+        vm.registers.insert(1, Arc::new(vec![Value::Bool(true)]));
+        let err = vm
+            .step(&batch, &Opcode::Filter { predicate: 1 })
+            .unwrap_err();
+        assert_eq!(err, VmError::RegisterLengthMismatch { opcode: "Filter" });
+    }
+
+    #[test]
+    fn filter_then_map_forces_compaction_and_stays_correct() {
+        // #265: Map has no row-index concept, so a pending selection must
+        // be fully resolved before it runs -- exercises `Map`'s
+        // `resolve_selection` call, matching a real compiled program
+        // (`SELECT a + b ... WHERE ...` runs `Map` after `Filter`).
+        let batch = Batch::new(3)
+            .with_column("a", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+            .with_column("b", vec![Value::Int(10), Value::Int(20), Value::Int(30)])
+            .with_column(
+                "keep",
+                vec![Value::Bool(false), Value::Bool(true), Value::Bool(true)],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "a".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "b".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 2,
+                    column: "keep".into(),
+                },
+                Opcode::Filter { predicate: 2 },
+                Opcode::Map {
+                    dst: 3,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+                Opcode::Emit {
+                    registers: vec![3].into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.take_output(),
+            vec![vec![Value::Int(22)], vec![Value::Int(33)]]
+        );
     }
 
     #[test]
@@ -2673,6 +3000,75 @@ mod tests {
     }
 
     #[test]
+    fn filter_then_group_reduce_resolves_the_pending_selection() {
+        // #265: GroupReduce is one of the lazy resolvers -- it must index
+        // through Filter's pending selection itself rather than assuming
+        // its source registers are already compacted.
+        let batch = Batch::new(4)
+            .with_column(
+                "region",
+                vec![
+                    Value::Str("east".into()),
+                    Value::Str("west".into()),
+                    Value::Str("east".into()),
+                    Value::Str("west".into()),
+                ],
+            )
+            .with_column(
+                "amount",
+                vec![
+                    Value::Int(10),
+                    Value::Int(5),
+                    Value::Int(20),
+                    Value::Int(15),
+                ],
+            )
+            .with_column(
+                "keep",
+                vec![
+                    Value::Bool(true),
+                    Value::Bool(false),
+                    Value::Bool(true),
+                    Value::Bool(true),
+                ],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "region".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "amount".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 2,
+                    column: "keep".into(),
+                },
+                Opcode::Filter { predicate: 2 },
+                Opcode::GroupReduce {
+                    group_by: vec![0].into(),
+                    aggs: vec![(AggFunc::Sum, Some(1))].into(),
+                    agg_dst: vec![3].into(),
+                },
+            ],
+        )
+        .unwrap();
+        // Row 1 (west, 5) is filtered out, so west's sum is just row 3's 15.
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Str("east".into()), Value::Str("west".into())]
+        );
+        assert_eq!(
+            vm.register(3).unwrap(),
+            &[Value::Float(30.0), Value::Float(15.0)]
+        );
+    }
+
+    #[test]
     fn group_reduce_groups_all_null_keys_together() {
         // Unlike a join key (`hash_probe_null_keys_never_match`), a
         // `GROUP BY` key groups every NULL into the same group (#263).
@@ -2717,6 +3113,78 @@ mod tests {
         assert_eq!(
             vm.register(2).unwrap(),
             &[Value::Float(8.0), Value::Float(2.0)]
+        );
+    }
+
+    #[test]
+    fn filter_then_hash_build_resolves_the_pending_selection() {
+        // #265: HashBuild is one of the lazy resolvers -- only its own
+        // key/payload registers are indexed through the selection.
+        let right = Batch::new(3)
+            .with_column("rkey", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+            .with_column(
+                "rval",
+                vec![
+                    Value::Str("a".into()),
+                    Value::Str("b".into()),
+                    Value::Str("c".into()),
+                ],
+            )
+            .with_column(
+                "keep",
+                vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
+            );
+        let mut build_vm = Vm::new();
+        build_vm
+            .execute(
+                &right,
+                &[
+                    Opcode::LoadColumn {
+                        reg: 0,
+                        column: "rkey".into(),
+                    },
+                    Opcode::LoadColumn {
+                        reg: 1,
+                        column: "rval".into(),
+                    },
+                    Opcode::LoadColumn {
+                        reg: 2,
+                        column: "keep".into(),
+                    },
+                    Opcode::Filter { predicate: 2 },
+                    Opcode::HashBuild {
+                        key_cols: vec![0].into(),
+                        payload_cols: vec![1].into(),
+                        table: 0,
+                    },
+                ],
+            )
+            .unwrap();
+
+        let left =
+            Batch::new(3).with_column("lkey", vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let mut vm = Vm::with_join_tables(build_vm.join_tables());
+        vm.execute(
+            &left,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "lkey".into(),
+                },
+                Opcode::HashProbe {
+                    key_cols: vec![0].into(),
+                    table: 0,
+                    payload_dst: vec![1].into(),
+                    kind: JoinKind::Inner,
+                },
+            ],
+        )
+        .unwrap();
+        // key=2 was filtered out of the build side, so it never matches.
+        assert_eq!(vm.register(0).unwrap(), &[Value::Int(1), Value::Int(3)]);
+        assert_eq!(
+            vm.register(1).unwrap(),
+            &[Value::Str("a".into()), Value::Str("c".into())]
         );
     }
 
@@ -2868,6 +3336,58 @@ mod tests {
             VmError::UnknownJoinTable {
                 opcode: "HashProbe",
                 table: 42
+            }
+        );
+    }
+
+    #[test]
+    fn hash_probe_length_mismatch_errors() {
+        let mut build_vm = Vm::new();
+        build_vm
+            .execute(
+                &Batch::new(1).with_column("rkey", vec![Value::Int(1)]),
+                &[
+                    Opcode::LoadColumn {
+                        reg: 0,
+                        column: "rkey".into(),
+                    },
+                    Opcode::HashBuild {
+                        key_cols: vec![0].into(),
+                        payload_cols: vec![0].into(),
+                        table: 0,
+                    },
+                ],
+            )
+            .unwrap();
+
+        let batch = Batch::new(2).with_column("lkey", vec![Value::Int(1), Value::Int(2)]);
+        let mut vm = Vm::with_join_tables(build_vm.join_tables());
+        vm.execute(
+            &batch,
+            &[Opcode::LoadColumn {
+                reg: 0,
+                column: "lkey".into(),
+            }],
+        )
+        .unwrap();
+        // A second, mismatched-length live register alongside the key
+        // column -- HashProbe's own reshape loop must catch this itself.
+        vm.registers.insert(1, Arc::new(vec![Value::Int(1)]));
+        let err = vm
+            .step(
+                &batch,
+                &Opcode::HashProbe {
+                    key_cols: vec![0].into(),
+                    table: 0,
+                    payload_dst: vec![2].into(),
+                    kind: JoinKind::Inner,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(
+            err,
+            VmError::RegisterLengthMismatch {
+                opcode: "HashProbe"
             }
         );
     }

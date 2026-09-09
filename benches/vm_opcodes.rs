@@ -88,6 +88,55 @@ fn bench_batch_map_and_filter(r: &mut common::Report) {
     });
 }
 
+fn bench_batch_filter_many_registers(r: &mut common::Report) {
+    // #265: isolates Filter's own cost across several live registers, with
+    // no consumer after it -- pre-#265 this eagerly compacted every one of
+    // the 4 registers; now it's a single index-buffer allocation
+    // regardless of how many registers happen to be live.
+    let ids: Vec<BatchValue> = (0..ROWS as i64).map(BatchValue::Int).collect();
+    let batch = Batch::new(ROWS)
+        .with_column("a", ids.clone())
+        .with_column("b", ids.clone())
+        .with_column("c", ids.clone())
+        .with_column("d", ids);
+    let program = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "a".into(),
+        },
+        BatchOpcode::LoadColumn {
+            reg: 1,
+            column: "b".into(),
+        },
+        BatchOpcode::LoadColumn {
+            reg: 2,
+            column: "c".into(),
+        },
+        BatchOpcode::LoadColumn {
+            reg: 3,
+            column: "d".into(),
+        },
+        BatchOpcode::LoadConst {
+            reg: 4,
+            value: BatchValue::Int(ROWS as i64 / 2),
+        },
+        BatchOpcode::Map {
+            dst: 5,
+            op: MapOp::Gt,
+            a: 0,
+            b: 4,
+        },
+        BatchOpcode::Filter { predicate: 5 },
+    ];
+    r.bench(
+        "vm_opcodes/batch::Filter (4 live registers, no consumer)",
+        || {
+            let mut vm = BatchVm::new();
+            vm.execute(black_box(&batch), &program)
+        },
+    );
+}
+
 fn bench_batch_reduce(r: &mut common::Report) {
     let batch = batch_fixture();
     let program = [
@@ -292,6 +341,7 @@ fn main() {
     let mut report = common::Report::new("vm_opcodes");
     bench_batch_load_column(&mut report);
     bench_batch_map_and_filter(&mut report);
+    bench_batch_filter_many_registers(&mut report);
     bench_batch_reduce(&mut report);
     bench_batch_group_reduce(&mut report);
     bench_batch_hash_join(&mut report);
