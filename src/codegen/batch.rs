@@ -447,6 +447,7 @@ fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
                     "subquery in JOIN is not supported by the batch planner".into(),
                 ));
             };
+            // MC/DC: this decision must not share a line number with one in `src/vm/batch.rs` (ids are basename+line).
             let (left_col, right_col) = match &j.constraint {
                 Some(JoinConstraint::On(expr)) => extract_equi_join(expr)
                     .ok_or_else(|| PlanError::UnknownColumn("JOIN ON must be col = col".into()))?,
@@ -1487,6 +1488,7 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
 
     // Semi-joins compile with `where_clause` stripped, mirroring
     // `compile_semi_join` (the `IN` subquery isn't a VM predicate).
+    // MC/DC: this decision must not share a line number with one in `src/vm/batch.rs` (ids are basename+line).
     let program = if has_window {
         None
     } else if is_semi_join {
@@ -1885,6 +1887,7 @@ fn window_detail(spec: &WindowSpec) -> String {
     if !spec.partition_by.is_empty() {
         over.push(format!("PARTITION BY {}", spec.partition_by.join(", ")));
     }
+    // MC/DC: this decision must not share a line number with one in `src/vm/batch.rs` (ids are basename+line).
     if !spec.order_by.is_empty() {
         let cols: Vec<String> = spec
             .order_by
@@ -2283,7 +2286,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_954__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__batch_955__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2294,7 +2297,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_954__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__batch_955__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2305,7 +2308,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_954__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__batch_955__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2318,7 +2321,7 @@ mod tests {
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_994__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__batch_995__v1_group_by_without_agg_column_merges_partial_aggregates() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
@@ -2328,7 +2331,7 @@ mod tests {
     /// MC/DC vector (obligation `batch_879`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_994__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__batch_995__v2_agg_column_without_group_by_merges_partial_aggregates() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
@@ -2339,7 +2342,7 @@ mod tests {
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_994__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__batch_995__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();

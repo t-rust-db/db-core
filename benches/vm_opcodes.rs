@@ -149,6 +149,66 @@ fn bench_batch_group_reduce(r: &mut common::Report) {
     }
 }
 
+fn bench_batch_hash_join(r: &mut common::Report) {
+    // #272: fact/dimension probe -- ROWS probe rows against a 1%-cardinality
+    // build side with a `Str` payload (the parity `join` shape). The probe
+    // used to allocate a key `Vec`, a `get_all` `Vec` and a payload clone
+    // per row; now zero allocations per row for integer keys.
+    let dim = ROWS / 100;
+    let right = Batch::new(dim)
+        .with_column("id", (0..dim as i64).map(BatchValue::Int).collect())
+        .with_column(
+            "tier",
+            (0..dim)
+                .map(|i| BatchValue::Str(["bronze", "silver", "gold"][i % 3].into()))
+                .collect(),
+        );
+    let left = Batch::new(ROWS).with_column(
+        "fk",
+        (0..ROWS as i64)
+            .map(|i| BatchValue::Int(i % dim as i64))
+            .collect(),
+    );
+    let mut builder = BatchVm::new();
+    builder
+        .execute(
+            &right,
+            &[
+                BatchOpcode::LoadColumn {
+                    reg: 0,
+                    column: "id".into(),
+                },
+                BatchOpcode::LoadColumn {
+                    reg: 1,
+                    column: "tier".into(),
+                },
+                BatchOpcode::HashBuild {
+                    key_cols: vec![0].into(),
+                    payload_cols: vec![1].into(),
+                    table: 0,
+                },
+            ],
+        )
+        .unwrap();
+    let tables = builder.join_tables();
+    let probe = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "fk".into(),
+        },
+        BatchOpcode::HashProbe {
+            key_cols: vec![0].into(),
+            table: 0,
+            payload_dst: vec![1].into(),
+            kind: db_core::vm::batch::JoinKind::Inner,
+        },
+    ];
+    r.bench("vm_opcodes/batch::HashProbe (1% dim, Str payload)", || {
+        let mut vm = BatchVm::with_join_tables(tables.clone());
+        vm.execute(black_box(&left), &probe)
+    });
+}
+
 fn bench_batch_emit(r: &mut common::Report) {
     // Isolates Emit's per-row transpose cost (#262): a bare
     // LoadColumn+Emit program, so the increment over LoadColumn alone
@@ -234,6 +294,7 @@ fn main() {
     bench_batch_map_and_filter(&mut report);
     bench_batch_reduce(&mut report);
     bench_batch_group_reduce(&mut report);
+    bench_batch_hash_join(&mut report);
     bench_batch_emit(&mut report);
     bench_batch_emit_duplicate_register(&mut report);
     bench_row_scan_column(&mut report);

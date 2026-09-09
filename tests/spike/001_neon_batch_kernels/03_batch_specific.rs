@@ -81,11 +81,11 @@ fn report(kernel: &str, vm: Duration, raw: Duration) {
 struct PrebuiltSegment(Batch);
 
 impl Segment for PrebuiltSegment {
-    fn load(&self) -> Batch {
+    fn load(&self) -> db_core::vm::batch::Result<Batch> {
         // A real `Segment` re-materializes a batch per call (e.g. decoding
         // a Parquet row group); cloning the prebuilt one here stands in
         // for that cost rather than eliding it.
-        self.0.clone()
+        Ok(self.0.clone())
     }
 }
 

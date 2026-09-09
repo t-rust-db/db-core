@@ -128,10 +128,10 @@ fn build_segments(rows_total: usize) -> Vec<Batch> {
 struct PrebuiltSegment(Batch);
 
 impl Segment for PrebuiltSegment {
-    fn load(&self) -> Batch {
+    fn load(&self) -> db_core::vm::batch::Result<Batch> {
         // Stands in for real decode cost (e.g. a Parquet row group) --
         // deliberately not free, see round 3's doc comment.
-        self.0.clone()
+        Ok(self.0.clone())
     }
 }
 
@@ -426,7 +426,7 @@ fn adjusted_batch_specific_spike() {
     let owned = owned_segments(&batches);
     let t_single_with_load = time_it(REPS, || {
         for seg in &owned {
-            let batch = seg.load();
+            let batch = seg.load().unwrap();
             let mut vm = Vm::new();
             vm.execute(&batch, &program_load_map_emit).unwrap();
             black_box(vm.take_output());

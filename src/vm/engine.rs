@@ -18,10 +18,11 @@
 //! over two already-materialized tables, and [`semi_filter`].
 
 use super::batch::{
-    compare_for_order, run_parallel, run_parallel_top_n, AggPart, Batch, Opcode, Program, Result,
-    Segment, TopN, Value, Vm, VmError,
+    compare_for_order, run_parallel, run_parallel_top_n, AggPart, Batch, JoinTables, Opcode,
+    Program, Result, Segment, TopN, Value, Vm, VmError,
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// A [`Segment`] over an already-materialized [`Batch`] -- for the join/
 /// semi-join/window paths, which build one in-memory table and then run
@@ -29,8 +30,8 @@ use std::collections::{HashMap, HashSet};
 pub struct InMemorySegment(pub Batch);
 
 impl Segment for InMemorySegment {
-    fn load(&self) -> Batch {
-        self.0.clone()
+    fn load(&self) -> Result<Batch> {
+        Ok(self.0.clone())
     }
 }
 
@@ -127,7 +128,7 @@ fn bounded_scan<S: Segment>(
         if rows.len() >= limit {
             break;
         }
-        let batch = segment.load();
+        let batch = segment.load()?;
         let mut vm = Vm::new();
         vm.execute(&batch, body)?;
         rows.extend(vm.take_output());
@@ -219,8 +220,20 @@ fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) -> Result<(
     for (i, part) in parts.iter().enumerate() {
         match part {
             AggPart::GroupKey => {}
-            AggPart::Sum | AggPart::Count => {
+            AggPart::Sum => {
                 into[i] = Value::Float(partial_f64(&into[i])? + partial_f64(&from[i])?);
+            }
+            // A merged COUNT stays an integer, as a single segment's does
+            // (#272): before, it came back as `Float`, so the *type* of
+            // `COUNT(*)` depended on how many segments the scan had.
+            AggPart::Count => {
+                let total = partial_i64(&into[i])?
+                    .checked_add(partial_i64(&from[i])?)
+                    .ok_or_else(|| VmError::MalformedProgram {
+                        opcode: "Combine",
+                        reason: "partial COUNT overflowed i64".to_string(),
+                    })?;
+                into[i] = Value::Int(total);
             }
             AggPart::Min => {
                 if let (Some(a), Some(b)) = (into[i].as_f64(), from[i].as_f64()) {
@@ -240,6 +253,19 @@ fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) -> Result<(
         }
     }
     Ok(())
+}
+
+/// A partial COUNT slot as an integer. NULL is the additive identity (a
+/// segment that saw no rows); anything else non-integer is a planner bug.
+fn partial_i64(v: &Value) -> Result<i64> {
+    match v {
+        Value::Null => Ok(0),
+        Value::Int(n) => Ok(*n),
+        other => Err(VmError::MalformedProgram {
+            opcode: "Combine",
+            reason: format!("partial COUNT slot holds {other:?}, not an integer"),
+        }),
+    }
 }
 
 /// A partial SUM/COUNT/AVG slot as a number. NULL is the additive identity
@@ -310,29 +336,80 @@ pub struct JoinProgram {
 /// joined batch (left columns then right payload), and run `body` over it
 /// as a single in-memory segment via [`run`].
 pub fn run_join(left: &Batch, right: &Batch, plan: &JoinProgram) -> Result<Vec<Vec<Value>>> {
+    run_join_segments(vec![InMemorySegment(left.clone())], right, plan)
+}
+
+/// [`run_join`] with the probe (left) side as segments (#272): the build
+/// side runs once, then `probe ++ body` runs per left segment through the
+/// same morsel-driven [`run`] every single-table query uses -- parallel
+/// across segments, with the trailing `Combine`/`Sort`/`Limit` merging the
+/// per-segment aggregates. Nothing materializes the joined table: each
+/// [`JoinedSegment`] hands its probe registers straight to the body as a
+/// [`Batch`] (moved, not copied).
+///
+/// Takes `left` by value so a segment can be wrapped without a borrow
+/// (the qualified subset forbids the struct lifetime that would need).
+pub fn run_join_segments<S: Segment>(
+    left: Vec<S>,
+    right: &Batch,
+    plan: &JoinProgram,
+) -> Result<Vec<Vec<Value>>> {
     let build: Vec<Opcode> = plan.build.opcodes().cloned().collect();
-    let probe: Vec<Opcode> = plan.probe.opcodes().cloned().collect();
+    let mut builder = Vm::new();
+    builder.execute(right, &build)?;
+    let tables = builder.join_tables();
 
-    let mut vm = Vm::new();
-    vm.execute(right, &build)?;
-    vm.clear_registers();
-    vm.execute(left, &probe)?;
-
-    let num_rows = vm.register(0)?.len();
-    let mut joined = Batch::new(num_rows);
-    for (reg, name) in plan.left_columns.iter().enumerate() {
-        joined
-            .columns
-            .insert(name.clone(), vm.register(reg)?.to_vec());
-    }
-    for (name, &reg) in plan.right_columns.iter().zip(&plan.payload_dst) {
-        joined
-            .columns
-            .insert(name.clone(), vm.register(reg)?.to_vec());
-    }
-
-    let segments = [InMemorySegment(joined)];
+    let shape = Arc::new(JoinShape {
+        probe: plan.probe.opcodes().cloned().collect(),
+        left_columns: plan.left_columns.clone(),
+        right_columns: plan.right_columns.clone(),
+        payload_dst: plan.payload_dst.clone(),
+    });
+    let segments: Vec<JoinedSegment<S>> = left
+        .into_iter()
+        .map(|segment| JoinedSegment {
+            left: segment,
+            tables: tables.clone(),
+            shape: Arc::clone(&shape),
+        })
+        .collect();
     run(&segments, &plan.body)
+}
+
+/// The per-plan, read-only part every [`JoinedSegment`] of one join shares.
+struct JoinShape {
+    probe: Vec<Opcode>,
+    left_columns: Vec<String>,
+    right_columns: Vec<String>,
+    payload_dst: Vec<usize>,
+}
+
+/// A left segment plus the already-built join table: [`Segment::load`]
+/// loads the left batch, probes it, and returns the joined batch for the
+/// body -- the join happens inside the load, per segment, on whichever
+/// worker thread [`run_parallel`] hands it to.
+struct JoinedSegment<S: Segment> {
+    left: S,
+    tables: JoinTables,
+    shape: Arc<JoinShape>,
+}
+
+impl<S: Segment> Segment for JoinedSegment<S> {
+    fn load(&self) -> Result<Batch> {
+        let batch = self.left.load()?;
+        let mut vm = Vm::with_join_tables(self.tables.clone());
+        vm.execute(&batch, &self.shape.probe)?;
+
+        let num_rows = vm.register(0)?.len();
+        let mut joined = Batch::new(num_rows);
+        for (reg, name) in self.shape.left_columns.iter().enumerate() {
+            joined.columns.insert(name.clone(), vm.take_register(reg)?);
+        }
+        for (name, &reg) in self.shape.right_columns.iter().zip(&self.shape.payload_dst) {
+            joined.columns.insert(name.clone(), vm.take_register(reg)?);
+        }
+        Ok(joined)
+    }
 }
 
 /// Keep only the rows of `batch` whose `key_column` value (stringified)
@@ -455,7 +532,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_107__v1_distinct_disqualifies_bounded_scan() {
+    fn mcdc__engine_108__v1_distinct_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -472,7 +549,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_107__v2_non_empty_agg_parts_disqualifies_bounded_scan() {
+    fn mcdc__engine_108__v2_non_empty_agg_parts_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -489,7 +566,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_107__v3_filter_in_body_disqualifies_bounded_scan() {
+    fn mcdc__engine_108__v3_filter_in_body_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -506,7 +583,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_107__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan() {
+    fn mcdc__engine_108__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -527,9 +604,9 @@ mod tests {
         static LOADS: AtomicUsize = AtomicUsize::new(0);
         struct Counting(Batch);
         impl Segment for Counting {
-            fn load(&self) -> Batch {
+            fn load(&self) -> Result<Batch> {
                 LOADS.fetch_add(1, Ordering::SeqCst);
-                self.0.clone()
+                Ok(self.0.clone())
             }
         }
         let mk = |n: i64| -> Counting {
