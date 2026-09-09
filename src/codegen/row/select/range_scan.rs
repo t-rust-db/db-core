@@ -419,6 +419,26 @@ where
 /// `row_skip` on a miss, then the caller's own per-row body). Returns
 /// `Ok(false)` — `em`/`reg` untouched — for any unrecognized shape,
 /// exactly like its `SELECT` counterparts.
+/// Which index [`try_compile_range_row_seek`] would walk for `where_expr`
+/// (position in `schema.indexes`), or `None` when it returns `Ok(false)`
+/// -- the eligibility half of that row seek, shared with
+/// [`super::eqp::explain_query_plan`] (#282) so an aggregate/`GROUP BY`
+/// plan reports `SEARCH` exactly when #279's seek compiles. Narrower than
+/// [`range_seek_index_position`] on purpose: the row seek recognizes only
+/// `BETWEEN` and a forward comparison, not `LIKE`-prefix or `IN`.
+pub(super) fn range_row_seek_index_position(
+    where_expr: &Expr,
+    schema: &TableSchema,
+) -> Option<usize> {
+    let recognized = matches!(&where_expr.kind, ExprKind::Between { negated: false, .. })
+        || as_forward_comparison(where_expr).is_some();
+    if recognized {
+        range_seek_index_position(where_expr, schema)
+    } else {
+        None
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_compile_range_row_seek<F>(
     em: &mut Emitter,
@@ -1405,7 +1425,7 @@ mod mcdc_vectors {
 
     // --- range_scan_445: row-seek (UPDATE) BETWEEN operands supported -----
     #[test]
-    fn mcdc__range_scan_446__v1_update_between_literals_seeks() {
+    fn mcdc__range_scan_466__v1_update_between_literals_seeks() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1414,7 +1434,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_446__v2_update_computed_lower_bound_scans() {
+    fn mcdc__range_scan_466__v2_update_computed_lower_bound_scans() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 1 + 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1423,7 +1443,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_446__v3_update_computed_upper_bound_scans() {
+    fn mcdc__range_scan_466__v3_update_computed_upper_bound_scans() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 1 AND 5 + 1",
             &schema("INTEGER", true, false),
@@ -1433,7 +1453,7 @@ mod mcdc_vectors {
 
     // --- range_scan_455: row-seek (UPDATE) BETWEEN affinity ---------------
     #[test]
-    fn mcdc__range_scan_456__v1_update_bounds_match_affinity_seeks() {
+    fn mcdc__range_scan_476__v1_update_bounds_match_affinity_seeks() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1442,7 +1462,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_456__v2_update_text_lower_bound_scans() {
+    fn mcdc__range_scan_476__v2_update_text_lower_bound_scans() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 'x' AND 5",
             &schema("INTEGER", true, false),
@@ -1451,7 +1471,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_456__v3_update_text_upper_bound_scans() {
+    fn mcdc__range_scan_476__v3_update_text_upper_bound_scans() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 1 AND 'x'",
             &schema("INTEGER", true, false),
@@ -1461,7 +1481,7 @@ mod mcdc_vectors {
 
     // --- range_scan_586: LIKE prefix contains wildcard / single-char ------
     #[test]
-    fn mcdc__range_scan_587__v1_plain_prefix_seeks() {
+    fn mcdc__range_scan_607__v1_plain_prefix_seeks() {
         let p = compile(
             "SELECT b FROM t WHERE a LIKE 'ab%'",
             &schema("TEXT", true, false),
@@ -1470,7 +1490,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_587__v2_prefix_with_inner_percent_scans() {
+    fn mcdc__range_scan_607__v2_prefix_with_inner_percent_scans() {
         let p = compile(
             "SELECT b FROM t WHERE a LIKE 'a%b%'",
             &schema("TEXT", true, false),
@@ -1479,7 +1499,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_587__v3_prefix_with_underscore_scans() {
+    fn mcdc__range_scan_607__v3_prefix_with_underscore_scans() {
         let p = compile(
             "SELECT b FROM t WHERE a LIKE 'a_b%'",
             &schema("TEXT", true, false),
@@ -1489,7 +1509,7 @@ mod mcdc_vectors {
 
     // --- range_scan_589: `!glob && prefix has backslash` ------------------
     #[test]
-    fn mcdc__range_scan_590__v1_like_with_backslash_in_prefix_scans() {
+    fn mcdc__range_scan_610__v1_like_with_backslash_in_prefix_scans() {
         let p = compile(
             "SELECT b FROM t WHERE a LIKE 'a\\b%'",
             &schema("TEXT", true, false),
@@ -1498,7 +1518,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_590__v2_glob_with_backslash_in_prefix_seeks() {
+    fn mcdc__range_scan_610__v2_glob_with_backslash_in_prefix_seeks() {
         let p = compile(
             "SELECT b FROM t WHERE a GLOB 'a\\b*'",
             &schema("TEXT", true, false),
@@ -1507,7 +1527,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_590__v3_like_without_backslash_seeks() {
+    fn mcdc__range_scan_610__v3_like_without_backslash_seeks() {
         let p = compile(
             "SELECT b FROM t WHERE a LIKE 'ab%'",
             &schema("TEXT", true, false),
@@ -1517,21 +1537,21 @@ mod mcdc_vectors {
 
     // --- range_scan_1013: range_seek_index_position BETWEEN operands ------
     #[test]
-    fn mcdc__range_scan_1014__v1_literal_bounds_pick_the_index() {
+    fn mcdc__range_scan_1034__v1_literal_bounds_pick_the_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 5");
         assert_eq!(range_seek_index_position(&w, &s), Some(0));
     }
 
     #[test]
-    fn mcdc__range_scan_1014__v2_computed_lower_bound_picks_no_index() {
+    fn mcdc__range_scan_1034__v2_computed_lower_bound_picks_no_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 + 1 AND 5");
         assert_eq!(range_seek_index_position(&w, &s), None);
     }
 
     #[test]
-    fn mcdc__range_scan_1014__v3_computed_upper_bound_picks_no_index() {
+    fn mcdc__range_scan_1034__v3_computed_upper_bound_picks_no_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 5 + 1");
         assert_eq!(range_seek_index_position(&w, &s), None);
@@ -1539,21 +1559,21 @@ mod mcdc_vectors {
 
     // --- range_scan_1018: range_seek_index_position BETWEEN affinity ------
     #[test]
-    fn mcdc__range_scan_1019__v1_matching_affinity_picks_the_index() {
+    fn mcdc__range_scan_1039__v1_matching_affinity_picks_the_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 5");
         assert_eq!(range_seek_index_position(&w, &s), Some(0));
     }
 
     #[test]
-    fn mcdc__range_scan_1019__v2_text_lower_bound_picks_no_index() {
+    fn mcdc__range_scan_1039__v2_text_lower_bound_picks_no_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 'x' AND 5");
         assert_eq!(range_seek_index_position(&w, &s), None);
     }
 
     #[test]
-    fn mcdc__range_scan_1019__v3_text_upper_bound_picks_no_index() {
+    fn mcdc__range_scan_1039__v3_text_upper_bound_picks_no_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 'x'");
         assert_eq!(range_seek_index_position(&w, &s), None);
@@ -1561,14 +1581,14 @@ mod mcdc_vectors {
 
     // --- range_scan_1048: range_seek_index_position IN list ---------------
     #[test]
-    fn mcdc__range_scan_1049__v1_non_empty_literal_list_picks_the_index() {
+    fn mcdc__range_scan_1069__v1_non_empty_literal_list_picks_the_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a IN (1, 2)");
         assert_eq!(range_seek_index_position(&w, &s), Some(0));
     }
 
     #[test]
-    fn mcdc__range_scan_1049__v2_empty_list_picks_no_index() {
+    fn mcdc__range_scan_1069__v2_empty_list_picks_no_index() {
         let s = schema("INTEGER", true, false);
         let w = Expr {
             kind: ExprKind::In {
@@ -1582,7 +1602,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1049__v3_computed_list_member_picks_no_index() {
+    fn mcdc__range_scan_1069__v3_computed_list_member_picks_no_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a IN (1, 1 + 1)");
         assert_eq!(range_seek_index_position(&w, &s), None);
@@ -1590,7 +1610,7 @@ mod mcdc_vectors {
 
     // --- range_scan_1099: EQP BETWEEN operands supported ------------------
     #[test]
-    fn mcdc__range_scan_1100__v1_eqp_reports_index_search_for_literal_bounds() {
+    fn mcdc__range_scan_1120__v1_eqp_reports_index_search_for_literal_bounds() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1599,7 +1619,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1100__v2_eqp_reports_scan_for_computed_lower_bound() {
+    fn mcdc__range_scan_1120__v2_eqp_reports_scan_for_computed_lower_bound() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 1 + 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1608,7 +1628,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1100__v3_eqp_reports_scan_for_computed_upper_bound() {
+    fn mcdc__range_scan_1120__v3_eqp_reports_scan_for_computed_upper_bound() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 5 + 1",
             &schema("INTEGER", true, false),
@@ -1618,7 +1638,7 @@ mod mcdc_vectors {
 
     // --- range_scan_1105: EQP BETWEEN affinity ----------------------------
     #[test]
-    fn mcdc__range_scan_1106__v1_eqp_reports_index_search_when_affinity_matches() {
+    fn mcdc__range_scan_1126__v1_eqp_reports_index_search_when_affinity_matches() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1627,7 +1647,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1106__v2_eqp_reports_scan_for_text_lower_bound() {
+    fn mcdc__range_scan_1126__v2_eqp_reports_scan_for_text_lower_bound() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 'x' AND 5",
             &schema("INTEGER", true, false),
@@ -1636,7 +1656,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1106__v3_eqp_reports_scan_for_text_upper_bound() {
+    fn mcdc__range_scan_1126__v3_eqp_reports_scan_for_text_upper_bound() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 'x'",
             &schema("INTEGER", true, false),
@@ -1646,7 +1666,7 @@ mod mcdc_vectors {
 
     // --- range_scan_1142: EQP IN list -------------------------------------
     #[test]
-    fn mcdc__range_scan_1143__v1_eqp_reports_index_search_for_literal_list() {
+    fn mcdc__range_scan_1163__v1_eqp_reports_index_search_for_literal_list() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a IN (1, 2)",
             &schema("INTEGER", true, false),
@@ -1655,7 +1675,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1143__v2_eqp_reports_scan_for_empty_list() {
+    fn mcdc__range_scan_1163__v2_eqp_reports_scan_for_empty_list() {
         let s = schema("INTEGER", true, false);
         let mut sel = select("SELECT b FROM t WHERE a IN (1)");
         sel.where_clause = Some(Expr {
@@ -1678,7 +1698,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1143__v3_eqp_reports_scan_for_computed_list_member() {
+    fn mcdc__range_scan_1163__v3_eqp_reports_scan_for_computed_list_member() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a IN (1, 1 + 1)",
             &schema("INTEGER", true, false),

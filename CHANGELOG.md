@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.76.8] - 2026-09-09
+
+### Changed
+
+- **Aggregate scans use an index range seek instead of `Rewind`** (#279). `compile_grouped_scan` and `try_compile_direct_agg_scan` (the implicit whole-table-group fast path) full-scanned the table even when `WHERE` was a single range/`BETWEEN` predicate on an indexed column. Both now try `try_compile_range_row_seek` (already used by `UPDATE`/`DELETE`) first -- `SeekIndexGE`/`IdxCompareGT`/`IdxNext` on the index, `IdxRowid` + `SeekRowid` to the table row -- and fall back to the existing `Rewind` scan for any other `WHERE` shape. The covering case (never opening the table cursor) is a follow-up. `EXPLAIN QUERY PLAN` reports the seek (`SEARCH t USING INDEX ix (col>?)`) for the aggregate and `GROUP BY` arms via the shared `range_row_seek_index_position` eligibility check (#282).
+
 ## [0.76.7] - 2026-09-09
 
 ### Fixed

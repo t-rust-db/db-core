@@ -6,6 +6,7 @@ mod join;
 
 use super::limit_scan::compile_limit_setup;
 use super::order_by::{order_by_target_for_expr, OrderByPlan, OrderByTarget};
+use super::range_scan::try_compile_range_row_seek;
 use super::*;
 use crate::codegen::row::index_maintenance::{valid_index_root_page, valid_table_root_page};
 use crate::codegen::row::{key_index, record_width};
@@ -436,61 +437,107 @@ where
         })
         .collect();
 
-    let scan_rewind = em.emit(Instruction::new(Opcode::Rewind, cursors.table, 0, 0));
     let tail_label = em.new_label();
-    em.patch_p2(scan_rewind, tail_label);
-    let scan_loop = em.new_label();
-    em.place(scan_loop);
 
-    let scan_skip = em.new_label();
-    if let Some(where_expr) = &select.where_clause {
-        compile_cond(
+    // #279: accumulating a matched row is identical whether it was
+    // reached via a full `Rewind`/`Next` scan or an index range seek —
+    // only how a matching row is *found* differs, so both paths below
+    // share this per-row body.
+    let accumulate_row = |em: &mut Emitter, reg: &mut RegAlloc| -> Result<(), CodegenError> {
+        let boundary_label = em.new_label();
+        let not_boundary_label = em.new_label();
+        let first_row_check = em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
+        em.patch_p2(first_row_check, boundary_label);
+        let goto_not_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+        em.patch_p2(goto_not_boundary, not_boundary_label);
+
+        em.place(boundary_label);
+        em.emit(Instruction::new(Opcode::Integer, 1, have_group_reg, 0));
+        // This table's first matching row: fold with `reset: true` so a
+        // freshly-numbered slot starts a fresh accumulator — see
+        // `compile_grouped_scan`'s identical comment.
+        for agg in &agg_slots {
+            emit_agg_step(em, reg, &table_scope, agg, true)?;
+        }
+        // The single implicit group's "arbitrary row" for any plain
+        // (non-aggregate) result/`HAVING` column is its first matching
+        // row, matching `compile_grouped_scan`'s choice — snapshotted
+        // straight off the real table cursor (not `read_row_columns_into`,
+        // which is only safe against the pass-2 pseudo cursor's
+        // already-materialized record; a rowid-alias column here still
+        // needs `Opcode::Rowid` against the live table cursor).
+        for (idx, &r) in snapshot_regs.iter().enumerate() {
+            emit_column_read(em, schema, cursors.table, idx, r)?;
+        }
+        let after_accumulate = em.new_label();
+        let goto_after_accumulate = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+        em.patch_p2(goto_after_accumulate, after_accumulate);
+
+        em.place(not_boundary_label);
+        for agg in &agg_slots {
+            emit_agg_step(em, reg, &table_scope, agg, false)?;
+        }
+
+        em.place(after_accumulate);
+        Ok(())
+    };
+
+    // #279: no `Sorter` runs on this branch, so — matching
+    // `try_compile_index_ordered_group_by`'s own convention — reuse the
+    // sort cursor number for the range seek's index cursor.
+    let range_index_cursor = cursors.sort;
+    let used_range_seek = match &select.where_clause {
+        Some(where_expr) => try_compile_range_row_seek(
             em,
             reg,
-            &table_scope,
             where_expr,
-            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(scan_skip)),
-        )?;
-    }
+            schema,
+            &table_scope,
+            range_index_cursor,
+            tail_label,
+            &mut |em, reg, index_cursor, row_skip| {
+                let rowid_reg = reg.alloc();
+                em.emit(Instruction::new(
+                    Opcode::IdxRowid,
+                    index_cursor,
+                    rowid_reg,
+                    0,
+                ));
+                let seek_addr = em.emit(Instruction::new(
+                    Opcode::SeekRowid,
+                    cursors.table,
+                    0,
+                    rowid_reg,
+                ));
+                em.patch_p2(seek_addr, row_skip);
+                accumulate_row(em, reg)
+            },
+        )?,
+        None => false,
+    };
 
-    let boundary_label = em.new_label();
-    let not_boundary_label = em.new_label();
-    let first_row_check = em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
-    em.patch_p2(first_row_check, boundary_label);
-    let goto_not_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-    em.patch_p2(goto_not_boundary, not_boundary_label);
+    if !used_range_seek {
+        let scan_rewind = em.emit(Instruction::new(Opcode::Rewind, cursors.table, 0, 0));
+        em.patch_p2(scan_rewind, tail_label);
+        let scan_loop = em.new_label();
+        em.place(scan_loop);
 
-    em.place(boundary_label);
-    em.emit(Instruction::new(Opcode::Integer, 1, have_group_reg, 0));
-    // This table's first matching row: fold with `reset: true` so a
-    // freshly-numbered slot starts a fresh accumulator — see
-    // `compile_grouped_scan`'s identical comment.
-    for agg in &agg_slots {
-        emit_agg_step(em, reg, &table_scope, agg, true)?;
-    }
-    // The single implicit group's "arbitrary row" for any plain
-    // (non-aggregate) result/`HAVING` column is its first matching
-    // row, matching `compile_grouped_scan`'s choice — snapshotted
-    // straight off the real table cursor (not `read_row_columns_into`,
-    // which is only safe against the pass-2 pseudo cursor's
-    // already-materialized record; a rowid-alias column here still
-    // needs `Opcode::Rowid` against the live table cursor).
-    for (idx, &r) in snapshot_regs.iter().enumerate() {
-        emit_column_read(em, schema, cursors.table, idx, r)?;
-    }
-    let after_accumulate = em.new_label();
-    let goto_after_accumulate = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-    em.patch_p2(goto_after_accumulate, after_accumulate);
+        let scan_skip = em.new_label();
+        if let Some(where_expr) = &select.where_clause {
+            compile_cond(
+                em,
+                reg,
+                &table_scope,
+                where_expr,
+                CondTargets::null_is_false(Target::Fallthrough, Target::Jump(scan_skip)),
+            )?;
+        }
+        accumulate_row(em, reg)?;
 
-    em.place(not_boundary_label);
-    for agg in &agg_slots {
-        emit_agg_step(em, reg, &table_scope, agg, false)?;
+        em.place(scan_skip);
+        let scan_next = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
+        em.patch_p2(scan_next, scan_loop);
     }
-
-    em.place(after_accumulate);
-    em.place(scan_skip);
-    let scan_next = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
-    em.patch_p2(scan_next, scan_loop);
 
     // Tail flush: always exactly one row (#287), whether or not any
     // row ever matched — `have_group_reg`/`snapshot_regs`' NULL
@@ -878,28 +925,21 @@ where
         P4::None,
     ));
 
-    let scan_rewind = em.emit(Instruction::new(Opcode::Rewind, cursors.table, 0, 0));
     let sort_step = em.new_label();
-    em.patch_p2(scan_rewind, sort_step);
-    let scan_loop = em.new_label();
-    em.place(scan_loop);
 
-    let scan_skip = em.new_label();
-    if let Some(where_expr) = &select.where_clause {
-        compile_cond(
-            em,
-            reg,
-            &table_scope,
-            where_expr,
-            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(scan_skip)),
-        )?;
-    }
-    let first = compile_row_values_compact(em, reg, schema, &needed_order, cursors.table)?;
-
+    // #279: buffering a row is identical whether it was reached via a
+    // full `Rewind`/`Next` scan or an index range seek — only how a
+    // matching row is *found* differs. `sort_keys` is rebuilt by this
+    // closure on whichever path actually runs (exactly one of the two
+    // branches below), so it's still correct for the single
+    // `sorter_open_addr` patch after either one.
     let mut sort_keys = Vec::with_capacity(group_targets.len());
-    for (expr, target) in select.group_by.iter().zip(&group_targets) {
-        let index =
-            match target {
+    let mut emit_pass1_row = |em: &mut Emitter, reg: &mut RegAlloc| -> Result<(), CodegenError> {
+        let first = compile_row_values_compact(em, reg, schema, &needed_order, cursors.table)?;
+
+        sort_keys.clear();
+        for (expr, target) in select.group_by.iter().zip(&group_targets) {
+            let index = match target {
                 // Always resolves: `needed_columns` includes every column
                 // `select.group_by` references (`columns_needed_for_projection`),
                 // so `idx` always has a compacted position.
@@ -915,37 +955,95 @@ where
                     key_index(r, first)?
                 }
             };
-        sort_keys.push(SortKeyColumn {
-            index,
-            descending: false,
-            collation: collation_of(expr)
-                .or_else(|| expr_collation(&table_scope, expr))
-                .unwrap_or(Collation::Binary),
-            nulls_first: true,
-        });
+            sort_keys.push(SortKeyColumn {
+                index,
+                descending: false,
+                collation: collation_of(expr)
+                    .or_else(|| expr_collation(&table_scope, expr))
+                    .unwrap_or(Collation::Binary),
+                nulls_first: true,
+            });
+        }
+
+        let count = record_width(reg.peek(), first)?;
+        let record_reg = reg.alloc();
+        em.emit(Instruction::new(
+            Opcode::MakeRecord,
+            first,
+            i32::try_from(count).unwrap_or(0),
+            record_reg,
+        ));
+        // `first..first+count` (this row's `MakeRecord` source run) is
+        // still live here — `record_reg` was allocated after it — so
+        // `SorterInsert` can read its own sort key's values straight out
+        // of those registers instead of decoding them back out of the
+        // blob it's also handed; see `crate::vm::row::sorter`'s module
+        // doc for the `p3`/`p5` contract.
+        let mut sorter_insert =
+            Instruction::new(Opcode::SorterInsert, cursors.sort, record_reg, first);
+        sorter_insert.p5 = 1;
+        em.emit(sorter_insert);
+        Ok(())
+    };
+
+    // #279: `cursors.sort` is the real `Sorter` here (opened just above),
+    // so — unlike `try_compile_direct_agg_scan`'s reuse of it — pick a
+    // cursor slot this function never otherwise touches for the range
+    // seek's own index cursor.
+    let range_index_cursor = cursors.distinct;
+    let used_range_seek = match &select.where_clause {
+        Some(where_expr) => try_compile_range_row_seek(
+            em,
+            reg,
+            where_expr,
+            schema,
+            &table_scope,
+            range_index_cursor,
+            sort_step,
+            &mut |em, reg, index_cursor, row_skip| {
+                let rowid_reg = reg.alloc();
+                em.emit(Instruction::new(
+                    Opcode::IdxRowid,
+                    index_cursor,
+                    rowid_reg,
+                    0,
+                ));
+                let seek_addr = em.emit(Instruction::new(
+                    Opcode::SeekRowid,
+                    cursors.table,
+                    0,
+                    rowid_reg,
+                ));
+                em.patch_p2(seek_addr, row_skip);
+                emit_pass1_row(em, reg)
+            },
+        )?,
+        None => false,
+    };
+
+    if !used_range_seek {
+        let scan_rewind = em.emit(Instruction::new(Opcode::Rewind, cursors.table, 0, 0));
+        em.patch_p2(scan_rewind, sort_step);
+        let scan_loop = em.new_label();
+        em.place(scan_loop);
+
+        let scan_skip = em.new_label();
+        if let Some(where_expr) = &select.where_clause {
+            compile_cond(
+                em,
+                reg,
+                &table_scope,
+                where_expr,
+                CondTargets::null_is_false(Target::Fallthrough, Target::Jump(scan_skip)),
+            )?;
+        }
+        emit_pass1_row(em, reg)?;
+
+        em.place(scan_skip);
+        let scan_next = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
+        em.patch_p2(scan_next, scan_loop);
     }
     em.patch_p4(sorter_open_addr, P4::SortKey(sort_keys));
-
-    let count = record_width(reg.peek(), first)?;
-    let record_reg = reg.alloc();
-    em.emit(Instruction::new(
-        Opcode::MakeRecord,
-        first,
-        i32::try_from(count).unwrap_or(0),
-        record_reg,
-    ));
-    // `first..first+count` (this row's `MakeRecord` source run) is still
-    // live here — `record_reg` was allocated after it — so `SorterInsert`
-    // can read its own sort key's values straight out of those registers
-    // instead of decoding them back out of the blob it's also handed;
-    // see `crate::vm::row::sorter`'s module doc for the `p3`/`p5` contract.
-    let mut sorter_insert = Instruction::new(Opcode::SorterInsert, cursors.sort, record_reg, first);
-    sorter_insert.p5 = 1;
-    em.emit(sorter_insert);
-
-    em.place(scan_skip);
-    let scan_next = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
-    em.patch_p2(scan_next, scan_loop);
 
     // Pass 2: walk the sorted buffer, grouping and aggregating.
     em.place(sort_step);
@@ -1566,18 +1664,66 @@ mod mcdc_vectors {
     }
 
     // ---------------------------------------------------------------------
-    // aggregate_51 -- `try_compile_index_only_count`'s clause guard:
+    // #279 -- `compile_grouped_scan`/`try_compile_direct_agg_scan` now try
+    // an index range seek (`SeekIndexGE`/`IdxCompareGT`/`IdxNext`) before
+    // falling back to a full `Rewind` on a range/BETWEEN `WHERE` against
+    // an indexed column.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn range_seek_279_implicit_group_count_over_indexed_range_seeks() {
+        let p = ok("SELECT count(*) FROM t WHERE a > 5", &[t_indexed_a()]);
+        assert!(has(&p, Opcode::SeekIndexGE));
+        assert!(!has(&p, Opcode::Rewind));
+    }
+
+    #[test]
+    fn range_seek_279_implicit_group_sum_over_indexed_between_seeks() {
+        let p = ok(
+            "SELECT sum(b) FROM t WHERE a BETWEEN 1 AND 10",
+            &[t_indexed_a()],
+        );
+        assert!(has(&p, Opcode::SeekIndexGE));
+        assert!(has(&p, Opcode::IdxCompareGT));
+        assert!(!has(&p, Opcode::Rewind));
+    }
+
+    #[test]
+    fn range_seek_279_explicit_group_by_over_indexed_range_seeks() {
+        let p = ok(
+            "SELECT a, count(*) FROM t WHERE a > 5 GROUP BY a",
+            &[t_indexed_a()],
+        );
+        assert!(has(&p, Opcode::SeekIndexGE));
+        assert!(!has(&p, Opcode::Rewind));
+    }
+
+    #[test]
+    fn range_seek_279_non_range_where_still_falls_back_to_a_scan() {
+        let p = ok("SELECT count(*) FROM t WHERE b > 5", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::SeekIndexGE));
+        assert!(has(&p, Opcode::Rewind));
+    }
+
+    #[test]
+    fn range_seek_279_unindexed_range_column_falls_back_to_a_scan() {
+        let p = ok("SELECT count(*) FROM t WHERE a > (5 + 1)", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::SeekIndexGE));
+        assert!(has(&p, Opcode::Rewind));
+    }
+
+    // ---------------------------------------------------------------------
+    // aggregate_54 -- `try_compile_index_only_count`'s clause guard:
     // `having.is_some() || limit.is_some() || !order_by.is_empty()`.
     // Observable: the fast path emits `Opcode::Count`; the fallback scans.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_46__v1_bare_count_star_takes_the_count_fast_path() {
+    fn mcdc__aggregate_47__v1_bare_count_star_takes_the_count_fast_path() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_46__v2_having_falls_back_to_a_scan() {
+    fn mcdc__aggregate_47__v2_having_falls_back_to_a_scan() {
         let p = ok(
             "SELECT count(*) FROM t HAVING count(*) > 0",
             &[t_indexed_a()],
@@ -1586,7 +1732,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_46__v3_limit_falls_back_to_a_scan() {
+    fn mcdc__aggregate_47__v3_limit_falls_back_to_a_scan() {
         let p = ok("SELECT count(*) FROM t LIMIT 1", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
@@ -1595,7 +1741,7 @@ mod mcdc_vectors {
     /// with an aggregate (no GROUP BY)" before this decision is reached, so
     /// the fast path is never taken -- observed as the rejection itself.
     #[test]
-    fn mcdc__aggregate_46__v4_order_by_never_reaches_the_count_fast_path() {
+    fn mcdc__aggregate_47__v4_order_by_never_reaches_the_count_fast_path() {
         let e = err_text("SELECT count(*) FROM t ORDER BY 1", &[t_indexed_a()]);
         assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
     }
@@ -1605,25 +1751,25 @@ mod mcdc_vectors {
     // `*distinct || !name == count || !args == Star`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_61__v1_count_star_matches_the_shape() {
+    fn mcdc__aggregate_62__v1_count_star_matches_the_shape() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_61__v2_count_distinct_is_not_index_only() {
+    fn mcdc__aggregate_62__v2_count_distinct_is_not_index_only() {
         let p = ok("SELECT count(DISTINCT a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_61__v3_other_function_name_is_not_a_count() {
+    fn mcdc__aggregate_62__v3_other_function_name_is_not_a_count() {
         let p = ok("SELECT max(a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
 
     #[test]
-    fn mcdc__aggregate_61__v4_count_of_a_column_is_not_count_star() {
+    fn mcdc__aggregate_62__v4_count_of_a_column_is_not_count_star() {
         let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::Count));
     }
@@ -1634,25 +1780,25 @@ mod mcdc_vectors {
     // only the index (root 5), never opening the table (root 2).
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_239__v1_bare_sum_reads_only_the_index() {
+    fn mcdc__aggregate_240__v1_bare_sum_reads_only_the_index() {
         let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
         assert!(index_only(&p), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_239__v2_where_opens_the_table() {
+    fn mcdc__aggregate_240__v2_where_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t WHERE b > 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_239__v3_having_opens_the_table() {
+    fn mcdc__aggregate_240__v3_having_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t HAVING sum(a) > 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_239__v4_limit_opens_the_table() {
+    fn mcdc__aggregate_240__v4_limit_opens_the_table() {
         let p = ok("SELECT sum(a) FROM t LIMIT 1", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
@@ -1660,7 +1806,7 @@ mod mcdc_vectors {
     /// `ORDER BY` with an ungrouped aggregate is rejected upstream by
     /// `compile_select_scan`; the fast path is never consulted.
     #[test]
-    fn mcdc__aggregate_239__v5_order_by_never_reaches_the_sum_fast_path() {
+    fn mcdc__aggregate_240__v5_order_by_never_reaches_the_sum_fast_path() {
         let e = err_text("SELECT sum(a) FROM t ORDER BY 1", &[t_indexed_a()]);
         assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
     }
@@ -1670,7 +1816,7 @@ mod mcdc_vectors {
     /// scanned (or index-walked in key order) and the aggregate accumulated
     /// per group rather than summed off the index alone.
     #[test]
-    fn mcdc__aggregate_239__v6_group_by_never_reaches_the_sum_fast_path() {
+    fn mcdc__aggregate_240__v6_group_by_never_reaches_the_sum_fast_path() {
         let p = ok("SELECT b, sum(a) FROM t GROUP BY b", &[t_indexed_a()]);
         assert!(opens(&p, 2), "{p:?}");
     }
@@ -1680,7 +1826,7 @@ mod mcdc_vectors {
     // `*distinct || !(name == sum || name == avg)`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_249__v1_plain_sum_is_index_only() {
+    fn mcdc__aggregate_250__v1_plain_sum_is_index_only() {
         let p = ok("SELECT sum(a) FROM t", &[t_indexed_a()]);
         assert!(index_only(&p), "{p:?}");
     }
@@ -1692,13 +1838,13 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_249__v2_count_is_neither_sum_nor_avg() {
+    fn mcdc__aggregate_250__v2_count_is_neither_sum_nor_avg() {
         let p = ok("SELECT count(a) FROM t", &[t_indexed_a()]);
         assert!(!index_only(&p), "{p:?}");
     }
 
     // ---------------------------------------------------------------------
-    // aggregate_1213 -- `group_by_index_ordering`'s
+    // aggregate_1311 -- `group_by_index_ordering`'s
     // `implicit_group || select.group_by.is_empty()`. Only reached from
     // `compile_select_scan`'s explicit-GROUP-BY branch (with
     // `implicit_group == false`) and from EQP (same), so `(false, false)` is
@@ -1707,7 +1853,7 @@ mod mcdc_vectors {
     // GROUP BY needs no `SorterOpen`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1213__v1_explicit_group_by_on_indexed_column_walks_the_index() {
+    fn mcdc__aggregate_1311__v1_explicit_group_by_on_indexed_column_walks_the_index() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && opens(&p, 5), "{p:?}");
     }
@@ -1715,7 +1861,7 @@ mod mcdc_vectors {
     /// `implicit_group == true` (an aggregate with no GROUP BY) never asks
     /// for index ordering: there is one group, nothing to order.
     #[test]
-    fn mcdc__aggregate_1213__v2_implicit_group_never_asks_for_index_ordering() {
+    fn mcdc__aggregate_1311__v2_implicit_group_never_asks_for_index_ordering() {
         let p = ok("SELECT count(*) FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen) && !opens(&p, 5), "{p:?}");
     }
@@ -1723,7 +1869,7 @@ mod mcdc_vectors {
     /// `group_by.is_empty()` with no aggregate is a plain scan; the grouped
     /// branch (and with it this decision) is skipped entirely.
     #[test]
-    fn mcdc__aggregate_1213__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
+    fn mcdc__aggregate_1311__v3_no_group_by_and_no_aggregate_is_a_plain_scan() {
         let p = ok("SELECT a FROM t", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
@@ -1733,13 +1879,13 @@ mod mcdc_vectors {
     // (same function): either disqualifies the index-ordered GROUP BY.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__aggregate_1219__v1_no_where_on_a_rowid_table_is_index_ordered() {
+    fn mcdc__aggregate_1317__v1_no_where_on_a_rowid_table_is_index_ordered() {
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
         assert!(!has(&p, Opcode::SorterOpen), "{p:?}");
     }
 
     #[test]
-    fn mcdc__aggregate_1219__v2_where_clause_needs_a_sorter() {
+    fn mcdc__aggregate_1317__v2_where_clause_needs_a_sorter() {
         let p = ok(
             "SELECT a, count(*) FROM t WHERE b > 0 GROUP BY a",
             &[t_indexed_a()],
@@ -1748,7 +1894,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__aggregate_1219__v3_without_rowid_table_needs_a_sorter() {
+    fn mcdc__aggregate_1317__v3_without_rowid_table_needs_a_sorter() {
         let mut schema = t_indexed_a();
         schema.without_rowid = true;
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[schema]);
