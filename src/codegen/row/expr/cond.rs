@@ -8,7 +8,8 @@ use crate::codegen::row::{
     p4_coll_seq, CodegenError, CondTargets, Emitter, Label, NullTarget, RegAlloc, Scope, Target,
 };
 use crate::parser::ast::{BinaryOp, Expr, ExprKind, UnaryOp};
-use crate::vm::row::{comparison_affinity, Affinity, Collation, Instruction, Opcode};
+use crate::value::Collation;
+use crate::vm::row::{comparison_affinity, Affinity, Instruction, Opcode};
 
 /// Resolves a bare `Expr::Column` name against a single schema; any
 /// other expression is a codegen error only when a caller specifically

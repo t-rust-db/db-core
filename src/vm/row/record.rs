@@ -10,7 +10,7 @@
 //! export (kept private here, an implementation detail of
 //! `decode_record`/`decode_column`).
 
-use super::value::{TextEncoding, Value};
+use crate::value::{TextEncoding, Value};
 use std::rc::Rc;
 
 /// Errors from decoding a record payload.

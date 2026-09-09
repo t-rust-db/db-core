@@ -41,7 +41,7 @@ use super::program::{Instruction, Opcode, Program, P4, SYNCHRONOUS_FULL, SYNCHRO
 use super::record::{decode_column_with, decode_record, encode_record, parse_header};
 use super::schema_storage::{SchemaStorage, SchemaStorageError};
 use super::transaction::Transaction;
-use super::value::{Collation, TextEncoding, Value};
+use crate::value::{Collation, TextEncoding, Value};
 
 /// Caps a single register index or range count -- a backstop against an
 /// adversarial/corrupt instruction driving an oversized allocation.

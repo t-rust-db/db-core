@@ -2,7 +2,7 @@
 //! declared type (<https://www.sqlite.org/datatype3.html> §3.1). Ported
 //! from sqlite-rs's `vdbe::affinity` (ADR 0008).
 
-use super::value::{format_real, Value};
+use crate::value::{format_real, Value};
 
 /// A column's storage-class preference, derived from its declared type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

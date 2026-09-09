@@ -14,7 +14,8 @@ use crate::codegen::row::select::{
 };
 use crate::codegen::row::{CondTargets, Emitter, NullTarget, RegAlloc, Scope, Target};
 use crate::parser::ast::{Expr, ResultColumn, Select};
-use crate::vm::row::{Collation, Instruction, Opcode, P4};
+use crate::value::Collation;
+use crate::vm::row::{Instruction, Opcode, P4};
 
 /// A subquery's single projected result-column expression — scalar
 /// subqueries and single-column `IN (SELECT ...)` both need exactly one

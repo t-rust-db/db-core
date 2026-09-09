@@ -29,7 +29,8 @@
 
 use db_core::codegen::row::dispatch::compile_statement;
 use db_core::codegen::row::TableSchema;
-use db_core::vm::row::{execute, Cursor, EphemeralTableCursor, Opcode, Program, Value, Vm};
+use db_core::value::Value;
+use db_core::vm::row::{execute, Cursor, EphemeralTableCursor, Opcode, Program, Vm};
 
 fn schema(name: &str, columns: &[&str]) -> TableSchema {
     schema_with_root(name, columns, 2)

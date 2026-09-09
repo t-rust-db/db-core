@@ -10,13 +10,8 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "db-core"
-version = "0.77.0"
-
-[[package]]
-name = "db-storage"
-version = "0.6.4"
+version = "0.78.0"
 dependencies = [
- "db-core",
  "memmap2",
  "ruzstd",
 ]

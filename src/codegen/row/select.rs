@@ -28,8 +28,9 @@ use crate::parser::ast::{
     JoinConstraint, JoinOp, Literal, ParamKind, ResultColumn, Select, TableRef, TableRefKind,
 };
 use crate::parser::Span;
+use crate::value::Collation;
 use crate::vm::row::{
-    comparison_affinity, Affinity, Collation, Instruction, Opcode, Program, SortKeyColumn, P4,
+    comparison_affinity, Affinity, Instruction, Opcode, Program, SortKeyColumn, P4,
 };
 
 /// Errors raised while compiling a `SELECT` (or a statement that embeds one,

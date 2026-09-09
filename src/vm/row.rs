@@ -8,8 +8,8 @@
 //! typed-operand design to `row`, which does not apply here). Ported
 //! so far:
 //!
-//! - [`value`] -- `Value`/`Collation`/`compare_text`/`format_real`,
-//!   re-exporting `db_core::value` (ADR 0010).
+//! - [`crate::value`] -- `Value`/`Collation`/`compare_text`/`format_real`
+//!   (ADR 0010), used directly here rather than re-exported.
 //! - [`compare`] -- cross-type ordering (NULL < numeric < text < blob),
 //!   re-exporting `db_core::compare` (ADR 0011/#122).
 //! - [`logic`] -- three-valued logic / NULL propagation (codegen-side
@@ -175,7 +175,6 @@ pub mod program;
 pub mod record;
 pub mod schema_storage;
 pub mod transaction;
-pub mod value;
 pub mod vm;
 
 pub use affinity::{affinity_of, apply_affinity, comparison_affinity, Affinity};
@@ -199,5 +198,4 @@ pub use program::{
 pub use record::{decode_column, decode_record, encode_record, RecordError};
 pub use schema_storage::{SchemaStorage, SchemaStorageError};
 pub use transaction::{Transaction, TransactionError};
-pub use value::{compare_text, format_real, Collation, TextEncoding, Value};
 pub use vm::{execute, ExecError, Step, Vm};

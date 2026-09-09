@@ -373,7 +373,7 @@ mod tests {
             columns: vec![crate::codegen::row::IndexedColumn {
                 name: "key".to_string(),
                 desc: false,
-                collation: crate::vm::row::Collation::Binary,
+                collation: crate::value::Collation::Binary,
             }],
             root_page: 0,
         };

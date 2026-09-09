@@ -884,7 +884,7 @@ mod tests {
             columns: vec![IndexedColumn {
                 name: col.to_string(),
                 desc: false,
-                collation: crate::vm::row::Collation::Binary,
+                collation: crate::value::Collation::Binary,
             }],
             root_page: 0,
         }

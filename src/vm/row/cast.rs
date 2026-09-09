@@ -8,7 +8,7 @@
 
 use super::affinity::Affinity;
 use super::coerce::coerce_text_to_numeric;
-use super::value::{format_real, Value};
+use crate::value::{format_real, Value};
 
 /// Casts `value` to `target`'s storage class. `NULL` casts to `NULL`
 /// under every target -- the one rule common to all five arms.

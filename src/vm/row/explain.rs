@@ -16,7 +16,7 @@
 //! already-compiled bytecode.
 
 use super::program::{GroupKeyColumn, Opcode, Program, SortKeyColumn, P4};
-use super::value::Collation;
+use crate::value::Collation;
 
 /// One rendered `EXPLAIN` row.
 #[derive(Debug, Clone, PartialEq)]
@@ -66,7 +66,7 @@ fn render_p4(p4: &P4) -> String {
     match p4 {
         P4::None => String::new(),
         P4::Int(i) => i.to_string(),
-        P4::Real(r) => super::value::format_real(*r),
+        P4::Real(r) => crate::value::format_real(*r),
         P4::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),
         P4::Str(s) => s.clone(),
         P4::CollSeq {

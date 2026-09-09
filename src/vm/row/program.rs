@@ -17,7 +17,7 @@
 //! `MakeRecord`'s record encoding, the remaining cursor/index opcodes)
 //! is unimplemented (`ExecError::Unimplemented`) pending later phases.
 
-use super::value::Collation;
+use crate::value::Collation;
 
 /// `BEGIN`'s locking mode, carried through `Opcode::Transaction`'s `p1`
 /// (db-core#97, mirroring sqlite-rs's `vdbe::control` constants).

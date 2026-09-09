@@ -37,8 +37,6 @@ test: ## Run db-core's test suite with all features (spikes excluded; see make t
 test-lib: ## Just db-core's library unit tests (fastest inner loop)
 	cargo test -p db-core --all-features --lib
 
-test-storage: ## Run db-storage's test suite (workspace member, absorbed #287)
-	$(MAKE) -C db-storage test
 
 SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
 	| python3 -c "import json,sys; \
@@ -140,7 +138,13 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # themselves and so pass the gate unexempted. Everything above the
 # boundary stays in the qualified subset. Adding a file here is an
 # architecture decision (ADR 0008, ADR 0015), not a lint fix.
-MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs
+#
+# `src/storage/*` (ADR 0016, #288): the absorbed db-storage code was never
+# under this gate -- explicit lifetimes (`'a`/`'m` on the Parquet reader,
+# page sources, VFS traits) and the two audited `unsafe` carve-outs
+# (`column::mmap`, `row::vfs::fcntl`). Excluded as a unit, tracked as a
+# worklist in db-core#289; `src/storage.rs` itself stays in the scan.
+MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/storage/*
 
 check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
 	@command -v cargo-mvl-limit >/dev/null 2>&1 || { \
@@ -158,8 +162,6 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) check-deny
 	$(MAKE) check-mvl-limit
 	$(MAKE) test
-	$(MAKE) -C db-storage lint
-	$(MAKE) test-storage
 	@echo "all CI gates passed"
 
 # === Performance ===

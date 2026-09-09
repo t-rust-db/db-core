@@ -14,7 +14,7 @@ use std::rc::Rc;
 use super::aggregate::{AggState, AggregateError};
 use super::program::{GroupKeyColumn, SortKeyColumn};
 use super::record::{decode_column, decode_record, encode_record, RecordError};
-use super::value::{Collation, TextEncoding, Value};
+use crate::value::{Collation, TextEncoding, Value};
 
 /// A forward-scanning, row-at-a-time cursor over a table's rows.
 /// Mirrors the read-only subset of sqlite-rs's `TableCursor` interface
@@ -1471,7 +1471,7 @@ mod tests {
         SortKeyColumn {
             index,
             descending: false,
-            collation: super::super::value::Collation::Binary,
+            collation: crate::value::Collation::Binary,
             nulls_first: false,
         }
     }
@@ -1498,7 +1498,7 @@ mod tests {
         let key = SortKeyColumn {
             index: 0,
             descending: true,
-            collation: super::super::value::Collation::Binary,
+            collation: crate::value::Collation::Binary,
             nulls_first: true,
         };
         let mut c = SorterCursor::new(vec![key], None);
@@ -1627,7 +1627,7 @@ mod tests {
     fn group_key(index: usize) -> GroupKeyColumn {
         GroupKeyColumn {
             index,
-            collation: super::super::value::Collation::Binary,
+            collation: crate::value::Collation::Binary,
             affinity: b'A',
         }
     }
@@ -1668,14 +1668,14 @@ mod tests {
             0,
             "count",
             &[Value::Integer(1)],
-            super::super::value::Collation::Binary,
+            crate::value::Collation::Binary,
         )
         .unwrap();
         c.hash_agg_step(
             0,
             "count",
             &[Value::Integer(1)],
-            super::super::value::Collation::Binary,
+            crate::value::Collation::Binary,
         )
         .unwrap();
         assert!(c.hash_agg_find(make_row(&[Value::Text("y".to_string().into())])));
@@ -1683,7 +1683,7 @@ mod tests {
             0,
             "count",
             &[Value::Integer(1)],
-            super::super::value::Collation::Binary,
+            crate::value::Collation::Binary,
         )
         .unwrap();
 
@@ -1713,7 +1713,7 @@ mod tests {
         SortKeyColumn {
             index,
             descending: false,
-            collation: super::super::value::Collation::Binary,
+            collation: crate::value::Collation::Binary,
             nulls_first: false,
         }
     }
@@ -1819,7 +1819,7 @@ mod tests {
             0,
             "count",
             &[Value::Integer(1)],
-            super::super::value::Collation::Binary,
+            crate::value::Collation::Binary,
         )
         .unwrap();
         assert!(c.rewind());

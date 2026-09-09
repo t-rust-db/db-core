@@ -12,7 +12,7 @@
 //! own fixture rows to test one behavior in isolation.
 
 use super::cursor::Cursor;
-use super::value::Value;
+use crate::value::Value;
 
 /// Builds `cursor` up from `rows` via [`Cursor::insert`] -- every check
 /// in this module needs an insert-capable cursor to construct its
@@ -199,7 +199,7 @@ mod tests {
 
     use super::super::cursor::EphemeralTableCursor;
     use super::super::record::{decode_column, decode_record, encode_record};
-    use super::super::value::TextEncoding;
+    use crate::value::TextEncoding;
     use super::*;
 
     #[test]
@@ -292,7 +292,7 @@ mod tests {
     fn in_memory_index_cursor_satisfies_the_index_conformance_suite() {
         use super::super::cursor::InMemoryIndexCursor;
         use super::super::program::SortKeyColumn;
-        use super::super::value::Collation;
+        use crate::value::Collation;
 
         assert_index_cursor_conformance(|| {
             InMemoryIndexCursor::new(vec![SortKeyColumn {
