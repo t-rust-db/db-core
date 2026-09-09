@@ -12,6 +12,10 @@ behind the `storage-row`/`storage-column` features. The language/execution
 layer (`parser`/`vm`/`codegen`) stays storage-agnostic: it never imports
 `storage`; `storage` imports only `value` and `schema`.
 
+The `engine` module ([ADR 0017](.openspec/adr/0017-engine-seam.md)) is
+the client-facing seam over the modes: open a file, run SQL, get `Cell`s --
+`engine::row` today, batch and stream to follow.
+
 Was six separate crates (`sql-types`, `sql-expr`, `sql-parser`,
 `sql-join`, `sql-vm`, `sql-codegen`) until this repo's merge into one —
 see `CHANGELOG.md`. The module boundaries are unchanged, just no longer

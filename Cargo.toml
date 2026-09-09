@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.80.0"
+version = "0.81.0"
 # The three [[bench]] targets are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -24,6 +24,11 @@ path = "tests/unit/vm_row_hooks_test.rs"
 [[test]]
 name = "unit_parser_public_api"
 path = "tests/unit/parser_public_api_test.rs"
+
+[[test]]
+name = "unit_engine_public_api"
+path = "tests/unit/engine_public_api_test.rs"
+required-features = ["engine-row"]
 
 [[test]]
 name = "unit_vm_row_public_api"
@@ -132,6 +137,7 @@ default = [
     "storage-row",
     "storage-column",
     "storage-stream",
+    "engine-row",
 ]
 
 # `parser`: one grammar section per Cargo feature, mirroring `vm`'s own
@@ -184,6 +190,12 @@ storage-stream = ["vm-stream"]
 # for consumers' own test suites -- enable from `[dev-dependencies]`
 # only (db-storage#13).
 storage-test-support = []
+
+# `engine` (#295, ADR 0017): the client-facing seam over the execution
+# modes. `engine-row` is the row implementation -- storage::row wired to
+# vm::row through the ADR 0008 boundary traits (the glue that lived in
+# sqlite-rs's vdbe/adapter.rs), plus parse -> compile -> execute.
+engine-row = ["storage-row", "parser-row", "vm-row", "codegen-row"]
 
 # sqlite-rs's lint bar (#82).
 [lints.rust]
