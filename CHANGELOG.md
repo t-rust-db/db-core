@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.83.0] - 2026-09-10
+
+### Added
+
+- **`storage::stream` foundation** (#304, ADR 0018 §Storage; PR #329) -- the live-file layer under the stream engine. `LogFile`: two line-aligned cursors (`tail_off`, `head_off`), 256 KiB block reads in both directions; `open` positions at the last newline reading at most one block; `read_tail(min_bytes)` walks backwards with partial-line carry so the last N lines cost O(bytes shown); `refresh()` reads forward and reports `NoNew | New(blocks) | Truncated` (`head_off > len` repositions). Only complete lines leave the module. `Segment`: the owned, `'static` form of a parsed block -- bytes behind `Arc<[u8]>`, `raw`/`message`/high-cardinality strings as `(u32, u32)` spans into them, dictionaries owned, Tier-2 columns owned, `minmax` over event and observed timestamps built at seal, `overlaps_event`, `dict_contains`, split at `SEGMENT_MAX_ROWS` (4096); a string not inside the block becomes `None`, never a panic. `Ring`: hot segments under a byte budget, whole-segment eviction from the tail, `push_tail` for backwards fill (returns the segment that did not fit), the head segment always kept, `overlapping_event(range)`, `set_budget`.
+- `LogBatch::observed_ts_ns` (when a line was read) alongside `timestamp_ns` (what it says), plus `fill_observed_ts`.
+- Fixture `tests/fixtures/stream/syslog-1k.log`.
+
+### Fixed
+
+- `SyslogParser::parse_batch` silently capped every batch at `BATCH_SIZE` (256) rows regardless of `max_lines`; the caller now bounds the batch and `BATCH_SIZE` is only the initial capacity.
+
 ## [0.82.0] - 2026-09-10
 
 ### Added
