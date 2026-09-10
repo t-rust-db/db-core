@@ -38,8 +38,8 @@ use crate::storage::row::vfs::{PageSource, UnixVfs, Vfs};
 use crate::vm::row::{execute, explain, Program, Vm};
 
 use super::{
-    Cell, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeRow, OpcodeSection, PlanRow,
-    QueryResult,
+    Cell, ColumnInfo, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeRow, OpcodeSection,
+    PlanRow, QueryResult, TableInfo,
 };
 
 pub mod adapter;
@@ -343,6 +343,22 @@ impl Engine for RowEngine {
             page_count: self.header.page_count,
             freelist_pages: self.header.freelist_page_count,
         }
+    }
+
+    fn tables(&self) -> Result<Vec<TableInfo>, EngineError> {
+        let (schemas, _views) = self.catalog()?;
+        Ok(schemas
+            .into_iter()
+            .map(|t| TableInfo {
+                name: t.name,
+                columns: t
+                    .columns
+                    .into_iter()
+                    .zip(t.column_types)
+                    .map(|(name, type_name)| ColumnInfo { name, type_name })
+                    .collect(),
+            })
+            .collect())
     }
 }
 

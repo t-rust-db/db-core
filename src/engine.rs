@@ -187,6 +187,26 @@ pub struct OpcodeSection {
     pub rows: Vec<OpcodeRow>,
 }
 
+/// A table's name and columns, as known from the file's schema without
+/// running a query -- a schema-tree UI's shape (#310, db-studio#10).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableInfo {
+    /// The table's name.
+    pub name: String,
+    /// The table's columns, in declared order.
+    pub columns: Vec<ColumnInfo>,
+}
+
+/// One column of a [`TableInfo`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ColumnInfo {
+    /// The column's name.
+    pub name: String,
+    /// Declared type text, e.g. `INTEGER`/`TEXT` (empty when the column
+    /// has none -- SQLite allows untyped columns).
+    pub type_name: String,
+}
+
 /// What an engine knows about its file without scanning it. One variant
 /// per mode because the honest numbers differ: a SQLite file has a page
 /// count in its header; a Parquet file has row groups and a row count in
@@ -304,4 +324,8 @@ pub trait Engine {
 
     /// What the engine knows about the file without scanning it.
     fn stats(&self) -> FileStats;
+
+    /// Tables (and their columns) known from the file's schema, without
+    /// running a query. Empty for a file with no tables.
+    fn tables(&self) -> Result<Vec<TableInfo>, EngineError>;
 }

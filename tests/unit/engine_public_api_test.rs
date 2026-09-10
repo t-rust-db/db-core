@@ -23,7 +23,8 @@ use std::path::{Path, PathBuf};
 
 use db_core::engine::row::RowEngine;
 use db_core::engine::{
-    Cell, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeSection, PlanRow, QueryResult,
+    Cell, ColumnInfo, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeSection, PlanRow,
+    QueryResult, TableInfo,
 };
 use db_core::value::Value;
 
@@ -350,6 +351,71 @@ fn cell_display_matches_shell_conventions() {
     assert_eq!(Cell::Bool(true).to_string(), "1");
     assert_eq!(Cell::Text("x y".to_string()).to_string(), "x y");
     assert_eq!(Cell::Blob(vec![0xAB, 0x01]).to_string(), "X'AB01'");
+}
+
+#[test]
+fn tables_reports_names_and_columns_from_the_schema() {
+    let db = TempDb::new("tables");
+    let mut engine = open(&db);
+    engine
+        .run_query("CREATE TABLE t1(a INTEGER, b TEXT); CREATE TABLE t2(c REAL)")
+        .unwrap();
+
+    // The fixture may already carry its own table(s) from corpus
+    // generation -- filter to just the two created here.
+    let mut tables: Vec<TableInfo> = engine
+        .tables()
+        .unwrap()
+        .into_iter()
+        .filter(|t| t.name == "t1" || t.name == "t2")
+        .collect();
+    tables.sort_by(|a, b| a.name.cmp(&b.name));
+    assert_eq!(
+        tables,
+        vec![
+            TableInfo {
+                name: "t1".to_string(),
+                columns: vec![
+                    ColumnInfo {
+                        name: "a".to_string(),
+                        type_name: "INTEGER".to_string(),
+                    },
+                    ColumnInfo {
+                        name: "b".to_string(),
+                        type_name: "TEXT".to_string(),
+                    },
+                ],
+            },
+            TableInfo {
+                name: "t2".to_string(),
+                columns: vec![ColumnInfo {
+                    name: "c".to_string(),
+                    type_name: "REAL".to_string(),
+                }],
+            },
+        ]
+    );
+}
+
+#[test]
+fn tables_succeeds_on_a_freshly_opened_file_with_well_formed_entries() {
+    let db = TempDb::new("tables-fresh");
+    let engine = open(&db);
+    // The fixture (table_single_page.db) already carries a table from
+    // corpus generation -- assert the call succeeds and each entry is
+    // well-formed rather than assuming emptiness.
+    for t in engine.tables().unwrap() {
+        assert!(!t.name.is_empty());
+    }
+}
+
+#[test]
+fn tables_is_reachable_through_dyn_engine() {
+    let db = TempDb::new("tables-dyn");
+    let mut boxed: Box<dyn Engine> = Box::new(open(&db));
+    boxed.run_query("CREATE TABLE dt(a INTEGER)").unwrap();
+    let tables = boxed.tables().unwrap();
+    assert!(tables.iter().any(|t| t.name == "dt"));
 }
 
 #[test]
