@@ -182,11 +182,20 @@ fn column_affinity(schema: &TableSchema, col_name: &str) -> Affinity {
 /// needed to return one, past this codebase's qualified-language-subset
 /// limit, `tools/mvl-limit`) — every caller already re-fetches via
 /// `schema.indexes.get(position)` right after.
+///
+/// Only a `BINARY`-collated leading column qualifies (#298): the index
+/// b-tree is stored and searched in BINARY order (`storage::row::btree::
+/// index`, Tier 0), so a `SeekIndexGE`/`IdxCompareGT` walk keyed on a
+/// `NOCASE`/`RTRIM` column would descend to the wrong leaf and stop at the
+/// wrong entry -- `WHERE name = 'alice'` on a `NOCASE` index returned zero
+/// rows for `Alice`/`alice`/`ALICE`. Such indexes fall back to the
+/// ordinary scan (whose `Eq` filter applies the collation), same as an
+/// unindexed column would.
 pub(super) fn find_leading_index(schema: &TableSchema, col_name: &str) -> Option<usize> {
     schema.indexes.iter().position(|idx| {
-        idx.columns
-            .first()
-            .is_some_and(|c| c.name.eq_ignore_ascii_case(col_name))
+        idx.columns.first().is_some_and(|c| {
+            c.name.eq_ignore_ascii_case(col_name) && c.collation == Collation::Binary
+        })
     })
 }
 
@@ -367,16 +376,10 @@ where
     let Some(where_expr) = &select.where_clause else {
         return Ok(false);
     };
-    let ExprKind::Between {
-        expr,
-        lo,
-        hi,
-        negated: false,
-    } = &where_expr.kind
-    else {
+    let Some((col, lo, hi, _)) = as_bounds(where_expr) else {
         return Ok(false);
     };
-    let Some(col_name) = where_col(expr) else {
+    let Some(col_name) = where_col(col) else {
         return Ok(false);
     };
     let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
@@ -405,57 +408,36 @@ where
 
     let limit = compile_limit_setup(em, reg, &scope, select)?;
     let lo_reg = compile_value(em, reg, &scope, lo)?;
-    let hi_reg = compile_value(em, reg, &scope, hi)?;
-
-    // #280: a NULL bound (only reachable now that a subquery/expression
-    // bound is allowed -- a bare NULL literal is never accepted by
-    // `is_constant_operand`) makes the range empty, same as sqlite3's
-    // `IsNull r[2] -> <end>` ahead of its own `SeekGT`.
-    let lo_null_addr = em.emit(Instruction::new(Opcode::IsNull, lo_reg, 0, 0));
-    em.patch_p2(lo_null_addr, end_label);
-    let hi_null_addr = em.emit(Instruction::new(Opcode::IsNull, hi_reg, 0, 0));
-    em.patch_p2(hi_null_addr, end_label);
-
-    let seek_addr = em.emit(Instruction::with_p4(
-        Opcode::SeekIndexGE,
-        index_cursor,
-        0,
-        lo_reg,
-        P4::SeekKey(vec![leading_collation]),
-    ));
-    em.patch_p2(seek_addr, end_label);
-
-    let loop_start = em.new_label();
-    em.place(loop_start);
-
-    let stop_addr = em.emit(Instruction::with_p4(
-        Opcode::IdxCompareGT,
-        index_cursor,
-        0,
-        hi_reg,
-        P4::SeekKey(vec![leading_collation]),
-    ));
-    em.patch_p2(stop_addr, end_label);
-
-    let row_skip = em.new_label();
-    emit_matched_row(
+    // `col = lit` (#298): one bound, evaluated once.
+    let hi_reg = if std::ptr::eq(lo, hi) {
+        lo_reg
+    } else {
+        compile_value(em, reg, &scope, hi)?
+    };
+    emit_bounded_index_walk(
         em,
-        reg,
-        select,
-        schema,
-        cursors,
         index_cursor,
-        col_name,
-        &limit,
-        row_skip,
+        lo_reg,
+        hi_reg,
+        leading_collation,
         end_label,
-        catalog,
-        sink,
+        |em, row_skip| {
+            emit_matched_row(
+                em,
+                reg,
+                select,
+                schema,
+                cursors,
+                index_cursor,
+                col_name,
+                &limit,
+                row_skip,
+                end_label,
+                catalog,
+                sink,
+            )
+        },
     )?;
-
-    em.place(row_skip);
-    let next_addr = em.emit(Instruction::new(Opcode::IdxNext, index_cursor, 0, 0));
-    em.patch_p2(next_addr, loop_start);
     Ok(true)
 }
 
@@ -483,8 +465,7 @@ pub(super) fn range_row_seek_index_position(
     schema: &TableSchema,
     catalog: &[TableSchema],
 ) -> Option<usize> {
-    let recognized = matches!(&where_expr.kind, ExprKind::Between { negated: false, .. })
-        || as_forward_comparison(where_expr).is_some();
+    let recognized = as_bounds(where_expr).is_some() || as_forward_comparison(where_expr).is_some();
     if recognized {
         range_seek_index_position(where_expr, schema, catalog)
     } else {
@@ -506,14 +487,8 @@ pub(crate) fn try_compile_range_row_seek<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, Label) -> Result<(), CodegenError>,
 {
-    if let ExprKind::Between {
-        expr,
-        lo,
-        hi,
-        negated: false,
-    } = &where_expr.kind
-    {
-        let Some(col_name) = where_col(expr) else {
+    if let Some((col, lo, hi, _)) = as_bounds(where_expr) {
+        let Some(col_name) = where_col(col) else {
             return Ok(false);
         };
         if !is_constant_operand(lo, scope) || !is_constant_operand(hi, scope) {
@@ -535,43 +510,22 @@ where
             .columns
             .first()
             .map_or(Collation::Binary, |c| c.collation);
-
         open_index_cursor(em, index, index_cursor)?;
         let lo_reg = compile_value(em, reg, scope, lo)?;
-        let hi_reg = compile_value(em, reg, scope, hi)?;
-
-        // #280: see `try_compile_between_seek`'s identical comment.
-        let lo_null_addr = em.emit(Instruction::new(Opcode::IsNull, lo_reg, 0, 0));
-        em.patch_p2(lo_null_addr, end_label);
-        let hi_null_addr = em.emit(Instruction::new(Opcode::IsNull, hi_reg, 0, 0));
-        em.patch_p2(hi_null_addr, end_label);
-
-        let seek_addr = em.emit(Instruction::with_p4(
-            Opcode::SeekIndexGE,
+        let hi_reg = if std::ptr::eq(lo, hi) {
+            lo_reg
+        } else {
+            compile_value(em, reg, scope, hi)?
+        };
+        emit_bounded_index_walk(
+            em,
             index_cursor,
-            0,
             lo_reg,
-            P4::SeekKey(vec![leading_collation]),
-        ));
-        em.patch_p2(seek_addr, end_label);
-
-        let loop_start = em.new_label();
-        em.place(loop_start);
-
-        let stop_addr = em.emit(Instruction::with_p4(
-            Opcode::IdxCompareGT,
-            index_cursor,
-            0,
             hi_reg,
-            P4::SeekKey(vec![leading_collation]),
-        ));
-        em.patch_p2(stop_addr, end_label);
-
-        let row_skip = em.new_label();
-        sink(em, reg, index_cursor, row_skip)?;
-        em.place(row_skip);
-        let next_addr = em.emit(Instruction::new(Opcode::IdxNext, index_cursor, 0, 0));
-        em.patch_p2(next_addr, loop_start);
+            leading_collation,
+            end_label,
+            |em, row_skip| sink(em, reg, index_cursor, row_skip),
+        )?;
         return Ok(true);
     }
 
@@ -904,32 +858,33 @@ where
     for operand in operands {
         let value_reg = compile_value(em, reg, &scope, operand)?;
         let next_value = em.new_label();
-        let seek_addr = em.emit(Instruction::with_p4(
-            Opcode::SeekIndexEq,
-            index_cursor,
-            0,
-            value_reg,
-            P4::SeekKey(vec![leading_collation]),
-        ));
-        em.patch_p2(seek_addr, next_value);
-
-        let row_skip = em.new_label();
-        emit_matched_row(
+        // #298: a bounded walk with `lo = hi = value`, not a single
+        // `SeekIndexEq` -- a non-unique index can hold several entries
+        // equal to `value`, and every one of them is a match.
+        emit_bounded_index_walk(
             em,
-            reg,
-            select,
-            schema,
-            cursors,
             index_cursor,
-            col_name,
-            &limit,
-            row_skip,
-            end_label,
-            catalog,
-            sink,
+            value_reg,
+            value_reg,
+            leading_collation,
+            next_value,
+            |em, row_skip| {
+                emit_matched_row(
+                    em,
+                    reg,
+                    select,
+                    schema,
+                    cursors,
+                    index_cursor,
+                    col_name,
+                    &limit,
+                    row_skip,
+                    end_label,
+                    catalog,
+                    sink,
+                )
+            },
         )?;
-        em.place(row_skip);
-
         em.place(next_value);
     }
     let done_addr = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
@@ -1099,26 +1054,21 @@ pub(crate) fn range_seek_index_position(
     // `Subquery` operand's own `FROM` against `catalog` -- so `0` here
     // is a placeholder, never an actual cursor this function opens.
     let scope = Scope::single(schema, 0).with_catalog(catalog);
-    match &where_expr.kind {
-        ExprKind::Between {
-            expr,
-            lo,
-            hi,
-            negated: false,
-        } => {
-            let col_name = where_col(expr)?;
-            if !is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope) {
-                return None;
-            }
-            let index_position = find_leading_index(schema, col_name)?;
-            let affinity = column_affinity(schema, col_name);
-            if !operand_matches_column_affinity(lo, affinity)
-                || !operand_matches_column_affinity(hi, affinity)
-            {
-                return None;
-            }
-            Some(index_position)
+    if let Some((col, lo, hi, _)) = as_bounds(where_expr) {
+        let col_name = where_col(col)?;
+        if !is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope) {
+            return None;
         }
+        let index_position = find_leading_index(schema, col_name)?;
+        let affinity = column_affinity(schema, col_name);
+        if !operand_matches_column_affinity(lo, affinity)
+            || !operand_matches_column_affinity(hi, affinity)
+        {
+            return None;
+        }
+        return Some(index_position);
+    }
+    match &where_expr.kind {
         ExprKind::Like {
             expr,
             pattern,
@@ -1189,30 +1139,35 @@ pub(super) fn find_range_seek_detail(
     // is a placeholder cursor id, never opened.
     let scope = Scope::single(schema, 0).with_catalog(catalog);
     let where_expr = select.where_clause.as_ref()?;
-    match &where_expr.kind {
-        ExprKind::Between {
-            expr,
-            lo,
-            hi,
-            negated: false,
-        } => {
-            let col_name = where_col(expr)?;
-            if !is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope) {
-                return None;
-            }
-            let index_position = find_leading_index(schema, col_name)?;
-            let index = schema.indexes.get(index_position)?;
-            let affinity = column_affinity(schema, col_name);
-            if !operand_matches_column_affinity(lo, affinity)
-                || !operand_matches_column_affinity(hi, affinity)
-            {
-                return None;
-            }
-            Some(format!(
+    if let Some((col, lo, hi, equality)) = as_bounds(where_expr) {
+        let col_name = where_col(col)?;
+        if !is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope) {
+            return None;
+        }
+        let index_position = find_leading_index(schema, col_name)?;
+        let index = schema.indexes.get(index_position)?;
+        let affinity = column_affinity(schema, col_name);
+        if !operand_matches_column_affinity(lo, affinity)
+            || !operand_matches_column_affinity(hi, affinity)
+        {
+            return None;
+        }
+        // sqlite3's wording: `(col=?)` for equality, `(col>? AND col<?)`
+        // for BETWEEN (inclusive bounds notwithstanding -- confirmed
+        // empirically, sqlite3 3.53.4).
+        return Some(if equality {
+            format!(
+                "SEARCH {table_display} USING INDEX {} ({col_name}=?)",
+                index.name
+            )
+        } else {
+            format!(
                 "SEARCH {table_display} USING INDEX {} ({col_name}>? AND {col_name}<?)",
                 index.name
-            ))
-        }
+            )
+        });
+    }
+    match &where_expr.kind {
         ExprKind::Like {
             expr,
             pattern,
@@ -1278,6 +1233,92 @@ pub(super) fn find_range_seek_detail(
             ))
         }),
     }
+}
+
+/// A `WHERE` clause that bounds one indexed column from both sides:
+/// `col BETWEEN lo AND hi`, or (#298) an equality `col = lit` / `lit =
+/// col`, which is the same walk with `lo` and `hi` the *same* expression.
+/// Returns `(col, lo, hi, equality)` -- `equality` records which spelling
+/// it was, for `EXPLAIN QUERY PLAN`'s wording. `None` for every other
+/// shape. (A tuple rather than a struct: the qualified subset,
+/// `make check-mvl-limit`, admits no explicit lifetime parameters.)
+fn as_bounds(where_expr: &Expr) -> Option<(&Expr, &Expr, &Expr, bool)> {
+    match &where_expr.kind {
+        ExprKind::Between {
+            expr,
+            lo,
+            hi,
+            negated: false,
+        } => Some((expr, lo, hi, false)),
+        ExprKind::Binary {
+            op: BinaryOp::Eq,
+            lhs,
+            rhs,
+        } => {
+            let (col, lit) = if where_col(lhs).is_some() {
+                (lhs.as_ref(), rhs.as_ref())
+            } else if where_col(rhs).is_some() {
+                (rhs.as_ref(), lhs.as_ref())
+            } else {
+                return None;
+            };
+            Some((col, lit, lit, true))
+        }
+        _ => None,
+    }
+}
+
+/// The one correct "every index entry with `lo <= key <= hi`" walk, shared
+/// by `BETWEEN`, `=` and each `IN (...)` value (#298): a `NULL` bound
+/// matches nothing (jump to `exit`); `SeekIndexGE(lo)` positions on the
+/// first candidate (none: `exit`); then loop -- `IdxCompareGT(hi)` exits
+/// once past the upper bound, `body` handles the positioned entry (it
+/// receives `row_skip` to jump to on a missing table row), `IdxNext`
+/// advances and re-enters the loop. A single `SeekIndexEq` is *not* a
+/// substitute: it lands on one entry, and a non-unique index may hold many
+/// equal to `lo`.
+fn emit_bounded_index_walk<B>(
+    em: &mut Emitter,
+    index_cursor: i32,
+    lo_reg: i32,
+    hi_reg: i32,
+    leading_collation: Collation,
+    exit: Label,
+    body: B,
+) -> Result<(), CodegenError>
+where
+    B: FnOnce(&mut Emitter, Label) -> Result<(), CodegenError>,
+{
+    let lo_null_addr = em.emit(Instruction::new(Opcode::IsNull, lo_reg, 0, 0));
+    em.patch_p2(lo_null_addr, exit);
+    if hi_reg != lo_reg {
+        let hi_null_addr = em.emit(Instruction::new(Opcode::IsNull, hi_reg, 0, 0));
+        em.patch_p2(hi_null_addr, exit);
+    }
+    let seek_addr = em.emit(Instruction::with_p4(
+        Opcode::SeekIndexGE,
+        index_cursor,
+        0,
+        lo_reg,
+        P4::SeekKey(vec![leading_collation]),
+    ));
+    em.patch_p2(seek_addr, exit);
+    let loop_start = em.new_label();
+    em.place(loop_start);
+    let stop_addr = em.emit(Instruction::with_p4(
+        Opcode::IdxCompareGT,
+        index_cursor,
+        0,
+        hi_reg,
+        P4::SeekKey(vec![leading_collation]),
+    ));
+    em.patch_p2(stop_addr, exit);
+    let row_skip = em.new_label();
+    body(em, row_skip)?;
+    em.place(row_skip);
+    let next_addr = em.emit(Instruction::new(Opcode::IdxNext, index_cursor, 0, 0));
+    em.patch_p2(next_addr, loop_start);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1415,7 +1456,7 @@ mod mcdc_vectors {
 
     // --- range_scan_327: `name == indexed_col && rowid_alias != idx` -------
     #[test]
-    fn mcdc__range_scan_328__v1_indexed_non_alias_column_is_read_from_the_index_cursor() {
+    fn mcdc__range_scan_337__v1_indexed_non_alias_column_is_read_from_the_index_cursor() {
         let p = compile(
             "SELECT a, b FROM t WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1425,7 +1466,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_328__v2_indexed_rowid_alias_column_is_read_via_rowid() {
+    fn mcdc__range_scan_337__v2_indexed_rowid_alias_column_is_read_via_rowid() {
         let p = compile(
             "SELECT a, b FROM t WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, true),
@@ -1436,7 +1477,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_328__v3_non_indexed_column_is_read_from_the_table_cursor() {
+    fn mcdc__range_scan_337__v3_non_indexed_column_is_read_from_the_table_cursor() {
         let p = compile(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1447,7 +1488,7 @@ mod mcdc_vectors {
 
     // --- range_scan_382: BETWEEN operands supported -----------------------
     #[test]
-    fn mcdc__range_scan_383__v1_both_bounds_literal_seeks() {
+    fn mcdc__range_scan_386__v1_both_bounds_literal_seeks() {
         let p = compile(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1456,7 +1497,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_383__v2_computed_lower_bound_seeks() {
+    fn mcdc__range_scan_386__v2_computed_lower_bound_seeks() {
         // #280: a constant-arithmetic bound is loop-constant, computed
         // once before the seek same as a bare literal.
         let p = compile(
@@ -1467,7 +1508,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_383__v3_computed_upper_bound_seeks() {
+    fn mcdc__range_scan_386__v3_computed_upper_bound_seeks() {
         let p = compile(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 5 + 1",
             &schema("INTEGER", true, false),
@@ -1477,7 +1518,7 @@ mod mcdc_vectors {
 
     // --- range_scan_392: BETWEEN operands match column affinity ----------
     #[test]
-    fn mcdc__range_scan_393__v1_both_bounds_match_integer_affinity_seeks() {
+    fn mcdc__range_scan_396__v1_both_bounds_match_integer_affinity_seeks() {
         let p = compile(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1486,7 +1527,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_393__v2_text_lower_bound_against_integer_column_scans() {
+    fn mcdc__range_scan_396__v2_text_lower_bound_against_integer_column_scans() {
         let p = compile(
             "SELECT b FROM t WHERE a BETWEEN 'x' AND 5",
             &schema("INTEGER", true, false),
@@ -1495,7 +1536,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_393__v3_text_upper_bound_against_integer_column_scans() {
+    fn mcdc__range_scan_396__v3_text_upper_bound_against_integer_column_scans() {
         let p = compile(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 'x'",
             &schema("INTEGER", true, false),
@@ -1553,7 +1594,7 @@ mod mcdc_vectors {
 
     // --- range_scan_518: row-seek (UPDATE) BETWEEN operands supported -----
     #[test]
-    fn mcdc__range_scan_519__v1_update_between_literals_seeks() {
+    fn mcdc__range_scan_494__v1_update_between_literals_seeks() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1562,8 +1603,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_519__v2_update_computed_lower_bound_seeks() {
-        // #280: see `mcdc__range_scan_383__v2`'s identical comment.
+    fn mcdc__range_scan_494__v2_update_computed_lower_bound_seeks() {
+        // #280: see `mcdc__range_scan_386__v2`'s identical comment.
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 1 + 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1572,7 +1613,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_519__v3_update_computed_upper_bound_seeks() {
+    fn mcdc__range_scan_494__v3_update_computed_upper_bound_seeks() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 1 AND 5 + 1",
             &schema("INTEGER", true, false),
@@ -1582,7 +1623,7 @@ mod mcdc_vectors {
 
     // --- range_scan_528: row-seek (UPDATE) BETWEEN affinity ---------------
     #[test]
-    fn mcdc__range_scan_529__v1_update_bounds_match_affinity_seeks() {
+    fn mcdc__range_scan_504__v1_update_bounds_match_affinity_seeks() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1591,7 +1632,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_529__v2_update_text_lower_bound_scans() {
+    fn mcdc__range_scan_504__v2_update_text_lower_bound_scans() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 'x' AND 5",
             &schema("INTEGER", true, false),
@@ -1600,7 +1641,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_529__v3_update_text_upper_bound_scans() {
+    fn mcdc__range_scan_504__v3_update_text_upper_bound_scans() {
         let p = compile_upd(
             "UPDATE t SET b = 'z' WHERE a BETWEEN 1 AND 'x'",
             &schema("INTEGER", true, false),
@@ -1608,9 +1649,9 @@ mod mcdc_vectors {
         assert!(!seeks(&p));
     }
 
-    // --- range_scan_669: LIKE prefix contains wildcard / single-char ------
+    // --- range_scan_624: LIKE prefix contains wildcard / single-char ------
     #[test]
-    fn mcdc__range_scan_670__v1_plain_prefix_seeks() {
+    fn mcdc__range_scan_624__v1_plain_prefix_seeks() {
         let p = compile(
             "SELECT b FROM t WHERE a LIKE 'ab%'",
             &schema("TEXT", true, false),
@@ -1619,7 +1660,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_670__v2_prefix_with_inner_percent_scans() {
+    fn mcdc__range_scan_624__v2_prefix_with_inner_percent_scans() {
         let p = compile(
             "SELECT b FROM t WHERE a LIKE 'a%b%'",
             &schema("TEXT", true, false),
@@ -1628,7 +1669,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_670__v3_prefix_with_underscore_scans() {
+    fn mcdc__range_scan_624__v3_prefix_with_underscore_scans() {
         let p = compile(
             "SELECT b FROM t WHERE a LIKE 'a_b%'",
             &schema("TEXT", true, false),
@@ -1638,7 +1679,7 @@ mod mcdc_vectors {
 
     // --- range_scan_672: `!glob && prefix has backslash` ------------------
     #[test]
-    fn mcdc__range_scan_673__v1_like_with_backslash_in_prefix_scans() {
+    fn mcdc__range_scan_627__v1_like_with_backslash_in_prefix_scans() {
         let p = compile(
             "SELECT b FROM t WHERE a LIKE 'a\\b%'",
             &schema("TEXT", true, false),
@@ -1647,7 +1688,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_673__v2_glob_with_backslash_in_prefix_seeks() {
+    fn mcdc__range_scan_627__v2_glob_with_backslash_in_prefix_seeks() {
         let p = compile(
             "SELECT b FROM t WHERE a GLOB 'a\\b*'",
             &schema("TEXT", true, false),
@@ -1656,7 +1697,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_673__v3_like_without_backslash_seeks() {
+    fn mcdc__range_scan_627__v3_like_without_backslash_seeks() {
         let p = compile(
             "SELECT b FROM t WHERE a LIKE 'ab%'",
             &schema("TEXT", true, false),
@@ -1666,7 +1707,7 @@ mod mcdc_vectors {
 
     // --- range_scan_1109: range_seek_index_position BETWEEN operands ------
     #[test]
-    fn mcdc__range_scan_1110__v1_literal_bounds_pick_the_index() {
+    fn mcdc__range_scan_1059__v1_literal_bounds_pick_the_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 5");
         assert_eq!(
@@ -1676,7 +1717,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1110__v2_computed_lower_bound_picks_the_index() {
+    fn mcdc__range_scan_1059__v2_computed_lower_bound_picks_the_index() {
         // #280: a constant-arithmetic bound is loop-constant.
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 + 1 AND 5");
@@ -1687,7 +1728,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1110__v3_computed_upper_bound_picks_the_index() {
+    fn mcdc__range_scan_1059__v3_computed_upper_bound_picks_the_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 5 + 1");
         assert_eq!(
@@ -1698,7 +1739,7 @@ mod mcdc_vectors {
 
     // --- range_scan_1114: range_seek_index_position BETWEEN affinity ------
     #[test]
-    fn mcdc__range_scan_1115__v1_matching_affinity_picks_the_index() {
+    fn mcdc__range_scan_1064__v1_matching_affinity_picks_the_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 5");
         assert_eq!(
@@ -1708,7 +1749,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1115__v2_text_lower_bound_picks_no_index() {
+    fn mcdc__range_scan_1064__v2_text_lower_bound_picks_no_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 'x' AND 5");
         assert_eq!(
@@ -1718,7 +1759,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1115__v3_text_upper_bound_picks_no_index() {
+    fn mcdc__range_scan_1064__v3_text_upper_bound_picks_no_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 'x'");
         assert_eq!(
@@ -1729,7 +1770,7 @@ mod mcdc_vectors {
 
     // --- range_scan_1144: range_seek_index_position IN list ---------------
     #[test]
-    fn mcdc__range_scan_1145__v1_non_empty_literal_list_picks_the_index() {
+    fn mcdc__range_scan_1095__v1_non_empty_literal_list_picks_the_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a IN (1, 2)");
         assert_eq!(
@@ -1739,7 +1780,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1145__v2_empty_list_picks_no_index() {
+    fn mcdc__range_scan_1095__v2_empty_list_picks_no_index() {
         let s = schema("INTEGER", true, false);
         let w = Expr {
             kind: ExprKind::In {
@@ -1756,7 +1797,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1145__v3_computed_list_member_picks_no_index() {
+    fn mcdc__range_scan_1095__v3_computed_list_member_picks_no_index() {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a IN (1, 1 + 1)");
         assert_eq!(
@@ -1765,9 +1806,9 @@ mod mcdc_vectors {
         );
     }
 
-    // --- range_scan_1199: EQP BETWEEN operands supported ------------------
+    // --- range_scan_1144: EQP BETWEEN/= operands loop-constant ------------------
     #[test]
-    fn mcdc__range_scan_1200__v1_eqp_reports_index_search_for_literal_bounds() {
+    fn mcdc__range_scan_1144__v1_eqp_reports_index_search_for_literal_bounds() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1776,7 +1817,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1200__v2_eqp_reports_index_search_for_computed_lower_bound() {
+    fn mcdc__range_scan_1144__v2_eqp_reports_index_search_for_computed_lower_bound() {
         // #280: a constant-arithmetic bound is loop-constant.
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 1 + 1 AND 5",
@@ -1786,7 +1827,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1200__v3_eqp_reports_index_search_for_computed_upper_bound() {
+    fn mcdc__range_scan_1144__v3_eqp_reports_index_search_for_computed_upper_bound() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 5 + 1",
             &schema("INTEGER", true, false),
@@ -1796,7 +1837,7 @@ mod mcdc_vectors {
 
     // --- range_scan_1205: EQP BETWEEN affinity ----------------------------
     #[test]
-    fn mcdc__range_scan_1206__v1_eqp_reports_index_search_when_affinity_matches() {
+    fn mcdc__range_scan_1150__v1_eqp_reports_index_search_when_affinity_matches() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 5",
             &schema("INTEGER", true, false),
@@ -1805,7 +1846,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1206__v2_eqp_reports_scan_for_text_lower_bound() {
+    fn mcdc__range_scan_1150__v2_eqp_reports_scan_for_text_lower_bound() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 'x' AND 5",
             &schema("INTEGER", true, false),
@@ -1814,7 +1855,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1206__v3_eqp_reports_scan_for_text_upper_bound() {
+    fn mcdc__range_scan_1150__v3_eqp_reports_scan_for_text_upper_bound() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a BETWEEN 1 AND 'x'",
             &schema("INTEGER", true, false),
@@ -1824,7 +1865,7 @@ mod mcdc_vectors {
 
     // --- range_scan_1242: EQP IN list -------------------------------------
     #[test]
-    fn mcdc__range_scan_1243__v1_eqp_reports_index_search_for_literal_list() {
+    fn mcdc__range_scan_1198__v1_eqp_reports_index_search_for_literal_list() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a IN (1, 2)",
             &schema("INTEGER", true, false),
@@ -1833,7 +1874,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1243__v2_eqp_reports_scan_for_empty_list() {
+    fn mcdc__range_scan_1198__v2_eqp_reports_scan_for_empty_list() {
         let s = schema("INTEGER", true, false);
         let mut sel = select("SELECT b FROM t WHERE a IN (1)");
         sel.where_clause = Some(Expr {
@@ -1856,7 +1897,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__range_scan_1243__v3_eqp_reports_scan_for_computed_list_member() {
+    fn mcdc__range_scan_1198__v3_eqp_reports_scan_for_computed_list_member() {
         let d = eqp_detail(
             "SELECT b FROM t WHERE a IN (1, 1 + 1)",
             &schema("INTEGER", true, false),

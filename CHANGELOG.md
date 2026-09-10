@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.81.1] - 2026-09-10
+
+### Fixed
+
+- **`IN (...)` on a non-unique index returned only the first row per value** (#298). `try_compile_in_list_seek` did one `SeekIndexEq` per value and emitted a single row; with three rows sharing the key, `WHERE a IN (1)` returned one where sqlite3 returns three. Each value is now a bounded index walk (`SeekIndexGE` → `IdxCompareGT` stop → `IdxNext`), the same loop `BETWEEN` always used.
+- **Equality on a secondary index now seeks** (#298). `WHERE col = lit` / `lit = col` (constant operand, matching affinity) was the one comparison shape the single-table seek family did not recognize, so it fell through to a full scan even though `>`/`BETWEEN`/`LIKE 'p%'`/`IN` on the same index all seeked. It is now the degenerate `BETWEEN lit AND lit` walk -- for `SELECT`, and through `try_compile_range_row_seek` for `UPDATE`/`DELETE` too. `EXPLAIN QUERY PLAN` reports sqlite3's wording, `SEARCH t USING INDEX i (col=?)`; an aggregate with such a `WHERE` reports the same (was `SCAN`).
+- **No seek on a non-`BINARY` index** (#298). The index b-tree is stored and searched in BINARY order (Tier 0), so every `SeekIndexGE`-based shape on a `NOCASE`/`RTRIM` index -- `BETWEEN`, `>`, `LIKE 'p%'`, and now `=`/`IN` -- descended to the wrong leaf: `WHERE name = 'alice'` on a `NOCASE` index returned 0 of 3 rows, `name > 'alice'` 0 of 2. `find_leading_index` (the one choke point for all of them and their `EXPLAIN QUERY PLAN` mirrors) now requires a `BINARY` leading collation; such indexes fall back to the scan, whose filter applies the collation. Regression fixture `tests/corpus/fixtures/btrees/collate_nocase.db` (built by sqlite3, since db-core's DDL does not accept `COLLATE` in `CREATE INDEX`).
+- Consumers asserting program shape: `IN (...)` no longer emits `SeekIndexEq`; it emits the `SeekIndexGE`/`IdxCompareGT`/`IdxNext` walk per value (sqlite-rs's `in_list_matches_exactly_the_listed_values` pins the old opcode).
+- Shared `emit_bounded_index_walk` replaces three copies of the walk; `as_bounds` is the one shape-recognizer for `BETWEEN`/`=` used by all three eligibility mirrors, so `EXPLAIN QUERY PLAN` cannot drift from what compiles.
+
 ## [0.81.0] - 2026-09-09
 
 ### Added
