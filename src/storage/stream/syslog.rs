@@ -4,7 +4,7 @@
 //!
 //! Example: `<134>Sep  9 14:23:01 webserver nginx[1234]: GET /api/health 200`
 
-use super::batch::{Facility, LogBatch, Severity, Source, BATCH_SIZE};
+use super::batch::{Facility, LogBatch, Severity, Source};
 
 /// Syslog parser that fills `LogBatch` from raw lines.
 pub struct SyslogParser {
@@ -37,7 +37,9 @@ impl SyslogParser {
         let mut batch = LogBatch::new(source);
         let mut consumed: usize = 0;
         let mut lines_parsed: usize = 0;
-        let limit = max_lines.min(BATCH_SIZE);
+        // The caller bounds the batch (`SEGMENT_MAX_ROWS` for a segment);
+        // `BATCH_SIZE` is only the initial capacity.
+        let limit = max_lines;
 
         let mut start = 0;
         for (i, &byte) in buffer.iter().enumerate() {
