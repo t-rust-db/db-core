@@ -29,9 +29,15 @@
 //! metadata constant across a file/container.
 
 pub mod batch;
+pub mod file;
+pub mod ring;
+pub mod segment;
 pub mod syslog;
 
 pub use batch::{
     Facility, FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind,
 };
+pub use file::{Block, LogFile, Refresh, BLOCK_SIZE};
+pub use ring::Ring;
+pub use segment::{MinMax, OwnedColumn, Segment, Span, SEGMENT_MAX_ROWS};
 pub use syslog::SyslogParser;

@@ -268,8 +268,11 @@ pub struct LogBatch<'a> {
     pub raw: Vec<&'a [u8]>,
 
     // === Tier 2: Predefined typed columns ===
-    /// Timestamp in nanoseconds since Unix epoch.
+    /// Event timestamp (parsed from the line) in nanoseconds since Unix epoch.
     pub timestamp_ns: Vec<Option<i64>>,
+    /// Observed timestamp (when the line was read) in nanoseconds since Unix
+    /// epoch. Filled per read via [`LogBatch::fill_observed_ts`].
+    pub observed_ts_ns: Vec<Option<i64>>,
     /// Log severity.
     pub severity: Vec<Option<Severity>>,
     /// Extracted message body (may differ from raw if structured).
@@ -300,6 +303,7 @@ impl<'a> LogBatch<'a> {
             resource: Resource::default(),
             raw: Vec::with_capacity(BATCH_SIZE),
             timestamp_ns: Vec::with_capacity(BATCH_SIZE),
+            observed_ts_ns: Vec::with_capacity(BATCH_SIZE),
             severity: Vec::with_capacity(BATCH_SIZE),
             message: Vec::with_capacity(BATCH_SIZE),
             facility: Vec::with_capacity(BATCH_SIZE),
@@ -338,12 +342,23 @@ impl<'a> LogBatch<'a> {
     ) {
         self.raw.push(raw);
         self.timestamp_ns.push(timestamp_ns);
+        self.observed_ts_ns.push(None);
         self.severity.push(severity);
         self.facility.push(facility);
         self.message.push(message);
         self.trace_id.push(None);
         self.span_id.push(None);
         self.len = self.len.saturating_add(1);
+    }
+
+    /// Set the observed timestamp on every row that does not have one yet.
+    /// All lines of one read share the moment they were read.
+    pub fn fill_observed_ts(&mut self, observed_ts_ns: i64) {
+        for slot in self.observed_ts_ns.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(observed_ts_ns);
+            }
+        }
     }
 
     /// Set a dynamic field value for the current row.
@@ -362,6 +377,7 @@ impl<'a> LogBatch<'a> {
         self.len = 0;
         self.raw.clear();
         self.timestamp_ns.clear();
+        self.observed_ts_ns.clear();
         self.severity.clear();
         self.facility.clear();
         self.message.clear();
