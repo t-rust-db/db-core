@@ -71,11 +71,10 @@ fn encode_leaf_cell(
     payload: &[u8],
 ) -> Result<Vec<u8>, BtreeError> {
     let payload_len = payload.len() as u64;
-    let local_size =
-        (local_payload_size(usable_size, payload_len, false) as usize).min(payload.len());
+    let local_size = (local_payload_size(usable_size, payload_len, false)).min(payload.len());
     let (local_bytes, overflow_bytes) = payload.split_at(local_size);
     let mut cell = encode_varint(payload_len);
-    cell.extend(encode_varint(rowid as u64));
+    cell.extend(encode_varint(super::super::rowid_to_varint(rowid)));
     cell.extend_from_slice(local_bytes);
     if !overflow_bytes.is_empty() {
         let overflow_first = write_overflow_chain(pager, usable_size, overflow_bytes)?;

@@ -614,7 +614,7 @@ impl WalWriter {
             }
         }
 
-        let mut bytes = vec![0u8; size as usize];
+        let mut bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
         let n = file.read_at(&mut bytes, 0)?;
         bytes.truncate(n);
 
@@ -668,7 +668,8 @@ impl WalWriter {
         let frame_size = FRAME_HEADER_LEN
             .saturating_add(self.header.page_size as usize)
             .max(1) as u64;
-        (self.offset.saturating_sub(HEADER_LEN as u64) / frame_size) as u32
+        u32::try_from(self.offset.saturating_sub(HEADER_LEN as u64) / frame_size)
+            .unwrap_or(u32::MAX)
     }
 }
 
@@ -800,7 +801,7 @@ mod tests {
 
         let file = vfs.open_read(path).unwrap();
         let size = file.size().unwrap();
-        let mut bytes = vec![0u8; size as usize];
+        let mut bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
         file.read_at(&mut bytes, 0).unwrap();
 
         let parsed = WalHeader::parse(&bytes).unwrap();
@@ -827,7 +828,7 @@ mod tests {
 
         let file = vfs.open_read(path).unwrap();
         let size = file.size().unwrap();
-        let mut bytes = vec![0u8; size as usize];
+        let mut bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
         file.read_at(&mut bytes, 0).unwrap();
 
         let parsed = WalHeader::parse(&bytes).unwrap();
@@ -871,7 +872,7 @@ mod tests {
 
         let file = vfs.open_read(path).unwrap();
         let size = file.size().unwrap();
-        let mut bytes = vec![0u8; size as usize];
+        let mut bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
         file.read_at(&mut bytes, 0).unwrap();
 
         let parsed = WalHeader::parse(&bytes).unwrap();

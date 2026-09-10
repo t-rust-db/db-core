@@ -602,14 +602,19 @@ impl Pager {
                 self.page_size,
                 self.page_size,
                 initial_page_count,
-                to_journal.len() as u32,
+                // Page numbers are `u32`, so a journal can never hold more.
+                u32::try_from(to_journal.len()).unwrap_or(u32::MAX),
                 random_nonce(),
             )
             .map_err(journal_to_pager_error)?;
             for (index, &page_num) in to_journal.iter().enumerate() {
                 let original = self.source.read_page(page_num)?;
                 writer
-                    .write_record(index as u32, page_num, &original)
+                    .write_record(
+                        u32::try_from(index).unwrap_or(u32::MAX),
+                        page_num,
+                        &original,
+                    )
                     .map_err(journal_to_pager_error)?;
             }
             // `PRAGMA synchronous` (#645): the journal fsync is skipped
@@ -1143,7 +1148,9 @@ fn recover_hot_journal<V: Vfs>(
 ) -> Result<(), PagerError> {
     let journal_file = vfs.open_read(journal_path)?;
     let size = journal_file.size()?;
-    let mut journal_bytes = vec![0u8; size as usize];
+    // A file larger than the address space cannot be read into memory;
+    // start empty and let the short read fail the header checks below.
+    let mut journal_bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
     let n = journal_file.read_at(&mut journal_bytes, 0)?;
     journal_bytes.truncate(n);
 
@@ -1190,7 +1197,7 @@ fn read_wal_pages<V: Vfs>(
         return Ok(HashMap::new());
     }
 
-    let mut bytes = vec![0u8; size as usize];
+    let mut bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
     let n = wal_file.read_at(&mut bytes, 0)?;
     bytes.truncate(n);
     if bytes.len() < wal::HEADER_LEN {

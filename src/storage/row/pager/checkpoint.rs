@@ -81,7 +81,7 @@ pub fn checkpoint_passive(
             checkpoint_complete: true,
         });
     }
-    let mut wal_bytes = vec![0u8; size as usize];
+    let mut wal_bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
     let n = wal_file.read_at(&mut wal_bytes, 0)?;
     wal_bytes.truncate(n);
     if wal_bytes.len() < wal::HEADER_LEN {
@@ -108,7 +108,9 @@ pub fn checkpoint_passive(
         clippy::arithmetic_side_effects,
         reason = "frame_size.max(1) rules out division by zero"
     )]
-    let total_frames = (wal_bytes.len().saturating_sub(wal::HEADER_LEN) / frame_size.max(1)) as u32;
+    let total_frames =
+        u32::try_from(wal_bytes.len().saturating_sub(wal::HEADER_LEN) / frame_size.max(1))
+            .unwrap_or(u32::MAX);
     if total_frames == 0 {
         return Ok(CheckpointResult {
             backfilled_frames: 0,

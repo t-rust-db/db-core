@@ -307,10 +307,11 @@ fn check_freelist<P: PageSource>(source: &P, header: &DatabaseHeader, problems: 
                 problems.push(format!("freelist leaf page {leaf} is out of range"));
             }
         }
-        total_leaves = total_leaves.saturating_add(page.leaves.len() as u32);
+        total_leaves =
+            total_leaves.saturating_add(u32::try_from(page.leaves.len()).unwrap_or(u32::MAX));
         trunk = page.next_trunk;
     }
-    let total = total_leaves.saturating_add(seen_trunks.len() as u32);
+    let total = total_leaves.saturating_add(u32::try_from(seen_trunks.len()).unwrap_or(u32::MAX));
     if total != header.freelist_page_count {
         problems.push(format!(
             "freelist_page_count is {} but the trunk chain has {total} pages",
