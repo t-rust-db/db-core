@@ -944,8 +944,12 @@ mod mcdc_vectors {
 
     #[test]
     fn mcdc__eqp_268__v4_aggregate_never_reports_a_covering_index_seek() {
+        // `direct_scan` false: an aggregate never takes the covering-index
+        // path. Since #298 its `WHERE a = 1` does seek -- through the
+        // #279 row seek, as `SEARCH ... USING INDEX`, never `COVERING`.
         let d = eqp_details("SELECT sum(b) FROM t WHERE a = 1");
-        assert_eq!(d[0], "SCAN t", "{d:?}");
+        assert_eq!(d[0], "SEARCH t USING INDEX ia (a=?)", "{d:?}");
+        assert!(!d[0].contains("COVERING"), "{d:?}");
     }
 
     // `IN` is a direct-scan range shape but not a #279 row-seek shape, so
