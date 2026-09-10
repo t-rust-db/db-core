@@ -11,7 +11,7 @@ executor**. It is:
 
 1. a storage layer, `storage::stream`, that turns a live append-only file
    into indexed, immutable `Segment`s held in a bounded `Ring`;
-2. adapters that present those segments to the existing `vm::batch`
+2. adapters that present those segments to the batch VM, `vm::batch`
    executor (`impl vm::batch::Segment`, `impl vm::batch::Source`);
 3. a planner, `codegen::stream`, that adds a stream **prologue**
    (segment pruning, late parsing) and **epilogue** (windows, standing
@@ -21,12 +21,12 @@ Filter, projection, aggregation, sort, limit and the parallel-body →
 `Combine` barrier are reused from `vm::batch` verbatim. `vm::stream`
 defines only the opcodes the batch VM has no notion of (§Opcodes).
 
-The reasoning: `vm::batch` is already pull-based (`Source::next_batch()
--> Option<Batch>`), already splits a program into a per-segment body and
-a finalize barrier (`Program::split_finalize`), resolves columns by name
+This holds because the batch VM is pull-based (`Source::next_batch()
+-> Option<Batch>`), splits a program into a per-segment body and a
+finalize barrier (`Program::split_finalize`), resolves columns by name
 at run time, and exposes projection pushdown (`Program::columns_to_
-load`). A live log is a stream of segments; nothing in that list needs
-to change to consume one.
+load`). A live log is a stream of segments and is consumed through those
+four interfaces unchanged.
 
 ## Storage: `storage::stream`
 
@@ -48,7 +48,8 @@ file ─────────────────────────
 - **`Segment`** — a sealed `LogBatch` (≤ 4096 rows) plus indexes built
   at seal: `minmax` on both timestamps; the Tier-3 dictionaries, which
   *are* the set index (`facility = 'kern'` with no dict hit → skip);
-  optional bloom over `message` tokens and `trace_id`; `Vec<u32>` line
+  bloom over `message` tokens and over high-cardinality id columns
+  (`trace_id`, `request_id`; default-on, ~1–2 KB); `Vec<u32>` line
   offsets. The head segment is the only mutable object; it is re-indexed
   per refresh and sealed at 4096 rows or an idle timeout.
 - **Sparse global index** — `(byte_off, event_ts)` per segment boundary,
@@ -64,6 +65,65 @@ file ─────────────────────────
   (`vm::batch::AggPart`) — for up to the scope horizon. A live
   `count(*) … since 1d` over a 42-minute ring merges a day of summaries,
   re-aggregates the hot ring, and adds the head.
+
+## Indexing: block-level only, no row-level index
+
+The stream engine has **no per-row index** — no B-tree, no hash index,
+no inverted index over fields. Inside the ring a filter is a dictionary
+lookup plus a vectorized sweep of a `u16` vector over 4096 rows: a few
+microseconds per segment, single-digit milliseconds for an hour at
+1k lines/s. Below ~10⁷ rows a scan beats any row index, and building one
+per field at every seal would cost more than every query saves. Loki's
+argument against Lucene-style inverted indexes holds for logs: queries
+are time-bounded, so per-row indexes cost far more than they return.
+
+What the engine has instead are **segment-skipping indexes**, each
+answering "can this segment contain a match?": minmax (time ranges), the
+dictionaries (equality on low-cardinality columns), blooms (needles in
+`message` and high-cardinality ids). Hash tables exist only at query
+time (`GroupReduce`, `HashBuild`) — execution structures, not indexes.
+
+**Sidecar index file.** In-memory indexes die with eviction and close,
+which makes read-through over a large file disk-bound: every segment
+would have to be read to consult its bloom. So the skip indexes are also
+persisted in an append-only sidecar, `<file>.idx`, one record per sealed
+segment: byte range, line count, minmax on both timestamps, blooms.
+Read-through prunes from the sidecar and reads only surviving segments;
+a second open of a large file is immediate; rebuild is lazy and
+incremental from the last indexed byte; truncation/rotation invalidates
+it under the same `head_off > len` rule. Size ≈ 2 KB per 4096 lines,
+about 0.5 % of the file.
+
+The hot-window "scan is fast enough" claim is **measured, not assumed**:
+the adapter benchmark (#302) fixes the numbers before any further index
+work.
+
+## Formats
+
+Per-line parsers live in `storage::stream` and fill `LogBatch`. Three
+are in scope besides syslog: Apache/nginx combined (raw, positional),
+JSON Lines (structured, nested), logfmt (structured, flat). Rules:
+
+- **Tier 2b stays `facility`-only.** Access-log fields (`status`,
+  `method`, `bytes`) are typed Tier-3 columns, not new predefined
+  columns: a Tier-3 `Int` or `Dict` column filters just as fast and only
+  one format has them.
+- **Typed Tier-3 at ingest.** `FieldStore` accepts `Int`/`Float`/`Bool`
+  as well as `Str`; first non-null type wins, conflict degrades to `Str`;
+  sparse keys are null-padded.
+- **Never fabricate Tier-2.** A format without a severity (combined
+  log) leaves `severity = None`; the query says `status >= 500`.
+- **Alias promotion** for structured formats (`time|ts|@timestamp…` →
+  `event_ts`, `level|severity|lvl…` → `severity`, `msg|message…` →
+  `message`); numeric levels (Bunyan/Pino 10–60) map to `Severity`.
+  Nested objects flatten to dot paths to depth 2; deeper stays a string
+  for late `json_extract`.
+- **Two-stage container parse.** Docker `json-file` and Kubernetes CRI
+  wrap a payload in another format; the container is parsed first, the
+  payload re-enters detection. Container fields stay Tier-3.
+- **Detection locks on per file** (sample the first block; ≥ 80 %
+  agreement decides), falling back to per-line detection only when
+  lock-on fails; `format` is recorded as a Tier-3 `Dict` column.
 
 ## Scope and retention
 
@@ -113,8 +173,8 @@ clamped and reported.
    `codegen::batch::compile` on the rewritten `Select`.
 4. Wrap: prologue, `Body`, epilogue.
 
-`Scope` is a planner input; its default lives in the client (loglume
-config), not in db-core.
+`Scope` is a planner input; its default lives in the client, not in
+db-core.
 
 Exact decomposition holds for `COUNT`/`SUM`/`MIN`/`MAX`/`AVG`.
 `COUNT(DISTINCT)` and quantiles do not decompose across summaries; they
@@ -124,7 +184,7 @@ fall back to read-through (reported) until sketch states exist.
 
 Typed operands, ADR 0007 style. Only what `vm::batch` cannot express.
 
-| Opcode | Meaning | Source of the idea |
+| Opcode | Meaning | Reference |
 |---|---|---|
 | `Prune { scope, preds: Vec<IndexPred> }` | segment selection via minmax / dictionary / bloom before any row is materialized | ClickHouse skip indexes (`minmax`, `set`, `bloom_filter`); Loki chunk blooms |
 | `Parse { src, format: Json \| Logfmt \| Regex \| Kv, prefix }` | late structuring: new Tier-3 columns for this query only, after the cheap substring filter on `raw` | Loki `\| json` / `\| logfmt` pipeline stages; ClickHouse raw `Body` + materialized columns |
@@ -133,9 +193,9 @@ Typed operands, ADR 0007 style. Only what `vm::batch` cannot express.
 | `Watermark { grace }` | close windows at `max(event_ts) − grace`; late lines to a side output | Flink event time / watermarks |
 | `Emit { mode: Rows \| OnChange \| Threshold(expr) }` | standing-query output; alerts are `OnChange`/`Threshold` on a result set | Loki ruler (`for`), swatchdog |
 
-Ideas taken for the storage layer, for the record:
+Storage mechanisms and their references:
 
-| Mechanism | Source |
+| Mechanism | Reference |
 |---|---|
 | Incremental line-offset index rebuilt from the last indexed byte; truncation reset; SQL virtual tables over a growing file | lnav `logfile::rebuild_index` |
 | Immutable segment per refresh; queries union segments; refresh interval bounds re-index cost | OpenSearch/Lucene segments + `refresh` |
@@ -147,9 +207,11 @@ Ideas taken for the storage layer, for the record:
 
 ## Structure
 
-- `src/storage/stream/{file,segment,ring,index}.rs` — `LogFile`,
-  `Segment`, `Ring`, sparse index. `batch.rs`/`syslog.rs` (existing) are
-  the per-line parse into `LogBatch`.
+- `src/storage/stream/{file,segment,ring,index,sidecar}.rs` — `LogFile`,
+  `Segment`, `Ring`, sparse index, `<file>.idx` sidecar.
+  `batch.rs` and the parsers `syslog.rs`, `clf.rs`, `jsonl.rs`,
+  `logfmt.rs` plus `detect.rs` (lock-on) are the per-line parse into
+  `LogBatch`.
 - `src/storage/stream/adapter.rs` — `impl vm::batch::Segment for
   Arc<Segment>` (materializes only `Program::columns_to_load()`),
   `TailSource: vm::batch::Source` (blocks on head refresh).
@@ -158,33 +220,20 @@ Ideas taken for the storage layer, for the record:
 - `src/codegen/stream.rs` — `compile`, `Scope`, `IndexPred`, validator.
 - `src/engine/stream.rs` — `StreamEngine: Engine` (ADR 0017);
   `FileStats::Stream { bytes_parsed, lines }` plus ring/scope stats.
-- Features: `storage-stream = ["vm-stream"]` (existing), `codegen-stream
+- Features: `storage-stream = ["vm-stream"]`, `codegen-stream
   = ["codegen-batch", "storage-stream"]`, `engine-stream = [...]`.
 
 ## Consequences
 
 - Dictionary → `vm::batch::Value::Str` materialization per row is the
-  performance frontier. It is accepted for the first slice and measured
-  before optimizing; the candidate fix is a dictionary column variant in
-  `Batch`, not a stream-specific value model (ADR 0010/0014 reasoning).
+  performance frontier. It is measured before it is optimized; the fix,
+  if one is needed, is a dictionary column variant in `Batch`, not a
+  stream-specific value model (ADR 0010, ADR 0014).
 - The head segment re-materializes on every refresh; refresh rate is
   capped (OpenSearch's 1 s default exists for this reason).
 - Alerts need no server: a standing query is a compiled program plus an
   interval and a `for` duration, evaluated on each segment seal in the
   client process.
-- #300 (`parse_expr` as a public entry point) is superseded: the stream
-  engine consumes the full parser through `codegen::stream`, exactly as
-  the batch and row engines do.
-
-## Phases
-
-1. `storage::stream` — `LogFile`, `Segment` + minmax, `Ring` (fixed
-   budget), truncation, `observed_ts`.
-2. Adapters + `StreamEngine` — full SQL over a live file with **zero new
-   opcodes**; loglume drops its hand-rolled filter.
-3. `codegen::stream` — validation, `Scope`, `Prune`.
-4. Late parse — `json_extract`, `logfmt_extract`, `regexp_extract`
-   (`functions` module; no grammar change).
-5. Windows — `Window`/`RangeAgg`/`Watermark`; `Combine` across ring +
-   summaries; ring autoscaling.
-6. Standing queries — `Emit::OnChange`; loglume `--alert`.
+- The stream mode consumes the full parser through `codegen::stream`,
+  as the row and batch modes do through their planners; there is no
+  expression-only parser entry point.
