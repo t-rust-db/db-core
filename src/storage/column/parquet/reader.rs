@@ -14,6 +14,8 @@ use std::fmt;
 pub enum ReadError {
     Encoding(EncodingError),
     UnexpectedEof,
+    /// A page header's `num_values` is negative.
+    InvalidValueCount(i32),
     InvalidUtf8,
     DictionaryIndexOutOfRange(u32),
     UnsupportedNestedPhysicalType(crate::storage::column::parquet::footer::PhysicalType),
@@ -24,6 +26,7 @@ impl fmt::Display for ReadError {
         match self {
             ReadError::Encoding(e) => write!(f, "{e}"),
             ReadError::UnexpectedEof => write!(f, "unexpected end of page data"),
+            ReadError::InvalidValueCount(n) => write!(f, "invalid page value count: {n}"),
             ReadError::InvalidUtf8 => write!(f, "BYTE_ARRAY value is not valid UTF-8"),
             ReadError::DictionaryIndexOutOfRange(i) => {
                 write!(f, "dictionary index {i} out of range")
@@ -45,6 +48,11 @@ impl From<EncodingError> for ReadError {
 
 pub type Result<T> = std::result::Result<T, ReadError>;
 
+/// A page header's `num_values` as a count: negative is corrupt input.
+fn value_count(num_values: i32) -> Result<usize> {
+    usize::try_from(num_values).map_err(|_| ReadError::InvalidValueCount(num_values))
+}
+
 /// Split a data page body into `(definition_levels, value_bytes)`.
 /// `definition_levels` is empty when `max_def_level == 0` (all values
 /// present, no null tracking needed).
@@ -56,7 +64,8 @@ fn split_definition_levels<'a>(
     if max_def_level == 0 {
         return Ok((Vec::new(), page_body));
     }
-    let (levels, rest) = read_level_section(page_body, max_def_level, header.num_values as usize)?;
+    let (levels, rest) =
+        read_level_section(page_body, max_def_level, value_count(header.num_values)?)?;
     Ok((levels, rest))
 }
 
@@ -81,7 +90,7 @@ pub fn split_rep_def_levels<'a>(
     max_rep_level: u32,
     max_def_level: u32,
 ) -> Result<(Vec<u32>, Vec<u32>, &'a [u8])> {
-    let num_values = header.num_values as usize;
+    let num_values = value_count(header.num_values)?;
     let mut buf = page_body;
     let rep_levels = if max_rep_level == 0 {
         Vec::new()
@@ -149,7 +158,7 @@ fn assemble<T>(
     mut values: &[u8],
     mut read_value: impl FnMut(&mut &[u8]) -> Result<T>,
 ) -> Result<Vec<Option<T>>> {
-    let num_values = header.num_values as usize;
+    let num_values = value_count(header.num_values)?;
     let mut out = Vec::with_capacity(num_values);
     if definition_levels.is_empty() {
         for _ in 0..num_values {
@@ -241,7 +250,7 @@ pub fn decode_dictionary_double(dictionary_body: &[u8], num_values: i32) -> Resu
 
 /// Decode a bit-packed BOOLEAN dictionary page body into its `num_values` entries.
 pub fn decode_dictionary_boolean(dictionary_body: &[u8], num_values: i32) -> Result<Vec<bool>> {
-    (0..num_values as usize)
+    (0..value_count(num_values)?)
         .map(|i| {
             let byte = *dictionary_body.get(i / 8).ok_or(ReadError::UnexpectedEof)?;
             Ok((byte >> (i % 8)) & 1 == 1)
@@ -304,7 +313,7 @@ fn assemble_dictionary<T: Clone>(
     indices: &[u32],
     dictionary: &[T],
 ) -> Result<Vec<Option<T>>> {
-    let num_values = header.num_values as usize;
+    let num_values = value_count(header.num_values)?;
     let mut out = Vec::with_capacity(num_values);
     let mut idx_iter = indices.iter();
     let presents: Vec<bool> = if definition_levels.is_empty() {
@@ -331,7 +340,7 @@ fn assemble_dictionary<T: Clone>(
 /// `header.num_values` when there are no definition levels (all present).
 fn present_count(header: &DataPageHeader, definition_levels: &[u32], max_def_level: u32) -> usize {
     if definition_levels.is_empty() {
-        header.num_values as usize
+        usize::try_from(header.num_values).unwrap_or(0)
     } else {
         encoding::null_mask(definition_levels, max_def_level)
             .into_iter()
@@ -359,7 +368,7 @@ pub fn read_dictionary_index_column(
     let indices =
         read_dictionary_indices(index_bytes, present_count(header, &levels, max_def_level))?;
     let presents: Vec<bool> = if levels.is_empty() {
-        vec![true; header.num_values as usize]
+        vec![true; value_count(header.num_values)?]
     } else {
         encoding::null_mask(&levels, max_def_level)
     };
@@ -391,7 +400,7 @@ pub fn read_int64_column(
         let decoded = encoding::decode_delta_binary_packed(values)?;
         let mut decoded = decoded.into_iter();
         let presents: Vec<bool> = if levels.is_empty() {
-            vec![true; header.num_values as usize]
+            vec![true; value_count(header.num_values)?]
         } else {
             encoding::null_mask(&levels, max_def_level)
         };
@@ -1105,5 +1114,24 @@ mod tests {
                 })
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_289 {
+    use super::*;
+
+    /// #289: `num_values < 0` in a page header is corrupt input.
+    #[test]
+    fn negative_value_count_is_a_typed_error() {
+        assert_eq!(value_count(3).unwrap(), 3);
+        assert!(matches!(
+            value_count(-1),
+            Err(ReadError::InvalidValueCount(-1))
+        ));
+        assert!(matches!(
+            decode_dictionary_boolean(&[], -7),
+            Err(ReadError::InvalidValueCount(-7))
+        ));
     }
 }

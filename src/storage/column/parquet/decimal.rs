@@ -21,14 +21,19 @@ impl Decimal {
 impl fmt::Display for Decimal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.scale <= 0 {
-            return write!(f, "{}", self.unscaled * 10i128.pow((-self.scale) as u32));
+            return write!(
+                f,
+                "{}",
+                self.unscaled * 10i128.pow(self.scale.unsigned_abs())
+            );
         }
-        let scale = self.scale as u32;
+        let scale = self.scale.unsigned_abs();
         let divisor = 10i128.pow(scale);
         let sign = if self.unscaled < 0 { "-" } else { "" };
         let magnitude = self.unscaled.unsigned_abs();
-        let whole = magnitude / divisor as u128;
-        let frac = magnitude % divisor as u128;
+        let divisor = divisor.unsigned_abs();
+        let whole = magnitude / divisor;
+        let frac = magnitude % divisor;
         write!(f, "{sign}{whole}.{frac:0width$}", width = scale as usize)
     }
 }

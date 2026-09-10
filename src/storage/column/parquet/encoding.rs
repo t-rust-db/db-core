@@ -8,6 +8,8 @@ use std::fmt;
 pub enum EncodingError {
     UnexpectedEof,
     InvalidVarint,
+    /// A block size or count varint does not fit `usize`.
+    InvalidLength(u64),
 }
 
 impl fmt::Display for EncodingError {
@@ -15,6 +17,7 @@ impl fmt::Display for EncodingError {
         match self {
             EncodingError::UnexpectedEof => write!(f, "unexpected end of input"),
             EncodingError::InvalidVarint => write!(f, "varint too long"),
+            EncodingError::InvalidLength(n) => write!(f, "length out of range: {n}"),
         }
     }
 }
@@ -22,6 +25,28 @@ impl fmt::Display for EncodingError {
 impl std::error::Error for EncodingError {}
 
 pub type Result<T> = std::result::Result<T, EncodingError>;
+
+/// A varint used as a length/count: must fit `usize`.
+fn length(v: u64) -> Result<usize> {
+    usize::try_from(v).map_err(|_| EncodingError::InvalidLength(v))
+}
+
+/// Zigzag decoding without a reinterpreting cast: the magnitude half always
+/// fits (`raw >> 1 < 2^63`), the sign is `-1` or `0`.
+fn zigzag_decode(raw: u64) -> i64 {
+    let half = i64::try_from(raw >> 1).unwrap_or(i64::MAX);
+    half ^ -i64::from(raw & 1 == 1)
+}
+
+/// The two's-complement reinterpretation the DELTA_BINARY_PACKED encoding
+/// defines for a 64-bit-wide delta (#289): the one place it is spelled out.
+#[allow(
+    clippy::cast_possible_wrap,
+    reason = "bit-for-bit reinterpretation the encoding specifies; not a range conversion"
+)]
+fn u64_bits_as_i64(raw: u64) -> i64 {
+    raw as i64
+}
 
 fn read_unsigned_varint(buf: &[u8], pos: &mut usize) -> Result<u64> {
     let mut result: u64 = 0;
@@ -112,7 +137,7 @@ pub fn decode_hybrid_rle_bitpacked(
 
 fn read_zigzag_varint(buf: &[u8], pos: &mut usize) -> Result<i64> {
     let raw = read_unsigned_varint(buf, pos)?;
-    Ok(((raw >> 1) as i64) ^ -((raw & 1) as i64))
+    Ok(zigzag_decode(raw))
 }
 
 /// Unpack `count` `bit_width`-bit unsigned values, packed LSB-first with no
@@ -153,9 +178,9 @@ fn unpack_bit_packed(data: &[u8], bit_width: u32, count: usize) -> Result<Vec<u6
 /// Spec: https://parquet.apache.org/docs/file-format/data-pages/encodings/#delta-encoding-delta_binary_packed--5
 pub fn decode_delta_binary_packed(data: &[u8]) -> Result<Vec<i64>> {
     let mut pos = 0usize;
-    let block_size = read_unsigned_varint(data, &mut pos)? as usize;
-    let miniblocks_per_block = read_unsigned_varint(data, &mut pos)? as usize;
-    let total_count = read_unsigned_varint(data, &mut pos)? as usize;
+    let block_size = length(read_unsigned_varint(data, &mut pos)?)?;
+    let miniblocks_per_block = length(read_unsigned_varint(data, &mut pos)?)?;
+    let total_count = length(read_unsigned_varint(data, &mut pos)?)?;
     let first_value = read_zigzag_varint(data, &mut pos)?;
 
     let mut out = Vec::with_capacity(total_count);
@@ -183,7 +208,11 @@ pub fn decode_delta_binary_packed(data: &[u8]) -> Result<Vec<i64>> {
                 if out.len() >= total_count {
                     break;
                 }
-                prev += min_delta + raw as i64;
+                // Deltas are unsigned offsets from `min_delta`, summed with the
+                // two's-complement wrap the encoding defines for 64-bit widths.
+                prev = prev
+                    .wrapping_add(min_delta)
+                    .wrapping_add(u64_bits_as_i64(raw));
                 out.push(prev);
             }
         }
@@ -380,5 +409,29 @@ mod tests {
         write_zigzag(&mut buf, 42);
         let values = decode_delta_binary_packed(&buf).unwrap();
         assert_eq!(values, vec![42]);
+    }
+}
+
+#[cfg(test)]
+mod tests_289 {
+    use super::*;
+
+    /// #289: zigzag and the 64-bit delta reinterpretation, at the corners.
+    #[test]
+    fn zigzag_decode_corners_and_wide_delta_bits() {
+        assert_eq!(zigzag_decode(0), 0);
+        assert_eq!(zigzag_decode(1), -1);
+        assert_eq!(zigzag_decode(2), 1);
+        assert_eq!(zigzag_decode(u64::MAX), i64::MIN);
+        assert_eq!(zigzag_decode(u64::MAX - 1), i64::MAX);
+        assert_eq!(u64_bits_as_i64(u64::MAX), -1);
+        assert_eq!(u64_bits_as_i64(1 << 63), i64::MIN);
+        assert_eq!(length(7).unwrap(), 7);
+        // `length` can only fail where `usize` is narrower than `u64`.
+        #[cfg(target_pointer_width = "32")]
+        assert!(matches!(
+            length(u64::MAX),
+            Err(EncodingError::InvalidLength(u64::MAX))
+        ));
     }
 }
