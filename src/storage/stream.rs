@@ -28,6 +28,15 @@
 //! Batch-level `Source` and `Resource` avoid per-row duplication for
 //! metadata constant across a file/container.
 
+// db-core#225's `cast_*` tier, scoped off for `stream` only while its
+// storage layer is being built (#304/#305 own this module): two sites today
+// (`file.rs`, `segment.rs`). Lift with #305, not as a drive-by from #289.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+
 pub mod batch;
 pub mod file;
 pub mod ring;

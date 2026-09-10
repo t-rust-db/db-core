@@ -2587,7 +2587,7 @@ mod tests {
     /// leaves false) for A's independence pair.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__btree_1509__v1_content_start_before_ptr_end() {
+    fn mcdc__btree_1543__v1_content_start_before_ptr_end() {
         let mut buf = vec![0u8; 32];
         put_u8(&mut buf, 0, LEAF_TABLE, 1).unwrap();
         write_content_start(&mut buf, 0, 4, 1).unwrap(); // ptr_base(8) + 0 cells == 8 > content_start(4)
@@ -2601,10 +2601,10 @@ mod tests {
 
     /// #52 tagged MC/DC vector (obligation `btree_1374`): both leaves
     /// false — the fast path proceeds. Independence pair for leaf A
-    /// against `mcdc__btree_1509__v1_content_start_before_ptr_end`.
+    /// against `mcdc__btree_1543__v1_content_start_before_ptr_end`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__btree_1509__v2_both_leaves_false() {
+    fn mcdc__btree_1543__v2_both_leaves_false() {
         let mut buf = leaf_page_with_cells(512, &[]);
         let cell = build_interior_cell(0, 42);
         let spliced = splice_insert_cell(&mut buf, 0, 1, 0, &cell).unwrap();
@@ -2618,10 +2618,10 @@ mod tests {
     /// (`content_start.saturating_sub(ptr_end) < needed`) true while A is
     /// false independently flips the outcome to true — a zero-size gap.
     /// Independence pair for leaf B against
-    /// `mcdc__btree_1509__v2_both_leaves_false`.
+    /// `mcdc__btree_1543__v2_both_leaves_false`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__btree_1509__v3_gap_too_small() {
+    fn mcdc__btree_1543__v3_gap_too_small() {
         let mut buf = vec![0u8; 32];
         put_u8(&mut buf, 0, LEAF_TABLE, 1).unwrap();
         write_content_start(&mut buf, 0, 8, 1).unwrap(); // ptr_base(8) + 0 cells == 8, zero gap

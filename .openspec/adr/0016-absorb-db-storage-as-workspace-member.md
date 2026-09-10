@@ -28,17 +28,27 @@ No `db-storage` crate, workspace member, or git dependency exists.
 
 ## Gates
 
-- `cast_possible_truncation`/`cast_possible_wrap`/`cast_sign_loss`
-  (db-core#225) — `#![allow]` on `storage` only.
-- `check-mvl-limit` — `src/storage/*` in `MVL_LIMIT_EXCLUDE`;
-  `src/storage.rs` scanned.
-- `check-panic-allows` — `EXEMPT`: `storage/row/btree.rs`
-  (`test_minimal_db`, `cfg(any(test, feature))`),
-  `storage/row/vfs/bin/lock_probe.rs`.
-- MC/DC obligation ids are basename-keyed: `storage::row::btree::{table,
-  index}` submodule files carry a `table_`/`index_` prefix.
+`storage` is held to db-core's full lint tier (#289): no `cast_*` allow,
+no `EXEMPT` entries in `check-panic-allows`. Two designated boundaries in
+`MVL_LIMIT_EXCLUDE`, by file name, not by directory:
 
-All four are a worklist in db-core#289.
+- `storage::row::vfs` (`vfs.rs`, `page_source.rs`, `unix.rs`,
+  `memory.rs`) — the open-implementor `dyn` boundary (ADR 0003), same
+  standing as `vm/row/cursor*.rs`; `fcntl.rs` — one of the two audited
+  `unsafe` carve-outs.
+- `storage::column::parquet/*` — a zero-copy reader over the mmap; the
+  lifetimes are the design. Owning the buffer instead would be a redesign,
+  not a lint fix, and is not planned. `column/mmap.rs` — the other
+  `unsafe` carve-out.
+- `storage::stream/*` is excluded while #304/#305 build it; lifted with
+  #305.
+
+MC/DC obligation ids are basename-keyed: `storage::row::btree::{table,
+index}` submodule files carry a `table_`/`index_` prefix. The
+`lock_probe` test helper lives in `tests/helpers/` (as in sqlite-rs), out
+of production scanning; `test_minimal_db`'s `cfg(any(test,
+feature = "storage-test-support"))` region counts as test code for the
+panic-allow gate.
 
 ## Consequences
 

@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.83.0"
+version = "0.83.1"
 # The three [[bench]] targets are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -111,7 +111,7 @@ ruzstd = { version = "0.7", optional = true }
 
 [[bin]]
 name = "lock_probe"
-path = "src/storage/row/vfs/bin/lock_probe.rs"
+path = "tests/helpers/lock_probe.rs"
 required-features = ["storage-row"]
 
 [[bench]]

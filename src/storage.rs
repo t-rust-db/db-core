@@ -14,17 +14,6 @@
 // than `forbid` is what lets those two opt back in locally (#9).
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
-// db-core#225's `cast_*` tier is scoped off for `storage` only: this
-// module was written under db-storage's lint bar (sqlite-rs's, #82),
-// which predates #225, and carries ~98 unreviewed `as` casts. Each is a
-// per-site decision (`try_from` + typed error vs. a documented allow),
-// not a mechanical rewrite -- tracked as a worklist in db-core#289.
-// Everything else in db-core's `[lints.clippy]` applies here unchanged.
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss
-)]
 
 #[cfg(feature = "storage-column")]
 pub mod column;
