@@ -42,3 +42,6 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0013](0013-row-codegen-owned-in-db-core.md) — `codegen::row` is the one row planner, owned in `db-core`
 - [0014](0014-one-row-schema-type.md) — One row schema type, defined in `db-core::schema`, consumed by `db-storage`
 - [0015](0015-testing-strategy.md) — db-core's testing strategy
+- [0016](0016-absorb-db-storage-as-workspace-member.md) — db-storage absorbed as the `storage` module
+- [0017](0017-engine-seam.md) — `engine`: the client-facing seam over execution modes
+- [0018](0018-stream-engine.md) — Stream engine: indexed live-log query as storage + prologue/epilogue around the batch VM
