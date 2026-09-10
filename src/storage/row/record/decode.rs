@@ -12,7 +12,9 @@ use super::{TextEncoding, Value};
 /// Never panics — any truncation or malformed serial type returns `Err`.
 pub fn decode_record(payload: &[u8], encoding: TextEncoding) -> Result<Vec<Value>, RecordError> {
     let (header_len, n) = decode_varint_at(payload, 0)?;
-    let header_len = header_len as usize;
+    // An oversize varint (untrusted input) saturates and fails the length
+    // checks that follow, as a typed error.
+    let header_len = usize::try_from(header_len).unwrap_or(usize::MAX);
     if header_len < n {
         return Err(RecordError::HeaderTooShort {
             declared: header_len,
@@ -77,7 +79,9 @@ pub fn parse_header_into(
 ) -> Result<(), RecordError> {
     entries.clear();
     let (header_len, n) = decode_varint_at(payload, 0)?;
-    let header_len = header_len as usize;
+    // An oversize varint (untrusted input) saturates and fails the length
+    // checks that follow, as a typed error.
+    let header_len = usize::try_from(header_len).unwrap_or(usize::MAX);
     if header_len < n {
         return Err(RecordError::HeaderTooShort {
             declared: header_len,
@@ -226,7 +230,9 @@ fn decode_single_column(
     encoding: TextEncoding,
 ) -> Result<Value, RecordError> {
     let (header_len, n) = decode_varint_at(payload, 0)?;
-    let header_len = header_len as usize;
+    // An oversize varint (untrusted input) saturates and fails the length
+    // checks that follow, as a typed error.
+    let header_len = usize::try_from(header_len).unwrap_or(usize::MAX);
     if header_len < n {
         return Err(RecordError::HeaderTooShort {
             declared: header_len,
@@ -316,7 +322,7 @@ pub fn decode_serial_value(
         0 => Ok((Value::Null, 0)),
         1 => {
             let [b0] = take_array(buf, pos)?;
-            Ok((Value::Integer(b0 as i8 as i64), 1))
+            Ok((Value::Integer(i64::from(i8::from_be_bytes([b0]))), 1))
         }
         2 => {
             let b = take_array(buf, pos)?;

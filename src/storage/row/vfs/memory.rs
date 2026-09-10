@@ -120,7 +120,9 @@ impl VfsFile for MemoryVfsFile {
     )]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
         let data = self.0.lock().map_err(|_| poisoned(Path::new("<memory>")))?;
-        let offset = offset as usize;
+        let Ok(offset) = usize::try_from(offset) else {
+            return Ok(0);
+        };
         if offset >= data.len() {
             return Ok(0);
         }
@@ -145,7 +147,13 @@ impl VfsFile for MemoryVfsFile {
     )]
     fn write_at(&self, buf: &[u8], offset: u64) -> Result<()> {
         let mut data = self.0.lock().map_err(|_| poisoned(Path::new("<memory>")))?;
-        let offset = offset as usize;
+        let offset = usize::try_from(offset).map_err(|_| VfsError::Io {
+            path: "<memory>".to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "write offset exceeds the address space",
+            ),
+        })?;
         let end = offset.saturating_add(buf.len());
         if data.len() < end {
             data.resize(end, 0);
@@ -156,7 +164,7 @@ impl VfsFile for MemoryVfsFile {
 
     fn truncate(&self, len: u64) -> Result<()> {
         let mut data = self.0.lock().map_err(|_| poisoned(Path::new("<memory>")))?;
-        data.resize(len as usize, 0);
+        data.resize(usize::try_from(len).unwrap_or(usize::MAX), 0);
         Ok(())
     }
 

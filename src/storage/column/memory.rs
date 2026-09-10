@@ -55,7 +55,9 @@ impl VfsFile for MemoryFile {
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        let offset = offset as usize;
+        let Ok(offset) = usize::try_from(offset) else {
+            return Ok(0);
+        };
         if offset >= self.contents.len() {
             return Ok(0);
         }

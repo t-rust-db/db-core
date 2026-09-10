@@ -183,7 +183,9 @@ pub fn read_views<P: PageSource>(
 fn table_schema(values: &[Value]) -> TableSchema {
     let name = text(values.get(1)).to_string();
     let root_page = match values.get(3) {
-        Some(Value::Integer(i)) => *i as u32,
+        // A root page outside `u32` is not a page; 0 is the existing
+        // "no root" value the callers already handle.
+        Some(Value::Integer(i)) => u32::try_from(*i).unwrap_or(0),
         _ => 0,
     };
     let sql = text(values.get(4));
@@ -230,7 +232,9 @@ fn index_schema(values: &[Value]) -> Option<(String, IndexSchema)> {
     let name = text(values.get(1)).to_string();
     let table_name = text(values.get(2)).to_string();
     let root_page = match values.get(3) {
-        Some(Value::Integer(i)) => *i as u32,
+        // A root page outside `u32` is not a page; 0 is the existing
+        // "no root" value the callers already handle.
+        Some(Value::Integer(i)) => u32::try_from(*i).unwrap_or(0),
         _ => 0,
     };
     let sql = text(values.get(4));

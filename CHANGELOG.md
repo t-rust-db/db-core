@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.83.1] - 2026-09-10
+
+### Fixed
+
+- **`src/storage` at db-core's full lint tier** (#289; precondition for the charter, #324). All 98 `as` casts under `storage/row` and `storage/column` reviewed: untrusted file integers now go through `try_from` with typed errors -- the Parquet reader accepted a negative `num_values`/`page_size`/chunk offset from a corrupt footer as a wrapped-around `usize` (`FileError::InvalidMetadata`, `ReadError::InvalidValueCount`, `ThriftError`/`EncodingError`/`SnappyError::InvalidLength` are new); rowid varints and the DELTA_BINARY_PACKED 64-bit delta are reinterpreted in one documented place each (`rowid_from_varint`/`rowid_to_varint`, `u64_bits_as_i64`); `local_payload_size` returns `usize`. The `storage`-wide `#![allow(cast_*)]` is gone (kept only on `storage::stream`, whose storage layer #304/#305 are still building).
+- `check-mvl-limit` exemptions are named boundary files, not `src/storage/*`: the VFS `dyn` boundary, the two `unsafe` carve-outs, and the Parquet zero-copy reader (designated, ADR 0016 §Gates). `check-panic-allows`: `EXEMPT` is empty again -- `cfg(any(test, ...))` regions count as test code, and `lock_probe` lives in `tests/helpers/`.
+
 ## [0.83.0] - 2026-09-10
 
 ### Added

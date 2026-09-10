@@ -83,7 +83,7 @@ fn build_node(
         (def, rep)
     };
 
-    let num_children = element.num_children.unwrap_or(0) as usize;
+    let num_children = usize::try_from(element.num_children.unwrap_or(0)).unwrap_or(0);
     let mut children = Vec::with_capacity(num_children);
     for _ in 0..num_children {
         children.push(build_node(schema, idx, def_level, rep_level, false));

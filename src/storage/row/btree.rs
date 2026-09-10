@@ -375,7 +375,7 @@ impl<P: PageSource> TableCursor<P> {
                         })?;
                         let (key, _) = decode_varint(key_bytes)
                             .map_err(|source| BtreeError::InvalidCellVarint { page_num, source })?;
-                        if target_rowid <= key as i64 {
+                        if target_rowid <= rowid_from_varint(key) {
                             let child = read_u32(&page, cell_start, page_num)?;
                             next_page = child;
                             hi = mid;
@@ -606,6 +606,28 @@ impl<P: PageSource> TableCursor<P> {
     }
 }
 
+/// A rowid/interior key as stored: SQLite writes the `i64` as an unsigned
+/// varint of its two's-complement bits, so decoding is a bit-for-bit
+/// reinterpretation, not a range conversion -- a negative rowid is a
+/// varint above `i64::MAX`. The two helpers are the only place that
+/// reinterpretation is spelled out (#289).
+#[allow(
+    clippy::cast_possible_wrap,
+    reason = "two's-complement reinterpretation of the stored varint bits, by the file format"
+)]
+pub(super) fn rowid_from_varint(bits: u64) -> i64 {
+    bits as i64
+}
+
+/// Inverse of [`rowid_from_varint`].
+#[allow(
+    clippy::cast_sign_loss,
+    reason = "two's-complement reinterpretation into the stored varint bits, by the file format"
+)]
+pub(super) fn rowid_to_varint(rowid: i64) -> u64 {
+    rowid as u64
+}
+
 /// SQLite's overflow local-size formula (fileformat2.html "Cell Payload
 /// Overflow"). `min_local` is shared by every cell kind, but `max_local`
 /// is NOT: table leaf cells use `usable_size - 35`, while index cells
@@ -619,7 +641,15 @@ impl<P: PageSource> TableCursor<P> {
 /// `usable_size` degrades to a safe (wrong but non-panicking) answer,
 /// caught by the length checks around the call site instead of an
 /// arithmetic panic here.
-fn local_payload_size(usable_size: u32, payload_len: u64, is_index: bool) -> u64 {
+fn local_payload_size(usable_size: u32, payload_len: u64, is_index: bool) -> usize {
+    // Bounded by `usable_size` (a `u32`) on every path below, so the
+    // conversion is lossless on any target this crate builds for; the
+    // `usize::MAX` arm is unreachable there and only guards a 16-bit target.
+    usize::try_from(local_payload_size_u64(usable_size, payload_len, is_index))
+        .unwrap_or(usize::MAX)
+}
+
+fn local_payload_size_u64(usable_size: u32, payload_len: u64, is_index: bool) -> u64 {
     let max_local = if is_index {
         ((usable_size.saturating_sub(12) as u64).saturating_mul(64) / 255).saturating_sub(23)
     } else {
@@ -656,7 +686,7 @@ fn first_overflow_page(
     page_num: u32,
     is_index: bool,
 ) -> Result<Option<u32>, BtreeError> {
-    let local_size = local_payload_size(usable_size, payload_len, is_index) as usize;
+    let local_size = local_payload_size(usable_size, payload_len, is_index);
     if (local_size as u64) < payload_len {
         Ok(Some(read_u32(
             buf,
@@ -725,7 +755,7 @@ fn reassemble_payload<P: PageSource>(
     let cell_tail = page
         .get(tail_start..)
         .ok_or(BtreeError::PayloadTooShort { page_num })?;
-    let local_size = local_payload_size(usable_size, payload_len, is_index) as usize;
+    let local_size = local_payload_size(usable_size, payload_len, is_index);
     let local_bytes = cell_tail
         .get(..local_size)
         .ok_or(BtreeError::PayloadTooShort { page_num })?;
@@ -751,7 +781,9 @@ fn reassemble_payload<P: PageSource>(
     // payload_len is bounds-checked against MAX_PAYLOAD_LEN above, so
     // preallocating the full length avoids the log₂(payload/page) regrow-
     // and-recopy chain a bare to_vec() + extend_from_slice would pay (#588).
-    let mut result = Vec::with_capacity(payload_len as usize);
+    // A capacity hint only: on a target where the (already bounds-checked)
+    // length does not fit, start empty and let `extend` grow.
+    let mut result = Vec::with_capacity(usize::try_from(payload_len).unwrap_or(0));
     result.extend_from_slice(local_bytes);
     let available = usable_size.saturating_sub(4).max(1) as u64;
     let mut hops = 0usize;
@@ -787,7 +819,9 @@ fn reassemble_payload<P: PageSource>(
                 source,
             })?;
         let next = read_u32(&page, 0, overflow_page)?;
-        let take = remaining.min(available) as usize;
+        // `available` is at most `usable_size - 4` (a `u32`); an impossible
+        // overflow takes the whole page and fails the length check below.
+        let take = usize::try_from(remaining.min(available)).unwrap_or(usize::MAX);
         let chunk =
             page.get(4..4usize.saturating_add(take))
                 .ok_or_else(|| BtreeError::PageTooShort {
@@ -1047,7 +1081,7 @@ pub(super) fn collect_leaf_cells(
         let ptr_off = cell_ptr_offset(ptr_base, i);
         let cell_start = read_cell_pointer(buf, ptr_off, page_num, i)?;
         let (rowid, payload_len, tail_start) = decode_cell_head(buf, cell_start, page_num)?;
-        let local_size = local_payload_size(usable_size, payload_len, false) as usize;
+        let local_size = local_payload_size(usable_size, payload_len, false);
         let has_overflow = (local_size as u64) < payload_len;
         let cell_end = tail_start
             .saturating_add(local_size)
@@ -1088,7 +1122,7 @@ pub(super) fn scan_leaf_cells(
         if cell_rowid > rowid && insert_pos == num_cells {
             insert_pos = i;
         }
-        let local_size = local_payload_size(usable_size, payload_len, false) as usize;
+        let local_size = local_payload_size(usable_size, payload_len, false);
         let has_overflow = (local_size as u64) < payload_len;
         let cell_end = tail_start
             .saturating_add(local_size)
@@ -1122,7 +1156,7 @@ pub(super) fn find_leaf_cell(
         if cell_rowid != rowid {
             continue;
         }
-        let local_size = local_payload_size(usable_size, payload_len, false) as usize;
+        let local_size = local_payload_size(usable_size, payload_len, false);
         let overflow_page = if (local_size as u64) < payload_len {
             read_u32(buf, tail_start.saturating_add(local_size), page_num)?
         } else {
@@ -1153,7 +1187,7 @@ pub(super) fn collect_interior_entries(
             .ok_or(BtreeError::PayloadTooShort { page_num })?;
         let (key, _) = decode_varint(rest)
             .map_err(|source| BtreeError::InvalidCellVarint { page_num, source })?;
-        out.push((child, key as i64));
+        out.push((child, rowid_from_varint(key)));
     }
     let rightmost = read_u32(buf, header_start.saturating_add(8), page_num)?;
     Ok((out, rightmost))
@@ -1163,7 +1197,7 @@ pub(super) fn collect_interior_entries(
 /// key (rowid) varint. Shared by the insert and delete write paths.
 pub(super) fn build_interior_cell(child: u32, key: i64) -> Vec<u8> {
     let mut cell = child.to_be_bytes().to_vec();
-    cell.extend(encode_varint(key as u64));
+    cell.extend(encode_varint(rowid_to_varint(key)));
     cell
 }
 
@@ -1564,7 +1598,7 @@ pub(super) fn splice_delete_cell(
     } else {
         index::decode_payload_len(buf, cell_start, page_num)?
     };
-    let local_size = local_payload_size(usable_size, payload_len, !has_rowid) as usize;
+    let local_size = local_payload_size(usable_size, payload_len, !has_rowid);
     let has_overflow = (local_size as u64) < payload_len;
     let cell_end = tail_start
         .saturating_add(local_size)
@@ -1727,7 +1761,7 @@ fn decode_cell_head(
     let (rowid, n2) =
         decode_varint(rest).map_err(|source| BtreeError::InvalidCellVarint { page_num, source })?;
     Ok((
-        rowid as i64,
+        rowid_from_varint(rowid),
         payload_len,
         cell_start.saturating_add(n1).saturating_add(n2),
     ))
@@ -1749,7 +1783,9 @@ pub fn test_minimal_db(
 ) {
     let mut page1 = vec![0u8; page_size as usize];
     page1[0..16].copy_from_slice(b"SQLite format 3\0");
-    page1[16..18].copy_from_slice(&(page_size as u16).to_be_bytes());
+    // Header byte 16-17: page size, with 65536 encoded as 1 (SQLite file
+    // format 1.3); every other legal size fits a `u16` as-is.
+    page1[16..18].copy_from_slice(&u16::try_from(page_size).unwrap_or(1).to_be_bytes());
     page1[18] = 1;
     page1[19] = 1;
     page1[28..32].copy_from_slice(&1u32.to_be_bytes());
@@ -2427,7 +2463,7 @@ mod tests {
         let mut cell = Vec::new();
         cell.extend_from_slice(&encode_varint_for_test(5000));
         cell.extend_from_slice(&encode_varint_for_test(1));
-        let local_size = local_payload_size(512, 5000, false) as usize;
+        let local_size = local_payload_size(512, 5000, false);
         cell.extend(std::iter::repeat_n(0u8, local_size));
         cell.extend_from_slice(&99u32.to_be_bytes());
         page[cell_start..cell_start.saturating_add(cell.len())].copy_from_slice(&cell);
@@ -2551,7 +2587,7 @@ mod tests {
     /// leaves false) for A's independence pair.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__btree_1509__v1_content_start_before_ptr_end() {
+    fn mcdc__btree_1543__v1_content_start_before_ptr_end() {
         let mut buf = vec![0u8; 32];
         put_u8(&mut buf, 0, LEAF_TABLE, 1).unwrap();
         write_content_start(&mut buf, 0, 4, 1).unwrap(); // ptr_base(8) + 0 cells == 8 > content_start(4)
@@ -2565,10 +2601,10 @@ mod tests {
 
     /// #52 tagged MC/DC vector (obligation `btree_1374`): both leaves
     /// false — the fast path proceeds. Independence pair for leaf A
-    /// against `mcdc__btree_1509__v1_content_start_before_ptr_end`.
+    /// against `mcdc__btree_1543__v1_content_start_before_ptr_end`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__btree_1509__v2_both_leaves_false() {
+    fn mcdc__btree_1543__v2_both_leaves_false() {
         let mut buf = leaf_page_with_cells(512, &[]);
         let cell = build_interior_cell(0, 42);
         let spliced = splice_insert_cell(&mut buf, 0, 1, 0, &cell).unwrap();
@@ -2582,10 +2618,10 @@ mod tests {
     /// (`content_start.saturating_sub(ptr_end) < needed`) true while A is
     /// false independently flips the outcome to true — a zero-size gap.
     /// Independence pair for leaf B against
-    /// `mcdc__btree_1509__v2_both_leaves_false`.
+    /// `mcdc__btree_1543__v2_both_leaves_false`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__btree_1509__v3_gap_too_small() {
+    fn mcdc__btree_1543__v3_gap_too_small() {
         let mut buf = vec![0u8; 32];
         put_u8(&mut buf, 0, LEAF_TABLE, 1).unwrap();
         write_content_start(&mut buf, 0, 8, 1).unwrap(); // ptr_base(8) + 0 cells == 8, zero gap

@@ -107,7 +107,7 @@ impl TrunkPage {
     /// linger from a previous, longer version of this trunk.
     pub fn write(&self, buf: &mut [u8]) -> Result<(), FreelistError> {
         write_u32(buf, 0, self.next_trunk)?;
-        write_u32(buf, 4, self.leaves.len() as u32)?;
+        write_u32(buf, 4, u32::try_from(self.leaves.len()).unwrap_or(u32::MAX))?;
         for (i, leaf) in self.leaves.iter().enumerate() {
             let offset = 8usize.saturating_add(i.saturating_mul(4));
             write_u32(buf, offset, *leaf)?;

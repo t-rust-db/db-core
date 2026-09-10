@@ -162,18 +162,22 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # boundary stays in the qualified subset. Adding a file here is an
 # architecture decision (ADR 0008, ADR 0015), not a lint fix.
 #
-# `src/storage/*` (ADR 0016, #288): the absorbed db-storage code was never
-# under this gate -- explicit lifetimes (`'a`/`'m` on the Parquet reader,
-# page sources, VFS traits) and the two audited `unsafe` carve-outs
-# (`column::mmap`, `row::vfs::fcntl`). Excluded as a unit, tracked as a
-# worklist in db-core#289; `src/storage.rs` itself stays in the scan.
+# Storage boundary files (ADR 0016 §Gates, #289): the VFS traits and their
+# implementors (`vfs.rs`, `page_source.rs`, `unix.rs`, `memory.rs`) are an
+# open-implementor `dyn` boundary exactly like `vm/row/cursor*.rs`; the
+# Parquet reader (`parquet/*`) is a zero-copy reader over the mmap and
+# carries the lifetimes that implies -- designated a boundary rather than
+# rewritten to own its buffer; `fcntl.rs` and `mmap.rs` hold the two
+# audited `unsafe` carve-outs. Everything else under `src/storage/row` and
+# `src/storage/column` is in the qualified subset. `src/storage/stream/*`
+# stays excluded while #304/#305 build it (lifted with #305).
 #
 # `src/engine/row.rs`, `src/engine/row/adapter.rs` and `src/engine/column.rs`
 # (ADR 0017; column.rs holds `ParquetFile<'a>`/`RowGroupSegment<'a, 'm>`): the
 # implementors of that same ADR 0008 boundary -- they hand `Box<dyn
 # CursorFactory>`/`Box<dyn Transaction>`/`Box<dyn SchemaStorage>` to the Vm
 # and hold `Rc<dyn PageSource>`. Same exemption, same reason, as vm.rs.
-MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/storage/* src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs
+MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/column/parquet/* src/storage/column/parquet/compression/* src/storage/stream/*
 
 check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
 	@command -v cargo-mvl-limit >/dev/null 2>&1 || { \

@@ -618,7 +618,7 @@ fn decode_value_cell(
     encoding: TextEncoding,
 ) -> Result<(Vec<Value>, Vec<u8>), BtreeError> {
     let (payload_len, tail_start) = decode_payload_len(buf, value_start, page_num)?;
-    let local_size = local_payload_size(usable_size, payload_len, true) as usize;
+    let local_size = local_payload_size(usable_size, payload_len, true);
     let has_overflow = (local_size as u64) < payload_len;
     let cell_end = tail_start
         .saturating_add(local_size)
@@ -653,7 +653,7 @@ pub(super) fn value_cell_len(
     usable_size: u32,
 ) -> Result<usize, BtreeError> {
     let (payload_len, tail_start) = decode_payload_len(buf, cell_start, page_num)?;
-    let local_size = local_payload_size(usable_size, payload_len, true) as usize;
+    let local_size = local_payload_size(usable_size, payload_len, true);
     let has_overflow = (local_size as u64) < payload_len;
     let cell_end = tail_start
         .saturating_add(local_size)

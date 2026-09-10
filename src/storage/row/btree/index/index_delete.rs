@@ -59,7 +59,7 @@ use crate::storage::row::record::{TextEncoding, Value};
 /// payload-length varint at offset 0.
 fn overflow_page_of(value_bytes: &[u8], usable_size: u32) -> Result<u32, BtreeError> {
     let (payload_len, tail_start) = decode_payload_len(value_bytes, 0, 0)?;
-    let local_size = local_payload_size(usable_size, payload_len, true) as usize;
+    let local_size = local_payload_size(usable_size, payload_len, true);
     if (local_size as u64) < payload_len {
         Ok(read_u32(
             value_bytes,

@@ -9,8 +9,13 @@ use std::fmt;
 pub enum SnappyError {
     UnexpectedEof,
     InvalidVarint,
+    /// The declared uncompressed length does not fit `usize`.
+    InvalidLength(u64),
     InvalidCopyOffset,
-    SizeMismatch { expected: usize, actual: usize },
+    SizeMismatch {
+        expected: usize,
+        actual: usize,
+    },
 }
 
 impl fmt::Display for SnappyError {
@@ -18,6 +23,7 @@ impl fmt::Display for SnappyError {
         match self {
             SnappyError::UnexpectedEof => write!(f, "unexpected end of snappy input"),
             SnappyError::InvalidVarint => write!(f, "invalid snappy varint"),
+            SnappyError::InvalidLength(n) => write!(f, "declared snappy length out of range: {n}"),
             SnappyError::InvalidCopyOffset => write!(
                 f,
                 "snappy copy references data before the start of the buffer"
@@ -61,7 +67,9 @@ fn read_varint(data: &[u8], pos: &mut usize) -> Result<u64> {
 /// preamble and is validated against it.
 pub fn decompress(data: &[u8], uncompressed_size: usize) -> Result<Vec<u8>> {
     let mut pos = 0usize;
-    let declared_len = read_varint(data, &mut pos)? as usize;
+    let declared = read_varint(data, &mut pos)?;
+    let declared_len =
+        usize::try_from(declared).map_err(|_| SnappyError::InvalidLength(declared))?;
     let mut out = Vec::with_capacity(declared_len.max(uncompressed_size));
 
     while pos < data.len() {

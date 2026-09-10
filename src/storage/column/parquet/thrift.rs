@@ -23,6 +23,8 @@ const CTYPE_STRUCT: u8 = 0x0c;
 pub enum ThriftError {
     UnexpectedEof,
     InvalidVarint,
+    /// A length, size or narrow-integer varint does not fit its type.
+    InvalidLength(u64),
     UnknownType(u8),
 }
 
@@ -31,6 +33,7 @@ impl fmt::Display for ThriftError {
         match self {
             ThriftError::UnexpectedEof => write!(f, "unexpected end of input"),
             ThriftError::InvalidVarint => write!(f, "varint too long"),
+            ThriftError::InvalidLength(n) => write!(f, "length or size out of range: {n}"),
             ThriftError::UnknownType(t) => write!(f, "unknown thrift compact type: 0x{t:02x}"),
         }
     }
@@ -39,6 +42,12 @@ impl fmt::Display for ThriftError {
 impl std::error::Error for ThriftError {}
 
 pub type Result<T> = std::result::Result<T, ThriftError>;
+
+/// An `i16` field (field ids, I16 values) read as zigzag i32: out of range is
+/// corrupt input, not a silent truncation.
+fn narrow_i16(v: i32) -> Result<i16> {
+    i16::try_from(v).map_err(|_| ThriftError::InvalidLength(u64::from(v.unsigned_abs())))
+}
 
 /// A generic, schema-less Thrift value. Parquet's `FileMetaData` struct is
 /// decoded into this shape and then interpreted field-by-field.
@@ -62,7 +71,7 @@ impl Value {
         match self {
             Value::I16(v) => Some(*v as i32),
             Value::I32(v) => Some(*v),
-            Value::I64(v) => Some(*v as i32),
+            Value::I64(v) => i32::try_from(*v).ok(),
             Value::Byte(v) => Some(*v as i32),
             _ => None,
         }
@@ -164,13 +173,17 @@ impl<'a> Decoder<'a> {
     }
 
     fn read_zigzag_i32(&mut self) -> Result<i32> {
-        let v = self.read_varint()? as u32;
-        Ok(((v >> 1) as i32) ^ -((v & 1) as i32))
+        let raw = self.read_varint()?;
+        let v = u32::try_from(raw).map_err(|_| ThriftError::InvalidLength(raw))?;
+        // Zigzag: the magnitude half always fits; the sign is -1 or 0.
+        let half = i32::try_from(v >> 1).unwrap_or(i32::MAX);
+        Ok(half ^ -i32::from(v & 1 == 1))
     }
 
     fn read_zigzag_i64(&mut self) -> Result<i64> {
         let v = self.read_varint()?;
-        Ok(((v >> 1) as i64) ^ -((v & 1) as i64))
+        let half = i64::try_from(v >> 1).unwrap_or(i64::MAX);
+        Ok(half ^ -i64::from(v & 1 == 1))
     }
 
     fn read_double(&mut self) -> Result<f64> {
@@ -181,7 +194,8 @@ impl<'a> Decoder<'a> {
     }
 
     fn read_binary(&mut self) -> Result<Vec<u8>> {
-        let len = self.read_varint()? as usize;
+        let raw = self.read_varint()?;
+        let len = usize::try_from(raw).map_err(|_| ThriftError::InvalidLength(raw))?;
         Ok(self.read_bytes(len)?.to_vec())
     }
 
@@ -197,8 +211,8 @@ impl<'a> Decoder<'a> {
                 None => Ok(Value::Bool(self.read_byte()? == CTYPE_BOOLEAN_TRUE)),
             },
             CTYPE_BOOLEAN_FALSE => Ok(Value::Bool(bool_value.unwrap_or(false))),
-            CTYPE_BYTE => Ok(Value::Byte(self.read_byte()? as i8)),
-            CTYPE_I16 => Ok(Value::I16(self.read_zigzag_i32()? as i16)),
+            CTYPE_BYTE => Ok(Value::Byte(i8::from_be_bytes([self.read_byte()?]))),
+            CTYPE_I16 => Ok(Value::I16(narrow_i16(self.read_zigzag_i32()?)?)),
             CTYPE_I32 => Ok(Value::I32(self.read_zigzag_i32()?)),
             CTYPE_I64 => Ok(Value::I64(self.read_zigzag_i64()?)),
             CTYPE_DOUBLE => Ok(Value::Double(self.read_double()?)),
@@ -217,7 +231,7 @@ impl<'a> Decoder<'a> {
         if size == 15 {
             size = self.read_varint()?;
         }
-        let mut items = Vec::with_capacity(size as usize);
+        let mut items = Vec::with_capacity(usize::try_from(size).map_or(0, |n| n.min(1 << 16)));
         for _ in 0..size {
             items.push(self.read_value(elem_type, None)?);
         }
@@ -232,7 +246,7 @@ impl<'a> Decoder<'a> {
         let types = self.read_byte()?;
         let key_type = decode_element_type(types >> 4)?;
         let val_type = decode_element_type(types & 0x0f)?;
-        let mut items = Vec::with_capacity(size as usize);
+        let mut items = Vec::with_capacity(usize::try_from(size).map_or(0, |n| n.min(1 << 16)));
         for _ in 0..size {
             let k = self.read_value(key_type, None)?;
             let v = self.read_value(val_type, None)?;
@@ -253,7 +267,7 @@ impl<'a> Decoder<'a> {
             let delta = (header >> 4) & 0x0f;
             let ctype = header & 0x0f;
             let field_id = if delta == 0 {
-                self.read_zigzag_i32()? as i16
+                narrow_i16(self.read_zigzag_i32()?)?
             } else {
                 last_field_id + delta as i16
             };
@@ -452,5 +466,64 @@ mod tests {
         // Empty input.
         let result = decode_struct(&[]);
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod tests_289 {
+    use super::*;
+
+    /// #289: zigzag decoding without reinterpreting casts, all four corners.
+    #[test]
+    fn zigzag_i32_and_i64_decode_all_corners() {
+        fn z32(raw: u64) -> i32 {
+            let bytes = encode_varint_test(raw);
+            let mut r = Decoder::new(&bytes);
+            r.read_zigzag_i32().unwrap()
+        }
+        fn z64(raw: u64) -> i64 {
+            let bytes = encode_varint_test(raw);
+            let mut r = Decoder::new(&bytes);
+            r.read_zigzag_i64().unwrap()
+        }
+        assert_eq!(z32(0), 0);
+        assert_eq!(z32(1), -1);
+        assert_eq!(z32(2), 1);
+        assert_eq!(z32(u64::from(u32::MAX)), i32::MIN);
+        assert_eq!(z32(u64::from(u32::MAX - 1)), i32::MAX);
+        assert_eq!(z64(0), 0);
+        assert_eq!(z64(1), -1);
+        assert_eq!(z64(u64::MAX), i64::MIN);
+        assert_eq!(z64(u64::MAX - 1), i64::MAX);
+        // A zigzag i32 whose varint does not fit u32 is corrupt input.
+        let bytes = encode_varint_test(1 << 40);
+        let mut r = Decoder::new(&bytes);
+        assert!(matches!(
+            r.read_zigzag_i32(),
+            Err(ThriftError::InvalidLength(_))
+        ));
+    }
+
+    #[test]
+    fn narrow_i16_rejects_out_of_range_field_ids() {
+        assert_eq!(narrow_i16(300).unwrap(), 300);
+        assert_eq!(narrow_i16(-300).unwrap(), -300);
+        assert!(matches!(
+            narrow_i16(40_000),
+            Err(ThriftError::InvalidLength(40_000))
+        ));
+    }
+
+    fn encode_varint_test(mut v: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 {
+                out.push(byte);
+                return out;
+            }
+            out.push(byte | 0x80);
+        }
     }
 }

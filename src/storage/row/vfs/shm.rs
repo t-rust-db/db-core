@@ -76,7 +76,7 @@ const UNIX_SHM_BASE: off_t = 120;
 pub fn wal_read_lock_byte(slot: usize) -> off_t {
     UNIX_SHM_BASE
         .saturating_add(3)
-        .saturating_add(slot as off_t)
+        .saturating_add(off_t::try_from(slot).unwrap_or(off_t::MAX))
 }
 
 /// SQLite's `WAL_WRITE_LOCK` (`wal.c`): guards `mxFrame`/the `-wal` file's
@@ -254,9 +254,9 @@ fn open_shm_shared(shm_path: &Path) -> io::Result<Arc<File>> {
 /// (`super::pager::Pager::set_journal_mode`) writes these bytes through
 /// the abstract `Vfs` trait instead.
 pub fn fresh_shm_bytes() -> Vec<u8> {
-    let mut bytes = vec![0u8; SHM_REGION_SIZE as usize];
+    let mut bytes = vec![0u8; usize::try_from(SHM_REGION_SIZE).unwrap_or(0)];
     for slot in 0..5usize {
-        let off = read_mark_offset(slot) as usize;
+        let off = usize::try_from(read_mark_offset(slot)).unwrap_or(usize::MAX);
         if let Some(dest) = bytes.get_mut(off..off.saturating_add(4)) {
             dest.copy_from_slice(&READ_MARK_UNUSED.to_ne_bytes());
         }

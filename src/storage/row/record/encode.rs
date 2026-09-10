@@ -116,10 +116,10 @@ fn integer_body_len(serial_type: u64) -> usize {
 
 fn write_integer_body_into(i: i64, serial_type: u64, out: &mut Vec<u8>) {
     match serial_type {
-        1 => out.push(i as u8),
-        2 => out.extend_from_slice(&(i as i16).to_be_bytes()),
+        1 => out.extend_from_slice(&i.to_be_bytes()[7..8]),
+        2 => out.extend_from_slice(&i.to_be_bytes()[6..8]),
         3 => out.extend_from_slice(&i.to_be_bytes()[5..8]),
-        4 => out.extend_from_slice(&(i as i32).to_be_bytes()),
+        4 => out.extend_from_slice(&i.to_be_bytes()[4..8]),
         5 => out.extend_from_slice(&i.to_be_bytes()[2..8]),
         6 => out.extend_from_slice(&i.to_be_bytes()),
         _ => {} // 8/9: zero-byte constants

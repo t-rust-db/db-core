@@ -17,6 +17,15 @@ use std::fmt;
 #[derive(Debug)]
 pub enum FileError {
     Footer(FooterError),
+    /// A footer/page-header integer is outside the range the file format
+    /// allows (negative count, negative or oversize offset/size) -- corrupt
+    /// or hostile input, reported instead of wrapped into a huge allocation.
+    InvalidMetadata {
+        /// Which field.
+        field: &'static str,
+        /// The value as read.
+        value: i64,
+    },
     Page(PageError),
     Read(ReadError),
     Compression(CompressionError),
@@ -38,6 +47,9 @@ impl fmt::Display for FileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FileError::Footer(e) => write!(f, "{e}"),
+            FileError::InvalidMetadata { field, value } => {
+                write!(f, "invalid {field} in file metadata: {value}")
+            }
             FileError::Page(e) => write!(f, "{e}"),
             FileError::Read(e) => write!(f, "{e}"),
             FileError::Compression(e) => write!(f, "{e}"),
@@ -122,11 +134,20 @@ pub type DictionaryIndices<T> = (Vec<T>, Vec<Option<u32>>);
 /// definition level and return wrong values with no error (see #61) --
 /// nested/repeated fields must go through [`ParquetFile::read_nested_column`]
 /// instead, which this flag (see [`ParquetFile::is_flat`]) lets callers detect.
+/// A page-header size as `usize`: negative (corrupt/hostile header) is an
+/// error, never a wrapped-around allocation.
+fn page_size(field: &'static str, value: i32) -> Result<usize> {
+    usize::try_from(value).map_err(|_| FileError::InvalidMetadata {
+        field,
+        value: i64::from(value),
+    })
+}
+
 fn is_flat_schema(schema: &[footer::SchemaElement]) -> bool {
     let Some(root) = schema.first() else {
         return true;
     };
-    let expected_leaves = root.num_children.unwrap_or(0) as usize;
+    let expected_leaves = usize::try_from(root.num_children.unwrap_or(0)).unwrap_or(0);
     schema.len() == expected_leaves + 1
         && schema[1..]
             .iter()
@@ -196,7 +217,11 @@ impl<'a> ParquetFile<'a> {
             leaf_data.insert(path.clone(), entries);
         }
 
-        let num_rows = row_group.num_rows() as usize;
+        let num_rows =
+            usize::try_from(row_group.num_rows()).map_err(|_| FileError::InvalidMetadata {
+                field: "row_group.num_rows",
+                value: row_group.num_rows(),
+            })?;
         let mut columns = nested::reconstruct_row_group(&self.schema_tree, num_rows, &leaf_data)?;
         let idx = columns
             .iter()
@@ -257,7 +282,7 @@ impl<'a> ParquetFile<'a> {
             .schema
             .get(column_index + 1)
             .and_then(|s| s.type_length)
-            .map(|len| len as usize)
+            .and_then(|len| usize::try_from(len).ok())
             .ok_or(FileError::MissingTypeLength)
     }
 
@@ -314,8 +339,18 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// the next column's bytes whenever a dictionary page precedes.
     fn column_chunk_bytes(&self, column_index: usize) -> Result<&'a [u8]> {
         let meta = self.column_meta(column_index)?;
-        let start = meta.dictionary_page_offset.unwrap_or(meta.data_page_offset) as usize;
-        let end = start + meta.total_compressed_size as usize;
+        let start_i64 = meta.dictionary_page_offset.unwrap_or(meta.data_page_offset);
+        let start = usize::try_from(start_i64).map_err(|_| FileError::InvalidMetadata {
+            field: "column_chunk.page_offset",
+            value: start_i64,
+        })?;
+        let size = usize::try_from(meta.total_compressed_size).map_err(|_| {
+            FileError::InvalidMetadata {
+                field: "column_chunk.total_compressed_size",
+                value: meta.total_compressed_size,
+            }
+        })?;
+        let end = start.checked_add(size).ok_or(FileError::ChunkOutOfBounds)?;
         self.file
             .data
             .get(start..end)
@@ -347,7 +382,12 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         while pos < chunk_bytes.len() {
             let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
             let page_start = pos + consumed;
-            let page_end = page_start + header.compressed_page_size as usize;
+            let page_end = page_start
+                .checked_add(page_size(
+                    "compressed_page_size",
+                    header.compressed_page_size,
+                )?)
+                .ok_or(FileError::ChunkOutOfBounds)?;
             let compressed = chunk_bytes
                 .get(page_start..page_end)
                 .ok_or(FileError::ChunkOutOfBounds)?;
@@ -357,7 +397,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     let page_body = compression::decompress(
                         codec,
                         compressed,
-                        header.uncompressed_page_size as usize,
+                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
                     )?;
                     let is_dictionary_encoded = matches!(
                         data_page_header.encoding,
@@ -379,7 +419,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     let dictionary_body = compression::decompress(
                         codec,
                         compressed,
-                        header.uncompressed_page_size as usize,
+                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
                     )?;
                     dictionary = Some(decode_dictionary(
                         &dictionary_body,
@@ -419,7 +459,12 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         while pos < chunk_bytes.len() {
             let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
             let page_start = pos + consumed;
-            let page_end = page_start + header.compressed_page_size as usize;
+            let page_end = page_start
+                .checked_add(page_size(
+                    "compressed_page_size",
+                    header.compressed_page_size,
+                )?)
+                .ok_or(FileError::ChunkOutOfBounds)?;
             let compressed = chunk_bytes
                 .get(page_start..page_end)
                 .ok_or(FileError::ChunkOutOfBounds)?;
@@ -437,7 +482,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     let page_body = compression::decompress(
                         codec,
                         compressed,
-                        header.uncompressed_page_size as usize,
+                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
                     )?;
                     indices.extend(reader::read_dictionary_index_column(
                         &page_body,
@@ -452,7 +497,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     let dictionary_body = compression::decompress(
                         codec,
                         compressed,
-                        header.uncompressed_page_size as usize,
+                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
                     )?;
                     dictionary = Some(decode_dictionary(
                         &dictionary_body,
@@ -483,7 +528,12 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         while pos < chunk_bytes.len() {
             let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
             let page_start = pos + consumed;
-            let page_end = page_start + header.compressed_page_size as usize;
+            let page_end = page_start
+                .checked_add(page_size(
+                    "compressed_page_size",
+                    header.compressed_page_size,
+                )?)
+                .ok_or(FileError::ChunkOutOfBounds)?;
             let compressed = chunk_bytes
                 .get(page_start..page_end)
                 .ok_or(FileError::ChunkOutOfBounds)?;
@@ -499,7 +549,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     let page_body = compression::decompress(
                         codec,
                         compressed,
-                        header.uncompressed_page_size as usize,
+                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
                     )?;
                     let (rep_levels, def_levels, mut value_bytes) = reader::split_rep_def_levels(
                         &page_body,
@@ -508,7 +558,13 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                         leaf.max_def_level,
                     )?;
 
-                    let num_values = data_page_header.num_values as usize;
+                    let num_values =
+                        usize::try_from(data_page_header.num_values).map_err(|_| {
+                            FileError::InvalidMetadata {
+                                field: "data_page.num_values",
+                                value: i64::from(data_page_header.num_values),
+                            }
+                        })?;
                     let mut bit_pos = 0usize;
                     for i in 0..num_values {
                         let def = def_levels.get(i).copied().unwrap_or(leaf.max_def_level);
@@ -1054,5 +1110,31 @@ mod tests {
         let rg = file.row_group(0).unwrap();
         let result = rg.read_int64_column(5);
         assert!(matches!(result, Err(FileError::ColumnIndexOutOfRange(5))));
+    }
+}
+
+#[cfg(test)]
+mod tests_289 {
+    use super::*;
+
+    /// #289: a negative page size in a (corrupt or hostile) page header is a
+    /// typed error, never a wrapped-around allocation.
+    #[test]
+    fn negative_page_size_is_invalid_metadata_not_a_huge_allocation() {
+        assert_eq!(page_size("compressed_page_size", 4096).unwrap(), 4096);
+        assert_eq!(page_size("compressed_page_size", 0).unwrap(), 0);
+        match page_size("compressed_page_size", -1) {
+            Err(FileError::InvalidMetadata { field, value }) => {
+                assert_eq!(field, "compressed_page_size");
+                assert_eq!(value, -1);
+            }
+            other => panic!("expected InvalidMetadata, got {other:?}"),
+        }
+        assert!(FileError::InvalidMetadata {
+            field: "x",
+            value: -5
+        }
+        .to_string()
+        .contains("-5"));
     }
 }
