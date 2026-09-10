@@ -38,6 +38,16 @@ pub trait Engine {
 - `tests/unit/engine_public_api_test.rs` — black-box, through the trait and
   through `Box<dyn Engine>`, on a temp copy of a committed fixture.
 
+## Implementations
+
+| Mode | Type | Feature | Source | Executes |
+|---|---|---|---|---|
+| Row | `engine::row::RowEngine` | `engine-row` | one `.sqlite` file | `codegen::row` -> `vm::row` over `storage::row` through the ADR 0008 boundary (`engine/row/adapter.rs`) |
+| Batch | `engine::column::BatchEngine` | `engine-column` | one `.parquet` file, table = file stem | `codegen::batch` -> `vm::engine::run` over one `Segment` per row group (`storage::column`), decoding `columns_to_load()` only |
+| Stream | `engine::stream::StreamEngine` | `engine-stream` | one `.log` file | ADR 0018 / #305 |
+
+Single file, single table, per engine. Multi-table shapes (`JOIN`, `IN (SELECT ...)`) are `ErrorKind::Unsupported` in the batch engine; they live in column-rs's multi-table session until the cross-mode work (#317) decides where joins compose.
+
 ## Client types
 
 Owned, mode-independent, convertible from every mode's own types. Not a

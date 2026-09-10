@@ -4,6 +4,15 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.82.0] - 2026-09-10
+
+### Added
+
+- **`engine::column::BatchEngine`** (`engine-column`, on by default; implies `storage-column`, `parser-column`, `vm-batch`, `codegen-batch`) -- the batch `Engine` (#325, #326, #327): one Parquet file as one table named after the file stem, ported from column-rs's `QueryEngine` single-file case. `open` (mmap + footer), `run_query` (parse -> `expand_star` -> `codegen::batch::compile` -> `vm::engine::run` over one `Segment` per row group, decoding only `columns_to_load()`), `explain_plan`/`explain_opcodes` (the batch planner's `PlanNode`/`OpcodeSection`, mapped field-for-field; footer row-group/row counts feed the plan), `stats` (`FileStats::Batch`), `tables` (one `TableInfo`; Parquet physical types as `type_name`). `JOIN`, `IN (SELECT ...)` and window functions report `Unsupported` -- they need column-rs's multi-table session. A syntax error is `ErrorKind::Parse` (column-rs's `QueryEngine` reports it as an unknown column).
+- `engine::single_statement` is shared by the row and column engines.
+- `make check-features` covers `engine-column`; `src/engine/column.rs` joins `MVL_LIMIT_EXCLUDE` (`ParquetFile<'a>`/`RowGroupSegment<'a, 'm>`, the storage boundary's lifetimes -- same exemption as `engine/row.rs`).
+- Fixture `tests/corpus/fixtures/parquet/production.parquet` (from column-rs).
+
 ## [0.81.1] - 2026-09-10
 
 ### Fixed

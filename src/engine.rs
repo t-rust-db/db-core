@@ -33,6 +33,9 @@ use std::path::Path;
 #[cfg(feature = "engine-row")]
 pub mod row;
 
+#[cfg(feature = "engine-column")]
+pub mod column;
+
 /// Which execution mode an engine drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -328,4 +331,19 @@ pub trait Engine {
     /// Tables (and their columns) known from the file's schema, without
     /// running a query. Empty for a file with no tables.
     fn tables(&self) -> Result<Vec<TableInfo>, EngineError>;
+}
+
+/// `explain_*` (and the batch engine's `run_query`) take exactly one
+/// statement: split on top-level `;`, accept one, reject none or several.
+#[cfg(any(feature = "engine-row", feature = "engine-column"))]
+pub(crate) fn single_statement(sql: &str) -> Result<String, EngineError> {
+    let mut stmts = crate::parser::row::tokenizer::split_statements(sql).into_iter();
+    match (stmts.next(), stmts.next()) {
+        (Some(one), None) => Ok(one),
+        (None, _) => Err(EngineError::new(ErrorKind::Parse, "empty statement")),
+        (Some(_), Some(_)) => Err(EngineError::new(
+            ErrorKind::Unsupported,
+            "EXPLAIN takes a single statement",
+        )),
+    }
 }

@@ -14,7 +14,7 @@ layer (`parser`/`vm`/`codegen`) stays storage-agnostic: it never imports
 
 The `engine` module ([ADR 0017](.openspec/adr/0017-engine-seam.md)) is
 the client-facing seam over the modes: open a file, run SQL, get `Cell`s --
-`engine::row` today, batch and stream to follow.
+`engine::row` (SQLite files) and `engine::column` (Parquet files) today, stream to follow.
 
 Was six separate crates (`sql-types`, `sql-expr`, `sql-parser`,
 `sql-join`, `sql-vm`, `sql-codegen`) until this repo's merge into one —

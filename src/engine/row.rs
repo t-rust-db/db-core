@@ -38,8 +38,8 @@ use crate::storage::row::vfs::{PageSource, UnixVfs, Vfs};
 use crate::vm::row::{execute, explain, Program, Vm};
 
 use super::{
-    Cell, ColumnInfo, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeRow, OpcodeSection,
-    PlanRow, QueryResult, TableInfo,
+    single_statement, Cell, ColumnInfo, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeRow,
+    OpcodeSection, PlanRow, QueryResult, TableInfo,
 };
 
 pub mod adapter;
@@ -359,18 +359,5 @@ impl Engine for RowEngine {
                     .collect(),
             })
             .collect())
-    }
-}
-
-/// `explain_*` take exactly one statement.
-fn single_statement(sql: &str) -> Result<String, EngineError> {
-    let mut stmts = split_statements(sql).into_iter();
-    match (stmts.next(), stmts.next()) {
-        (Some(one), None) => Ok(one),
-        (None, _) => Err(EngineError::new(ErrorKind::Parse, "empty statement")),
-        (Some(_), Some(_)) => Err(EngineError::new(
-            ErrorKind::Unsupported,
-            "EXPLAIN takes a single statement",
-        )),
     }
 }
