@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.81.1"
+version = "0.82.0"
 # The three [[bench]] targets are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -29,6 +29,11 @@ path = "tests/unit/parser_public_api_test.rs"
 name = "unit_index_seek"
 path = "tests/unit/index_seek_test.rs"
 required-features = ["engine-row"]
+
+[[test]]
+name = "unit_engine_column_public_api"
+path = "tests/unit/engine_column_public_api_test.rs"
+required-features = ["engine-column"]
 
 [[test]]
 name = "unit_engine_public_api"
@@ -143,6 +148,7 @@ default = [
     "storage-column",
     "storage-stream",
     "engine-row",
+    "engine-column",
 ]
 
 # `parser`: one grammar section per Cargo feature, mirroring `vm`'s own
@@ -201,6 +207,10 @@ storage-test-support = []
 # vm::row through the ADR 0008 boundary traits (the glue that lived in
 # sqlite-rs's vdbe/adapter.rs), plus parse -> compile -> execute.
 engine-row = ["storage-row", "parser-row", "vm-row", "codegen-row"]
+# `engine-column` (#325): the batch implementation -- one Parquet file as one
+# table, through storage::column and vm::batch (column-rs's QueryEngine
+# single-file case, ported).
+engine-column = ["storage-column", "parser-column", "vm-batch", "codegen-batch"]
 
 # sqlite-rs's lint bar (#82).
 [lints.rust]

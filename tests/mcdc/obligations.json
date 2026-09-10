@@ -21519,6 +21519,87 @@
     "compiler_void": true
   },
   {
+    "id": "column_89",
+    "file": "src/engine/column.rs",
+    "line": 89,
+    "decision": "!from.eq_ignore_ascii_case(&self.table)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "column_105",
+    "file": "src/engine/column.rs",
+    "line": 105,
+    "decision": "in_subquery(&select).is_some()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "column_111",
+    "file": "src/engine/column.rs",
+    "line": 111,
+    "decision": "select.columns.iter().any(is_window_column)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "column_183",
+    "file": "src/engine/column.rs",
+    "line": 183,
+    "decision": "match physical_type {\n                PhysicalType::Int64 => rg.read_int64_column(*index).map(|col| {\n                    col.into_iter()\n                        .map(|v| v.map_or(Value::Null, Value::Int))\n                        .collect()\n                }),\n                PhysicalType::Int32 => rg.read_int32_column(*index).map(|col| {\n                    col.into_iter()\n                        .map(|v| v.map_or(Value::Null, |i| Value::Int(i64::from(i))))\n                        .collect()\n                }),\n                PhysicalType::Double => rg.read_double_column(*index).map(|col| {\n                    col.into_iter()\n                        .map(|v| v.map_or(Value::Null, Value::Float))\n                        .collect()\n                }),\n                PhysicalType::Float => rg.read_float_column(*index).map(|col| {\n                    col.into_iter()\n                        .map(|v| v.map_or(Value::Null, |f| Value::Float(f64::from(f))))\n                        .collect()\n                }),\n                PhysicalType::Boolean => rg.read_boolean_column(*index).map(|col| {\n                    col.into_iter()\n                        .map(|v| v.map_or(Value::Null, Value::Bool))\n                        .collect()\n                }),\n                _ => rg.read_string_column(*index).map(|col| {\n                    col.into_iter()\n                        .map(|v| v.map_or(Value::Null, |s| Value::Str(s.into())))\n                        .collect()\n                }),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "column_252",
+    "file": "src/engine/column.rs",
+    "line": 252,
+    "decision": "match &select.where_clause {\n        Some(Expr {\n            kind: ExprKind::InSubquery { subquery, .. },\n            ..\n        }) => Some(subquery),\n        _ => None,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "column_262",
+    "file": "src/engine/column.rs",
+    "line": 262,
+    "decision": "match column {\n        ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { tail, .. },\n                    ..\n                },\n            ..\n        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),\n        _ => false,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "column_278",
+    "file": "src/engine/column.rs",
+    "line": 278,
+    "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "column_291",
+    "file": "src/engine/column.rs",
+    "line": 291,
+    "decision": "match pt {\n        PhysicalType::Boolean => \"BOOLEAN\",\n        PhysicalType::Int32 => \"INT32\",\n        PhysicalType::Int64 => \"INT64\",\n        PhysicalType::Int96 => \"INT96\",\n        PhysicalType::Float => \"FLOAT\",\n        PhysicalType::Double => \"DOUBLE\",\n        PhysicalType::ByteArray => \"BYTE_ARRAY\",\n        PhysicalType::FixedLenByteArray => \"FIXED_LEN_BYTE_ARRAY\",\n        PhysicalType::Unknown(_) => \"\",\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "column_385",
+    "file": "src/engine/column.rs",
+    "line": 385,
+    "decision": "r.comment.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
     "id": "row_109",
     "file": "src/engine/row.rs",
     "line": 109,
@@ -21589,15 +21670,6 @@
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
-  },
-  {
-    "id": "row_352",
-    "file": "src/engine/row.rs",
-    "line": 352,
-    "decision": "match (stmts.next(), stmts.next()) {\n        (Some(one), None) => Ok(one),\n        (None, _) => Err(EngineError::new(ErrorKind::Parse, \"empty statement\")),\n        (Some(_), Some(_)) => Err(EngineError::new(\n            ErrorKind::Unsupported,\n            \"EXPLAIN takes a single statement\",\n        )),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true
   },
   {
     "id": "coerce_15",
@@ -21879,64 +21951,73 @@
     "compiler_void": true
   },
   {
-    "id": "engine_49",
+    "id": "engine_52",
     "file": "src/engine.rs",
-    "line": 49,
+    "line": 52,
     "decision": "match self {\n            Mode::Row => \"row\",\n            Mode::Batch => \"batch\",\n            Mode::Stream => \"stream\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "engine_80",
+    "id": "engine_83",
     "file": "src/engine.rs",
-    "line": 80,
+    "line": 83,
     "decision": "match self {\n            Cell::Null => Ok(()),\n            Cell::Int(n) => write!(f, \"{n}\"),\n            Cell::Real(x) => f.write_str(&crate::value::format_real(*x)),\n            Cell::Bool(b) => f.write_str(if *b { \"1\" } else { \"0\" }),\n            Cell::Text(s) => f.write_str(s),\n            Cell::Blob(bytes) => {\n                f.write_str(\"X'\")?;\n                for b in bytes {\n                    write!(f, \"{b:02X}\")?;\n                }\n                f.write_str(\"'\")\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "engine_84",
+    "id": "engine_87",
     "file": "src/engine.rs",
-    "line": 84,
+    "line": 87,
     "decision": "*b",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "engine_99",
+    "id": "engine_102",
     "file": "src/engine.rs",
-    "line": 99,
+    "line": 102,
     "decision": "match v {\n            crate::value::Value::Null => Cell::Null,\n            crate::value::Value::Integer(n) => Cell::Int(n),\n            crate::value::Value::Real(x) => Cell::Real(x),\n            crate::value::Value::Text(s) => Cell::Text(s.to_string()),\n            crate::value::Value::Blob(b) => Cell::Blob(b.to_vec()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "engine_111",
+    "id": "engine_114",
     "file": "src/engine.rs",
-    "line": 111,
+    "line": 114,
     "decision": "match v {\n            crate::value::Value::Null => Cell::Null,\n            crate::value::Value::Integer(n) => Cell::Int(*n),\n            crate::value::Value::Real(x) => Cell::Real(*x),\n            crate::value::Value::Text(s) => Cell::Text(s.to_string()),\n            crate::value::Value::Blob(b) => Cell::Blob(b.to_vec()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "engine_124",
+    "id": "engine_127",
     "file": "src/engine.rs",
-    "line": 124,
+    "line": 127,
     "decision": "match v {\n            crate::vm::batch::Value::Null => Cell::Null,\n            crate::vm::batch::Value::Int(n) => Cell::Int(n),\n            crate::vm::batch::Value::Float(x) => Cell::Real(x),\n            crate::vm::batch::Value::Bool(b) => Cell::Bool(b),\n            crate::vm::batch::Value::Str(s) => Cell::Text(s.into_owned()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "engine_240",
+    "id": "engine_263",
     "file": "src/engine.rs",
-    "line": 240,
+    "line": 263,
     "decision": "match self {\n            ErrorKind::Open => \"open\",\n            ErrorKind::Parse => \"parse\",\n            ErrorKind::Compile => \"compile\",\n            ErrorKind::Execute => \"execute\",\n            ErrorKind::Unsupported => \"unsupported\",\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "engine_341",
+    "file": "src/engine.rs",
+    "line": 341,
+    "decision": "match (stmts.next(), stmts.next()) {\n        (Some(one), None) => Ok(one),\n        (None, _) => Err(EngineError::new(ErrorKind::Parse, \"empty statement\")),\n        (Some(_), Some(_)) => Err(EngineError::new(\n            ErrorKind::Unsupported,\n            \"EXPLAIN takes a single statement\",\n        )),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
