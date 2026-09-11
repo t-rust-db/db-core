@@ -356,8 +356,9 @@ impl Engine for BatchEngine {
         let stats = TableStats {
             row_groups: self.num_row_groups,
             rows: self.num_rows,
+            source: None,
         };
-        let nodes = planner::explain(&select, |_| stats).map_err(plan_err)?;
+        let nodes = planner::explain(&select, |_| stats.clone()).map_err(plan_err)?;
         Ok(nodes
             .into_iter()
             .map(|n| PlanRow {

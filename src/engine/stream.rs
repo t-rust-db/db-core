@@ -251,6 +251,7 @@ impl StreamEngine {
         TableStats {
             row_groups: self.ring.len(),
             rows: i64::try_from(self.ring.rows()).unwrap_or(i64::MAX),
+            source: None,
         }
     }
 
@@ -350,7 +351,7 @@ impl Engine for StreamEngine {
         let stmt = single_statement(sql)?;
         let select = self.parse_for_table(&stmt)?;
         let stats = self.table_stats();
-        let nodes = planner::explain(&select, |_| stats).map_err(plan_err)?;
+        let nodes = planner::explain(&select, |_| stats.clone()).map_err(plan_err)?;
         Ok(nodes
             .into_iter()
             .map(|n| PlanRow {

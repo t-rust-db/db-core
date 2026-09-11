@@ -39,6 +39,14 @@ pub mod column;
 #[cfg(feature = "engine-stream")]
 pub mod stream;
 
+/// Cross-mode joins (#312 ADR-0019, #314): a SQLite table as a
+/// `vm::batch::Batch`/`Source`, the lookup side of a batch/stream-driving
+/// join. Deliberately not part of `row`'s module tree (ADR 0000 §(c): the
+/// SQLite side never names `vm::batch`) -- like this file itself, it is a
+/// seam allowed to know both `row::RowEngine` and `vm::batch`.
+#[cfg(all(feature = "engine-row", feature = "vm-batch"))]
+pub mod cross_mode;
+
 /// Which execution mode an engine drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {

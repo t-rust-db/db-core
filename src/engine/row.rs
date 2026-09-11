@@ -235,6 +235,28 @@ impl RowEngine {
         })
     }
 
+    /// This table's schema, or an error if no such table exists. Crate-
+    /// internal: `engine::cross_mode`'s row→batch adapter needs the table's
+    /// shape (root page, rowid alias) to scan it directly, without going
+    /// through `vm::row` -- deliberately outside this module's tree (ADR
+    /// 0000 §(c): the SQLite side never names `vm::batch`), so it takes
+    /// only mode-agnostic types (`schema::TableSchema`) from here.
+    pub(crate) fn table_schema(&self, table: &str) -> Result<TableSchema, EngineError> {
+        let (schemas, _views) = self.catalog()?;
+        schemas
+            .into_iter()
+            .find(|t| t.name == table)
+            .ok_or_else(|| EngineError::new(ErrorKind::Compile, format!("no such table: {table}")))
+    }
+
+    /// Runs `f` with this engine's shared pager and header -- the only
+    /// storage access `engine::cross_mode`'s adapter needs for a read-only
+    /// whole-table scan.
+    pub(crate) fn with_storage<T>(&self, f: impl FnOnce(&Pager, &DatabaseHeader) -> T) -> T {
+        let pager = self.pager.borrow();
+        f(&pager, &self.header)
+    }
+
     fn compile_one(&self, stmt: &str, catalog: &Catalog) -> Result<Program, EngineError> {
         let (schemas, views) = catalog;
         if Self::is_select(stmt) {
