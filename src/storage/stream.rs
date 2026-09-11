@@ -39,12 +39,18 @@
 
 #[cfg(feature = "vm-batch")]
 pub mod adapter;
+pub mod alias;
 pub mod batch;
 pub mod clf;
+pub mod detect;
 pub mod file;
+pub mod json;
+pub mod jsonl;
+pub mod logfmt;
 pub mod ring;
 pub mod segment;
 pub mod syslog;
+pub mod timestamp;
 
 #[cfg(feature = "vm-batch")]
 pub use adapter::{ColumnRequest, StreamSegment, TailSource, PREDEFINED_COLUMNS};
@@ -53,7 +59,10 @@ pub use batch::{
     Facility, FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind,
 };
 pub use clf::ClfParser;
+pub use detect::{detect, parse_detected, Detection, Format};
 pub use file::{Block, LogFile, Refresh, BLOCK_SIZE};
+pub use jsonl::JsonlParser;
+pub use logfmt::LogfmtParser;
 pub use ring::Ring;
 pub use segment::{MinMax, OwnedColumn, Segment, Span, SEGMENT_MAX_ROWS};
 pub use syslog::SyslogParser;
