@@ -194,7 +194,12 @@ pub fn checkpoint_passive(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    non_snake_case
+)]
 mod tests {
     use super::wal::WalWriter;
     use super::*;
@@ -238,6 +243,72 @@ mod tests {
                 checkpoint_complete: true,
             }
         );
+    }
+
+    mod mcdc_vectors {
+        //! Tagged MC/DC vectors for this file's multi-leaf decisions
+        //! (`mcdc__<file-stem>_<line>__vN`, joined to
+        //! `tests/mcdc/obligations.json` by `make test-mcdc`; db-core#299
+        //! follow-up).
+
+        use super::*;
+
+        // checkpoint_178: `*page_num == 0 || *page_num > max_page`
+        #[test]
+        fn mcdc__checkpoint_178__v1_both_false_is_backfilled() {
+            let (vfs, db_path) = setup(512);
+            let wal_path = companion_path(&db_path, "-wal");
+            let header = WalHeader::new(true, 512, 0x1111, 0x2222, 1);
+            let mut writer = WalWriter::create(&vfs, &wal_path, header).unwrap();
+            writer.append_frame(1, &vec![0xAAu8; 512], 1).unwrap();
+            writer.sync().unwrap();
+
+            let result = checkpoint_passive(&vfs, &db_path, 512).unwrap();
+            assert_eq!(result.backfilled_frames, 1);
+        }
+
+        #[test]
+        fn mcdc__checkpoint_178__v2_page_num_zero_is_skipped() {
+            let (vfs, db_path) = setup(512);
+            let wal_path = companion_path(&db_path, "-wal");
+            let header = WalHeader::new(true, 512, 0x3333, 0x4444, 1);
+            let mut writer = WalWriter::create(&vfs, &wal_path, header).unwrap();
+            writer.append_frame(0, &vec![0xBBu8; 512], 1).unwrap();
+            writer.sync().unwrap();
+
+            let result = checkpoint_passive(&vfs, &db_path, 512).unwrap();
+            assert_eq!(result.backfilled_frames, 1);
+
+            let db_file = vfs.open_read(&db_path).unwrap();
+            let mut db_bytes = vec![0u8; 512];
+            db_file.read_at(&mut db_bytes, 0).unwrap();
+            assert_ne!(db_bytes, vec![0xBBu8; 512], "page 0 must never be written");
+        }
+
+        #[test]
+        fn mcdc__checkpoint_178__v3_page_num_above_max_page_is_skipped() {
+            let (vfs, db_path) = setup(512);
+            let wal_path = companion_path(&db_path, "-wal");
+            let header = WalHeader::new(true, 512, 0x5555, 0x6666, 1);
+            let mut writer = WalWriter::create(&vfs, &wal_path, header).unwrap();
+            // Declares a commit at db_size 1 but also writes page 100 in
+            // the same frame set — page 100 is out of range for both the
+            // WAL's own declared size and the (empty) main file's current
+            // page count, so it must be skipped rather than seeking
+            // write_at to a huge offset.
+            writer.append_frame(100, &vec![0xCCu8; 512], 1).unwrap();
+            writer.sync().unwrap();
+
+            let result = checkpoint_passive(&vfs, &db_path, 512).unwrap();
+            assert_eq!(result.backfilled_frames, 1);
+
+            let db_file = vfs.open_read(&db_path).unwrap();
+            assert_eq!(
+                db_file.size().unwrap(),
+                512,
+                "no write beyond the main file's extent"
+            );
+        }
     }
 
     #[test]

@@ -41,6 +41,14 @@ pub enum DispatchError {
     /// The statement referenced an index not present in the schema catalog.
     NoSuchIndex(String),
 
+    /// A `CREATE TABLE` named a table already present in the schema catalog
+    /// (and it didn't say `IF NOT EXISTS`).
+    TableAlreadyExists(String),
+
+    /// A `CREATE INDEX` named an index (or table) already present in the
+    /// schema catalog (and it didn't say `IF NOT EXISTS`).
+    IndexAlreadyExists(String),
+
     /// The leading keyword(s) didn't match any statement kind this
     /// dispatcher knows how to parse/compile.
     Unrecognized(String),
@@ -60,6 +68,8 @@ impl std::fmt::Display for DispatchError {
         match self {
             DispatchError::NoSuchTable(name) => write!(f, "no such table: {name}"),
             DispatchError::NoSuchIndex(name) => write!(f, "no such index: {name}"),
+            DispatchError::TableAlreadyExists(name) => write!(f, "table {name} already exists"),
+            DispatchError::IndexAlreadyExists(name) => write!(f, "index {name} already exists"),
             DispatchError::Unrecognized(kw) => {
                 write!(f, "unsupported or unrecognized statement: {kw:?} ...")
             }
@@ -120,6 +130,19 @@ fn canonical(word: &str) -> &'static str {
 
 fn parse_error<T: std::fmt::Debug>(other: ParseOutcome<T>) -> DispatchError {
     DispatchError::ParseFailed(format!("{other:?}"))
+}
+
+/// `Init -> Halt`, nothing else — what `IF NOT EXISTS` compiles to when the
+/// named table/index is already in the catalog: a statement that succeeds
+/// without touching the schema.
+fn no_op_program() -> Program {
+    let mut em = Emitter::new();
+    let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
+    let body_start = em.new_label();
+    em.place(body_start);
+    em.patch_p2(init_addr, body_start);
+    em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+    em.finish()
 }
 
 /// Parses `sql`, picks the compiler for its leading keyword(s), and
@@ -305,7 +328,18 @@ pub fn compile_statement(
             other => Err(parse_error(other)),
         },
         "CREATE" if second == "TABLE" => match parse_create_table(sql) {
-            ParseOutcome::Accepted(create) => Ok(compile_create_table(&create, sql)?),
+            ParseOutcome::Accepted(create) => {
+                let exists = schemas
+                    .iter()
+                    .any(|s| s.name.eq_ignore_ascii_case(&create.name));
+                if exists {
+                    if create.if_not_exists {
+                        return Ok(no_op_program());
+                    }
+                    return Err(DispatchError::TableAlreadyExists(create.name));
+                }
+                Ok(compile_create_table(&create, sql)?)
+            }
             other => Err(parse_error(other)),
         },
         "CREATE" if second == "VIEW" => match parse_create_view(sql) {
@@ -315,6 +349,19 @@ pub fn compile_statement(
         "CREATE" if is_create_index => match parse_create_index(sql) {
             ParseOutcome::Accepted(ci) => {
                 let schema = find_schema(&ci.table)?;
+                let exists = schemas
+                    .iter()
+                    .any(|s| s.name.eq_ignore_ascii_case(&ci.name))
+                    || schemas
+                        .iter()
+                        .flat_map(|s| &s.indexes)
+                        .any(|idx| idx.name.eq_ignore_ascii_case(&ci.name));
+                if exists {
+                    if ci.if_not_exists {
+                        return Ok(no_op_program());
+                    }
+                    return Err(DispatchError::IndexAlreadyExists(ci.name));
+                }
                 Ok(compile_create_index(&ci, schema, sql)?)
             }
             other => Err(parse_error(other)),
@@ -498,9 +545,9 @@ mod mcdc_vectors {
         )
     }
 
-    // dispatch_269: `is_subquery(&from.first) || from.joins.iter().any(|j| is_subquery(&j.table))`
+    // dispatch_292: `is_subquery(&from.first) || from.joins.iter().any(|j| is_subquery(&j.table))`
     #[test]
-    fn mcdc__dispatch_269__v1_view_as_first_source_is_rejected() {
+    fn mcdc__dispatch_292__v1_view_as_first_source_is_rejected() {
         let (schemas, views) = catalog();
         assert!(is_view_source_rejection(compile_statement(
             "INSERT INTO t SELECT a FROM v",
@@ -510,7 +557,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__dispatch_269__v2_view_as_joined_source_is_rejected() {
+    fn mcdc__dispatch_292__v2_view_as_joined_source_is_rejected() {
         let (schemas, views) = catalog();
         assert!(is_view_source_rejection(compile_statement(
             "INSERT INTO t SELECT u.a FROM u JOIN v ON u.a = v.a",
@@ -520,7 +567,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__dispatch_269__v3_plain_table_sources_pass_the_guard() {
+    fn mcdc__dispatch_292__v3_plain_table_sources_pass_the_guard() {
         let (schemas, views) = catalog();
         let result = compile_statement(
             "INSERT INTO t SELECT u.a FROM u JOIN w ON u.a = w.a",
@@ -528,5 +575,67 @@ mod mcdc_vectors {
             &views,
         );
         assert!(!is_view_source_rejection(result));
+    }
+}
+
+#[cfg(test)]
+mod already_exists_tests {
+    //! db-core#299: `CREATE TABLE`/`CREATE INDEX` over an existing name
+    //! must fail the way stock SQLite's own `prepare` does, not silently
+    //! succeed; `IF NOT EXISTS` must keep succeeding as a no-op.
+
+    use crate::codegen::row::dispatch::{compile_statement, DispatchError};
+    use crate::codegen::row::{IndexSchema, TableSchema};
+    use crate::vm::row::Opcode;
+
+    fn schemas() -> Vec<TableSchema> {
+        vec![TableSchema {
+            name: "t".to_string(),
+            root_page: 2,
+            columns: vec!["a".to_string()],
+            column_types: vec!["INTEGER".to_string()],
+            sql: "CREATE TABLE t(a INTEGER)".to_string(),
+            indexes: vec![IndexSchema {
+                name: "idx_t_a".to_string(),
+                unique: false,
+                columns: vec![],
+                root_page: 3,
+            }],
+            ..Default::default()
+        }]
+    }
+
+    #[test]
+    fn create_table_over_existing_name_fails() {
+        let err = compile_statement("CREATE TABLE t(z INTEGER)", &schemas(), &[]).unwrap_err();
+        assert!(matches!(&err, DispatchError::TableAlreadyExists(name) if name == "t"));
+        assert_eq!(err.to_string(), "table t already exists");
+    }
+
+    #[test]
+    fn create_table_if_not_exists_over_existing_name_is_a_no_op() {
+        let program =
+            compile_statement("CREATE TABLE IF NOT EXISTS t(z INTEGER)", &schemas(), &[]).unwrap();
+        let opcodes: Vec<Opcode> = program.instructions.iter().map(|i| i.opcode).collect();
+        assert_eq!(opcodes, vec![Opcode::Init, Opcode::Halt]);
+    }
+
+    #[test]
+    fn create_index_over_existing_name_fails() {
+        let err = compile_statement("CREATE INDEX idx_t_a ON t(a)", &schemas(), &[]).unwrap_err();
+        assert!(matches!(&err, DispatchError::IndexAlreadyExists(name) if name == "idx_t_a"));
+        assert_eq!(err.to_string(), "index idx_t_a already exists");
+    }
+
+    #[test]
+    fn create_index_if_not_exists_over_existing_name_is_a_no_op() {
+        let program = compile_statement(
+            "CREATE INDEX IF NOT EXISTS idx_t_a ON t(a)",
+            &schemas(),
+            &[],
+        )
+        .unwrap();
+        let opcodes: Vec<Opcode> = program.instructions.iter().map(|i| i.opcode).collect();
+        assert_eq!(opcodes, vec![Opcode::Init, Opcode::Halt]);
     }
 }

@@ -1862,6 +1862,48 @@ mod tests {
         assert!(matches!(result, Err(PagerError::PendingTransaction)));
     }
 
+    #[allow(non_snake_case)]
+    mod mcdc_vectors {
+        //! Tagged MC/DC vectors for this file's multi-leaf decisions
+        //! (`mcdc__<file-stem>_<line>__vN`, joined to
+        //! `tests/mcdc/obligations.json` by `make test-mcdc`; db-core#299
+        //! follow-up).
+
+        use super::*;
+
+        // pager_804: `!self.dirty.is_empty() || self.tx_lock_level > LockLevel::Shared`
+        #[test]
+        fn mcdc__pager_804__v1_both_false_switch_is_allowed() {
+            let mut vfs = MemoryVfs::new();
+            vfs.insert("/test.db", vec![0u8; 512]);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+
+            assert!(pager.set_journal_mode(JournalMode::Wal).is_ok());
+        }
+
+        #[test]
+        fn mcdc__pager_804__v2_dirty_pages_pending_is_rejected() {
+            let mut vfs = MemoryVfs::new();
+            vfs.insert("/test.db", vec![0u8; 512]);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+            pager.get_page_mut(1).unwrap();
+
+            let result = pager.set_journal_mode(JournalMode::Wal);
+            assert!(matches!(result, Err(PagerError::PendingTransaction)));
+        }
+
+        #[test]
+        fn mcdc__pager_804__v3_escalated_lock_with_no_dirty_pages_is_rejected() {
+            let mut vfs = MemoryVfs::new();
+            vfs.insert("/test.db", vec![0u8; 512]);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+            pager.begin_immediate().unwrap();
+
+            let result = pager.set_journal_mode(JournalMode::Wal);
+            assert!(matches!(result, Err(PagerError::PendingTransaction)));
+        }
+    }
+
     /// #388: `PRAGMA journal_mode=DELETE` while WAL is active checkpoints
     /// every pending WAL frame into the main file (even one that targets
     /// page 1 itself — the regression this pins: the version-byte patch

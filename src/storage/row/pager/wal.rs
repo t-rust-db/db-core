@@ -901,4 +901,174 @@ mod tests {
             Err(WalError::InvalidPageSize { page_size: 512 })
         ));
     }
+
+    #[allow(non_snake_case)]
+    mod mcdc_vectors {
+        //! Tagged MC/DC vectors for this file's multi-leaf decisions
+        //! (`mcdc__<file-stem>_<line>__vN`, joined to
+        //! `tests/mcdc/obligations.json` by `make test-mcdc`; db-core#299
+        //! follow-up).
+
+        use super::*;
+        use crate::storage::row::vfs::{AnyVfs, MemoryVfs};
+
+        // wal_170: `page_size < 512 || !page_size.is_power_of_two() || page_size > 65536`
+        #[test]
+        fn mcdc__wal_170__v1_all_false_is_accepted() {
+            let header = WalHeader::new(true, 4096, 1, 2, 0);
+            assert!(WalHeader::parse(&header.serialize()).is_ok());
+        }
+
+        #[test]
+        fn mcdc__wal_170__v2_below_512_is_rejected() {
+            let header = WalHeader::new(true, 256, 1, 2, 0);
+            assert!(matches!(
+                WalHeader::parse(&header.serialize()),
+                Err(WalError::InvalidPageSize { page_size: 256 })
+            ));
+        }
+
+        #[test]
+        fn mcdc__wal_170__v3_not_power_of_two_is_rejected() {
+            let header = WalHeader::new(true, 600, 1, 2, 0);
+            assert!(matches!(
+                WalHeader::parse(&header.serialize()),
+                Err(WalError::InvalidPageSize { page_size: 600 })
+            ));
+        }
+
+        #[test]
+        fn mcdc__wal_170__v4_above_65536_is_rejected() {
+            let header = WalHeader::new(true, 131_072, 1, 2, 0);
+            assert!(matches!(
+                WalHeader::parse(&header.serialize()),
+                Err(WalError::InvalidPageSize { page_size: 131_072 })
+            ));
+        }
+
+        fn wal_with_one_frame(salt1: u32, salt2: u32) -> (WalHeader, Vec<u8>) {
+            let memory = MemoryVfs::new();
+            let vfs = AnyVfs::new(memory);
+            let path = Path::new("/mcdc.db-wal");
+            let header = WalHeader::new(true, 512, salt1, salt2, 0);
+            let mut writer = WalWriter::create(&vfs, path, header).unwrap();
+            writer.append_frame(1, &vec![0x11u8; 512], 1).unwrap();
+            writer.sync().unwrap();
+
+            let file = vfs.open_read(path).unwrap();
+            let size = file.size().unwrap();
+            let mut bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
+            file.read_at(&mut bytes, 0).unwrap();
+            (header, bytes)
+        }
+
+        // wal_337 (committed_pages) / wal_419 (last_valid_frame_state):
+        // `salt1 != header.salt1 || salt2 != header.salt2`
+        #[test]
+        fn mcdc__wal_337__v1_both_false_frame_is_valid() {
+            let (header, bytes) = wal_with_one_frame(0xAAAA, 0xBBBB);
+            let (pages, db_size) = committed_pages(&header, &bytes);
+            assert_eq!(db_size, 1);
+            assert!(pages.contains_key(&1));
+        }
+
+        #[test]
+        fn mcdc__wal_337__v2_salt1_mismatch_stops_the_scan() {
+            let (mut header, bytes) = wal_with_one_frame(0xAAAA, 0xBBBB);
+            header.salt1 ^= 1; // frame bytes still carry the original salt1
+            let (pages, db_size) = committed_pages(&header, &bytes);
+            assert_eq!(db_size, 0);
+            assert!(pages.is_empty());
+        }
+
+        #[test]
+        fn mcdc__wal_337__v3_salt2_mismatch_stops_the_scan() {
+            let (mut header, bytes) = wal_with_one_frame(0xAAAA, 0xBBBB);
+            header.salt2 ^= 1;
+            let (pages, db_size) = committed_pages(&header, &bytes);
+            assert_eq!(db_size, 0);
+            assert!(pages.is_empty());
+        }
+
+        #[test]
+        fn mcdc__wal_419__v1_both_false_frame_is_valid() {
+            let (header, bytes) = wal_with_one_frame(0xCCCC, 0xDDDD);
+            let (offset, _) = last_valid_frame_state(&header, &bytes);
+            assert_eq!(offset, bytes.len() as u64);
+        }
+
+        #[test]
+        fn mcdc__wal_419__v2_salt1_mismatch_stops_the_scan() {
+            let (mut header, bytes) = wal_with_one_frame(0xCCCC, 0xDDDD);
+            header.salt1 ^= 1;
+            let (offset, running) = last_valid_frame_state(&header, &bytes);
+            assert_eq!(offset, HEADER_LEN as u64);
+            assert_eq!(running, header.header_checksum);
+        }
+
+        #[test]
+        fn mcdc__wal_419__v3_salt2_mismatch_stops_the_scan() {
+            let (mut header, bytes) = wal_with_one_frame(0xCCCC, 0xDDDD);
+            header.salt2 ^= 1;
+            let (offset, running) = last_valid_frame_state(&header, &bytes);
+            assert_eq!(offset, HEADER_LEN as u64);
+            assert_eq!(running, header.header_checksum);
+        }
+
+        // wal_604: `hint.expected_size == size && read_header == Some(hint.header)`
+        #[test]
+        fn mcdc__wal_604__v1_both_true_resumes_from_the_hint() {
+            let memory = MemoryVfs::new();
+            let vfs = AnyVfs::new(memory);
+            let path = Path::new("/mcdc_resume.db-wal");
+            let header = WalHeader::new(true, 512, 1, 2, 0);
+            let mut writer = WalWriter::create(&vfs, path, header).unwrap();
+            writer.append_frame(1, &vec![0x11u8; 512], 1).unwrap();
+            writer.sync().unwrap();
+            let hint = writer.resume_hint();
+
+            let resumed = WalWriter::open_existing(&vfs, path, 512, Some(&hint)).unwrap();
+            assert_eq!(resumed.frame_count(), 1);
+        }
+
+        #[test]
+        fn mcdc__wal_604__v2_size_mismatch_falls_back_to_a_rescan() {
+            let memory = MemoryVfs::new();
+            let vfs = AnyVfs::new(memory);
+            let path = Path::new("/mcdc_resume.db-wal");
+            let header = WalHeader::new(true, 512, 1, 2, 0);
+            let mut writer = WalWriter::create(&vfs, path, header).unwrap();
+            writer.append_frame(1, &vec![0x11u8; 512], 1).unwrap();
+            writer.sync().unwrap();
+            let mut hint = writer.resume_hint();
+            hint.expected_size = hint.expected_size.saturating_add(1);
+
+            let resumed = WalWriter::open_existing(&vfs, path, 512, Some(&hint)).unwrap();
+            assert_eq!(
+                resumed.frame_count(),
+                1,
+                "rescan still finds the real frame"
+            );
+        }
+
+        #[test]
+        fn mcdc__wal_604__v3_header_mismatch_falls_back_to_a_rescan() {
+            let memory = MemoryVfs::new();
+            let vfs = AnyVfs::new(memory);
+            let path = Path::new("/mcdc_resume.db-wal");
+            let header = WalHeader::new(true, 512, 1, 2, 0);
+            let mut writer = WalWriter::create(&vfs, path, header).unwrap();
+            writer.append_frame(1, &vec![0x11u8; 512], 1).unwrap();
+            writer.sync().unwrap();
+            let mut hint = writer.resume_hint();
+            hint.header = WalHeader::new(true, 512, 9, 9, 0); // size still matches, header doesn't
+
+            let resumed = WalWriter::open_existing(&vfs, path, 512, Some(&hint)).unwrap();
+            assert_eq!(
+                resumed.frame_count(),
+                1,
+                "rescan still finds the real frame"
+            );
+        }
+    }
 }

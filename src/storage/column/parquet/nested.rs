@@ -305,7 +305,7 @@ mod tests {
     use crate::storage::column::parquet::footer::{PhysicalType, Repetition, SchemaElement};
     use crate::storage::column::parquet::schema_tree::build_schema_tree;
 
-    fn group(name: &str, repetition: Repetition, num_children: i32) -> SchemaElement {
+    pub(super) fn group(name: &str, repetition: Repetition, num_children: i32) -> SchemaElement {
         SchemaElement {
             name: name.to_string(),
             physical_type: None,
@@ -318,14 +318,22 @@ mod tests {
         }
     }
 
-    fn map_group(name: &str, repetition: Repetition, num_children: i32) -> SchemaElement {
+    pub(super) fn map_group(
+        name: &str,
+        repetition: Repetition,
+        num_children: i32,
+    ) -> SchemaElement {
         SchemaElement {
             converted_type: Some(ConvertedType::Other(1)),
             ..group(name, repetition, num_children)
         }
     }
 
-    fn leaf_elem(name: &str, repetition: Repetition, physical_type: PhysicalType) -> SchemaElement {
+    pub(super) fn leaf_elem(
+        name: &str,
+        repetition: Repetition,
+        physical_type: PhysicalType,
+    ) -> SchemaElement {
         SchemaElement {
             name: name.to_string(),
             physical_type: Some(physical_type),
@@ -338,7 +346,7 @@ mod tests {
         }
     }
 
-    fn entries(
+    pub(super) fn entries(
         rep_levels: Vec<u32>,
         def_levels: Vec<u32>,
         values: Vec<Option<LeafScalar>>,
@@ -630,6 +638,226 @@ mod tests {
         assert_eq!(
             NestedError::UnsupportedMapShape("a.b".into()).to_string(),
             "MAP at 'a.b' does not have the expected key_value(key, value) shape"
+        );
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    non_snake_case,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing
+)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#299 MC/DC backfill).
+
+    use super::tests::{entries, group, leaf_elem, map_group};
+    use super::*;
+    use crate::storage::column::parquet::footer::{PhysicalType, Repetition};
+    use crate::storage::column::parquet::schema_tree::build_schema_tree;
+
+    // nested_114: `node.children.len() == 1
+    //     && node.children[0].element.repetition == Some(Repeated)`
+    #[test]
+    fn mcdc__nested_114__v1_both_true_is_a_two_level_list() {
+        // "nums { repeated int32 element }": exactly one child, and that
+        // child is repeated -- both leafs true, so it's a 2-level list.
+        let schema = vec![
+            group("root", Repetition::Required, 1),
+            group("nums", Repetition::Required, 1),
+            leaf_elem("element", Repetition::Repeated, PhysicalType::Int32),
+        ];
+        let tree = build_schema_tree(&schema);
+        let mut leaves = LeafData::new();
+        leaves.insert(
+            "nums.element".to_string(),
+            entries(vec![0], vec![1], vec![Some(LeafScalar::Int32(1))]),
+        );
+        let result = reconstruct_row_group(&tree, 1, &leaves).unwrap();
+        assert_eq!(
+            result[0].1,
+            vec![NestedValue::List(vec![NestedValue::Scalar(
+                LeafScalar::Int32(1)
+            )])]
+        );
+    }
+
+    #[test]
+    fn mcdc__nested_114__v2_more_than_one_child_is_a_struct() {
+        // Two children -- first leaf (`len() == 1`) is false, so this
+        // falls through to the struct path regardless of repetition.
+        let schema = vec![
+            group("root", Repetition::Required, 1),
+            group("pair", Repetition::Required, 2),
+            leaf_elem("a", Repetition::Required, PhysicalType::Int64),
+            leaf_elem("b", Repetition::Required, PhysicalType::Int64),
+        ];
+        let tree = build_schema_tree(&schema);
+        let mut leaves = LeafData::new();
+        leaves.insert(
+            "pair.a".to_string(),
+            entries(vec![0], vec![0], vec![Some(LeafScalar::Int64(1))]),
+        );
+        leaves.insert(
+            "pair.b".to_string(),
+            entries(vec![0], vec![0], vec![Some(LeafScalar::Int64(2))]),
+        );
+        let result = reconstruct_row_group(&tree, 1, &leaves).unwrap();
+        assert!(matches!(result[0].1[0], NestedValue::Struct(_)));
+    }
+
+    #[test]
+    fn mcdc__nested_114__v3_one_child_not_repeated_is_a_struct() {
+        // Exactly one child (first leaf true), but that child is not
+        // repeated (second leaf false) -- still a struct, not a list.
+        let schema = vec![
+            group("root", Repetition::Required, 1),
+            group("wrapper", Repetition::Required, 1),
+            leaf_elem("a", Repetition::Required, PhysicalType::Int64),
+        ];
+        let tree = build_schema_tree(&schema);
+        let mut leaves = LeafData::new();
+        leaves.insert(
+            "wrapper.a".to_string(),
+            entries(vec![0], vec![0], vec![Some(LeafScalar::Int64(9))]),
+        );
+        let result = reconstruct_row_group(&tree, 1, &leaves).unwrap();
+        assert!(matches!(result[0].1[0], NestedValue::Struct(_)));
+    }
+
+    // nested_178: `!key_node.is_leaf() || !value_node.is_leaf()`
+    #[test]
+    fn mcdc__nested_178__v1_key_not_leaf_is_unsupported() {
+        let schema = vec![
+            group("root", Repetition::Required, 1),
+            map_group("m", Repetition::Optional, 1),
+            group("key_value", Repetition::Repeated, 2),
+            group("key", Repetition::Required, 1), // not a leaf
+            leaf_elem("inner", Repetition::Required, PhysicalType::Int64),
+            leaf_elem("value", Repetition::Optional, PhysicalType::Int64),
+        ];
+        let tree = build_schema_tree(&schema);
+        let leaves = LeafData::new();
+        let err = reconstruct_row_group(&tree, 1, &leaves).unwrap_err();
+        assert!(matches!(err, NestedError::UnsupportedMapShape(p) if p == "m"));
+    }
+
+    #[test]
+    fn mcdc__nested_178__v2_key_leaf_value_not_leaf_is_unsupported() {
+        let schema = vec![
+            group("root", Repetition::Required, 1),
+            map_group("m", Repetition::Optional, 1),
+            group("key_value", Repetition::Repeated, 2),
+            leaf_elem("key", Repetition::Required, PhysicalType::ByteArray),
+            group("value", Repetition::Optional, 1), // not a leaf
+            leaf_elem("inner", Repetition::Required, PhysicalType::Int64),
+        ];
+        let tree = build_schema_tree(&schema);
+        let leaves = LeafData::new();
+        let err = reconstruct_row_group(&tree, 1, &leaves).unwrap_err();
+        assert!(matches!(err, NestedError::UnsupportedMapShape(p) if p == "m"));
+    }
+
+    #[test]
+    fn mcdc__nested_178__v3_both_leaves_is_supported() {
+        let schema = vec![
+            group("root", Repetition::Required, 1),
+            map_group("m", Repetition::Optional, 1),
+            group("key_value", Repetition::Repeated, 2),
+            leaf_elem("key", Repetition::Required, PhysicalType::ByteArray),
+            leaf_elem("value", Repetition::Optional, PhysicalType::Int64),
+        ];
+        let tree = build_schema_tree(&schema);
+        let mut leaves = LeafData::new();
+        leaves.insert(
+            "m.key_value.key".to_string(),
+            entries(vec![0], vec![2], vec![Some(LeafScalar::Str("k".into()))]),
+        );
+        leaves.insert(
+            "m.key_value.value".to_string(),
+            entries(vec![0], vec![3], vec![Some(LeafScalar::Int64(1))]),
+        );
+        let result = reconstruct_row_group(&tree, 1, &leaves).unwrap();
+        assert!(matches!(result[0].1[0], NestedValue::List(_)));
+    }
+
+    // nested_285: `i >= rep_levels.len() || rep_levels[i] == 0`
+    fn two_level_list_tree() -> SchemaNode {
+        let schema = vec![
+            group("root", Repetition::Required, 1),
+            group("nums", Repetition::Required, 1),
+            leaf_elem("element", Repetition::Repeated, PhysicalType::Int32),
+        ];
+        build_schema_tree(&schema)
+    }
+
+    #[test]
+    fn mcdc__nested_285__v1_reaches_end_of_rep_levels() {
+        // Single-element list: after pushing the one element, `i` equals
+        // `rep_levels.len()` -- the first leaf is true (short-circuits).
+        let tree = two_level_list_tree();
+        let mut leaves = LeafData::new();
+        leaves.insert(
+            "nums.element".to_string(),
+            entries(vec![0], vec![1], vec![Some(LeafScalar::Int32(1))]),
+        );
+        let result = reconstruct_row_group(&tree, 1, &leaves).unwrap();
+        assert_eq!(
+            result[0].1,
+            vec![NestedValue::List(vec![NestedValue::Scalar(
+                LeafScalar::Int32(1)
+            )])]
+        );
+    }
+
+    #[test]
+    fn mcdc__nested_285__v2_hits_a_row_boundary_before_the_end() {
+        // Two entries, but the second starts a new row (`rep_levels[1] ==
+        // 0`) -- `i < len` so the first leaf is false, the second is true.
+        let tree = two_level_list_tree();
+        let mut leaves = LeafData::new();
+        leaves.insert(
+            "nums.element".to_string(),
+            entries(
+                vec![0, 0],
+                vec![1, 1],
+                vec![Some(LeafScalar::Int32(1)), Some(LeafScalar::Int32(2))],
+            ),
+        );
+        let result = reconstruct_row_group(&tree, 1, &leaves).unwrap();
+        assert_eq!(
+            result[0].1,
+            vec![NestedValue::List(vec![NestedValue::Scalar(
+                LeafScalar::Int32(1)
+            )])]
+        );
+    }
+
+    #[test]
+    fn mcdc__nested_285__v3_neither_leaf_true_keeps_accumulating() {
+        // Two entries in the same list (`rep_levels[1] == 1`): both leafs
+        // false at the first check, so the loop continues to a second
+        // element before eventually breaking at the true end.
+        let tree = two_level_list_tree();
+        let mut leaves = LeafData::new();
+        leaves.insert(
+            "nums.element".to_string(),
+            entries(
+                vec![0, 1],
+                vec![1, 1],
+                vec![Some(LeafScalar::Int32(1)), Some(LeafScalar::Int32(2))],
+            ),
+        );
+        let result = reconstruct_row_group(&tree, 1, &leaves).unwrap();
+        assert_eq!(
+            result[0].1,
+            vec![NestedValue::List(vec![
+                NestedValue::Scalar(LeafScalar::Int32(1)),
+                NestedValue::Scalar(LeafScalar::Int32(2)),
+            ])]
         );
     }
 }

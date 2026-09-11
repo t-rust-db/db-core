@@ -2630,26 +2630,26 @@ mod tests {
         assert!(!spliced, "zero-size gap must decline the fast path");
     }
 
-    /// MC/DC vector (obligation `btree_1088`, `scan_leaf_cells`'s
+    /// MC/DC vector (obligation `btree_1122`, `scan_leaf_cells`'s
     /// insert-position decision `cell_rowid > rowid && insert_pos ==
     /// num_cells`): both leaves true — the first cell with a greater
     /// rowid sets `insert_pos`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__btree_1088__v1_first_greater_rowid_sets_insert_pos() {
+    fn mcdc__btree_1122__v1_first_greater_rowid_sets_insert_pos() {
         let buf = leaf_page_with_cells(512, &[table_cell(10, &[1, 2, 3])]);
         let (insert_pos, num_cells, _) = scan_leaf_cells(&buf, 0, 1, 512, 5).unwrap();
         assert_eq!((insert_pos, num_cells), (0, 1));
     }
 
-    /// MC/DC vector (obligation `btree_1088`): leaf A true, leaf B
+    /// MC/DC vector (obligation `btree_1122`): leaf A true, leaf B
     /// (`insert_pos == num_cells`) false — a second cell also exceeding
     /// `rowid` must not overwrite the insertion point already found at
     /// the first one. Independence pair for B against
-    /// `mcdc__btree_1088__v1_first_greater_rowid_sets_insert_pos`.
+    /// `mcdc__btree_1122__v1_first_greater_rowid_sets_insert_pos`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__btree_1088__v2_later_greater_rowid_does_not_overwrite() {
+    fn mcdc__btree_1122__v2_later_greater_rowid_does_not_overwrite() {
         let buf = leaf_page_with_cells(
             512,
             &[table_cell(10, &[1, 2, 3]), table_cell(20, &[4, 5, 6])],
@@ -2658,13 +2658,13 @@ mod tests {
         assert_eq!((insert_pos, num_cells), (0, 2));
     }
 
-    /// MC/DC vector (obligation `btree_1088`): leaf A false — every cell's
+    /// MC/DC vector (obligation `btree_1122`): leaf A false — every cell's
     /// rowid is at or below the target, so `insert_pos` stays at
     /// `num_cells` regardless of leaf B. Independence pair for A against
-    /// `mcdc__btree_1088__v1_first_greater_rowid_sets_insert_pos`.
+    /// `mcdc__btree_1122__v1_first_greater_rowid_sets_insert_pos`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__btree_1088__v3_no_greater_rowid_leaves_insert_pos_at_num_cells() {
+    fn mcdc__btree_1122__v3_no_greater_rowid_leaves_insert_pos_at_num_cells() {
         let buf = leaf_page_with_cells(512, &[table_cell(1, &[1, 2, 3])]);
         let (insert_pos, num_cells, _) = scan_leaf_cells(&buf, 0, 1, 512, 5).unwrap();
         assert_eq!((insert_pos, num_cells), (1, 1));

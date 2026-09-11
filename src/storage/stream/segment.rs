@@ -379,7 +379,7 @@ mod tests {
     use super::*;
     use crate::storage::stream::SourceKind;
 
-    fn block(text: &str) -> Block {
+    pub(super) fn block(text: &str) -> Block {
         Block {
             file_off: 1000,
             bytes: Arc::from(text.as_bytes()),
@@ -439,5 +439,52 @@ mod tests {
         assert_eq!(span_in(b"abc", b"zzz"), None);
         let bytes = b"hello world";
         assert_eq!(span_in(bytes, &bytes[6..]), Some((6, 5)));
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#299 MC/DC backfill).
+
+    use super::tests::block;
+    use super::Segment;
+    use crate::storage::stream::{Source, SourceKind, SyslogParser};
+
+    fn src() -> Source {
+        Source::new(SourceKind::File, "/var/log/t.log")
+    }
+
+    // segment_109: `consumed == 0 || batch.is_empty()`
+    #[test]
+    fn mcdc__segment_109__v1_both_true_no_newline_at_all() {
+        // No `\n` anywhere: parse_batch never advances `consumed` and
+        // never parses a line, so both leafs are true.
+        let b = block("no newline here");
+        let segs = Segment::seal_block(&b, &src(), &SyslogParser::with_year(2026), 0);
+        assert!(segs.is_empty());
+    }
+
+    #[test]
+    fn mcdc__segment_109__v2_consumed_nonzero_but_batch_empty() {
+        // A lone blank line: `consumed` advances past the `\n` (nonzero,
+        // so the first leaf is false), but the empty line before it isn't
+        // parsed into a row, so `batch.is_empty()` is true.
+        let b = block("\n");
+        let segs = Segment::seal_block(&b, &src(), &SyslogParser::with_year(2026), 0);
+        assert!(segs.is_empty());
+    }
+
+    #[test]
+    fn mcdc__segment_109__v3_both_false_makes_progress() {
+        // A complete, non-blank line: `consumed` advances (false) and the
+        // batch gets a row (`is_empty()` false) -- neither leaf breaks the
+        // loop, so a segment is produced.
+        let b = block("<134>Sep 10 08:00:01 h a: x\n");
+        let segs = Segment::seal_block(&b, &src(), &SyslogParser::with_year(2026), 0);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].len(), 1);
     }
 }

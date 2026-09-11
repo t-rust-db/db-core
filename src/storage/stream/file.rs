@@ -231,19 +231,19 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    struct Tmp(PathBuf);
+    pub(super) struct Tmp(pub(super) PathBuf);
     impl Drop for Tmp {
         fn drop(&mut self) {
             std::fs::remove_file(&self.0).ok();
         }
     }
-    fn tmp(name: &str, contents: &[u8]) -> Tmp {
+    pub(super) fn tmp(name: &str, contents: &[u8]) -> Tmp {
         let mut p = std::env::temp_dir();
         p.push(format!("db-core-stream-{}-{}", std::process::id(), name));
         std::fs::write(&p, contents).unwrap();
         Tmp(p)
     }
-    fn lines(blocks: &[Block]) -> Vec<String> {
+    pub(super) fn lines(blocks: &[Block]) -> Vec<String> {
         let mut out = Vec::new();
         for b in blocks {
             for l in b.bytes.split(|&c| c == b'\n') {
@@ -353,5 +353,51 @@ mod tests {
         let mut lf = LogFile::open(&t.0).unwrap();
         assert!(lf.read_tail(1).unwrap().is_empty());
         assert!(matches!(lf.refresh().unwrap(), Refresh::NoNew));
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#299 MC/DC backfill).
+
+    use super::tests::{lines, tmp};
+    use super::LogFile;
+
+    // file_120: `loaded < min_bytes && self.tail_off > 0`
+    #[test]
+    fn mcdc__file_120__v1_both_true_keeps_reading_backwards() {
+        let t = tmp("mcdc_v1", b"l1\nl2\nl3\nl4\n");
+        let mut lf = LogFile::open(&t.0).unwrap();
+        // Not enough loaded yet (true) and there's still file before
+        // tail_off (true), so read_tail keeps pulling blocks.
+        let blocks = lf.read_tail(1).unwrap();
+        assert_eq!(lines(&blocks), vec!["l1", "l2", "l3", "l4"]);
+        assert_eq!(lf.tail_off(), 0);
+    }
+
+    #[test]
+    fn mcdc__file_120__v2_min_bytes_already_satisfied() {
+        let t = tmp("mcdc_v2", b"l1\nl2\nl3\nl4\n");
+        let mut lf = LogFile::open(&t.0).unwrap();
+        // A tiny min_bytes is satisfied by the first block read, so the
+        // first leaf (`loaded < min_bytes`) goes false and the loop stops
+        // regardless of `tail_off`.
+        let blocks = lf.read_tail(1).unwrap();
+        assert!(!blocks.is_empty());
+        assert!(lf.tail_off() < lf.head_off());
+    }
+
+    #[test]
+    fn mcdc__file_120__v3_tail_off_reaches_zero_before_min_bytes() {
+        let t = tmp("mcdc_v3", b"");
+        let mut lf = LogFile::open(&t.0).unwrap();
+        // Empty file: `loaded < min_bytes` stays true (nothing loaded),
+        // but `tail_off > 0` is false from the start, so the loop never
+        // runs and returns no blocks.
+        assert!(lf.read_tail(1).unwrap().is_empty());
+        assert_eq!(lf.tail_off(), 0);
     }
 }

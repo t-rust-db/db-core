@@ -318,7 +318,7 @@ pub fn recover(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, non_snake_case)]
 mod tests {
     use super::*;
 
@@ -365,6 +365,25 @@ mod tests {
 
     #[test]
     fn checksum_of_short_page_below_200_bytes_is_just_the_nonce() {
+        let page = vec![0xffu8; 100];
+        assert_eq!(page_checksum(42, &page), 42);
+    }
+
+    // journal_156: `idx > 0 && idx < page.len()` in page_checksum's sampling
+    // loop. Only 2 of the 3 MC/DC vectors are reachable through this
+    // public function: `idx` is seeded as `page.len().saturating_sub(200)`
+    // and only ever decreases by further `saturating_sub(200)` steps, so
+    // it can never exceed `page.len()` while positive — the "idx > 0 but
+    // idx >= page.len()" combination is structurally unreachable, not
+    // just untested.
+    #[test]
+    fn mcdc__journal_156__v1_both_true_the_loop_samples() {
+        let page = vec![1u8; 512];
+        assert_eq!(page_checksum(0, &page), 2);
+    }
+
+    #[test]
+    fn mcdc__journal_156__v2_idx_zero_the_loop_never_runs() {
         let page = vec![0xffu8; 100];
         assert_eq!(page_checksum(42, &page), 42);
     }

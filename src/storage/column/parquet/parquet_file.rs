@@ -972,6 +972,108 @@ mod tests {
         (page_bytes, meta_bytes)
     }
 
+    /// Bit-packs `indices` (one RLE/bit-packed hybrid run, `bit_width`
+    /// bits each) the same way a real PLAIN_DICTIONARY/RLE_DICTIONARY data
+    /// page body does -- mirrors `reader::tests::encode_dictionary_indices`
+    /// but lives here too since that one is private to `reader`'s own test
+    /// module.
+    fn encode_dictionary_indices(indices: &[u32], bit_width: u32) -> Vec<u8> {
+        let n = indices.len();
+        let num_groups = n.div_ceil(8);
+        let mut out = vec![bit_width as u8];
+        out.push(((num_groups as u64) << 1 | 1) as u8);
+
+        let total_bits = num_groups * 8 * bit_width as usize;
+        let mut bytes = vec![0u8; total_bits.div_ceil(8)];
+        let mut bit_pos = 0usize;
+        for g in 0..num_groups {
+            for i in 0..8 {
+                let value = indices.get(g * 8 + i).copied().unwrap_or(0);
+                for bit in 0..bit_width as usize {
+                    if (value >> bit) & 1 == 1 {
+                        let global_bit = bit_pos + bit;
+                        bytes[global_bit / 8] |= 1 << (global_bit % 8);
+                    }
+                }
+                bit_pos += bit_width as usize;
+            }
+        }
+        out.extend_from_slice(&bytes);
+        out
+    }
+
+    fn build_dictionary_page_header(num_values: i32, page_size: i32) -> Vec<u8> {
+        let mut dph = StructWriter::new();
+        dph.i32_field(1, num_values);
+        dph.i32_field(2, 0); // encoding = PLAIN
+        let dph_bytes = dph.finish();
+
+        let mut w = StructWriter::new();
+        w.i32_field(1, 2); // DICTIONARY_PAGE
+        w.i32_field(2, page_size);
+        w.i32_field(3, page_size);
+        w.struct_field(7, dph_bytes);
+        w.finish()
+    }
+
+    fn build_dictionary_encoded_data_page_header(num_values: i32, page_size: i32) -> Vec<u8> {
+        let mut dph = StructWriter::new();
+        dph.i32_field(1, num_values);
+        dph.i32_field(2, 2); // encoding = PLAIN_DICTIONARY
+        dph.i32_field(3, 3); // def level encoding = RLE
+        dph.i32_field(4, 3); // rep level encoding = RLE
+        let dph_bytes = dph.finish();
+
+        let mut w = StructWriter::new();
+        w.i32_field(1, 0); // DATA_PAGE
+        w.i32_field(2, page_size);
+        w.i32_field(3, page_size);
+        w.struct_field(5, dph_bytes);
+        w.finish()
+    }
+
+    /// Build a dictionary-encoded INT64 column chunk: a DICTIONARY_PAGE
+    /// (PLAIN-encoded `dict_values`) followed by one PLAIN_DICTIONARY
+    /// DATA_PAGE whose body is `indices` bit-packed at the smallest width
+    /// that fits `dict_values.len() - 1` (no definition levels, since the
+    /// synthetic schema this pairs with is REQUIRED -- max_def_level 0).
+    fn build_int64_dictionary_chunk(
+        dict_values: &[i64],
+        indices: &[u32],
+        base_offset: i64,
+    ) -> (Vec<u8>, Vec<u8>) {
+        let mut dict_body = Vec::new();
+        for v in dict_values {
+            dict_body.extend_from_slice(&v.to_le_bytes());
+        }
+        let dict_header =
+            build_dictionary_page_header(dict_values.len() as i32, dict_body.len() as i32);
+        let mut page_bytes = dict_header;
+        page_bytes.extend_from_slice(&dict_body);
+
+        let bit_width =
+            (usize::BITS - (dict_values.len().saturating_sub(1)).leading_zeros()).clamp(1, 32);
+        let data_body = encode_dictionary_indices(indices, bit_width);
+        let data_header =
+            build_dictionary_encoded_data_page_header(indices.len() as i32, data_body.len() as i32);
+        page_bytes.extend_from_slice(&data_header);
+        page_bytes.extend_from_slice(&data_body);
+
+        let mut meta = StructWriter::new();
+        meta.i32_field(1, 2); // INT64
+        meta.field_header(3, 0x09); // path_in_schema list<string>
+        meta.buf.push((1u8 << 4) | 0x08);
+        meta.write_varint(1);
+        meta.buf.push(b'v');
+        meta.i64_field(5, indices.len() as i64); // num_values
+        meta.i64_field(6, page_bytes.len() as i64); // total_uncompressed_size
+        meta.i64_field(7, page_bytes.len() as i64); // total_compressed_size
+        meta.i64_field(9, base_offset); // dictionary_page_offset==data_page_offset here
+        let meta_bytes = meta.finish();
+
+        (page_bytes, meta_bytes)
+    }
+
     fn build_column_chunk(file_offset: i64, meta_data: Vec<u8>) -> Vec<u8> {
         let mut w = StructWriter::new();
         w.i64_field(2, file_offset);
@@ -1110,6 +1212,106 @@ mod tests {
         let rg = file.row_group(0).unwrap();
         let result = rg.read_int64_column(5);
         assert!(matches!(result, Err(FileError::ColumnIndexOutOfRange(5))));
+    }
+
+    /// Assembles a one-row-group, one-column INT64 file from already-built
+    /// column-chunk page bytes + `ColumnMetaData`, for the
+    /// `read_column_dictionary_indices` MC/DC vectors below (which need
+    /// direct control over what page types appear in the chunk, unlike
+    /// `build_file`'s always-PLAIN chunks).
+    fn build_file_from_chunk(page_bytes: &[u8], meta_bytes: Vec<u8>, num_rows: i64) -> Vec<u8> {
+        let mut file = Vec::new();
+        file.extend_from_slice(b"PAR1");
+        file.extend_from_slice(page_bytes);
+
+        let column_chunk = build_column_chunk(4, meta_bytes);
+        let row_group = build_row_group(vec![column_chunk], page_bytes.len() as i64, num_rows);
+        let root = build_root_schema_element(1);
+        let col = build_schema_element("v", 2, 0); // REQUIRED -> max_def_level 0
+        let metadata = build_file_metadata(vec![root, col], num_rows, vec![row_group]);
+        file.extend_from_slice(&metadata);
+        file.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"PAR1");
+        file
+    }
+
+    #[allow(non_snake_case)]
+    mod mcdc_vectors {
+        //! Tagged MC/DC vectors for this file's multi-leaf decisions
+        //! (`mcdc__<file-stem>_<line>__vN`, joined to
+        //! `tests/mcdc/obligations.json` by `make test-mcdc`; db-core#299
+        //! follow-up).
+
+        use super::*;
+
+        // parquet_file_474: `dictionary.is_none() || !matches!(data_page_header.encoding, PlainDictionary | RleDictionary)`
+        #[test]
+        fn mcdc__parquet_file_474__v1_both_false_returns_the_dictionary() {
+            let (page_bytes, meta_bytes) =
+                build_int64_dictionary_chunk(&[10, 20, 30], &[2, 0, 1], 4);
+            let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
+            let file = ParquetFile::open(&file_bytes).unwrap();
+            let rg = file.row_group(0).unwrap();
+
+            let result = rg.read_int64_column_dictionary_indices(0).unwrap();
+            let (dict, indices) = result.expect("dictionary-encoded chunk must return Some");
+            assert_eq!(dict, vec![10, 20, 30]);
+            assert_eq!(indices, vec![Some(2), Some(0), Some(1)]);
+        }
+
+        #[test]
+        fn mcdc__parquet_file_474__v2_no_dictionary_page_returns_none() {
+            // A plain (non-dictionary) chunk: the first Data page arrives
+            // with `dictionary` still `None`, so the `||`'s first leaf
+            // alone must short-circuit to `None` regardless of encoding.
+            let (page_bytes, meta_bytes) = build_int64_chunk(&[1, 2, 3], 4);
+            let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
+            let file = ParquetFile::open(&file_bytes).unwrap();
+            let rg = file.row_group(0).unwrap();
+
+            let result = rg.read_int64_column_dictionary_indices(0).unwrap();
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn mcdc__parquet_file_474__v3_dictionary_present_but_plain_data_page_returns_none() {
+            // A dictionary page followed by a *PLAIN* (not
+            // PLAIN_DICTIONARY) data page: `dictionary.is_none()` is
+            // false, but the encoding check is true, so the `||` must
+            // still short-circuit to `None`.
+            let mut dict_body = Vec::new();
+            for v in [10i64, 20, 30] {
+                dict_body.extend_from_slice(&v.to_le_bytes());
+            }
+            let mut page_bytes = build_dictionary_page_header(3, dict_body.len() as i32);
+            page_bytes.extend_from_slice(&dict_body);
+
+            let mut value_body = Vec::new();
+            for v in [10i64, 20, 30] {
+                value_body.extend_from_slice(&v.to_le_bytes());
+            }
+            page_bytes.extend_from_slice(&build_page_header(3, value_body.len() as i32));
+            page_bytes.extend_from_slice(&value_body);
+
+            let mut meta = StructWriter::new();
+            meta.i32_field(1, 2); // INT64
+            meta.field_header(3, 0x09);
+            meta.buf.push((1u8 << 4) | 0x08);
+            meta.write_varint(1);
+            meta.buf.push(b'v');
+            meta.i64_field(5, 3);
+            meta.i64_field(6, page_bytes.len() as i64);
+            meta.i64_field(7, page_bytes.len() as i64);
+            meta.i64_field(9, 4);
+            let meta_bytes = meta.finish();
+
+            let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
+            let file = ParquetFile::open(&file_bytes).unwrap();
+            let rg = file.row_group(0).unwrap();
+
+            let result = rg.read_int64_column_dictionary_indices(0).unwrap();
+            assert!(result.is_none());
+        }
     }
 }
 

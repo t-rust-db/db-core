@@ -359,7 +359,7 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    fn fixture(family: &str, name: &str) -> Vec<u8> {
+    pub(super) fn fixture(family: &str, name: &str) -> Vec<u8> {
         // `cargo test` runs with the working directory set to the crate
         // root, so a path relative to it needs no `env!("CARGO_MANIFEST_DIR")`
         // — the mvl-limit gate (Makefile) doesn't allow that macro here.
@@ -492,5 +492,66 @@ mod tests {
         bytes[16..18].copy_from_slice(&600u16.to_be_bytes());
         let err = DatabaseHeader::parse(&bytes).unwrap_err();
         assert_eq!(err, HeaderError::InvalidPageSize { raw: 600 });
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#299 follow-up).
+
+    use super::tests::fixture;
+    use super::*;
+
+    // header_225: `page_size < 512 || !page_size.is_power_of_two()`
+    #[test]
+    fn mcdc__header_225__v1_both_false_is_accepted() {
+        let bytes = fixture("pagesizes", "page_size_512.db");
+        assert!(DatabaseHeader::parse(&bytes).is_ok());
+    }
+
+    #[test]
+    fn mcdc__header_225__v2_below_512_and_power_of_two_is_rejected() {
+        let mut bytes = fixture("pagesizes", "page_size_512.db");
+        bytes[16..18].copy_from_slice(&256u16.to_be_bytes());
+        let err = DatabaseHeader::parse(&bytes).unwrap_err();
+        assert_eq!(err, HeaderError::InvalidPageSize { raw: 256 });
+    }
+
+    #[test]
+    fn mcdc__header_225__v3_above_512_and_not_power_of_two_is_rejected() {
+        let mut bytes = fixture("pagesizes", "page_size_512.db");
+        bytes[16..18].copy_from_slice(&600u16.to_be_bytes());
+        let err = DatabaseHeader::parse(&bytes).unwrap_err();
+        assert_eq!(err, HeaderError::InvalidPageSize { raw: 600 });
+    }
+
+    // header_289: `self.write_version == 2 && self.read_version == 2`
+    #[test]
+    fn mcdc__header_289__v1_both_true_is_wal() {
+        let mut bytes = fixture("pagesizes", "reserved_bytes_0.db");
+        bytes[18] = 2;
+        bytes[19] = 2;
+        let header = DatabaseHeader::parse(&bytes).unwrap();
+        assert_eq!(header.journal_mode(), JournalMode::Wal);
+    }
+
+    #[test]
+    fn mcdc__header_289__v2_write_true_read_false_is_legacy() {
+        let mut bytes = fixture("pagesizes", "reserved_bytes_0.db");
+        bytes[18] = 2;
+        bytes[19] = 1;
+        let header = DatabaseHeader::parse(&bytes).unwrap();
+        assert_eq!(header.journal_mode(), JournalMode::Legacy);
+    }
+
+    #[test]
+    fn mcdc__header_289__v3_write_false_is_legacy() {
+        let bytes = fixture("pagesizes", "reserved_bytes_0.db");
+        let header = DatabaseHeader::parse(&bytes).unwrap();
+        assert_eq!(header.write_version, 1);
+        assert_eq!(header.journal_mode(), JournalMode::Legacy);
     }
 }
