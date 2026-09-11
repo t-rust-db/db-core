@@ -55,6 +55,11 @@ path = "tests/unit/dispatch_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_select_compound"
+path = "tests/unit/select_compound_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_engine_column_public_api"
 path = "tests/unit/engine_column_public_api_test.rs"
 required-features = ["engine-column"]
