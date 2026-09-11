@@ -40,7 +40,7 @@ use crate::storage::stream::{
     SourceKind,
 };
 use crate::vm::batch::{AggFunc, Value};
-use crate::vm::stream::{IndexPred, Program, Scope};
+use crate::vm::stream::{EmitMode, IndexPred, Program, Scope};
 
 use super::{
     single_statement, Cell, ColumnInfo, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeRow,
@@ -499,6 +499,44 @@ impl StreamEngine {
         vec![vec![merged]]
     }
 
+    /// Runs an already-compiled `program` for `select` against this
+    /// engine's current ring state (segment selection, `vm::batch`
+    /// execution, epilogue/summary handling) -- the shared tail of
+    /// [`Engine::run_query`] and [`StandingQuery::poll`] (#309), so a
+    /// standing query re-evaluates through the exact same path a one-shot
+    /// query does rather than a parallel, potentially-diverging copy.
+    fn run_compiled(
+        &mut self,
+        select: &Select,
+        program: &Program,
+    ) -> Result<QueryResult, EngineError> {
+        let columns = self.requests(&program.body.columns_to_load())?;
+        let (segments, mut scope_report) = self.select_segments(&program.prune, &columns);
+        let rows = crate::vm::engine::run(&segments, &program.body)
+            .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
+
+        if let Some(epilogue) = &program.epilogue {
+            let (out_columns, out_rows) = run_range_vector_epilogue(select, epilogue, rows)?;
+            return Ok(QueryResult {
+                columns: out_columns,
+                rows: out_rows,
+                scope_report: Some(scope_report),
+            });
+        }
+
+        let now = self.clock.now_ns();
+        let requested_range = effective_time_range(&program.prune.scope, now, &program.prune.preds);
+        let rows = self.merge_retained_summaries(select, requested_range, rows, &mut scope_report);
+        Ok(QueryResult {
+            columns: planner::output_column_names(select),
+            rows: rows
+                .into_iter()
+                .map(|r| r.into_iter().map(Cell::from).collect())
+                .collect(),
+            scope_report: Some(scope_report),
+        })
+    }
+
     /// This engine's `log` table as a [`TableStats`], `source: None` --
     /// callers labelling a cross-mode plan (#317) fill that in themselves.
     #[must_use]
@@ -528,6 +566,208 @@ impl StreamEngine {
             }
         }
     }
+}
+
+/// A compiled query re-evaluated on demand (ADR 0018 §Consequences: "a
+/// standing query is a compiled program plus an interval and a `for`
+/// duration, evaluated on each segment seal in the client process").
+/// Client-driven, not a background thread or server: db-core owns no
+/// scheduler. The caller decides when to call [`Self::poll`] -- typically
+/// after each [`StreamEngine::refresh`], or on its own `interval` cadence
+/// -- and reads [`Self::interval`] as a hint for that cadence.
+pub struct StandingQuery {
+    select: Select,
+    program: Program,
+    sql: String,
+    mode: EmitMode,
+    interval: Duration,
+    for_duration: Duration,
+    /// The last result set an `OnChange` poll fired on -- `None` before
+    /// the first fire.
+    last_fired_rows: Option<Vec<Vec<Cell>>>,
+    /// When a `Threshold` condition most recently started holding
+    /// continuously, per the polling engine's own clock -- `None` while
+    /// not holding. Reset the moment the condition stops holding, so a
+    /// later re-crossing starts a fresh `for_duration` count rather than
+    /// picking up where an earlier, already-fired hold left off.
+    threshold_since_ns: Option<i64>,
+    /// Whether the current continuous hold (tracked by
+    /// `threshold_since_ns`) has already fired -- cleared alongside it,
+    /// so exactly one event fires per hold reaching `for_duration`, not
+    /// one per poll for as long as the condition keeps holding
+    /// afterwards (#309's "done when" criterion).
+    fired_for_current_hold: bool,
+}
+
+/// One [`StandingQuery::poll`] fire: the result set that triggered it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StandingQueryEvent {
+    /// The query's result at the moment of firing.
+    pub result: QueryResult,
+}
+
+impl StandingQuery {
+    /// Parses and compiles `sql` against `engine`'s current schema once
+    /// (the user-facing contract: `StandingQuery` owns the SQL text, not
+    /// a caller-supplied `Program`, so `poll` never recompiles). `sql`
+    /// must be a plain `log`-table `SELECT`, exactly as `run_query`
+    /// accepts.
+    ///
+    /// # Errors
+    /// `ErrorKind::Compile` if `mode` is `Threshold` with a non-comparison
+    /// operator (`AND`/`OR`/arithmetic/`||`/bitwise all make no sense as
+    /// a threshold check), or if `sql` fails to parse/compile for any of
+    /// `run_query`'s own reasons.
+    pub fn new(
+        engine: &StreamEngine,
+        sql: &str,
+        mode: EmitMode,
+        interval: Duration,
+        for_duration: Duration,
+    ) -> Result<Self, EngineError> {
+        if let EmitMode::Threshold { op, .. } = &mode {
+            if !is_comparison_op(*op) {
+                return Err(EngineError::new(
+                    ErrorKind::Compile,
+                    format!("EmitMode::Threshold needs a comparison operator, got {op:?}"),
+                ));
+            }
+        }
+        let stmt = single_statement(sql)?;
+        let select = engine.parse_for_table(&stmt)?;
+        let scope = resolve_scope(&select);
+        let program: Program =
+            stream_planner::compile(&select, scope, engine.clock.now_ns()).map_err(stream_err)?;
+        Ok(Self {
+            select,
+            program,
+            sql: sql.to_string(),
+            mode,
+            interval,
+            for_duration,
+            last_fired_rows: None,
+            threshold_since_ns: None,
+            fired_for_current_hold: false,
+        })
+    }
+
+    /// The SQL this standing query re-evaluates on every poll.
+    #[must_use]
+    pub fn sql(&self) -> &str {
+        &self.sql
+    }
+
+    /// The polling cadence the caller asked for -- a hint db-core stores
+    /// but never itself schedules against (no server, no timer thread:
+    /// ADR 0018).
+    #[must_use]
+    pub fn interval(&self) -> Duration {
+        self.interval
+    }
+
+    /// Re-evaluates this standing query against `engine`'s current ring
+    /// state (the same execution path [`Engine::run_query`] uses,
+    /// via [`StreamEngine::run_compiled`]) and decides, per `self.mode`,
+    /// whether this poll constitutes a fire. `engine.refresh()` is the
+    /// caller's responsibility -- `poll` never pulls new data in itself,
+    /// matching the "client-side callback" model: the caller decides when
+    /// a segment has sealed or `interval` has elapsed, not db-core.
+    ///
+    /// # Errors
+    /// Whatever `run_compiled`'s own execution can fail with
+    /// (`ErrorKind::Execute`/`ErrorKind::Compile`).
+    pub fn poll(
+        &mut self,
+        engine: &mut StreamEngine,
+    ) -> Result<Option<StandingQueryEvent>, EngineError> {
+        let result = engine.run_compiled(&self.select, &self.program)?;
+        match self.mode.clone() {
+            EmitMode::Rows => Ok(Some(StandingQueryEvent { result })),
+            EmitMode::OnChange => Ok(self.poll_on_change(result)),
+            EmitMode::Threshold { op, threshold } => {
+                Ok(self.poll_threshold(engine, op, threshold, result))
+            }
+        }
+    }
+
+    /// Fires only on a transition (a result set different from the last
+    /// one this same query fired on), never on a repeat of that same
+    /// result. The very first poll fires if it has any rows at all --
+    /// "nothing seen yet" -> "something" is itself a transition; an empty
+    /// result never fires (there is no result to alert on) but does
+    /// update `last_fired_rows` so a later change *back* to that same
+    /// emptiness is not mistaken for a fresh transition.
+    fn poll_on_change(&mut self, result: QueryResult) -> Option<StandingQueryEvent> {
+        let changed = self.last_fired_rows.as_ref() != Some(&result.rows);
+        if !changed {
+            return None;
+        }
+        self.last_fired_rows = Some(result.rows.clone());
+        if result.rows.is_empty() {
+            None
+        } else {
+            Some(StandingQueryEvent { result })
+        }
+    }
+
+    /// Fires once when the reduced value crosses `op`/`threshold` and has
+    /// held continuously for at least `self.for_duration` -- not on every
+    /// subsequent poll while it remains crossed. Uses `engine`'s own
+    /// clock (so `FakeClock`-driven tests control this deterministically,
+    /// same as ring autoscaling did in #308) rather than the system
+    /// clock.
+    fn poll_threshold(
+        &mut self,
+        engine: &StreamEngine,
+        op: crate::parser::ast::BinaryOp,
+        threshold: f64,
+        result: QueryResult,
+    ) -> Option<StandingQueryEvent> {
+        let value = latest_scalar(&result);
+        let holds = value.is_some_and(|v| crate::vm::stream::threshold_holds(op, threshold, &v));
+        if !holds {
+            self.threshold_since_ns = None;
+            self.fired_for_current_hold = false;
+            return None;
+        }
+        let now = engine.clock.now_ns();
+        let since = *self.threshold_since_ns.get_or_insert(now);
+        let held_ns = now.saturating_sub(since);
+        let for_ns = i64::try_from(self.for_duration.as_nanos()).unwrap_or(i64::MAX);
+        if held_ns >= for_ns && !self.fired_for_current_hold {
+            self.fired_for_current_hold = true;
+            Some(StandingQueryEvent { result })
+        } else {
+            None
+        }
+    }
+}
+
+/// `EmitMode::Threshold`'s six valid comparisons -- `AND`/`OR`/
+/// arithmetic/`||`/bitwise ops make no sense as a threshold and are
+/// rejected by `StandingQuery::new`.
+fn is_comparison_op(op: crate::parser::ast::BinaryOp) -> bool {
+    use crate::parser::ast::BinaryOp;
+    matches!(
+        op,
+        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+    )
+}
+
+/// The last row's last cell as a `vm::batch::Value`, for `Threshold`
+/// evaluation -- a range-vector query's output is `(window_start, value)`
+/// per window (#308), so the most recent window is its last row, and the
+/// reduced value is always its final column.
+fn latest_scalar(result: &QueryResult) -> Option<Value> {
+    let cell = result.rows.last()?.last()?;
+    Some(match cell {
+        Cell::Null => Value::Null,
+        Cell::Int(n) => Value::Int(*n),
+        Cell::Real(x) => Value::Float(*x),
+        Cell::Bool(b) => Value::Bool(*b),
+        Cell::Text(s) => Value::Str(s.clone().into()),
+        Cell::Blob(_) => Value::Null,
+    })
 }
 
 fn planner_parse(sql: &str) -> Result<Select, EngineError> {
@@ -824,31 +1064,7 @@ impl Engine for StreamEngine {
         let scope = resolve_scope(&select);
         let program: Program =
             stream_planner::compile(&select, scope, self.clock.now_ns()).map_err(stream_err)?;
-        let columns = self.requests(&program.body.columns_to_load())?;
-        let (segments, mut scope_report) = self.select_segments(&program.prune, &columns);
-        let rows = crate::vm::engine::run(&segments, &program.body)
-            .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
-
-        if let Some(epilogue) = &program.epilogue {
-            let (out_columns, out_rows) = run_range_vector_epilogue(&select, epilogue, rows)?;
-            return Ok(QueryResult {
-                columns: out_columns,
-                rows: out_rows,
-                scope_report: Some(scope_report),
-            });
-        }
-
-        let now = self.clock.now_ns();
-        let requested_range = effective_time_range(&program.prune.scope, now, &program.prune.preds);
-        let rows = self.merge_retained_summaries(&select, requested_range, rows, &mut scope_report);
-        Ok(QueryResult {
-            columns: planner::output_column_names(&select),
-            rows: rows
-                .into_iter()
-                .map(|r| r.into_iter().map(Cell::from).collect())
-                .collect(),
-            scope_report: Some(scope_report),
-        })
+        self.run_compiled(&select, &program)
     }
 
     fn explain_plan(&self, sql: &str) -> Result<Vec<PlanRow>, EngineError> {

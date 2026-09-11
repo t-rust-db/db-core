@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.87.0] - 2026-09-11
+
+### Added
+
+- **Standing queries** (#309, ADR 0018 phase 6): a compiled program plus an interval and a `for` duration, evaluated on demand in the client process. `engine::stream::StandingQuery` owns the SQL text and compiles it once, caching the resulting `Program`; `poll()` re-runs it through the same execution path as one-shot `run_query`, so a standing query never diverges from what a fresh query would return. `vm::stream::EmitMode` (`Rows`/`OnChange`/`Threshold { op, threshold }`) decides whether a re-evaluated result set constitutes a fire: `OnChange` fires on transitions (nothing→something, or result-set change); `Threshold` fires once when a range-vector's single reduced value crosses a comparison and holds for at least `for_duration` (Loki ruler semantics — never per-poll while the condition persists). Client-driven, not a background thread: the caller decides when to call `poll()` and reads `StandingQuery::interval()` as a hint for cadence. Feature `engine-stream`.
+
 ## [0.86.1] - 2026-09-11
 
 ### Fixed
