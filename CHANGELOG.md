@@ -4,6 +4,19 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.84.0] - 2026-09-10
+
+### Added
+
+- **ADR 0000 -- the charter** (#324): what db-core is for (a safe, auditable SQLite in Rust) and the invariants that may never change while adding other modes -- the *SQLite profile* (`parser-row, vm-row, codegen-row, storage-row, engine-row`) has a first-party-only closure, `unsafe` only at the named carve-outs (`storage/row/vfs/fcntl.rs`: 2), and compiles no batch/column/stream file. Numbered ADRs must be consistent with it.
+- **`make check-sqlite-profile`** (PR gate, `tools/check_sqlite_profile.py`): measures those three invariants from rustc's dep-info for the profile build -- 122 files, `{db-core}`, 2 `unsafe` sites -- not from a hand-maintained module list.
+- **`tests/unit/layer_isolation_test.rs`**: the SQLite side never names `vm::batch`/`vm::engine`/`vm::stream`/`codegen::batch`/`storage::column`/`storage::stream`/`engine::{column,stream}`, and they never name the SQLite side (ported from sqlite-rs). Comment lines are ignored; code is not.
+- **`.github/workflows/assurance.yml`** (weekly + on demand): `make check-coverage-profile` -- the coverage floor measured on the SQLite profile, not `--all-features` -- and the MC/DC discharge dashboard, as job summaries. First scheduled job in this repo.
+
+### Changed
+
+- **`codegen-row` no longer implies `vm-batch`.** The #153 note that `codegen::row` shared `vm::batch::AggFunc` was stale -- the row planner carries `P4::AggFunc { name, arity, collation }`, its own variant -- and the implication compiled `src/vm/batch.rs` into every sqlite-rs binary. `check-features` and the new profile gate both pass; consumers that relied on `codegen-row` pulling in `vm-batch` must name it.
+
 ## [0.83.1] - 2026-09-10
 
 ### Fixed

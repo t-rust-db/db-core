@@ -11,6 +11,11 @@ log of routine changes.
 kebab-case. Numbers are stable; a retired or superseded ADR keeps its
 number and file, reduced to a pointer at what replaced it.
 
+`0000-charter.md` sits outside the sequence on purpose: it is not a
+decision among alternatives but the charter every numbered ADR must be
+consistent with. Nothing precedes it, nothing supersedes it; a conflict
+resolves toward it.
+
 ADRs describe the architecture as it stands. They are not a changelog
 and do not narrate how code arrived; `CHANGELOG.md` and git history do
 that.

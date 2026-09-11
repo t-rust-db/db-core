@@ -16,6 +16,16 @@ The `engine` module ([ADR 0017](.openspec/adr/0017-engine-seam.md)) is
 the client-facing seam over the modes: open a file, run SQL, get `Cell`s --
 `engine::row` (SQLite files) and `engine::column` (Parquet files) today, stream to follow.
 
+**Charter.** db-core exists to be a safe SQLite in Rust that can be audited
+([ADR 0000](.openspec/adr/0000-charter.md)). The *SQLite profile* --
+`parser-row, vm-row, codegen-row, storage-row, engine-row`, exactly what
+sqlite-rs builds -- has a first-party-only dependency closure, `unsafe`
+confined to two named sites in `storage/row/vfs/fcntl.rs`, and compiles no
+batch/column/stream file; `make check-sqlite-profile` measures all three from
+rustc's dep-info on every PR, `tests/unit/layer_isolation_test.rs` keeps the
+two sides from naming each other, and `.github/workflows/assurance.yml`
+runs the slow checks (profile coverage, MC/DC dashboard) weekly.
+
 Was six separate crates (`sql-types`, `sql-expr`, `sql-parser`,
 `sql-join`, `sql-vm`, `sql-codegen`) until this repo's merge into one —
 see `CHANGELOG.md`. The module boundaries are unchanged, just no longer
