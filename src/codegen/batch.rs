@@ -363,6 +363,26 @@ fn window_spec(
     })
 }
 
+/// Whether any `SELECT`-list column carries a `RANGE <duration>` tail
+/// (#308, stream-only, like [`Select::scope`]) -- `codegen::stream`
+/// always strips this into a residual `Select` before delegating to
+/// [`compile`], so seeing one here means a row/batch caller is compiling
+/// a range-vector query directly, which this planner does not implement.
+fn has_range_vector_call(select: &Select) -> bool {
+    select.columns.iter().any(|col| {
+        matches!(
+            col,
+            ResultColumn::Expr {
+                expr: AstExpr {
+                    kind: ExprKind::FunctionCall { tail, .. },
+                    ..
+                },
+                ..
+            } if tail.as_deref().is_some_and(|t| t.range.is_some())
+        )
+    })
+}
+
 fn classify_item(col: &ResultColumn) -> Result<Item> {
     match col {
         ResultColumn::Star => Ok(Item::Star),
@@ -404,6 +424,17 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
                     spec.filter = Some(f.clone());
                 }
                 Ok(Item::Window(spec))
+            }
+            // A range-vector call (#308): `has_range_vector_call` rejects
+            // this at `compile`'s own entry, but `classify_item` is also
+            // called from `expand_star` (only to detect `SELECT *`,
+            // regardless of what any non-`*` item turns out to be), so
+            // this arm must not error here -- `Item::Expr` is never
+            // actually compiled for this shape.
+            ExprKind::FunctionCall { tail, .. }
+                if tail.as_deref().is_some_and(|t| t.range.is_some()) =>
+            {
+                Ok(Item::Expr(expr.clone()))
             }
             ExprKind::FunctionCall {
                 name,
@@ -612,6 +643,7 @@ pub fn expand_star(select: &Select, schema: &[String]) -> Result<Select> {
         || items
             .iter()
             .any(|c| matches!(c, Item::Agg(..) | Item::Window(_)));
+    // `SELECT *` alongside an aggregate has no fixed column list to expand.
     if has_aggregation {
         return Err(PlanError::StarWithAggregation);
     }
@@ -909,6 +941,9 @@ fn mask_filtered_source(
 /// (db-core#48). Compiled once, reused across every segment.
 pub fn compile(select: &Select) -> Result<Program> {
     if select.scope.is_some() {
+        return Err(PlanError::ScopeClauseUnsupported);
+    }
+    if has_range_vector_call(select) {
         return Err(PlanError::ScopeClauseUnsupported);
     }
     let mut ctx = Ctx {
@@ -1307,6 +1342,7 @@ pub fn compile_window(select: &Select) -> Result<Program> {
             needed.push(name.to_string());
         }
     };
+    // Collect every column any item actually references.
     for item in &items {
         match item {
             Item::Column(name) => push_needed(name, &mut needed),
@@ -1383,6 +1419,7 @@ pub fn compile_window(select: &Select) -> Result<Program> {
     let mut next_reg = ctx.next_reg;
     let mut null_reg: Option<usize> = None;
     let mut emit_regs = Vec::with_capacity(items.len());
+    // One register per output item, in `SELECT`-list order.
     for (item, filtered_arg) in items.iter().zip(&filtered_arg) {
         match item {
             Item::Column(name) => emit_regs.push(column_reg(name)?),
@@ -1618,6 +1655,7 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
     };
     let columns_to_load = program.as_ref().map(Program::columns_to_load);
 
+    // A join's own EXPLAIN needs the driving and lookup sides labelled separately.
     let mut main_cols: Vec<String> = match (&columns_to_load, join) {
         (Some(cols), Some(_)) => cols
             .iter()
@@ -2025,6 +2063,7 @@ fn window_detail(spec: &WindowSpec) -> String {
             .order_by
             .iter()
             .map(|(col, desc)| {
+                // Render each ORDER BY term's direction.
                 if *desc {
                     format!("{col} DESC")
                 } else {
@@ -2429,7 +2468,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1053__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__batch_1088__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2440,7 +2479,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1053__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__batch_1088__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2451,7 +2490,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1053__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__batch_1088__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2460,32 +2499,32 @@ mod tests {
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
     }
 
-    /// MC/DC vector (obligation `batch_1093`, `Combine`'s comment choice
+    /// MC/DC vector (obligation `batch_1127`, `Combine`'s comment choice
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1093__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__batch_1128__v1_group_by_without_agg_column_merges_partial_aggregates() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
         assert_eq!(fin.comment.as_deref(), Some("merge partial aggregates"));
     }
 
-    /// MC/DC vector (obligation `batch_1093`): leaf B (`has_agg`) true alone.
+    /// MC/DC vector (obligation `batch_1127`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1093__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__batch_1128__v2_agg_column_without_group_by_merges_partial_aggregates() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
         assert_eq!(fin.comment.as_deref(), Some("merge partial aggregates"));
     }
 
-    /// MC/DC vector (obligation `batch_1093`): both leaves false --
+    /// MC/DC vector (obligation `batch_1127`): both leaves false --
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1093__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__batch_1128__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();

@@ -189,7 +189,7 @@ Typed operands, ADR 0007 style. Only what `vm::batch` cannot express.
 | `Prune { scope, preds: Vec<IndexPred> }` | segment selection via minmax / dictionary / bloom before any row is materialized | ClickHouse skip indexes (`minmax`, `set`, `bloom_filter`); Loki chunk blooms |
 | `Parse { src, format: Json \| Logfmt \| Regex \| Kv, prefix }` | late structuring: new Tier-3 columns for this query only, after the cheap substring filter on `raw` | Loki `\| json` / `\| logfmt` pipeline stages; ClickHouse raw `Body` + materialized columns |
 | `Body(Vec<vm::batch::Opcode>)` | filter / project / reduce — reused verbatim | ADR 0007 `split_finalize` |
-| `Window { size, step, key }` + `RangeAgg { func }` | `count_over_time`, `rate`, `*_over_time` over `[5m]`; tumbling/hopping keyed by dictionary index | Loki range vectors; Kafka Streams windows |
+| `Window { size, step, key }` + `RangeAgg { func }` | `count_over_time`, `rate`, `*_over_time` over `RANGE 5m` (not Loki's `[5m]`: `[` already opens a quoted identifier in this parser's tokenizer, so bracket syntax would collide with that, not extend it); tumbling/hopping keyed by dictionary index | Loki range vectors; Kafka Streams windows |
 | `Watermark { grace }` | close windows at `max(event_ts) − grace`; late lines to a side output | Flink event time / watermarks |
 | `Emit { mode: Rows \| OnChange \| Threshold(expr) }` | standing-query output; alerts are `OnChange`/`Threshold` on a result set | Loki ruler (`for`), swatchdog |
 

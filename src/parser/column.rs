@@ -437,6 +437,48 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
                 };
                 validate_window_call(expr.span, name, args, window_def)
             }
+            // A range-vector call (#308, ADR 0018 §Opcodes): stream-only,
+            // like `SINCE`/`UNTIL` -- `codegen::batch`/`codegen::row`
+            // reject a `Select` whose only column carries a `RANGE` tail
+            // just as they reject one carrying `Select::scope`, so this
+            // validator only needs to accept the shape, not decide which
+            // engine may run it.
+            ExprKind::FunctionCall {
+                name,
+                distinct,
+                args,
+                tail,
+            } if matches!(tail.as_deref(), Some(t) if t.range.is_some()) => {
+                if *distinct {
+                    return Err(unsupported(
+                        expr.span,
+                        "DISTINCT inside a range-vector call".into(),
+                    ));
+                }
+                if crate::vm::stream::RangeAggFunc::from_name(name).is_none() {
+                    return Err(unsupported(
+                        expr.span,
+                        format!("unknown range-vector function {name}"),
+                    ));
+                }
+                match args {
+                    FunctionArgs::Star => Ok(()),
+                    FunctionArgs::List(list) => match list.as_slice() {
+                        [] => Ok(()),
+                        [arg] => match &arg.kind {
+                            ExprKind::Column { .. } => column_name(arg).map(|_| ()),
+                            _ => Err(unsupported(
+                                arg.span,
+                                format!("{name}(...): argument must be a bare column"),
+                            )),
+                        },
+                        _ => Err(unsupported(
+                            expr.span,
+                            format!("{name}(...) takes at most one argument"),
+                        )),
+                    },
+                }
+            }
             ExprKind::FunctionCall {
                 name,
                 distinct,
@@ -1432,21 +1474,21 @@ mod tests {
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
-    /// MC/DC vector (obligation `column_672`, the CROSS JOIN LIMIT rule
+    /// MC/DC vector (obligation `column_773`, the CROSS JOIN LIMIT rule
     /// `has_cross_join && select.limit.is_none()`): both leaves true --
     /// the query is rejected.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_731__v1_cross_join_without_limit_is_rejected() {
+    fn mcdc__column_773__v1_cross_join_without_limit_is_rejected() {
         let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
-    /// MC/DC vector (obligation `column_672`): leaf B (`limit.is_none()`)
+    /// MC/DC vector (obligation `column_773`): leaf B (`limit.is_none()`)
     /// false with a CROSS JOIN present -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_731__v2_cross_join_with_limit_is_accepted() {
+    fn mcdc__column_773__v2_cross_join_with_limit_is_accepted() {
         let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();
         assert!(matches!(
             q.limit.as_ref().unwrap().limit.kind,
@@ -1454,32 +1496,32 @@ mod tests {
         ));
     }
 
-    /// MC/DC vector (obligation `column_672`): leaf A (`has_cross_join`)
+    /// MC/DC vector (obligation `column_773`): leaf A (`has_cross_join`)
     /// false with no LIMIT -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_731__v3_non_cross_join_without_limit_is_accepted() {
+    fn mcdc__column_773__v3_non_cross_join_without_limit_is_accepted() {
         let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
         assert!(q.limit.is_none());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_769__v1_agg_without_window_validates_group_by_keys() {
+    fn mcdc__column_811__v1_agg_without_window_validates_group_by_keys() {
         let err = parse("SELECT foo, SUM(amount) FROM t").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_769__v2_no_agg_skips_group_by_key_validation() {
+    fn mcdc__column_811__v2_no_agg_skips_group_by_key_validation() {
         let q = parse("SELECT foo, bar FROM t").unwrap();
         assert_eq!(q.columns.len(), 2);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_769__v3_agg_with_window_skips_group_by_key_validation() {
+    fn mcdc__column_811__v3_agg_with_window_skips_group_by_key_validation() {
         let q =
             parse("SELECT region, SUM(amount), ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
         assert_eq!(q.columns.len(), 3);
@@ -1594,7 +1636,7 @@ mod tests {
     // !has_window && has_expr` decision that no longer exists -- an
     // unaliased computed expression alongside an aggregate is still
     // rejected, but now via the per-item `select_keys` loop under
-    // `column_769` (`has_agg && !has_window`), not a standalone `&&
+    // `column_811` (`has_agg && !has_window`), not a standalone `&&
     // has_expr` leaf. Kept as ordinary regression tests, not re-tagged,
     // since there is no longer a matching multi-leaf decision to name.
     #[test]

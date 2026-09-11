@@ -2478,6 +2478,23 @@ impl Parser {
     /// existed.
     #[inline(never)]
     fn function_tail(&mut self, end: &mut Span) -> PResult<Option<Box<FunctionTail>>> {
+        // `RANGE <bound>` (#308, ADR 0018 §Opcodes): a range-vector
+        // selector, e.g. `count_over_time(message) RANGE 5m` --
+        // deliberately `RANGE <bound>` rather than the ADR's own
+        // illustrative `[5m]`: `[` already opens a quoted identifier in
+        // this tokenizer (`scan_quoted_identifier`), so bracket syntax
+        // here would collide with that, not extend it. `RANGE` is
+        // already a reserved keyword (window frame specs), reused here
+        // in a position `window_def` never reaches (it is parsed inside
+        // `OVER (...)`'s own parens, not at this tail level).
+        let range = if self.eat_kw(Keyword::RANGE) {
+            Some(self.scope_bound()?)
+        } else {
+            None
+        };
+        if let Some(r) = &range {
+            *end = r.span;
+        }
         let filter = if self.eat_kw(Keyword::FILTER) {
             self.expect_punct(TokenKind::LParen, "'(' after FILTER")?;
             self.expect_kw(Keyword::WHERE)?;
@@ -2494,10 +2511,14 @@ impl Parser {
         } else {
             None
         };
-        if filter.is_none() && over.is_none() {
+        if filter.is_none() && over.is_none() && range.is_none() {
             return Ok(None);
         }
-        Ok(Some(Box::new(FunctionTail { filter, over })))
+        Ok(Some(Box::new(FunctionTail {
+            filter,
+            over,
+            range,
+        })))
     }
 
     /// The inline window spec after `OVER`: `([PARTITION BY expr, ...]
@@ -3281,8 +3302,10 @@ mod tests {
         }
     }
 
-    /// db-core#219 tagged MC/DC vectors (obligation `grammar_2391`, the
-    /// `FunctionTail` elision `filter.is_none() && over.is_none()`).
+    /// db-core#219 tagged MC/DC vectors (obligation `grammar_2514`, the
+    /// `FunctionTail` elision `filter.is_none() && over.is_none() &&
+    /// range.is_none()` -- a third leaf, `range` (#308), joined this
+    /// decision after it was originally tagged at a different line).
     fn function_tail_of(sql: &str) -> Option<Box<FunctionTail>> {
         let select = match crate::parser::row::parse_select(sql) {
             crate::parser::row::ParseOutcome::Accepted(select) => *select,
@@ -3299,22 +3322,29 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__grammar_2497__v1_no_filter_no_over_elides_the_tail() {
+    fn mcdc__grammar_2514__v1_no_filter_no_over_no_range_elides_the_tail() {
         assert!(function_tail_of("SELECT abs(x) FROM t").is_none());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__grammar_2497__v2_filter_alone_keeps_the_tail() {
+    fn mcdc__grammar_2514__v2_filter_alone_keeps_the_tail() {
         let tail = function_tail_of("SELECT count(x) FILTER (WHERE x > 1) FROM t").unwrap();
-        assert!(tail.filter.is_some() && tail.over.is_none());
+        assert!(tail.filter.is_some() && tail.over.is_none() && tail.range.is_none());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__grammar_2497__v3_over_alone_keeps_the_tail() {
+    fn mcdc__grammar_2514__v3_over_alone_keeps_the_tail() {
         let tail = function_tail_of("SELECT row_number() OVER (ORDER BY x) FROM t").unwrap();
-        assert!(tail.filter.is_none() && tail.over.is_some());
+        assert!(tail.filter.is_none() && tail.over.is_some() && tail.range.is_none());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__grammar_2514__v4_range_alone_keeps_the_tail() {
+        let tail = function_tail_of("SELECT count_over_time(x) RANGE 5 minutes FROM t").unwrap();
+        assert!(tail.filter.is_none() && tail.over.is_none() && tail.range.is_some());
     }
 }
 

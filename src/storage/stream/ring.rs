@@ -9,7 +9,27 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::segment::Segment;
+use super::segment::{MinMax, Segment, SegmentSummary};
+
+/// Default horizon (#308): how far back retained summaries survive
+/// eviction before this `Ring` drops them too, absent an explicit
+/// [`Ring::set_summary_horizon`] call. Matches ADR 0018's own "count(*)
+/// ... since 1d" example.
+pub const DEFAULT_SUMMARY_HORIZON_NS: i64 = 24 * 60 * 60 * 1_000_000_000;
+
+/// One evicted segment's surviving state (#308 "summaries survive
+/// eviction"): its universal per-column stats plus both timestamp
+/// minmaxes, so a query wider than the ring can still be answered for
+/// `COUNT`/`SUM`/`MIN`/`MAX` without re-reading the segment's bytes.
+#[derive(Debug, Clone)]
+pub struct EvictedSummary {
+    /// The evicted segment's `minmax_event`.
+    pub minmax_event: Option<MinMax>,
+    /// The evicted segment's `minmax_observed`.
+    pub minmax_observed: Option<MinMax>,
+    /// The evicted segment's universal summary.
+    pub summary: SegmentSummary,
+}
 
 /// Hot segments, oldest at the front.
 #[derive(Debug)]
@@ -17,16 +37,82 @@ pub struct Ring {
     segs: VecDeque<Arc<Segment>>,
     bytes: usize,
     budget: usize,
+    /// Retained state for segments evicted from `segs`, oldest first,
+    /// pruned to `summary_horizon_ns` behind the newest known observed
+    /// time -- a second, unbounded-by-bytes structure (summaries are a
+    /// few `f64`s each, not segment bytes) but still bounded in time.
+    evicted: VecDeque<EvictedSummary>,
+    summary_horizon_ns: i64,
 }
 
 impl Ring {
-    /// A ring holding at most `budget` bytes of segment data.
+    /// A ring holding at most `budget` bytes of segment data, retaining
+    /// evicted summaries for [`DEFAULT_SUMMARY_HORIZON_NS`].
     #[must_use]
     pub fn new(budget: usize) -> Self {
         Self {
             segs: VecDeque::new(),
             bytes: 0,
             budget,
+            evicted: VecDeque::new(),
+            summary_horizon_ns: DEFAULT_SUMMARY_HORIZON_NS,
+        }
+    }
+
+    /// How far behind the newest known observed time a retained summary
+    /// may fall before this ring drops it.
+    pub fn set_summary_horizon(&mut self, horizon_ns: i64) {
+        self.summary_horizon_ns = horizon_ns;
+        self.prune_summaries();
+    }
+
+    /// Retained summaries for segments no longer held, oldest first.
+    pub fn evicted_summaries(&self) -> impl Iterator<Item = &EvictedSummary> {
+        self.evicted.iter()
+    }
+
+    /// Retained summaries whose `minmax_observed` overlaps `range`
+    /// (a summary with no observed timestamps is conservatively kept,
+    /// mirroring [`Segment::overlaps_event`]).
+    pub fn summaries_overlapping(&self, range: &Range<i64>) -> Vec<&EvictedSummary> {
+        self.evicted
+            .iter()
+            .filter(|e| match e.minmax_observed {
+                Some((lo, hi)) => lo < range.end && hi >= range.start,
+                None => true,
+            })
+            .collect()
+    }
+
+    /// The newest observed-time upper bound this ring knows about, from
+    /// the live head if any, else the newest retained summary -- the
+    /// reference point [`Self::prune_summaries`] measures the horizon
+    /// against (data-time-driven, not wall-clock: a `Ring` with no
+    /// `Clock` dependency stays trivially testable).
+    fn newest_observed_hi(&self) -> Option<i64> {
+        self.segs
+            .back()
+            .and_then(|s| s.minmax_observed())
+            .map(|(_, hi)| hi)
+            .or_else(|| {
+                self.evicted
+                    .back()
+                    .and_then(|e| e.minmax_observed)
+                    .map(|(_, hi)| hi)
+            })
+    }
+
+    fn prune_summaries(&mut self) {
+        let Some(newest) = self.newest_observed_hi() else {
+            return;
+        };
+        while let Some(front) = self.evicted.front() {
+            let hi = front.minmax_observed.map_or(i64::MIN, |(_, hi)| hi);
+            if newest.saturating_sub(hi) > self.summary_horizon_ns {
+                self.evicted.pop_front();
+            } else {
+                break;
+            }
         }
     }
 
@@ -83,10 +169,13 @@ impl Ring {
         self.evict_over_budget()
     }
 
-    /// Drop every segment.
+    /// Drop every segment and every retained summary (a truncation/
+    /// rotation invalidates history the same way it invalidates the
+    /// ring itself -- there is no "old file's tail" left to summarize).
     pub fn clear(&mut self) {
         self.segs.clear();
         self.bytes = 0;
+        self.evicted.clear();
     }
 
     /// Segments oldest first.
@@ -121,11 +210,19 @@ impl Ring {
         while self.bytes > self.budget && self.segs.len() > 1 {
             if let Some(seg) = self.segs.pop_front() {
                 self.bytes = self.bytes.saturating_sub(seg.byte_len());
+                self.evicted.push_back(EvictedSummary {
+                    minmax_event: seg.minmax_event(),
+                    minmax_observed: seg.minmax_observed(),
+                    summary: seg.summary().clone(),
+                });
                 evicted.push(seg);
             }
         }
         // A single segment larger than the budget is kept: the ring always
         // holds the head.
+        if !evicted.is_empty() {
+            self.prune_summaries();
+        }
         evicted
     }
 }
@@ -202,6 +299,63 @@ mod tests {
     }
 
     #[test]
+    fn eviction_retains_a_summary_with_the_right_row_count() {
+        let mut ring = Ring::new(usize::MAX);
+        let a = seg(0, 1, 10);
+        let a_rows = a.summary().rows;
+        let size = a.byte_len();
+        ring.push_head(a);
+        ring.push_head(seg(1000, 2, 10));
+        ring.set_budget(size); // evicts the first (only one fits now)
+        let summaries: Vec<_> = ring.evicted_summaries().collect();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].summary.rows, a_rows);
+    }
+
+    #[test]
+    fn summaries_overlapping_filters_by_observed_range_like_segments_do() {
+        let mut ring = Ring::new(usize::MAX);
+        ring.push_head(seg(0, 1, 5));
+        ring.push_head(seg(1000, 5, 5));
+        ring.push_head(seg(2000, 9, 5));
+        // All three share one observed_ts (seal_block's `observed_ts_ns`
+        // arg is `0` for every `seg()` in this test file), so the range
+        // must cover it for any to match.
+        let (lo, hi) = ring.segments().next().unwrap().minmax_observed().unwrap();
+        ring.set_budget(1); // evict everything but the head
+        assert!(!ring.evicted_summaries().collect::<Vec<_>>().is_empty());
+        assert_eq!(ring.summaries_overlapping(&(lo..hi + 1)).len(), 2);
+        assert_eq!(ring.summaries_overlapping(&(hi + 10..hi + 20)).len(), 0);
+    }
+
+    #[test]
+    fn summary_horizon_drops_evicted_state_older_than_the_horizon() {
+        let mut ring = Ring::new(usize::MAX);
+        // Every `seg()` here shares `observed_ts_ns == 0` (the `seal_block`
+        // arg below is always `0`), so exercise the horizon through event
+        // time isn't possible with this helper; instead shrink the horizon
+        // to before `newest_observed_hi()` (also `0`) so everything with
+        // `hi <= 0 - 1` is pruned -- i.e. a horizon of `-1` prunes all.
+        ring.push_head(seg(0, 1, 5));
+        ring.push_head(seg(1000, 5, 5));
+        ring.set_budget(1);
+        assert_eq!(ring.evicted_summaries().count(), 1);
+        ring.set_summary_horizon(-1);
+        assert_eq!(ring.evicted_summaries().count(), 0);
+    }
+
+    #[test]
+    fn clear_drops_retained_summaries_too() {
+        let mut ring = Ring::new(usize::MAX);
+        ring.push_head(seg(0, 1, 5));
+        ring.push_head(seg(1000, 5, 5));
+        ring.set_budget(1);
+        assert_eq!(ring.evicted_summaries().count(), 1);
+        ring.clear();
+        assert_eq!(ring.evicted_summaries().count(), 0);
+    }
+
+    #[test]
     fn shrinking_budget_evicts() {
         let mut ring = Ring::new(usize::MAX);
         for i in 0..5u64 {
@@ -246,9 +400,9 @@ mod mcdc_vectors {
         Arc::new(v.remove(0))
     }
 
-    // ring_121: `self.bytes > self.budget && self.segs.len() > 1`
+    // ring_210: `self.bytes > self.budget && self.segs.len() > 1`
     #[test]
-    fn mcdc__ring_121__v1_both_true_evicts() {
+    fn mcdc__ring_210__v1_both_true_evicts() {
         let a = make_seg(0, 1, 10);
         let size = a.byte_len();
         let mut ring = Ring::new(size + 1);
@@ -260,7 +414,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__ring_121__v2_bytes_not_over_budget_no_eviction() {
+    fn mcdc__ring_210__v2_bytes_not_over_budget_no_eviction() {
         let a = make_seg(0, 1, 10);
         let size = a.byte_len();
         let mut ring = Ring::new(size * 10);
@@ -272,7 +426,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__ring_121__v3_over_budget_but_single_segment_kept() {
+    fn mcdc__ring_210__v3_over_budget_but_single_segment_kept() {
         let mut ring = Ring::new(1);
         // bytes > budget is true (any segment exceeds budget of 1 byte),
         // but segs.len() > 1 is false (only one segment held) -- the
