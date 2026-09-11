@@ -943,7 +943,7 @@ mod mcdc_vectors {
 
     // stream_357 (`requests`): `is_predefined(col) || self.fields.iter().any(|f| f == col)`
     #[test]
-    fn mcdc__stream_357__v1_predefined_alone_is_enough() {
+    fn mcdc__stream_214__v1_predefined_alone_is_enough() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
         let e = StreamEngine::open(&p).unwrap();
         // "severity" is predefined (true) and not a seen Tier-3 field
@@ -952,7 +952,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__stream_357__v2_seen_tier3_field_alone_is_enough() {
+    fn mcdc__stream_214__v2_seen_tier3_field_alone_is_enough() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h nginx[7]: msg\n");
         let e = StreamEngine::open(&p).unwrap();
         // "pid" is not predefined (false) but was seen as a Tier-3 field
@@ -961,7 +961,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__stream_357__v3_neither_is_unknown() {
+    fn mcdc__stream_214__v3_neither_is_unknown() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
         let e = StreamEngine::open(&p).unwrap();
         // Not predefined and never seen as a field -- both leafs false.
@@ -986,7 +986,7 @@ mod mcdc_vectors {
     // stream_474 (`merge_retained_summaries`):
     // `!select.group_by.is_empty() || select.where_clause.is_some()`
     #[test]
-    fn mcdc__stream_474__v1_group_by_alone_short_circuits() {
+    fn mcdc__stream_480__v1_group_by_alone_short_circuits() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
         let e = StreamEngine::open(&p).unwrap();
         let select = parse("SELECT severity, count(*) FROM log GROUP BY severity");
@@ -999,7 +999,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__stream_474__v2_where_alone_short_circuits() {
+    fn mcdc__stream_480__v2_where_alone_short_circuits() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
         let e = StreamEngine::open(&p).unwrap();
         let select = parse("SELECT count(*) FROM log WHERE severity >= 0");
@@ -1012,7 +1012,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__stream_474__v3_neither_lets_the_merge_proceed() {
+    fn mcdc__stream_480__v3_neither_lets_the_merge_proceed() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n<134>Sep 10 08:00:02 h app: msg\n");
         let mut e = StreamEngine::open_with_budget(&p, 1).unwrap();
         e.refresh().unwrap(); // no-op; establishes a deterministic ring state
