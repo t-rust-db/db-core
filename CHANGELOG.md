@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.86.0] - 2026-09-11
+
+### Added
+
+- **Cross-mode queries epic** (#317): the row→batch adapter (ADR-0019, #314) presents a SQLite table as a `vm::batch::Batch`/`Source`, the lookup side of a hash join. `engine::cross_mode::scan_table_as_batch` reads through `RowEngine`'s own b-tree (the row VM never runs) and materializes requested columns with a new `value::Value → vm::batch::Value` conversion. `RowTableSegment`/`RowTableSource` wrap the snapshot for the batch VM's existing `HashBuild`/`HashProbe` (no new opcodes, same join planner). Whole-table materialization v1: rowid-alias substitution, NULL-padding, BLOB columns rejected (no batch equivalent).
+- **EXPLAIN labeling for cross-mode joins** (#315): `TableStats` gains an optional `source` label (table's mode and file, e.g. `"sqlite hosts.sqlite"`) shown in `SCAN` node detail; untagged tables (single-mode engines) report plain SCAN unchanged. Sets up future EXPLAIN to name which side is stream/batch/sqlite in a cross-mode join.
+- **ADR-0019 documented** (#312): design for cross-mode queries, recorded as the basis for #314/#315.
+
+### Changed
+
+- **`#316` closed**: no parser work needed — existing `FromClause`/`Join` AST already parses multi-source `FROM x JOIN y ON ...`; the remaining gap (routing `TableRef` to the right engine) belongs to future runtime resolver work, not this epic's v1.
+
 ## [0.85.0] - 2026-09-11
 
 ### Added
