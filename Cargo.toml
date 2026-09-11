@@ -70,6 +70,11 @@ path = "tests/unit/memoized_subquery_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_eqp"
+path = "tests/unit/eqp_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_engine_column_public_api"
 path = "tests/unit/engine_column_public_api_test.rs"
 required-features = ["engine-column"]
