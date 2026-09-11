@@ -101,6 +101,27 @@ jobs:
           shared-key: sqlite-profile
       - run: make check-sqlite-profile
 
+  # Public API surface (db-core#360): `tests/public_api.md` must match a
+  # fresh `cargo-public-api` scan, or a widened/narrowed `pub` surface can
+  # ship without a reviewed diff. Needs nightly for rustdoc JSON output,
+  # unlike every other gate here -- `cargo public-api` shells out to
+  # `cargo +nightly rustdoc` itself, so nightly is installed alongside
+  # stable rather than as the job's only toolchain.
+  public-api:
+    name: Public API surface (cargo-public-api)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: public-api
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-public-api
+      - run: make check-public-api-fresh
+
   test:
     name: Test
     runs-on: ubuntu-latest
