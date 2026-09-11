@@ -37,11 +37,16 @@
     clippy::cast_sign_loss
 )]
 
+#[cfg(feature = "vm-batch")]
+pub mod adapter;
 pub mod batch;
 pub mod file;
 pub mod ring;
 pub mod segment;
 pub mod syslog;
+
+#[cfg(feature = "vm-batch")]
+pub use adapter::{ColumnRequest, StreamSegment, TailSource, PREDEFINED_COLUMNS};
 
 pub use batch::{
     Facility, FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind,
