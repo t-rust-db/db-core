@@ -6,6 +6,7 @@
 //! `sleep`s. Deliberately small -- one method, no calendar/timezone
 //! concerns (those stay in `storage::stream`'s per-line parsers).
 
+#[cfg(any(test, feature = "storage-test-support"))]
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::SystemTime;
 

@@ -122,6 +122,28 @@ fn severity_name_literal_orders_correctly() {
 }
 
 #[test]
+fn like_matches_prefix_and_contains_over_facility() {
+    let mut e = open();
+    // `'auth%'` (prefix) matches both `auth` and `authpriv`.
+    let want_prefix = oracle()
+        .iter()
+        .filter(|(f, _)| f.starts_with("auth"))
+        .count();
+    let got_prefix = rows(&mut e, "SELECT * FROM log WHERE facility LIKE 'auth%'").len();
+    assert_eq!(got_prefix, want_prefix);
+    assert!(got_prefix > 0);
+
+    // `'%p%'` (contains) matches `authpriv`, `lpr`, `uucp`, `ftp`.
+    let want_contains = oracle().iter().filter(|(f, _)| f.contains('p')).count();
+    let got_contains = rows(&mut e, "SELECT * FROM log WHERE facility LIKE '%p%'").len();
+    assert_eq!(got_contains, want_contains);
+
+    // `NOT LIKE` is the complement.
+    let got_not = rows(&mut e, "SELECT * FROM log WHERE facility NOT LIKE '%p%'").len();
+    assert_eq!(got_not, 1000 - want_contains);
+}
+
+#[test]
 fn severity_and_facility_conjunction() {
     let mut e = open();
     let want = oracle()
@@ -443,19 +465,16 @@ static STATUS_LINES: std::sync::LazyLock<String> =
 /// #307 "Done when": `json_extract` over a JSON-in-syslog `message`,
 /// grouped by the extracted value via its `SELECT`-list alias. The
 /// issue's own acceptance query adds `WHERE message LIKE '%status%'` as
-/// a cheap pre-filter before the late parse -- `LIKE` is not part of
-/// this validated subset's `WHERE` grammar at all (pre-existing,
-/// unrelated to `json_extract`; `parser::column::validate_expr`'s doc
-/// comment already calls this out), so that clause is dropped here.
-/// Adding `LIKE`/`GLOB` (or a general `FunctionCall`) to the `WHERE`
-/// subset is a separate, unscoped decision.
+/// a cheap pre-filter before the late parse -- `LIKE` is now part of
+/// this validated subset's `WHERE` grammar (#352), so the clause is
+/// included here.
 #[test]
 fn json_extract_with_alias_and_group_by_matches_the_oracle() {
     let mut e = open_json();
     let got: BTreeMap<String, i64> = rows(
         &mut e,
         "SELECT json_extract(message,'$.status') AS s, count(*) FROM log \
-         GROUP BY s ORDER BY s",
+         WHERE message LIKE '%status%' GROUP BY s ORDER BY s",
     )
     .into_iter()
     // The NULL group (rows with no `"status"` key, or malformed JSON) is

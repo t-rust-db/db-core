@@ -79,6 +79,43 @@ fn scan_filter_and_emit_over_a_single_segment() {
 }
 
 #[test]
+fn map_like_and_glob_filter_by_pattern_and_negate() {
+    let batch = Batch::new(3).with_column(
+        "name",
+        vec![
+            Value::Str("west".into()),
+            Value::Str("north".into()),
+            Value::Str("south".into()),
+        ],
+    );
+    let segments = [InMemorySegment(batch)];
+
+    let program = Program::new(vec![
+        Instruction::new(Opcode::LoadColumn {
+            reg: 0,
+            column: "name".into(),
+        }),
+        Instruction::new(Opcode::LoadConst {
+            reg: 1,
+            value: Value::Str("%out%".into()),
+        }),
+        Instruction::new(Opcode::Map {
+            dst: 2,
+            op: MapOp::Like { negated: false },
+            a: 0,
+            b: 1,
+        }),
+        Instruction::new(Opcode::Filter { predicate: 2 }),
+        Instruction::new(Opcode::Emit {
+            registers: vec![0].into(),
+        }),
+        Instruction::new(Opcode::Halt),
+    ]);
+    let rows = run(&segments, &program).unwrap();
+    assert_eq!(rows, vec![vec![Value::Str("south".into())]]);
+}
+
+#[test]
 fn run_join_assembles_a_joined_batch_from_build_and_probe_programs() {
     // Right (build) side: id, payload.
     let right = Batch::new(2)

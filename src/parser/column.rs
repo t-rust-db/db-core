@@ -591,6 +591,18 @@ fn validate_expr(expr: &mut AstExpr) -> Result<()> {
             validate_expr(rhs)
         }
         ExprKind::IsNull { expr: inner, .. } => validate_expr(inner),
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            escape: None,
+            ..
+        } => {
+            validate_expr(inner)?;
+            validate_expr(pattern)
+        }
+        ExprKind::Like {
+            escape: Some(_), ..
+        } => Err(unsupported(expr.span, "LIKE ... ESCAPE".into())),
         ExprKind::Paren(inner) => validate_expr(inner),
         ExprKind::InSubquery {
             expr: inner,

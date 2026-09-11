@@ -945,26 +945,28 @@ fn render_option_usize(v: Option<usize>) -> String {
     }
 }
 
-fn render_map_op(op: MapOp) -> &'static str {
+fn render_map_op(op: MapOp) -> String {
     match op {
-        MapOp::Add => "Add",
-        MapOp::Sub => "Sub",
-        MapOp::Mul => "Mul",
-        MapOp::Div => "Div",
-        MapOp::Eq => "Eq",
-        MapOp::Ne => "Ne",
-        MapOp::Lt => "Lt",
-        MapOp::Le => "Le",
-        MapOp::Gt => "Gt",
-        MapOp::Ge => "Ge",
-        MapOp::And => "And",
-        MapOp::Or => "Or",
-        MapOp::Not => "Not",
-        MapOp::IsNull => "IsNull",
-        MapOp::IsNotNull => "IsNotNull",
-        MapOp::Concat => "Concat",
-        MapOp::Neg => "Neg",
-        MapOp::MaskIf => "MaskIf",
+        MapOp::Add => "Add".to_string(),
+        MapOp::Sub => "Sub".to_string(),
+        MapOp::Mul => "Mul".to_string(),
+        MapOp::Div => "Div".to_string(),
+        MapOp::Eq => "Eq".to_string(),
+        MapOp::Ne => "Ne".to_string(),
+        MapOp::Lt => "Lt".to_string(),
+        MapOp::Le => "Le".to_string(),
+        MapOp::Gt => "Gt".to_string(),
+        MapOp::Ge => "Ge".to_string(),
+        MapOp::And => "And".to_string(),
+        MapOp::Or => "Or".to_string(),
+        MapOp::Not => "Not".to_string(),
+        MapOp::IsNull => "IsNull".to_string(),
+        MapOp::IsNotNull => "IsNotNull".to_string(),
+        MapOp::Concat => "Concat".to_string(),
+        MapOp::Neg => "Neg".to_string(),
+        MapOp::MaskIf => "MaskIf".to_string(),
+        MapOp::Like { negated } => format!("Like {{ negated: {negated} }}"),
+        MapOp::Glob { negated } => format!("Glob {{ negated: {negated} }}"),
     }
 }
 
