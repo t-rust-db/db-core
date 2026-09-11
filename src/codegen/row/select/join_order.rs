@@ -644,6 +644,7 @@ mod tests {
             compound: vec![],
             order_by: vec![],
             limit: None,
+            scope: None,
             span: span(),
         };
         let subquery = Expr {

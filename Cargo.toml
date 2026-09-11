@@ -183,7 +183,9 @@ parser-row = []
 # `vm-row`/`vm-stream` or pulls in a dependency only one of them needs.
 vm-batch = []
 vm-row = []
-vm-stream = []
+# `vm::stream::Program` wraps a `vm::batch::Program` body verbatim (ADR
+# 0018): no separate row/filter/aggregate opcodes to duplicate `vm-batch`'s.
+vm-stream = ["vm-batch"]
 
 # `codegen`: the planner (AST -> executable `Program`), sqlite-rs's
 # meaning of the word (ADR 0007). One per `vm` executor; `codegen-batch`
@@ -197,7 +199,10 @@ codegen-batch = ["vm-batch", "parser-column"]
 # implication it justified put `vm/batch.rs` into every SQLite-profile
 # build. `make check-sqlite-profile` now fails if that ever returns.
 codegen-row = ["vm-row", "parser-row"]
-codegen-stream = []
+# `codegen::stream::compile` prunes via `storage-stream`'s `Segment`/`Ring`
+# minmax and dictionaries, and delegates the residual query to
+# `codegen-batch` (ADR 0018 §Planner).
+codegen-stream = ["vm-stream", "codegen-batch", "storage-stream", "parser-row"]
 
 # `emit-batch`: the ahead-of-time Rust-source emitter over the batch
 # planner's output, `codegen::batch::emit` (ADR 0007; db-core#192 folded
@@ -235,9 +240,9 @@ engine-row = ["storage-row", "parser-row", "vm-row", "codegen-row"]
 # single-file case, ported).
 engine-column = ["storage-column", "parser-column", "vm-batch", "codegen-batch"]
 # The stream engine (ADR 0018): `storage::stream` under `vm::batch` through
-# `storage::stream::adapter`; the planner is `codegen::batch` until
-# `codegen::stream` exists.
-engine-stream = ["storage-stream", "parser-column", "vm-batch", "codegen-batch"]
+# `storage::stream::adapter`, planned by `codegen::stream` (prune + delegate
+# to `codegen::batch` for the residual query).
+engine-stream = ["storage-stream", "parser-column", "codegen-stream"]
 
 # sqlite-rs's lint bar (#82).
 [lints.rust]

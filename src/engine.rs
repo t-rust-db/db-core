@@ -103,6 +103,7 @@ impl fmt::Display for Cell {
     /// Shell-style rendering: `NULL` is empty, reals use `value::format_real`
     /// (SQLite's `%!.15g`), blobs render as `X'..'` hex.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Render Cell types in shell-style format (display, not debug).
         match self {
             Cell::Null => Ok(()),
             Cell::Int(n) => write!(f, "{n}"),
@@ -168,6 +169,11 @@ pub struct QueryResult {
     pub columns: Vec<String>,
     /// The rows, in result order.
     pub rows: Vec<Vec<Cell>>,
+    /// The stream engine's effective range for this query (ADR 0018
+    /// §Scope and retention: "every result reports its effective range").
+    /// `None` for row/batch results, which have no scope concept.
+    #[cfg(feature = "vm-stream")]
+    pub scope_report: Option<ScopeReport>,
 }
 
 impl QueryResult {
@@ -176,6 +182,26 @@ impl QueryResult {
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
+}
+
+/// A stream query's effective range (ADR 0018 §Scope and retention): "a
+/// default that is silent is a wrong answer waiting to be trusted."
+#[cfg(feature = "vm-stream")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScopeReport {
+    /// Rows the query actually saw.
+    pub lines: u64,
+    /// Earliest event timestamp seen, nanoseconds since epoch.
+    pub first_ts: Option<i64>,
+    /// Latest event timestamp seen, nanoseconds since epoch.
+    pub last_ts: Option<i64>,
+    /// The scope the query asked for.
+    pub scope_requested: crate::vm::stream::Scope,
+    /// The scope actually available (narrower than requested when the
+    /// ring/file cannot reach far enough back).
+    pub scope_available: crate::vm::stream::Scope,
+    /// `true` when `scope_available` was clamped at the start of the file.
+    pub capped: bool,
 }
 
 /// One `EXPLAIN QUERY PLAN` step. The same shape as row's `EqpRow` (minus

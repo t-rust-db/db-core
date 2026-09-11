@@ -63,10 +63,9 @@ pub fn parse_object(s: &str) -> Option<(JsonValue<'_>, &str)> {
         let after_value = after_value.trim_start();
         if let Some(after) = after_value.strip_prefix(',') {
             rest = after.trim_start();
-        } else if let Some(after) = after_value.strip_prefix('}') {
-            return Some((JsonValue::Object(fields), after));
         } else {
-            return None;
+            let after = after_value.strip_prefix('}')?;
+            return Some((JsonValue::Object(fields), after));
         }
     }
 }

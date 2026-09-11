@@ -164,6 +164,7 @@ pub fn run_query(
             .into_iter()
             .map(|r| r.into_iter().map(Cell::from).collect())
             .collect(),
+        scope_report: None,
     })
 }
 
