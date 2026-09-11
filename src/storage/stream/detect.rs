@@ -13,7 +13,7 @@
 //! line. `format` is recorded as a Tier-3 Dict column so
 //! `WHERE format = 'json'` works on mixed files.
 
-use super::batch::{LogBatch, Source};
+use super::batch::{LineParser, LogBatch, Source};
 use super::clf::ClfParser;
 use super::json::{self, JsonValue};
 use super::jsonl::JsonlParser;
@@ -65,6 +65,54 @@ pub struct Detection {
     pub locked: bool,
     /// Container wrapper, if any (`"docker"` or `"cri"`).
     pub container: Option<&'static str>,
+}
+
+/// A [`LineParser`] over any of the formats [`detect`] can lock on to,
+/// so a caller (e.g. `StreamEngine`) can hold one concrete parser chosen
+/// at open time instead of hard-coding [`SyslogParser`].
+#[derive(Debug, Clone)]
+pub enum DetectedParser {
+    /// RFC 3164 syslog.
+    Syslog(SyslogParser),
+    /// Apache/nginx combined log format.
+    Clf(ClfParser),
+    /// JSON Lines.
+    Jsonl(JsonlParser),
+    /// `key=value` logfmt.
+    Logfmt(LogfmtParser),
+    /// No format locked on: store each line verbatim as `message`.
+    Freeform,
+}
+
+impl DetectedParser {
+    /// The parser for a locked-on [`Format`] (`Freeform` included).
+    #[must_use]
+    pub fn for_format(format: Format) -> Self {
+        match format {
+            Format::Syslog => Self::Syslog(SyslogParser::new()),
+            Format::Clf => Self::Clf(ClfParser::new()),
+            Format::Jsonl => Self::Jsonl(JsonlParser::new()),
+            Format::Logfmt => Self::Logfmt(LogfmtParser::new()),
+            Format::Freeform => Self::Freeform,
+        }
+    }
+}
+
+impl LineParser for DetectedParser {
+    fn parse_batch<'a>(
+        &self,
+        source: Source,
+        buffer: &'a [u8],
+        max_lines: usize,
+    ) -> (LogBatch<'a>, usize) {
+        match self {
+            Self::Syslog(p) => p.parse_batch(source, buffer, max_lines),
+            Self::Clf(p) => p.parse_batch(source, buffer, max_lines),
+            Self::Jsonl(p) => p.parse_batch(source, buffer, max_lines),
+            Self::Logfmt(p) => p.parse_batch(source, buffer, max_lines),
+            Self::Freeform => parse_freeform(source, buffer, max_lines),
+        }
+    }
 }
 
 /// Cheap-first classification of a single line's format. Operates on the

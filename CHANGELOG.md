@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.86.1] - 2026-09-11
+
+### Fixed
+
+- **`StreamEngine` format detection** (#348): `StreamEngine::open_with_budget` now calls `storage::stream::detect::detect` to pick the right parser for the opened file instead of hardcoding `SyslogParser`. A logfmt or JSON-Lines file opened through `StreamEngine` now parses correctly with the detected parser; rotation/truncation triggers re-detection.
+
 ## [0.86.0] - 2026-09-11
 
 ### Added

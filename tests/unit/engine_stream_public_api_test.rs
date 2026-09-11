@@ -335,6 +335,75 @@ fn join_and_unbounded_aggregate_are_rejected() {
     // `src/codegen/stream.rs`'s own tests instead.
 }
 
+const LOGFMT_FIXTURE: &str = "tests/fixtures/stream/logfmt-1k.log";
+const JSONL_FIXTURE: &str = "tests/fixtures/stream/jsonl-1k.log";
+
+/// #348: `StreamEngine` must detect and dispatch per-format, not hard-code
+/// `SyslogParser` -- a logfmt file's `message` must be just the `msg=`
+/// value, never the whole raw line (the syslog no-match fallback).
+#[test]
+fn detects_and_parses_a_logfmt_file_not_as_syslog() {
+    let mut e = StreamEngine::open(Path::new(LOGFMT_FIXTURE)).expect("open logfmt fixture");
+    let got = rows(&mut e, "SELECT message FROM log LIMIT 3");
+    let raw_lines: Vec<String> = std::fs::read_to_string(LOGFMT_FIXTURE)
+        .unwrap()
+        .lines()
+        .take(3)
+        .map(String::from)
+        .collect();
+    for (row, raw) in got.iter().zip(raw_lines.iter()) {
+        match &row[0] {
+            Cell::Text(msg) => {
+                assert_ne!(msg, raw, "message must not be the whole raw line");
+                assert!(
+                    raw.contains(&format!("msg=\"{msg}\"")),
+                    "{msg} not found in {raw}"
+                );
+            }
+            other => panic!("expected Text message, got {other:?}"),
+        }
+    }
+}
+
+/// #348: same guarantee for a JSON-Lines file.
+#[test]
+fn detects_and_parses_a_jsonl_file_not_as_syslog() {
+    let mut e = StreamEngine::open(Path::new(JSONL_FIXTURE)).expect("open jsonl fixture");
+    let got = rows(&mut e, "SELECT message FROM log LIMIT 3");
+    let raw_lines: Vec<String> = std::fs::read_to_string(JSONL_FIXTURE)
+        .unwrap()
+        .lines()
+        .take(3)
+        .map(String::from)
+        .collect();
+    for (row, raw) in got.iter().zip(raw_lines.iter()) {
+        match &row[0] {
+            Cell::Text(msg) => {
+                assert_ne!(msg, raw, "message must not be the whole raw JSON line");
+                assert!(
+                    raw.contains(&format!("\"msg\": \"{msg}\"")),
+                    "{msg} not found in {raw}"
+                );
+            }
+            other => panic!("expected Text message, got {other:?}"),
+        }
+    }
+}
+
+/// #348: a real RFC 3164 syslog file's behavior is unchanged.
+#[test]
+fn still_detects_and_parses_a_real_syslog_file() {
+    let mut e = open();
+    let got = rows(&mut e, "SELECT severity_text FROM log LIMIT 3");
+    for row in got {
+        assert_ne!(
+            row[0],
+            Cell::Null,
+            "syslog severity_text must still resolve"
+        );
+    }
+}
+
 const JSON_FIXTURE: &str = "tests/fixtures/stream/syslog-json-1k.log";
 
 fn open_json() -> StreamEngine {
