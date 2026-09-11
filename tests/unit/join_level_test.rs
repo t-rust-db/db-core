@@ -297,6 +297,67 @@ fn join_over_a_large_unindexed_table_builds_a_transient_auto_index() {
 }
 
 #[test]
+fn full_join_emits_matched_rows_and_both_sides_unmatched_rows() {
+    let db = TempDb::new("full-join-plain");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE fj_a(k INTEGER); \
+         CREATE TABLE fj_b(k INTEGER, w INTEGER); \
+         INSERT INTO fj_a VALUES (1), (2); \
+         INSERT INTO fj_b VALUES (2, 200), (3, 300)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query(
+            "SELECT fj_a.k, fj_b.w FROM fj_a FULL JOIN fj_b ON fj_a.k = fj_b.k \
+             ORDER BY fj_a.k, fj_b.w",
+        )
+        .unwrap()
+        .rows;
+    // 1 unmatched on the left (fj_b side NULL), 2/200 matched, 3/300
+    // unmatched on the right (fj_a side NULL).
+    assert_eq!(ints(&rows), vec![vec![-1, 300], vec![1, -1], vec![2, 200]]);
+}
+
+#[test]
+fn full_join_with_order_by_alone_sorts_the_whole_result() {
+    let db = TempDb::new("full-join-order-by");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE fjo_a(k INTEGER); \
+         CREATE TABLE fjo_b(k INTEGER, w INTEGER); \
+         INSERT INTO fjo_a VALUES (3), (1); \
+         INSERT INTO fjo_b VALUES (1, 100)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query(
+            "SELECT fjo_a.k FROM fjo_a FULL JOIN fjo_b ON fjo_a.k = fjo_b.k ORDER BY fjo_a.k",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![vec![1], vec![3]]);
+}
+
+#[test]
+fn full_join_with_distinct_alone_dedups_without_a_sort() {
+    let db = TempDb::new("full-join-distinct");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE fjd_a(k INTEGER); \
+         CREATE TABLE fjd_b(k INTEGER); \
+         INSERT INTO fjd_a VALUES (1), (1); \
+         INSERT INTO fjd_b VALUES (1)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query("SELECT DISTINCT fjd_a.k FROM fjd_a FULL JOIN fjd_b ON fjd_a.k = fjd_b.k")
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![vec![1]]);
+}
+
+#[test]
 fn join_with_a_where_clause_limit_offset_and_distinct() {
     // `emit_join_final_row`'s WHERE/LIMIT/OFFSET guards and
     // `emit_join_distinct_guard`'s dedup, all combined with a join --
