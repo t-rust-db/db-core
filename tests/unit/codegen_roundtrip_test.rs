@@ -522,3 +522,161 @@ fn without_a_with_clause_the_query_still_compiles() {
     );
     assert_eq!(rows, vec![ints(&[2])]);
 }
+
+// ---------------------------------------------------------------------
+// codegen::row::expr::expr_value value-mode compilation: literal/param/
+// operator shapes not otherwise reached by this file's condition-mode
+// (`WHERE`) or aggregate tests.
+// ---------------------------------------------------------------------
+
+fn run_with_params(sql: &str, params: Vec<Value>, seed: Vec<(i64, Vec<Value>)>) -> Vec<Vec<Value>> {
+    let schemas = [schema("t", &["a"])];
+    let program = compile_statement(sql, &schemas, &[]).unwrap();
+    let mut vm = Vm::new();
+    vm.bind_params(params);
+    let mut table = EphemeralTableCursor::new();
+    for (rowid, values) in seed {
+        table.insert(rowid, values);
+    }
+    vm.open_cursor(0, Box::new(table)).unwrap();
+    execute(&mut vm, &program).unwrap()
+}
+
+#[test]
+fn select_list_true_false_and_blob_literals() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT TRUE, FALSE, x'414243' FROM t",
+        vec![(1, ints(&[1]))],
+    );
+    assert_eq!(
+        rows,
+        vec![vec![
+            Value::Integer(1),
+            Value::Integer(0),
+            Value::Blob(vec![0x41, 0x42, 0x43].into()),
+        ]]
+    );
+}
+
+#[test]
+fn select_list_integer_literal_beyond_i32_uses_int64() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT 5000000000 FROM t",
+        vec![(1, ints(&[1]))],
+    );
+    assert_eq!(rows, vec![vec![Value::Integer(5_000_000_000)]]);
+}
+
+#[test]
+fn anonymous_and_numbered_parameters_read_bound_values() {
+    let rows = run_with_params(
+        "SELECT ?, ?1 FROM t",
+        vec![Value::Integer(7)],
+        vec![(1, ints(&[1]))],
+    );
+    assert_eq!(rows, vec![vec![Value::Integer(7), Value::Integer(7)]]);
+}
+
+#[test]
+fn named_colon_parameter_is_a_known_simplification_always_null() {
+    // #137's bounded scope: `:name`/`@name`/`$name` aren't wired to an
+    // index, so they compile to an always-NULL register rather than an
+    // error -- a documented simplification, not a bug.
+    let rows = run_with_params("SELECT :missing FROM t", vec![], vec![(1, ints(&[1]))]);
+    assert_eq!(rows, vec![vec![Value::Null]]);
+}
+
+#[test]
+fn like_escape_and_negated_like_and_glob() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT a FROM t WHERE a LIKE '10%' ESCAPE '\\' OR a NOT LIKE '2%' OR a GLOB '3*'",
+        vec![
+            (1, vec![Value::Text("10x".into())]),
+            (2, vec![Value::Text("20x".into())]),
+            (3, vec![Value::Text("30x".into())]),
+        ],
+    );
+    assert_eq!(
+        rows,
+        vec![
+            vec![Value::Text("10x".into())],
+            vec![Value::Text("30x".into())],
+        ]
+    );
+}
+
+#[test]
+fn unary_plus_minus_not_and_bitnot() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT +a, -a, NOT a, ~a FROM t",
+        vec![(1, vec![Value::Integer(5)])],
+    );
+    assert_eq!(
+        rows,
+        vec![vec![
+            Value::Integer(5),
+            Value::Integer(-5),
+            Value::Integer(0),
+            Value::Integer(-6),
+        ]]
+    );
+}
+
+#[test]
+fn arithmetic_and_bitwise_and_concat_operators() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT a - 1, a / 2, a % 3, a & 1, a | 8, a << 1, a >> 1, a || 'x' FROM t",
+        vec![(1, vec![Value::Integer(10)])],
+    );
+    assert_eq!(
+        rows,
+        vec![vec![
+            Value::Integer(9),
+            Value::Integer(5),
+            Value::Integer(1),
+            Value::Integer(0),
+            Value::Integer(10),
+            Value::Integer(20),
+            Value::Integer(5),
+            Value::Text("10x".into()),
+        ]]
+    );
+}
+
+#[test]
+fn function_call_with_non_contiguously_compiled_arguments() {
+    // `coalesce(a, -1)` compiles its second arg (unary minus) via
+    // several intermediate registers of its own, so the two top-level
+    // args don't land contiguously -- exercises `compile_value`'s
+    // copy-into-a-fresh-run fallback for `FunctionCall`.
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT coalesce(a, -1) + coalesce(a, -1) FROM t",
+        vec![(1, vec![Value::Null])],
+    );
+    assert_eq!(rows, vec![vec![Value::Integer(-2)]]);
+}
+
+#[test]
+fn window_function_in_the_select_list_is_unsupported() {
+    // A non-aggregate call with `OVER` reaches `expr_value.rs`'s own
+    // `tail.over` check (an aggregate call with `OVER` is instead
+    // caught earlier, as an aggregate-with-window rejection).
+    let schemas = [schema("t", &["a"])];
+    let err = compile_statement("SELECT abs(a) OVER () FROM t", &schemas, &[]).unwrap_err();
+    assert!(format!("{err:?}").contains("window"), "{err:?}");
+}
+
+#[test]
+fn aggregate_used_as_a_plain_scalar_argument_is_unsupported() {
+    // `abs(count(*))` reaches `compile_value` for the *inner* `count(*)`
+    // in a context this V2 compiler's aggregate pass never sees.
+    let schemas = [schema("t", &["a"])];
+    let err = compile_statement("SELECT abs(count(*)) FROM t", &schemas, &[]).unwrap_err();
+    assert!(format!("{err:?}").contains("count"), "{err:?}");
+}
