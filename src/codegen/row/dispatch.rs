@@ -349,7 +349,9 @@ pub fn compile_statement(
         "CREATE" if is_create_index => match parse_create_index(sql) {
             ParseOutcome::Accepted(ci) => {
                 let schema = find_schema(&ci.table)?;
-                let exists = schemas.iter().any(|s| s.name.eq_ignore_ascii_case(&ci.name))
+                let exists = schemas
+                    .iter()
+                    .any(|s| s.name.eq_ignore_ascii_case(&ci.name))
                     || schemas
                         .iter()
                         .flat_map(|s| &s.indexes)
@@ -613,16 +615,14 @@ mod already_exists_tests {
     #[test]
     fn create_table_if_not_exists_over_existing_name_is_a_no_op() {
         let program =
-            compile_statement("CREATE TABLE IF NOT EXISTS t(z INTEGER)", &schemas(), &[])
-                .unwrap();
+            compile_statement("CREATE TABLE IF NOT EXISTS t(z INTEGER)", &schemas(), &[]).unwrap();
         let opcodes: Vec<Opcode> = program.instructions.iter().map(|i| i.opcode).collect();
         assert_eq!(opcodes, vec![Opcode::Init, Opcode::Halt]);
     }
 
     #[test]
     fn create_index_over_existing_name_fails() {
-        let err =
-            compile_statement("CREATE INDEX idx_t_a ON t(a)", &schemas(), &[]).unwrap_err();
+        let err = compile_statement("CREATE INDEX idx_t_a ON t(a)", &schemas(), &[]).unwrap_err();
         assert!(matches!(&err, DispatchError::IndexAlreadyExists(name) if name == "idx_t_a"));
         assert_eq!(err.to_string(), "index idx_t_a already exists");
     }

@@ -318,14 +318,22 @@ mod tests {
         }
     }
 
-    pub(super) fn map_group(name: &str, repetition: Repetition, num_children: i32) -> SchemaElement {
+    pub(super) fn map_group(
+        name: &str,
+        repetition: Repetition,
+        num_children: i32,
+    ) -> SchemaElement {
         SchemaElement {
             converted_type: Some(ConvertedType::Other(1)),
             ..group(name, repetition, num_children)
         }
     }
 
-    pub(super) fn leaf_elem(name: &str, repetition: Repetition, physical_type: PhysicalType) -> SchemaElement {
+    pub(super) fn leaf_elem(
+        name: &str,
+        repetition: Repetition,
+        physical_type: PhysicalType,
+    ) -> SchemaElement {
         SchemaElement {
             name: name.to_string(),
             physical_type: Some(physical_type),

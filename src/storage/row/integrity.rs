@@ -823,4 +823,117 @@ mod tests {
             .iter()
             .any(|p| p.contains("freelist leaf page 999 is out of range")));
     }
+
+    #[allow(non_snake_case)]
+    mod mcdc_vectors {
+        //! Tagged MC/DC vectors for this file's multi-leaf decisions
+        //! (`mcdc__<file-stem>_<line>__vN`, joined to
+        //! `tests/mcdc/obligations.json` by `make test-mcdc`; db-core#299
+        //! follow-up).
+
+        use super::*;
+
+        // integrity_285: `trunk > header.page_count || !seen_trunks.insert(trunk)`
+        #[test]
+        fn mcdc__integrity_285__v1_both_false_walks_the_chain() {
+            let mut header = fake_header(2);
+            header.freelist_trunk_page = 1;
+            header.freelist_page_count = 1;
+            let mut pages = HashMap::new();
+            pages.insert(1u32, trunk_page(0, &[]));
+            let source = FakePageSource { pages };
+            let mut problems = Vec::new();
+
+            check_freelist(&source, &header, &mut problems);
+
+            assert!(!problems
+                .iter()
+                .any(|p| p.contains("out of range or repeated")));
+        }
+
+        #[test]
+        fn mcdc__integrity_285__v2_trunk_out_of_range() {
+            let mut header = fake_header(2);
+            header.freelist_trunk_page = 5;
+            header.freelist_page_count = 1;
+            let source = FakePageSource {
+                pages: HashMap::new(),
+            };
+            let mut problems = Vec::new();
+
+            check_freelist(&source, &header, &mut problems);
+
+            assert!(problems
+                .iter()
+                .any(|p| p.contains("out of range or repeated")));
+        }
+
+        #[test]
+        fn mcdc__integrity_285__v3_trunk_in_range_but_repeated() {
+            let mut header = fake_header(2);
+            header.freelist_trunk_page = 1;
+            header.freelist_page_count = 99;
+            let mut pages = HashMap::new();
+            pages.insert(1u32, trunk_page(2, &[]));
+            pages.insert(2u32, trunk_page(1, &[]));
+            let source = FakePageSource { pages };
+            let mut problems = Vec::new();
+
+            check_freelist(&source, &header, &mut problems);
+
+            assert!(problems
+                .iter()
+                .any(|p| p.contains("out of range or repeated")));
+        }
+
+        // integrity_306: `*leaf == 0 || *leaf > header.page_count`
+        #[test]
+        fn mcdc__integrity_306__v1_both_false_is_silent() {
+            let mut header = fake_header(5);
+            header.freelist_trunk_page = 1;
+            header.freelist_page_count = 2;
+            let mut pages = HashMap::new();
+            pages.insert(1u32, trunk_page(0, &[3]));
+            let source = FakePageSource { pages };
+            let mut problems = Vec::new();
+
+            check_freelist(&source, &header, &mut problems);
+
+            assert!(!problems.iter().any(|p| p.contains("is out of range")));
+        }
+
+        #[test]
+        fn mcdc__integrity_306__v2_leaf_zero_is_out_of_range() {
+            let mut header = fake_header(5);
+            header.freelist_trunk_page = 1;
+            header.freelist_page_count = 2;
+            let mut pages = HashMap::new();
+            pages.insert(1u32, trunk_page(0, &[0]));
+            let source = FakePageSource { pages };
+            let mut problems = Vec::new();
+
+            check_freelist(&source, &header, &mut problems);
+
+            assert!(problems
+                .iter()
+                .any(|p| p.contains("freelist leaf page 0 is out of range")));
+        }
+
+        #[test]
+        fn mcdc__integrity_306__v3_leaf_above_page_count_is_out_of_range() {
+            let mut header = fake_header(2);
+            header.freelist_trunk_page = 1;
+            header.freelist_page_count = 2;
+            let mut pages = HashMap::new();
+            pages.insert(1u32, trunk_page(0, &[999]));
+            let source = FakePageSource { pages };
+            let mut problems = Vec::new();
+
+            check_freelist(&source, &header, &mut problems);
+
+            assert!(problems
+                .iter()
+                .any(|p| p.contains("freelist leaf page 999 is out of range")));
+        }
+    }
 }
