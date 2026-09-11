@@ -23,10 +23,11 @@ use std::rc::Rc;
 
 use crate::codegen::row::dispatch::{compile_select_statement, explain_select_statement};
 use crate::codegen::row::planner::Stats;
+use crate::codegen::row::select::select_result_column_count_joined;
 use crate::codegen::row::{
     compile_statement, leading_keywords, output_column_names, resolve_from_table_schema,
 };
-use crate::parser::ast::Select;
+use crate::parser::ast::{Select, TableRef};
 use crate::parser::row::error::{parse_select, ParseOutcome};
 use crate::parser::row::tokenizer::split_statements;
 use crate::schema::{TableSchema, ViewSchema};
@@ -173,7 +174,13 @@ impl RowEngine {
     }
 
     /// Column labels for a `SELECT`: schema-derived for a single-table
-    /// query, `column1..N` otherwise (sqlite-rs's REPL rule).
+    /// query, `column1..N` otherwise (sqlite-rs's REPL rule) -- sized by
+    /// the query's actual projected width, not `select.columns.len()`
+    /// (a `SELECT *`/`table.*` result column expands to more than one
+    /// output column, so counting AST result columns directly undercounts
+    /// and desyncs the header list from the row width; see
+    /// `select_result_column_count_joined`'s own doc comment for its one
+    /// remaining narrow spot -- `SELECT *` over a NATURAL/USING join).
     fn derive_headers(select: &Select, schemas: &[TableSchema]) -> Vec<String> {
         let single_table = select.compound.is_empty()
             && select
@@ -187,7 +194,23 @@ impl RowEngine {
                 }
             }
         }
-        let count = select.columns.len().max(1);
+        let count = select
+            .from
+            .as_ref()
+            .filter(|_| select.compound.is_empty())
+            .and_then(|from| {
+                let table_refs: Vec<&TableRef> = std::iter::once(&from.first)
+                    .chain(from.joins.iter().map(|j| &j.table))
+                    .collect();
+                let joined_schemas: Vec<TableSchema> = table_refs
+                    .iter()
+                    .map(|tr| resolve_from_table_schema(tr, schemas))
+                    .collect::<Result<_, _>>()
+                    .ok()?;
+                select_result_column_count_joined(select, &joined_schemas, &table_refs).ok()
+            })
+            .unwrap_or(select.columns.len())
+            .max(1);
         (1..=count).map(|i| format!("column{i}")).collect()
     }
 
