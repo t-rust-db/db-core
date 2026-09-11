@@ -52,7 +52,7 @@ const OTHER_ROOTS: &[&str] = &[
     "src/vm/batch.rs",
     "src/vm/engine.rs",
     "src/vm/stream.rs",
-    "src/codegen/batch.rs",
+    "src/codegen/batch_planner.rs",
     "src/storage/column.rs",
     "src/storage/stream.rs",
     "src/engine/column.rs",

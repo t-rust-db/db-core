@@ -93,9 +93,9 @@ fn known_obligation_ids() -> HashSet<String> {
 }
 
 /// Every `(id, file)` pair in the committed snapshot, in file order --
-/// `id` is `<basename>_<line>`, so two files sharing a basename (e.g.
-/// `src/codegen/batch.rs` and `src/vm/batch.rs`, since #192's module
-/// move) can coincidentally collide on the same line number and
+/// `id` is `<basename>_<line>`, so two files sharing a basename (as
+/// `src/codegen/batch.rs` and `src/vm/batch.rs` did between #192's module
+/// move and #363's rename) can coincidentally collide on the same line number and
 /// therefore the same id. `cargo-mvl-mcdc harvest` joins tagged tests to
 /// obligations by id alone, so a collision silently misattributes one
 /// file's discharged vectors to the other's obligation -- `make
@@ -126,14 +126,6 @@ fn obligation_id_file_pairs() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Pre-existing cross-file collisions between `src/codegen/batch.rs` and
-/// `src/vm/batch.rs` (same basename, coincidentally overlapping line
-/// numbers -- both files are large and grow independently, so some
-/// overlap is inevitable and not worth fighting line-by-line every time
-/// either shifts). Known and accepted as of db-core#196; anything beyond
-/// this fixed set is a *new* collision and must fail the test below.
-const KNOWN_BATCH_COLLISIONS: &[&str] = &["batch_427", "batch_699"];
-
 #[test]
 fn every_obligation_id_in_the_snapshot_is_unique_across_files() {
     let mut files_by_id: HashMap<String, HashSet<String>> = HashMap::new();
@@ -148,7 +140,7 @@ fn every_obligation_id_in_the_snapshot_is_unique_across_files() {
     // id are the failure mode this guards.
     let mut collisions: Vec<String> = files_by_id
         .into_iter()
-        .filter(|(id, files)| files.len() > 1 && !KNOWN_BATCH_COLLISIONS.contains(&id.as_str()))
+        .filter(|(_, files)| files.len() > 1)
         .map(|(id, files)| {
             let mut files: Vec<String> = files.into_iter().collect();
             files.sort();
@@ -163,8 +155,8 @@ fn every_obligation_id_in_the_snapshot_is_unique_across_files() {
          tests/mcdc/obligations.json -- `cargo-mvl-mcdc harvest` joins tagged tests \
          to obligations by id alone, so a shared id silently misattributes discharged \
          vectors between the files (typically two files with the same basename, e.g. \
-         a module move that leaves both `src/codegen/batch.rs` and `src/vm/batch.rs` \
-         with a decision on the same line number). `cargo-mvl-mcdc`'s id scheme can't \
+         the pre-#363 `src/codegen/batch.rs` next to `src/vm/batch.rs`, each with a \
+         decision on the same line number). `cargo-mvl-mcdc`'s id scheme can't \
          disambiguate this on its own -- rename one file, or move one of the colliding \
          decisions to a different line, then re-run `make mcdc-obligations`:\n{}",
         collisions.join("\n")

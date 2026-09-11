@@ -35,6 +35,11 @@
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "codegen-batch")]
+// Lives in `batch_planner.rs`, not `batch.rs`: `cargo-mvl-mcdc` ids
+// obligations by file stem + line, so this file and `src/vm/batch.rs`
+// collided on every same-numbered decision (#363). The module path
+// stays `codegen::batch`.
+#[path = "codegen/batch_planner.rs"]
 pub mod batch;
 #[cfg(feature = "codegen-row")]
 pub mod row;

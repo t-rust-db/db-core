@@ -44,6 +44,9 @@
 //! stands).
 
 #[cfg(feature = "emit-batch")]
+// This file is loaded via `#[path]` (see `src/codegen.rs`), so the child
+// module's directory has to be named explicitly too.
+#[path = "batch/emit.rs"]
 pub mod emit;
 
 use crate::parser::ast::{
@@ -2490,7 +2493,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1088__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__batch_planner_1109__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2501,7 +2504,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1088__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__batch_planner_1109__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2512,7 +2515,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1088__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__batch_planner_1109__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2525,7 +2528,7 @@ mod tests {
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1128__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__batch_planner_1149__v1_group_by_without_agg_column_merges_partial_aggregates() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
@@ -2535,7 +2538,7 @@ mod tests {
     /// MC/DC vector (obligation `batch_1127`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1128__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__batch_planner_1149__v2_agg_column_without_group_by_merges_partial_aggregates() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
@@ -2546,7 +2549,7 @@ mod tests {
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1128__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__batch_planner_1149__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();

@@ -1,15 +1,15 @@
 //! `BatchExecutor`: the vectorized/columnar query VM, one of `sql-vm`'s
 //!
-//! **MC/DC obligation ids (db-core#219):** `cargo-mvl-mcdc` names an
-//! obligation `<file-stem>_<line>`, so this file and
-//! `src/codegen/batch.rs` -- same stem, both long -- collide whenever a
-//! decision in each sits on the same line number, and
-//! `unit_mcdc_discharge` rejects the snapshot. This doc block is
-//! deliberately eleven lines long: it offsets every decision below so
-//! that none currently shares a line with a `codegen::batch` decision.
-//! If a later edit re-introduces a collision, the fix is the one that
-//! test's message gives (shift one of the two decisions), and this
-//! block is the cheapest place to do it.
+//! **MC/DC obligation ids (db-core#219, #363):** `cargo-mvl-mcdc` names an
+//! obligation `<file-stem>_<line>`, so while this file shared the stem
+//! `batch` with `src/codegen/batch.rs` the two collided whenever a
+//! decision in each sat on the same line number, and
+//! `unit_mcdc_discharge` rejected the snapshot. #363 ended that by
+//! renaming the planner's file to `src/codegen/batch_planner.rs`. This
+//! block (and the `#262`/`#263` line-shift comments further down) are
+//! the historical offsets that used to dodge those collisions; they are
+//! kept as-is so every decision below keeps its current id -- deleting
+//! them would only force a snapshot regeneration and re-tag for nothing.
 //! three executors (see crate root docs) -- extracted from column-rs's
 //! private `src/vm.rs`, which was its only consumer, so any engine
 //! executing queries in batches over `sql_expr`-compiled programs
@@ -1874,9 +1874,9 @@ impl Vm {
     clippy::arithmetic_side_effects,
     reason = "every column slice holds `num_rows` values and every index in `indices`/`partitions` was drawn from `0..num_rows`; `pos + 1` and the running counters are bounded by `num_rows`"
 )]
-// #262: this blank comment line exists only to shift the line numbers of
-// the MC/DC decisions below off the same-basename collision with
-// `src/codegen/batch.rs` (`cargo-mvl-mcdc` ids by basename+line, not path).
+// #262: line-shift comment, originally to dodge a same-basename MC/DC id
+// collision with `src/codegen/batch.rs` (renamed `batch_planner.rs` in #363,
+// which ended those collisions); kept so the decision ids below stay stable.
 fn compute_window(
     func: WindowFunc,
     offset: Option<i64>,
@@ -1903,9 +1903,9 @@ fn compute_window(
     for key in &partition_order {
         let mut indices = partitions[key].clone();
         indices.sort_by(|&a, &b| {
-            // #263: keep this loop on its own line -- otherwise its
-            // decision collides on line number (basename+line id) with
-            // an unrelated one in src/codegen/batch.rs.
+            // #263: kept on its own line -- originally so its decision
+            // wouldn't share a basename+line MC/DC id with one in the
+            // pre-#363 src/codegen/batch.rs; left as-is for stable ids.
             for (col, descending) in order_cols {
                 let ord = compare_for_order(&col[a], &col[b], *descending);
                 // #307: line-shift buffer to avoid an MC/DC id collision.
@@ -2190,9 +2190,9 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
         // `Null`); the same semantics here keep this match total without
         // an `unreachable!` the qualified subset forbids.
         MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),
-        // #262: keep this on its own line -- collides on line number
-        // (basename+line id) with an unrelated decision in
-        // src/codegen/batch.rs otherwise.
+        // #262: kept on its own line -- originally so its decision
+        // wouldn't share a basename+line MC/DC id with one in the
+        // pre-#363 src/codegen/batch.rs; left as-is for stable ids.
         MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),
         MapOp::MaskIf => {
             // MaskIf keeps `a` wherever the predicate register is true.
@@ -2454,7 +2454,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2147__v1_a_null_propagates() {
+    fn mcdc__batch_2160__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2482,7 +2482,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2147__v2_b_null_propagates() {
+    fn mcdc__batch_2160__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2510,7 +2510,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2147__v3_neither_null_computes_result() {
+    fn mcdc__batch_2160__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2538,7 +2538,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2203__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_2224__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2566,7 +2566,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2203__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_2224__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2594,7 +2594,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2203__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_2224__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2622,7 +2622,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2203__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_2224__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(

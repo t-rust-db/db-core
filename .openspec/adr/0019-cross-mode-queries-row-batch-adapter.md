@@ -11,7 +11,7 @@ A cross-mode query joins a **driving** source — stream `.log` (#305's
 **lookup** sides: `.sqlite` tables. Both sides are `vm::batch::Source`s;
 the join itself is `vm::batch`'s existing `HashBuild`/`HashProbe`
 (`src/vm/batch.rs:335-361`), planned by the existing join-side selection
-in `codegen::batch::compile` (`src/codegen/batch.rs:1490-1560`). Batch
+in `codegen::batch::compile` (`src/codegen/batch_planner.rs:1490-1560`). Batch
 mode already joins table to table today — this ADR does not introduce
 joins, it introduces one new piece: a **row→batch adapter**, `impl
 vm::batch::Segment`/`Source` over a SQLite table read through
@@ -67,7 +67,7 @@ cost-based decision: the lookup side is bounded by construction (whole
 table materialized up front), the driving side is not (a live tail is
 unbounded, a `.parquet` scan can be arbitrarily large). `codegen::batch`
 already picks build/probe by which side of a `Join` it resolves as
-"right" (`src/codegen/batch.rs:1490-1545`); cross-mode compilation
+"right" (`src/codegen/batch_planner.rs:1490-1545`); cross-mode compilation
 fixes the lookup side as that right/build side unconditionally, rather
 than exposing it to whatever cost heuristic future table-to-table joins
 might grow.
@@ -109,7 +109,7 @@ family).
   for a materialized SQLite table snapshot, `impl vm::batch::Source`
   driving it from `Engine::tables()` + `engine::row` cursors; the
   `value::Value → vm::batch::Value` conversion.
-- `src/codegen/batch.rs` — extend join-side resolution so a `TableRef`
+- `src/codegen/batch_planner.rs` — extend join-side resolution so a `TableRef`
   naming a `.sqlite` table always resolves to the build side (existing
   `HashBuild`/`HashProbe` machinery, no opcode change).
 - No `src/parser` change (see Grammar, above).
