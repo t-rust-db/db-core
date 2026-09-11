@@ -338,3 +338,44 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#299 MC/DC backfill).
+
+    use super::SyslogParser;
+
+    // syslog_209: `month == 0 || month > 12 || day == 0 || day > 31`
+    #[test]
+    fn mcdc__syslog_209__v1_month_zero() {
+        let p = SyslogParser::with_year(2026);
+        assert_eq!(p.to_epoch_nanos(0, 1, 0, 0, 0), None);
+    }
+
+    #[test]
+    fn mcdc__syslog_209__v2_month_over_twelve() {
+        let p = SyslogParser::with_year(2026);
+        assert_eq!(p.to_epoch_nanos(13, 1, 0, 0, 0), None);
+    }
+
+    #[test]
+    fn mcdc__syslog_209__v3_day_zero() {
+        let p = SyslogParser::with_year(2026);
+        assert_eq!(p.to_epoch_nanos(1, 0, 0, 0, 0), None);
+    }
+
+    #[test]
+    fn mcdc__syslog_209__v4_day_over_thirty_one() {
+        let p = SyslogParser::with_year(2026);
+        assert_eq!(p.to_epoch_nanos(1, 32, 0, 0, 0), None);
+    }
+
+    #[test]
+    fn mcdc__syslog_209__v5_all_false_is_valid() {
+        let p = SyslogParser::with_year(2026);
+        assert!(p.to_epoch_nanos(1, 1, 0, 0, 0).is_some());
+    }
+}

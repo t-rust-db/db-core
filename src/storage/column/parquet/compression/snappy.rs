@@ -202,3 +202,33 @@ mod tests {
         assert!(matches!(err, SnappyError::InvalidCopyOffset));
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case, clippy::unwrap_used)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#299 MC/DC backfill).
+
+    use super::copy_from_offset;
+
+    // snappy_149: `offset == 0 || offset > out.len()`
+    #[test]
+    fn mcdc__snappy_149__v1_offset_zero() {
+        let mut out = vec![b'a', b'b'];
+        assert!(copy_from_offset(&mut out, 0, 1).is_err());
+    }
+
+    #[test]
+    fn mcdc__snappy_149__v2_offset_beyond_out_len() {
+        let mut out = vec![b'a', b'b'];
+        assert!(copy_from_offset(&mut out, 3, 1).is_err());
+    }
+
+    #[test]
+    fn mcdc__snappy_149__v3_offset_within_range_succeeds() {
+        let mut out = vec![b'a', b'b'];
+        assert!(copy_from_offset(&mut out, 2, 1).is_ok());
+        assert_eq!(out, vec![b'a', b'b', b'a']);
+    }
+}

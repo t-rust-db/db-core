@@ -213,3 +213,71 @@ mod tests {
         assert_eq!(ring.len(), 2);
     }
 }
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#299 MC/DC backfill).
+
+    use super::Ring;
+    use crate::storage::stream::segment::Segment;
+    use crate::storage::stream::{Block, Source, SourceKind, SyslogParser};
+    use std::sync::Arc;
+
+    fn make_seg(off: u64, secs: u32, n: usize) -> Arc<Segment> {
+        let mut text = String::new();
+        for i in 0..n {
+            text.push_str(&format!(
+                "<134>Sep 10 08:00:{secs:02} h app[{i}]: msg {i}\n"
+            ));
+        }
+        let b = Block {
+            file_off: off,
+            bytes: Arc::from(text.as_bytes()),
+        };
+        let mut v = Segment::seal_block(
+            &b,
+            &Source::new(SourceKind::File, "t"),
+            &SyslogParser::with_year(2026),
+            0,
+        );
+        Arc::new(v.remove(0))
+    }
+
+    // ring_121: `self.bytes > self.budget && self.segs.len() > 1`
+    #[test]
+    fn mcdc__ring_121__v1_both_true_evicts() {
+        let a = make_seg(0, 1, 10);
+        let size = a.byte_len();
+        let mut ring = Ring::new(size + 1);
+        ring.push_head(a);
+        // Pushing a second segment makes bytes > budget (true) and
+        // segs.len() > 1 (true) -- both leafs true, so it evicts.
+        let ev = ring.push_head(make_seg(1000, 2, 10));
+        assert_eq!(ev.len(), 1);
+    }
+
+    #[test]
+    fn mcdc__ring_121__v2_bytes_not_over_budget_no_eviction() {
+        let a = make_seg(0, 1, 10);
+        let size = a.byte_len();
+        let mut ring = Ring::new(size * 10);
+        ring.push_head(a);
+        // bytes > budget is false (plenty of room) regardless of len(),
+        // so no eviction happens.
+        let ev = ring.push_head(make_seg(1000, 2, 10));
+        assert!(ev.is_empty());
+    }
+
+    #[test]
+    fn mcdc__ring_121__v3_over_budget_but_single_segment_kept() {
+        let mut ring = Ring::new(1);
+        // bytes > budget is true (any segment exceeds budget of 1 byte),
+        // but segs.len() > 1 is false (only one segment held) -- the
+        // single head segment is always kept.
+        let ev = ring.push_head(make_seg(0, 1, 10));
+        assert!(ev.is_empty());
+    }
+}
