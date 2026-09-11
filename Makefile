@@ -126,7 +126,7 @@ check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see
 # nothing else). `--all-features` hides a missing implication; a consumer
 # enabling one feature finds it. 0.78.0 shipped `storage-row` without
 # `parser-row` this way.
-FEATURES := storage-row storage-column storage-stream engine-row engine-column parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
+FEATURES := storage-row storage-column storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
 
 check-features: ## Each Cargo feature builds standalone (cargo check --no-default-features --features X)
 	@for f in $(FEATURES); do \
@@ -202,7 +202,7 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # implementors of that same ADR 0008 boundary -- they hand `Box<dyn
 # CursorFactory>`/`Box<dyn Transaction>`/`Box<dyn SchemaStorage>` to the Vm
 # and hold `Rc<dyn PageSource>`. Same exemption, same reason, as vm.rs.
-MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/column/parquet/* src/storage/column/parquet/compression/* src/storage/stream/*
+MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/column/parquet/* src/storage/column/parquet/compression/* src/storage/stream/* src/engine/stream.rs
 
 check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
 	@command -v cargo-mvl-limit >/dev/null 2>&1 || { \
@@ -231,6 +231,7 @@ perf: ## Run the parser/codegen/vm_opcodes benchmarks (report only, not a CI gat
 	cargo bench --bench parser
 	cargo bench --bench codegen
 	cargo bench --bench vm_opcodes
+	cargo bench --bench stream_materialize
 
 BENCH ?= codegen
 

@@ -225,10 +225,20 @@ Storage mechanisms and their references:
 
 ## Consequences
 
-- Dictionary → `vm::batch::Value::Str` materialization per row is the
-  performance frontier. It is measured before it is optimized; the fix,
-  if one is needed, is a dictionary column variant in `Batch`, not a
-  stream-specific value model (ADR 0010, ADR 0014).
+- Materialization into `vm::batch::Value` per row is the performance
+  frontier, and it is measured (`benches/stream_materialize.rs`, release
+  build, 4096-line segments, Apple silicon): sealing a block parses at
+  ~6 M rows/s; loading `severity` + `facility` runs at ~690 M rows/s
+  (integers and `&'static str` dictionaries — no allocation); loading all
+  columns including `message`, `raw` and Tier-3 strings runs at ~7 M
+  rows/s (one `String` per cell — the 100× tax); a `count(*) WHERE
+  severity >= 13` over 262 k rows completes in ~0.6 ms (~430 M rows/s).
+  So filtering on typed and dictionary columns is effectively free and
+  the cost is entirely in string-column allocation. The fix, when a
+  workload needs it, is a borrowed or dictionary column variant in
+  `Batch`, not a stream-specific value model (ADR 0010, ADR 0014);
+  projection pushdown (`columns_to_load`) already keeps unneeded string
+  columns out of the hot path.
 - The head segment re-materializes on every refresh; refresh rate is
   capped (OpenSearch's 1 s default exists for this reason).
 - Alerts need no server: a standing query is a compiled program plus an

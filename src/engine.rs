@@ -36,6 +36,9 @@ pub mod row;
 #[cfg(feature = "engine-column")]
 pub mod column;
 
+#[cfg(feature = "engine-stream")]
+pub mod stream;
+
 /// Which execution mode an engine drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -335,7 +338,11 @@ pub trait Engine {
 
 /// `explain_*` (and the batch engine's `run_query`) take exactly one
 /// statement: split on top-level `;`, accept one, reject none or several.
-#[cfg(any(feature = "engine-row", feature = "engine-column"))]
+#[cfg(any(
+    feature = "engine-row",
+    feature = "engine-column",
+    feature = "engine-stream"
+))]
 pub(crate) fn single_statement(sql: &str) -> Result<String, EngineError> {
     let mut stmts = crate::parser::row::tokenizer::split_statements(sql).into_iter();
     match (stmts.next(), stmts.next()) {
