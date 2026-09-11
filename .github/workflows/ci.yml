@@ -3,8 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - ".openspec/**"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - ".openspec/**"
 
 env:
   # cargo-mvl-limit is not published to crates.io, so the qualified-subset
