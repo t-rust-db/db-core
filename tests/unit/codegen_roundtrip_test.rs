@@ -383,3 +383,142 @@ fn scalar_subquery_may_project_a_computed_expression() {
     );
     assert_eq!(rows, vec![ints(&[4])]);
 }
+
+// ---------------------------------------------------------------------
+// #376: non-recursive `WITH` clause, rewritten away before codegen
+// (`codegen::row::subquery::cte`).
+// ---------------------------------------------------------------------
+
+#[test]
+fn with_clause_cte_referenced_once() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "WITH big AS (SELECT a FROM t WHERE a > 1) SELECT a FROM big",
+        vec![(1, ints(&[1])), (2, ints(&[2])), (3, ints(&[3]))],
+    );
+    assert_eq!(rows, vec![ints(&[2]), ints(&[3])]);
+}
+
+#[test]
+fn with_clause_cte_referenced_without_explicit_alias_keeps_cte_name() {
+    // `FROM big` (no `AS b`) still resolves `big.a` against the CTE's
+    // own name -- `substitute_table_ref` defaults the alias to it.
+    let rows = run(
+        &[schema("t", &["a"])],
+        "WITH big AS (SELECT a FROM t) SELECT big.a FROM big WHERE big.a > 1",
+        vec![(1, ints(&[1])), (2, ints(&[2]))],
+    );
+    assert_eq!(rows, vec![ints(&[2])]);
+}
+
+#[test]
+fn with_clause_later_cte_may_reference_an_earlier_one() {
+    // `evens` materializes `t` once; `big_evens` materializes `evens`
+    // (itself a subquery over `t`) again, so `t` ends up scanned by two
+    // separate `OpenRead`s -- unlike this file's other `run()`-based
+    // tests, the base table isn't necessarily cursor 0.
+    let schemas = [schema("t", &["a"])];
+    let program = compile_statement(
+        "WITH \
+           evens AS (SELECT a FROM t WHERE a % 2 = 0), \
+           big_evens AS (SELECT a FROM evens WHERE a > 2) \
+         SELECT a FROM big_evens",
+        &schemas,
+        &[],
+    )
+    .unwrap();
+
+    let mut vm = Vm::new();
+    for instr in &program.instructions {
+        if instr.opcode == Opcode::OpenRead {
+            let mut t = EphemeralTableCursor::new();
+            for (rowid, values) in [
+                (1, ints(&[1])),
+                (2, ints(&[2])),
+                (3, ints(&[4])),
+                (4, ints(&[5])),
+            ] {
+                t.insert(rowid, values);
+            }
+            vm.open_cursor(instr.p1, Box::new(t)).unwrap();
+        }
+    }
+    let rows = execute(&mut vm, &program).unwrap();
+    assert_eq!(rows, vec![ints(&[4])]);
+}
+
+#[test]
+fn with_clause_applies_explicit_column_aliases() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "WITH renamed(x) AS (SELECT a FROM t) SELECT x FROM renamed WHERE x > 1",
+        vec![(1, ints(&[1])), (2, ints(&[2]))],
+    );
+    assert_eq!(rows, vec![ints(&[2])]);
+}
+
+#[test]
+fn with_clause_mismatched_column_alias_count_leaves_natural_names() {
+    // `apply_column_aliases` only renames a same-length, all-`Expr`
+    // result list; a mismatched count is left alone, so the CTE is
+    // still queryable, just under its query's own column name.
+    let rows = run(
+        &[schema("t", &["a"])],
+        "WITH renamed(x, y) AS (SELECT a FROM t) SELECT a FROM renamed",
+        vec![(1, ints(&[5]))],
+    );
+    assert_eq!(rows, vec![ints(&[5])]);
+}
+
+#[test]
+fn with_clause_over_a_union_all_compound_substitutes_every_arm() {
+    // Each `UNION ALL` arm has its own `FROM cte` reference --
+    // `substitute_cte_refs` walks `select.compound` as well as the main
+    // query's own `FROM`, so both arms resolve `big`.
+    let schemas = [schema("t", &["a"])];
+    let program = compile_statement(
+        "WITH big AS (SELECT a FROM t WHERE a > 1) \
+         SELECT a FROM big UNION ALL SELECT a FROM big WHERE a > 2",
+        &schemas,
+        &[],
+    )
+    .unwrap();
+
+    let mut vm = Vm::new();
+    for instr in &program.instructions {
+        if instr.opcode == Opcode::OpenRead {
+            let mut t = EphemeralTableCursor::new();
+            for (rowid, values) in [(1, ints(&[1])), (2, ints(&[2])), (3, ints(&[3]))] {
+                t.insert(rowid, values);
+            }
+            vm.open_cursor(instr.p1, Box::new(t)).unwrap();
+        }
+    }
+    let rows = execute(&mut vm, &program).unwrap();
+    assert_eq!(rows, vec![ints(&[2]), ints(&[3]), ints(&[3])]);
+}
+
+#[test]
+fn with_clause_shadows_a_real_table_of_the_same_name() {
+    // The CTE `t` shadows the real table `t` for this statement only --
+    // `substitute_table_ref` rewrites the `FROM t` reference to the
+    // CTE's own (filtered) body rather than the real table.
+    let rows = run(
+        &[schema("t", &["a"])],
+        "WITH t AS (SELECT a FROM t WHERE a > 1) SELECT a FROM t",
+        vec![(1, ints(&[1])), (2, ints(&[2])), (3, ints(&[3]))],
+    );
+    assert_eq!(rows, vec![ints(&[2]), ints(&[3])]);
+}
+
+#[test]
+fn without_a_with_clause_the_query_still_compiles() {
+    // `expand_with_clause`'s `Cow::Borrowed` fast path for a `Select`
+    // with no `WITH` clause at all.
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT a FROM t WHERE a > 1",
+        vec![(1, ints(&[1])), (2, ints(&[2]))],
+    );
+    assert_eq!(rows, vec![ints(&[2])]);
+}

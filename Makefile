@@ -85,6 +85,11 @@ test-mcdc: mcdc-obligations ## MC/DC dashboard for all of src/; fails if any mul
 
 COVERAGE_MIN := 80
 
+# hash.rs (#570) is a spike kept intact but deliberately unwired from GROUP
+# BY dispatch (#631, see entry.rs) -- production code never calls it, so
+# covering it would mean testing the dispatch decision, not the code.
+COVERAGE_EXCLUDE_REGEX := codegen/row/select/aggregate/hash\.rs
+
 coverage: ## Line coverage report over the library + tests/unit (cargo-llvm-cov); spikes excluded
 	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
 		echo "cargo-llvm-cov not found — install with: cargo install cargo-llvm-cov --locked"; \
@@ -96,8 +101,8 @@ coverage: ## Line coverage report over the library + tests/unit (cargo-llvm-cov)
 	# instead of plain `cargo test`.
 	cargo llvm-cov clean --workspace
 	cargo llvm-cov --locked --all-features --no-report --lib $(NON_SPIKE_TESTS)
-	cargo llvm-cov report
-	cargo llvm-cov report --json --output-path target/llvm-cov.json
+	cargo llvm-cov report --ignore-filename-regex '$(COVERAGE_EXCLUDE_REGEX)'
+	cargo llvm-cov report --ignore-filename-regex '$(COVERAGE_EXCLUDE_REGEX)' --json --output-path target/llvm-cov.json
 
 check-coverage: coverage ## Gate: fail if line coverage is below $(COVERAGE_MIN)%
 	@python3 -c "import json, sys; \
