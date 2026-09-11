@@ -228,6 +228,13 @@ check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the
 # documented; this proves the *set* of `pub` items doesn't grow without a
 # reviewed diff, the same "committed evidence, regenerable on demand" split
 # `tests/mcdc/obligations.json` uses above. Needs nightly (rustdoc JSON).
+#
+# CI (`ubuntu-latest`) is the authoritative environment for this snapshot.
+# `src/storage/row/vfs/fcntl.rs::fsync` is `cfg(target_os = "macos")`-only
+# (#652), so `make public-api` run on macOS adds that one line spuriously;
+# `make check-public-api-fresh` on a non-Linux host will likewise report
+# false drift. Regenerate on Linux (or let the CI job's diff tell you
+# exactly what changed and hand-edit) if you're not on Linux.
 define RENDER_PUBLIC_API
 	echo "# db-core public API"; \
 	echo; \
@@ -237,7 +244,9 @@ define RENDER_PUBLIC_API
 	echo "public-api\` whenever a change adds, removes, or changes the signature of a"; \
 	echo "\`pub\` item; \`make check-public-api-fresh\` (part of \`make ci\`) fails the"; \
 	echo "build if this file is stale, so a public API change without a regenerated"; \
-	echo "snapshot is a build failure, not a silent widening."; \
+	echo "snapshot is a build failure, not a silent widening. **Regenerate on"; \
+	echo "Linux** -- \`fcntl::fsync\` is macOS-only (#652), so a macOS run adds it"; \
+	echo "spuriously; CI (ubuntu-latest) is the authoritative environment."; \
 	echo; \
 	echo '```text'; \
 	cargo +nightly public-api --all-features -ss 2>/dev/null; \
