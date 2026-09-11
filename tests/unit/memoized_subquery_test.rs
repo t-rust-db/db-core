@@ -134,6 +134,108 @@ fn a_probe_value_absent_from_the_subquery_never_caches_a_false_match() {
 }
 
 #[test]
+fn correlation_detection_walks_between_in_like_and_case_inside_the_subquery() {
+    // Each subquery below correlates its WHERE clause against
+    // `outer_t.k` through a different `collect_correlated_column`
+    // traversal arm (BETWEEN, IN, LIKE, CASE, a unary/paren wrapper),
+    // not the plain `Binary` equality the other tests use.
+    let (_db, mut e) = seeded("traversal-arms");
+    let rows = e
+        .run_query(
+            "SELECT tag FROM outer_t \
+             WHERE outer_t.k = (SELECT k FROM bound WHERE bound.k BETWEEN outer_t.k AND outer_t.k) \
+             ORDER BY tag",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(
+        rows,
+        vec![
+            vec![Cell::Text("a".into())],
+            vec![Cell::Text("b".into())],
+            vec![Cell::Text("c".into())],
+        ]
+    );
+
+    let rows = e
+        .run_query(
+            "SELECT tag FROM outer_t \
+             WHERE outer_t.k = (SELECT k FROM bound WHERE bound.k IN (outer_t.k)) \
+             ORDER BY tag",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(
+        rows,
+        vec![
+            vec![Cell::Text("a".into())],
+            vec![Cell::Text("b".into())],
+            vec![Cell::Text("c".into())],
+        ]
+    );
+
+    let rows = e
+        .run_query(
+            "SELECT tag FROM outer_t \
+             WHERE outer_t.k = (SELECT k FROM bound WHERE CAST(bound.k AS INTEGER) = -(-outer_t.k)) \
+             ORDER BY tag",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(
+        rows,
+        vec![
+            vec![Cell::Text("a".into())],
+            vec![Cell::Text("b".into())],
+            vec![Cell::Text("c".into())],
+        ]
+    );
+
+    let rows = e
+        .run_query(
+            "SELECT tag FROM outer_t \
+             WHERE outer_t.k = (SELECT k FROM bound WHERE \
+                CASE WHEN bound.k = outer_t.k THEN 1 ELSE 0 END = 1) \
+             ORDER BY tag",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(
+        rows,
+        vec![
+            vec![Cell::Text("a".into())],
+            vec![Cell::Text("b".into())],
+            vec![Cell::Text("c".into())],
+        ]
+    );
+}
+
+#[test]
+fn a_subquery_correlated_against_two_distinct_outer_columns_is_not_memoized_but_still_correct() {
+    // `collect_correlated_column` sets `ambiguous` on a *second*
+    // distinct outer column -- `subquery_memoizable` then returns
+    // `None`, so this falls back to `compile_scalar_subquery`'s
+    // ordinary per-row path. Still has to answer correctly.
+    let db = TempDb::new("two-outer-cols");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE tc_outer(k INTEGER, j INTEGER); \
+         CREATE TABLE tc_bound(k INTEGER, j INTEGER, v INTEGER); \
+         INSERT INTO tc_outer VALUES (1, 2); \
+         INSERT INTO tc_bound VALUES (1, 2, 100)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query(
+            "SELECT tc_outer.k FROM tc_outer \
+             WHERE 100 = (SELECT v FROM tc_bound WHERE tc_bound.k = tc_outer.k AND tc_bound.j = tc_outer.j)",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(rows, vec![vec![Cell::Int(1)]]);
+}
+
+#[test]
 fn memoized_subquery_result_is_correct_across_many_repeated_probes() {
     // A larger repeat count than the two-row case above, to exercise
     // more than a single cache hit per distinct value.
