@@ -135,14 +135,12 @@ impl SyslogParser {
         Some((pri, rest))
     }
 
-    /// Parse BSD timestamp (e.g., "Sep  9 14:23:01"), returning (nanos, rest).
+    /// Parse BSD timestamp (e.g., "Sep  9 14:23:01" or "Sep 9 14:23:01"), returning (nanos, rest).
+    ///
+    /// RFC 3164 space-pads the day to two characters (`Sep  9`), but many emitters write an
+    /// unpadded single digit (`Sep 9`) instead. Rather than assume a fixed-width prefix, this
+    /// walks the timestamp token by token so both forms parse to the same offset for hostname.
     fn parse_timestamp<'a>(&self, s: &'a str) -> (Option<i64>, &'a str) {
-        // Expected format: "Mmm dd HH:MM:SS " or "Mmm  d HH:MM:SS "
-        // Minimum: "Jan  1 00:00:00 " = 16 chars
-        if s.len() < 16 {
-            return (None, s);
-        }
-
         let month_str = s.get(..3).unwrap_or("");
         let month = match month_str {
             "Jan" => 1,
@@ -160,15 +158,26 @@ impl SyslogParser {
             _ => return (None, s),
         };
 
-        // Day: chars 4-5, may have leading space
-        let day_str = s.get(4..6).unwrap_or("").trim();
+        // Skip the run of spaces after the month (one or two, per RFC 3164 padding).
+        let after_month = s.get(3..).unwrap_or("");
+        let day_start = after_month
+            .len()
+            .saturating_sub(after_month.trim_start_matches(' ').len());
+        let after_month_spaces = after_month.get(day_start..).unwrap_or("");
+
+        // Day: 1-2 digits, followed by a space.
+        let day_end = after_month_spaces
+            .find(' ')
+            .unwrap_or(after_month_spaces.len());
+        let day_str = after_month_spaces.get(..day_end).unwrap_or("");
         let day: u32 = match day_str.parse() {
             Ok(d) => d,
             Err(_) => return (None, s),
         };
 
-        // Time: HH:MM:SS at chars 7-14
-        let time_str = s.get(7..15).unwrap_or("");
+        // Time: "HH:MM:SS" after the space following the day.
+        let after_day = after_month_spaces.get(day_end..).unwrap_or("").trim_start();
+        let time_str = after_day.get(..8).unwrap_or("");
         let (hour, minute, second) = match self.parse_time(time_str) {
             Some(t) => t,
             None => return (None, s),
@@ -177,8 +186,8 @@ impl SyslogParser {
         // Convert to nanos since epoch (simplified, ignores timezone)
         let timestamp_ns = self.to_epoch_nanos(month, day, hour, minute, second);
 
-        // Rest starts after the space following the timestamp
-        let rest = s.get(16..).unwrap_or("").trim_start();
+        // Rest starts after the timestamp and any following space.
+        let rest = after_day.get(8..).unwrap_or("").trim_start();
         (timestamp_ns, rest)
     }
 
@@ -307,6 +316,40 @@ mod tests {
         assert_eq!(batch.severity.first(), Some(&Some(Severity::Info))); // PRI 134 = facility 16 * 8 + severity 6
         assert_eq!(batch.message.first(), Some(&Some("GET /api/health 200")));
         assert_eq!(batch.resource.hostname.as_deref(), Some("webserver"));
+    }
+
+    #[test]
+    fn parse_single_digit_day_unpadded() {
+        // Same line as `parse_basic_syslog` but with an unpadded single-digit day
+        // ("Sep 9" instead of "Sep  9"), as emitted by loglume's gen_syslog.py.
+        let parser = SyslogParser::with_year(2024);
+        let source = Source::new(SourceKind::File, "/var/log/test.log");
+        let input = b"<134>Sep 9 14:23:01 webserver nginx[1234]: GET /api/health 200\n";
+
+        let (batch, consumed) = parser.parse_batch(source, input, 10);
+
+        assert_eq!(batch.len(), 1);
+        assert_eq!(consumed, input.len());
+        assert_eq!(batch.severity.first(), Some(&Some(Severity::Info)));
+        assert_eq!(batch.message.first(), Some(&Some("GET /api/health 200")));
+        assert_eq!(batch.resource.hostname.as_deref(), Some("webserver"));
+    }
+
+    #[test]
+    fn parse_padded_and_unpadded_day_agree_on_timestamp() {
+        let parser = SyslogParser::with_year(2024);
+        let source = Source::new(SourceKind::File, "/var/log/test.log");
+        let padded = b"<134>Sep  9 14:23:01 web app: hi\n";
+        let unpadded = b"<134>Sep 9 14:23:01 web app: hi\n";
+
+        let (padded_batch, _) = parser.parse_batch(source.clone(), padded, 10);
+        let (unpadded_batch, _) = parser.parse_batch(source, unpadded, 10);
+
+        assert!(padded_batch.timestamp_ns.first().unwrap().is_some());
+        assert_eq!(
+            padded_batch.timestamp_ns.first(),
+            unpadded_batch.timestamp_ns.first()
+        );
     }
 
     #[test]
