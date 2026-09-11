@@ -55,6 +55,11 @@ path = "tests/unit/engine_stream_windows_test.rs"
 required-features = ["engine-stream"]
 
 [[test]]
+name = "unit_engine_stream_standing_queries"
+path = "tests/unit/engine_stream_standing_queries_test.rs"
+required-features = ["engine-stream", "storage-test-support"]
+
+[[test]]
 name = "unit_engine_public_api"
 path = "tests/unit/engine_public_api_test.rs"
 required-features = ["engine-row"]

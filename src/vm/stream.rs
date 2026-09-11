@@ -1,9 +1,9 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
 //! `vm::stream` -- the opcodes `vm::batch` has no notion of (ADR 0018
-//! §Opcodes). `Prune` (segment selection before any row is materialized)
-//! and `Window`/`RangeAgg`/`Watermark` (#308, range-vector aggregation)
-//! are implemented; `Emit`/standing queries are #309.
+//! §Opcodes). `Prune` (segment selection before any row is materialized),
+//! `Window`/`RangeAgg`/`Watermark` (#308, range-vector aggregation), and
+//! `Emit` (#309, standing-query fire modes) are implemented.
 //!
 //! A stream [`Program`] is a prologue (`Prune`) around a `Body` reused
 //! verbatim from [`crate::vm::batch`], plus an optional epilogue
@@ -168,6 +168,69 @@ pub type EpilogueRow = (i64, Value);
 
 /// One windowed result: `(window_start_ns, reduced_value)`.
 pub type WindowResult = (i64, Value);
+
+/// A standing query's fire mode (ADR 0018 §Opcodes: "standing-query
+/// output; alerts are `OnChange`/`Threshold` on a result set"). Unlike
+/// every other type in this module, `Emit` is not executed by any VM --
+/// `codegen::stream` never emits it as part of a `Program`. It is a plain
+/// data type consumed by `engine::stream::StandingQuery::poll`, which
+/// decides whether a re-evaluated result set constitutes a fire: that
+/// decision needs the *previous* poll's state (last-fired rows, how long
+/// a threshold has held), which is exactly the kind of long-lived,
+/// query-external state neither `vm::batch::Vm` nor this module's own
+/// `run_epilogue` carry between calls.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EmitMode {
+    /// Every poll fires with the current result set -- no transition
+    /// tracking, included for symmetry with the ADR's enum rather than
+    /// because it does anything `StreamEngine::run_query` doesn't already
+    /// do on its own.
+    Rows,
+    /// Fires only when the result set differs from the last-fired one
+    /// (Loki ruler / swatchdog semantics) -- not on every poll where it
+    /// happens to still be the same.
+    OnChange,
+    /// Fires when a range-vector query's single reduced value crosses
+    /// `op`/`threshold` and stays crossed for at least the standing
+    /// query's `for_duration` -- Loki ruler's `for:` field. A comparison
+    /// against a constant, not an arbitrary `parser::ast::Expr`: every
+    /// range-vector query (#308) already reduces to one scalar per
+    /// window, so `lhs OP threshold_literal` is the entire expressive
+    /// range a threshold alert needs, and evaluating it needs no scalar
+    /// expression VM (`vm::batch`'s own expression opcodes are compiled
+    /// against a batch of rows, not a single already-reduced value).
+    Threshold {
+        /// The comparison applied to the reduced value.
+        op: crate::parser::ast::BinaryOp,
+        /// The constant compared against.
+        threshold: f64,
+    },
+}
+
+/// Whether `value` satisfies `op`/`threshold` (`EmitMode::Threshold`).
+/// `Value::Null` or a non-numeric value never satisfies any comparison,
+/// matching SQL's three-valued-logic convention that `NULL <op> x` is
+/// neither true nor false.
+#[must_use]
+pub fn threshold_holds(op: crate::parser::ast::BinaryOp, threshold: f64, value: &Value) -> bool {
+    use crate::parser::ast::BinaryOp;
+    let Some(v) = value.as_f64() else {
+        return false;
+    };
+    match op {
+        BinaryOp::Eq => v == threshold,
+        BinaryOp::Ne => v != threshold,
+        BinaryOp::Lt => v < threshold,
+        BinaryOp::Le => v <= threshold,
+        BinaryOp::Gt => v > threshold,
+        BinaryOp::Ge => v >= threshold,
+        // Every other `BinaryOp` (`AND`/`OR`/arithmetic/`||`/bitwise) is
+        // not a comparison and cannot appear here: `EmitMode::Threshold`
+        // is only ever constructed by `StandingQuery::new`, which rejects
+        // anything but the six comparison operators above.
+        _ => false,
+    }
+}
 
 /// Buckets `rows` into `epilogue.window`-wide tumbling windows keyed by
 /// event timestamp, reduces each bucket with `epilogue.func`, and
@@ -351,5 +414,14 @@ mod tests {
             run_epilogue(&[], &epilogue(RangeAggFunc::Count, 10, 0)),
             (Vec::new(), Vec::new())
         );
+    }
+
+    #[test]
+    fn threshold_holds_compares_the_reduced_value_against_the_constant() {
+        use crate::parser::ast::BinaryOp;
+        assert!(threshold_holds(BinaryOp::Gt, 100.0, &Value::Int(150)));
+        assert!(!threshold_holds(BinaryOp::Gt, 100.0, &Value::Int(50)));
+        assert!(threshold_holds(BinaryOp::Le, 100.0, &Value::Float(100.0)));
+        assert!(!threshold_holds(BinaryOp::Gt, 100.0, &Value::Null));
     }
 }
