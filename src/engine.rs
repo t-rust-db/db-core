@@ -47,6 +47,18 @@ pub mod stream;
 #[cfg(all(feature = "engine-row", feature = "vm-batch"))]
 pub mod cross_mode;
 
+/// Cross-mode query resolver (#342, epic #317): routes a `SELECT` whose
+/// `FROM`/`JOIN` spans the stream table `log` and a SQLite lookup table to
+/// [`cross_mode`], `codegen::batch::compile_join` and
+/// `vm::engine::run_join_segments`. A sibling seam like `cross_mode`, for
+/// the same layer-isolation reason (ADR 0000 §(c)).
+#[cfg(all(
+    feature = "engine-row",
+    feature = "engine-stream",
+    feature = "vm-batch"
+))]
+pub mod resolve;
+
 /// Which execution mode an engine drives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
