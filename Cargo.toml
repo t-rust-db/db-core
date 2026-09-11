@@ -35,6 +35,11 @@ path = "tests/unit/index_seek_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_index_ordered_scan"
+path = "tests/unit/index_ordered_scan_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_engine_column_public_api"
 path = "tests/unit/engine_column_public_api_test.rs"
 required-features = ["engine-column"]
