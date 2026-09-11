@@ -147,6 +147,20 @@ impl Severity {
         }
     }
 
+    /// Parse a Bunyan/Pino numeric level (10/20/30/40/50/60).
+    #[must_use]
+    pub const fn from_number(n: i64) -> Option<Self> {
+        match n {
+            10 => Some(Self::Trace),
+            20 => Some(Self::Debug),
+            30 => Some(Self::Info),
+            40 => Some(Self::Warn),
+            50 => Some(Self::Error),
+            60 => Some(Self::Fatal),
+            _ => None,
+        }
+    }
+
     /// Parse from syslog severity (0-7, where 0 is most severe).
     #[must_use]
     pub fn from_syslog(severity: u8) -> Option<Self> {
@@ -395,6 +409,13 @@ impl<'a> LogBatch<'a> {
             .set_float(name, self.len.saturating_sub(1), value);
     }
 
+    /// Set a boolean field value at the given row index (Tier-3 typed
+    /// column, e.g. JSONL's bare boolean values).
+    pub fn set_field_bool(&mut self, name: &str, value: bool) {
+        self.fields
+            .set_bool(name, self.len.saturating_sub(1), value);
+    }
+
     /// Get the raw line at index (returns empty slice if out of bounds).
     #[must_use]
     pub fn raw_line(&self, index: usize) -> &'a [u8] {
@@ -582,6 +603,27 @@ impl<'a> FieldColumn<'a> {
         }
     }
 
+    /// Push a boolean value, handling type conflicts (degrade to `Str`). See
+    /// [`Self::push_int`] for the conflict-handling rationale.
+    fn push_bool(&mut self, value: Option<bool>) {
+        match self {
+            Self::Bool(v) => v.push(value),
+            Self::Dict { dict, .. } if dict.is_empty() => {
+                let len = self.len();
+                *self = Self::Bool({
+                    let mut v = vec![None; len];
+                    v.push(value);
+                    v
+                });
+            }
+            _ => {
+                let mut strs = self.decode_to_str();
+                strs.push(None);
+                *self = Self::Str(strs);
+            }
+        }
+    }
+
     /// Null-pad via [`Self::push_int`] (a plain `fn`, for use as a function
     /// pointer where a null-padding closure is needed).
     fn push_int_null(&mut self) {
@@ -591,6 +633,11 @@ impl<'a> FieldColumn<'a> {
     /// Null-pad via [`Self::push_float`]. See [`Self::push_int_null`].
     fn push_float_null(&mut self) {
         self.push_float(None);
+    }
+
+    /// Null-pad via [`Self::push_bool`]. See [`Self::push_int_null`].
+    fn push_bool_null(&mut self) {
+        self.push_bool(None);
     }
 
     /// Number of rows.
@@ -687,6 +734,17 @@ impl<'a> FieldStore<'a> {
             row,
             |col| col.push_float(Some(value)),
             FieldColumn::push_float_null,
+        );
+    }
+
+    /// Set a boolean field value at the given row index. See
+    /// [`FieldColumn::push_bool`] for type-conflict handling.
+    pub fn set_bool(&mut self, name: &str, row: usize, value: bool) {
+        self.set_typed(
+            name,
+            row,
+            |col| col.push_bool(Some(value)),
+            FieldColumn::push_bool_null,
         );
     }
 

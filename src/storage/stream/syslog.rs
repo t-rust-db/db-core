@@ -63,7 +63,7 @@ impl SyslogParser {
     }
 
     /// Parse a single syslog line into the batch.
-    fn parse_line<'a>(&self, batch: &mut LogBatch<'a>, line: &'a [u8]) {
+    pub(crate) fn parse_line<'a>(&self, batch: &mut LogBatch<'a>, line: &'a [u8]) {
         // Try to parse as UTF-8
         let line_str = match std::str::from_utf8(line) {
             Ok(s) => s,
