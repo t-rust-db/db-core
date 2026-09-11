@@ -400,3 +400,56 @@ pub(crate) fn single_statement(sql: &str) -> Result<String, EngineError> {
         )),
     }
 }
+
+#[cfg(all(
+    test,
+    any(
+        feature = "engine-row",
+        feature = "engine-column",
+        feature = "engine-stream"
+    )
+))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mode_display_names_each_variant() {
+        assert_eq!(Mode::Row.to_string(), "row");
+        assert_eq!(Mode::Batch.to_string(), "batch");
+        assert_eq!(Mode::Stream.to_string(), "stream");
+    }
+
+    #[test]
+    fn cell_display_renders_bool_and_blob() {
+        assert_eq!(Cell::Bool(true).to_string(), "1");
+        assert_eq!(Cell::Bool(false).to_string(), "0");
+        assert_eq!(Cell::Blob(vec![0xDE, 0xAD]).to_string(), "X'DEAD'");
+        assert_eq!(Cell::Blob(vec![]).to_string(), "X''");
+    }
+
+    #[test]
+    fn cell_from_a_borrowed_value_matches_the_owned_conversion() {
+        use crate::value::Value;
+        let values = [
+            Value::Null,
+            Value::Integer(7),
+            Value::Real(1.5),
+            Value::Text("hi".to_string().into()),
+            Value::Blob(vec![1, 2, 3].into()),
+        ];
+        for v in values {
+            assert_eq!(Cell::from(&v), Cell::from(v.clone()), "{v:?}");
+        }
+    }
+
+    #[test]
+    fn single_statement_rejects_empty_and_multiple_statements() {
+        let err = single_statement("").unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Parse);
+
+        let err = single_statement("SELECT 1; SELECT 2").unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Unsupported);
+
+        assert_eq!(single_statement("SELECT 1").unwrap(), "SELECT 1");
+    }
+}
