@@ -59,7 +59,7 @@ pub use batch::{
     Facility, FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind,
 };
 pub use clf::ClfParser;
-pub use detect::{detect, parse_detected, Detection, Format};
+pub use detect::{detect, parse_detected, DetectedParser, Detection, Format};
 pub use file::{Block, LogFile, Refresh, BLOCK_SIZE};
 pub use jsonl::JsonlParser;
 pub use logfmt::LogfmtParser;

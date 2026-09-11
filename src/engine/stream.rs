@@ -35,7 +35,7 @@ use crate::storage::stream::adapter::{
     is_predefined, now_ns, ColumnRequest, StreamSegment, TailSource, PREDEFINED_COLUMNS,
 };
 use crate::storage::stream::{
-    LogFile, OwnedColumn, Refresh, Ring, Segment, Source, SourceKind, SyslogParser,
+    detect, DetectedParser, LogFile, OwnedColumn, Refresh, Ring, Segment, Source, SourceKind,
 };
 use crate::vm::stream::{IndexPred, Program, Scope};
 
@@ -56,7 +56,7 @@ pub struct StreamEngine {
     file: LogFile,
     ring: Ring,
     source: Source,
-    parser: SyslogParser,
+    parser: DetectedParser,
     /// Tier-3 names seen in any held segment, in first-seen order.
     fields: Vec<String>,
 }
@@ -81,7 +81,9 @@ impl StreamEngine {
             .read_tail(u64::try_from(budget).unwrap_or(u64::MAX))
             .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", path.display())))?;
         let source = Source::new(SourceKind::File, &path.to_string_lossy());
-        let parser = SyslogParser::new();
+        let sample: &[u8] = blocks.first().map_or(&[], |b| &b.bytes[..]);
+        let detection = detect::detect(sample, detect::DEFAULT_SAMPLE_LINES);
+        let parser = DetectedParser::for_format(detection.format);
         let mut engine = StreamEngine {
             path: path.to_path_buf(),
             file,
@@ -124,6 +126,9 @@ impl StreamEngine {
                 self.fields.clear();
                 let budget = u64::try_from(self.ring.budget()).unwrap_or(u64::MAX);
                 let blocks = self.file.read_tail(budget).map_err(io)?;
+                let sample: &[u8] = blocks.first().map_or(&[], |b| &b.bytes[..]);
+                let detection = detect::detect(sample, detect::DEFAULT_SAMPLE_LINES);
+                self.parser = DetectedParser::for_format(detection.format);
                 Ok(self.seal_all(&blocks))
             }
         }
@@ -185,7 +190,7 @@ impl StreamEngine {
         Ok(TailSource::new(
             file,
             self.source.clone(),
-            SyslogParser::new(),
+            self.parser.clone(),
             columns.to_vec(),
             poll,
             max_idle_polls,

@@ -26,9 +26,9 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use super::detect::DetectedParser;
 use super::file::{LogFile, Refresh};
 use super::segment::{OwnedColumn, Segment};
-use super::syslog::SyslogParser;
 use super::Source;
 use crate::vm::batch::{Batch, Segment as VmSegment, Source as VmSource, Value, VmError};
 
@@ -196,7 +196,7 @@ pub fn now_ns() -> i64 {
 pub struct TailSource {
     file: LogFile,
     source: Source,
-    parser: SyslogParser,
+    parser: DetectedParser,
     columns: Vec<ColumnRequest>,
     poll: Duration,
     max_idle_polls: Option<u32>,
@@ -211,7 +211,7 @@ impl TailSource {
     pub fn new(
         file: LogFile,
         source: Source,
-        parser: SyslogParser,
+        parser: DetectedParser,
         columns: Vec<ColumnRequest>,
         poll: Duration,
         max_idle_polls: Option<u32>,
@@ -287,6 +287,7 @@ impl VmSource for TailSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::stream::syslog::SyslogParser;
     use crate::storage::stream::{Block, SourceKind};
     use std::io::Write;
 
@@ -386,7 +387,7 @@ mod tests {
         let mut src = TailSource::new(
             file,
             Source::new(SourceKind::File, "t"),
-            SyslogParser::with_year(2026),
+            DetectedParser::Syslog(SyslogParser::with_year(2026)),
             vec![ColumnRequest::bare("message")],
             Duration::from_millis(5),
             Some(3),
