@@ -337,6 +337,47 @@ mod tests {
     }
 
     #[test]
+    fn clf_where_status_and_method_runs_through_batch_vm() {
+        use crate::codegen::batch::compile;
+        use crate::parser::column::parse as parse_select;
+        use crate::storage::stream::ClfParser;
+        use crate::vm::batch::run_parallel;
+
+        let text = "1.1.1.1 - - [10/Sep/2026:08:00:00 +0000] \"POST /submit HTTP/1.1\" 500 12 \"-\" \"-\"\n\
+1.1.1.1 - - [10/Sep/2026:08:00:01 +0000] \"GET /health HTTP/1.1\" 200 3 \"-\" \"-\"\n\
+1.1.1.1 - - [10/Sep/2026:08:00:02 +0000] \"POST /submit HTTP/1.1\" 200 5 \"-\" \"-\"\n";
+        let b = Block {
+            file_off: 0,
+            bytes: Arc::from(text.as_bytes()),
+        };
+        let mut segs = Segment::seal_block(
+            &b,
+            &Source::new(SourceKind::File, "access"),
+            &ClfParser::new(),
+            0,
+        );
+        let seg = StreamSegment::new(
+            Arc::new(segs.remove(0)),
+            vec![ColumnRequest::bare("status"), ColumnRequest::bare("method")],
+        );
+
+        let select =
+            parse_select("SELECT status, method FROM log WHERE status >= 500 AND method = 'POST'")
+                .unwrap();
+        let program = compile(&select).unwrap();
+        let opcodes: Vec<_> = program.opcodes().cloned().collect();
+
+        let rows = run_parallel(&[seg], &opcodes).unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "only the first line matches status>=500 AND method='POST'"
+        );
+        assert_eq!(rows[0][0], Value::Int(500));
+        assert_eq!(rows[0][1], Value::Str("POST".into()));
+    }
+
+    #[test]
     fn tail_source_yields_appends_then_stops() {
         let mut p = std::env::temp_dir();
         p.push(format!("db-core-tail-{}.log", std::process::id()));

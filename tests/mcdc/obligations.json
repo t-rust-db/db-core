@@ -12474,73 +12474,199 @@
     "compiler_void": true
   },
   {
-    "id": "batch_358",
+    "id": "batch_375",
     "file": "src/storage/stream/batch.rs",
-    "line": 358,
+    "line": 375,
     "decision": "slot.is_none()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "batch_424",
+    "id": "batch_460",
     "file": "src/storage/stream/batch.rs",
-    "line": 424,
-    "decision": "match self {\n            Self::Dict { dict, indices } => {\n                if let Some(v) = value {\n                    // Look up or insert into dictionary\n                    let idx = dict.iter().position(|&d| d == v);\n                    let idx = match idx {\n                        Some(i) => i,\n                        None => {\n                            if dict.len() >= DICT_CARDINALITY_THRESHOLD {\n                                // Degrade to Str\n                                let mut strs: Vec<Option<&'a str>> =\n                                    Vec::with_capacity(indices.len().saturating_add(1));\n                                for opt_idx in indices.iter() {\n                                    strs.push(\n                                        opt_idx.and_then(|i| dict.get(usize::from(i)).copied()),\n                                    );\n                                }\n                                strs.push(Some(v));\n                                *self = Self::Str(strs);\n                                return;\n                            }\n                            dict.push(v);\n                            dict.len().saturating_sub(1)\n                        }\n                    };\n                    // Safe: idx < DICT_CARDINALITY_THRESHOLD < u16::MAX\n                    #[allow(clippy::cast_possible_truncation)]\n                    indices.push(Some(idx as u16));\n                } else {\n                    indices.push(None);\n                }\n            }\n            Self::Str(strs) => strs.push(value),\n            _ => {} // Type mismatch, ignore\n        }",
+    "line": 460,
+    "decision": "match self {\n            Self::Dict { dict, indices } => {\n                if let Some(v) = value {\n                    // Look up or insert into dictionary\n                    let idx = dict.iter().position(|&d| d == v);\n                    let idx = match idx {\n                        Some(i) => i,\n                        None => {\n                            if dict.len() >= DICT_CARDINALITY_THRESHOLD {\n                                // Degrade to Str\n                                let mut strs: Vec<Option<&'a str>> =\n                                    Vec::with_capacity(indices.len().saturating_add(1));\n                                for opt_idx in indices.iter() {\n                                    strs.push(\n                                        opt_idx.and_then(|i| dict.get(usize::from(i)).copied()),\n                                    );\n                                }\n                                strs.push(Some(v));\n                                *self = Self::Str(strs);\n                                return;\n                            }\n                            dict.push(v);\n                            dict.len().saturating_sub(1)\n                        }\n                    };\n                    // Safe: idx < DICT_CARDINALITY_THRESHOLD < u16::MAX\n                    #[allow(clippy::cast_possible_truncation)]\n                    indices.push(Some(idx as u16));\n                } else {\n                    indices.push(None);\n                }\n            }\n            Self::Str(strs) => strs.push(value),\n            Self::Int(v) if Self::all_none(v) => Self::degrade_typed_to_str(v.len(), value, self),\n            Self::Float(v) if Self::all_none(v) => {\n                Self::degrade_typed_to_str(v.len(), value, self);\n            }\n            Self::Bool(v) if Self::all_none(v) => {\n                Self::degrade_typed_to_str(v.len(), value, self);\n            }\n            // No non-null value has been pushed yet (\"first non-null type\n            // wins\" hasn't decided a type): adopt Str now instead of treating\n            // an all-null typed column as an established conflict.\n            Self::Int(v) => Self::degrade_typed_to_str(v.len(), value, self),\n            Self::Float(v) => Self::degrade_typed_to_str(v.len(), value, self),\n            Self::Bool(v) => Self::degrade_typed_to_str(v.len(), value, self),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_429",
+    "id": "batch_493",
     "file": "src/storage/stream/batch.rs",
-    "line": 429,
+    "line": 493,
+    "decision": "Self::all_none(v)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "batch_494",
+    "file": "src/storage/stream/batch.rs",
+    "line": 494,
+    "decision": "Self::all_none(v)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "batch_497",
+    "file": "src/storage/stream/batch.rs",
+    "line": 497,
+    "decision": "Self::all_none(v)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "batch_465",
+    "file": "src/storage/stream/batch.rs",
+    "line": 465,
     "decision": "match idx {\n                        Some(i) => i,\n                        None => {\n                            if dict.len() >= DICT_CARDINALITY_THRESHOLD {\n                                // Degrade to Str\n                                let mut strs: Vec<Option<&'a str>> =\n                                    Vec::with_capacity(indices.len().saturating_add(1));\n                                for opt_idx in indices.iter() {\n                                    strs.push(\n                                        opt_idx.and_then(|i| dict.get(usize::from(i)).copied()),\n                                    );\n                                }\n                                strs.push(Some(v));\n                                *self = Self::Str(strs);\n                                return;\n                            }\n                            dict.push(v);\n                            dict.len().saturating_sub(1)\n                        }\n                    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_432",
+    "id": "batch_468",
     "file": "src/storage/stream/batch.rs",
-    "line": 432,
+    "line": 468,
     "decision": "dict.len() >= DICT_CARDINALITY_THRESHOLD",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "batch_464",
+    "id": "batch_528",
     "file": "src/storage/stream/batch.rs",
-    "line": 464,
+    "line": 528,
+    "decision": "match self {\n            Self::Str(strs) => strs.clone(),\n            Self::Dict { dict, indices } => indices\n                .iter()\n                .map(|opt| opt.and_then(|i| dict.get(usize::from(i)).copied()))\n                .collect(),\n            Self::Int(_) | Self::Float(_) | Self::Bool(_) => vec![None; self.len()],\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_546",
+    "file": "src/storage/stream/batch.rs",
+    "line": 546,
+    "decision": "match self {\n            Self::Int(v) => v.push(value),\n            Self::Dict { dict, .. } if dict.is_empty() => {\n                let len = self.len();\n                *self = Self::Int({\n                    let mut v = vec![None; len];\n                    v.push(value);\n                    v\n                });\n            }\n            _ => {\n                let mut strs = self.decode_to_str();\n                strs.push(None);\n                *self = Self::Str(strs);\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_548",
+    "file": "src/storage/stream/batch.rs",
+    "line": 548,
+    "decision": "dict.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "batch_567",
+    "file": "src/storage/stream/batch.rs",
+    "line": 567,
+    "decision": "match self {\n            Self::Float(v) => v.push(value),\n            Self::Dict { dict, .. } if dict.is_empty() => {\n                let len = self.len();\n                *self = Self::Float({\n                    let mut v = vec![None; len];\n                    v.push(value);\n                    v\n                });\n            }\n            _ => {\n                let mut strs = self.decode_to_str();\n                strs.push(None);\n                *self = Self::Str(strs);\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_569",
+    "file": "src/storage/stream/batch.rs",
+    "line": 569,
+    "decision": "dict.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "batch_599",
+    "file": "src/storage/stream/batch.rs",
+    "line": 599,
     "decision": "match self {\n            Self::Str(v) => v.len(),\n            Self::Dict { indices, .. } => indices.len(),\n            Self::Int(v) => v.len(),\n            Self::Float(v) => v.len(),\n            Self::Bool(v) => v.len(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_481",
+    "id": "batch_616",
     "file": "src/storage/stream/batch.rs",
-    "line": 481,
+    "line": 616,
     "decision": "match self {\n            Self::Str(v) => v.clear(),\n            Self::Dict { dict, indices } => {\n                dict.clear();\n                indices.clear();\n            }\n            Self::Int(v) => v.clear(),\n            Self::Float(v) => v.clear(),\n            Self::Bool(v) => v.clear(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "batch_529",
+    "id": "batch_664",
     "file": "src/storage/stream/batch.rs",
-    "line": 529,
+    "line": 664,
     "decision": "col.len() < row",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "batch_605",
+    "id": "batch_719",
     "file": "src/storage/stream/batch.rs",
-    "line": 605,
+    "line": 719,
+    "decision": "col.len() < row",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "batch_795",
+    "file": "src/storage/stream/batch.rs",
+    "line": 795,
     "decision": "match col {\n            FieldColumn::Dict { dict, indices } => {\n                assert_eq!(dict.len(), 2); // nginx, postgres\n                assert_eq!(indices.len(), 3);\n            }\n            _ => panic!(\"Expected Dict encoding\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_810",
+    "file": "src/storage/stream/batch.rs",
+    "line": 810,
+    "decision": "match store.get(\"status\").unwrap() {\n            FieldColumn::Int(v) => assert_eq!(v, &[Some(200), Some(500)]),\n            other => panic!(\"Expected Int encoding, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_821",
+    "file": "src/storage/stream/batch.rs",
+    "line": 821,
+    "decision": "match store.get(\"status\").unwrap() {\n            FieldColumn::Int(v) => assert_eq!(v, &[None, None, Some(404)]),\n            other => panic!(\"Expected Int encoding, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_833",
+    "file": "src/storage/stream/batch.rs",
+    "line": 833,
+    "decision": "match store.get(\"duration\").unwrap() {\n            FieldColumn::Float(v) => assert_eq!(v, &[Some(1.5), Some(2.25)]),\n            other => panic!(\"Expected Float encoding, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_846",
+    "file": "src/storage/stream/batch.rs",
+    "line": 846,
+    "decision": "match store.get(\"mixed\").unwrap() {\n            FieldColumn::Str(v) => assert_eq!(v, &[None, Some(\"oops\")]),\n            other => panic!(\"Expected Str degrade, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "batch_860",
+    "file": "src/storage/stream/batch.rs",
+    "line": 860,
+    "decision": "match store.get(\"mixed\").unwrap() {\n            FieldColumn::Str(v) => assert_eq!(v, &[Some(\"hello\"), Some(\"world\"), None]),\n            other => panic!(\"Expected Str degrade preserving prior strings, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
@@ -12555,90 +12681,324 @@
     "compiler_void": false
   },
   {
-    "id": "segment_49",
+    "id": "clf_42",
+    "file": "src/storage/stream/clf.rs",
+    "line": 42,
+    "decision": "byte == b'\\n'",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "clf_43",
+    "file": "src/storage/stream/clf.rs",
+    "line": 43,
+    "decision": "start < i",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "clf_51",
+    "file": "src/storage/stream/clf.rs",
+    "line": 51,
+    "decision": "lines_parsed >= limit",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "clf_62",
+    "file": "src/storage/stream/clf.rs",
+    "line": 62,
+    "decision": "match std::str::from_utf8(line) {\n            Ok(s) => s,\n            Err(_) => {\n                // Non-UTF8 line: store raw only\n                batch.push_line(line, None, None, None, None);\n                return;\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_125",
+    "file": "src/storage/stream/clf.rs",
+    "line": 125,
+    "decision": "s.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "clf_128",
+    "file": "src/storage/stream/clf.rs",
+    "line": 128,
+    "decision": "match s.find(char::is_whitespace) {\n            Some(i) => {\n                let word = s.get(..i).unwrap_or(\"\");\n                let rest = s.get(i..).unwrap_or(\"\").trim_start();\n                (Some(word), rest)\n            }\n            None => (Some(s), \"\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_142",
+    "file": "src/storage/stream/clf.rs",
+    "line": 142,
+    "decision": "!s.starts_with('\"')",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "clf_146",
+    "file": "src/storage/stream/clf.rs",
+    "line": 146,
+    "decision": "match after_quote.find('\"') {\n            Some(end) => {\n                let inner = after_quote.get(..end).unwrap_or(\"\");\n                let rest = after_quote\n                    .get(end.saturating_add(1)..)\n                    .unwrap_or(\"\")\n                    .trim_start();\n                (Some(inner), rest)\n            }\n            None => (None, s),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_162",
+    "file": "src/storage/stream/clf.rs",
+    "line": 162,
+    "decision": "!s.starts_with('[')",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "clf_166",
+    "file": "src/storage/stream/clf.rs",
+    "line": 166,
+    "decision": "match after_bracket.find(']') {\n            Some(end) => {\n                let inner = after_bracket.get(..end).unwrap_or(\"\");\n                let rest = after_bracket\n                    .get(end.saturating_add(1)..)\n                    .unwrap_or(\"\")\n                    .trim_start();\n                (Self::parse_clf_timestamp(inner), rest)\n            }\n            None => (None, s),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_205",
+    "file": "src/storage/stream/clf.rs",
+    "line": 205,
+    "decision": "z.len() != 5",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "clf_208",
+    "file": "src/storage/stream/clf.rs",
+    "line": 208,
+    "decision": "z.starts_with('-')",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "clf_225",
+    "file": "src/storage/stream/clf.rs",
+    "line": 225,
+    "decision": "s.len() < 8",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false
+  },
+  {
+    "id": "clf_236",
+    "file": "src/storage/stream/clf.rs",
+    "line": 236,
+    "decision": "match s {\n            \"Jan\" => 1,\n            \"Feb\" => 2,\n            \"Mar\" => 3,\n            \"Apr\" => 4,\n            \"May\" => 5,\n            \"Jun\" => 6,\n            \"Jul\" => 7,\n            \"Aug\" => 8,\n            \"Sep\" => 9,\n            \"Oct\" => 10,\n            \"Nov\" => 11,\n            \"Dec\" => 12,\n            _ => return None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_267",
+    "file": "src/storage/stream/clf.rs",
+    "line": 267,
+    "decision": "year < 1970\n            || month == 0\n            || month > 12\n            || day == 0\n            || day > 31\n            || hour > 23\n            || minute > 59\n            || second > 59",
+    "conditions": 8,
+    "vectors_required": 9,
+    "compiler_void": false
+  },
+  {
+    "id": "clf_339",
+    "file": "src/storage/stream/clf.rs",
+    "line": 339,
+    "decision": "match batch.fields.get(\"status\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(500)]),\n            other => panic!(\"expected Int status, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_343",
+    "file": "src/storage/stream/clf.rs",
+    "line": 343,
+    "decision": "match batch.fields.get(\"bytes\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(1834)]),\n            other => panic!(\"expected Int bytes, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_347",
+    "file": "src/storage/stream/clf.rs",
+    "line": 347,
+    "decision": "match batch.fields.get(\"method\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"GET\"]),\n            other => panic!(\"expected Dict method, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_352",
+    "file": "src/storage/stream/clf.rs",
+    "line": 352,
+    "decision": "match batch.fields.get(\"ip\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"10.0.0.1\"]),\n            other => panic!(\"expected Dict ip, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_356",
+    "file": "src/storage/stream/clf.rs",
+    "line": 356,
+    "decision": "match batch.fields.get(\"user\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"alice\"]),\n            other => panic!(\"expected Dict user, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_360",
+    "file": "src/storage/stream/clf.rs",
+    "line": 360,
+    "decision": "match batch.fields.get(\"referer\") {\n            Some(FieldColumn::Dict { dict, .. }) => {\n                assert_eq!(dict.as_slice(), [\"https://example.com\"]);\n            }\n            other => panic!(\"expected Dict referer, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_378",
+    "file": "src/storage/stream/clf.rs",
+    "line": 378,
+    "decision": "match batch.fields.get(\"status\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(200)]),\n            other => panic!(\"expected Int status, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_406",
+    "file": "src/storage/stream/clf.rs",
+    "line": 406,
+    "decision": "match batch.fields.get(\"status\").unwrap() {\n            FieldColumn::Int(v) => v.clone(),\n            other => panic!(\"expected Int, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_410",
+    "file": "src/storage/stream/clf.rs",
+    "line": 410,
+    "decision": "match batch.fields.get(\"method\").unwrap() {\n            FieldColumn::Dict { dict, indices } => indices\n                .iter()\n                .map(|i| i.map(|i| dict[usize::from(i)]))\n                .collect::<Vec<_>>(),\n            other => panic!(\"expected Dict, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_438",
+    "file": "src/storage/stream/clf.rs",
+    "line": 438,
+    "decision": "match batch.fields.get(\"path\") {\n            Some(FieldColumn::Str(v)) => assert_eq!(v.len(), 300),\n            other => panic!(\"expected Dict->Str degrade for high-cardinality path, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "clf_443",
+    "file": "src/storage/stream/clf.rs",
+    "line": 443,
+    "decision": "match batch.fields.get(\"method\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"GET\"]),\n            other => panic!(\"expected method to stay Dict, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true
+  },
+  {
+    "id": "segment_48",
     "file": "src/storage/stream/segment.rs",
-    "line": 49,
+    "line": 48,
     "decision": "match self {\n            Self::Dict { indices, .. } => indices.len(),\n            Self::Str(v) => v.len(),\n            Self::Int(v) => v.len(),\n            Self::Float(v) => v.len(),\n            Self::Bool(v) => v.len(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "segment_68",
+    "id": "segment_67",
     "file": "src/storage/stream/segment.rs",
-    "line": 68,
+    "line": 67,
     "decision": "match self {\n            Self::Dict { dict, .. } => Some(dict.iter().any(|d| d.as_ref() == value)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "segment_106",
+    "id": "segment_105",
     "file": "src/storage/stream/segment.rs",
-    "line": 106,
+    "line": 105,
     "decision": "off < block.bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "segment_109",
+    "id": "segment_108",
     "file": "src/storage/stream/segment.rs",
-    "line": 109,
+    "line": 108,
     "decision": "consumed == 0 || batch.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false
   },
   {
-    "id": "segment_194",
+    "id": "segment_193",
     "file": "src/storage/stream/segment.rs",
-    "line": 194,
+    "line": 193,
     "decision": "match self.lines.last() {\n            Some(&(start, len)) => {\n                let block_end = u64::from(start)\n                    .saturating_add(u64::from(len))\n                    .saturating_add(1);\n                // `start` is relative to `bytes`; the block's file offset is\n                // `file_off - first_line_start`.\n                let first = self.lines.first().map_or(0, |&(s, _)| u64::from(s));\n                self.file_off\n                    .saturating_sub(first)\n                    .saturating_add(block_end)\n            }\n            None => self.file_off,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "segment_263",
+    "id": "segment_262",
     "file": "src/storage/stream/segment.rs",
-    "line": 263,
+    "line": 262,
     "decision": "match self.minmax_event {\n            Some((lo, hi)) => lo < range.end && hi >= range.start,\n            None => true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "segment_284",
+    "id": "segment_283",
     "file": "src/storage/stream/segment.rs",
-    "line": 284,
+    "line": 283,
     "decision": "match self.field(name)? {\n            OwnedColumn::Dict { dict, indices } => {\n                let idx = (*indices.get(i)?)?;\n                dict.get(usize::from(idx)).map(|s| s.as_ref())\n            }\n            OwnedColumn::Str(spans) => {\n                let span = (*spans.get(i)?)?;\n                std::str::from_utf8(self.slice(span)).ok()\n            }\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "segment_322",
+    "id": "segment_321",
     "file": "src/storage/stream/segment.rs",
-    "line": 322,
+    "line": 321,
     "decision": "end > bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false
   },
   {
-    "id": "segment_331",
+    "id": "segment_330",
     "file": "src/storage/stream/segment.rs",
-    "line": 331,
+    "line": 330,
     "decision": "match acc {\n            None => (*v, *v),\n            Some((lo, hi)) => (lo.min(*v), hi.max(*v)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true
   },
   {
-    "id": "segment_342",
+    "id": "segment_341",
     "file": "src/storage/stream/segment.rs",
-    "line": 342,
+    "line": 341,
     "decision": "match col {\n        FieldColumn::Dict { dict, indices } => {\n            let mut idx = indices.clone();\n            idx.extend(std::iter::repeat_n(None, pad(idx.len())));\n            OwnedColumn::Dict {\n                dict: dict.iter().map(|s| Arc::<str>::from(*s)).collect(),\n                indices: idx,\n            }\n        }\n        FieldColumn::Str(strs) => {\n            let mut spans: Vec<Option<Span>> = strs\n                .iter()\n                .map(|s| s.and_then(|s| span_in(bytes, s.as_bytes())))\n                .collect();\n            spans.extend(std::iter::repeat_n(None, pad(spans.len())));\n            OwnedColumn::Str(spans)\n        }\n        FieldColumn::Int(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Int(v)\n        }\n        FieldColumn::Float(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Float(v)\n        }\n        FieldColumn::Bool(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Bool(v)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12798,9 +13158,9 @@
     "compiler_void": false
   },
   {
-    "id": "syslog_333",
+    "id": "syslog_344",
     "file": "src/storage/stream/syslog.rs",
-    "line": 333,
+    "line": 344,
     "decision": "match batch.fields.get(\"tag\") {\n            Some(crate::storage::stream::FieldColumn::Dict { dict, .. }) => {\n                assert_eq!(dict.as_slice(), [\"nginx\"]);\n            }\n            other => panic!(\"{other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

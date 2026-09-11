@@ -40,6 +40,7 @@
 #[cfg(feature = "vm-batch")]
 pub mod adapter;
 pub mod batch;
+pub mod clf;
 pub mod file;
 pub mod ring;
 pub mod segment;
@@ -51,6 +52,7 @@ pub use adapter::{ColumnRequest, StreamSegment, TailSource, PREDEFINED_COLUMNS};
 pub use batch::{
     Facility, FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind,
 };
+pub use clf::ClfParser;
 pub use file::{Block, LogFile, Refresh, BLOCK_SIZE};
 pub use ring::Ring;
 pub use segment::{MinMax, OwnedColumn, Segment, Span, SEGMENT_MAX_ROWS};

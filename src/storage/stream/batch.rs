@@ -251,6 +251,21 @@ impl Resource {
     }
 }
 
+/// A per-line log format parser: turns a raw buffer into a [`LogBatch`].
+/// Implemented by [`super::syslog::SyslogParser`] and
+/// [`super::clf::ClfParser`] so storage (`Segment::seal_block`) doesn't hard
+/// -code one format.
+pub trait LineParser {
+    /// Parse lines from a buffer into a `LogBatch`, returning the batch and
+    /// the number of bytes consumed.
+    fn parse_batch<'a>(
+        &self,
+        source: Source,
+        buffer: &'a [u8],
+        max_lines: usize,
+    ) -> (LogBatch<'a>, usize);
+}
+
 /// A columnar batch of parsed log lines.
 #[derive(Debug)]
 pub struct LogBatch<'a> {
@@ -353,6 +368,8 @@ impl<'a> LogBatch<'a> {
 
     /// Set the observed timestamp on every row that does not have one yet.
     /// All lines of one read share the moment they were read.
+    // #318: line-shift comment to avoid an MC/DC obligation id collision
+    // with `src/codegen/batch.rs`'s own decision at the same line number.
     pub fn fill_observed_ts(&mut self, observed_ts_ns: i64) {
         for slot in self.observed_ts_ns.iter_mut() {
             if slot.is_none() {
@@ -364,6 +381,18 @@ impl<'a> LogBatch<'a> {
     /// Set a dynamic field value for the current row.
     pub fn set_field(&mut self, name: &str, value: &'a str) {
         self.fields.set(name, self.len.saturating_sub(1), value);
+    }
+
+    /// Set a dynamic integer field value for the current row (typed Tier-3,
+    /// e.g. CLF's `status`/`bytes`).
+    pub fn set_field_int(&mut self, name: &str, value: i64) {
+        self.fields.set_int(name, self.len.saturating_sub(1), value);
+    }
+
+    /// Set a dynamic floating-point field value for the current row.
+    pub fn set_field_float(&mut self, name: &str, value: f64) {
+        self.fields
+            .set_float(name, self.len.saturating_sub(1), value);
     }
 
     /// Get the raw line at index (returns empty slice if out of bounds).
@@ -420,6 +449,13 @@ impl<'a> FieldColumn<'a> {
     }
 
     /// Push a string value, handling Dict→Str degradation.
+    ///
+    /// Pushing a string onto an established `Int`/`Float`/`Bool` column is a
+    /// type conflict (ADR-0018: "first non-null type wins; conflict
+    /// degrades to `Str`"). `FieldColumn<'a>`'s `Str`/`Dict` variants only
+    /// hold borrowed `&'a str` data, so a numeric value pushed earlier has no
+    /// string form to recover -- the degrade keeps every prior row as `None`
+    /// and the new (borrowed) string value is preserved.
     fn push_str(&mut self, value: Option<&'a str>) {
         match self {
             Self::Dict { dict, indices } => {
@@ -454,8 +490,107 @@ impl<'a> FieldColumn<'a> {
                 }
             }
             Self::Str(strs) => strs.push(value),
-            _ => {} // Type mismatch, ignore
+            Self::Int(v) if Self::all_none(v) => Self::degrade_typed_to_str(v.len(), value, self),
+            Self::Float(v) if Self::all_none(v) => {
+                Self::degrade_typed_to_str(v.len(), value, self);
+            }
+            Self::Bool(v) if Self::all_none(v) => {
+                Self::degrade_typed_to_str(v.len(), value, self);
+            }
+            // No non-null value has been pushed yet ("first non-null type
+            // wins" hasn't decided a type): adopt Str now instead of treating
+            // an all-null typed column as an established conflict.
+            Self::Int(v) => Self::degrade_typed_to_str(v.len(), value, self),
+            Self::Float(v) => Self::degrade_typed_to_str(v.len(), value, self),
+            Self::Bool(v) => Self::degrade_typed_to_str(v.len(), value, self),
         }
+    }
+
+    /// Whether every value in a typed column is `None` (no type has been
+    /// established yet by a non-null push).
+    fn all_none<T>(values: &[Option<T>]) -> bool {
+        values.iter().all(Option::is_none)
+    }
+
+    /// Rewrites an `Int`/`Float`/`Bool` column as `Str`: prior rows become
+    /// `None` (no borrowed string form exists for a numeric value) and
+    /// `value` is appended. Shared by `push_str`'s conflict/no-type arms.
+    fn degrade_typed_to_str(prior_len: usize, value: Option<&'a str>, slot: &mut Self) {
+        let mut strs: Vec<Option<&'a str>> = vec![None; prior_len];
+        strs.push(value);
+        *slot = Self::Str(strs);
+    }
+
+    /// Rewrites a `Dict`/`Str` column into a plain `Str` column (decoding any
+    /// `Dict` indices), for use when a numeric push type-conflicts with
+    /// established string data.
+    fn decode_to_str(&self) -> Vec<Option<&'a str>> {
+        match self {
+            Self::Str(strs) => strs.clone(),
+            Self::Dict { dict, indices } => indices
+                .iter()
+                .map(|opt| opt.and_then(|i| dict.get(usize::from(i)).copied()))
+                .collect(),
+            Self::Int(_) | Self::Float(_) | Self::Bool(_) => vec![None; self.len()],
+        }
+    }
+
+    /// Push an integer value, handling type conflicts (degrade to `Str`).
+    ///
+    /// A column with no established type yet (no non-null value pushed by
+    /// any push method) adopts `Int` (ADR-0018: "first non-null type wins").
+    /// A column already holding real string data degrades to `Str`,
+    /// preserving that data; the incoming int has no borrowed string form,
+    /// so its row becomes `None`.
+    fn push_int(&mut self, value: Option<i64>) {
+        match self {
+            Self::Int(v) => v.push(value),
+            Self::Dict { dict, .. } if dict.is_empty() => {
+                let len = self.len();
+                *self = Self::Int({
+                    let mut v = vec![None; len];
+                    v.push(value);
+                    v
+                });
+            }
+            _ => {
+                let mut strs = self.decode_to_str();
+                strs.push(None);
+                *self = Self::Str(strs);
+            }
+        }
+    }
+
+    /// Push a float value, handling type conflicts (degrade to `Str`). See
+    /// [`Self::push_int`] for the conflict-handling rationale.
+    fn push_float(&mut self, value: Option<f64>) {
+        match self {
+            Self::Float(v) => v.push(value),
+            Self::Dict { dict, .. } if dict.is_empty() => {
+                let len = self.len();
+                *self = Self::Float({
+                    let mut v = vec![None; len];
+                    v.push(value);
+                    v
+                });
+            }
+            _ => {
+                let mut strs = self.decode_to_str();
+                strs.push(None);
+                *self = Self::Str(strs);
+            }
+        }
+    }
+
+    /// Null-pad via [`Self::push_int`] (a plain `fn`, for use as a function
+    /// pointer where a null-padding closure is needed).
+    fn push_int_null(&mut self) {
+        self.push_int(None);
+    }
+
+    /// Null-pad via [`Self::push_float`]. See [`Self::push_int_null`].
+    fn push_float_null(&mut self) {
+        self.push_float(None);
     }
 
     /// Number of rows.
@@ -530,6 +665,61 @@ impl<'a> FieldStore<'a> {
             col.push_str(None);
         }
         col.push_str(Some(value));
+    }
+
+    /// Set an integer field value at the given row index (Tier-3 typed
+    /// columns, e.g. CLF's `status`/`bytes`). See [`FieldColumn::push_int`]
+    /// for type-conflict handling.
+    pub fn set_int(&mut self, name: &str, row: usize, value: i64) {
+        self.set_typed(
+            name,
+            row,
+            |col| col.push_int(Some(value)),
+            FieldColumn::push_int_null,
+        );
+    }
+
+    /// Set a floating-point field value at the given row index. See
+    /// [`FieldColumn::push_float`] for type-conflict handling.
+    pub fn set_float(&mut self, name: &str, row: usize, value: f64) {
+        self.set_typed(
+            name,
+            row,
+            |col| col.push_float(Some(value)),
+            FieldColumn::push_float_null,
+        );
+    }
+
+    /// Shared plumbing for `set_int`/`set_float`: finds or creates the named
+    /// column (starting untyped, as a `Dict`, so "first non-null type wins"
+    /// can still apply), null-pads up to `row`, then pushes the value.
+    fn set_typed(
+        &mut self,
+        name: &str,
+        row: usize,
+        push_value: impl FnOnce(&mut FieldColumn<'a>),
+        push_null: fn(&mut FieldColumn<'a>),
+    ) {
+        let key = self
+            .order
+            .iter()
+            .find(|k| k.as_ref() == name)
+            .cloned()
+            .unwrap_or_else(|| {
+                let key = Arc::<str>::from(name);
+                self.order.push(Arc::clone(&key));
+                key
+            });
+
+        let col = self
+            .columns
+            .entry(Arc::clone(&key))
+            .or_insert_with(|| FieldColumn::new_str(BATCH_SIZE));
+
+        while col.len() < row {
+            push_null(col);
+        }
+        push_value(col);
     }
 
     /// Get a field column by name.
@@ -608,6 +798,68 @@ mod tests {
                 assert_eq!(indices.len(), 3);
             }
             _ => panic!("Expected Dict encoding"),
+        }
+    }
+
+    #[test]
+    fn set_int_creates_typed_column() {
+        let mut store = FieldStore::new();
+        store.set_int("status", 0, 200);
+        store.set_int("status", 1, 500);
+
+        match store.get("status").unwrap() {
+            FieldColumn::Int(v) => assert_eq!(v, &[Some(200), Some(500)]),
+            other => panic!("Expected Int encoding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_int_pads_nulls_for_skipped_rows() {
+        let mut store = FieldStore::new();
+        store.set_int("status", 2, 404);
+
+        match store.get("status").unwrap() {
+            FieldColumn::Int(v) => assert_eq!(v, &[None, None, Some(404)]),
+            other => panic!("Expected Int encoding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_float_creates_typed_column() {
+        let mut store = FieldStore::new();
+        store.set_float("duration", 0, 1.5);
+        store.set_float("duration", 1, 2.25);
+
+        match store.get("duration").unwrap() {
+            FieldColumn::Float(v) => assert_eq!(v, &[Some(1.5), Some(2.25)]),
+            other => panic!("Expected Float encoding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn int_column_conflicting_with_string_degrades_to_str_preserving_new_value() {
+        let mut store = FieldStore::new();
+        store.set_int("mixed", 0, 42);
+        // Type conflict: same field later receives a string value.
+        store.set("mixed", 1, "oops");
+
+        match store.get("mixed").unwrap() {
+            FieldColumn::Str(v) => assert_eq!(v, &[None, Some("oops")]),
+            other => panic!("Expected Str degrade, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_column_conflicting_with_int_degrades_preserving_existing_strings() {
+        let mut store = FieldStore::new();
+        store.set("mixed", 0, "hello");
+        store.set("mixed", 1, "world");
+        // Type conflict: same field later receives an int value.
+        store.set_int("mixed", 2, 7);
+
+        match store.get("mixed").unwrap() {
+            FieldColumn::Str(v) => assert_eq!(v, &[Some("hello"), Some("world"), None]),
+            other => panic!("Expected Str degrade preserving prior strings, got {other:?}"),
         }
     }
 }
