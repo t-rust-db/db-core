@@ -145,6 +145,58 @@ fn in_with_a_null_list_item_can_still_definitely_match() {
 }
 
 #[test]
+fn bare_column_and_subquery_truthiness_in_boolean_context() {
+    // A bare (non-comparison) column and a scalar subquery used
+    // directly as a boolean condition both go through `finish_truthy`
+    // rather than a dedicated comparison opcode.
+    let db = TempDb::new("truthy");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE tr(a INTEGER); \
+         CREATE TABLE flag(v INTEGER); \
+         INSERT INTO tr VALUES (0), (1), (2); \
+         INSERT INTO flag VALUES (1)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query("SELECT a FROM tr WHERE a ORDER BY a")
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![1, 2]);
+
+    let rows = e
+        .run_query("SELECT a FROM tr WHERE (SELECT v FROM flag) ORDER BY a")
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![0, 1, 2]);
+}
+
+#[test]
+fn or_with_a_bare_truthy_operand_routes_null_through_the_other_side() {
+    // The first OR operand is a bare column (truthy, not a comparison),
+    // compiled with `NullTarget::True` from the OR's own on_null
+    // threading -- exercises finish_truthy's NullTarget::True arm,
+    // not just its NullTarget::False one (the WHERE-clause default).
+    let db = TempDb::new("or-truthy-null");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE ot(a INTEGER, b INTEGER); \
+         INSERT INTO ot VALUES (NULL, 1); \
+         INSERT INTO ot VALUES (NULL, 0); \
+         INSERT INTO ot VALUES (1, 0)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query("SELECT b FROM ot WHERE a OR b = 1 ORDER BY b")
+        .unwrap()
+        .rows;
+    // Row (NULL, 0): unknown OR false = unknown, excluded. Row (NULL, 1):
+    // unknown OR true = true, included. Row (1, 0): true OR false = true,
+    // included.
+    assert_eq!(ints(&rows), vec![0, 1]);
+}
+
+#[test]
 fn and_or_reorder_the_cheaper_operand_first_but_answer_the_same() {
     // #581: `abs(a) > 0` (a function call, cost_class 2) is pricier
     // than the bare-column comparisons on the other side of AND/OR, so
