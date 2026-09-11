@@ -63,6 +63,8 @@ pub use detect::{detect, parse_detected, DetectedParser, Detection, Format};
 pub use file::{Block, LogFile, Refresh, BLOCK_SIZE};
 pub use jsonl::JsonlParser;
 pub use logfmt::LogfmtParser;
-pub use ring::Ring;
-pub use segment::{MinMax, OwnedColumn, Segment, Span, SEGMENT_MAX_ROWS};
+pub use ring::{EvictedSummary, Ring, DEFAULT_SUMMARY_HORIZON_NS};
+pub use segment::{
+    ColumnSummary, MinMax, OwnedColumn, Segment, SegmentSummary, Span, SEGMENT_MAX_ROWS,
+};
 pub use syslog::SyslogParser;

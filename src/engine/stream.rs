@@ -27,16 +27,19 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::clock::{Clock, SystemClock};
 use crate::codegen::batch::{self as planner, PlanError, TableStats};
 use crate::codegen::stream::{self as stream_planner, StreamPlanError};
-use crate::parser::ast::{Expr, ExprKind, ResultColumn, ScopeUnit, Select};
+use crate::parser::ast::{Expr, ExprKind, FunctionArgs, ResultColumn, ScopeUnit, Select};
 use crate::parser::ParseError;
 use crate::storage::stream::adapter::{
-    is_predefined, now_ns, ColumnRequest, StreamSegment, TailSource, PREDEFINED_COLUMNS,
+    is_predefined, ColumnRequest, StreamSegment, TailSource, PREDEFINED_COLUMNS,
 };
 use crate::storage::stream::{
-    detect, DetectedParser, LogFile, OwnedColumn, Refresh, Ring, Segment, Source, SourceKind,
+    detect, DetectedParser, EvictedSummary, LogFile, OwnedColumn, Refresh, Ring, Segment, Source,
+    SourceKind,
 };
+use crate::vm::batch::{AggFunc, Value};
 use crate::vm::stream::{IndexPred, Program, Scope};
 
 use super::{
@@ -50,6 +53,21 @@ pub const TABLE: &str = "log";
 /// Default ring budget: bytes of log held hot.
 pub const DEFAULT_BUDGET: usize = 64 * 1024 * 1024;
 
+/// Ring autoscaling floor (#308 ADR 0018 §Storage: `target =
+/// clamp(rate_ewma * default_scope, min, hard_cap)`) -- never shrink the
+/// ring below one segment's worth of headroom even on a near-idle file.
+pub const MIN_RING_BUDGET: usize = 4 * 1024 * 1024;
+
+/// Ring autoscaling ceiling: never grow past this regardless of burst
+/// rate, so a runaway feed cannot exhaust memory.
+pub const HARD_CAP_RING_BUDGET: usize = 512 * 1024 * 1024;
+
+/// EWMA smoothing constant for the ingestion-rate sample (bytes/sec)
+/// driving autoscaling -- closer to `1.0` reacts faster to bursts,
+/// closer to `0.0` smooths harder. The ADR pins the *formula*, not this
+/// constant; this value has no measured basis and may need tuning.
+const RATE_EWMA_ALPHA: f64 = 0.3;
+
 /// One open log file, presented as the single table `log`.
 pub struct StreamEngine {
     path: PathBuf,
@@ -59,6 +77,23 @@ pub struct StreamEngine {
     parser: DetectedParser,
     /// Tier-3 names seen in any held segment, in first-seen order.
     fields: Vec<String>,
+    clock: Box<dyn Clock>,
+    /// Smoothed ingestion rate, bytes/sec, feeding ring autoscaling.
+    rate_ewma_bytes_per_sec: f64,
+    /// Wall-clock time of the last rate sample, for computing elapsed time
+    /// on the next one.
+    last_sample_ns: Option<i64>,
+    /// The default scope this engine autoscales the ring toward holding
+    /// hot (ADR 0018: "the ring's job is to hold at least the default
+    /// query scope") -- set once at open, not re-read per query, since
+    /// autoscaling reacts to *ingestion rate*, not to any one query's
+    /// own `SINCE`.
+    autoscale_target_scope: Duration,
+    /// Off by default (#308): `open_with_budget`'s `budget` is an
+    /// explicit client contract every existing caller (and #306/#307's
+    /// own tests) relies on staying exactly what they set. Autoscaling
+    /// only engages after [`Self::enable_autoscaling`].
+    autoscale_enabled: bool,
 }
 
 impl std::fmt::Debug for StreamEngine {
@@ -91,14 +126,39 @@ impl StreamEngine {
             source,
             parser,
             fields: Vec::new(),
+            clock: Box::new(SystemClock),
+            rate_ewma_bytes_per_sec: 0.0,
+            last_sample_ns: None,
+            autoscale_target_scope: DEFAULT_SCOPE,
+            autoscale_enabled: false,
         };
-        let observed = now_ns();
+        let observed = engine.clock.now_ns();
         for b in &blocks {
             for s in Segment::seal_block(b, &engine.source, &engine.parser, observed) {
                 engine.admit(Arc::new(s));
             }
         }
         Ok(engine)
+    }
+
+    /// Replace this engine's time source (#308) -- production code has
+    /// no reason to call this (the real clock is the default); tests use
+    /// it to simulate ingestion over minutes/hours/days of ring
+    /// autoscaling and summary-horizon behavior without real `sleep`s.
+    pub fn set_clock(&mut self, clock: Box<dyn Clock>) {
+        self.clock = clock;
+    }
+
+    /// Turn on ring autoscaling (#308, off by default): `target =
+    /// clamp(rate_ewma * target_scope, MIN_RING_BUDGET,
+    /// HARD_CAP_RING_BUDGET)`, resampled on every [`Self::refresh`].
+    /// Also raises the retained-summary horizon to `target_scope` (a
+    /// wider ring should keep at least as much summarized history).
+    pub fn enable_autoscaling(&mut self, target_scope: Duration) {
+        self.autoscale_enabled = true;
+        self.autoscale_target_scope = target_scope;
+        let horizon_ns = i64::try_from(target_scope.as_nanos()).unwrap_or(i64::MAX);
+        self.ring.set_summary_horizon(horizon_ns);
     }
 
     /// The file this engine was opened on.
@@ -135,14 +195,17 @@ impl StreamEngine {
     }
 
     fn seal_all(&mut self, blocks: &[crate::storage::stream::Block]) -> usize {
-        let observed = now_ns();
+        let observed = self.clock.now_ns();
         let mut rows = 0usize;
+        let mut bytes = 0usize;
         for b in blocks {
             for s in Segment::seal_block(b, &self.source, &self.parser, observed) {
                 rows = rows.saturating_add(s.len());
+                bytes = bytes.saturating_add(s.byte_len());
                 self.admit(Arc::new(s));
             }
         }
+        self.sample_rate_and_autoscale(bytes, observed);
         rows
     }
 
@@ -153,6 +216,46 @@ impl StreamEngine {
             }
         }
         let _evicted = self.ring.push_head(seg);
+    }
+
+    /// Ring autoscaling (#308, ADR 0018 §Storage): `target =
+    /// clamp(rate_ewma * default_scope, min, hard_cap)`. Updates the
+    /// smoothed bytes/sec rate from `bytes_admitted` over the elapsed
+    /// time since the last sample, then resizes the ring toward holding
+    /// at least `autoscale_target_scope` of that rate -- grows on a
+    /// sustained burst, shrinks on sustained idle. The first sample (no
+    /// prior `last_sample_ns`) only seeds the rate; it does not resize,
+    /// since one elapsed-time-of-zero sample would divide by zero.
+    fn sample_rate_and_autoscale(&mut self, bytes_admitted: usize, now_ns: i64) {
+        if !self.autoscale_enabled {
+            return;
+        }
+        let Some(last) = self.last_sample_ns else {
+            self.last_sample_ns = Some(now_ns);
+            return;
+        };
+        self.last_sample_ns = Some(now_ns);
+        let elapsed_ns = now_ns.saturating_sub(last);
+        if elapsed_ns <= 0 {
+            return;
+        }
+        let elapsed_secs = elapsed_ns as f64 / 1e9;
+        let sample = bytes_admitted as f64 / elapsed_secs;
+        self.rate_ewma_bytes_per_sec =
+            RATE_EWMA_ALPHA * sample + (1.0 - RATE_EWMA_ALPHA) * self.rate_ewma_bytes_per_sec;
+
+        let target_scope_secs = self.autoscale_target_scope.as_secs_f64();
+        let target_bytes = (self.rate_ewma_bytes_per_sec * target_scope_secs)
+            .clamp(0.0, HARD_CAP_RING_BUDGET as f64);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped to [0.0, HARD_CAP_RING_BUDGET as f64] just above"
+        )]
+        let target = (target_bytes as usize).clamp(MIN_RING_BUDGET, HARD_CAP_RING_BUDGET);
+        if target != self.ring.budget() {
+            let _evicted = self.ring.set_budget(target);
+        }
     }
 
     /// All column names of `log`: the predefined ones, then Tier-3 fields.
@@ -289,7 +392,7 @@ impl StreamEngine {
         prune: &crate::vm::stream::Prune,
         columns: &[ColumnRequest],
     ) -> (Vec<StreamSegment>, ScopeReport) {
-        let now = now_ns();
+        let now = self.clock.now_ns();
         let requested_range = effective_time_range(&prune.scope, now, &prune.preds);
         // Prune segments by time-range overlap vs. all segments in the ring.
         let mut candidates: Vec<Arc<Segment>> = match &requested_range {
@@ -350,6 +453,50 @@ impl StreamEngine {
             capped,
         };
         (segments, report)
+    }
+
+    /// Folds retained per-segment summaries (#308, ADR 0018: "a live
+    /// `count(*) ... since 1d` over a 42-minute ring merges a day of
+    /// summaries, re-aggregates the hot ring, and adds the head") into
+    /// `rows` when `select` is exactly one of the decomposable shapes:
+    /// `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`, with
+    /// no `GROUP BY` and no `WHERE` -- a query with either of those has
+    /// no way to apply itself to a summary (a summary has no rows left
+    /// to filter or bucket), so it is left exactly as the ring answered
+    /// it, still reported `capped` if the request reached further back.
+    /// `AVG` is excluded too: `vm::engine::run`'s result is already
+    /// finalized (sum/count already divided), so there is nothing left
+    /// to merge a summary's own sum/count into.
+    fn merge_retained_summaries(
+        &self,
+        select: &Select,
+        requested_range: Option<Range<i64>>,
+        rows: Vec<Vec<Value>>,
+        report: &mut ScopeReport,
+    ) -> Vec<Vec<Value>> {
+        let Some(range) = requested_range else {
+            return rows;
+        };
+        if !select.group_by.is_empty() || select.where_clause.is_some() {
+            return rows;
+        }
+        let Some((agg, column)) = single_ungrouped_aggregate(select) else {
+            return rows;
+        };
+        let summaries = self.ring.summaries_overlapping(&range);
+        if summaries.is_empty() {
+            return rows;
+        }
+        let live = rows.into_iter().next().and_then(|r| r.into_iter().next());
+        let merged = fold_summaries_into(agg, column.as_deref(), &summaries, live);
+        report.capped = false;
+        report.lines = report.lines.saturating_add(
+            summaries
+                .iter()
+                .map(|e| e.summary.rows)
+                .fold(0u64, u64::saturating_add),
+        );
+        vec![vec![merged]]
     }
 
     /// This engine's `log` table as a [`TableStats`], `source: None` --
@@ -480,6 +627,188 @@ fn effective_time_range(scope: &Scope, now_ns: i64, preds: &[IndexPred]) -> Opti
     has_bound.then_some(lo..hi)
 }
 
+/// Drives `program.body`'s `(timestamp, value)` rows through
+/// [`crate::vm::stream::run_epilogue`] (#308): buckets into tumbling
+/// windows, reduces each, and returns `(window_start_ns, reduced_value)`
+/// rows -- late rows (behind the watermark) are dropped from the result
+/// here, not reported; `#309`'s standing-query surface is the intended
+/// consumer of a side output, so this query-at-a-time path only needs
+/// the on-time rows.
+fn run_range_vector_epilogue(
+    select: &Select,
+    epilogue: &crate::vm::stream::Epilogue,
+    rows: Vec<Vec<Value>>,
+) -> Result<(Vec<String>, Vec<Vec<Cell>>), EngineError> {
+    let epilogue_rows: Vec<crate::vm::stream::EpilogueRow> = rows
+        .into_iter()
+        .map(|mut r| {
+            let value = r.pop().unwrap_or(Value::Null);
+            let ts = match r.first() {
+                Some(Value::Int(n)) => *n,
+                _ => 0,
+            };
+            (ts, value)
+        })
+        .collect();
+    let (windows, _late) = crate::vm::stream::run_epilogue(&epilogue_rows, epilogue);
+    let label = range_vector_label(select);
+    let out_rows = windows
+        .into_iter()
+        .map(|(start, value)| vec![Cell::Int(start), Cell::from(value)])
+        .collect();
+    Ok((vec!["window_start".to_string(), label], out_rows))
+}
+
+/// The output label for a range-vector query's one value column, e.g.
+/// `COUNT_OVER_TIME(message)` -- `select` is known to have exactly one
+/// `ResultColumn::Expr` carrying a `FunctionCall` (that is what made
+/// `codegen::stream::compile` build an [`Epilogue`] in the first place).
+fn range_vector_label(select: &Select) -> String {
+    match select.columns.first() {
+        Some(ResultColumn::Expr {
+            expr:
+                Expr {
+                    kind: ExprKind::FunctionCall { name, args, .. },
+                    ..
+                },
+            ..
+        }) => {
+            let arg = match args {
+                FunctionArgs::Star => "*".to_string(),
+                FunctionArgs::List(list) => list
+                    .iter()
+                    .filter_map(|e| match &e.kind {
+                        ExprKind::Column { name, .. } => Some(name.clone()),
+                        _ => None,
+                    })
+                    .next()
+                    .unwrap_or_default(),
+            };
+            format!("{}({arg})", name.to_ascii_uppercase())
+        }
+        _ => "value".to_string(),
+    }
+}
+
+/// If `select` is exactly one ungrouped, unfiltered aggregate call over
+/// `*` or one column -- `COUNT(*)`, `COUNT(x)`, `SUM(x)`, `MIN(x)`,
+/// `MAX(x)` -- the function and, for anything but `COUNT(*)`, the column
+/// name. `None` for every other shape (multiple result columns, a
+/// non-aggregate expression, `AVG`, `DISTINCT`, or any argument that
+/// isn't a bare column) -- [`StreamEngine::merge_retained_summaries`]'s
+/// only caller leaves those to the ring exactly as it answered them.
+fn single_ungrouped_aggregate(select: &Select) -> Option<(AggFunc, Option<String>)> {
+    let [ResultColumn::Expr { expr, .. }] = select.columns.as_slice() else {
+        return None;
+    };
+    let Expr {
+        kind:
+            ExprKind::FunctionCall {
+                name,
+                distinct: false,
+                args,
+                tail,
+            },
+        ..
+    } = expr
+    else {
+        return None;
+    };
+    if tail
+        .as_deref()
+        .is_some_and(|t| t.filter.is_some() || t.over.is_some())
+    {
+        return None;
+    }
+    let agg = AggFunc::from_name(name)?;
+    if matches!(agg, AggFunc::Avg) {
+        return None;
+    }
+    match args {
+        FunctionArgs::Star if matches!(agg, AggFunc::Count) => Some((agg, None)),
+        FunctionArgs::Star => None,
+        FunctionArgs::List(list) => match list.as_slice() {
+            [Expr {
+                kind: ExprKind::Column {
+                    table: None, name, ..
+                },
+                ..
+            }] => Some((agg, Some(name.clone()))),
+            _ => None,
+        },
+    }
+}
+
+/// Combines `live` (the ring's already-finalized single-row aggregate,
+/// `None` if the ring held no matching row) with every retained
+/// [`EvictedSummary`] overlapping the query's range, using the same
+/// additive/comparative semantics `vm::engine::merge_rows` applies
+/// across live segments -- `NULL` is each operation's identity, matching
+/// that function's own convention (db-core#232).
+fn fold_summaries_into(
+    agg: AggFunc,
+    column: Option<&str>,
+    summaries: &[&EvictedSummary],
+    live: Option<Value>,
+) -> Value {
+    let column_summary = |e: &&EvictedSummary| -> Option<crate::storage::stream::ColumnSummary> {
+        column.map_or(
+            Some(crate::storage::stream::ColumnSummary {
+                count: e.summary.rows,
+                ..Default::default()
+            }),
+            |c| e.summary.column(c).copied(),
+        )
+    };
+    match agg {
+        AggFunc::Count => {
+            let live_n = match live {
+                Some(Value::Int(n)) => n,
+                _ => 0,
+            };
+            let total = summaries
+                .iter()
+                .filter_map(column_summary)
+                .map(|c| c.count)
+                .fold(live_n, |acc, c| {
+                    acc.saturating_add(i64::try_from(c).unwrap_or(i64::MAX))
+                });
+            Value::Int(total)
+        }
+        AggFunc::Sum => {
+            let live_v = live.and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let total = summaries
+                .iter()
+                .filter_map(column_summary)
+                .fold(live_v, |acc, c| acc + c.sum);
+            Value::Float(total)
+        }
+        AggFunc::Min => summaries
+            .iter()
+            .filter_map(column_summary)
+            .filter(|c| c.count > 0)
+            .map(|c| c.min)
+            .fold(live.and_then(|v| v.as_f64()), |acc, v| {
+                Some(acc.map_or(v, |a| a.min(v)))
+            })
+            .map_or(Value::Null, Value::Float),
+        AggFunc::Max => summaries
+            .iter()
+            .filter_map(column_summary)
+            .filter(|c| c.count > 0)
+            .map(|c| c.max)
+            .fold(live.and_then(|v| v.as_f64()), |acc, v| {
+                Some(acc.map_or(v, |a| a.max(v)))
+            })
+            .map_or(Value::Null, Value::Float),
+        // `single_ungrouped_aggregate` never returns `Avg` (its own
+        // finalized sum/count can't be re-merged, see this fn's doc
+        // comment) -- a non-panicking fallback here costs nothing and
+        // keeps this helper safe to call with any `AggFunc` value.
+        AggFunc::Avg => Value::Null,
+    }
+}
+
 impl Engine for StreamEngine {
     fn open(path: &Path) -> Result<Self, EngineError> {
         Self::open_with_budget(path, DEFAULT_BUDGET)
@@ -493,11 +822,25 @@ impl Engine for StreamEngine {
         let stmt = single_statement(sql)?;
         let select = self.parse_for_table(&stmt)?;
         let scope = resolve_scope(&select);
-        let program: Program = stream_planner::compile(&select, scope).map_err(stream_err)?;
+        let program: Program =
+            stream_planner::compile(&select, scope, self.clock.now_ns()).map_err(stream_err)?;
         let columns = self.requests(&program.body.columns_to_load())?;
-        let (segments, scope_report) = self.select_segments(&program.prune, &columns);
+        let (segments, mut scope_report) = self.select_segments(&program.prune, &columns);
         let rows = crate::vm::engine::run(&segments, &program.body)
             .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
+
+        if let Some(epilogue) = &program.epilogue {
+            let (out_columns, out_rows) = run_range_vector_epilogue(&select, epilogue, rows)?;
+            return Ok(QueryResult {
+                columns: out_columns,
+                rows: out_rows,
+                scope_report: Some(scope_report),
+            });
+        }
+
+        let now = self.clock.now_ns();
+        let requested_range = effective_time_range(&program.prune.scope, now, &program.prune.preds);
+        let rows = self.merge_retained_summaries(&select, requested_range, rows, &mut scope_report);
         Ok(QueryResult {
             columns: planner::output_column_names(&select),
             rows: rows
@@ -567,5 +910,119 @@ impl Engine for StreamEngine {
                 })
                 .collect(),
         }])
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code fails fast (db-core#230)"
+)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#299 MC/DC backfill).
+
+    use super::{Range, ScopeReport, StreamEngine, Value};
+    use crate::engine::Engine as _;
+
+    fn temp_log_with(text: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "db-core-engine-stream-mcdc-{}-{n}.log",
+            std::process::id()
+        ));
+        std::fs::write(&p, text).unwrap();
+        p
+    }
+
+    // stream_357 (`requests`): `is_predefined(col) || self.fields.iter().any(|f| f == col)`
+    #[test]
+    fn mcdc__stream_357__v1_predefined_alone_is_enough() {
+        let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
+        let e = StreamEngine::open(&p).unwrap();
+        // "severity" is predefined (true) and not a seen Tier-3 field
+        // (false) -- the first leaf alone makes this resolve.
+        assert!(e.requests(&["severity".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn mcdc__stream_357__v2_seen_tier3_field_alone_is_enough() {
+        let p = temp_log_with("<134>Sep 10 08:00:01 h nginx[7]: msg\n");
+        let e = StreamEngine::open(&p).unwrap();
+        // "pid" is not predefined (false) but was seen as a Tier-3 field
+        // (true) -- the second leaf alone makes this resolve.
+        assert!(e.requests(&["pid".to_string()]).is_ok());
+    }
+
+    #[test]
+    fn mcdc__stream_357__v3_neither_is_unknown() {
+        let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
+        let e = StreamEngine::open(&p).unwrap();
+        // Not predefined and never seen as a field -- both leafs false.
+        assert!(e.requests(&["not_a_real_column".to_string()]).is_err());
+    }
+
+    fn report() -> ScopeReport {
+        ScopeReport {
+            lines: 0,
+            first_ts: None,
+            last_ts: None,
+            scope_requested: crate::vm::stream::Scope::All,
+            scope_available: crate::vm::stream::Scope::All,
+            capped: true,
+        }
+    }
+
+    fn parse(sql: &str) -> crate::parser::ast::Select {
+        crate::parser::parse(sql).unwrap()
+    }
+
+    // stream_474 (`merge_retained_summaries`):
+    // `!select.group_by.is_empty() || select.where_clause.is_some()`
+    #[test]
+    fn mcdc__stream_474__v1_group_by_alone_short_circuits() {
+        let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
+        let e = StreamEngine::open(&p).unwrap();
+        let select = parse("SELECT severity, count(*) FROM log GROUP BY severity");
+        let rows: Vec<Vec<Value>> = vec![vec![Value::Int(1)]];
+        let mut rep = report();
+        // GROUP BY present (true), no WHERE (false) -- the first leaf
+        // alone short-circuits: `rows` comes back untouched.
+        let out = e.merge_retained_summaries(&select, Some(0..1), rows.clone(), &mut rep);
+        assert_eq!(out, rows);
+    }
+
+    #[test]
+    fn mcdc__stream_474__v2_where_alone_short_circuits() {
+        let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
+        let e = StreamEngine::open(&p).unwrap();
+        let select = parse("SELECT count(*) FROM log WHERE severity >= 0");
+        let rows: Vec<Vec<Value>> = vec![vec![Value::Int(1)]];
+        let mut rep = report();
+        // No GROUP BY (false), WHERE present (true) -- the second leaf
+        // alone short-circuits: `rows` comes back untouched.
+        let out = e.merge_retained_summaries(&select, Some(0..1), rows.clone(), &mut rep);
+        assert_eq!(out, rows);
+    }
+
+    #[test]
+    fn mcdc__stream_474__v3_neither_lets_the_merge_proceed() {
+        let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n<134>Sep 10 08:00:02 h app: msg\n");
+        let mut e = StreamEngine::open_with_budget(&p, 1).unwrap();
+        e.refresh().unwrap(); // no-op; establishes a deterministic ring state
+        let select = parse("SELECT count(*) FROM log");
+        // Neither GROUP BY nor WHERE (both false) -- the guard does not
+        // short-circuit, so the merge path (retained-summary lookup) runs;
+        // whether it changes `rows` depends on the ring, not this guard.
+        let rows: Vec<Vec<Value>> = vec![vec![Value::Int(1)]];
+        let mut rep = report();
+        let range: Range<i64> = i64::MIN..i64::MAX;
+        let _ = e.merge_retained_summaries(&select, Some(range), rows, &mut rep);
     }
 }

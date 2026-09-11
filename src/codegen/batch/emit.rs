@@ -712,8 +712,12 @@ fn render_expr_kind(kind: &ExprKind) -> String {
             rust_str_literal(name),
             render_function_args(args),
             match tail {
+                // `range` (#308) is stream-only: `codegen::batch` never
+                // plans a call carrying one (rejected upstream, same as
+                // `Select::scope`), so this emits a literal `None` rather
+                // than rendering `t.range` at all.
                 Some(t) => format!(
-                    "Some(Box::new(FunctionTail {{ filter: {}, over: {} }}))",
+                    "Some(Box::new(FunctionTail {{ filter: {}, over: {}, range: None }}))",
                     match &t.filter {
                         Some(f) => format!("Some({})", render_expr(f)),
                         None => "None".to_string(),

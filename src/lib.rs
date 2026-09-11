@@ -68,6 +68,7 @@
 /// fails the build if the two drift, so bump both together on release.
 pub const VERSION: &str = "0.86.0";
 
+pub mod clock;
 pub mod coerce;
 pub mod compare;
 pub mod functions;

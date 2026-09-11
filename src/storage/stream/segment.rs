@@ -71,6 +71,79 @@ impl OwnedColumn {
     }
 }
 
+/// Universal per-column stats computed once at seal, independent of any
+/// query (#308) -- a segment evicted before any aggregate ever asked for
+/// it still answers `COUNT`/`SUM`/`MIN`/`MAX` over its numeric columns
+/// (and `COUNT` over its dict columns) from this alone. Dict columns
+/// carry no `min`/`max`/`sum`: they are categorical, and their dictionary
+/// itself (kept alongside the segment) already answers "does this value
+/// occur" without a summary.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ColumnSummary {
+    /// Non-null values seen.
+    pub count: u64,
+    /// Smallest non-null value (numeric columns only; `0.0` if `count == 0`).
+    pub min: f64,
+    /// Largest non-null value (numeric columns only; `0.0` if `count == 0`).
+    pub max: f64,
+    /// Sum of non-null values, for `AVG` derivation (numeric columns only).
+    pub sum: f64,
+}
+
+/// A sealed segment's universal summary: total rows plus one
+/// [`ColumnSummary`] per Tier-3 numeric or dictionary column.
+#[derive(Debug, Clone, Default)]
+pub struct SegmentSummary {
+    /// Rows in the segment -- `COUNT(*)`'s answer directly.
+    pub rows: u64,
+    /// `(field name, summary)`, in the same order as the segment's own
+    /// `field_names`/`field_cols`.
+    pub columns: Vec<(Arc<str>, ColumnSummary)>,
+}
+
+impl SegmentSummary {
+    /// The summary for one Tier-3 field, if it was numeric or a
+    /// dictionary (a `Str`/`Bool` column has no entry here).
+    #[must_use]
+    pub fn column(&self, name: &str) -> Option<&ColumnSummary> {
+        self.columns
+            .iter()
+            .find(|(n, _)| n.as_ref() == name)
+            .map(|(_, s)| s)
+    }
+}
+
+/// One pass over an already-materialized column, single fixed-size
+/// accumulator: `Str`/`Bool` are skipped (not summarized) since neither
+/// has a query-relevant numeric reduction.
+fn summarize_column(col: &OwnedColumn) -> Option<ColumnSummary> {
+    match col {
+        OwnedColumn::Int(v) => Some(fold_numeric(v.iter().filter_map(|x| x.map(|n| n as f64)))),
+        OwnedColumn::Float(v) => Some(fold_numeric(v.iter().filter_map(|x| *x))),
+        OwnedColumn::Dict { indices, .. } => Some(ColumnSummary {
+            count: indices.iter().filter(|i| i.is_some()).count() as u64,
+            ..ColumnSummary::default()
+        }),
+        OwnedColumn::Str(_) | OwnedColumn::Bool(_) => None,
+    }
+}
+
+fn fold_numeric(values: impl Iterator<Item = f64>) -> ColumnSummary {
+    let mut acc = ColumnSummary::default();
+    for v in values {
+        if acc.count == 0 {
+            acc.min = v;
+            acc.max = v;
+        } else {
+            acc.min = acc.min.min(v);
+            acc.max = acc.max.max(v);
+        }
+        acc.sum += v;
+        acc.count = acc.count.saturating_add(1);
+    }
+    acc
+}
+
 /// A sealed segment.
 #[derive(Debug)]
 pub struct Segment {
@@ -86,6 +159,7 @@ pub struct Segment {
     field_cols: Vec<OwnedColumn>,
     minmax_event: Option<MinMax>,
     minmax_observed: Option<MinMax>,
+    summary: SegmentSummary,
     source: Source,
     resource: Resource,
 }
@@ -145,9 +219,20 @@ impl Segment {
             }
         }
 
+        let summary = SegmentSummary {
+            rows: batch.len() as u64,
+            columns: field_names
+                .iter()
+                .cloned()
+                .zip(&field_cols)
+                .filter_map(|(name, col)| summarize_column(col).map(|s| (name, s)))
+                .collect(),
+        };
+
         Self {
             minmax_event: minmax(&batch.timestamp_ns),
             minmax_observed: minmax(&batch.observed_ts_ns),
+            summary,
             lines,
             message,
             event_ts_ns: batch.timestamp_ns.clone(),
@@ -253,6 +338,13 @@ impl Segment {
     #[must_use]
     pub const fn minmax_observed(&self) -> Option<MinMax> {
         self.minmax_observed
+    }
+
+    /// This segment's universal per-column summary (#308), computed once
+    /// at seal -- still answerable after the segment itself is evicted.
+    #[must_use]
+    pub const fn summary(&self) -> &SegmentSummary {
+        &self.summary
     }
 
     /// Whether any event timestamp may fall in `range` (segments without
@@ -409,6 +501,52 @@ mod tests {
     }
 
     #[test]
+    fn summary_covers_dict_columns_and_skips_str_columns() {
+        let b = block("<134>Sep 10 08:00:01 web01 nginx[12]: GET /a 200\n<131>Sep 10 08:00:02 web01 postgres[7]: ERROR: nope\n");
+        let segs = Segment::seal_block(&b, &src(), &SyslogParser::with_year(2026), 42);
+        let s = &segs[0];
+        let summary = s.summary();
+        assert_eq!(summary.rows, 2);
+        // `tag` is a `Dict` column: count only, no min/max/sum.
+        let tag = summary.column("tag").expect("tag is Tier-3");
+        assert_eq!(tag.count, 2);
+        assert_eq!((tag.min, tag.max, tag.sum), (0.0, 0.0, 0.0));
+        // `pid` starts as a low-cardinality `Dict` too (`FieldColumn::
+        // new_str` always starts `Dict`, degrading to `Str` only past
+        // `DICT_CARDINALITY_THRESHOLD`) -- count only, same as `tag`.
+        let pid = summary.column("pid").expect("pid stays Dict at 2 rows");
+        assert_eq!(pid.count, 2);
+        assert_eq!((pid.min, pid.max, pid.sum), (0.0, 0.0, 0.0));
+        assert_eq!(s.field("tag").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn summarize_column_computes_count_min_max_sum_over_int_and_float() {
+        let ints = OwnedColumn::Int(vec![Some(10), None, Some(-4), Some(6)]);
+        let s = summarize_column(&ints).expect("Int is summarized");
+        assert_eq!(s.count, 3);
+        assert_eq!((s.min, s.max), (-4.0, 10.0));
+        assert!((s.sum - 12.0).abs() < f64::EPSILON);
+
+        let floats = OwnedColumn::Float(vec![Some(0.5), Some(1.5)]);
+        let s = summarize_column(&floats).expect("Float is summarized");
+        assert_eq!(s.count, 2);
+        assert!((s.sum - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn summarize_column_skips_str_and_bool() {
+        assert!(summarize_column(&OwnedColumn::Str(vec![Some((0, 1))])).is_none());
+        assert!(summarize_column(&OwnedColumn::Bool(vec![Some(true)])).is_none());
+    }
+
+    #[test]
+    fn summarize_column_all_null_int_reports_zero_count_and_defaults() {
+        let s = summarize_column(&OwnedColumn::Int(vec![None, None])).expect("Int is summarized");
+        assert_eq!((s.count, s.min, s.max, s.sum), (0, 0.0, 0.0, 0.0));
+    }
+
+    #[test]
     fn minmax_and_overlap() {
         let b = block("<134>Sep 10 08:00:01 h a: x\n<134>Sep 10 08:00:05 h a: y\n");
         let segs = Segment::seal_block(&b, &src(), &SyslogParser::with_year(2026), 0);
@@ -456,9 +594,9 @@ mod mcdc_vectors {
         Source::new(SourceKind::File, "/var/log/t.log")
     }
 
-    // segment_108: `consumed == 0 || batch.is_empty()`
+    // segment_182: `consumed == 0 || batch.is_empty()`
     #[test]
-    fn mcdc__segment_108__v1_both_true_no_newline_at_all() {
+    fn mcdc__segment_182__v1_both_true_no_newline_at_all() {
         // No `\n` anywhere: parse_batch never advances `consumed` and
         // never parses a line, so both leafs are true.
         let b = block("no newline here");
@@ -467,7 +605,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__segment_108__v2_consumed_nonzero_but_batch_empty() {
+    fn mcdc__segment_182__v2_consumed_nonzero_but_batch_empty() {
         // A lone blank line: `consumed` advances past the `\n` (nonzero,
         // so the first leaf is false), but the empty line before it isn't
         // parsed into a row, so `batch.is_empty()` is true.
@@ -477,7 +615,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__segment_108__v3_both_false_makes_progress() {
+    fn mcdc__segment_182__v3_both_false_makes_progress() {
         // A complete, non-blank line: `consumed` advances (false) and the
         // batch gets a row (`is_empty()` false) -- neither leaf breaks the
         // loop, so a segment is produced.

@@ -388,6 +388,12 @@ pub struct FunctionTail {
     pub filter: Option<Expr>,
     /// `OVER (...)`'s window spec, if given.
     pub over: Option<WindowDef>,
+    /// `[<duration>]` (#308, ADR 0018 §Opcodes' `Window`/`RangeAgg`):
+    /// a Loki-style range-vector selector immediately after a function
+    /// call, e.g. `count_over_time(message)[5m]`. Stream-only, like
+    /// [`Select::scope`] -- `codegen::stream` is the only planner that
+    /// interprets it; `row`/`batch` reject a call carrying one.
+    pub range: Option<ScopeBound>,
 }
 
 /// `LIMIT limit [OFFSET offset]`.

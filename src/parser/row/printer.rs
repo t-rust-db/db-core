@@ -317,6 +317,9 @@ impl fmt::Display for Expr {
                 }
                 write!(f, ")")?;
                 if let Some(tail) = tail {
+                    if let Some(range) = &tail.range {
+                        write!(f, " RANGE {} {}", range.amount, range.unit)?;
+                    }
                     if let Some(filter) = &tail.filter {
                         write!(f, " FILTER (WHERE {filter})")?;
                     }

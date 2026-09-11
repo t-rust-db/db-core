@@ -24,11 +24,13 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::codegen::batch::{self as batch_planner, PlanError};
-use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, ResultColumn, ScopeUnit, Select};
+use crate::parser::ast::{
+    BinaryOp, Expr, ExprKind, FunctionArgs, Literal, ResultColumn, ScopeBound, ScopeUnit, Select,
+};
 use crate::parser::Span;
 use crate::storage::stream::Severity;
 use crate::vm::batch::Program as BatchProgram;
-use crate::vm::stream::{IndexPred, Program, Prune};
+use crate::vm::stream::{Epilogue, IndexPred, Program, Prune, RangeAggFunc, Watermark, Window};
 
 pub use crate::vm::stream::Scope;
 
@@ -87,7 +89,14 @@ pub type Result<T> = std::result::Result<T, StreamPlanError>;
 /// caller (query `SINCE`/`UNTIL` > CLI > config > built-in default, ADR
 /// 0018 §Scope and retention; `Scope`'s own default lives in the client,
 /// not here).
-pub fn compile(select: &Select, scope: Scope) -> Result<Program> {
+///
+/// `now_ns` resolves `SINCE`/`UNTIL` to an absolute `IndexPred::TimeRange`
+/// (#308: this used to read the wall clock directly, which desyncs from
+/// an `engine::stream::StreamEngine` running on an injected
+/// `crate::clock::Clock` -- e.g. any test using `FakeClock` -- since a
+/// segment's `observed_ts_ns` is stamped from that same engine clock,
+/// not from real time).
+pub fn compile(select: &Select, scope: Scope, now_ns: i64) -> Result<Program> {
     validate(select, &scope)?;
 
     let mut select = select.clone();
@@ -96,21 +105,160 @@ pub fn compile(select: &Select, scope: Scope) -> Result<Program> {
     let mut preds = Vec::new();
     if let Some(clause) = select.scope.take() {
         if let Some(since) = clause.since {
-            preds.extend(time_pred(&since, scope_now_ns(), true));
+            preds.extend(time_pred(&since, now_ns, true));
         }
         if let Some(until) = clause.until {
-            preds.extend(time_pred(&until, scope_now_ns(), false));
+            preds.extend(time_pred(&until, now_ns, false));
         }
     }
     if let Some(where_clause) = &select.where_clause {
         collect_dict_eq(where_clause, &mut preds);
     }
 
+    if let Some(range_vector) = range_vector_query(&select)? {
+        let (residual, epilogue) = range_vector;
+        let body: BatchProgram = batch_planner::compile(&residual)?;
+        return Ok(Program {
+            prune: Prune { scope, preds },
+            body,
+            epilogue: Some(epilogue),
+        });
+    }
+
     let body: BatchProgram = batch_planner::compile(&select)?;
     Ok(Program {
         prune: Prune { scope, preds },
         body,
+        epilogue: None,
     })
+}
+
+/// If `select` is exactly one range-vector call --
+/// `<count|sum|avg|min|max>_over_time(<*|column>) RANGE <duration>` or
+/// `rate(<*|column>) RANGE <duration>`, with no `GROUP BY`/`HAVING`/
+/// `ORDER BY`/`LIMIT`/`DISTINCT` (#308's narrow SQL surface: one call,
+/// nothing else) -- the [`Epilogue`] it lowers to, plus a residual
+/// `Select` that just projects `(timestamp, <argument column>)` for
+/// `codegen::batch` to compile: the actual window bucketing/reduction
+/// happens in [`crate::vm::stream::run_epilogue`], not in the `vm::batch`
+/// body, so the body's only job is handing over the two columns that
+/// need.
+///
+/// `None` for every other shape -- an ordinary query, or a call to one
+/// of these names *without* a `RANGE` tail (that's just an unknown
+/// function name to `codegen::batch`, unrelated to this feature).
+fn range_vector_query(select: &Select) -> Result<Option<(Select, Epilogue)>> {
+    let [ResultColumn::Expr { expr, alias: _ }] = select.columns.as_slice() else {
+        return Ok(None);
+    };
+    let Expr {
+        kind:
+            ExprKind::FunctionCall {
+                name,
+                distinct: false,
+                args,
+                tail: Some(tail),
+            },
+        span,
+    } = expr
+    else {
+        return Ok(None);
+    };
+    let Some(range) = &tail.range else {
+        return Ok(None);
+    };
+    let Some(func) = RangeAggFunc::from_name(name) else {
+        return Ok(None);
+    };
+    if !select.group_by.is_empty()
+        || select.having.is_some()
+        || !select.order_by.is_empty()
+        || select.limit.is_some()
+    {
+        return Err(StreamPlanError::Rejected {
+            message: format!(
+                "{name}(...) RANGE ...: a range-vector query stands alone -- \
+                 no GROUP BY/HAVING/ORDER BY/LIMIT"
+            ),
+            span: *span,
+        });
+    }
+    let size = scope_bound_duration(range)?;
+
+    let arg_column = match args {
+        FunctionArgs::Star => None,
+        FunctionArgs::List(list) => match list.as_slice() {
+            [] if matches!(func, RangeAggFunc::Count | RangeAggFunc::Rate) => None,
+            [Expr {
+                kind: ExprKind::Column {
+                    table: None, name, ..
+                },
+                ..
+            }] => Some(name.clone()),
+            _ => {
+                return Err(StreamPlanError::Rejected {
+                    message: format!("{name}(...): argument must be a bare column or `*`"),
+                    span: *span,
+                })
+            }
+        },
+    };
+    if arg_column.is_none() && !matches!(func, RangeAggFunc::Count | RangeAggFunc::Rate) {
+        return Err(StreamPlanError::Rejected {
+            message: format!("{name}(*) has no value to reduce; give it a column"),
+            span: *span,
+        });
+    }
+
+    let value_column = arg_column.unwrap_or_else(|| "timestamp".to_string());
+    let residual = Select {
+        columns: vec![column_result("timestamp"), column_result(&value_column)],
+        scope: select.scope.clone(),
+        where_clause: select.where_clause.clone(),
+        ..select.clone()
+    };
+
+    let epilogue = Epilogue {
+        window: Window { size, step: size },
+        func,
+        // No `WATERMARK` SQL clause exists yet to set grace
+        // independently -- one window's width is a reasonable default
+        // (ADR 0018 gives the formula, not a number).
+        watermark: Watermark { grace: size },
+    };
+    Ok(Some((residual, epilogue)))
+}
+
+fn column_result(name: &str) -> ResultColumn {
+    ResultColumn::Expr {
+        expr: Expr {
+            kind: ExprKind::Column {
+                table: None,
+                catalog: None,
+                name: name.to_string(),
+            },
+            span: Span::UNKNOWN,
+        },
+        alias: None,
+    }
+}
+
+/// A [`ScopeBound`]'s amount+unit as a `Duration` -- rejecting
+/// `Lines`/`Bytes` units, which have no fixed time width to bucket by.
+fn scope_bound_duration(bound: &ScopeBound) -> Result<Duration> {
+    let secs = match bound.unit {
+        ScopeUnit::Seconds => bound.amount,
+        ScopeUnit::Minutes => bound.amount.saturating_mul(60),
+        ScopeUnit::Hours => bound.amount.saturating_mul(3_600),
+        ScopeUnit::Days => bound.amount.saturating_mul(86_400),
+        ScopeUnit::Lines | ScopeUnit::Bytes => {
+            return Err(StreamPlanError::Rejected {
+                message: "RANGE needs a time unit (s/m/h/d), not lines/bytes".to_string(),
+                span: bound.span,
+            })
+        }
+    };
+    Ok(Duration::from_secs(secs))
 }
 
 /// v1 reject-based validation (ADR 0002): joins have no plan here (the
@@ -252,16 +400,6 @@ fn time_pred(bound: &crate::parser::ast::ScopeBound, now_ns: i64, since: bool) -
     }
 }
 
-fn scope_now_ns() -> i64 {
-    i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_nanos(),
-    )
-    .unwrap_or(i64::MAX)
-}
-
 /// Rewrite every `severity <cmp> '<name>'` (either side) in `WHERE`,
 /// `HAVING` and the result list into its numeric code. Moved here from
 /// `engine::stream::rewrite` (ADR 0018: this is `codegen::stream`'s once
@@ -333,7 +471,7 @@ mod tests {
 
     fn compiled(sql: &str, scope: Scope) -> Result<Program> {
         let select = parse(sql).unwrap();
-        compile(&select, scope)
+        compile(&select, scope, 0)
     }
 
     #[test]
@@ -427,5 +565,108 @@ mod tests {
             .columns_to_load()
             .iter()
             .any(|c| c == "severity"));
+    }
+
+    fn default_scope() -> Scope {
+        Scope::Time(Duration::from_secs(3600))
+    }
+
+    // stream_173 (`range_vector_query`): `!select.group_by.is_empty() ||
+    // select.having.is_some() || !select.order_by.is_empty() ||
+    // select.limit.is_some()`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__stream_173__v1_all_false_compiles() {
+        let program = compiled(
+            "SELECT count_over_time(message) RANGE 10 seconds FROM log",
+            default_scope(),
+        )
+        .unwrap();
+        assert!(program.epilogue.is_some());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__stream_173__v2_group_by_alone_rejects() {
+        let err = compiled(
+            "SELECT count_over_time(message) RANGE 10 seconds FROM log GROUP BY severity",
+            default_scope(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("stands alone"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__stream_173__v3_having_alone_rejects() {
+        // `HAVING` has no grammar/validator support at all yet (rejected
+        // unconditionally, pre-existing and unrelated to #308), so this
+        // leaf can't be exercised through `parse` -- built directly
+        // instead, on an otherwise-plain range-vector `Select`.
+        let mut select =
+            parse("SELECT count_over_time(message) RANGE 10 seconds FROM log").unwrap();
+        select.having = Some(Expr {
+            kind: ExprKind::Literal(Literal::Integer(1)),
+            span: Span::UNKNOWN,
+        });
+        let err = compile(&select, default_scope(), 0).unwrap_err();
+        assert!(err.to_string().contains("stands alone"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__stream_173__v4_order_by_alone_rejects() {
+        let err = compiled(
+            "SELECT count_over_time(message) RANGE 10 seconds FROM log ORDER BY severity",
+            default_scope(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("stands alone"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__stream_173__v5_limit_alone_rejects() {
+        let err = compiled(
+            "SELECT count_over_time(message) RANGE 10 seconds FROM log LIMIT 5",
+            default_scope(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("stands alone"));
+    }
+
+    // stream_206 (`range_vector_query`): `arg_column.is_none() &&
+    // !matches!(func, RangeAggFunc::Count | RangeAggFunc::Rate)`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__stream_206__v1_both_true_rejects_sum_with_no_column() {
+        let err = compiled(
+            "SELECT sum_over_time(*) RANGE 10 seconds FROM log",
+            default_scope(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("has no value to reduce"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__stream_206__v2_no_column_but_count_is_fine() {
+        let program = compiled(
+            "SELECT count_over_time(*) RANGE 10 seconds FROM log",
+            default_scope(),
+        )
+        .unwrap();
+        assert!(program.epilogue.is_some());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__stream_206__v3_a_column_is_fine_even_for_sum() {
+        let program = compiled(
+            "SELECT sum_over_time(severity) RANGE 10 seconds FROM log",
+            default_scope(),
+        )
+        .unwrap();
+        assert!(program.epilogue.is_some());
     }
 }
