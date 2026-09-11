@@ -673,6 +673,204 @@ fn window_function_in_the_select_list_is_unsupported() {
 }
 
 #[test]
+fn comparison_and_logical_operators_in_the_select_list_materialize_0_1_or_null() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT a = 1, a <> 1, a IS NULL, a IS NOT NULL, a > 0 AND a < 2, a = NULL FROM t",
+        vec![(1, vec![Value::Integer(1)]), (2, vec![Value::Null])],
+    );
+    assert_eq!(
+        rows,
+        vec![
+            vec![
+                Value::Integer(1),
+                Value::Integer(0),
+                Value::Integer(0),
+                Value::Integer(1),
+                Value::Integer(1),
+                Value::Null,
+            ],
+            vec![
+                Value::Null,
+                Value::Null,
+                Value::Integer(1),
+                Value::Integer(0),
+                Value::Null,
+                Value::Null,
+            ],
+        ]
+    );
+}
+
+#[test]
+fn cast_expression_forces_target_affinity() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT CAST(a AS INTEGER), CAST(a AS TEXT) FROM t",
+        vec![(1, vec![Value::Text("42".into())])],
+    );
+    assert_eq!(
+        rows,
+        vec![vec![Value::Integer(42), Value::Text("42".into())]]
+    );
+}
+
+#[test]
+fn case_without_operand_matches_the_first_true_when() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT CASE WHEN a > 10 THEN 'big' WHEN a > 0 THEN 'small' ELSE 'non-positive' END FROM t",
+        vec![
+            (1, vec![Value::Integer(20)]),
+            (2, vec![Value::Integer(5)]),
+            (3, vec![Value::Integer(-1)]),
+        ],
+    );
+    assert_eq!(
+        rows,
+        vec![
+            vec![Value::Text("big".into())],
+            vec![Value::Text("small".into())],
+            vec![Value::Text("non-positive".into())],
+        ]
+    );
+}
+
+#[test]
+fn case_with_operand_compares_equality_against_each_when() {
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT CASE a WHEN 1 THEN 'one' WHEN 2 THEN 'two' END FROM t",
+        vec![(1, vec![Value::Integer(2)]), (2, vec![Value::Integer(3)])],
+    );
+    assert_eq!(
+        rows,
+        vec![vec![Value::Text("two".into())], vec![Value::Null]]
+    );
+}
+
+#[test]
+fn case_branch_result_kinds_cover_every_emit_branch_into_shape() {
+    // Exercises every `emit_branch_into` literal/column/fallback arm in
+    // one query: an integer literal, TRUE/FALSE, a string, a float, a
+    // blob, an explicit NULL, a bare column, and a computed expression
+    // (the `compile_value` + `Copy` fallback).
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT \
+           CASE a WHEN 1 THEN 100 WHEN 2 THEN TRUE WHEN 3 THEN FALSE \
+                  WHEN 4 THEN 'x' WHEN 5 THEN 1.5 WHEN 6 THEN x'ab' \
+                  WHEN 7 THEN NULL WHEN 8 THEN a ELSE a + 1 END \
+         FROM t",
+        vec![
+            (1, vec![Value::Integer(1)]),
+            (2, vec![Value::Integer(2)]),
+            (3, vec![Value::Integer(3)]),
+            (4, vec![Value::Integer(4)]),
+            (5, vec![Value::Integer(5)]),
+            (6, vec![Value::Integer(6)]),
+            (7, vec![Value::Integer(7)]),
+            (8, vec![Value::Integer(8)]),
+            (9, vec![Value::Integer(9)]),
+        ],
+    );
+    assert_eq!(
+        rows,
+        vec![
+            vec![Value::Integer(100)],
+            vec![Value::Integer(1)],
+            vec![Value::Integer(0)],
+            vec![Value::Text("x".into())],
+            vec![Value::Real(1.5)],
+            vec![Value::Blob(vec![0xab].into())],
+            vec![Value::Null],
+            vec![Value::Integer(8)],
+            vec![Value::Integer(10)],
+        ]
+    );
+}
+
+#[test]
+fn case_with_no_matching_when_and_no_else_is_null_and_does_not_leak_across_rows() {
+    // #134's fix: `dest` is a reused register across scan iterations,
+    // so a no-match/no-ELSE row must not see a prior row's result.
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT CASE WHEN a = 1 THEN 'matched' END FROM t",
+        vec![(1, vec![Value::Integer(1)]), (2, vec![Value::Integer(2)])],
+    );
+    assert_eq!(
+        rows,
+        vec![vec![Value::Text("matched".into())], vec![Value::Null]]
+    );
+}
+
+#[test]
+fn between_in_exists_and_in_subquery_in_the_select_list() {
+    let schemas = [
+        schema_with_root("t", &["a"], 2),
+        schema_with_root("u", &["a"], 3),
+    ];
+    let program = compile_statement(
+        "SELECT a BETWEEN 1 AND 3, a IN (2, 4), EXISTS (SELECT 1 FROM u), \
+                a IN (SELECT a FROM u) \
+         FROM t",
+        &schemas,
+        &[],
+    )
+    .unwrap();
+    let mut vm = Vm::new();
+    let mut t = EphemeralTableCursor::new();
+    t.insert(1, ints(&[2]));
+    t.insert(2, ints(&[9]));
+    vm.open_cursor(0, Box::new(t)).unwrap();
+    for instr in &program.instructions {
+        if instr.opcode == Opcode::OpenRead && instr.p2 == 3 {
+            let mut u = EphemeralTableCursor::new();
+            u.insert(1, ints(&[2]));
+            vm.open_cursor(instr.p1, Box::new(u)).unwrap();
+        }
+    }
+    let rows = execute(&mut vm, &program).unwrap();
+    assert_eq!(
+        rows,
+        vec![
+            vec![
+                Value::Integer(1),
+                Value::Integer(1),
+                Value::Integer(1),
+                Value::Integer(1),
+            ],
+            vec![
+                Value::Integer(0),
+                Value::Integer(0),
+                Value::Integer(1),
+                Value::Integer(0),
+            ],
+        ]
+    );
+}
+
+#[test]
+fn scalar_subquery_in_the_select_list() {
+    let schemas = [
+        schema_with_root("t", &["a"], 2),
+        schema_with_root("bound", &["n"], 3),
+    ];
+    let program = compile_statement("SELECT (SELECT n FROM bound) FROM t", &schemas, &[]).unwrap();
+    let mut vm = Vm::new();
+    let mut t = EphemeralTableCursor::new();
+    t.insert(1, ints(&[1]));
+    vm.open_cursor(0, Box::new(t)).unwrap();
+    let mut bound = EphemeralTableCursor::new();
+    bound.insert(1, ints(&[10]));
+    vm.open_cursor(cursor_slot_for_root(&program, 3), Box::new(bound))
+        .unwrap();
+    let rows = execute(&mut vm, &program).unwrap();
+    assert_eq!(rows, vec![vec![Value::Integer(10)]]);
+}
+
+#[test]
 fn aggregate_used_as_a_plain_scalar_argument_is_unsupported() {
     // `abs(count(*))` reaches `compile_value` for the *inner* `count(*)`
     // in a context this V2 compiler's aggregate pass never sees.
