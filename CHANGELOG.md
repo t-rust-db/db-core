@@ -1,5 +1,23 @@
 # Changelog
 
+All notable changes to db-core. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
+
+**Versioning policy:** one crate, one version, one tag per release.
+
+## [0.85.0] - 2026-09-11
+
+### Added
+
+- **`engine::stream::StreamEngine`** (#305, ADR 0018 phase 2): full SQL over a live syslog file through the batch VM with zero new opcodes. Tail-first open into a `Ring`; parse → `expand_star` → severity-literal rewrite → `codegen::batch::compile` → `vm::engine::run` over one `StreamSegment` per ring segment. `refresh()`, `segments(cols)`, `tail_source(cols, ..)`, `stats() → FileStats::Stream`, `tables()`. Feature `engine-stream`.
+- **`storage::stream::adapter`**: `StreamSegment: vm::batch::Segment` materializes only `Program::columns_to_load()` (unknown column is a `SegmentLoad` error, never NULLs); `TailSource: vm::batch::Source` yields appended complete lines batch-at-a-time.
+- **Severity-literal rewrite** (`engine/stream/rewrite.rs`): `severity >= 'WARN'` becomes `>= 13` before planning; unknown names are `Compile` errors. Moves to `codegen::stream` with #306.
+- Benchmark `stream_materialize`: typed/dictionary column filter ~430 M rows/s; all-columns load ~7 M rows/s (string allocation), recorded in ADR 0018 §Consequences.
+
+### Fixed
+
+- Syslog timestamp parse accepted only RFC 3164 space-padded days; `Sep 9` shifted hostname, tag and message on every such line (#332).
+- `src/lib.rs::VERSION` had drifted from `Cargo.toml` (0.84.0 vs 0.84.1) and the 0.84.1 changelog entry displaced the file header; both repaired.
+
 ## [0.84.1] - 2026-09-11
 
 ### Fixed
@@ -7,12 +25,6 @@
 
 ### Changed
 - MC/DC test coverage expanded for storage-layer multi-leaf boolean decisions (131/132 obligations discharged)
-
-## [0.84.0] - 2026-01-05
-
-All notable changes to db-core. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
-
-**Versioning policy:** one crate, one version, one tag per release.
 
 ## [0.84.0] - 2026-09-10
 
