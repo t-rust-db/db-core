@@ -476,6 +476,7 @@ where
         compound: Vec::new(),
         order_by: Vec::new(),
         limit: None,
+        scope: None,
         span: select.span,
     };
     let cols = result_columns(&throwaway, &synthetic_schema);

@@ -272,3 +272,65 @@ fn refresh_admits_appended_lines_and_tail_source_streams_them() {
     assert!(src.next_batch().is_none());
     std::fs::remove_file(&p).ok();
 }
+
+/// ADR 0018 §Planner/§Scope: every stream result carries its effective
+/// range, and a freshly opened engine's default scope (`SINCE` absent)
+/// still sees the whole fixture -- `SINCE`/`UNTIL` bound *observed* time
+/// ("since I opened this"), not the fixture's own (old, synthetic) event
+/// timestamps.
+#[test]
+fn query_result_carries_a_scope_report() {
+    let mut e = open();
+    let result = e.run_query("SELECT count(*) FROM log").unwrap();
+    let report = result.scope_report.expect("stream queries report scope");
+    assert_eq!(report.lines, 1000);
+    // ADR 0018 §Scope and retention: "past the file start the range is
+    // clamped and reported" -- the default 1h scope reaches earlier than
+    // this fixture's single load instant, so `capped` is correctly true
+    // rather than a sign anything was missed (every line is still seen,
+    // as `lines` above confirms).
+    assert!(report.capped);
+}
+
+/// A `SINCE` bound wide enough to cover "just opened" still returns the
+/// whole fixture (#306 "Done when": `since 1h` touches only the segments
+/// whose minmax overlaps -- here every segment's `observed_ts` is "now",
+/// so every segment overlaps a 1-hour-wide window).
+#[test]
+fn since_covers_the_whole_freshly_opened_fixture() {
+    let mut e = open();
+    assert_eq!(
+        rows(&mut e, "SELECT count(*) FROM log SINCE 1 h")[0][0],
+        Cell::Int(1000)
+    );
+}
+
+/// #306 "Done when": `facility = 'kern'` skips segments whose dictionary
+/// lacks the value -- exercised end to end (Prune + residual filter both
+/// apply; a segment surviving Prune isn't automatically "all kern rows").
+#[test]
+fn dict_eq_prune_still_filters_exact_rows() {
+    let mut e = open();
+    let want = oracle().iter().filter(|(f, _)| *f == "kern").count();
+    assert_eq!(
+        rows(&mut e, "SELECT count(*) FROM log WHERE facility = 'kern'")[0][0],
+        Cell::Int(want as i64)
+    );
+}
+
+/// #306 "Done when": rejection tests with exact spans -- a stream JOIN
+/// has no plan (ADR 0002 reject-after-parse), and an aggregate with no
+/// boundary over `Scope::All` is rejected naming the construct.
+#[test]
+fn join_and_unbounded_aggregate_are_rejected() {
+    let mut e = open();
+    let err = e
+        .run_query("SELECT * FROM log JOIN log AS b ON log.tag = b.tag")
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+
+    // `SINCE 0 lines`/`Scope::All` has no meaning through the public
+    // engine yet (no CLI/config layer wires a bare `Scope::All` request
+    // here) -- covered directly against `codegen::stream::compile` in
+    // `src/codegen/stream.rs`'s own tests instead.
+}

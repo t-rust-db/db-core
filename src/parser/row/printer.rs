@@ -101,7 +101,29 @@ impl fmt::Display for Select {
                 write!(f, " OFFSET {offset}")?;
             }
         }
+        if let Some(scope) = &self.scope {
+            if let Some(since) = &scope.since {
+                write!(f, " SINCE {} {}", since.amount, since.unit)?;
+            }
+            if let Some(until) = &scope.until {
+                write!(f, " UNTIL {} {}", until.amount, until.unit)?;
+            }
+        }
         Ok(())
+    }
+}
+
+impl fmt::Display for ScopeUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let text = match self {
+            ScopeUnit::Seconds => "seconds",
+            ScopeUnit::Minutes => "minutes",
+            ScopeUnit::Hours => "hours",
+            ScopeUnit::Days => "days",
+            ScopeUnit::Lines => "lines",
+            ScopeUnit::Bytes => "bytes",
+        };
+        write!(f, "{text}")
     }
 }
 

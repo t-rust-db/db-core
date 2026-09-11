@@ -656,6 +656,7 @@ fn compound_arm_as_select(arm: &CompoundSelect) -> Select {
         compound: Vec::new(),
         order_by: Vec::new(),
         limit: None,
+        scope: None,
         span: arm.span,
     }
 }

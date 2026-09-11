@@ -6,27 +6,30 @@
 //!
 //! The file is opened tail-first: the last `budget` bytes are read
 //! backwards, parsed and sealed into segments held by a [`Ring`]. Every
-//! query is parse → `expand_star` → severity-literal rewrite →
-//! `codegen::batch::compile` → `vm::engine::run` over one [`StreamSegment`]
-//! per ring segment, each materializing exactly the columns the program
+//! query is parse → `expand_star` → `codegen::stream::compile` (`Prune`
+//! prologue + a `vm::batch::Program` body) → segment selection over the
+//! `Prune` → `vm::engine::run` over one [`StreamSegment`] per surviving
+//! ring segment, each materializing exactly the columns the program
 //! loads. [`StreamEngine::refresh`] pulls appended lines into the ring;
 //! [`StreamEngine::tail_source`] hands the live head to a `vm::batch`
 //! program batch-at-a-time.
 //!
 //! The table is always named `log`. Single table only: `JOIN`,
 //! `IN (SELECT ...)` and window functions report
-//! [`ErrorKind::Unsupported`]. Queries run over what the ring holds (the
-//! default scope); scope semantics, pruning and read-through belong to
-//! `codegen::stream`.
+//! [`ErrorKind::Unsupported`]. Scope wider than the ring should read
+//! through the file via a sidecar index (ADR 0018); no sidecar exists
+//! yet (#323), so a query outside the ring's `Lines`/`Bytes`/`All` scope
+//! runs over what the ring holds and reports `capped` rather than
+//! reading further back.
 
-mod rewrite;
-
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::codegen::batch::{self as planner, PlanError, TableStats};
-use crate::parser::ast::{Expr, ExprKind, ResultColumn, Select};
+use crate::codegen::stream::{self as stream_planner, StreamPlanError};
+use crate::parser::ast::{Expr, ExprKind, ResultColumn, ScopeUnit, Select};
 use crate::parser::ParseError;
 use crate::storage::stream::adapter::{
     is_predefined, now_ns, ColumnRequest, StreamSegment, TailSource, PREDEFINED_COLUMNS,
@@ -34,12 +37,11 @@ use crate::storage::stream::adapter::{
 use crate::storage::stream::{
     LogFile, OwnedColumn, Refresh, Ring, Segment, Source, SourceKind, SyslogParser,
 };
-use crate::vm::batch::Program;
-use crate::vm::engine;
+use crate::vm::stream::{IndexPred, Program, Scope};
 
 use super::{
     single_statement, Cell, ColumnInfo, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeRow,
-    OpcodeSection, PlanRow, QueryResult, TableInfo,
+    OpcodeSection, PlanRow, QueryResult, ScopeReport, TableInfo,
 };
 
 /// The one table name a stream engine serves.
@@ -220,8 +222,7 @@ impl StreamEngine {
                 "window functions are not available through the stream engine yet",
             ));
         }
-        let mut select = planner::expand_star(&select, &self.columns()).map_err(plan_err)?;
-        rewrite::severity_literals(&mut select)?;
+        let select = planner::expand_star(&select, &self.columns()).map_err(plan_err)?;
         Ok(select)
     }
 
@@ -231,7 +232,8 @@ impl StreamEngine {
     /// so a cross-mode caller (#317) can apply the same rewrite this
     /// engine's own [`Self::parse_for_table`] does before planning a join.
     pub fn rewrite_severity_literals(select: &mut Select) -> Result<(), EngineError> {
-        rewrite::severity_literals(select)
+        crate::codegen::stream::rewrite_severity_literals(select)
+            .map_err(|e| EngineError::new(ErrorKind::Compile, e.to_string()))
     }
 
     /// Resolve a program's `columns_to_load()` (possibly table-qualified,
@@ -263,6 +265,86 @@ impl StreamEngine {
                 }
             })
             .collect()
+    }
+
+    /// Segments surviving `prune`, plus the effective range those
+    /// segments cover. `scope`/`SINCE`/`UNTIL` bound *observed* time --
+    /// "since I opened/ingested this" (ADR 0018's own distinction between
+    /// `event_ts_ns` and `observed_ts_ns`) -- so a fixture seeded with old
+    /// event timestamps but ingested just now still matches the default
+    /// scope; an ordinary `WHERE timestamp ...` predicate still filters
+    /// event time as part of the residual query. `DictEq` predicates then
+    /// drop any segment whose dictionary lacks the value
+    /// (`OwnedColumn::dict_contains`). `Scope::Lines`/`Bytes`/`All` have
+    /// no fixed nanosecond edge to prune by and no sidecar index to read
+    /// through yet (#323), so they fall back to every segment the ring
+    /// currently holds -- correct, just not narrowed.
+    fn select_segments(
+        &self,
+        prune: &crate::vm::stream::Prune,
+        columns: &[ColumnRequest],
+    ) -> (Vec<StreamSegment>, ScopeReport) {
+        let now = now_ns();
+        let requested_range = effective_time_range(&prune.scope, now, &prune.preds);
+        // Prune segments by time-range overlap vs. all segments in the ring.
+        let mut candidates: Vec<Arc<Segment>> = match &requested_range {
+            Some(range) => self
+                .ring
+                .segments()
+                .filter(|s| match s.minmax_observed() {
+                    Some((lo, hi)) => lo < range.end && hi >= range.start,
+                    None => true,
+                })
+                .cloned()
+                .collect(),
+            None => self.ring.segments().cloned().collect(),
+        };
+        for pred in &prune.preds {
+            if let IndexPred::DictEq { column, value } = pred {
+                candidates.retain(|s| {
+                    s.field(column)
+                        .and_then(|c| c.dict_contains(value))
+                        .unwrap_or(true)
+                });
+            }
+        }
+
+        let lines = candidates
+            .iter()
+            .map(|s| u64::try_from(s.len()).unwrap_or(u64::MAX))
+            .fold(0u64, u64::saturating_add);
+        let (first_ts, last_ts) = candidates.iter().filter_map(|s| s.minmax_event()).fold(
+            (None, None),
+            |(lo, hi), (mn, mx)| {
+                (
+                    Some(lo.map_or(mn, |l: i64| l.min(mn))),
+                    Some(hi.map_or(mx, |h: i64| h.max(mx))),
+                )
+            },
+        );
+        // Capped when the request reaches further back than the ring's
+        // oldest held line -- read-through would serve the rest once
+        // #323 lands; today the report is honest that it did not.
+        let capped = match (&requested_range, self.ring.segments().next()) {
+            (Some(range), Some(oldest)) => oldest
+                .minmax_observed()
+                .is_some_and(|(oldest_lo, _)| range.start < oldest_lo),
+            _ => false,
+        };
+
+        let segments = candidates
+            .into_iter()
+            .map(|s| StreamSegment::new(s, columns.to_vec()))
+            .collect();
+        let report = ScopeReport {
+            lines,
+            first_ts,
+            last_ts,
+            scope_requested: prune.scope,
+            scope_available: prune.scope,
+            capped,
+        };
+        (segments, report)
     }
 
     /// This engine's `log` table as a [`TableStats`], `source: None` --
@@ -342,6 +424,57 @@ fn plan_err(e: PlanError) -> EngineError {
     }
 }
 
+fn stream_err(e: StreamPlanError) -> EngineError {
+    match e {
+        StreamPlanError::Rejected { .. } => EngineError::new(ErrorKind::Unsupported, e),
+        StreamPlanError::InvalidLiteral { .. } => EngineError::new(ErrorKind::Compile, e),
+        StreamPlanError::Batch(inner) => plan_err(inner),
+    }
+}
+
+/// The query's effective `Scope`: the tightest `SINCE` bound if the
+/// query has one, else the built-in default (ADR 0018 §Scope and
+/// retention: the default itself is a client concern, not db-core's --
+/// this fallback only covers a bare `SELECT ... FROM log` with no client
+/// wired up yet).
+const DEFAULT_SCOPE: Duration = Duration::from_secs(3600);
+
+fn resolve_scope(select: &Select) -> Scope {
+    let Some(since) = select.scope.as_ref().and_then(|c| c.since.as_ref()) else {
+        return Scope::Time(DEFAULT_SCOPE);
+    };
+    match since.unit {
+        ScopeUnit::Seconds => Scope::Time(Duration::from_secs(since.amount)),
+        ScopeUnit::Minutes => Scope::Time(Duration::from_secs(since.amount.saturating_mul(60))),
+        ScopeUnit::Hours => Scope::Time(Duration::from_secs(since.amount.saturating_mul(3_600))),
+        ScopeUnit::Days => Scope::Time(Duration::from_secs(since.amount.saturating_mul(86_400))),
+        ScopeUnit::Lines => Scope::Lines(since.amount),
+        ScopeUnit::Bytes => Scope::Bytes(since.amount),
+    }
+}
+
+/// The `[lo, hi)` event-time range `scope`/`preds` together imply, or
+/// `None` for `Lines`/`Bytes`/`All` (no fixed nanosecond edge --
+/// `select_segments` falls back to every held segment for those).
+fn effective_time_range(scope: &Scope, now_ns: i64, preds: &[IndexPred]) -> Option<Range<i64>> {
+    let mut lo = i64::MIN;
+    let mut hi = i64::MAX;
+    let mut has_bound = false;
+    if let Scope::Time(d) = scope {
+        let delta = i64::try_from(d.as_nanos()).unwrap_or(i64::MAX);
+        lo = lo.max(now_ns.saturating_sub(delta));
+        has_bound = true;
+    }
+    for pred in preds {
+        if let IndexPred::TimeRange { lo: plo, hi: phi } = pred {
+            lo = lo.max(*plo);
+            hi = hi.min(*phi);
+            has_bound = true;
+        }
+    }
+    has_bound.then_some(lo..hi)
+}
+
 impl Engine for StreamEngine {
     fn open(path: &Path) -> Result<Self, EngineError> {
         Self::open_with_budget(path, DEFAULT_BUDGET)
@@ -354,10 +487,11 @@ impl Engine for StreamEngine {
     fn run_query(&mut self, sql: &str) -> Result<QueryResult, EngineError> {
         let stmt = single_statement(sql)?;
         let select = self.parse_for_table(&stmt)?;
-        let program: Program = planner::compile(&select).map_err(plan_err)?;
-        let columns = self.requests(&program.columns_to_load())?;
-        let segments = self.segments(&columns);
-        let rows = engine::run(&segments, &program)
+        let scope = resolve_scope(&select);
+        let program: Program = stream_planner::compile(&select, scope).map_err(stream_err)?;
+        let columns = self.requests(&program.body.columns_to_load())?;
+        let (segments, scope_report) = self.select_segments(&program.prune, &columns);
+        let rows = crate::vm::engine::run(&segments, &program.body)
             .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
         Ok(QueryResult {
             columns: planner::output_column_names(&select),
@@ -365,6 +499,7 @@ impl Engine for StreamEngine {
                 .into_iter()
                 .map(|r| r.into_iter().map(Cell::from).collect())
                 .collect(),
+            scope_report: Some(scope_report),
         })
     }
 

@@ -347,6 +347,7 @@ impl Engine for BatchEngine {
                 .into_iter()
                 .map(|r| r.into_iter().map(Cell::from).collect())
                 .collect(),
+            ..Default::default()
         })
     }
 

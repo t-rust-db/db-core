@@ -57,6 +57,12 @@ pub fn compile_select_with_catalog_and_stats(
     catalog: &[TableSchema],
     stats: &crate::codegen::row::planner::Stats,
 ) -> Result<Program, CodegenError> {
+    if select.scope.is_some() {
+        return Err(CodegenError::Unsupported {
+            reason: "SINCE/UNTIL (ADR 0018) is only available through the stream engine"
+                .to_string(),
+        });
+    }
     let Some(from) = &select.from else {
         return compile_select_no_from(select, catalog);
     };
@@ -442,6 +448,7 @@ pub(super) fn arm_as_select(arm: &CompoundSelect) -> Select {
         compound: Vec::new(),
         order_by: Vec::new(),
         limit: None,
+        scope: None,
         span: arm.span,
     }
 }
@@ -828,7 +835,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__entry_146__v1_bare_expression_list_compiles_to_one_row() {
+    fn mcdc__entry_152__v1_bare_expression_list_compiles_to_one_row() {
         let p = compile_no_from(&parsed("SELECT 1 + 1")).unwrap();
         assert!(
             has(&p, Opcode::ResultRow) && !has(&p, Opcode::OpenRead),
@@ -837,19 +844,19 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__entry_146__v2_where_is_rejected() {
+    fn mcdc__entry_152__v2_where_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t WHERE 1 = 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_146__v3_group_by_is_rejected() {
+    fn mcdc__entry_152__v3_group_by_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t GROUP BY 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_146__v4_having_is_rejected() {
+    fn mcdc__entry_152__v4_having_is_rejected() {
         let mut select = parsed("SELECT 1");
         select.having = parsed("SELECT 1 FROM t GROUP BY 1 HAVING 1 = 1").having;
         let e = compile_no_from(&select).unwrap_err();
@@ -857,25 +864,25 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__entry_146__v5_order_by_is_rejected() {
+    fn mcdc__entry_152__v5_order_by_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t ORDER BY 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_146__v6_limit_is_rejected() {
+    fn mcdc__entry_152__v6_limit_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t LIMIT 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_146__v7_distinct_is_rejected() {
+    fn mcdc__entry_152__v7_distinct_is_rejected() {
         let e = compile_no_from(&parsed("SELECT DISTINCT 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_146__v8_compound_is_rejected() {
+    fn mcdc__entry_152__v8_compound_is_rejected() {
         let mut select = parsed("SELECT 1");
         select.compound = from_less("SELECT 1 FROM t UNION ALL SELECT 2 FROM t").compound;
         let e = compile_no_from(&select).unwrap_err();

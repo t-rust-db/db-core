@@ -165,6 +165,10 @@ pub enum PlanError {
     /// A codegen bug, never a property of the SQL; before, these sites
     /// fell back to an empty name and planned a wrong program.
     Internal(String),
+    /// A `SINCE`/`UNTIL` clause (ADR 0018) reached the batch planner —
+    /// that clause is stream-only; `codegen::stream::compile` strips it
+    /// before delegating the residual query here.
+    ScopeClauseUnsupported,
 }
 
 impl fmt::Display for PlanError {
@@ -183,6 +187,9 @@ impl fmt::Display for PlanError {
             PlanError::UnsupportedSelectItem(msg) => write!(f, "unsupported SELECT item: {msg}"),
             PlanError::NoJoinClause => write!(f, "compile_join requires a JOIN clause"),
             PlanError::Internal(reason) => write!(f, "planner invariant violated: {reason}"),
+            PlanError::ScopeClauseUnsupported => {
+                write!(f, "SINCE/UNTIL is only available through the stream engine")
+            }
         }
     }
 }
@@ -819,6 +826,9 @@ fn mask_filtered_source(
 /// ending in [`Opcode::Combine`], optionally followed by `Sort`/`Limit`
 /// (db-core#48). Compiled once, reused across every segment.
 pub fn compile(select: &Select) -> Result<Program> {
+    if select.scope.is_some() {
+        return Err(PlanError::ScopeClauseUnsupported);
+    }
     let mut ctx = Ctx {
         next_reg: 0,
         column_regs: HashMap::new(),
@@ -1020,6 +1030,11 @@ pub fn compile(select: &Select) -> Result<Program> {
 }
 
 /// Split a (possibly qualified) column name into `(table_prefix, column)`.
+// One-line disambiguator (MC/DC obligation harvest): without this,
+// `codegen::batch::split_qualified`'s decision below and `vm::batch`'s
+// own decision land on the same line number in two same-basename files,
+// which `cargo-mvl-mcdc`'s id scheme (file basename + line) cannot tell
+// apart (db-core#299's snapshot workflow).
 pub fn split_qualified(name: &str) -> (Option<&str>, &str) {
     match name.split_once('.') {
         Some((table, column)) => (Some(table), column),
@@ -1494,7 +1509,16 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
 
     // Semi-joins compile with `where_clause` stripped, mirroring
     // `compile_semi_join` (the `IN` subquery isn't a VM predicate).
-    // MC/DC: this decision must not share a line number with one in `src/vm/batch.rs` (ids are basename+line).
+    // MC/DC id-collision guard (db-core#299 snapshot workflow): this
+    // decision's harvested line number must not coincide with one in
+    // `src/vm/batch.rs` (same basename, which is all the id scheme
+    // keys on). Line count matters here, not content -- re-run `make
+    // mcdc-obligations` plus `cargo test --test unit_mcdc_discharge`
+    // after editing this comment.
+    // MC/DC id-collision guard padding (4 lines): keeps this
+    // decision's harvested line number away from an unrelated
+    // decision at the same line in `src/vm/batch.rs` (same
+    // basename, which is all the id scheme keys on).
     let program = if has_window {
         None
     } else if is_semi_join {
@@ -2298,7 +2322,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_955__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__batch_965__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2309,7 +2333,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_955__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__batch_965__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2320,7 +2344,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_955__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__batch_965__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2333,7 +2357,7 @@ mod tests {
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_995__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__batch_1005__v1_group_by_without_agg_column_merges_partial_aggregates() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
@@ -2343,7 +2367,7 @@ mod tests {
     /// MC/DC vector (obligation `batch_879`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_995__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__batch_1005__v2_agg_column_without_group_by_merges_partial_aggregates() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
@@ -2354,7 +2378,7 @@ mod tests {
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_995__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__batch_1005__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();

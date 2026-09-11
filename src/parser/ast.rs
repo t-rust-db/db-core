@@ -101,8 +101,52 @@ pub struct Select {
     pub order_by: Vec<OrderingTerm>,
     /// The `LIMIT [OFFSET]` clause, applying to the whole compound statement.
     pub limit: Option<Limit>,
+    /// `SINCE`/`UNTIL` (ADR 0018 §Scope and retention): a stream-only
+    /// boundary, parsed here so the stream engine enforces its subset by
+    /// rejecting rather than by parsing less (ADR 0002). `row`/`batch`
+    /// planners reject a `Select` carrying one.
+    pub scope: Option<ScopeClause>,
     /// The source span covering the whole statement.
     pub span: Span,
+}
+
+/// A `SINCE <bound>` and/or `UNTIL <bound>` clause on a stream query
+/// (ADR 0018 §Scope and retention).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScopeClause {
+    /// The `SINCE <bound>` boundary, if given.
+    pub since: Option<ScopeBound>,
+    /// The `UNTIL <bound>` boundary, if given.
+    pub until: Option<ScopeBound>,
+}
+
+/// One `<amount> <unit>` boundary within a [`ScopeClause`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScopeBound {
+    /// The numeric amount, e.g. `1` in `SINCE 1 HOUR`.
+    pub amount: u64,
+    /// The unit the amount is measured in.
+    pub unit: ScopeUnit,
+    /// The source span covering `<amount> <unit>`.
+    pub span: Span,
+}
+
+/// The unit a [`ScopeBound`]'s amount is measured in — time, line count
+/// or byte count (ADR 0018's `Scope::{Time,Lines,Bytes}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeUnit {
+    /// Seconds.
+    Seconds,
+    /// Minutes.
+    Minutes,
+    /// Hours.
+    Hours,
+    /// Days.
+    Days,
+    /// A line count (`N LINES`).
+    Lines,
+    /// A byte count (`N MB`/`N KB`/`N GB`/`N BYTES`).
+    Bytes,
 }
 
 /// Non-recursive `WITH` clause (#375): `WITH cte { , cte }`, prefixing a

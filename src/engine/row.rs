@@ -206,6 +206,7 @@ impl RowEngine {
                 .into_iter()
                 .map(|r| r.into_iter().map(Cell::from).collect())
                 .collect(),
+            ..Default::default()
         })
     }
 
@@ -232,6 +233,7 @@ impl RowEngine {
                 .into_iter()
                 .map(|r| r.into_iter().map(Cell::from).collect())
                 .collect(),
+            ..Default::default()
         })
     }
 
