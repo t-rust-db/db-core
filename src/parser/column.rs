@@ -455,28 +455,47 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
                         "DISTINCT inside a range-vector call".into(),
                     ));
                 }
-                if crate::vm::stream::RangeAggFunc::from_name(name).is_none() {
-                    return Err(unsupported(
+                // Range-vector functions (`count_over_time`, ...) only
+                // exist behind `vm-stream` -- a consumer built without
+                // it (column-rs's `vm-batch`-only build, per this
+                // Cargo.toml's own feature-isolation comment) can't
+                // execute one regardless of its name, so reject
+                // unconditionally rather than pulling `vm::stream` in
+                // just to validate a name it will never run. Each `cfg`
+                // arm below produces the whole match arm's result, so
+                // exactly one compiles -- no unreachable-code fallthrough.
+                #[cfg(not(feature = "vm-stream"))]
+                {
+                    Err(unsupported(
                         expr.span,
-                        format!("unknown range-vector function {name}"),
-                    ));
+                        format!("range-vector function {name}: requires the vm-stream feature"),
+                    ))
                 }
-                match args {
-                    FunctionArgs::Star => Ok(()),
-                    FunctionArgs::List(list) => match list.as_slice() {
-                        [] => Ok(()),
-                        [arg] => match &arg.kind {
-                            ExprKind::Column { .. } => column_name(arg).map(|_| ()),
+                #[cfg(feature = "vm-stream")]
+                {
+                    if crate::vm::stream::RangeAggFunc::from_name(name).is_none() {
+                        return Err(unsupported(
+                            expr.span,
+                            format!("unknown range-vector function {name}"),
+                        ));
+                    }
+                    match args {
+                        FunctionArgs::Star => Ok(()),
+                        FunctionArgs::List(list) => match list.as_slice() {
+                            [] => Ok(()),
+                            [arg] => match &arg.kind {
+                                ExprKind::Column { .. } => column_name(arg).map(|_| ()),
+                                _ => Err(unsupported(
+                                    arg.span,
+                                    format!("{name}(...): argument must be a bare column"),
+                                )),
+                            },
                             _ => Err(unsupported(
-                                arg.span,
-                                format!("{name}(...): argument must be a bare column"),
+                                expr.span,
+                                format!("{name}(...) takes at most one argument"),
                             )),
                         },
-                        _ => Err(unsupported(
-                            expr.span,
-                            format!("{name}(...) takes at most one argument"),
-                        )),
-                    },
+                    }
                 }
             }
             ExprKind::FunctionCall {
