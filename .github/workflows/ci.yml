@@ -78,6 +78,12 @@ jobs:
             --rev "$MVL_RUST_REV" rust-limit --bin cargo-mvl-limit --locked --force
       - run: make check-mvl-limit
 
+  # MC/DC snapshot freshness (db-core#335, ADR 0000 §Invariants (e)):
+  # `tests/mcdc/obligations.json` must match a fresh scan of src/, or a
+  # discharge tag (`mcdc__<file>_<line>__vN`) can silently point at a
+  # stale line/obligation. `make ci` already runs this locally; this job
+  # is what makes that true on every PR instead of only for whoever runs
+  # `make ci` by hand.
   # Unit/integration test suite, all features.
   # Charter gate (ADR 0000, #324): the SQLite profile -- the exact feature
   # set sqlite-rs builds -- resolves to first-party crates only, carries
