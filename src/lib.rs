@@ -71,6 +71,8 @@ pub const VERSION: &str = "0.86.0";
 pub mod coerce;
 pub mod compare;
 pub mod functions;
+pub mod json_path;
+pub mod logfmt_scan;
 pub mod schema;
 pub mod types;
 pub mod value;

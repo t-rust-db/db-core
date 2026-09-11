@@ -908,7 +908,10 @@ fn render_opcode(op: &Opcode) -> String {
         // paper over with a fake rendering: once a real planner starts
         // emitting these, this arm should become a real render_*
         // implementation at that point, not before.
-        Opcode::HashBuild { .. } | Opcode::HashProbe { .. } | Opcode::Window { .. } => {
+        Opcode::HashBuild { .. }
+        | Opcode::HashProbe { .. }
+        | Opcode::Window { .. }
+        | Opcode::Call { .. } => {
             // Same `compile_error!`-in-generated-source strategy as
             // `render_expr_kind`'s unsupported arm: loud at the consumer's
             // build, no panic here.

@@ -235,6 +235,24 @@ fn expr_column_name(expr: &AstExpr) -> Option<String> {
     }
 }
 
+/// The `#307` scalar functions this planner accepts in a `SELECT` list
+/// (checked by name + arity, not the full `crate::functions::call`
+/// registry -- everything else in that registry has never been callable
+/// from SQL here, and opening that up is a separate, unscoped decision).
+fn is_known_scalar_function(name: &str, arity: usize) -> bool {
+    matches!(
+        (name.to_ascii_lowercase().as_str(), arity),
+        ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3)
+    )
+}
+
+fn arg_count(args: &FunctionArgs) -> usize {
+    match args {
+        FunctionArgs::Star => 0,
+        FunctionArgs::List(list) => list.len(),
+    }
+}
+
 fn agg_arg(_expr: &AstExpr, agg: AggFunc, args: &FunctionArgs) -> Result<Option<String>> {
     match args {
         FunctionArgs::Star => {
@@ -351,13 +369,11 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
         ResultColumn::TableStar { .. } => Err(PlanError::UnsupportedSelectItem(
             "table.* is not supported".into(),
         )),
-        ResultColumn::Expr {
-            expr: _,
-            alias: Some(_),
-        } => Err(PlanError::UnsupportedSelectItem(
-            "column alias (AS) is not supported".into(),
-        )),
-        ResultColumn::Expr { expr, alias: None } => match &expr.kind {
+        // `alias` only renames this column's output header
+        // ([`output_column_names`]) and, for a `GROUP BY` that names it
+        // exactly, its group key ([`resolve_group_by_alias`]) -- it does
+        // not change how `expr` itself classifies or compiles.
+        ResultColumn::Expr { expr, alias: _ } => match &expr.kind {
             ExprKind::Column { .. } => expr_column_name(expr).map(Item::Column).ok_or_else(|| {
                 PlanError::UnsupportedSelectItem("expected a column reference".into())
             }),
@@ -394,17 +410,59 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
                 distinct: _,
                 args,
                 tail,
-            } => {
-                let agg = AggFunc::from_name(name).ok_or_else(|| {
-                    PlanError::UnsupportedSelectItem(format!("unknown function {name}"))
-                })?;
-                let arg = agg_arg(expr, agg, args)?;
-                let filter = tail.as_deref().and_then(|t| t.filter.clone());
-                Ok(Item::Agg(agg, arg, filter))
-            }
+            } => match AggFunc::from_name(name) {
+                Some(agg) => {
+                    let arg = agg_arg(expr, agg, args)?;
+                    let filter = tail.as_deref().and_then(|t| t.filter.clone());
+                    Ok(Item::Agg(agg, arg, filter))
+                }
+                // Not an aggregate: a scalar call (#307) compiles like any
+                // other expression (`compile_expr`'s `FunctionCall` arm);
+                // anything else is rejected here, at plan time (ADR 0002),
+                // rather than silently lowering to `NULL` in `compile_expr`.
+                None if is_known_scalar_function(name, arg_count(args)) => {
+                    Ok(Item::Expr(expr.clone()))
+                }
+                None => Err(PlanError::UnsupportedSelectItem(format!(
+                    "unknown function {name}"
+                ))),
+            },
             _ => Ok(Item::Expr(expr.clone())),
         },
     }
+}
+
+/// Every `SELECT`-list `AS <alias>` in `select`, mapped to its
+/// underlying expression -- #307's narrow alias support: only a `GROUP
+/// BY` that names an alias exactly resolves through this map
+/// ([`group_by_key_expr`]); nothing else in this planner looks a name up
+/// against a `SELECT`-list alias.
+fn select_aliases(select: &Select) -> HashMap<String, AstExpr> {
+    select
+        .columns
+        .iter()
+        .filter_map(|col| match col {
+            ResultColumn::Expr {
+                expr,
+                alias: Some(alias),
+            } => Some((alias.clone(), expr.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Resolves one `GROUP BY` name to the expression it groups by: a
+/// `SELECT`-list alias exactly matching `name` (#307), or (the pre-#307
+/// behavior) `name` itself as a plain column reference.
+fn group_by_key_expr(name: &str, aliases: &HashMap<String, AstExpr>) -> AstExpr {
+    aliases.get(name).cloned().unwrap_or_else(|| AstExpr {
+        kind: ExprKind::Column {
+            table: None,
+            catalog: None,
+            name: name.to_string(),
+        },
+        span: crate::parser::Span::UNKNOWN,
+    })
 }
 
 fn classify_items(select: &Select) -> Result<Vec<Item>> {
@@ -667,6 +725,30 @@ fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
             });
             reg
         }
+        // A scalar call (#307): compiled args feed `Opcode::Call`, which
+        // dispatches into `crate::functions::call` at execution time.
+        // `classify_item` already rejected any top-level SELECT-list call
+        // this planner doesn't recognize; a call reached only through a
+        // nested expression (inside `WHERE`, another call's argument, ...)
+        // is not similarly validated -- an unknown name there resolves to
+        // `Value::Null` at runtime ([`Opcode::Call`]'s own doc comment),
+        // the same fallback every other out-of-subset shape in this
+        // function gets.
+        ExprKind::FunctionCall {
+            distinct: _,
+            name,
+            args: FunctionArgs::List(list),
+            tail,
+        } if tail.as_deref().is_none_or(|t| t.over.is_none()) => {
+            let arg_regs: Vec<usize> = list.iter().map(|a| compile_expr(a, ctx)).collect();
+            let dst = ctx.alloc();
+            ctx.push(Opcode::Call {
+                dst,
+                name: name.clone().into(),
+                args: arg_regs.into(),
+            });
+            dst
+        }
         ExprKind::Paren(inner) => compile_expr(inner, ctx),
         // `compile_semi_join` handles `IN (subquery)` itself and strips it
         // from `where_clause` before ever calling `compile` -- reaching
@@ -836,6 +918,7 @@ pub fn compile(select: &Select) -> Result<Program> {
     };
 
     let items = classify_items(select)?;
+    let aliases = select_aliases(select);
     let group_by: Vec<String> = select
         .group_by
         .iter()
@@ -846,9 +929,14 @@ pub fn compile(select: &Select) -> Result<Program> {
     // *before* compiling WHERE/Filter: Filter only shrinks registers that
     // are already live, so anything loaded afterwards would keep the
     // batch's full (pre-filter) length and desync from filtered registers.
+    // A name matching a `SELECT`-list alias (#307) compiles that alias's
+    // expression instead of loading a same-named column that doesn't
+    // exist -- `group_by_key_expr` falls back to the pre-#307 plain-column
+    // behavior for every other name.
     let mut group_by_regs = Vec::new();
     for name in &group_by {
-        group_by_regs.push(ctx.load_column(name));
+        let key_expr = group_by_key_expr(name, &aliases);
+        group_by_regs.push(compile_expr(&key_expr, &mut ctx));
     }
     // Resolved to the final source register for each `Item::Agg` (already
     // folding in `FILTER (WHERE ...)`, if any -- see `mask_filtered_source`)
@@ -1792,6 +1880,7 @@ fn render_operands(op: &Opcode) -> String {
         } => format!("agg_parts={agg_parts:?} num_group_keys={num_group_keys} distinct={distinct}"),
         Opcode::Sort { col, descending } => format!("col={col} descending={descending}"),
         Opcode::Limit { n } => format!("n={n}"),
+        Opcode::Call { dst, name, args } => format!("dst={dst} name={name} args={args:?}"),
     }
 }
 
@@ -1898,8 +1987,15 @@ fn window_func_name(func: WindowFunc) -> &'static str {
 }
 
 /// Output column label for one `SELECT` item, e.g. `amount`, `SUM(amount)`,
-/// `COUNT(*)`, or `ROW_NUMBER()`.
+/// `COUNT(*)`, or `ROW_NUMBER()` -- or, when the item carries an explicit
+/// `AS <alias>` (#307), that alias verbatim.
 fn select_item_label(item: &ResultColumn) -> String {
+    if let ResultColumn::Expr {
+        alias: Some(alias), ..
+    } = item
+    {
+        return alias.clone();
+    }
     match classify_item(item) {
         Ok(Item::Column(name)) => name,
         Ok(Item::Star) => "*".to_string(),
@@ -2074,6 +2170,17 @@ fn collect_expr_columns(expr: &AstExpr, out: &mut Vec<String>) {
         ExprKind::Unary { expr: inner, .. } => collect_expr_columns(inner, out),
         ExprKind::IsNull { expr, .. } => collect_expr_columns(expr, out),
         ExprKind::Is { lhs, .. } => collect_expr_columns(lhs, out),
+        // A scalar call's (#307) column references are its arguments' --
+        // needed so a bare (non-`GROUP BY`) `SELECT json_extract(msg, ...)`
+        // pre-loads `msg` before `Filter`, same as any other expression.
+        ExprKind::FunctionCall {
+            args: FunctionArgs::List(list),
+            ..
+        } => {
+            for arg in list {
+                collect_expr_columns(arg, out);
+            }
+        }
         _ => {}
     }
 }
@@ -2322,7 +2429,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_965__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__batch_1053__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2333,7 +2440,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_965__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__batch_1053__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2344,7 +2451,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_965__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__batch_1053__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2353,32 +2460,32 @@ mod tests {
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
     }
 
-    /// MC/DC vector (obligation `batch_879`, `Combine`'s comment choice
+    /// MC/DC vector (obligation `batch_1093`, `Combine`'s comment choice
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1005__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__batch_1093__v1_group_by_without_agg_column_merges_partial_aggregates() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
         assert_eq!(fin.comment.as_deref(), Some("merge partial aggregates"));
     }
 
-    /// MC/DC vector (obligation `batch_879`): leaf B (`has_agg`) true alone.
+    /// MC/DC vector (obligation `batch_1093`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1005__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__batch_1093__v2_agg_column_without_group_by_merges_partial_aggregates() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
         assert_eq!(fin.comment.as_deref(), Some("merge partial aggregates"));
     }
 
-    /// MC/DC vector (obligation `batch_879`): both leaves false --
+    /// MC/DC vector (obligation `batch_1093`): both leaves false --
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1005__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__batch_1093__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
