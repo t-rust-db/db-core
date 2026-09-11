@@ -7,6 +7,7 @@
 use super::batch::{Facility, LogBatch, Severity, Source};
 
 /// Syslog parser that fills `LogBatch` from raw lines.
+#[derive(Debug, Clone)]
 pub struct SyslogParser {
     /// Current year for timestamp parsing (syslog doesn't include year).
     year: i32,
@@ -135,14 +136,11 @@ impl SyslogParser {
         Some((pri, rest))
     }
 
-    /// Parse BSD timestamp (e.g., "Sep  9 14:23:01"), returning (nanos, rest).
+    /// Parse BSD timestamp, returning (nanos, rest). Token-based: RFC 3164
+    /// space-pads the day (`Sep  9`), many emitters do not (`Sep 9`), and
+    /// both must parse -- a fixed-width read of the second form eats the
+    /// hostname as the time and leaves every later field shifted.
     fn parse_timestamp<'a>(&self, s: &'a str) -> (Option<i64>, &'a str) {
-        // Expected format: "Mmm dd HH:MM:SS " or "Mmm  d HH:MM:SS "
-        // Minimum: "Jan  1 00:00:00 " = 16 chars
-        if s.len() < 16 {
-            return (None, s);
-        }
-
         let month_str = s.get(..3).unwrap_or("");
         let month = match month_str {
             "Jan" => 1,
@@ -160,25 +158,23 @@ impl SyslogParser {
             _ => return (None, s),
         };
 
-        // Day: chars 4-5, may have leading space
-        let day_str = s.get(4..6).unwrap_or("").trim();
-        let day: u32 = match day_str.parse() {
-            Ok(d) => d,
-            Err(_) => return (None, s),
+        // Day: one or two digits after any run of spaces.
+        let after_month = s.get(3..).unwrap_or("").trim_start();
+        let (day_str, after_day) = self.parse_word(after_month);
+        let day: u32 = match day_str.and_then(|d| d.parse().ok()) {
+            Some(d) if (1..=31).contains(&d) => d,
+            _ => return (None, s),
         };
 
-        // Time: HH:MM:SS at chars 7-14
-        let time_str = s.get(7..15).unwrap_or("");
-        let (hour, minute, second) = match self.parse_time(time_str) {
+        // Time: HH:MM:SS as the next word.
+        let (time_str, rest) = self.parse_word(after_day);
+        let (hour, minute, second) = match time_str.and_then(|t| self.parse_time(t)) {
             Some(t) => t,
             None => return (None, s),
         };
 
         // Convert to nanos since epoch (simplified, ignores timezone)
         let timestamp_ns = self.to_epoch_nanos(month, day, hour, minute, second);
-
-        // Rest starts after the space following the timestamp
-        let rest = s.get(16..).unwrap_or("").trim_start();
         (timestamp_ns, rest)
     }
 
@@ -320,6 +316,26 @@ mod tests {
         assert_eq!(batch.len(), 2);
         assert_eq!(batch.severity.first(), Some(&Some(Severity::Info))); // 134 & 7 = 6 (info)
         assert_eq!(batch.severity.get(1), Some(&Some(Severity::Error))); // 131 & 7 = 3 (err)
+    }
+
+    #[test]
+    fn single_digit_day_with_and_without_padding() {
+        let parser = SyslogParser::with_year(2026);
+        let source = Source::new(SourceKind::File, "/var/log/test.log");
+        let input = b"<134>Sep  9 14:23:01 web01 nginx[1]: padded\n<134>Sep 9 14:23:01 web01 nginx[1]: unpadded\n";
+        let (batch, _) = parser.parse_batch(source, input, 10);
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch.timestamp_ns.first(), batch.timestamp_ns.get(1));
+        assert!(batch.timestamp_ns.first().copied().flatten().is_some());
+        assert_eq!(batch.message.first(), Some(&Some("padded")));
+        assert_eq!(batch.message.get(1), Some(&Some("unpadded")));
+        assert_eq!(batch.resource.hostname.as_deref(), Some("web01"));
+        match batch.fields.get("tag") {
+            Some(crate::storage::stream::FieldColumn::Dict { dict, .. }) => {
+                assert_eq!(dict.as_slice(), ["nginx"]);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]
