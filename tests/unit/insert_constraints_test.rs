@@ -271,3 +271,18 @@ fn without_rowid_table_is_rejected_at_insert_compile_time() {
     assert_eq!(err.kind, ErrorKind::Compile);
     assert!(err.message.contains("WITHOUT ROWID"), "{}", err.message);
 }
+
+#[test]
+fn a_desc_index_column_is_rejected_at_create_index_time() {
+    // No index b-tree comparator is DESC-aware (#171) -- rather than
+    // silently building an ascending-looking key that reads back
+    // backwards, `CREATE INDEX ... (col DESC)` itself is refused, so
+    // no row-maintenance codepath (INSERT/UPDATE/DELETE) ever sees a
+    // DESC-declared index on a live schema.
+    let db = TempDb::new("desc-index");
+    let mut e = open(&db);
+    e.run_query("CREATE TABLE di(a INTEGER)").unwrap();
+    let err = e.run_query("CREATE INDEX di_a ON di(a DESC)").unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Compile);
+    assert!(err.message.contains("DESC"), "{}", err.message);
+}
