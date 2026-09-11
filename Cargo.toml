@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.83.1"
+version = "0.84.0"
 # The three [[bench]] targets are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -12,6 +12,10 @@ description = "Shared SQL language/execution layer for t-rust-db: types, expr, p
 [lib]
 name = "db_core"
 path = "src/lib.rs"
+
+[[test]]
+name = "unit_layer_isolation"
+path = "tests/unit/layer_isolation_test.rs"
 
 [[test]]
 name = "unit_mcdc_discharge"
@@ -171,9 +175,12 @@ vm-stream = []
 # `parser-column`'s validator to enforce the batch-planner's analytics
 # subset over `parser::ast::Select`.
 codegen-batch = ["vm-batch", "parser-column"]
-# `vm-batch` here: `codegen::row`'s aggregate codegen shares `vm::batch`'s
-# `AggFunc` enum (#153 -- one execution-operand enum for both engines).
-codegen-row = ["vm-row", "parser-row", "vm-batch"]
+# No `vm-batch` (#324): `codegen::row` carries its aggregate operand as
+# `P4::AggFunc { name, arity, collation }`, its own variant -- the #153
+# note that it shared `vm::batch::AggFunc` had gone stale, and the
+# implication it justified put `vm/batch.rs` into every SQLite-profile
+# build. `make check-sqlite-profile` now fails if that ever returns.
+codegen-row = ["vm-row", "parser-row"]
 codegen-stream = []
 
 # `emit-batch`: the ahead-of-time Rust-source emitter over the batch

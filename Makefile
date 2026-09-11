@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
+.PHONY: help check-sqlite-profile check-coverage-profile test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
 
 help: ## Show this help
 	@echo ""
@@ -135,6 +135,31 @@ check-features: ## Each Cargo feature builds standalone (cargo check --no-defaul
 		else echo FAIL; echo "$$out" | grep -E '^error' | head -5; exit 1; fi; \
 	done
 
+# The SQLite profile: the exact feature set sqlite-rs builds db-core with.
+SQLITE_PROFILE := parser-row,vm-row,codegen-row,storage-row,engine-row
+
+# ADR 0000 §Invariants (a)-(c): first-party-only closure, the named
+# `unsafe` carve-outs and nothing else, no batch/column/stream file --
+# all measured on what rustc actually compiles for the profile.
+check-sqlite-profile: ## Charter gate: the SQLite profile is dependency-free, unsafe-confined, mode-isolated (tools/check_sqlite_profile.py)
+	@python3 tools/check_sqlite_profile.py
+
+# ADR 0000 §(g): the coverage floor as a claim about the safe-SQLite
+# artifact -- instrumented over the profile, not --all-features. Too slow
+# for every PR; .github/workflows/assurance.yml runs it weekly.
+check-coverage-profile: ## Coverage floor over the SQLite profile (weekly assurance job)
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
+		echo "cargo-llvm-cov not found — install with: cargo install cargo-llvm-cov --locked"; \
+		exit 1; \
+	}
+	cargo llvm-cov clean --workspace
+	cargo llvm-cov --locked --no-default-features --features $(SQLITE_PROFILE) --no-report --lib
+	cargo llvm-cov report --json --output-path target/llvm-cov-profile.json
+	@python3 -c "import json, sys; \
+	  p = json.load(open('target/llvm-cov-profile.json'))['data'][0]['totals']['lines']['percent']; \
+	  print(f'Line coverage (SQLite profile): {p:.2f}% (threshold: $(COVERAGE_MIN)%)'); \
+	  sys.exit(0 if p >= $(COVERAGE_MIN) else 1)"
+
 check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 	@command -v cargo-deny >/dev/null 2>&1 || { \
 		echo "cargo-deny not found — install with: cargo install cargo-deny --locked"; \
@@ -194,6 +219,7 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) lint
 	$(MAKE) check-deny
 	$(MAKE) check-features
+	$(MAKE) check-sqlite-profile
 	$(MAKE) check-mcdc-fresh
 	$(MAKE) check-mvl-limit
 	$(MAKE) test
