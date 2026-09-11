@@ -93,14 +93,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: mcdc-fresh
-      - name: Cache cargo-mvl-mcdc
-        id: cache-mvl-mcdc
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-mvl-mcdc
-          key: cargo-mvl-mcdc-${{ runner.os }}-${{ env.MVL_RUST_REV }}
       - name: Install cargo-mvl-mcdc (pinned)
-        if: steps.cache-mvl-mcdc.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           cargo install --git https://github.com/mvl-lang/mvl-rust \
