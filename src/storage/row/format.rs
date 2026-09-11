@@ -299,5 +299,58 @@ mod tests {
             format_csv_value(&Value::Blob(vec![0xDE, 0xAD].into())),
             "\"X'DEAD'\""
         );
+        // An embedded `"` forces quoting and is itself doubled, not
+        // just passed through -- the one rewrite csv_quote does make.
+        assert_eq!(csv_quote("has\"quote"), "\"has\"\"quote\"");
+        assert_eq!(format_csv_value(&Value::Integer(42)), "42");
+        assert_eq!(format_csv_value(&Value::Real(1.5)), "1.5");
+    }
+
+    #[test]
+    fn list_value_matches_dump_quote_style() {
+        assert_eq!(format_list_value(&Value::Null), "NULL");
+        assert_eq!(format_list_value(&Value::Integer(-7)), "-7");
+        assert_eq!(format_list_value(&Value::Real(2.5)), "2.5");
+        // Unlike format_csv_value/format_query_value, .dump-style text is
+        // raw and unescaped, and a blob renders as X'HEX', not truncated
+        // at an embedded NUL.
+        assert_eq!(
+            format_list_value(&Value::Text("a\0b".to_string().into())),
+            "a\0b"
+        );
+        assert_eq!(
+            format_list_value(&Value::Blob(vec![0x00, 0xFF].into())),
+            "X'00FF'"
+        );
+    }
+
+    #[test]
+    fn write_query_value_matches_the_allocating_version() {
+        for v in [
+            Value::Null,
+            Value::Integer(9),
+            Value::Real(3.25),
+            Value::Text("hi\0there".to_string().into()),
+            Value::Blob(vec![0x01, 0x00, 0x02].into()),
+        ] {
+            let mut buf = Vec::new();
+            write_query_value(&mut buf, &v);
+            assert_eq!(buf, format_query_value(&v), "{v:?}");
+        }
+    }
+
+    #[test]
+    fn write_csv_value_matches_the_allocating_version() {
+        for v in [
+            Value::Null,
+            Value::Integer(9),
+            Value::Real(3.25),
+            Value::Text("a,b".to_string().into()),
+            Value::Blob(vec![0xAB].into()),
+        ] {
+            let mut buf = String::new();
+            write_csv_value(&mut buf, &v);
+            assert_eq!(buf, format_csv_value(&v), "{v:?}");
+        }
     }
 }
