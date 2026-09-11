@@ -50,6 +50,11 @@ path = "tests/unit/insert_constraints_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_dispatch"
+path = "tests/unit/dispatch_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_engine_column_public_api"
 path = "tests/unit/engine_column_public_api_test.rs"
 required-features = ["engine-column"]
