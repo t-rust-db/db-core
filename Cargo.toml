@@ -80,6 +80,11 @@ path = "tests/unit/cond_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_update_constraints"
+path = "tests/unit/update_constraints_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_engine_column_public_api"
 path = "tests/unit/engine_column_public_api_test.rs"
 required-features = ["engine-column"]
