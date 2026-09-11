@@ -4,7 +4,7 @@
 //!
 //! Example: `<134>Sep  9 14:23:01 webserver nginx[1234]: GET /api/health 200`
 
-use super::batch::{Facility, LogBatch, Severity, Source};
+use super::batch::{Facility, LineParser, LogBatch, Severity, Source};
 
 /// Syslog parser that fills `LogBatch` from raw lines.
 #[derive(Debug, Clone)]
@@ -282,6 +282,17 @@ impl SyslogParser {
 impl Default for SyslogParser {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl LineParser for SyslogParser {
+    fn parse_batch<'a>(
+        &self,
+        source: Source,
+        buffer: &'a [u8],
+        max_lines: usize,
+    ) -> (LogBatch<'a>, usize) {
+        Self::parse_batch(self, source, buffer, max_lines)
     }
 }
 

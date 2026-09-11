@@ -9,9 +9,8 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::batch::{Facility, FieldColumn, LogBatch, Resource, Severity, Source};
+use super::batch::{Facility, FieldColumn, LineParser, LogBatch, Resource, Severity, Source};
 use super::file::Block;
-use super::syslog::SyslogParser;
 
 /// Maximum rows per segment; a block with more lines is split.
 pub const SEGMENT_MAX_ROWS: usize = 4096;
@@ -95,10 +94,10 @@ impl Segment {
     /// Parse a block into one or more segments (split at
     /// [`SEGMENT_MAX_ROWS`]). Every line gets `observed_ts_ns`.
     #[must_use]
-    pub fn seal_block(
+    pub fn seal_block<P: LineParser>(
         block: &Block,
         source: &Source,
-        parser: &SyslogParser,
+        parser: &P,
         observed_ts_ns: i64,
     ) -> Vec<Segment> {
         let mut out = Vec::new();
@@ -377,7 +376,7 @@ fn own_column(col: &FieldColumn<'_>, bytes: &[u8], rows: usize) -> OwnedColumn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::stream::SourceKind;
+    use crate::storage::stream::{SourceKind, SyslogParser};
 
     pub(super) fn block(text: &str) -> Block {
         Block {
@@ -457,9 +456,9 @@ mod mcdc_vectors {
         Source::new(SourceKind::File, "/var/log/t.log")
     }
 
-    // segment_109: `consumed == 0 || batch.is_empty()`
+    // segment_108: `consumed == 0 || batch.is_empty()`
     #[test]
-    fn mcdc__segment_109__v1_both_true_no_newline_at_all() {
+    fn mcdc__segment_108__v1_both_true_no_newline_at_all() {
         // No `\n` anywhere: parse_batch never advances `consumed` and
         // never parses a line, so both leafs are true.
         let b = block("no newline here");
@@ -468,7 +467,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__segment_109__v2_consumed_nonzero_but_batch_empty() {
+    fn mcdc__segment_108__v2_consumed_nonzero_but_batch_empty() {
         // A lone blank line: `consumed` advances past the `\n` (nonzero,
         // so the first leaf is false), but the empty line before it isn't
         // parsed into a row, so `batch.is_empty()` is true.
@@ -478,7 +477,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__segment_109__v3_both_false_makes_progress() {
+    fn mcdc__segment_108__v3_both_false_makes_progress() {
         // A complete, non-blank line: `consumed` advances (false) and the
         // batch gets a row (`is_empty()` false) -- neither leaf breaks the
         // loop, so a segment is produced.
