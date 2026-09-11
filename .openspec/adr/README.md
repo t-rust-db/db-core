@@ -51,3 +51,4 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0017](0017-engine-seam.md) — `engine`: the client-facing seam over execution modes
 - [0018](0018-stream-engine.md) — Stream engine: indexed live-log query as storage + prologue/epilogue around the batch VM
 - [0019](0019-cross-mode-queries-row-batch-adapter.md) — Cross-mode queries: row→batch adapter for SQLite lookup sides, reusing `vm::batch`'s existing join
+- [0020](0020-double-quote-identifier-semantics.md) — Double quotes are always identifiers, never a string fallback (unlike SQLite/MySQL)
