@@ -152,6 +152,132 @@ fn rejects_a_single_table_query() {
 }
 
 #[test]
+fn a_select_with_no_from_clause_does_not_parse() {
+    // The grammar itself requires a FROM clause for any statement
+    // reaching this far (a bare `SELECT 1` fails to parse), so
+    // `resolve_sides`'s own "SELECT without FROM" guard is defensive
+    // for a shape this parser never actually produces.
+    let db = HostsDb::new("no-from");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let err = run_query(&driving, &lookup, "SELECT 1").unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Parse);
+}
+
+#[test]
+fn rejects_more_than_one_join_clause() {
+    let db = HostsDb::new("two-joins");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let err = run_query(
+        &driving,
+        &lookup,
+        "SELECT log.hostname FROM log \
+         JOIN hosts ON log.hostname = hosts.name \
+         JOIN hosts h2 ON log.hostname = h2.name",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+}
+
+#[test]
+fn rejects_neither_side_being_the_stream_table() {
+    let db = HostsDb::new("neither-log");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let err = run_query(
+        &driving,
+        &lookup,
+        "SELECT h1.name FROM hosts h1 JOIN hosts h2 ON h1.name = h2.name",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Compile);
+}
+
+#[test]
+fn rejects_a_subquery_from_clause() {
+    let db = HostsDb::new("subquery-from");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let err = run_query(
+        &driving,
+        &lookup,
+        "SELECT x.name FROM (SELECT name FROM hosts) x JOIN hosts ON x.name = hosts.name",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+}
+
+#[test]
+fn a_subquery_join_target_does_not_parse() {
+    // Same story as the FROM-subquery case, mirrored on the JOIN side:
+    // this grammar doesn't accept a subquery there at all.
+    let db = HostsDb::new("subquery-join");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let err = run_query(
+        &driving,
+        &lookup,
+        "SELECT log.hostname FROM log \
+         JOIN (SELECT name FROM hosts) x ON log.hostname = x.name",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Parse);
+}
+
+#[test]
+fn rejects_an_unsupported_join_kind_via_the_batch_planner() {
+    // `resolve_sides` accepts this (log drives, hosts looks up); the
+    // rejection comes from `codegen::batch::compile_join` itself
+    // (`PlanError::UnsupportedJoinKind`), routed through `plan_err`.
+    let db = HostsDb::new("unsupported-join-kind");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let err = run_query(
+        &driving,
+        &lookup,
+        "SELECT log.hostname FROM log FULL JOIN hosts ON log.hostname = hosts.name",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Compile);
+}
+
+#[test]
+fn a_malformed_statement_is_a_parse_error() {
+    let db = HostsDb::new("parse-error");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let err = run_query(&driving, &lookup, "SELECT FROM FROM").unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Parse);
+}
+
+#[test]
+fn explain_plan_shares_run_querys_side_resolution_errors() {
+    let db = HostsDb::new("explain-errors");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let err = explain_plan(&driving, &lookup, db.path(), "SELECT 1").unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Parse);
+
+    let err = explain_plan(
+        &driving,
+        &lookup,
+        db.path(),
+        "SELECT hosts.region FROM hosts JOIN log ON hosts.name = log.hostname",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+}
+
+#[test]
 fn explain_labels_each_side_by_source_mode_and_file() {
     let db = HostsDb::new("explain");
     let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
