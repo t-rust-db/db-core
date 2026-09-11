@@ -607,7 +607,7 @@ fn render_select(select: &Select) -> String {
         None => "None".to_string(),
     };
     format!(
-        "Select {{ with_clause: None, distinct: {}, columns: vec![{}], from: {}, where_clause: {}, group_by: vec![{}], having: None, compound: vec![], order_by: vec![{}], limit: {}, span: {} }}",
+        "Select {{ with_clause: None, distinct: {}, columns: vec![{}], from: {}, where_clause: {}, group_by: vec![{}], having: None, compound: vec![], order_by: vec![{}], limit: {}, scope: None, span: {} }}",
         render_distinctness(select.distinct),
         columns.join(", "),
         from,

@@ -4,6 +4,14 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.88.1] - 2026-09-11
+
+### Fixed
+
+- **`emit::batch`'s generated `Select` literal was missing the `scope` field** (introduced when ADR 0018 added `Select::scope`): any consumer using `emit-batch` to generate a standalone Rust program from a query (column-rs's codegen-vs-interpreter parity tests) failed with `rustc` error E0063 on the generated source. `scope: None` is now always emitted (batch queries never carry a stream-only `SINCE`/`UNTIL` scope).
+- **`vm-stream` failed to compile alone** (db-core#356): `threshold_holds` (#309) needs `parser::ast::BinaryOp` at runtime, but the `vm-stream` Cargo.toml feature didn't declare `parser-row` as a dependency -- invisible under `default-features`, only hit by a minimal-features consumer (loglume: `storage-stream`+`vm-stream` only). Now `vm-stream = ["vm-batch", "parser-row"]`.
+- **`parser-column`'s expression validator failed to compile alone** (same root cause as db-core#356, different call site): the range-vector (`count_over_time(...) RANGE ...`) validation arm unconditionally referenced `vm::stream::RangeAggFunc`, breaking a `vm-batch`-only build (column-rs's real feature set). Now `cfg`-gated: without `vm-stream`, any range-vector call is rejected outright (correct -- it could never execute anyway) instead of failing to compile.
+
 ## [0.88.0] - 2026-09-11
 
 ### Added

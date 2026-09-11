@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.88.0"
+version = "0.88.1"
 # The three [[bench]] targets are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -200,7 +200,10 @@ vm-batch = []
 vm-row = []
 # `vm::stream::Program` wraps a `vm::batch::Program` body verbatim (ADR
 # 0018): no separate row/filter/aggregate opcodes to duplicate `vm-batch`'s.
-vm-stream = ["vm-batch"]
+# `parser-row` is a genuine dependency, not validation-only convenience
+# (db-core#356): `threshold_holds` (#309, standing queries) evaluates a
+# real `parser::ast::BinaryOp` at runtime, not just a name lookup.
+vm-stream = ["vm-batch", "parser-row"]
 
 # `codegen`: the planner (AST -> executable `Program`), sqlite-rs's
 # meaning of the word (ADR 0007). One per `vm` executor; `codegen-batch`
