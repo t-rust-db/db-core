@@ -100,7 +100,14 @@ fn seeded(label: &str) -> (TempDb, RowEngine) {
          CREATE INDEX m_ab ON m(a, b); \
          INSERT INTO m(a, b) VALUES (1, 2); \
          INSERT INTO m(a, b) VALUES (1, 1); \
-         INSERT INTO m(a, b) VALUES (2, 1)",
+         INSERT INTO m(a, b) VALUES (2, 1); \
+         CREATE TABLE p(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER); \
+         CREATE INDEX p_a ON p(a); \
+         INSERT INTO p(a, b) VALUES (1, 30); \
+         INSERT INTO p(a, b) VALUES (2, 20); \
+         INSERT INTO p(a, b) VALUES (1, 10); \
+         INSERT INTO p(a, b) VALUES (2, 40); \
+         INSERT INTO p(a, b) VALUES (1, 20)",
     )
     .expect("seed");
     (db, e)
@@ -185,6 +192,52 @@ fn multi_column_order_by_matching_the_index_prefix_uses_the_index() {
     assert_eq!(pairs, vec![(1, 1), (1, 2), (2, 1)]);
     assert_eq!(plan(&e, "SELECT a, b FROM m ORDER BY a, b"), "SCAN m");
     assert!(walks_an_index(&e, "SELECT a, b FROM m ORDER BY a, b"));
+}
+
+#[test]
+fn order_by_matching_only_an_index_prefix_walks_the_prefix_and_sorts_each_groups_suffix() {
+    // `p_a` indexes only `a`; `ORDER BY a, b` matches just that
+    // one-column prefix (#574's `try_compile_partial_sorted_index_scan`),
+    // so `a`'s groups are visited via the index in order, and each
+    // group's `b` values are sorted independently rather than the whole
+    // table going through one sort.
+    let (_db, mut e) = seeded("partial-prefix");
+    let out = rows(&mut e, "SELECT a, b FROM p ORDER BY a, b");
+    let pairs: Vec<(i64, i64)> = out
+        .iter()
+        .map(|r| match (&r[0], &r[1]) {
+            (Cell::Int(a), Cell::Int(b)) => (*a, *b),
+            other => panic!("expected two Ints, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(pairs, vec![(1, 10), (1, 20), (1, 30), (2, 20), (2, 40)]);
+    // Unlike the full-match path, a partial-prefix scan legitimately
+    // walks the index *and* opens a (per-group) sorter -- `walks_an_index`'s
+    // either/or assumption doesn't hold here, so check the opcode
+    // directly instead.
+    let sections = e
+        .explain_opcodes("SELECT a, b FROM p ORDER BY a, b")
+        .unwrap();
+    let ops: Vec<&str> = sections
+        .iter()
+        .flat_map(|s| s.rows.iter().map(|r| r.opcode.as_str()))
+        .collect();
+    assert!(ops.contains(&"IdxRewind"), "{ops:?}");
+    assert!(ops.contains(&"SorterOpen"), "{ops:?}");
+}
+
+#[test]
+fn order_by_matching_only_an_index_prefix_respects_limit_and_offset() {
+    let (_db, mut e) = seeded("partial-prefix-limit");
+    let out = rows(&mut e, "SELECT a, b FROM p ORDER BY a, b LIMIT 2 OFFSET 3");
+    let pairs: Vec<(i64, i64)> = out
+        .iter()
+        .map(|r| match (&r[0], &r[1]) {
+            (Cell::Int(a), Cell::Int(b)) => (*a, *b),
+            other => panic!("expected two Ints, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(pairs, vec![(2, 20), (2, 40)]);
 }
 
 #[test]
