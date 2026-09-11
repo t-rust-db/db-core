@@ -120,9 +120,49 @@ fn explain_builds_a_scan_plan_tree_for_a_flat_query() {
     let plan = explain(&select("SELECT a FROM t"), |_| TableStats {
         row_groups: 1,
         rows: 10,
+        source: None,
     })
     .unwrap();
     assert!(plan.iter().any(|node| node.detail.contains("SCAN")));
+}
+
+/// #315, ADR-0019: a cross-mode join's plan tree must name each side's
+/// mode and file, not just its table name -- `SCAN log` and `SCAN hosts`
+/// alone don't say one is a live tail and the other a SQLite lookup table.
+/// `TableStats::source` is the per-table label the caller supplies (the
+/// row→batch adapter's/stream adapter's own metadata); a single-mode
+/// engine passes `None` and gets today's plain `SCAN` detail unchanged.
+#[test]
+fn explain_labels_each_side_of_a_join_by_source_mode_and_file() {
+    let plan = explain(
+        &select("SELECT log.message, hosts.region FROM log JOIN hosts ON log.host = hosts.name"),
+        |table| match table {
+            "log" => TableStats {
+                row_groups: 3,
+                rows: 4096,
+                source: Some("stream app.log".to_string()),
+            },
+            _ => TableStats {
+                row_groups: 1,
+                rows: 3,
+                source: Some("sqlite hosts.sqlite".to_string()),
+            },
+        },
+    )
+    .unwrap();
+    let details: Vec<&str> = plan.iter().map(|n| n.detail.as_str()).collect();
+    assert!(
+        details
+            .iter()
+            .any(|d| d.starts_with("SCAN log") && d.ends_with("[stream app.log]")),
+        "{details:?}"
+    );
+    assert!(
+        details
+            .iter()
+            .any(|d| d.starts_with("SCAN hosts") && d.ends_with("[sqlite hosts.sqlite]")),
+        "{details:?}"
+    );
 }
 
 #[test]
@@ -172,6 +212,7 @@ fn compile_and_explain_reject_a_select_item_the_planner_cannot_classify() {
         explain(&select, |_| TableStats {
             row_groups: 1,
             rows: 10,
+            source: None,
         }),
         Err(PlanError::UnsupportedSelectItem(_))
     ));

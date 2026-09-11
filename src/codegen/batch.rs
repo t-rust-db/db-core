@@ -1423,12 +1423,18 @@ pub struct PlanNode {
 
 /// What `EXPLAIN`'s `SCAN` node reports about a table -- the only thing
 /// the planner needs from storage, supplied by the caller.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableStats {
     /// Number of row groups (segments) in the table.
     pub row_groups: usize,
     /// Total row count of the table.
     pub rows: i64,
+    /// A cross-mode join's source label for this table -- its execution
+    /// mode and file, e.g. `"sqlite hosts.sqlite"` or `"stream app.log"`
+    /// (#315, ADR-0019). `None` for a single-mode engine's own tables,
+    /// where every `SCAN` in the plan is already understood to be the
+    /// same file.
+    pub source: Option<String>,
 }
 
 struct PlanBuilder {
@@ -1837,8 +1843,12 @@ pub fn explain_opcodes(select: &Select) -> Result<Vec<OpcodeSection>> {
 
 fn scan_detail(table: &str, stats: TableStats) -> String {
     let groups = stats.row_groups;
+    let label = stats
+        .source
+        .as_deref()
+        .map_or(String::new(), |src| format!(" [{src}]"));
     format!(
-        "SCAN {table} ({groups} row group{}, ~{} rows)",
+        "SCAN {table} ({groups} row group{}, ~{} rows){label}",
         if groups == 1 { "" } else { "s" },
         stats.rows
     )
@@ -2440,6 +2450,7 @@ mod tests {
         TableStats {
             row_groups: 5,
             rows: 5000,
+            source: None,
         }
     }
 
