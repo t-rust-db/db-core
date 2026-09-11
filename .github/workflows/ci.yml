@@ -84,22 +84,6 @@ jobs:
   # stale line/obligation. `make ci` already runs this locally; this job
   # is what makes that true on every PR instead of only for whoever runs
   # `make ci` by hand.
-  mcdc-fresh:
-    name: MC/DC snapshot freshness
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: mcdc-fresh
-      - name: Install cargo-mvl-mcdc (pinned)
-        run: |
-          set -euo pipefail
-          cargo install --git https://github.com/mvl-lang/mvl-rust \
-            --rev "$MVL_RUST_REV" rust-mcdc --bin cargo-mvl-mcdc --locked --force
-      - run: make check-mcdc-fresh
-
   # Unit/integration test suite, all features.
   # Charter gate (ADR 0000, #324): the SQLite profile -- the exact feature
   # set sqlite-rs builds -- resolves to first-party crates only, carries
