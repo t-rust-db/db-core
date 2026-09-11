@@ -1,0 +1,77 @@
+# Weekly assurance (ADR 0000 §Invariants, db-core#324): the checks too slow
+# for every pull request, run on a schedule and on demand, with a job summary
+# instead of a red X -- these report drift; the PR gates block it.
+#
+# `ci.yml` is the PR gate set (lint, deny, features, mvl-limit, mcdc-fresh,
+# sqlite-profile, test). This workflow adds what `make ci` deliberately
+# leaves out: instrumented coverage over the SQLite profile, and the MC/DC
+# discharge dashboard over the whole crate.
+name: Assurance
+
+on:
+  schedule:
+    # Mondays 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+env:
+  MVL_RUST_REV: "a64eb33e7c9ef9ad031d22a70405e59aa1ad3cb0"
+
+jobs:
+  # Line coverage of the SQLite profile -- the exact feature set sqlite-rs
+  # builds -- not `--all-features`. The charter's coverage floor is a claim
+  # about the safe-SQLite artifact, so it is measured on that artifact.
+  profile-coverage:
+    name: Coverage (SQLite profile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: assurance-coverage
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Coverage floor over the SQLite profile
+        run: |
+          set -o pipefail
+          make check-coverage-profile 2>&1 | tee coverage.log
+          {
+            echo "## SQLite profile coverage"
+            echo
+            echo '```'
+            grep -E 'Line coverage|TOTAL' coverage.log || tail -5 coverage.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # MC/DC discharge dashboard over all of src/. `check-mcdc-fresh` (a PR
+  # gate) proves the snapshot is current and every tagged test names a real
+  # obligation; this reports how many multi-leaf obligations are actually
+  # discharged, which is a number worth watching, not blocking on.
+  mcdc-dashboard:
+    name: MC/DC dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: assurance-mcdc
+      - name: Install cargo-mvl-mcdc (pinned)
+        run: |
+          cargo install --git https://github.com/mvl-lang/mvl-rust \
+            --rev "$MVL_RUST_REV" rust-mcdc --bin cargo-mvl-mcdc --locked --force
+      - name: Harvest
+        run: |
+          set -o pipefail
+          make test-mcdc 2>&1 | tee mcdc.log || true
+          {
+            echo "## MC/DC dashboard"
+            echo
+            echo '```'
+            grep -E 'multi-leaf|overall discharged|SUMMARY' mcdc.log || tail -20 mcdc.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

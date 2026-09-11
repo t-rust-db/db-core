@@ -73,6 +73,22 @@ jobs:
       - run: make check-mvl-limit
 
   # Unit/integration test suite, all features.
+  # Charter gate (ADR 0000, #324): the SQLite profile -- the exact feature
+  # set sqlite-rs builds -- resolves to first-party crates only, carries
+  # exactly the named `unsafe` carve-outs, and compiles no batch/column/
+  # stream file. Measured from rustc's dep-info, so it costs one `cargo
+  # check`-sized build.
+  sqlite-profile:
+    name: SQLite profile (charter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sqlite-profile
+      - run: make check-sqlite-profile
+
   test:
     name: Test
     runs-on: ubuntu-latest
