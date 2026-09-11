@@ -211,6 +211,80 @@ fn correlation_detection_walks_between_in_like_and_case_inside_the_subquery() {
 }
 
 #[test]
+fn correlation_detection_walks_like_with_escape_and_the_select_list() {
+    let (_db, mut e) = seeded("like-and-select-list");
+    // LIKE (with ESCAPE) traversal arm.
+    let rows = e
+        .run_query(
+            "SELECT tag FROM outer_t \
+             WHERE outer_t.k = (SELECT k FROM bound WHERE CAST(bound.k AS TEXT) LIKE \
+                CAST(outer_t.k AS TEXT) ESCAPE '\\') \
+             ORDER BY tag",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(
+        rows,
+        vec![
+            vec![Cell::Text("a".into())],
+            vec![Cell::Text("b".into())],
+            vec![Cell::Text("c".into())],
+        ]
+    );
+
+    // The correlated column appears only in the subquery's own SELECT
+    // list, not its WHERE clause -- `single_correlated_outer_column`
+    // walks both.
+    let rows = e
+        .run_query(
+            "SELECT tag FROM outer_t \
+             WHERE outer_t.k = (SELECT outer_t.k FROM bound WHERE bound.k = 1) \
+             ORDER BY tag",
+        )
+        .unwrap()
+        .rows;
+    // The subquery returns `outer_t.k` itself (correlated via the
+    // SELECT list, not WHERE), so `outer_t.k = <that same value>` is
+    // trivially true for every row -- proof the correlation was found
+    // and threaded through correctly, not proof of a filtering effect.
+    assert_eq!(
+        rows,
+        vec![
+            vec![Cell::Text("a".into())],
+            vec![Cell::Text("b".into())],
+            vec![Cell::Text("c".into())],
+            vec![Cell::Text("d".into())],
+        ]
+    );
+}
+
+#[test]
+fn a_nested_exists_inside_the_correlated_subquery_disables_memoization_but_stays_correct() {
+    // `collect_correlated_column` treats a nested Subquery/EXISTS/
+    // InSubquery as unreasonable-about (`ambiguous = true`), so this
+    // subquery is never memoized -- it still has to answer correctly
+    // via the ordinary per-row `compile_scalar_subquery` path.
+    let (_db, mut e) = seeded("nested-exists");
+    let rows = e
+        .run_query(
+            "SELECT tag FROM outer_t \
+             WHERE outer_t.k = (SELECT k FROM bound WHERE bound.k = outer_t.k \
+                AND EXISTS (SELECT 1 FROM bound WHERE bound.k = 1)) \
+             ORDER BY tag",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(
+        rows,
+        vec![
+            vec![Cell::Text("a".into())],
+            vec![Cell::Text("b".into())],
+            vec![Cell::Text("c".into())],
+        ]
+    );
+}
+
+#[test]
 fn a_subquery_correlated_against_two_distinct_outer_columns_is_not_memoized_but_still_correct() {
     // `collect_correlated_column` sets `ambiguous` on a *second*
     // distinct outer column -- `subquery_memoizable` then returns
