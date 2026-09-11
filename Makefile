@@ -202,7 +202,15 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # implementors of that same ADR 0008 boundary -- they hand `Box<dyn
 # CursorFactory>`/`Box<dyn Transaction>`/`Box<dyn SchemaStorage>` to the Vm
 # and hold `Rc<dyn PageSource>`. Same exemption, same reason, as vm.rs.
-MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/column/parquet/* src/storage/column/parquet/compression/* src/storage/stream/* src/engine/stream.rs
+#
+# `src/json_path.rs` (#307): `JsonValue<'a>` is a zero-copy parser --
+# every variant borrows string spans from the source line rather than
+# allocating, which is the whole point (`storage::stream::json`'s
+# ingest-time cost budget, ADR 0018) -- so it carries the same explicit-
+# lifetime shape as `ParquetFile<'a>` above, moved here from the already-
+# excluded `src/storage/stream/*` so `functions::json_extract` can share
+# it without a second parser.
+MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/column/parquet/* src/storage/column/parquet/compression/* src/storage/stream/* src/engine/stream.rs src/json_path.rs
 
 check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
 	@command -v cargo-mvl-limit >/dev/null 2>&1 || { \

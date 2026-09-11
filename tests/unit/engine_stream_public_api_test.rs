@@ -334,3 +334,85 @@ fn join_and_unbounded_aggregate_are_rejected() {
     // here) -- covered directly against `codegen::stream::compile` in
     // `src/codegen/stream.rs`'s own tests instead.
 }
+
+const JSON_FIXTURE: &str = "tests/fixtures/stream/syslog-json-1k.log";
+
+fn open_json() -> StreamEngine {
+    StreamEngine::open(Path::new(JSON_FIXTURE)).expect("open JSON fixture")
+}
+
+/// Independent oracle: whether each line's `message` (the text after the
+/// `PROC[PID]: ` prefix) contains a `"status"` key, and what its value is
+/// -- a hand rolled substring search, not `json_extract` itself, so the
+/// test doesn't validate the function against its own output.
+fn json_status_oracle() -> Vec<Option<&'static str>> {
+    STATUS_LINES
+        .lines()
+        .map(|l| {
+            let msg = l.split_once(": ").map_or(l, |(_, m)| m);
+            // The fixture's one malformed-JSON case (unterminated object,
+            // `i % 17 == 0`) also contains the `"status":"..."` substring
+            // textually -- excluded here by requiring the closing brace,
+            // so this oracle doesn't count a line `json_extract` correctly
+            // treats as unparseable.
+            if !msg.ends_with('}') {
+                return None;
+            }
+            let key = "\"status\":\"";
+            let start = msg.find(key)? + key.len();
+            let end = msg[start..].find('"')? + start;
+            Some(&msg[start..end])
+        })
+        .collect()
+}
+
+// A `'static` copy of the fixture's contents so the oracle's borrows
+// outlive the function that built them (read once at first use).
+static STATUS_LINES: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| std::fs::read_to_string(JSON_FIXTURE).unwrap());
+
+/// #307 "Done when": `json_extract` over a JSON-in-syslog `message`,
+/// grouped by the extracted value via its `SELECT`-list alias. The
+/// issue's own acceptance query adds `WHERE message LIKE '%status%'` as
+/// a cheap pre-filter before the late parse -- `LIKE` is not part of
+/// this validated subset's `WHERE` grammar at all (pre-existing,
+/// unrelated to `json_extract`; `parser::column::validate_expr`'s doc
+/// comment already calls this out), so that clause is dropped here.
+/// Adding `LIKE`/`GLOB` (or a general `FunctionCall`) to the `WHERE`
+/// subset is a separate, unscoped decision.
+#[test]
+fn json_extract_with_alias_and_group_by_matches_the_oracle() {
+    let mut e = open_json();
+    let got: BTreeMap<String, i64> = rows(
+        &mut e,
+        "SELECT json_extract(message,'$.status') AS s, count(*) FROM log \
+         GROUP BY s ORDER BY s",
+    )
+    .into_iter()
+    // The NULL group (rows with no `"status"` key, or malformed JSON) is
+    // covered by its own test below -- filtered out here so this test
+    // compares only the present-and-parseable groups against the oracle.
+    .filter_map(|r| match (&r[0], &r[1]) {
+        (Cell::Text(s), Cell::Int(n)) => Some((s.clone(), *n)),
+        (Cell::Null, Cell::Int(_)) => None,
+        other => panic!("{other:?}"),
+    })
+    .collect();
+
+    let mut want: BTreeMap<String, i64> = BTreeMap::new();
+    for status in json_status_oracle().into_iter().flatten() {
+        *want.entry(status.to_string()).or_default() += 1;
+    }
+    assert_eq!(got, want);
+}
+
+/// A missing key (or malformed JSON) returns `NULL`, not an error -- the
+/// fixture seeds both on purpose (see the generator's `i % 10`/`i % 17`
+/// cases), so at least one row must produce it.
+#[test]
+fn json_extract_returns_null_for_missing_key_or_malformed_json() {
+    let mut e = open_json();
+    let got = rows(&mut e, "SELECT json_extract(message,'$.status') FROM log");
+    assert!(got.iter().any(|r| r[0] == Cell::Null));
+    assert_eq!(got.len(), 1000);
+}

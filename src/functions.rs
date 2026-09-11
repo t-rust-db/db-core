@@ -702,6 +702,612 @@ pub fn trigram_key(t: [u8; 3]) -> i64 {
     i64::from(t[0]) << 16 | i64::from(t[1]) << 8 | i64::from(t[2])
 }
 
+/// `json_extract(text, path)` -- late parse of embedded JSON (#307,
+/// ADR 0018 "late `json_extract`" for structure the ingest-time parser
+/// left as a string). Malformed JSON, a missing path or a path through
+/// a non-object all return `Value::Null` rather than an error, matching
+/// this module's existing null-propagation convention (`substr`,
+/// `instr`); a nested object/array leaf also returns `Value::Null` --
+/// re-serializing a parsed [`crate::json_path::JsonValue::Object`] back
+/// to JSON text is unscoped work with no caller today ([`JsonValue::Array`]
+/// keeps its raw text, so extracting an array leaf does work).
+fn json_extract(args: &[Value]) -> Result<Value, FunctionError> {
+    if args.iter().any(|v| matches!(v, Value::Null)) {
+        return Ok(Value::Null);
+    }
+    let text = as_text(&args[0]);
+    let path = as_text(&args[1]);
+    let Some((root, _)) = crate::json_path::parse_value(&text) else {
+        return Ok(Value::Null);
+    };
+    Ok(match crate::json_path::lookup(&root, &path) {
+        Some(crate::json_path::JsonValue::Null | crate::json_path::JsonValue::Object(_)) | None => {
+            Value::Null
+        }
+        Some(crate::json_path::JsonValue::Bool(b)) => Value::Integer(i64::from(b)),
+        Some(crate::json_path::JsonValue::Int(i)) => Value::Integer(i),
+        Some(crate::json_path::JsonValue::Float(f)) => Value::Real(f),
+        Some(crate::json_path::JsonValue::Str(s)) => Value::Text(s.to_string().into()),
+        Some(crate::json_path::JsonValue::Array(raw)) => Value::Text(raw.to_string().into()),
+    })
+}
+
+/// `logfmt_extract(text, key)` -- late parse of a `key=value` line
+/// (#307). A bare key (no `=value`) does not count as a match -- there
+/// is no "present but valueless" `Value` to return; missing/malformed
+/// input returns `Value::Null`.
+fn logfmt_extract(args: &[Value]) -> Result<Value, FunctionError> {
+    if args.iter().any(|v| matches!(v, Value::Null)) {
+        return Ok(Value::Null);
+    }
+    let text = as_text(&args[0]);
+    let key = as_text(&args[1]);
+    let found = crate::logfmt_scan::scan(&text).find_map(|(k, v)| if k == key { v } else { None });
+    Ok(match found {
+        Some(v) => Value::Text(v.to_string().into()),
+        None => Value::Null,
+    })
+}
+
+/// `regexp_extract(text, pattern, group)` -- capture-group extraction
+/// from the first match of `pattern` in `text` (#307); `group` 0 is the
+/// whole match. No match, an out-of-range group or a malformed pattern
+/// all return `Value::Null`.
+fn regexp_extract(args: &[Value]) -> Result<Value, FunctionError> {
+    if args.iter().any(|v| matches!(v, Value::Null)) {
+        return Ok(Value::Null);
+    }
+    let text = as_text(&args[0]);
+    let pattern = as_text(&args[1]);
+    let group = crate::coerce::cast_to_integer(&args[2]);
+    let Ok(group) = usize::try_from(group) else {
+        return Ok(Value::Null);
+    };
+    let Some(re) = regex_lite::compile(&pattern) else {
+        return Ok(Value::Null);
+    };
+    Ok(match regex_lite::find(&re, &text) {
+        Some(m) => match m.group(group) {
+            Some(s) => Value::Text(s.to_string().into()),
+            None => Value::Null,
+        },
+        None => Value::Null,
+    })
+}
+
+/// A small hand-rolled regex subset for `regexp_extract` (#307): literal
+/// characters, `.` (any char), `*`/`+`/`?` quantifiers on the preceding
+/// atom, `[...]`/`[^...]` character classes (with `-` ranges, mirroring
+/// [`glob_class`]'s syntax), `\` to escape a metacharacter, and `(...)`
+/// capture groups numbered by position of the opening paren (group 0 is
+/// the whole match). Deliberately no anchors, alternation, non-capturing
+/// groups, backreferences or `\d`/`\w`/`\s` shorthands, and no
+/// quantifier on a group as a whole -- ADR 0011 keeps `functions`
+/// dependency-free, so this is a matcher, not the `regex` crate, and log
+/// line extraction has not needed any of those yet.
+mod regex_lite {
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Atom {
+        Lit(char),
+        Any,
+        Class { negate: bool },
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Quant {
+        One,
+        Star,
+        Plus,
+        Opt,
+    }
+
+    #[derive(Debug, Clone)]
+    enum ClassItem {
+        Char(char),
+        Range(char, char),
+    }
+
+    #[derive(Debug, Clone)]
+    enum Node {
+        Atom {
+            atom: Atom,
+            items: Vec<ClassItem>,
+            quant: Quant,
+        },
+        GroupOpen,
+        GroupClose(usize),
+    }
+
+    /// A compiled pattern: a flat node list plus the number of capture
+    /// groups (excluding group 0, the whole match).
+    pub struct Compiled {
+        nodes: Vec<Node>,
+        group_count: usize,
+    }
+
+    /// Compile `pattern`, or `None` on malformed syntax (unterminated
+    /// class/group, dangling quantifier, trailing backslash).
+    pub fn compile(pattern: &str) -> Option<Compiled> {
+        let chars: Vec<char> = pattern.chars().collect();
+        let mut nodes = Vec::new();
+        let mut i = 0;
+        let mut next_group = 1usize;
+        let mut open_groups: Vec<usize> = Vec::new();
+        while i < chars.len() {
+            match chars[i] {
+                '(' => {
+                    nodes.push(Node::GroupOpen);
+                    open_groups.push(next_group);
+                    next_group = next_group.checked_add(1)?;
+                    i = i.checked_add(1)?;
+                }
+                ')' => {
+                    let idx = open_groups.pop()?;
+                    nodes.push(Node::GroupClose(idx));
+                    i = i.checked_add(1)?;
+                }
+                '.' => {
+                    i = i.checked_add(1)?;
+                    let quant = take_quant(&chars, &mut i);
+                    nodes.push(Node::Atom {
+                        atom: Atom::Any,
+                        items: Vec::new(),
+                        quant,
+                    });
+                }
+                '[' => {
+                    let (negate, items, next_i) = parse_class(&chars, i)?;
+                    i = next_i;
+                    let quant = take_quant(&chars, &mut i);
+                    nodes.push(Node::Atom {
+                        atom: Atom::Class { negate },
+                        items,
+                        quant,
+                    });
+                }
+                '\\' => {
+                    let c = *chars.get(i.checked_add(1)?)?;
+                    i = i.checked_add(2)?;
+                    let quant = take_quant(&chars, &mut i);
+                    nodes.push(Node::Atom {
+                        atom: Atom::Lit(c),
+                        items: Vec::new(),
+                        quant,
+                    });
+                }
+                c => {
+                    i = i.checked_add(1)?;
+                    let quant = take_quant(&chars, &mut i);
+                    nodes.push(Node::Atom {
+                        atom: Atom::Lit(c),
+                        items: Vec::new(),
+                        quant,
+                    });
+                }
+            }
+        }
+        if !open_groups.is_empty() {
+            return None; // unterminated group
+        }
+        Some(Compiled {
+            nodes,
+            group_count: next_group.saturating_sub(1),
+        })
+    }
+
+    fn take_quant(chars: &[char], i: &mut usize) -> Quant {
+        match chars.get(*i) {
+            Some('*') => {
+                *i = i.saturating_add(1);
+                Quant::Star
+            }
+            Some('+') => {
+                *i = i.saturating_add(1);
+                Quant::Plus
+            }
+            Some('?') => {
+                *i = i.saturating_add(1);
+                Quant::Opt
+            }
+            _ => Quant::One,
+        }
+    }
+
+    /// Parses a `[...]`/`[^...]` class starting at `chars[start]`
+    /// (`chars[start] == '['`); returns `(negate, items, index just past
+    /// the closing ']')`, or `None` if unterminated.
+    fn parse_class(chars: &[char], start: usize) -> Option<(bool, Vec<ClassItem>, usize)> {
+        let mut i = start.checked_add(1)?;
+        let negate = chars.get(i) == Some(&'^');
+        if negate {
+            i = i.checked_add(1)?;
+        }
+        let class_start = i;
+        let mut items = Vec::new();
+        loop {
+            if i >= chars.len() {
+                return None;
+            }
+            if chars[i] == ']' && i > class_start {
+                return Some((negate, items, i.checked_add(1)?));
+            }
+            if i.checked_add(2)? < chars.len()
+                && chars[i.checked_add(1)?] == '-'
+                && chars[i.checked_add(2)?] != ']'
+            {
+                items.push(ClassItem::Range(chars[i], chars[i.checked_add(2)?]));
+                i = i.checked_add(3)?;
+            } else {
+                items.push(ClassItem::Char(chars[i]));
+                i = i.checked_add(1)?;
+            }
+        }
+    }
+
+    fn class_matches(items: &[ClassItem], negate: bool, c: char) -> bool {
+        let hit = items.iter().any(|item| match item {
+            ClassItem::Char(x) => *x == c,
+            ClassItem::Range(lo, hi) => c >= *lo && c <= *hi,
+        });
+        hit != negate
+    }
+
+    fn atom_matches(atom: Atom, items: &[ClassItem], c: char) -> bool {
+        match atom {
+            Atom::Lit(x) => x == c,
+            Atom::Any => true,
+            Atom::Class { negate } => class_matches(items, negate, c),
+        }
+    }
+
+    /// One match: the whole-match span plus each capture group's span
+    /// (character offsets into the scanned text), 1-indexed by group
+    /// number.
+    pub struct Match {
+        text: Vec<char>,
+        whole: (usize, usize),
+        groups: Vec<Option<(usize, usize)>>,
+    }
+
+    impl Match {
+        /// Group 0 is the whole match; group N (1-based) is the Nth
+        /// capture group, or `None` if it didn't participate or `group`
+        /// is out of range.
+        pub fn group(&self, n: usize) -> Option<String> {
+            let span = if n == 0 {
+                Some(self.whole)
+            } else {
+                *self.groups.get(n.checked_sub(1)?)?
+            };
+            span.map(|(s, e)| self.text[s..e].iter().collect())
+        }
+    }
+
+    /// Find the first match of `re` anywhere in `text`, trying every
+    /// start offset left to right (unanchored search -- no anchors
+    /// exist in this subset, so "first match" needs an explicit scan).
+    pub fn find(re: &Compiled, text: &str) -> Option<Match> {
+        let chars: Vec<char> = text.chars().collect();
+        for start in 0..=chars.len() {
+            let mut groups = vec![None; re.group_count];
+            let mut open: Vec<usize> = Vec::new();
+            if let Some(end) = match_seq(&re.nodes, 0, &chars, start, &mut groups, &mut open) {
+                return Some(Match {
+                    text: chars,
+                    whole: (start, end),
+                    groups,
+                });
+            }
+        }
+        None
+    }
+
+    fn match_seq(
+        nodes: &[Node],
+        ni: usize,
+        text: &[char],
+        ti: usize,
+        groups: &mut Vec<Option<(usize, usize)>>,
+        open: &mut Vec<usize>,
+    ) -> Option<usize> {
+        let Some(node) = nodes.get(ni) else {
+            return Some(ti);
+        };
+        match node {
+            Node::GroupOpen => {
+                open.push(ti);
+                let r = match_seq(nodes, ni.saturating_add(1), text, ti, groups, open);
+                if r.is_none() {
+                    open.pop();
+                }
+                r
+            }
+            Node::GroupClose(idx) => {
+                let start = *open.last()?;
+                open.pop();
+                let slot = idx.checked_sub(1)?;
+                let previous = groups.get(slot).copied().unwrap_or(None);
+                if let Some(g) = groups.get_mut(slot) {
+                    *g = Some((start, ti));
+                }
+                let r = match_seq(nodes, ni.saturating_add(1), text, ti, groups, open);
+                if r.is_none() {
+                    if let Some(g) = groups.get_mut(slot) {
+                        *g = previous;
+                    }
+                    open.push(start);
+                }
+                r
+            }
+            Node::Atom { atom, items, quant } => match quant {
+                Quant::One => {
+                    let c = *text.get(ti)?;
+                    if atom_matches(*atom, items, c) {
+                        match_seq(
+                            nodes,
+                            ni.saturating_add(1),
+                            text,
+                            ti.saturating_add(1),
+                            groups,
+                            open,
+                        )
+                    } else {
+                        None
+                    }
+                }
+                Quant::Opt => try_repeat(nodes, ni, *atom, items, 0, 1, text, ti, groups, open),
+                Quant::Star => try_repeat(
+                    nodes,
+                    ni,
+                    *atom,
+                    items,
+                    0,
+                    usize::MAX,
+                    text,
+                    ti,
+                    groups,
+                    open,
+                ),
+                Quant::Plus => try_repeat(
+                    nodes,
+                    ni,
+                    *atom,
+                    items,
+                    1,
+                    usize::MAX,
+                    text,
+                    ti,
+                    groups,
+                    open,
+                ),
+            },
+        }
+    }
+
+    /// Greedy quantifier: collects every consecutive match of `atom`
+    /// starting at `ti`, then backtracks from the longest run down to
+    /// `min` repeats looking for one from which the rest of the pattern
+    /// also matches.
+    #[allow(clippy::too_many_arguments)]
+    fn try_repeat(
+        nodes: &[Node],
+        ni: usize,
+        atom: Atom,
+        items: &[ClassItem],
+        min: usize,
+        max: usize,
+        text: &[char],
+        ti: usize,
+        groups: &mut Vec<Option<(usize, usize)>>,
+        open: &mut Vec<usize>,
+    ) -> Option<usize> {
+        let mut positions = vec![ti];
+        let mut cur = ti;
+        while positions.len().saturating_sub(1) < max
+            && text.get(cur).is_some_and(|c| atom_matches(atom, items, *c))
+        {
+            cur = cur.saturating_add(1);
+            positions.push(cur);
+        }
+        let last = positions.len().saturating_sub(1);
+        if min > last {
+            return None;
+        }
+        for k in (min..=last).rev() {
+            if let Some(end) = match_seq(
+                nodes,
+                ni.saturating_add(1),
+                text,
+                positions[k],
+                groups,
+                open,
+            ) {
+                return Some(end);
+            }
+        }
+        None
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn extract(pattern: &str, text: &str, group: usize) -> Option<String> {
+            find(&compile(pattern)?, text)?.group(group)
+        }
+
+        #[test]
+        fn matches_literal_substring() {
+            assert_eq!(extract("bc", "abcd", 0), Some("bc".to_string()));
+        }
+
+        #[test]
+        fn dot_matches_any_char() {
+            assert_eq!(extract("a.c", "xabcx", 0), Some("abc".to_string()));
+        }
+
+        #[test]
+        fn star_matches_zero_or_more() {
+            assert_eq!(extract("ab*c", "ac", 0), Some("ac".to_string()));
+            assert_eq!(extract("ab*c", "abbbc", 0), Some("abbbc".to_string()));
+        }
+
+        #[test]
+        fn plus_requires_at_least_one() {
+            assert_eq!(extract("ab+c", "ac", 0), None);
+            assert_eq!(extract("ab+c", "abc", 0), Some("abc".to_string()));
+        }
+
+        #[test]
+        fn opt_matches_zero_or_one() {
+            assert_eq!(extract("ab?c", "ac", 0), Some("ac".to_string()));
+            assert_eq!(extract("ab?c", "abc", 0), Some("abc".to_string()));
+        }
+
+        #[test]
+        fn char_class_and_range() {
+            assert_eq!(
+                extract("[0-9]+", "port 8080 ok", 0),
+                Some("8080".to_string())
+            );
+            assert_eq!(extract("[^0-9]+", "8080abc", 0), Some("abc".to_string()));
+        }
+
+        #[test]
+        fn capture_group_extracts_submatch() {
+            assert_eq!(
+                extract(r"duration=([0-9]+)ms", "duration=184ms", 1),
+                Some("184".to_string())
+            );
+            assert_eq!(
+                extract(r"duration=([0-9]+)ms", "duration=184ms", 0),
+                Some("duration=184ms".to_string())
+            );
+        }
+
+        #[test]
+        fn no_match_returns_none() {
+            assert_eq!(extract("xyz", "abc", 0), None);
+        }
+
+        #[test]
+        fn escaped_metachar_is_literal() {
+            assert_eq!(extract(r"a\.b", "a.b", 0), Some("a.b".to_string()));
+            assert_eq!(extract(r"a\.b", "axb", 0), None);
+        }
+
+        #[test]
+        fn unterminated_group_fails_to_compile() {
+            assert!(compile("(abc").is_none());
+        }
+
+        #[test]
+        fn unterminated_class_fails_to_compile() {
+            assert!(compile("[abc").is_none());
+        }
+
+        /// MC/DC vector (obligation `functions_931`, `parse_class`'s
+        /// terminator check `chars[i] == ']' && i > class_start`): leaf A
+        /// false (not a `]`) -- an ordinary class member, scanning
+        /// continues.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_931__v1_non_bracket_continues() {
+            assert_eq!(extract("[ab]", "xaz", 0), Some("a".to_string()));
+        }
+
+        /// MC/DC vector (obligation `functions_931`): leaf A true, leaf B
+        /// (past the class start) false -- a `]` as the very first class
+        /// character is a literal member, not the terminator.
+        /// Independence pair for B against `mcdc__functions_931__
+        /// v3_bracket_past_start_terminates`.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_931__v2_leading_bracket_is_literal_member() {
+            assert_eq!(extract("[]a]", "x]z", 0), Some("]".to_string()));
+        }
+
+        /// MC/DC vector (obligation `functions_931`): both leaves true --
+        /// a `]` past the class start terminates the class. Independence
+        /// pair for A against `mcdc__functions_931__v1_non_bracket_
+        /// continues`.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_931__v3_bracket_past_start_terminates() {
+            assert_eq!(extract("[a]b", "xay", 0), None);
+            assert_eq!(extract("[a]b", "xaby", 0), Some("ab".to_string()));
+        }
+
+        /// MC/DC vector (obligation `functions_934`, `parse_class`'s
+        /// range-detection decision `i+2 < chars.len() && chars[i+1] ==
+        /// '-' && chars[i+2] != ']'`, 3 conditions): all leaves true -- a
+        /// real range like `a-z`.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_934__v1_all_true_is_range() {
+            assert_eq!(extract("[a-z]", "XmY", 0), Some("m".to_string()));
+        }
+
+        /// MC/DC vector (obligation `functions_934`): leaves A and B
+        /// true, leaf C (`chars[i+2] != ']'`) false -- `-` immediately
+        /// followed by the class terminator is not a range, so `-` is a
+        /// literal member.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_934__v2_dash_before_terminator_is_literal() {
+            assert_eq!(extract("[a-]", "x-y", 0), Some("-".to_string()));
+        }
+
+        /// MC/DC vector (obligation `functions_934`): leaf A true, leaf B
+        /// (`chars[i+1] == '-'`) false -- no dash follows, so it's a
+        /// plain class member, not a range.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_934__v3_no_dash_is_not_range() {
+            assert_eq!(extract("[ab]", "xbz", 0), Some("b".to_string()));
+        }
+
+        /// MC/DC vector (obligation `functions_934`): leaf A
+        /// (`i+2 < chars.len()`) false -- too close to the end of the
+        /// class for a range, so treated as a literal member.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_934__v4_too_short_for_range() {
+            assert_eq!(extract("[a]", "xay", 0), Some("a".to_string()));
+        }
+
+        /// MC/DC vector (obligation `functions_1106`, `try_repeat`'s
+        /// collection-loop decision `positions.len() - 1 < max &&
+        /// text.get(cur).is_some_and(...)`): both leaves true -- under
+        /// the repeat cap and the next character still matches, so
+        /// collection continues.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_1106__v1_under_cap_and_matches_continues() {
+            assert_eq!(extract("ab+c", "abbbc", 0), Some("abbbc".to_string()));
+        }
+
+        /// MC/DC vector (obligation `functions_1106`): leaf A true, leaf
+        /// B false -- still under the cap, but the next character
+        /// doesn't match the atom, so collection stops with zero
+        /// repeats.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_1106__v2_under_cap_but_no_match_stops() {
+            assert_eq!(extract("ab*c", "ac", 0), Some("ac".to_string()));
+        }
+
+        /// MC/DC vector (obligation `functions_1106`): leaf A false --
+        /// the repeat cap is reached, so collection stops regardless of
+        /// whether another character would have matched.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_1106__v3_cap_reached_stops() {
+            assert_eq!(extract("ab?c", "abc", 0), Some("abc".to_string()));
+        }
+    }
+}
+
 type ScalarFn = fn(&[Value]) -> Result<Value, FunctionError>;
 
 /// Dispatches `name(args)` by name and arity into this module's
@@ -735,6 +1341,9 @@ pub fn call(name: &str, args: &[Value]) -> Result<Value, FunctionError> {
         ("replace", 3) => Some(replace_fn),
         ("like", 2 | 3) => Some(like_fn),
         ("glob", 2) => Some(glob_fn),
+        ("json_extract", 2) => Some(json_extract),
+        ("logfmt_extract", 2) => Some(logfmt_extract),
+        ("regexp_extract", 3) => Some(regexp_extract),
         _ => None,
     };
     match f {

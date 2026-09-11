@@ -385,6 +385,24 @@ fn validate_window_call(
     Ok(())
 }
 
+/// The `#307` scalar functions this validator accepts in a `SELECT`
+/// list -- mirrors `codegen::batch::is_known_scalar_function`, kept as a
+/// separate copy (like [`window_shape`] already is for window functions)
+/// so this validator doesn't depend on the planner.
+fn is_known_scalar_function(name: &str, arity: usize) -> bool {
+    matches!(
+        (name.to_ascii_lowercase().as_str(), arity),
+        ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3)
+    )
+}
+
+fn arg_count(args: &FunctionArgs) -> usize {
+    match args {
+        FunctionArgs::Star => 0,
+        FunctionArgs::List(list) => list.len(),
+    }
+}
+
 fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<()> {
     use crate::parser::ast::ResultColumn;
     match col {
@@ -393,14 +411,9 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
             Span::UNKNOWN,
             "table.* is not supported".into(),
         )),
-        ResultColumn::Expr {
-            expr,
-            alias: Some(_),
-        } => Err(unsupported(
-            expr.span,
-            "column alias (AS) is not supported".into(),
-        )),
-        ResultColumn::Expr { expr, alias: None } => match &expr.kind {
+        // `alias` (#307) only renames this column's output header; it
+        // doesn't change how `expr` itself validates below.
+        ResultColumn::Expr { expr, alias: _ } => match &expr.kind {
             ExprKind::Column { .. } => column_name(expr).map(|_| ()),
             ExprKind::FunctionCall {
                 name,
@@ -430,13 +443,50 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
                 args,
                 ..
             } => {
-                if *distinct {
-                    return Err(unsupported(
-                        expr.span,
-                        "DISTINCT inside an aggregate".into(),
-                    ));
+                if is_known_agg_name(name) {
+                    if *distinct {
+                        return Err(unsupported(
+                            expr.span,
+                            "DISTINCT inside an aggregate".into(),
+                        ));
+                    }
+                    return validate_aggregate_call(expr, name, args);
                 }
-                validate_aggregate_call(expr, name, args)
+                // Not an aggregate: a scalar call (#307) -- its arguments
+                // are validated like any other expression (e.g. `raw`/
+                // `message` column references, or a literal path/key/
+                // group), same as an aggregate's own column argument.
+                if !is_known_scalar_function(name, arg_count(args)) {
+                    return Err(unsupported(expr.span, format!("unknown function {name}")));
+                }
+                match args {
+                    FunctionArgs::Star => Err(unsupported(
+                        expr.span,
+                        format!("{name} does not accept (*)"),
+                    )),
+                    // A column reference or a literal (path/key/group) --
+                    // `validate_expr` isn't reused here because it takes
+                    // `&mut`, and none of these three functions' arguments
+                    // need anything beyond what `column_name`/a literal
+                    // check already cover.
+                    FunctionArgs::List(list) => {
+                        for arg in list {
+                            match &arg.kind {
+                                ExprKind::Column { .. } => {
+                                    column_name(arg)?;
+                                }
+                                ExprKind::Literal(_) => {}
+                                _ => {
+                                    return Err(unsupported(
+                                        arg.span,
+                                        format!("{name} arguments must be a column or literal"),
+                                    ))
+                                }
+                            }
+                        }
+                        Ok(())
+                    }
+                }
             }
             _ => validate_expr(expr),
         },
@@ -465,7 +515,10 @@ fn item_kind(col: &crate::parser::ast::ResultColumn) -> Result<ItemKind> {
             ExprKind::FunctionCall { tail, .. } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
                 ItemKind::Window
             }
-            ExprKind::FunctionCall { .. } => ItemKind::Agg,
+            // A scalar call (#307) is a computed expression, not an
+            // aggregate -- `is_known_agg_name` is the real distinction
+            // `validate_result_column` already draws for the same call.
+            ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => ItemKind::Agg,
             _ => ItemKind::Expr,
         },
     })
@@ -713,31 +766,41 @@ fn validate_select(select: &mut Select) -> Result<()> {
             "a computed expression alongside a window function is not supported".into(),
         ));
     }
-    if has_agg && !has_window && has_expr {
-        return Err(unsupported(
-            select.span,
-            "a computed expression alongside an aggregate requires GROUP BY".into(),
-        ));
-    }
     if has_agg && !has_window {
-        let select_bare: Vec<&String> = items
-            .iter()
-            .filter_map(|c| match c {
-                ItemKind::Column(name) => Some(name),
-                _ => None,
-            })
-            .collect();
-        // Every GROUP BY key must be a plain column here (the batch
-        // planner groups by column); an expression is rejected with its
-        // own span rather than silently dropped from the comparison,
-        // which used to make this check accept or reject the wrong
-        // queries (db-core#232).
+        // Every non-aggregated SELECT item must resolve to one of
+        // `GROUP BY`'s keys, in the same order: a plain column by name,
+        // or (#307) a computed expression by its `AS <alias>` -- exactly
+        // the alias `codegen::batch::group_by_key_expr` resolves back to
+        // that expression. An unaliased computed expression has nothing
+        // for `GROUP BY` to name it by, so it stays rejected outright
+        // (db-core#232: silently dropping it from the comparison used to
+        // accept the wrong queries).
+        let mut select_keys = Vec::with_capacity(items.len());
+        for (col, item) in select.columns.iter().zip(&items) {
+            match item {
+                ItemKind::Column(name) => select_keys.push(name.clone()),
+                ItemKind::Expr => match col {
+                    crate::parser::ast::ResultColumn::Expr {
+                        alias: Some(alias), ..
+                    } => select_keys.push(alias.clone()),
+                    _ => {
+                        return Err(unsupported(
+                            select.span,
+                            "a computed expression alongside an aggregate requires GROUP BY \
+                             and an AS alias"
+                                .into(),
+                        ))
+                    }
+                },
+                ItemKind::Agg | ItemKind::Star | ItemKind::Window => {}
+            }
+        }
         let group_by: Vec<String> = select
             .group_by
             .iter()
             .map(column_name)
             .collect::<Result<_>>()?;
-        if select_bare != group_by.iter().collect::<Vec<_>>() {
+        if select_keys != group_by {
             let message = if group_by.is_empty() {
                 "a plain column alongside an aggregate requires GROUP BY".to_string()
             } else {
@@ -1374,7 +1437,7 @@ mod tests {
     /// the query is rejected.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_678__v1_cross_join_without_limit_is_rejected() {
+    fn mcdc__column_731__v1_cross_join_without_limit_is_rejected() {
         let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
@@ -1383,7 +1446,7 @@ mod tests {
     /// false with a CROSS JOIN present -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_678__v2_cross_join_with_limit_is_accepted() {
+    fn mcdc__column_731__v2_cross_join_with_limit_is_accepted() {
         let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();
         assert!(matches!(
             q.limit.as_ref().unwrap().limit.kind,
@@ -1395,28 +1458,28 @@ mod tests {
     /// false with no LIMIT -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_678__v3_non_cross_join_without_limit_is_accepted() {
+    fn mcdc__column_731__v3_non_cross_join_without_limit_is_accepted() {
         let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
         assert!(q.limit.is_none());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_722__v1_agg_without_window_validates_group_by_keys() {
+    fn mcdc__column_769__v1_agg_without_window_validates_group_by_keys() {
         let err = parse("SELECT foo, SUM(amount) FROM t").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_722__v2_no_agg_skips_group_by_key_validation() {
+    fn mcdc__column_769__v2_no_agg_skips_group_by_key_validation() {
         let q = parse("SELECT foo, bar FROM t").unwrap();
         assert_eq!(q.columns.len(), 2);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_722__v3_agg_with_window_skips_group_by_key_validation() {
+    fn mcdc__column_769__v3_agg_with_window_skips_group_by_key_validation() {
         let q =
             parse("SELECT region, SUM(amount), ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
         assert_eq!(q.columns.len(), 3);
@@ -1511,47 +1574,46 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_710__v1_window_beside_computed_expr_is_rejected() {
+    fn mcdc__column_763__v1_window_beside_computed_expr_is_rejected() {
         assert!(parse("SELECT id + 1, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_err());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_710__v2_window_beside_bare_column_is_accepted() {
+    fn mcdc__column_763__v2_window_beside_bare_column_is_accepted() {
         assert!(parse("SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_710__v3_computed_expr_without_window_is_accepted() {
+    fn mcdc__column_763__v3_computed_expr_without_window_is_accepted() {
         assert!(parse("SELECT id + 1 FROM t").is_ok());
     }
 
+    // #307: these four used to be MC/DC vectors for a 3-leaf `has_agg &&
+    // !has_window && has_expr` decision that no longer exists -- an
+    // unaliased computed expression alongside an aggregate is still
+    // rejected, but now via the per-item `select_keys` loop under
+    // `column_769` (`has_agg && !has_window`), not a standalone `&&
+    // has_expr` leaf. Kept as ordinary regression tests, not re-tagged,
+    // since there is no longer a matching multi-leaf decision to name.
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__column_716__v1_agg_beside_computed_expr_without_group_by_is_rejected() {
+    fn agg_beside_computed_expr_without_group_by_is_rejected() {
         assert!(parse("SELECT SUM(amount), id + 1 FROM t").is_err());
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__column_716__v2_computed_expr_without_agg_is_accepted() {
+    fn computed_expr_without_agg_is_accepted() {
         assert!(parse("SELECT id + 1 FROM t").is_ok());
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__column_716__v3_agg_without_computed_expr_is_accepted() {
+    fn agg_without_computed_expr_is_accepted() {
         assert!(parse("SELECT region, SUM(amount) FROM t GROUP BY region").is_ok());
     }
 
-    /// The `!has_window` leaf: with a window function present the query
-    /// is already rejected one check earlier (`column_700`, window beside
-    /// a computed expression), so this vector observes that masking
-    /// rejection rather than a pass through `column_706`.
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__column_716__v4_agg_with_window_and_expr_is_rejected_upstream() {
+    fn agg_with_window_and_expr_is_rejected_upstream() {
         assert!(
             parse("SELECT SUM(amount), id + 1, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_err()
         );

@@ -194,15 +194,15 @@ fn compile_join_reports_unsupported_join_kind_as_a_typed_error() {
 }
 
 /// db-core#232: `compile`/`explain` are fallible. A select item the batch
-/// planner cannot classify -- here a column alias, which only the
-/// `parser::column` validator used to reject -- is a `PlanError`, not a
-/// program that silently emits nothing.
+/// planner cannot classify -- an unknown function name, neither an
+/// aggregate, a window function, nor one of the #307 scalar functions --
+/// is a `PlanError`, not a program that silently emits nothing.
 #[test]
 fn compile_and_explain_reject_a_select_item_the_planner_cannot_classify() {
     let db_core::parser::row::ParseOutcome::Accepted(select) =
-        db_core::parser::row::parse_select("SELECT amount AS total FROM sales")
+        db_core::parser::row::parse_select("SELECT frobnicate(amount) FROM sales")
     else {
-        panic!("row grammar accepts a column alias");
+        panic!("row grammar accepts a function call");
     };
     assert!(matches!(
         compile(&select),
@@ -216,4 +216,19 @@ fn compile_and_explain_reject_a_select_item_the_planner_cannot_classify() {
         }),
         Err(PlanError::UnsupportedSelectItem(_))
     ));
+}
+
+/// #307: a `SELECT`-list column alias (`AS <alias>`) now compiles and
+/// renders its output header as the alias, rather than being rejected
+/// outright (the pre-#307 behavior `compile_and_explain_reject_a_select_
+/// item_the_planner_cannot_classify` above used to cover).
+#[test]
+fn compile_accepts_a_column_alias_and_uses_it_as_the_output_header() {
+    let db_core::parser::row::ParseOutcome::Accepted(select) =
+        db_core::parser::row::parse_select("SELECT amount AS total FROM sales")
+    else {
+        panic!("row grammar accepts a column alias");
+    };
+    assert!(compile(&select).is_ok());
+    assert_eq!(output_column_names(&select), vec!["total".to_string()]);
 }

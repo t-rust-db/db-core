@@ -443,6 +443,23 @@ pub enum Opcode {
         /// Maximum number of rows to keep.
         n: usize,
     },
+    /// Elementwise scalar function call: `registers[dst] = functions::call(
+    /// name, [registers[a] for a in args])`, per row. Dispatches into
+    /// `crate::functions`'s feature-free registry (ADR 0011) -- `codegen::
+    /// batch` never duplicates a scalar function's body -- via a small
+    /// [`Value`]<->[`crate::value::Value`] conversion (#307). An unknown
+    /// name/arity or a `crate::value::Value::Blob` result (no `Value::Blob`
+    /// variant here -- batch has never needed one) both yield `Value::Null`
+    /// rather than an error, the same convention `compile_expr` already
+    /// uses for every out-of-subset shape.
+    Call {
+        /// Destination register.
+        dst: usize,
+        /// Function name, dispatched by `functions::call`.
+        name: Cow<'static, str>,
+        /// Argument registers, in call order.
+        args: Cow<'static, [usize]>,
+    },
 }
 
 impl Opcode {
@@ -469,7 +486,34 @@ impl Opcode {
             Opcode::Combine { .. } => "Combine",
             Opcode::Sort { .. } => "Sort",
             Opcode::Limit { .. } => "Limit",
+            Opcode::Call { .. } => "Call",
         }
+    }
+}
+
+/// [`Value`] -> [`crate::value::Value`], for calling into `functions::call`
+/// (#307). `Bool` has no row-value equivalent -- SQLite's own storage
+/// classes have no boolean -- so it becomes `Integer(0/1)`, the same
+/// coercion `CAST(bool AS INTEGER)` would give.
+fn to_scalar_value(v: &Value) -> crate::value::Value {
+    match v {
+        Value::Int(i) => crate::value::Value::Integer(*i),
+        Value::Float(f) => crate::value::Value::Real(*f),
+        Value::Bool(b) => crate::value::Value::Integer(i64::from(*b)),
+        Value::Str(s) => crate::value::Value::Text(s.as_ref().into()),
+        Value::Null => crate::value::Value::Null,
+    }
+}
+
+/// [`crate::value::Value`] -> [`Value`], the reverse of
+/// [`to_scalar_value`]. `Blob` has no `Value` equivalent here (batch has
+/// never needed one) and becomes `Null` rather than erroring.
+fn from_scalar_value(v: crate::value::Value) -> Value {
+    match v {
+        crate::value::Value::Null | crate::value::Value::Blob(_) => Value::Null,
+        crate::value::Value::Integer(i) => Value::Int(i),
+        crate::value::Value::Real(f) => Value::Float(f),
+        crate::value::Value::Text(s) => Value::Str(s.to_string().into()),
     }
 }
 
@@ -806,6 +850,7 @@ fn top_n_reduce(rows: Vec<Vec<Value>>, spec: &TopN) -> Vec<Vec<Value>> {
         if heap.len() < spec.limit {
             heap.push(item);
         } else if let Some(worst) = heap.peek() {
+            // #307: line-shift buffer to avoid an MC/DC id collision.
             if item.cmp(worst) == std::cmp::Ordering::Less {
                 heap.pop();
                 heap.push(item);
@@ -1330,6 +1375,31 @@ impl Vm {
                     .collect();
                 self.registers.insert(*dst, Arc::new(result));
             }
+            Opcode::Call { dst, name, args } => {
+                // Elementwise, like `Map`: resolve any pending selection
+                // first (see the comment on that arm).
+                self.resolve_selection(opcode)?;
+                let arg_regs: Vec<&[Value]> = args
+                    .iter()
+                    .map(|&a| self.reg(a, opcode))
+                    .collect::<Result<_>>()?;
+                let num_rows = arg_regs.first().map_or(batch.num_rows, |r| r.len());
+                // #307: line-shift buffer to avoid an MC/DC id collision.
+                if arg_regs.iter().any(|r| r.len() != num_rows) {
+                    return Err(VmError::RegisterLengthMismatch { opcode });
+                }
+                let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];
+                let mut result = Vec::with_capacity(num_rows);
+                for row in 0..num_rows {
+                    for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {
+                        *slot = to_scalar_value(&reg[row]);
+                    }
+                    let value = crate::functions::call(name, &call_args)
+                        .map_or(Value::Null, from_scalar_value);
+                    result.push(value);
+                }
+                self.registers.insert(*dst, Arc::new(result));
+            }
             Opcode::Filter { predicate } => {
                 // #265: produces a selection vector (surviving row
                 // indices) instead of eagerly compacting every live
@@ -1825,6 +1895,7 @@ fn compute_window(
             // an unrelated one in src/codegen/batch.rs.
             for (col, descending) in order_cols {
                 let ord = compare_for_order(&col[a], &col[b], *descending);
+                // #307: line-shift buffer to avoid an MC/DC id collision.
                 if ord != std::cmp::Ordering::Equal {
                     return ord;
                 }
@@ -1946,6 +2017,7 @@ fn compute_window(
                         output[row] = match func {
                             WindowFunc::Count => Value::Int(running_count),
                             WindowFunc::Sum => {
+                                // #307: line-shift buffer to avoid an MC/DC id collision.
                                 if running_count > 0 {
                                     Value::Float(running_sum)
                                 } else {
@@ -2064,6 +2136,7 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
 fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
     // `IsNull`/`IsNotNull` must observe a `Null` operand, so they run
     // before the null-propagation rule below.
+    // #307: line-shift buffer to avoid an MC/DC id collision.
     if matches!(op, MapOp::IsNull) {
         return Value::Bool(matches!(a, Value::Null));
     }
@@ -2126,6 +2199,7 @@ fn arithmetic(op: MapOp, a: &Value, b: &Value, f: impl Fn(f64, f64) -> f64) -> V
         return Value::Null;
     };
     let result = f(x, y);
+    // #307: line-shift buffer to avoid an MC/DC id collision.
     if matches!(a, Value::Int(_)) && matches!(b, Value::Int(_)) && op != MapOp::Div {
         // `as` from `f64` saturates at the `i64` bounds and maps NaN to
         // 0 -- the intended overflow behavior for Int arithmetic here.
@@ -2359,7 +2433,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2074__v1_a_null_propagates() {
+    fn mcdc__batch_2147__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2387,7 +2461,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2074__v2_b_null_propagates() {
+    fn mcdc__batch_2147__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2415,7 +2489,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2074__v3_neither_null_computes_result() {
+    fn mcdc__batch_2147__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2443,7 +2517,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2129__v1_both_int_non_div_stays_int() {
+    fn mcdc__batch_2203__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2471,7 +2545,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2129__v2_a_not_int_promotes_to_float() {
+    fn mcdc__batch_2203__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2499,7 +2573,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2129__v3_b_not_int_promotes_to_float() {
+    fn mcdc__batch_2203__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2527,7 +2601,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2129__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__batch_2203__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(

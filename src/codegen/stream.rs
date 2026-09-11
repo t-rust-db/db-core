@@ -285,6 +285,7 @@ fn rewrite_severity_expr(e: &mut Expr) -> Result<()> {
     match &mut e.kind {
         ExprKind::Binary { op, lhs, rhs } => {
             if is_comparison(*op) {
+                // #307: line-shift buffer to avoid an MC/DC id collision.
                 if is_severity_column(lhs) {
                     rewrite_severity_value(rhs)?;
                 } else if is_severity_column(rhs) {
