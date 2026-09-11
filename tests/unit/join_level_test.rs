@@ -295,3 +295,38 @@ fn join_over_a_large_unindexed_table_builds_a_transient_auto_index() {
         .rows;
     assert_eq!(ints(&rows), vec![vec![70]]);
 }
+
+#[test]
+fn join_with_a_where_clause_limit_offset_and_distinct() {
+    // `emit_join_final_row`'s WHERE/LIMIT/OFFSET guards and
+    // `emit_join_distinct_guard`'s dedup, all combined with a join --
+    // exercised together to keep this file from growing one narrow
+    // test per guard.
+    let db = TempDb::new("join-where-limit-distinct");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE jw_a(k INTEGER); \
+         CREATE TABLE jw_b(k INTEGER, v INTEGER); \
+         INSERT INTO jw_a VALUES (1), (1), (2); \
+         INSERT INTO jw_b VALUES (1, 100); \
+         INSERT INTO jw_b VALUES (2, 5)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query(
+            "SELECT DISTINCT jw_b.v FROM jw_a JOIN jw_b ON jw_a.k = jw_b.k \
+             WHERE jw_b.v > 10",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![vec![100]]);
+
+    let rows = e
+        .run_query(
+            "SELECT jw_a.k FROM jw_a JOIN jw_b ON jw_a.k = jw_b.k \
+             LIMIT 1 OFFSET 1",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![vec![1]]);
+}
