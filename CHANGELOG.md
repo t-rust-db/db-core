@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.84.1] - 2026-09-11
+
+### Fixed
+- `CREATE TABLE`/`CREATE INDEX` over an existing name now fails with proper error messages, matching SQLite's behavior (#299)
+
+### Changed
+- MC/DC test coverage expanded for storage-layer multi-leaf boolean decisions (131/132 obligations discharged)
+
+## [0.84.0] - 2026-01-05
+
 All notable changes to db-core. Format follows [Keep a Changelog](https://keepachangelog.com/), versioning follows [SemVer](https://semver.org/). Pre-1.0: minor bumps may break the public API.
 
 **Versioning policy:** one crate, one version, one tag per release.
