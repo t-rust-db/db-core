@@ -215,6 +215,19 @@ pub enum MapOp {
     /// symmetrically: only `b` (the predicate) being exactly `Bool(true)`
     /// passes `a` through.
     MaskIf,
+    /// `a LIKE b` (`negated`: `NOT LIKE`) -- SQL `%`/`_` wildcard match,
+    /// per [`crate::functions::like_match`]. Both operands stringify via
+    /// [`Value`]'s `Display`, matching [`MapOp::Concat`]'s convention.
+    Like {
+        /// `true` for `NOT LIKE`.
+        negated: bool,
+    },
+    /// `a GLOB b` (`negated`: `NOT GLOB`) -- Unix glob match (`*`/`?`/
+    /// `[...]`), per [`crate::functions::glob_match`].
+    Glob {
+        /// `true` for `NOT GLOB`.
+        negated: bool,
+    },
 }
 
 /// Window functions supported by [`Opcode::Window`] -- `Sum`/`Avg`/`Count`
@@ -2188,6 +2201,14 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
             } else {
                 Value::Null
             }
+        }
+        MapOp::Like { negated } => {
+            let matched = crate::functions::like_match(&a.to_string(), &b.to_string(), None);
+            Value::Bool(matched != negated)
+        }
+        MapOp::Glob { negated } => {
+            let matched = crate::functions::glob_match(&a.to_string(), &b.to_string());
+            Value::Bool(matched != negated)
         }
     }
 }

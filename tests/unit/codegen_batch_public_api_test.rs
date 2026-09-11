@@ -21,7 +21,7 @@ use db_core::codegen::batch::{
     explain_opcodes, output_column_names, split_qualified, PlanError, TableStats, WindowFunc,
 };
 use db_core::parser::column::parse;
-use db_core::vm::batch::{JoinKind, Opcode};
+use db_core::vm::batch::{JoinKind, MapOp, Opcode};
 
 fn select(sql: &str) -> db_core::parser::ast::Select {
     parse(sql).unwrap()
@@ -38,6 +38,30 @@ fn compile_produces_a_program_ending_in_combine() {
         .iter()
         .any(|i| matches!(i.opcode, Opcode::Combine { .. })));
     assert!(program.columns_to_load().contains(&"product".to_string()));
+}
+
+#[test]
+fn compile_where_like_emits_a_like_map_op() {
+    let program = compile(&select("SELECT x FROM t WHERE x LIKE '%foo%'")).unwrap();
+    assert!(program.instructions.iter().any(|i| matches!(
+        i.opcode,
+        Opcode::Map {
+            op: MapOp::Like { negated: false },
+            ..
+        }
+    )));
+}
+
+#[test]
+fn compile_where_not_like_emits_a_negated_like_map_op() {
+    let program = compile(&select("SELECT x FROM t WHERE x NOT LIKE '%foo%'")).unwrap();
+    assert!(program.instructions.iter().any(|i| matches!(
+        i.opcode,
+        Opcode::Map {
+            op: MapOp::Like { negated: true },
+            ..
+        }
+    )));
 }
 
 #[test]

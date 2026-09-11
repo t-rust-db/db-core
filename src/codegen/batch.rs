@@ -807,6 +807,24 @@ fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
             });
             dst
         }
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            glob,
+            negated,
+            ..
+        } => {
+            let a = compile_expr(inner, ctx);
+            let b = compile_expr(pattern, ctx);
+            let dst = ctx.alloc();
+            let op = if *glob {
+                MapOp::Glob { negated: *negated }
+            } else {
+                MapOp::Like { negated: *negated }
+            };
+            ctx.push(Opcode::Map { dst, op, a, b });
+            dst
+        }
         ExprKind::Unary {
             op: crate::parser::ast::UnaryOp::Not,
             expr: inner,
@@ -2209,6 +2227,10 @@ fn collect_expr_columns(expr: &AstExpr, out: &mut Vec<String>) {
         ExprKind::Unary { expr: inner, .. } => collect_expr_columns(inner, out),
         ExprKind::IsNull { expr, .. } => collect_expr_columns(expr, out),
         ExprKind::Is { lhs, .. } => collect_expr_columns(lhs, out),
+        ExprKind::Like { expr, pattern, .. } => {
+            collect_expr_columns(expr, out);
+            collect_expr_columns(pattern, out);
+        }
         // A scalar call's (#307) column references are its arguments' --
         // needed so a bare (non-`GROUP BY`) `SELECT json_extract(msg, ...)`
         // pre-loads `msg` before `Filter`, same as any other expression.

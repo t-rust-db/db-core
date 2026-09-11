@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.87.0"
+version = "0.88.0"
 # The three [[bench]] targets are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false

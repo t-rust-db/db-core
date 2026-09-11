@@ -144,6 +144,53 @@ fn aggregates_and_group_by_run_across_every_row_group() {
 }
 
 #[test]
+fn like_matches_contains_prefix_and_suffix_patterns() {
+    let mut e = open();
+    // Distinct regions: east, north, south, west.
+    let contains = rows(
+        &mut e,
+        "SELECT region FROM production WHERE region LIKE '%out%' GROUP BY region",
+    );
+    assert_eq!(contains, vec![vec![Cell::Text("south".into())]]);
+
+    let prefix = rows(
+        &mut e,
+        "SELECT region FROM production WHERE region LIKE 'wes%' GROUP BY region",
+    );
+    assert_eq!(prefix, vec![vec![Cell::Text("west".into())]]);
+
+    // Both "north" and "south" end in "th".
+    let suffix = rows(
+        &mut e,
+        "SELECT region FROM production WHERE region LIKE '%th' GROUP BY region ORDER BY region",
+    );
+    assert_eq!(
+        suffix,
+        vec![
+            vec![Cell::Text("north".into())],
+            vec![Cell::Text("south".into())],
+        ]
+    );
+}
+
+#[test]
+fn not_like_excludes_matching_rows() {
+    let mut e = open();
+    let remaining = rows(
+        &mut e,
+        "SELECT region FROM production WHERE region NOT LIKE 'wes%' GROUP BY region ORDER BY region",
+    );
+    assert_eq!(
+        remaining,
+        vec![
+            vec![Cell::Text("east".into())],
+            vec![Cell::Text("north".into())],
+            vec![Cell::Text("south".into())],
+        ]
+    );
+}
+
+#[test]
 fn unknown_table_and_unknown_column_are_compile_errors_naming_the_culprit() {
     let mut e = open();
     let err = e.run_query("SELECT id FROM no_such_table").unwrap_err();

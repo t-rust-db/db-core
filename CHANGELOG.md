@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.88.0] - 2026-09-11
+
+### Added
+
+- **`LIKE`/`NOT LIKE`/`GLOB` in batch/stream `WHERE` clauses** (#352): `parser::column::validate_expr` gained an `ExprKind::Like` arm, `vm::batch` gained `MapOp::Like`/`MapOp::Glob` (delegating to the existing `functions::like_match`/`glob_match`), and `codegen::batch::compile_expr` lowers it; `codegen::stream` needs no change since it reuses `codegen::batch`'s compiled expressions verbatim. `LIKE ... ESCAPE` is explicitly rejected rather than silently ignored.
+
+### Fixed
+
+- **`collect_expr_columns` dropped columns referenced only in a `LIKE` predicate** (#352): surfaced as wrong results for `WHERE col LIKE ... GROUP BY col` on batch/stream, since the column wasn't pre-loaded before `Filter`.
+
 ## [0.87.0] - 2026-09-11
 
 ### Added
