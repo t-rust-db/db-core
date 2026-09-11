@@ -132,6 +132,93 @@ fn parse_error<T: std::fmt::Debug>(other: ParseOutcome<T>) -> DispatchError {
     DispatchError::ParseFailed(format!("{other:?}"))
 }
 
+// The five arms below each moved out of `compile_statement`'s big `match`
+// into their own function (db-core#336): a guard (`second == "TABLE"`, one
+// leaf) sharing a source line with the arm's own `match parse_x(sql) { ... }`
+// gave `cargo-mvl-mcdc` two decisions on one line, which collide into a
+// single ambiguous `<file-stem>_<line>` obligation id. A free function
+// puts the `match` on its own line in its own item, so the two decisions
+// (the calling arm's guard, this function's `match`) can never collide.
+
+fn dispatch_create_table(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+    match parse_create_table(sql) {
+        ParseOutcome::Accepted(create) => {
+            let exists = schemas
+                .iter()
+                .any(|s| s.name.eq_ignore_ascii_case(&create.name));
+            if exists {
+                if create.if_not_exists {
+                    return Ok(no_op_program());
+                }
+                return Err(DispatchError::TableAlreadyExists(create.name));
+            }
+            Ok(compile_create_table(&create, sql)?)
+        }
+        other => Err(parse_error(other)),
+    }
+}
+
+fn dispatch_create_view(sql: &str) -> Result<Program, DispatchError> {
+    match parse_create_view(sql) {
+        ParseOutcome::Accepted(create) => Ok(compile_create_view(&create, sql)?),
+        other => Err(parse_error(other)),
+    }
+}
+
+fn dispatch_create_index(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+    match parse_create_index(sql) {
+        ParseOutcome::Accepted(ci) => {
+            let schema = schemas
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(&ci.table))
+                .ok_or_else(|| DispatchError::NoSuchTable(ci.table.clone()))?;
+            let exists = schemas
+                .iter()
+                .any(|s| s.name.eq_ignore_ascii_case(&ci.name))
+                || schemas
+                    .iter()
+                    .flat_map(|s| &s.indexes)
+                    .any(|idx| idx.name.eq_ignore_ascii_case(&ci.name));
+            if exists {
+                if ci.if_not_exists {
+                    return Ok(no_op_program());
+                }
+                return Err(DispatchError::IndexAlreadyExists(ci.name));
+            }
+            Ok(compile_create_index(&ci, schema, sql)?)
+        }
+        other => Err(parse_error(other)),
+    }
+}
+
+fn dispatch_drop_table(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+    match parse_drop_table(sql) {
+        ParseOutcome::Accepted(drop) => {
+            let schema = schemas
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(&drop.name))
+                .ok_or_else(|| DispatchError::NoSuchTable(drop.name.clone()))?;
+            Ok(compile_drop_table(&drop, schema)?)
+        }
+        other => Err(parse_error(other)),
+    }
+}
+
+fn dispatch_drop_index(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+    match parse_drop_index(sql) {
+        ParseOutcome::Accepted(di) => {
+            let root_page = schemas
+                .iter()
+                .flat_map(|s| &s.indexes)
+                .find(|idx| idx.name.eq_ignore_ascii_case(&di.name))
+                .map(|idx| idx.root_page)
+                .ok_or_else(|| DispatchError::NoSuchIndex(di.name.clone()))?;
+            Ok(compile_drop_index(&di, root_page)?)
+        }
+        other => Err(parse_error(other)),
+    }
+}
+
 /// `Init -> Halt`, nothing else — what `IF NOT EXISTS` compiles to when the
 /// named table/index is already in the catalog: a statement that succeeds
 /// without touching the schema.
@@ -162,15 +249,6 @@ pub fn compile_statement(
             .find(|s| s.name.eq_ignore_ascii_case(name))
             .ok_or_else(|| DispatchError::NoSuchTable(name.to_string()))
     };
-    let find_index_root = |name: &str| -> Result<u32, DispatchError> {
-        schemas
-            .iter()
-            .flat_map(|s| &s.indexes)
-            .find(|idx| idx.name.eq_ignore_ascii_case(name))
-            .map(|idx| idx.root_page)
-            .ok_or_else(|| DispatchError::NoSuchIndex(name.to_string()))
-    };
-
     let mut words = sql.split_whitespace();
     let first_word = words.next().unwrap_or("");
     let head = canonical(first_word);
@@ -327,59 +405,11 @@ pub fn compile_statement(
             }
             other => Err(parse_error(other)),
         },
-        "CREATE" if second == "TABLE" => match parse_create_table(sql) {
-            ParseOutcome::Accepted(create) => {
-                let exists = schemas
-                    .iter()
-                    .any(|s| s.name.eq_ignore_ascii_case(&create.name));
-                if exists {
-                    if create.if_not_exists {
-                        return Ok(no_op_program());
-                    }
-                    return Err(DispatchError::TableAlreadyExists(create.name));
-                }
-                Ok(compile_create_table(&create, sql)?)
-            }
-            other => Err(parse_error(other)),
-        },
-        "CREATE" if second == "VIEW" => match parse_create_view(sql) {
-            ParseOutcome::Accepted(create) => Ok(compile_create_view(&create, sql)?),
-            other => Err(parse_error(other)),
-        },
-        "CREATE" if is_create_index => match parse_create_index(sql) {
-            ParseOutcome::Accepted(ci) => {
-                let schema = find_schema(&ci.table)?;
-                let exists = schemas
-                    .iter()
-                    .any(|s| s.name.eq_ignore_ascii_case(&ci.name))
-                    || schemas
-                        .iter()
-                        .flat_map(|s| &s.indexes)
-                        .any(|idx| idx.name.eq_ignore_ascii_case(&ci.name));
-                if exists {
-                    if ci.if_not_exists {
-                        return Ok(no_op_program());
-                    }
-                    return Err(DispatchError::IndexAlreadyExists(ci.name));
-                }
-                Ok(compile_create_index(&ci, schema, sql)?)
-            }
-            other => Err(parse_error(other)),
-        },
-        "DROP" if second == "TABLE" => match parse_drop_table(sql) {
-            ParseOutcome::Accepted(drop) => {
-                let schema = find_schema(&drop.name)?;
-                Ok(compile_drop_table(&drop, schema)?)
-            }
-            other => Err(parse_error(other)),
-        },
-        "DROP" if second == "INDEX" => match parse_drop_index(sql) {
-            ParseOutcome::Accepted(di) => {
-                let root_page = find_index_root(&di.name)?;
-                Ok(compile_drop_index(&di, root_page)?)
-            }
-            other => Err(parse_error(other)),
-        },
+        "CREATE" if second == "TABLE" => dispatch_create_table(sql, schemas),
+        "CREATE" if second == "VIEW" => dispatch_create_view(sql),
+        "CREATE" if is_create_index => dispatch_create_index(sql, schemas),
+        "DROP" if second == "TABLE" => dispatch_drop_table(sql, schemas),
+        "DROP" if second == "INDEX" => dispatch_drop_index(sql, schemas),
         // Reports the statement's actual leading word (uppercased, as
         // before), not `canonical`'s `""` sentinel — this is a cold
         // path, so the one allocation is free.
@@ -545,9 +575,9 @@ mod mcdc_vectors {
         )
     }
 
-    // dispatch_292: `is_subquery(&from.first) || from.joins.iter().any(|j| is_subquery(&j.table))`
+    // dispatch_370: `is_subquery(&from.first) || from.joins.iter().any(|j| is_subquery(&j.table))`
     #[test]
-    fn mcdc__dispatch_292__v1_view_as_first_source_is_rejected() {
+    fn mcdc__dispatch_370__v1_view_as_first_source_is_rejected() {
         let (schemas, views) = catalog();
         assert!(is_view_source_rejection(compile_statement(
             "INSERT INTO t SELECT a FROM v",
@@ -557,7 +587,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__dispatch_292__v2_view_as_joined_source_is_rejected() {
+    fn mcdc__dispatch_370__v2_view_as_joined_source_is_rejected() {
         let (schemas, views) = catalog();
         assert!(is_view_source_rejection(compile_statement(
             "INSERT INTO t SELECT u.a FROM u JOIN v ON u.a = v.a",
@@ -567,7 +597,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__dispatch_292__v3_plain_table_sources_pass_the_guard() {
+    fn mcdc__dispatch_370__v3_plain_table_sources_pass_the_guard() {
         let (schemas, views) = catalog();
         let result = compile_statement(
             "INSERT INTO t SELECT u.a FROM u JOIN w ON u.a = w.a",
