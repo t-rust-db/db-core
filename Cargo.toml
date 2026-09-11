@@ -50,6 +50,11 @@ path = "tests/unit/engine_public_api_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_engine_resolve_public_api"
+path = "tests/unit/engine_resolve_public_api_test.rs"
+required-features = ["engine-row", "engine-stream", "vm-batch"]
+
+[[test]]
 name = "unit_vm_row_public_api"
 path = "tests/unit/vm_row_public_api_test.rs"
 

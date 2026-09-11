@@ -225,6 +225,24 @@ impl StreamEngine {
         Ok(select)
     }
 
+    /// Rewrites every `severity <cmp> '<name>'` in `select` into its
+    /// numeric code (`WARN` etc. are the stream engine's own literal
+    /// convention, not something `codegen::batch` understands) -- exposed
+    /// so a cross-mode caller (#317) can apply the same rewrite this
+    /// engine's own [`Self::parse_for_table`] does before planning a join.
+    pub fn rewrite_severity_literals(select: &mut Select) -> Result<(), EngineError> {
+        rewrite::severity_literals(select)
+    }
+
+    /// Resolve a program's `columns_to_load()` (possibly table-qualified,
+    /// e.g. `log.severity` -- the driving side of a cross-mode join,
+    /// #317) into requests against this ring: every name must be a
+    /// predefined column or a Tier-3 field seen in the ring.
+    #[must_use = "validate every requested column before scanning"]
+    pub fn column_requests(&self, names: &[String]) -> Result<Vec<ColumnRequest>, EngineError> {
+        self.requests(names)
+    }
+
     /// Resolve the program's `columns_to_load()`: every name must be a
     /// predefined column or a Tier-3 field seen in the ring.
     fn requests(&self, names: &[String]) -> Result<Vec<ColumnRequest>, EngineError> {
@@ -247,7 +265,10 @@ impl StreamEngine {
             .collect()
     }
 
-    fn table_stats(&self) -> TableStats {
+    /// This engine's `log` table as a [`TableStats`], `source: None` --
+    /// callers labelling a cross-mode plan (#317) fill that in themselves.
+    #[must_use]
+    pub fn table_stats(&self) -> TableStats {
         TableStats {
             row_groups: self.ring.len(),
             rows: i64::try_from(self.ring.rows()).unwrap_or(i64::MAX),
