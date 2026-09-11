@@ -133,10 +133,17 @@ impl RowEngine {
     }
 
     /// Conservative catalog dirty flag: any `CREATE`/`DROP`/`ALTER`
-    /// invalidates, even one that fails or is a no-op.
+    /// invalidates, even one that fails or is a no-op. `ANALYZE` is
+    /// included too -- its first run in a session creates `sqlite_stat1`
+    /// (`write_stat1`'s `ensure_sqlite_stat1_table`) via the same
+    /// sqlite_master-writing path as `CREATE TABLE`, so the cached
+    /// catalog must be invalidated the same way or `stats_by_table`'s
+    /// `load_stats` keeps failing to find that table and every
+    /// `ANALYZE`-driven cost decision (auto-index probe, index-vs-scan
+    /// choice) stays silently switched off for the rest of the session.
     fn is_schema_changing(stmt: &str) -> bool {
         let head = stmt.trim_start();
-        ["CREATE", "DROP", "ALTER"].iter().any(|kw| {
+        ["CREATE", "DROP", "ALTER", "ANALYZE"].iter().any(|kw| {
             head.get(..kw.len())
                 .is_some_and(|h| h.eq_ignore_ascii_case(kw))
         })

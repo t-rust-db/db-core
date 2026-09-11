@@ -221,3 +221,77 @@ fn three_way_left_join_chain_produces_null_padded_unmatched_rows() {
         .rows;
     assert_eq!(ints(&rows), vec![vec![1, 900], vec![2, -1]]);
 }
+
+#[test]
+fn join_on_the_right_tables_rowid_seeks_instead_of_scanning() {
+    // `rs_b.id` is `rs_b`'s rowid alias, so `choose_join_access` picks
+    // `JoinAccess::Rowid` -- a `SeekRowid`, no scan of `rs_b` at all.
+    let db = TempDb::new("rowid-seek");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE rs_a(id INTEGER PRIMARY KEY, k INTEGER); \
+         CREATE TABLE rs_b(id INTEGER PRIMARY KEY, v INTEGER); \
+         INSERT INTO rs_a(k) VALUES (2); \
+         INSERT INTO rs_b(v) VALUES (100); \
+         INSERT INTO rs_b(v) VALUES (200)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query("SELECT rs_b.v FROM rs_a JOIN rs_b ON rs_b.id = rs_a.k")
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![vec![200]]);
+}
+
+#[test]
+fn join_on_a_unique_indexed_column_seeks_via_that_index() {
+    // `ui_b.k` is `UNIQUE`-indexed (not the rowid), so
+    // `choose_join_access` picks `JoinAccess::UniqueIndex` --
+    // `SeekIndexEq` + `IdxRowid` + `SeekRowid`, still no scan of `ui_b`.
+    let db = TempDb::new("unique-index-seek");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE ui_a(id INTEGER PRIMARY KEY, k INTEGER); \
+         CREATE TABLE ui_b(id INTEGER PRIMARY KEY, k INTEGER, v INTEGER); \
+         CREATE UNIQUE INDEX ui_b_k ON ui_b(k); \
+         INSERT INTO ui_a(k) VALUES (5); \
+         INSERT INTO ui_b(k, v) VALUES (5, 500); \
+         INSERT INTO ui_b(k, v) VALUES (6, 600)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query("SELECT ui_b.v FROM ui_a JOIN ui_b ON ui_b.k = ui_a.k")
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![vec![500]]);
+}
+
+#[test]
+fn join_over_a_large_unindexed_table_builds_a_transient_auto_index() {
+    // #545: no index backs `ai_b.k` at all, but `ANALYZE` gives it
+    // enough rows (>= 25) for `is_automatic_index_worthwhile` to build
+    // a transient one-shot index over the join column instead of an
+    // O(n*m) nested scan.
+    let db = TempDb::new("auto-index");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE ai_a(id INTEGER PRIMARY KEY, k INTEGER); \
+         CREATE TABLE ai_b(id INTEGER PRIMARY KEY, k INTEGER, v INTEGER); \
+         INSERT INTO ai_a(k) VALUES (7)",
+    )
+    .unwrap();
+    for i in 0..30 {
+        e.run_query(&format!(
+            "INSERT INTO ai_b(k, v) VALUES ({}, {})",
+            i,
+            i * 10
+        ))
+        .unwrap();
+    }
+    e.run_query("ANALYZE").unwrap();
+    let rows = e
+        .run_query("SELECT ai_b.v FROM ai_a JOIN ai_b ON ai_b.k = ai_a.k")
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![vec![70]]);
+}
