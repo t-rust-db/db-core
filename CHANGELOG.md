@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.88.2] - 2026-09-12
+
+### Fixed
+
+- **`SyslogParser::new()` hardcoded `year: 2024`** for RFC 3164 timestamp parsing (syslog lines carry no year field): silently wrong on any other year. Now derives the current year from the system clock via a dependency-free civil-from-days conversion.
+
 ## [0.88.1] - 2026-09-11
 
 ### Fixed
