@@ -764,7 +764,7 @@ fn graft_child_plan(
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::{explain_query_plan, IndexSchema, IndexedColumn, TableSchema};
@@ -809,7 +809,7 @@ mod mcdc_vectors {
         }
     }
 
-    // eqp_230 / eqp_268 / eqp_280 / eqp_290 / eqp_299 / eqp_483 -- `explain_query_plan` details.
+    // codegen_row_select_eqp_explain_query_plan_936ec01d / codegen_row_select_eqp_explain_query_plan_aeb958d2 / codegen_row_select_eqp_explain_query_plan_7c74682c / codegen_row_select_eqp_explain_query_plan_7c74682c_2 / eqp_299 / eqp_483 -- `explain_query_plan` details.
     /// `t(a, b)` at root 2 with `ia(a)` at 5 and `ib(b)` at 6; `u(b)` at 3.
     fn eqp_catalog() -> Vec<TableSchema> {
         let t = with_index(
@@ -835,23 +835,25 @@ mod mcdc_vectors {
             .collect()
     }
 
-    // eqp_280 / eqp_290: `level == 0 && direct_scan && access.is_none() && covering.is_none()`
+    // codegen_row_select_eqp_explain_query_plan_7c74682c / codegen_row_select_eqp_explain_query_plan_7c74682c_2: `level == 0 && direct_scan && access.is_none() && covering.is_none()`
     fn range_seek_detail_present(d: &[String]) -> bool {
         d[0].contains("SEARCH t USING INDEX ib")
     }
 
-    // eqp_485: `from.joins.is_empty() && !select.group_by.is_empty()`
+    // codegen_row_select_eqp_explain_query_plan_5836fc83: `from.joins.is_empty() && !select.group_by.is_empty()`
     const TEMP_BTREE: &str = "USE TEMP B-TREE FOR GROUP BY";
 
-    // eqp_268: `level == 0 && direct_scan && access.is_none()` (covering index)
+    // codegen_row_select_eqp_explain_query_plan_aeb958d2: `level == 0 && direct_scan && access.is_none()` (covering index)
     #[test]
-    fn mcdc__eqp_268__v1_outer_table_without_a_seek_is_a_scan() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_aeb958d2__v1_outer_table_without_a_seek_is_a_scan(
+    ) {
         let d = eqp_details("SELECT a FROM t WHERE a + b = 1");
         assert!(d[0].starts_with("SCAN t"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_268__v2_outer_table_with_a_rowid_seek_is_a_search() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_aeb958d2__v2_outer_table_with_a_rowid_seek_is_a_search(
+    ) {
         let d = eqp_details("SELECT a FROM t WHERE rowid = 1");
         assert!(
             d[0].contains("SEARCH t") && d[0].contains("rowid=?"),
@@ -860,19 +862,22 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_268__v3_inner_join_level_reports_its_own_access() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_aeb958d2__v3_inner_join_level_reports_its_own_access(
+    ) {
         let d = eqp_details("SELECT a FROM t JOIN u ON u.b = t.a");
         assert!(d.iter().any(|x| x.contains('u')), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_280__v1_all_true_reaches_the_range_seek_report() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7c74682c__v1_all_true_reaches_the_range_seek_report(
+    ) {
         let d = eqp_details("SELECT a, b FROM t WHERE b BETWEEN 1 AND 5");
         assert!(range_seek_detail_present(&d), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_280__v2_inner_level_never_reports_a_range_seek() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7c74682c__v2_inner_level_never_reports_a_range_seek(
+    ) {
         // Only the outermost table's WHERE is consulted for a range seek, so
         // the inner level (`u`, indexed on `b`) reports its join access, never
         // a `b>? AND b<?` range.
@@ -881,7 +886,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_280__v3_rowid_seek_takes_precedence() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7c74682c__v3_rowid_seek_takes_precedence() {
         let d = eqp_details("SELECT a, b FROM t WHERE rowid = 1");
         assert!(
             d[0].contains("rowid=?") && !range_seek_detail_present(&d),
@@ -890,19 +895,22 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_280__v4_covering_index_takes_precedence() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7c74682c__v4_covering_index_takes_precedence(
+    ) {
         let d = eqp_details("SELECT a FROM t WHERE a = 1");
         assert!(d[0].contains("COVERING INDEX ia"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_290__v1_all_true_reaches_the_range_seek_report() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7c74682c_2__v1_all_true_reaches_the_range_seek_report(
+    ) {
         let d = eqp_details("SELECT a, b FROM t WHERE b BETWEEN 1 AND 5");
         assert!(range_seek_detail_present(&d), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_290__v2_inner_level_never_reports_a_range_seek() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7c74682c_2__v2_inner_level_never_reports_a_range_seek(
+    ) {
         // Only the outermost table's WHERE is consulted for a range seek, so
         // the inner level (`u`, indexed on `b`) reports its join access, never
         // a `b>? AND b<?` range.
@@ -911,7 +919,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_290__v3_rowid_seek_takes_precedence() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7c74682c_2__v3_rowid_seek_takes_precedence()
+    {
         let d = eqp_details("SELECT a, b FROM t WHERE rowid = 1");
         assert!(
             d[0].contains("rowid=?") && !range_seek_detail_present(&d),
@@ -920,31 +929,36 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__eqp_290__v4_covering_index_takes_precedence() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7c74682c_2__v4_covering_index_takes_precedence(
+    ) {
         let d = eqp_details("SELECT a FROM t WHERE a = 1");
         assert!(d[0].contains("COVERING INDEX ia"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_485__v1_single_table_group_by_without_an_index_uses_a_temp_btree() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_5836fc83__v1_single_table_group_by_without_an_index_uses_a_temp_btree(
+    ) {
         let d = eqp_details("SELECT a + b, count(*) FROM t GROUP BY a + b");
         assert!(d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_485__v2_joined_group_by_is_not_reported() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_5836fc83__v2_joined_group_by_is_not_reported(
+    ) {
         let d = eqp_details("SELECT t.a, count(*) FROM t JOIN u ON u.b = t.a GROUP BY t.a");
         assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_485__v3_single_table_without_group_by_is_not_reported() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_5836fc83__v3_single_table_without_group_by_is_not_reported(
+    ) {
         let d = eqp_details("SELECT a FROM t");
         assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_268__v4_aggregate_never_reports_a_covering_index_seek() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_aeb958d2__v4_aggregate_never_reports_a_covering_index_seek(
+    ) {
         // `direct_scan` false: an aggregate never takes the covering-index
         // path. Since #298 its `WHERE a = 1` does seek -- through the
         // #279 row seek, as `SEARCH ... USING INDEX`, never `COVERING`.
@@ -956,52 +970,60 @@ mod mcdc_vectors {
     // `IN` is a direct-scan range shape but not a #279 row-seek shape, so
     // an aggregate over it is the one range predicate that must still SCAN.
     #[test]
-    fn mcdc__eqp_280__v5_aggregate_never_reports_the_direct_scans_skip_scan() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7c74682c__v5_aggregate_never_reports_the_direct_scans_skip_scan(
+    ) {
         let d = eqp_details("SELECT sum(a) FROM t WHERE b IN (1, 2)");
         assert_eq!(d[0], "SCAN t", "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_290__v5_aggregate_never_reports_the_direct_scans_in_list_seek() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7c74682c_2__v5_aggregate_never_reports_the_direct_scans_in_list_seek(
+    ) {
         let d = eqp_details("SELECT count(*) FROM t WHERE b IN (1, 2)");
         assert_eq!(d[0], "SCAN t", "{d:?}");
     }
 
-    // eqp_230: `level == 0 && direct_scan` (rowid seek)
+    // codegen_row_select_eqp_explain_query_plan_936ec01d: `level == 0 && direct_scan` (rowid seek)
     #[test]
-    fn mcdc__eqp_230__v1_direct_outer_table_reports_its_rowid_seek() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_936ec01d__v1_direct_outer_table_reports_its_rowid_seek(
+    ) {
         let d = eqp_details("SELECT a FROM t WHERE rowid = 5");
         assert!(d[0].contains("rowid=?"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_230__v2_inner_level_uses_join_access_not_the_where_clause() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_936ec01d__v2_inner_level_uses_join_access_not_the_where_clause(
+    ) {
         let d = eqp_details("SELECT t.a FROM t JOIN u ON u.b = t.a WHERE t.rowid = 5");
         assert_eq!(d.len(), 2, "{d:?}");
         assert!(!d[1].contains("rowid=?"), "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_230__v3_aggregate_outer_table_scans_despite_a_rowid_equality() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_936ec01d__v3_aggregate_outer_table_scans_despite_a_rowid_equality(
+    ) {
         let d = eqp_details("SELECT count(*) FROM t WHERE rowid = 5");
         assert_eq!(d[0], "SCAN t", "{d:?}");
     }
 
-    // eqp_300: `level == 0 && from.joins.is_empty()` (aggregate index walk)
+    // codegen_row_select_eqp_explain_query_plan_7278742d: `level == 0 && from.joins.is_empty()` (aggregate index walk)
     #[test]
-    fn mcdc__eqp_300__v1_single_table_index_only_sum_reports_the_index_walk() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7278742d__v1_single_table_index_only_sum_reports_the_index_walk(
+    ) {
         let d = eqp_details("SELECT sum(a) FROM t");
         assert_eq!(d[0], "SCAN t USING COVERING INDEX ia", "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_300__v2_joined_outer_table_is_not_an_index_walk() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7278742d__v2_joined_outer_table_is_not_an_index_walk(
+    ) {
         let d = eqp_details("SELECT sum(t.a) FROM t JOIN u ON u.b = t.a");
         assert_eq!(d[0], "SCAN t", "{d:?}");
     }
 
     #[test]
-    fn mcdc__eqp_300__v3_inner_level_is_not_an_index_walk() {
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_7278742d__v3_inner_level_is_not_an_index_walk(
+    ) {
         let d = eqp_details("SELECT sum(t.a) FROM t JOIN u ON u.b = t.a");
         assert!(!d[1].contains("COVERING INDEX"), "{d:?}");
     }

@@ -16,7 +16,7 @@ env:
   # cargo-mvl-limit is not published to crates.io, so the qualified-subset
   # gate builds it from source at this pinned rev. Bumping it is a reviewed
   # change, like any other pinned tool version.
-  MVL_RUST_REV: "a64eb33e7c9ef9ad031d22a70405e59aa1ad3cb0"
+  MVL_RUST_REV: "5a5ffd5a8e79298271a65649b3f586ebce2ffb31"
 
 jobs:
   # Formatting and lint. Fails fast, cheap, no dependency-graph work needed.
@@ -80,7 +80,7 @@ jobs:
 
   # MC/DC snapshot freshness (db-core#335, ADR 0000 §Invariants (e)):
   # `tests/mcdc/obligations.json` must match a fresh scan of src/, or a
-  # discharge tag (`mcdc__<file>_<line>__vN`) can silently point at a
+  # discharge tag (`mcdc__<id>__vN`) can silently point at a
   # stale line/obligation. `make ci` already runs this locally; this job
   # is what makes that true on every PR instead of only for whoever runs
   # `make ci` by hand.

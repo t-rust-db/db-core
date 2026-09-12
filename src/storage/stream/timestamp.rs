@@ -158,6 +158,134 @@ pub fn parse_flexible(s: &str) -> Option<i64> {
 mod tests {
     use super::*;
 
+    // --- MC/DC vectors (`mcdc__<id>__vN`, joined to tests/mcdc/obligations.json
+    // by `make test-mcdc`). ---------------------------------------------------
+
+    // storage_stream_timestamp_epoch_nanos_104c1cd5 (`epoch_nanos`): the
+    // nine-leaf `||` range guard. v1 is the all-false vector (every field in
+    // range); v2..v10 each flip exactly one leaf to true, in leaf order.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_epoch_nanos_104c1cd5__v1_all_in_range() {
+        assert!(epoch_nanos(2026, 9, 10, 8, 0, 5, 0).is_some());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_epoch_nanos_104c1cd5__v2_year_before_epoch() {
+        assert_eq!(epoch_nanos(1969, 9, 10, 8, 0, 5, 0), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_epoch_nanos_104c1cd5__v3_month_zero() {
+        assert_eq!(epoch_nanos(2026, 0, 10, 8, 0, 5, 0), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_epoch_nanos_104c1cd5__v4_month_thirteen() {
+        assert_eq!(epoch_nanos(2026, 13, 10, 8, 0, 5, 0), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_epoch_nanos_104c1cd5__v5_day_zero() {
+        assert_eq!(epoch_nanos(2026, 9, 0, 8, 0, 5, 0), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_epoch_nanos_104c1cd5__v6_day_thirty_two() {
+        assert_eq!(epoch_nanos(2026, 9, 32, 8, 0, 5, 0), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_epoch_nanos_104c1cd5__v7_hour_twenty_four() {
+        assert_eq!(epoch_nanos(2026, 9, 10, 24, 0, 5, 0), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_epoch_nanos_104c1cd5__v8_minute_sixty() {
+        assert_eq!(epoch_nanos(2026, 9, 10, 8, 60, 5, 0), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_epoch_nanos_104c1cd5__v9_second_sixty_one() {
+        // 60 is allowed (leap second), 61 is not.
+        assert!(epoch_nanos(2026, 9, 10, 8, 0, 60, 0).is_some());
+        assert_eq!(epoch_nanos(2026, 9, 10, 8, 0, 61, 0), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_epoch_nanos_104c1cd5__v10_nanos_overflow_second() {
+        assert_eq!(epoch_nanos(2026, 9, 10, 8, 0, 5, 1_000_000_000), None);
+    }
+
+    // storage_stream_timestamp_apply_zone_offset_6d98e87c (`apply_zone_offset`):
+    // `zone.is_empty() || zone.eq_ignore_ascii_case("Z")`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_apply_zone_offset_6d98e87c__v1_empty_zone_is_utc() {
+        assert_eq!(apply_zone_offset(1_000, ""), 1_000);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_apply_zone_offset_6d98e87c__v2_z_zone_is_utc() {
+        assert_eq!(apply_zone_offset(1_000, "Z"), 1_000);
+        assert_eq!(apply_zone_offset(1_000, "z"), 1_000);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_apply_zone_offset_6d98e87c__v3_numeric_offset_is_applied() {
+        // +01:00 local is one hour *earlier* in UTC.
+        assert_eq!(apply_zone_offset(3_600_000_000_000, "+0100"), 0);
+    }
+
+    // storage_stream_timestamp_parse_iso8601_6354738d (`parse_iso8601`):
+    // `sep != "T" && sep != "t" && sep != " "` -- v1..v3 each make one leaf
+    // false (an accepted separator), v4 makes all three true (rejected).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_parse_iso8601_6354738d__v1_upper_t_separator() {
+        assert!(parse_iso8601("2026-09-10T08:00:05Z").is_some());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_parse_iso8601_6354738d__v2_lower_t_separator() {
+        assert_eq!(
+            parse_iso8601("2026-09-10t08:00:05Z"),
+            parse_iso8601("2026-09-10T08:00:05Z")
+        );
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_parse_iso8601_6354738d__v3_space_separator() {
+        assert_eq!(
+            parse_iso8601("2026-09-10 08:00:05Z"),
+            parse_iso8601("2026-09-10T08:00:05Z")
+        );
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_parse_iso8601_6354738d__v4_other_separator_rejected() {
+        assert_eq!(parse_iso8601("2026-09-10X08:00:05Z"), None);
+    }
+
+    // storage_stream_timestamp_parse_epoch_9466aaa5 (`parse_epoch`):
+    // `digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit())`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_parse_epoch_9466aaa5__v1_empty_input() {
+        assert_eq!(parse_epoch(""), None);
+        assert_eq!(parse_epoch("-"), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_parse_epoch_9466aaa5__v2_non_digit_input() {
+        assert_eq!(parse_epoch("17000000ab"), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_timestamp_parse_epoch_9466aaa5__v3_all_digits_parse_by_width() {
+        assert_eq!(parse_epoch("1700000000"), Some(1_700_000_000_000_000_000));
+    }
+
     #[test]
     fn parses_iso8601_with_fraction_and_zone() {
         let ns = parse_iso8601("2026-09-10T08:00:05.123Z").expect("parses");

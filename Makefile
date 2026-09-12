@@ -59,7 +59,7 @@ mcdc-obligations: ## Regenerate the committed MC/DC obligations snapshot (tests/
 	}
 	@mkdir -p tests/mcdc
 	@cargo-mvl-mcdc scan -o tests/mcdc/obligations.json $(MCDC_FILES)
-	@echo "wrote tests/mcdc/obligations.json — commit it alongside the source change that shifted line numbers"
+	@echo "wrote tests/mcdc/obligations.json — commit it alongside the source change that added or edited a decision"
 
 # The committed snapshot must match the source: `unit_mcdc_discharge` only
 # checks that tagged tests name ids that exist, so a stale snapshot passes

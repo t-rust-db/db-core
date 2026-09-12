@@ -138,72 +138,72 @@ mod tests {
         assert_eq!(not(Some(true)), Some(false));
     }
 
-    /// MC/DC vector (obligation `logic_13`, `sql_eq`'s decision
+    /// MC/DC vector (obligation `vm_row_logic_sql_eq_0e991c46`, `sql_eq`'s decision
     /// `matches!(a, Value::Null) || matches!(b, Value::Null)`): leaf A
     /// (`a` is NULL) true.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__logic_13__v1_lhs_null_propagates() {
+    fn mcdc__vm_row_logic_sql_eq_0e991c46__v1_lhs_null_propagates() {
         assert_eq!(
             sql_eq(&Value::Null, &Value::Integer(1), Collation::Binary),
             None
         );
     }
 
-    /// MC/DC vector (obligation `logic_13`): both leaves false -- the
+    /// MC/DC vector (obligation `vm_row_logic_sql_eq_0e991c46`): both leaves false -- the
     /// comparison actually runs. Independence pair for A against
-    /// `mcdc__logic_13__v1_lhs_null_propagates`.
+    /// `mcdc__vm_row_logic_sql_eq_0e991c46__v1_lhs_null_propagates`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__logic_13__v2_neither_null_compares() {
+    fn mcdc__vm_row_logic_sql_eq_0e991c46__v2_neither_null_compares() {
         assert_eq!(
             sql_eq(&Value::Integer(1), &Value::Integer(1), Collation::Binary),
             Some(true)
         );
     }
 
-    /// MC/DC vector (obligation `logic_13`): leaf B (`b` is NULL) true,
+    /// MC/DC vector (obligation `vm_row_logic_sql_eq_0e991c46`): leaf B (`b` is NULL) true,
     /// leaf A false. Independence pair for B against
-    /// `mcdc__logic_13__v2_neither_null_compares`.
+    /// `mcdc__vm_row_logic_sql_eq_0e991c46__v2_neither_null_compares`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__logic_13__v3_rhs_null_propagates() {
+    fn mcdc__vm_row_logic_sql_eq_0e991c46__v3_rhs_null_propagates() {
         assert_eq!(
             sql_eq(&Value::Integer(1), &Value::Null, Collation::Binary),
             None
         );
     }
 
-    /// MC/DC vector (obligation `logic_21`, `sql_lt`'s decision
+    /// MC/DC vector (obligation `vm_row_logic_sql_lt_0e991c46`, `sql_lt`'s decision
     /// `matches!(a, Value::Null) || matches!(b, Value::Null)`): leaf A
     /// (`a` is NULL) true.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__logic_21__v1_lhs_null_propagates() {
+    fn mcdc__vm_row_logic_sql_lt_0e991c46__v1_lhs_null_propagates() {
         assert_eq!(
             sql_lt(&Value::Null, &Value::Integer(1), Collation::Binary),
             None
         );
     }
 
-    /// MC/DC vector (obligation `logic_21`): both leaves false -- the
+    /// MC/DC vector (obligation `vm_row_logic_sql_lt_0e991c46`): both leaves false -- the
     /// comparison actually runs. Independence pair for A against
-    /// `mcdc__logic_21__v1_lhs_null_propagates`.
+    /// `mcdc__vm_row_logic_sql_lt_0e991c46__v1_lhs_null_propagates`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__logic_21__v2_neither_null_compares() {
+    fn mcdc__vm_row_logic_sql_lt_0e991c46__v2_neither_null_compares() {
         assert_eq!(
             sql_lt(&Value::Integer(1), &Value::Integer(2), Collation::Binary),
             Some(true)
         );
     }
 
-    /// MC/DC vector (obligation `logic_21`): leaf B (`b` is NULL) true,
+    /// MC/DC vector (obligation `vm_row_logic_sql_lt_0e991c46`): leaf B (`b` is NULL) true,
     /// leaf A false. Independence pair for B against
-    /// `mcdc__logic_21__v2_neither_null_compares`.
+    /// `mcdc__vm_row_logic_sql_lt_0e991c46__v2_neither_null_compares`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__logic_21__v3_rhs_null_propagates() {
+    fn mcdc__vm_row_logic_sql_lt_0e991c46__v3_rhs_null_propagates() {
         assert_eq!(
             sql_lt(&Value::Integer(1), &Value::Null, Collation::Binary),
             None

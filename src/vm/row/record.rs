@@ -609,37 +609,37 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__record_93__v1_groups_grows() {
+    fn mcdc__vm_row_record_write_varint_into_a163d0fa__v1_groups_grows() {
         assert_eq!(encode_varint(128).len(), 2);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__record_93__v2_groups_stays_one() {
+    fn mcdc__vm_row_record_write_varint_into_a163d0fa__v2_groups_stays_one() {
         assert_eq!(encode_varint(5).len(), 1);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__record_93__v3_groups_caps_at_eight() {
+    fn mcdc__vm_row_record_write_varint_into_a163d0fa__v3_groups_caps_at_eight() {
         assert_eq!(encode_varint((1u64 << 56) - 1).len(), 8);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__record_128__v1_groups_grows() {
+    fn mcdc__vm_row_record_varint_len_a163d0fa__v1_groups_grows() {
         assert_eq!(varint_len(128), 2);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__record_128__v2_groups_stays_one() {
+    fn mcdc__vm_row_record_varint_len_a163d0fa__v2_groups_stays_one() {
         assert_eq!(varint_len(5), 1);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__record_128__v3_groups_caps_at_eight() {
+    fn mcdc__vm_row_record_varint_len_a163d0fa__v3_groups_caps_at_eight() {
         assert_eq!(varint_len((1u64 << 56) - 1), 8);
     }
 

@@ -818,28 +818,31 @@ mod tests {
     #[allow(non_snake_case)]
     mod mcdc_vectors {
         //! Tagged MC/DC vectors for this file's multi-leaf decisions
-        //! (`mcdc__<file-stem>_<line>__vN`, joined to
+        //! (`mcdc__<id>__vN`, joined to
         //! `tests/mcdc/obligations.json` by `make test-mcdc`; db-core#299
         //! follow-up).
 
         use super::*;
 
-        // ddl_reader_487: `b == b'*' && at(i.saturating_add(1)) == Some(b'/')`
+        // storage_row_schema_ddl_reader_mask_quotes_and_comments_8c0bc292: `b == b'*' && at(i.saturating_add(1)) == Some(b'/')`
         // in mask_quotes_and_comments's block-comment scan.
         #[test]
-        fn mcdc__ddl_reader_487__v1_both_true_closes_the_comment() {
+        fn mcdc__storage_row_schema_ddl_reader_mask_quotes_and_comments_8c0bc292__v1_both_true_closes_the_comment(
+        ) {
             let masked = mask_quotes_and_comments("a/*x*/b");
             assert_eq!(&masked, b"a     b");
         }
 
         #[test]
-        fn mcdc__ddl_reader_487__v2_not_a_star_keeps_scanning() {
+        fn mcdc__storage_row_schema_ddl_reader_mask_quotes_and_comments_8c0bc292__v2_not_a_star_keeps_scanning(
+        ) {
             let masked = mask_quotes_and_comments("a/*xy*/b");
             assert_eq!(&masked, b"a      b");
         }
 
         #[test]
-        fn mcdc__ddl_reader_487__v3_star_without_slash_keeps_scanning() {
+        fn mcdc__storage_row_schema_ddl_reader_mask_quotes_and_comments_8c0bc292__v3_star_without_slash_keeps_scanning(
+        ) {
             let masked = mask_quotes_and_comments("a/*x*y*/b");
             assert_eq!(&masked, b"a       b");
         }

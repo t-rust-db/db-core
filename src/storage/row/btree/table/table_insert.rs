@@ -642,7 +642,7 @@ mod tests {
         );
     }
 
-    // table_insert_161: `acc > 0 && acc.saturating_add(*w) > capacity` in
+    // storage_row_btree_table_table_insert_split_groups_by_bytes_ebe6ef1a: `acc > 0 && acc.saturating_add(*w) > capacity` in
     // split_groups_by_bytes's first-fit fallback loop. Five equal-weight
     // (150) cells over a 400-byte capacity force the two-way cut to fail
     // (best worst-side is 450 > 400) and drive the fallback through all
@@ -651,7 +651,8 @@ mod tests {
     // (acc>0 and over capacity, boundary pushed).
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__table_insert_161__v1_acc_positive_and_over_capacity_splits() {
+    fn mcdc__storage_row_btree_table_table_insert_split_groups_by_bytes_ebe6ef1a__v1_acc_positive_and_over_capacity_splits(
+    ) {
         // i=2/i=4 below hit this vector; the full result pins the split.
         assert_eq!(
             split_groups_by_bytes(&[148, 148, 148, 148, 148], 400),
@@ -661,7 +662,8 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__table_insert_161__v2_acc_zero_never_splits_on_its_own() {
+    fn mcdc__storage_row_btree_table_table_insert_split_groups_by_bytes_ebe6ef1a__v2_acc_zero_never_splits_on_its_own(
+    ) {
         // i=0: acc == 0, so even an over-capacity single cell doesn't
         // start a new group by itself — it must be absorbed first.
         assert_eq!(
@@ -672,7 +674,8 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__table_insert_161__v3_acc_positive_but_under_capacity_continues() {
+    fn mcdc__storage_row_btree_table_table_insert_split_groups_by_bytes_ebe6ef1a__v3_acc_positive_but_under_capacity_continues(
+    ) {
         // i=1/i=3: acc > 0 but acc + w still fits, so no split there.
         assert_eq!(
             split_groups_by_bytes(&[148, 148, 148, 148, 148], 400),

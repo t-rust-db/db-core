@@ -151,6 +151,27 @@ mod tests {
     use super::*;
     use crate::storage::stream::batch::{FieldColumn, SourceKind};
 
+    // storage_stream_logfmt_looks_like_logfmt_c8d291eb (`looks_like_logfmt`):
+    // `trimmed.starts_with('{') || trimmed.starts_with('<')` -- MC/DC vectors
+    // (`mcdc__<id>__vN`, joined to tests/mcdc/obligations.json by
+    // `make test-mcdc`). Each line carries two `k=v` pairs so only the
+    // leading-byte guard decides.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_logfmt_looks_like_logfmt_c8d291eb__v1_leading_brace_is_json() {
+        assert!(!LogfmtParser::looks_like_logfmt(b"{\"a\":1} k=v x=y"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_logfmt_looks_like_logfmt_c8d291eb__v2_leading_angle_is_syslog_pri() {
+        assert!(!LogfmtParser::looks_like_logfmt(b"<134> k=v x=y"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_logfmt_looks_like_logfmt_c8d291eb__v3_neither_prefix_is_logfmt() {
+        assert!(LogfmtParser::looks_like_logfmt(b"  k=v x=y"));
+    }
+
     fn parse_one(line: &'static str) -> LogBatch<'static> {
         let parser = LogfmtParser::new();
         let source = Source::new(SourceKind::File, "test.log");

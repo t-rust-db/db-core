@@ -135,8 +135,9 @@ fn parse_error<T: std::fmt::Debug>(other: ParseOutcome<T>) -> DispatchError {
 // The five arms below each moved out of `compile_statement`'s big `match`
 // into their own function (db-core#336): a guard (`second == "TABLE"`, one
 // leaf) sharing a source line with the arm's own `match parse_x(sql) { ... }`
-// gave `cargo-mvl-mcdc` two decisions on one line, which collide into a
-// single ambiguous `<file-stem>_<line>` obligation id. A free function
+// gave `cargo-mvl-mcdc` two decisions on one line, which collided into a
+// single ambiguous `<file-stem>_<line>` obligation id (ids are hashed per
+// decision since mvl-rust#121, so this is now only tidiness). A free function
 // puts the `match` on its own line in its own item, so the two decisions
 // (the calling arm's guard, this function's `match`) can never collide.
 
@@ -537,7 +538,7 @@ pub fn compile_eqp_program(rows: &[EqpRow]) -> Program {
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::dispatch::{compile_statement, DispatchError};
@@ -575,9 +576,10 @@ mod mcdc_vectors {
         )
     }
 
-    // dispatch_370: `is_subquery(&from.first) || from.joins.iter().any(|j| is_subquery(&j.table))`
+    // codegen_row_dispatch_compile_statement_8144d3a5: `is_subquery(&from.first) || from.joins.iter().any(|j| is_subquery(&j.table))`
     #[test]
-    fn mcdc__dispatch_370__v1_view_as_first_source_is_rejected() {
+    fn mcdc__codegen_row_dispatch_compile_statement_8144d3a5__v1_view_as_first_source_is_rejected()
+    {
         let (schemas, views) = catalog();
         assert!(is_view_source_rejection(compile_statement(
             "INSERT INTO t SELECT a FROM v",
@@ -587,7 +589,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__dispatch_370__v2_view_as_joined_source_is_rejected() {
+    fn mcdc__codegen_row_dispatch_compile_statement_8144d3a5__v2_view_as_joined_source_is_rejected()
+    {
         let (schemas, views) = catalog();
         assert!(is_view_source_rejection(compile_statement(
             "INSERT INTO t SELECT u.a FROM u JOIN v ON u.a = v.a",
@@ -597,7 +600,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__dispatch_370__v3_plain_table_sources_pass_the_guard() {
+    fn mcdc__codegen_row_dispatch_compile_statement_8144d3a5__v3_plain_table_sources_pass_the_guard(
+    ) {
         let (schemas, views) = catalog();
         let result = compile_statement(
             "INSERT INTO t SELECT u.a FROM u JOIN w ON u.a = w.a",

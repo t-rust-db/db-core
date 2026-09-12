@@ -987,7 +987,7 @@ fn emit_unique_check(
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::{compile_insert, CodegenError, TableSchema};
@@ -1015,7 +1015,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__insert_305__v1_short_row_is_a_shape_mismatch() {
+    fn mcdc__codegen_row_stmt_insert_compile_insert_e9674d7a__v1_short_row_is_a_shape_mismatch() {
         assert!(matches!(
             insert_result("INSERT INTO t VALUES (1)"),
             Err(CodegenError::RowShapeMismatch {
@@ -1027,7 +1027,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__insert_305__v2_full_row_compiles() {
+    fn mcdc__codegen_row_stmt_insert_compile_insert_e9674d7a__v2_full_row_compiles() {
         assert!(insert_result("INSERT INTO t VALUES (1, 2)").is_ok());
     }
 
@@ -1036,7 +1036,8 @@ mod mcdc_vectors {
     /// grammar refuses an empty row outright the leaf is unreachable from
     /// SQL, and this vector records that instead.
     #[test]
-    fn mcdc__insert_305__v3_empty_row_is_not_a_shape_mismatch() {
+    fn mcdc__codegen_row_stmt_insert_compile_insert_e9674d7a__v3_empty_row_is_not_a_shape_mismatch()
+    {
         let ParseOutcome::Accepted(insert) = parse_insert("INSERT INTO t VALUES ()") else {
             return;
         };
