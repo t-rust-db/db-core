@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (#368/#370, v2 follow-up to epic #317 / ADR-0019)
+Proposed (#368/#372, v2 follow-up to epic #317 / ADR-0019)
 
 ## Context
 

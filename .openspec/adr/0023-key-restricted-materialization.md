@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (#368/#371, v2 follow-up to epic #317 / ADR-0019)
+Proposed (#368/#373, v2 follow-up to epic #317 / ADR-0019)
 
 ## Context
 
@@ -83,6 +83,6 @@ exist for the dimension-table sizes ADR-0019 targets.
 - Turns an assumption ("full scan is fine for dimension-table sizes") into
   a measured claim, which is the standard this crate already holds other
   perf-sensitive changes to.
-- Sub-ticket #371 tracks writing and running the benchmark; a follow-up
+- Sub-ticket #373 tracks writing and running the benchmark; a follow-up
   ticket (only opened if warranted) would track whichever implementation
   the data supports.
