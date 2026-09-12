@@ -4,7 +4,46 @@
 //!
 //! Example: `<134>Sep  9 14:23:01 webserver nginx[1234]: GET /api/health 200`
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use super::batch::{Facility, LineParser, LogBatch, Severity, Source};
+
+/// Current UTC year, derived from the system clock.
+///
+/// Uses Howard Hinnant's `civil_from_days` algorithm to convert days since
+/// the Unix epoch to a proleptic Gregorian year without pulling in a date/time
+/// dependency. Falls back to 1970 if the system clock is set before the epoch.
+fn current_year() -> i32 {
+    let days = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() / 86400)
+        .unwrap_or(0) as i64;
+
+    let z = days.saturating_add(719_468);
+    let era = if z >= 0 { z } else { z.saturating_sub(146_096) } / 146_097;
+    let doe = z.saturating_sub(era.saturating_mul(146_097)); // [0, 146096]
+    let yoe = doe
+        .saturating_sub(doe / 1460)
+        .saturating_add(doe / 36524)
+        .saturating_sub(doe / 146_096)
+        / 365; // [0, 399]
+    let y = yoe.saturating_add(era.saturating_mul(400));
+    let doy = doe.saturating_sub(
+        365_i64
+            .saturating_mul(yoe)
+            .saturating_add(yoe / 4)
+            .saturating_sub(yoe / 100),
+    ); // [0, 365]
+    let mp = 5_i64.saturating_mul(doy).saturating_add(2) / 153; // [0, 11]
+    let month = if mp < 10 {
+        mp.saturating_add(3)
+    } else {
+        mp.saturating_sub(9)
+    };
+    let year = if month <= 2 { y.saturating_add(1) } else { y };
+
+    year.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
 
 /// Syslog parser that fills `LogBatch` from raw lines.
 #[derive(Debug, Clone)]
@@ -17,7 +56,9 @@ impl SyslogParser {
     /// Create a new parser using the current year.
     #[must_use]
     pub fn new() -> Self {
-        Self { year: 2024 } // TODO: get from system
+        Self {
+            year: current_year(),
+        }
     }
 
     /// Create a parser with explicit year.
@@ -347,6 +388,13 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn current_year_is_plausible() {
+        // Sanity bound, not a golden value -- avoids the test rotting.
+        let year = super::current_year();
+        assert!((2020..=2100).contains(&year), "got {year}");
     }
 
     #[test]
