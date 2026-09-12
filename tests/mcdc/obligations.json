@@ -1402,7 +1402,7 @@
   {
     "id": "functions_call_962dd9c9",
     "file": "src/functions.rs",
-    "line": 1317,
+    "line": 1358,
     "decision": "match (name.to_ascii_lowercase().as_str(), arity) {\n        (\"length\", 1) => Some(length),\n        (\"upper\", 1) => Some(upper),\n        (\"lower\", 1) => Some(lower),\n        (\"abs\", 1) => Some(abs),\n        (\"coalesce\", n) if n >= 2 => Some(coalesce),\n        (\"ifnull\", 2) => Some(coalesce),\n        (\"nullif\", 2) => Some(nullif),\n        (\"typeof\", 1) => Some(typeof_fn),\n        (\"sqlite_version\", 0) => Some(sqlite_version),\n        (\"hex\", 1) => Some(hex),\n        (\"unhex\", 1) => Some(unhex),\n        (\"quote\", 1) => Some(quote),\n        (\"min\", n) if n >= 1 => Some(scalar_min),\n        (\"max\", n) if n >= 1 => Some(scalar_max),\n        (\"round\", 1 | 2) => Some(round_fn),\n        (\"sign\", 1) => Some(sign),\n        (\"instr\", 2) => Some(instr),\n        (\"zeroblob\", 1) => Some(zeroblob),\n        (\"iif\", 3) => Some(iif),\n        (\"substr\", 2 | 3) => Some(substr),\n        (\"trim\", 1 | 2) => Some(trim_fn),\n        (\"ltrim\", 1 | 2) => Some(ltrim_fn),\n        (\"rtrim\", 1 | 2) => Some(rtrim_fn),\n        (\"replace\", 3) => Some(replace_fn),\n        (\"like\", 2 | 3) => Some(like_fn),\n        (\"glob\", 2) => Some(glob_fn),\n        (\"json_extract\", 2) => Some(json_extract),\n        (\"logfmt_extract\", 2) => Some(logfmt_extract),\n        (\"regexp_extract\", 3) => Some(regexp_extract),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1412,7 +1412,7 @@
   {
     "id": "functions_call_3c4eb680",
     "file": "src/functions.rs",
-    "line": 1322,
+    "line": 1363,
     "decision": "n >= 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -1422,7 +1422,7 @@
   {
     "id": "functions_call_3c4e8ca9",
     "file": "src/functions.rs",
-    "line": 1330,
+    "line": 1371,
     "decision": "n >= 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -1432,7 +1432,7 @@
   {
     "id": "functions_call_3c4e8ca9_2",
     "file": "src/functions.rs",
-    "line": 1331,
+    "line": 1372,
     "decision": "n >= 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -1442,7 +1442,7 @@
   {
     "id": "functions_call_f71c1e3e",
     "file": "src/functions.rs",
-    "line": 1349,
+    "line": 1390,
     "decision": "match f {\n        Some(f) => f(args),\n        None => Err(FunctionError::Unknown {\n            name: name.to_string(),\n            arity,\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5532,7 +5532,7 @@
   {
     "id": "parser_row_tokenizer_keyword_buckets_17d0798a",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 620,
+    "line": 634,
     "decision": "slot.1 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -5542,7 +5542,7 @@
   {
     "id": "parser_row_tokenizer_lookup_word_4ac7c463",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 642,
+    "line": 656,
     "decision": "match letter {\n        b'N' if word.eq_ignore_ascii_case(\"NULL\") => return TokenKind::Null,\n        b'T' if word.eq_ignore_ascii_case(\"TRUE\") => return TokenKind::True,\n        b'F' if word.eq_ignore_ascii_case(\"FALSE\") => return TokenKind::False,\n        _ => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5552,7 +5552,7 @@
   {
     "id": "parser_row_tokenizer_lookup_word_8560bd9e",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 643,
+    "line": 657,
     "decision": "word.eq_ignore_ascii_case(\"NULL\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -5562,7 +5562,7 @@
   {
     "id": "parser_row_tokenizer_lookup_word_7964e73e",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 644,
+    "line": 658,
     "decision": "word.eq_ignore_ascii_case(\"TRUE\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -5572,7 +5572,7 @@
   {
     "id": "parser_row_tokenizer_lookup_word_3ae8775a",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 645,
+    "line": 659,
     "decision": "word.eq_ignore_ascii_case(\"FALSE\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -5582,7 +5582,7 @@
   {
     "id": "parser_row_tokenizer_lookup_word_5d2d9251",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 652,
+    "line": 666,
     "decision": "match bucket.binary_search_by(|(text, _)| cmp_ignore_ascii_case(text, word)) {\n        Ok(idx) => bucket\n            .get(idx)\n            .map(|(_, kw)| TokenKind::Keyword(*kw))\n            .unwrap_or_else(|| TokenKind::Identifier(word.to_string())),\n        Err(_) => TokenKind::Identifier(word.to_string()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5592,7 +5592,7 @@
   {
     "id": "parser_row_tokenizer_tokenize_7777ad46",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 694,
+    "line": 708,
     "decision": "u32::try_from(src.len()).is_err()",
     "conditions": 1,
     "vectors_required": 2,
@@ -5602,7 +5602,7 @@
   {
     "id": "parser_row_tokenizer_tokenize_f74f1b04",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 723,
+    "line": 737,
     "decision": "is_eof",
     "conditions": 1,
     "vectors_required": 2,
@@ -5612,7 +5612,7 @@
   {
     "id": "parser_row_tokenizer_bump_08fbb98a",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 746,
+    "line": 760,
     "decision": "c == '\\n'",
     "conditions": 1,
     "vectors_required": 2,
@@ -5622,7 +5622,7 @@
   {
     "id": "parser_row_tokenizer_skip_trivia_78ada107",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 779,
+    "line": 793,
     "decision": "match self.peek_char(src) {\n                Some(c) if c.is_whitespace() => {\n                    self.bump(src);\n                }\n                Some('-') => {\n                    // Lookahead for `--` line comment without consuming\n                    // a lone `-` (the Minus operator).\n                    if self.peek_at(src, 1) == Some('-') {\n                        self.bump(src);\n                        self.bump(src);\n                        while let Some(c) = self.peek_char(src) {\n                            if c == '\\n' {\n                                break;\n                            }\n                            self.bump(src);\n                        }\n                        continue;\n                    }\n                    break;\n                }\n                Some('/') => {\n                    if self.peek_at(src, 1) == Some('*') {\n                        self.bump(src);\n                        self.bump(src);\n                        loop {\n                            match self.peek_char(src) {\n                                None => {\n                                    return Some(\"unterminated block comment\".to_string());\n                                }\n                                Some('*') => {\n                                    self.bump(src);\n                                    if self.peek_char(src) == Some('/') {\n                                        self.bump(src);\n                                        break;\n                                    }\n                                }\n                                Some(_) => {\n                                    self.bump(src);\n                                }\n                            }\n                        }\n                        continue;\n                    }\n                    break;\n                }\n                _ => break,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5632,7 +5632,7 @@
   {
     "id": "parser_row_tokenizer_skip_trivia_461b003e",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 780,
+    "line": 794,
     "decision": "c.is_whitespace()",
     "conditions": 1,
     "vectors_required": 2,
@@ -5642,7 +5642,7 @@
   {
     "id": "parser_row_tokenizer_skip_trivia_b7b4b97e",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 786,
+    "line": 800,
     "decision": "self.peek_at(src, 1) == Some('-')",
     "conditions": 1,
     "vectors_required": 2,
@@ -5652,7 +5652,7 @@
   {
     "id": "parser_row_tokenizer_skip_trivia_cb7dcf65",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 789,
+    "line": 803,
     "decision": "let Some(c) = self.peek_char(src)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5662,7 +5662,7 @@
   {
     "id": "parser_row_tokenizer_skip_trivia_08fbb98a",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 790,
+    "line": 804,
     "decision": "c == '\\n'",
     "conditions": 1,
     "vectors_required": 2,
@@ -5672,7 +5672,7 @@
   {
     "id": "parser_row_tokenizer_skip_trivia_ebd478c3",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 800,
+    "line": 814,
     "decision": "self.peek_at(src, 1) == Some('*')",
     "conditions": 1,
     "vectors_required": 2,
@@ -5682,7 +5682,7 @@
   {
     "id": "parser_row_tokenizer_skip_trivia_627a7d92",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 804,
+    "line": 818,
     "decision": "match self.peek_char(src) {\n                                None => {\n                                    return Some(\"unterminated block comment\".to_string());\n                                }\n                                Some('*') => {\n                                    self.bump(src);\n                                    if self.peek_char(src) == Some('/') {\n                                        self.bump(src);\n                                        break;\n                                    }\n                                }\n                                Some(_) => {\n                                    self.bump(src);\n                                }\n                            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5692,7 +5692,7 @@
   {
     "id": "parser_row_tokenizer_skip_trivia_6f00a544",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 810,
+    "line": 824,
     "decision": "self.peek_char(src) == Some('/')",
     "conditions": 1,
     "vectors_required": 2,
@@ -5702,7 +5702,7 @@
   {
     "id": "parser_row_tokenizer_next_token_72cc5c7b",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 836,
+    "line": 850,
     "decision": "let Some(reason) = self.skip_trivia(src)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5712,7 +5712,7 @@
   {
     "id": "parser_row_tokenizer_next_token_83c34676",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 851,
+    "line": 865,
     "decision": "match c {\n            '0'..='9' => self.scan_number(src),\n            '.' => {\n                // Lookahead: `.5` is a float; a lone `.` is Dot.\n                if matches!(self.peek_at(src, 1), Some('0'..='9')) {\n                    self.scan_number(src)\n                } else {\n                    self.bump(src);\n                    TokenKind::Dot\n                }\n            }\n            '\\'' => self.scan_string(src),\n            '\"' => self.scan_quoted_identifier(src, '\"', '\"'),\n            '[' => self.scan_quoted_identifier(src, '[', ']'),\n            '`' => self.scan_quoted_identifier(src, '`', '`'),\n            '?' => self.scan_param_question(src),\n            ':' => self.scan_param_named(src, ':'),\n            '@' => self.scan_param_named(src, '@'),\n            '$' => self.scan_param_named(src, '$'),\n            c if c == 'x' || c == 'X' => self.scan_maybe_blob(src, c),\n            c if is_ident_start(c) => self.scan_identifier_or_keyword(src),\n            _ => self.scan_operator(src),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5722,7 +5722,7 @@
   {
     "id": "parser_row_tokenizer_next_token_95992c1d",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 870,
+    "line": 884,
     "decision": "c == 'x' || c == 'X'",
     "conditions": 2,
     "vectors_required": 3,
@@ -5732,7 +5732,7 @@
   {
     "id": "parser_row_tokenizer_next_token_8457cd08",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 871,
+    "line": 885,
     "decision": "is_ident_start(c)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5742,7 +5742,7 @@
   {
     "id": "parser_row_tokenizer_next_token_f36cb06c",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 855,
+    "line": 869,
     "decision": "matches!(self.peek_at(src, 1), Some('0'..='9'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -5752,7 +5752,7 @@
   {
     "id": "parser_row_tokenizer_scan_identifier_or_keyword_853941d2",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 888,
+    "line": 902,
     "decision": "let Some(&b) = bytes.get(self.pos)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5762,7 +5762,7 @@
   {
     "id": "parser_row_tokenizer_scan_identifier_or_keyword_2f93ed48",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 889,
+    "line": 903,
     "decision": "b.is_ascii_alphanumeric() || b == b'_'",
     "conditions": 2,
     "vectors_required": 3,
@@ -5772,7 +5772,7 @@
   {
     "id": "parser_row_tokenizer_scan_identifier_or_keyword_cb7dcf65",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 896,
+    "line": 910,
     "decision": "let Some(c) = self.peek_char(src)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5782,7 +5782,7 @@
   {
     "id": "parser_row_tokenizer_scan_identifier_or_keyword_5f761720",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 897,
+    "line": 911,
     "decision": "is_ident_continue(c)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5792,7 +5792,7 @@
   {
     "id": "parser_row_tokenizer_scan_maybe_blob_6972ddf0",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 910,
+    "line": 924,
     "decision": "self.peek_at(src, 1) == Some('\\'')",
     "conditions": 1,
     "vectors_required": 2,
@@ -5802,7 +5802,7 @@
   {
     "id": "parser_row_tokenizer_scan_maybe_blob_6a296eb1",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 915,
+    "line": 929,
     "decision": "match self.peek_char(src) {\n                    None => {\n                        return TokenKind::Error(format!(\n                            \"unterminated blob literal starting with {x}'\"\n                        ));\n                    }\n                    Some('\\'') => {\n                        break;\n                    }\n                    Some(_) => {\n                        self.bump(src);\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5812,7 +5812,7 @@
   {
     "id": "parser_row_tokenizer_scan_maybe_blob_c47c3091",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 931,
+    "line": 945,
     "decision": "!hex.len().is_multiple_of(2) || !hex.chars().all(|c| c.is_ascii_hexdigit())",
     "conditions": 2,
     "vectors_required": 3,
@@ -5822,7 +5822,7 @@
   {
     "id": "parser_row_tokenizer_scan_maybe_blob_70e61421",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 939,
+    "line": 953,
     "decision": "match u8::from_str_radix(pair, 16) {\n                    Ok(b) => bytes.push(b),\n                    Err(_) => {\n                        let msg = format!(\"invalid blob byte: {pair:?}\");\n                        self.bump(src); // closing '\n                        return TokenKind::Error(msg);\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5832,7 +5832,7 @@
   {
     "id": "parser_row_tokenizer_scan_string_39cb951a",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 963,
+    "line": 977,
     "decision": "match self.peek_char(src) {\n                None => return TokenKind::Error(\"unterminated string literal\".to_string()),\n                Some('\\'') => {\n                    let quote_pos = self.pos;\n                    self.bump(src); // consume this quote\n                    if self.peek_char(src) == Some('\\'') {\n                        let seg = src.get(seg_start..quote_pos).unwrap_or(\"\");\n                        let buf = acc.get_or_insert_with(String::new);\n                        buf.push_str(seg);\n                        buf.push('\\'');\n                        self.bump(src); // consume the second quote\n                        seg_start = self.pos;\n                    } else {\n                        let seg = src.get(seg_start..quote_pos).unwrap_or(\"\");\n                        return TokenKind::String(match acc {\n                            Some(mut buf) => {\n                                buf.push_str(seg);\n                                buf\n                            }\n                            None => seg.to_string(),\n                        });\n                    }\n                }\n                Some(_) => {\n                    self.bump(src);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5842,7 +5842,7 @@
   {
     "id": "parser_row_tokenizer_scan_string_bb491f77",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 968,
+    "line": 982,
     "decision": "self.peek_char(src) == Some('\\'')",
     "conditions": 1,
     "vectors_required": 2,
@@ -5852,7 +5852,7 @@
   {
     "id": "parser_row_tokenizer_scan_string_c88346e7",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 977,
+    "line": 991,
     "decision": "match acc {\n                            Some(mut buf) => {\n                                buf.push_str(seg);\n                                buf\n                            }\n                            None => seg.to_string(),\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5862,7 +5862,7 @@
   {
     "id": "parser_row_tokenizer_scan_quoted_identifier_626ccd12",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1002,
+    "line": 1016,
     "decision": "match self.peek_char(src) {\n                None => {\n                    return TokenKind::Error(format!(\n                        \"unterminated quoted identifier starting with {open:?}\"\n                    ));\n                }\n                Some(c) if c == close => {\n                    let close_pos = self.pos;\n                    self.bump(src); // consume this closing delimiter\n                    if escapes && self.peek_char(src) == Some(close) {\n                        let seg = src.get(seg_start..close_pos).unwrap_or(\"\");\n                        let buf = acc.get_or_insert_with(String::new);\n                        buf.push_str(seg);\n                        buf.push(close);\n                        self.bump(src); // consume the doubled delimiter\n                        seg_start = self.pos;\n                    } else {\n                        let seg = src.get(seg_start..close_pos).unwrap_or(\"\");\n                        return TokenKind::Identifier(match acc {\n                            Some(mut buf) => {\n                                buf.push_str(seg);\n                                buf\n                            }\n                            None => seg.to_string(),\n                        });\n                    }\n                }\n                Some(_) => {\n                    self.bump(src);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5872,7 +5872,7 @@
   {
     "id": "parser_row_tokenizer_scan_quoted_identifier_d1d51aa6",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1008,
+    "line": 1022,
     "decision": "c == close",
     "conditions": 1,
     "vectors_required": 2,
@@ -5882,7 +5882,7 @@
   {
     "id": "parser_row_tokenizer_scan_quoted_identifier_aa1fa4b7",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1011,
+    "line": 1025,
     "decision": "escapes && self.peek_char(src) == Some(close)",
     "conditions": 2,
     "vectors_required": 3,
@@ -5892,7 +5892,7 @@
   {
     "id": "parser_row_tokenizer_scan_quoted_identifier_c88346e7",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1020,
+    "line": 1034,
     "decision": "match acc {\n                            Some(mut buf) => {\n                                buf.push_str(seg);\n                                buf\n                            }\n                            None => seg.to_string(),\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5902,7 +5902,7 @@
   {
     "id": "parser_row_tokenizer_scan_param_question_7644b622",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1039,
+    "line": 1053,
     "decision": "matches!(self.peek_char(src), Some('0'..='9'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -5912,7 +5912,7 @@
   {
     "id": "parser_row_tokenizer_scan_param_question_257658d1",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1043,
+    "line": 1057,
     "decision": "digits.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -5922,7 +5922,7 @@
   {
     "id": "parser_row_tokenizer_scan_param_question_f298bb7f",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1046,
+    "line": 1060,
     "decision": "match digits.parse::<u32>() {\n                Ok(n) => TokenKind::Param(Box::new(Param::Numbered(n))),\n                Err(_) => TokenKind::Error(format!(\"parameter number out of range: {digits}\")),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5932,7 +5932,7 @@
   {
     "id": "parser_row_tokenizer_scan_param_named_cb7dcf65",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1056,
+    "line": 1070,
     "decision": "let Some(c) = self.peek_char(src)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5942,7 +5942,7 @@
   {
     "id": "parser_row_tokenizer_scan_param_named_5f761720",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1057,
+    "line": 1071,
     "decision": "is_ident_continue(c)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5952,7 +5952,7 @@
   {
     "id": "parser_row_tokenizer_scan_param_named_429d4829",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1064,
+    "line": 1078,
     "decision": "name.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -5962,7 +5962,7 @@
   {
     "id": "parser_row_tokenizer_scan_param_named_70b58286",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1068,
+    "line": 1082,
     "decision": "match sigil {\n            ':' => TokenKind::Param(Box::new(Param::Colon(name))),\n            '@' => TokenKind::Param(Box::new(Param::At(name))),\n            '$' => TokenKind::Param(Box::new(Param::Dollar(name))),\n            _ => TokenKind::Error(format!(\"unsupported parameter sigil {sigil:?}\")),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5972,7 +5972,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_07c2b2c9",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1080,
+    "line": 1094,
     "decision": "self.peek_char(src) == Some('0') && matches!(self.peek_at(src, 1), Some('x' | 'X'))",
     "conditions": 2,
     "vectors_required": 3,
@@ -5982,7 +5982,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_cfab6dfe",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1084,
+    "line": 1098,
     "decision": "matches!(self.peek_char(src), Some(c) if c.is_ascii_hexdigit())",
     "conditions": 1,
     "vectors_required": 2,
@@ -5992,7 +5992,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_b3e6d8ef",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1088,
+    "line": 1102,
     "decision": "hex.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -6002,7 +6002,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_be720a1a",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1095,
+    "line": 1109,
     "decision": "match i64::from_str_radix(hex, 16) {\n                Ok(n) => TokenKind::Integer(n),\n                Err(_) => match u64::from_str_radix(hex, 16) {\n                    // SQLite hex literals above `i64::MAX` wrap to their\n                    // two's-complement value (`0xFFFFFFFFFFFFFFFF` is -1).\n                    Ok(n) => TokenKind::Integer(i64::from_ne_bytes(n.to_ne_bytes())),\n                    Err(e) => TokenKind::Error(format!(\"invalid hex literal: {e}\")),\n                },\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6012,7 +6012,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_12df341a",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1097,
+    "line": 1111,
     "decision": "match u64::from_str_radix(hex, 16) {\n                    // SQLite hex literals above `i64::MAX` wrap to their\n                    // two's-complement value (`0xFFFFFFFFFFFFFFFF` is -1).\n                    Ok(n) => TokenKind::Integer(i64::from_ne_bytes(n.to_ne_bytes())),\n                    Err(e) => TokenKind::Error(format!(\"invalid hex literal: {e}\")),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6022,7 +6022,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_7644b622",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1106,
+    "line": 1120,
     "decision": "matches!(self.peek_char(src), Some('0'..='9'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -6032,7 +6032,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_614a2b23",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1110,
+    "line": 1124,
     "decision": "self.peek_char(src) == Some('.')",
     "conditions": 1,
     "vectors_required": 2,
@@ -6042,7 +6042,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_7644b622_2",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1113,
+    "line": 1127,
     "decision": "matches!(self.peek_char(src), Some('0'..='9'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -6052,7 +6052,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_fbff035a",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1118,
+    "line": 1132,
     "decision": "matches!(self.peek_char(src), Some('e' | 'E'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -6062,7 +6062,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_c48c7ae7",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1120,
+    "line": 1134,
     "decision": "sign_char",
     "conditions": 1,
     "vectors_required": 2,
@@ -6072,7 +6072,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_0882a09a",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1122,
+    "line": 1136,
     "decision": "has_exp_digits",
     "conditions": 1,
     "vectors_required": 2,
@@ -6082,7 +6082,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_c48c7ae7_2",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1125,
+    "line": 1139,
     "decision": "sign_char",
     "conditions": 1,
     "vectors_required": 2,
@@ -6092,7 +6092,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_7644b622_3",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1128,
+    "line": 1142,
     "decision": "matches!(self.peek_char(src), Some('0'..='9'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -6102,7 +6102,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_87048e4f",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1135,
+    "line": 1149,
     "decision": "is_float",
     "conditions": 1,
     "vectors_required": 2,
@@ -6112,7 +6112,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_418d15e4",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1136,
+    "line": 1150,
     "decision": "match text.parse::<f64>() {\n                Ok(f) => TokenKind::Float(f),\n                Err(e) => TokenKind::Error(format!(\"invalid float literal {text:?}: {e}\")),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6122,7 +6122,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_eacfef1e",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1141,
+    "line": 1155,
     "decision": "match text.parse::<i64>() {\n                Ok(n) => TokenKind::Integer(n),\n                Err(_) => match text.parse::<f64>() {\n                    Ok(f) => TokenKind::Float(f),\n                    Err(e) => TokenKind::Error(format!(\"invalid integer literal {text:?}: {e}\")),\n                },\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6132,7 +6132,7 @@
   {
     "id": "parser_row_tokenizer_scan_number_304647ea",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1143,
+    "line": 1157,
     "decision": "match text.parse::<f64>() {\n                    Ok(f) => TokenKind::Float(f),\n                    Err(e) => TokenKind::Error(format!(\"invalid integer literal {text:?}: {e}\")),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6142,7 +6142,7 @@
   {
     "id": "parser_row_tokenizer_scan_operator_b79601b0",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1152,
+    "line": 1166,
     "decision": "match self.bump(src) {\n            Some(c) => c,\n            None => return TokenKind::Eof,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6152,7 +6152,7 @@
   {
     "id": "parser_row_tokenizer_scan_operator_5ae98a8f",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1156,
+    "line": 1170,
     "decision": "match c {\n            '*' => TokenKind::Star,\n            ',' => TokenKind::Comma,\n            ';' => TokenKind::Semicolon,\n            '(' => TokenKind::LParen,\n            ')' => TokenKind::RParen,\n            '+' => TokenKind::Plus,\n            '/' => TokenKind::Slash,\n            '%' => TokenKind::Percent,\n            '~' => TokenKind::BitNot,\n            '-' => {\n                if self.peek_char(src) == Some('>') {\n                    self.bump(src);\n                    if self.peek_char(src) == Some('>') {\n                        self.bump(src);\n                        TokenKind::ArrowArrow\n                    } else {\n                        TokenKind::Arrow\n                    }\n                } else {\n                    TokenKind::Minus\n                }\n            }\n            '=' => {\n                if self.peek_char(src) == Some('=') {\n                    self.bump(src);\n                }\n                TokenKind::Eq\n            }\n            '!' => {\n                if self.peek_char(src) == Some('=') {\n                    self.bump(src);\n                    TokenKind::Ne\n                } else {\n                    TokenKind::Error(\"expected '=' after '!'\".to_string())\n                }\n            }\n            '<' => match self.peek_char(src) {\n                Some('=') => {\n                    self.bump(src);\n                    TokenKind::Le\n                }\n                Some('>') => {\n                    self.bump(src);\n                    TokenKind::Ne\n                }\n                Some('<') => {\n                    self.bump(src);\n                    TokenKind::Shl\n                }\n                _ => TokenKind::Lt,\n            },\n            '>' => match self.peek_char(src) {\n                Some('=') => {\n                    self.bump(src);\n                    TokenKind::Ge\n                }\n                Some('>') => {\n                    self.bump(src);\n                    TokenKind::Shr\n                }\n                _ => TokenKind::Gt,\n            },\n            '|' => {\n                if self.peek_char(src) == Some('|') {\n                    self.bump(src);\n                    TokenKind::Concat\n                } else {\n                    TokenKind::BitOr\n                }\n            }\n            '&' => TokenKind::BitAnd,\n            other => TokenKind::Error(format!(\"unexpected character {other:?}\")),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6162,7 +6162,7 @@
   {
     "id": "parser_row_tokenizer_scan_operator_652251f3",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1167,
+    "line": 1181,
     "decision": "self.peek_char(src) == Some('>')",
     "conditions": 1,
     "vectors_required": 2,
@@ -6172,7 +6172,7 @@
   {
     "id": "parser_row_tokenizer_scan_operator_652251f3_2",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1169,
+    "line": 1183,
     "decision": "self.peek_char(src) == Some('>')",
     "conditions": 1,
     "vectors_required": 2,
@@ -6182,7 +6182,7 @@
   {
     "id": "parser_row_tokenizer_scan_operator_2e4d2d8e",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1180,
+    "line": 1194,
     "decision": "self.peek_char(src) == Some('=')",
     "conditions": 1,
     "vectors_required": 2,
@@ -6192,7 +6192,7 @@
   {
     "id": "parser_row_tokenizer_scan_operator_2e4d2d8e_2",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1186,
+    "line": 1200,
     "decision": "self.peek_char(src) == Some('=')",
     "conditions": 1,
     "vectors_required": 2,
@@ -6202,7 +6202,7 @@
   {
     "id": "parser_row_tokenizer_scan_operator_b4854580",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1193,
+    "line": 1207,
     "decision": "match self.peek_char(src) {\n                Some('=') => {\n                    self.bump(src);\n                    TokenKind::Le\n                }\n                Some('>') => {\n                    self.bump(src);\n                    TokenKind::Ne\n                }\n                Some('<') => {\n                    self.bump(src);\n                    TokenKind::Shl\n                }\n                _ => TokenKind::Lt,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6212,7 +6212,7 @@
   {
     "id": "parser_row_tokenizer_scan_operator_9fc636a1",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1208,
+    "line": 1222,
     "decision": "match self.peek_char(src) {\n                Some('=') => {\n                    self.bump(src);\n                    TokenKind::Ge\n                }\n                Some('>') => {\n                    self.bump(src);\n                    TokenKind::Shr\n                }\n                _ => TokenKind::Gt,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6222,7 +6222,7 @@
   {
     "id": "parser_row_tokenizer_scan_operator_e7096ff6",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1220,
+    "line": 1234,
     "decision": "self.peek_char(src) == Some('|')",
     "conditions": 1,
     "vectors_required": 2,
@@ -6232,7 +6232,7 @@
   {
     "id": "parser_row_tokenizer_split_statements_2bd6b76b",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1265,
+    "line": 1279,
     "decision": "match tok.kind {\n            TokenKind::Semicolon => {\n                // Offsets come from this same `sql` (and `tokenize` refused\n                // anything the `u32` cannot address), so the slices below\n                // always hit; `\"\"` is the total-slicing fallback only.\n                let end = tok.span.offset as usize;\n                push_trimmed(&mut statements, sql.get(start..end).unwrap_or(\"\"));\n                start = (tok.span.offset as usize).saturating_add(tok.span.len as usize);\n            }\n            TokenKind::Eof => {\n                push_trimmed(&mut statements, sql.get(start..).unwrap_or(\"\"));\n            }\n            _ => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6242,7 +6242,7 @@
   {
     "id": "parser_row_tokenizer_push_trimmed_8dd1a885",
     "file": "src/parser/row/tokenizer.rs",
-    "line": 1285,
+    "line": 1299,
     "decision": "!trimmed.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -19790,9 +19790,39 @@
     "wildcard_risk": true
   },
   {
+    "id": "storage_stream_syslog_current_year_d5be9768",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 23,
+    "decision": "z >= 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_syslog_current_year_1f89292c",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 38,
+    "decision": "mp < 10",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_syslog_current_year_28ccc599",
+    "file": "src/storage/stream/syslog.rs",
+    "line": 43,
+    "decision": "month <= 2",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_stream_syslog_parse_batch_196e6548",
     "file": "src/storage/stream/syslog.rs",
-    "line": 47,
+    "line": 88,
     "decision": "byte == b'\\n'",
     "conditions": 1,
     "vectors_required": 2,
@@ -19802,7 +19832,7 @@
   {
     "id": "storage_stream_syslog_parse_batch_ba96d854",
     "file": "src/storage/stream/syslog.rs",
-    "line": 48,
+    "line": 89,
     "decision": "start < i",
     "conditions": 1,
     "vectors_required": 2,
@@ -19812,7 +19842,7 @@
   {
     "id": "storage_stream_syslog_parse_batch_cad66ef3",
     "file": "src/storage/stream/syslog.rs",
-    "line": 56,
+    "line": 97,
     "decision": "lines_parsed >= limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -19822,7 +19852,7 @@
   {
     "id": "storage_stream_syslog_parse_line_7969ddd9",
     "file": "src/storage/stream/syslog.rs",
-    "line": 68,
+    "line": 109,
     "decision": "match std::str::from_utf8(line) {\n            Ok(s) => s,\n            Err(_) => {\n                // Non-UTF8 line: store raw only\n                batch.push_line(line, None, None, None, None);\n                return;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19832,7 +19862,7 @@
   {
     "id": "storage_stream_syslog_parse_line_a074ee11",
     "file": "src/storage/stream/syslog.rs",
-    "line": 78,
+    "line": 119,
     "decision": "match self.parse_pri(line_str) {\n            Some(p) => p,\n            None => {\n                // No PRI: store as-is\n                batch.push_line(line, None, None, None, Some(line_str));\n                return;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19842,7 +19872,7 @@
   {
     "id": "storage_stream_syslog_parse_line_3e8650f7",
     "file": "src/storage/stream/syslog.rs",
-    "line": 100,
+    "line": 141,
     "decision": "let Some(h) = hostname",
     "conditions": 1,
     "vectors_required": 2,
@@ -19852,7 +19882,7 @@
   {
     "id": "storage_stream_syslog_parse_line_4af1b886",
     "file": "src/storage/stream/syslog.rs",
-    "line": 101,
+    "line": 142,
     "decision": "batch.resource.hostname.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -19862,7 +19892,7 @@
   {
     "id": "storage_stream_syslog_parse_line_a2f73dfd",
     "file": "src/storage/stream/syslog.rs",
-    "line": 116,
+    "line": 157,
     "decision": "let Some(t) = tag",
     "conditions": 1,
     "vectors_required": 2,
@@ -19872,7 +19902,7 @@
   {
     "id": "storage_stream_syslog_parse_line_08bc0d79",
     "file": "src/storage/stream/syslog.rs",
-    "line": 119,
+    "line": 160,
     "decision": "let Some(p) = pid",
     "conditions": 1,
     "vectors_required": 2,
@@ -19882,7 +19912,7 @@
   {
     "id": "storage_stream_syslog_parse_line_3e8650f7_2",
     "file": "src/storage/stream/syslog.rs",
-    "line": 122,
+    "line": 163,
     "decision": "let Some(h) = hostname",
     "conditions": 1,
     "vectors_required": 2,
@@ -19892,7 +19922,7 @@
   {
     "id": "storage_stream_syslog_parse_pri_eb4de787",
     "file": "src/storage/stream/syslog.rs",
-    "line": 129,
+    "line": 170,
     "decision": "!s.starts_with('<')",
     "conditions": 1,
     "vectors_required": 2,
@@ -19902,7 +19932,7 @@
   {
     "id": "storage_stream_syslog_parse_timestamp_7eccb53a",
     "file": "src/storage/stream/syslog.rs",
-    "line": 145,
+    "line": 186,
     "decision": "match month_str {\n            \"Jan\" => 1,\n            \"Feb\" => 2,\n            \"Mar\" => 3,\n            \"Apr\" => 4,\n            \"May\" => 5,\n            \"Jun\" => 6,\n            \"Jul\" => 7,\n            \"Aug\" => 8,\n            \"Sep\" => 9,\n            \"Oct\" => 10,\n            \"Nov\" => 11,\n            \"Dec\" => 12,\n            _ => return (None, s),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19912,7 +19942,7 @@
   {
     "id": "storage_stream_syslog_parse_timestamp_acdeac75",
     "file": "src/storage/stream/syslog.rs",
-    "line": 164,
+    "line": 205,
     "decision": "match day_str.and_then(|d| d.parse().ok()) {\n            Some(d) if (1..=31).contains(&d) => d,\n            _ => return (None, s),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19922,7 +19952,7 @@
   {
     "id": "storage_stream_syslog_parse_timestamp_d670dd79",
     "file": "src/storage/stream/syslog.rs",
-    "line": 165,
+    "line": 206,
     "decision": "(1..=31).contains(&d)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19932,7 +19962,7 @@
   {
     "id": "storage_stream_syslog_parse_timestamp_27be852d",
     "file": "src/storage/stream/syslog.rs",
-    "line": 171,
+    "line": 212,
     "decision": "match time_str.and_then(|t| self.parse_time(t)) {\n            Some(t) => t,\n            None => return (None, s),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19942,7 +19972,7 @@
   {
     "id": "storage_stream_syslog_parse_time_833cfb43",
     "file": "src/storage/stream/syslog.rs",
-    "line": 183,
+    "line": 224,
     "decision": "s.len() < 8",
     "conditions": 1,
     "vectors_required": 2,
@@ -19952,7 +19982,7 @@
   {
     "id": "storage_stream_syslog_to_epoch_nanos_078f2393",
     "file": "src/storage/stream/syslog.rs",
-    "line": 205,
+    "line": 246,
     "decision": "month == 0 || month > 12 || day == 0 || day > 31",
     "conditions": 4,
     "vectors_required": 5,
@@ -19962,7 +19992,7 @@
   {
     "id": "storage_stream_syslog_parse_word_714ff8b9",
     "file": "src/storage/stream/syslog.rs",
-    "line": 236,
+    "line": 277,
     "decision": "s.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -19972,7 +20002,7 @@
   {
     "id": "storage_stream_syslog_parse_word_900cc980",
     "file": "src/storage/stream/syslog.rs",
-    "line": 239,
+    "line": 280,
     "decision": "match s.find(char::is_whitespace) {\n            Some(i) => {\n                let word = s.get(..i).unwrap_or(\"\");\n                let rest = s.get(i..).unwrap_or(\"\").trim_start();\n                (Some(word), rest)\n            }\n            None => (Some(s), \"\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19982,7 +20012,7 @@
   {
     "id": "storage_stream_syslog_parse_tag_pid_a46d8852",
     "file": "src/storage/stream/syslog.rs",
-    "line": 258,
+    "line": 299,
     "decision": "end == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -19992,7 +20022,7 @@
   {
     "id": "storage_stream_syslog_parse_tag_pid_5a30a4cf",
     "file": "src/storage/stream/syslog.rs",
-    "line": 266,
+    "line": 307,
     "decision": "rest.starts_with('[')",
     "conditions": 1,
     "vectors_required": 2,
@@ -20002,7 +20032,7 @@
   {
     "id": "storage_stream_syslog_single_digit_day_with_and_without_padding_0e225bd4",
     "file": "src/storage/stream/syslog.rs",
-    "line": 344,
+    "line": 385,
     "decision": "match batch.fields.get(\"tag\") {\n            Some(crate::storage::stream::FieldColumn::Dict { dict, .. }) => {\n                assert_eq!(dict.as_slice(), [\"nginx\"]);\n            }\n            other => panic!(\"{other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
