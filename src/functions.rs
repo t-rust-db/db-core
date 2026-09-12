@@ -1310,6 +1310,47 @@ mod regex_lite {
 
 type ScalarFn = fn(&[Value]) -> Result<Value, FunctionError>;
 
+/// Every scalar function `call` dispatches, kept next to it deliberately
+/// so the two can't drift apart -- adding a name here without a matching
+/// arm in `call` (or vice versa) is a copy/paste error away, not a
+/// silent divergence discovered later. A client-side completion popup
+/// (t-rust-db/db-studio#46) consumes this instead of hand-maintaining
+/// its own function-name list. Aggregate names (`COUNT`/`SUM`/...) and
+/// window functions aren't included -- they're recognized by each
+/// planner's own validator (e.g. `parser::column::is_known_agg_name`),
+/// not this scalar registry.
+pub const SCALAR_FUNCTION_NAMES: &[&str] = &[
+    "length",
+    "upper",
+    "lower",
+    "abs",
+    "coalesce",
+    "ifnull",
+    "nullif",
+    "typeof",
+    "sqlite_version",
+    "hex",
+    "unhex",
+    "quote",
+    "min",
+    "max",
+    "round",
+    "sign",
+    "instr",
+    "zeroblob",
+    "iif",
+    "substr",
+    "trim",
+    "ltrim",
+    "rtrim",
+    "replace",
+    "like",
+    "glob",
+    "json_extract",
+    "logfmt_extract",
+    "regexp_extract",
+];
+
 /// Dispatches `name(args)` by name and arity into this module's
 /// registry, per `Opcode::Function`.
 pub fn call(name: &str, args: &[Value]) -> Result<Value, FunctionError> {

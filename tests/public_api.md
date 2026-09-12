@@ -998,6 +998,7 @@ pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'
 impl core::fmt::Display for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::functions::FunctionError
+pub const db_core::functions::SCALAR_FUNCTION_NAMES: &[&str]
 pub fn db_core::functions::call(&str, &[db_core::value::Value]) -> core::result::Result<db_core::value::Value, db_core::functions::FunctionError>
 pub fn db_core::functions::glob_match(&str, &str) -> bool
 pub fn db_core::functions::like_match(&str, &str, core::option::Option<char>) -> bool
@@ -2116,6 +2117,7 @@ pub fn db_core::parser::row::tokenizer::Tokenizer::tokenize(&str) -> alloc::vec:
 impl core::default::Default for db_core::parser::row::tokenizer::Tokenizer
 pub fn db_core::parser::row::tokenizer::Tokenizer::default() -> Self
 pub fn db_core::parser::row::tokenizer::ends_with_semicolon(&str) -> bool
+pub fn db_core::parser::row::tokenizer::keyword_names() -> impl core::iter::traits::iterator::Iterator<Item = &'static str>
 pub fn db_core::parser::row::tokenizer::split_statements(&str) -> alloc::vec::Vec<alloc::string::String>
 pub enum db_core::parser::row::ParseOutcome<T>
 pub db_core::parser::row::ParseOutcome::Accepted(alloc::boxed::Box<T>)

@@ -591,6 +591,20 @@ const KEYWORDS: &[(&str, Keyword)] = &[
     ("WITHOUT", Keyword::WITHOUT),
 ];
 
+/// Every keyword's canonical (uppercase) spelling, `NULL`/`TRUE`/
+/// `FALSE` included even though [`KEYWORDS`] itself omits them (they're
+/// tokenized as their own `TokenKind` variants, not `Keyword`, per
+/// [`lookup_word`]) -- the single source of truth for "what is a SQL
+/// keyword here," so a client-side completion popup (t-rust-db/
+/// db-studio#46) or highlighter doesn't need its own hand-maintained
+/// copy that can drift from what this tokenizer actually accepts.
+pub fn keyword_names() -> impl Iterator<Item = &'static str> {
+    KEYWORDS
+        .iter()
+        .map(|&(name, _)| name)
+        .chain(["NULL", "TRUE", "FALSE"])
+}
+
 /// Case-insensitive ASCII ordering of `a` against `b`, without
 /// allocating an uppercased copy of either — used by [`lookup_word`]'s
 /// binary search so per-identifier lookup costs no heap allocation.
