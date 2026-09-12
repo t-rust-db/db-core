@@ -320,16 +320,17 @@ mod tests {
         u32::from_be_bytes(page1[36..40].try_into().unwrap())
     }
 
-    /// #52 tagged MC/DC vector (obligation `table_delete_61`, decision
+    /// #52 tagged MC/DC vector (obligation `storage_row_btree_table_table_delete_delete_row_0bd83e16`, decision
     /// `cells.len() > 1 || ancestors.is_empty()`): leaf A
     /// (`cells.len() > 1`) true, leaf B (`ancestors.is_empty()`) false —
     /// a multi-page tree where the leaf being deleted from still has
     /// other rows left, so it splices in place rather than collapsing.
     /// Independence pair for A against
-    /// `mcdc__table_delete_61__v2_last_cell_in_leaf_with_ancestors_collapses`.
+    /// `mcdc__storage_row_btree_table_table_delete_delete_row_0bd83e16__v2_last_cell_in_leaf_with_ancestors_collapses`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__table_delete_61__v1_leaf_survives_with_ancestors() {
+    fn mcdc__storage_row_btree_table_table_delete_delete_row_0bd83e16__v1_leaf_survives_with_ancestors(
+    ) {
         let page_size = 512u32;
         let (vfs, header) = minimal_db(page_size);
         let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
@@ -353,16 +354,17 @@ mod tests {
         assert!(delete_row(&mut pager, &header, 1, n - 1).is_ok());
     }
 
-    /// #52 tagged MC/DC vector (obligation `table_delete_61`): both leaves
+    /// #52 tagged MC/DC vector (obligation `storage_row_btree_table_table_delete_delete_row_0bd83e16`): both leaves
     /// false — a multi-page tree where the leaf being deleted from holds
     /// exactly one cell, so it must be deallocated and its removal
     /// cascaded into ancestors rather than spliced in place. Independence
-    /// pair for A against `mcdc__table_delete_61__v1_leaf_survives_with_ancestors`
+    /// pair for A against `mcdc__storage_row_btree_table_table_delete_delete_row_0bd83e16__v1_leaf_survives_with_ancestors`
     /// and for B against
-    /// `mcdc__table_delete_61__v3_only_row_in_root_leaf_has_no_ancestors`.
+    /// `mcdc__storage_row_btree_table_table_delete_delete_row_0bd83e16__v3_only_row_in_root_leaf_has_no_ancestors`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__table_delete_61__v2_last_cell_in_leaf_with_ancestors_collapses() {
+    fn mcdc__storage_row_btree_table_table_delete_delete_row_0bd83e16__v2_last_cell_in_leaf_with_ancestors_collapses(
+    ) {
         let page_size = 512u32;
         let (vfs, header) = minimal_db(page_size);
         let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
@@ -394,14 +396,15 @@ mod tests {
         );
     }
 
-    /// #52 tagged MC/DC vector (obligation `table_delete_61`): leaf A false,
+    /// #52 tagged MC/DC vector (obligation `storage_row_btree_table_table_delete_delete_row_0bd83e16`): leaf A false,
     /// leaf B (`ancestors.is_empty()`) true independently flips the
     /// outcome to true — the single-page root-leaf case, where the
     /// (empty) root can never be collapsed away. Independence pair for B
-    /// against `mcdc__table_delete_61__v2_last_cell_in_leaf_with_ancestors_collapses`.
+    /// against `mcdc__storage_row_btree_table_table_delete_delete_row_0bd83e16__v2_last_cell_in_leaf_with_ancestors_collapses`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__table_delete_61__v3_only_row_in_root_leaf_has_no_ancestors() {
+    fn mcdc__storage_row_btree_table_table_delete_delete_row_0bd83e16__v3_only_row_in_root_leaf_has_no_ancestors(
+    ) {
         let page_size = 512u32;
         let (vfs, header) = minimal_db(page_size);
         let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();

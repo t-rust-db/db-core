@@ -382,8 +382,6 @@ impl<'a> LogBatch<'a> {
 
     /// Set the observed timestamp on every row that does not have one yet.
     /// All lines of one read share the moment they were read.
-    // #318: line-shift comment to avoid an MC/DC obligation id collision
-    // with `src/codegen/batch.rs`'s own decision at the same line number.
     pub fn fill_observed_ts(&mut self, observed_ts_ns: i64) {
         for slot in self.observed_ts_ns.iter_mut() {
             if slot.is_none() {

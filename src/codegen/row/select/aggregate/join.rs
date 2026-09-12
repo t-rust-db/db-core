@@ -890,7 +890,7 @@ fn resolve_group_order_target(
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::dispatch::{compile_statement, DispatchError};
@@ -945,7 +945,8 @@ mod mcdc_vectors {
     // resolution, which rejects a function call.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__join_802__v1_same_name_and_distinctness_matches_the_slot() {
+    fn mcdc__codegen_row_select_aggregate_join_matches_agg_slot_ddfa3547__v1_same_name_and_distinctness_matches_the_slot(
+    ) {
         let p = ok(
             "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k ORDER BY count(b.w)",
             &two_tables(),
@@ -954,7 +955,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__join_802__v2_different_name_does_not_match() {
+    fn mcdc__codegen_row_select_aggregate_join_matches_agg_slot_ddfa3547__v2_different_name_does_not_match(
+    ) {
         let e = err_text(
             "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k ORDER BY sum(b.w)",
             &two_tables(),
@@ -966,7 +968,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__join_802__v3_same_name_but_different_distinctness_does_not_match() {
+    fn mcdc__codegen_row_select_aggregate_join_matches_agg_slot_ddfa3547__v3_same_name_but_different_distinctness_does_not_match(
+    ) {
         let e = err_text(
             "SELECT a.k, count(b.w) FROM a JOIN b ON a.k = b.k GROUP BY a.k \
              ORDER BY count(DISTINCT b.w)",

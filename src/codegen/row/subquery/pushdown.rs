@@ -503,7 +503,7 @@ mod tests {
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::push_down_where_predicates;
@@ -517,7 +517,7 @@ mod mcdc_vectors {
         }
     }
 
-    // pushdown_133: the same six-way guard in `subquery_pushdown_safe`.
+    // codegen_row_subquery_pushdown_subquery_pushdown_safe_fa31beb2: the same six-way guard in `subquery_pushdown_safe`.
     // Observable: the outer `WHERE x > 1` lands in the subquery's own
     // `WHERE` only when every leaf is false.
     fn pushed_down(inner: &str) -> bool {
@@ -530,39 +530,46 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__pushdown_133__v1_plain_subquery_receives_the_predicate() {
+    fn mcdc__codegen_row_subquery_pushdown_subquery_pushdown_safe_fa31beb2__v1_plain_subquery_receives_the_predicate(
+    ) {
         assert!(pushed_down("SELECT a AS x FROM u"));
     }
 
     #[test]
-    fn mcdc__pushdown_133__v2_distinct_blocks_pushdown() {
+    fn mcdc__codegen_row_subquery_pushdown_subquery_pushdown_safe_fa31beb2__v2_distinct_blocks_pushdown(
+    ) {
         assert!(!pushed_down("SELECT DISTINCT a AS x FROM u"));
     }
 
     #[test]
-    fn mcdc__pushdown_133__v3_having_blocks_pushdown() {
+    fn mcdc__codegen_row_subquery_pushdown_subquery_pushdown_safe_fa31beb2__v3_having_blocks_pushdown(
+    ) {
         assert!(!pushed_down("SELECT a AS x FROM u GROUP BY a HAVING a > 0"));
     }
 
     #[test]
-    fn mcdc__pushdown_133__v4_group_by_blocks_pushdown() {
+    fn mcdc__codegen_row_subquery_pushdown_subquery_pushdown_safe_fa31beb2__v4_group_by_blocks_pushdown(
+    ) {
         assert!(!pushed_down("SELECT a AS x FROM u GROUP BY a"));
     }
 
     #[test]
-    fn mcdc__pushdown_133__v5_limit_blocks_pushdown() {
+    fn mcdc__codegen_row_subquery_pushdown_subquery_pushdown_safe_fa31beb2__v5_limit_blocks_pushdown(
+    ) {
         assert!(!pushed_down("SELECT a AS x FROM u LIMIT 1"));
     }
 
     #[test]
-    fn mcdc__pushdown_133__v6_compound_blocks_pushdown() {
+    fn mcdc__codegen_row_subquery_pushdown_subquery_pushdown_safe_fa31beb2__v6_compound_blocks_pushdown(
+    ) {
         assert!(!pushed_down(
             "SELECT a AS x FROM u UNION ALL SELECT a AS x FROM u"
         ));
     }
 
     #[test]
-    fn mcdc__pushdown_133__v7_aggregate_blocks_pushdown() {
+    fn mcdc__codegen_row_subquery_pushdown_subquery_pushdown_safe_fa31beb2__v7_aggregate_blocks_pushdown(
+    ) {
         assert!(!pushed_down("SELECT max(a) AS x FROM u"));
     }
 }

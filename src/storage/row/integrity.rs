@@ -827,15 +827,15 @@ mod tests {
     #[allow(non_snake_case)]
     mod mcdc_vectors {
         //! Tagged MC/DC vectors for this file's multi-leaf decisions
-        //! (`mcdc__<file-stem>_<line>__vN`, joined to
+        //! (`mcdc__<id>__vN`, joined to
         //! `tests/mcdc/obligations.json` by `make test-mcdc`; db-core#299
         //! follow-up).
 
         use super::*;
 
-        // integrity_285: `trunk > header.page_count || !seen_trunks.insert(trunk)`
+        // storage_row_integrity_check_freelist_d8800eb6: `trunk > header.page_count || !seen_trunks.insert(trunk)`
         #[test]
-        fn mcdc__integrity_285__v1_both_false_walks_the_chain() {
+        fn mcdc__storage_row_integrity_check_freelist_d8800eb6__v1_both_false_walks_the_chain() {
             let mut header = fake_header(2);
             header.freelist_trunk_page = 1;
             header.freelist_page_count = 1;
@@ -852,7 +852,7 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__integrity_285__v2_trunk_out_of_range() {
+        fn mcdc__storage_row_integrity_check_freelist_d8800eb6__v2_trunk_out_of_range() {
             let mut header = fake_header(2);
             header.freelist_trunk_page = 5;
             header.freelist_page_count = 1;
@@ -869,7 +869,7 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__integrity_285__v3_trunk_in_range_but_repeated() {
+        fn mcdc__storage_row_integrity_check_freelist_d8800eb6__v3_trunk_in_range_but_repeated() {
             let mut header = fake_header(2);
             header.freelist_trunk_page = 1;
             header.freelist_page_count = 99;
@@ -886,9 +886,9 @@ mod tests {
                 .any(|p| p.contains("out of range or repeated")));
         }
 
-        // integrity_306: `*leaf == 0 || *leaf > header.page_count`
+        // storage_row_integrity_check_freelist_97560fcb: `*leaf == 0 || *leaf > header.page_count`
         #[test]
-        fn mcdc__integrity_306__v1_both_false_is_silent() {
+        fn mcdc__storage_row_integrity_check_freelist_97560fcb__v1_both_false_is_silent() {
             let mut header = fake_header(5);
             header.freelist_trunk_page = 1;
             header.freelist_page_count = 2;
@@ -903,7 +903,7 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__integrity_306__v2_leaf_zero_is_out_of_range() {
+        fn mcdc__storage_row_integrity_check_freelist_97560fcb__v2_leaf_zero_is_out_of_range() {
             let mut header = fake_header(5);
             header.freelist_trunk_page = 1;
             header.freelist_page_count = 2;
@@ -920,7 +920,8 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__integrity_306__v3_leaf_above_page_count_is_out_of_range() {
+        fn mcdc__storage_row_integrity_check_freelist_97560fcb__v3_leaf_above_page_count_is_out_of_range(
+        ) {
             let mut header = fake_header(2);
             header.freelist_trunk_page = 1;
             header.freelist_page_count = 2;

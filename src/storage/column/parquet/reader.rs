@@ -728,13 +728,14 @@ mod tests {
         out
     }
 
-    // reader_719: `idx < n && levels[idx] == 1` in the test-only
+    // storage_column_parquet_reader_encode_def_levels_62d37561: `idx < n && levels[idx] == 1` in the test-only
     // encode_def_levels helper's bit-packing loop. All three exercised by
     // one 3-level input: idx=0 (both true), idx=1 (idx < n true, level !=
     // 1), idx=3..7 (idx < n false, past the level list into padding).
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__reader_719__v1_in_range_and_level_one_sets_the_bit() {
+    fn mcdc__storage_column_parquet_reader_encode_def_levels_62d37561__v1_in_range_and_level_one_sets_the_bit(
+    ) {
         let encoded = encode_def_levels(&[1, 0, 1]);
         assert_eq!(encoded, vec![2, 0, 0, 0, 3, 0b0000_0101]);
         assert_eq!(
@@ -746,7 +747,8 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__reader_719__v2_in_range_but_level_not_one_clears_the_bit() {
+    fn mcdc__storage_column_parquet_reader_encode_def_levels_62d37561__v2_in_range_but_level_not_one_clears_the_bit(
+    ) {
         let encoded = encode_def_levels(&[1, 0, 1]);
         assert_eq!(
             encoded[5] & 0b0000_0010,
@@ -757,7 +759,8 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__reader_719__v3_out_of_range_padding_bits_are_clear() {
+    fn mcdc__storage_column_parquet_reader_encode_def_levels_62d37561__v3_out_of_range_padding_bits_are_clear(
+    ) {
         let encoded = encode_def_levels(&[1, 0, 1]);
         assert_eq!(
             encoded[5] & 0b1111_1000,

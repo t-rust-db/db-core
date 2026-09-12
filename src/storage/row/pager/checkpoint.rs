@@ -247,15 +247,16 @@ mod tests {
 
     mod mcdc_vectors {
         //! Tagged MC/DC vectors for this file's multi-leaf decisions
-        //! (`mcdc__<file-stem>_<line>__vN`, joined to
+        //! (`mcdc__<id>__vN`, joined to
         //! `tests/mcdc/obligations.json` by `make test-mcdc`; db-core#299
         //! follow-up).
 
         use super::*;
 
-        // checkpoint_178: `*page_num == 0 || *page_num > max_page`
+        // storage_row_pager_checkpoint_checkpoint_passive_2a432e1c: `*page_num == 0 || *page_num > max_page`
         #[test]
-        fn mcdc__checkpoint_178__v1_both_false_is_backfilled() {
+        fn mcdc__storage_row_pager_checkpoint_checkpoint_passive_2a432e1c__v1_both_false_is_backfilled(
+        ) {
             let (vfs, db_path) = setup(512);
             let wal_path = companion_path(&db_path, "-wal");
             let header = WalHeader::new(true, 512, 0x1111, 0x2222, 1);
@@ -268,7 +269,8 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__checkpoint_178__v2_page_num_zero_is_skipped() {
+        fn mcdc__storage_row_pager_checkpoint_checkpoint_passive_2a432e1c__v2_page_num_zero_is_skipped(
+        ) {
             let (vfs, db_path) = setup(512);
             let wal_path = companion_path(&db_path, "-wal");
             let header = WalHeader::new(true, 512, 0x3333, 0x4444, 1);
@@ -286,7 +288,8 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__checkpoint_178__v3_page_num_above_max_page_is_skipped() {
+        fn mcdc__storage_row_pager_checkpoint_checkpoint_passive_2a432e1c__v3_page_num_above_max_page_is_skipped(
+        ) {
             let (vfs, db_path) = setup(512);
             let wal_path = companion_path(&db_path, "-wal");
             let header = WalHeader::new(true, 512, 0x5555, 0x6666, 1);

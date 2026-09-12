@@ -192,7 +192,7 @@ fn expand_table_ref(
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::ExpandViews;
@@ -208,7 +208,7 @@ mod mcdc_vectors {
         }
     }
 
-    // views_83: `views.is_empty() || !select_references_any_view(self, views)`
+    // codegen_row_subquery_views_expand_views_08fa764e: `views.is_empty() || !select_references_any_view(self, views)`
     fn view_v() -> Vec<ViewSchema> {
         vec![ViewSchema {
             name: "v".to_string(),
@@ -217,7 +217,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__views_83__v1_no_views_in_scope_borrows() {
+    fn mcdc__codegen_row_subquery_views_expand_views_08fa764e__v1_no_views_in_scope_borrows() {
         let select = sel("SELECT b FROM v");
         let resolved = resolve_views(&[]);
         assert!(matches!(
@@ -227,7 +227,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__views_83__v2_views_in_scope_but_unreferenced_borrows() {
+    fn mcdc__codegen_row_subquery_views_expand_views_08fa764e__v2_views_in_scope_but_unreferenced_borrows(
+    ) {
         let select = sel("SELECT a FROM t");
         let resolved = resolve_views(&view_v());
         assert!(matches!(
@@ -237,7 +238,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__views_83__v3_referenced_view_is_expanded_into_an_owned_copy() {
+    fn mcdc__codegen_row_subquery_views_expand_views_08fa764e__v3_referenced_view_is_expanded_into_an_owned_copy(
+    ) {
         let select = sel("SELECT b FROM v");
         let resolved = resolve_views(&view_v());
         match select.expand_views(&resolved) {

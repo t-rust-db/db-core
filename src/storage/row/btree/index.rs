@@ -1029,7 +1029,8 @@ mod tests {
     /// leaves true.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__index_1092__v1_in_range_and_matches() {
+    fn mcdc__storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_559109f7__v1_in_range_and_matches(
+    ) {
         let expect_order = ["key1"];
         let idx = 0;
         let key0 = "key1";
@@ -1039,10 +1040,11 @@ mod tests {
     /// #52 tagged MC/DC vector (obligation `index_868`): leaf A
     /// (`idx < expect_order.len()`) true, leaf B (key match) false —
     /// independence pair for B against
-    /// `mcdc__index_1092__v1_in_range_and_matches`.
+    /// `mcdc__storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_559109f7__v1_in_range_and_matches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__index_1092__v2_in_range_but_does_not_match() {
+    fn mcdc__storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_559109f7__v2_in_range_but_does_not_match(
+    ) {
         let expect_order = ["key1"];
         let idx = 0;
         let key0 = "key2";
@@ -1051,11 +1053,12 @@ mod tests {
 
     /// #52 tagged MC/DC vector (obligation `index_868`): leaf A false —
     /// independence pair for A against
-    /// `mcdc__index_1092__v1_in_range_and_matches` (short-circuits, so B
+    /// `mcdc__storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_559109f7__v1_in_range_and_matches` (short-circuits, so B
     /// is never evaluated).
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__index_1092__v3_out_of_range() {
+    fn mcdc__storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_559109f7__v3_out_of_range(
+    ) {
         let expect_order = ["key1"];
         // `black_box` defeats constant-folding so rustc can't statically
         // prove `expect_order[idx]` out of bounds — it never runs, since

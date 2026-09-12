@@ -624,7 +624,7 @@ fn emit_update_row_body(
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::{
@@ -667,7 +667,7 @@ mod mcdc_vectors {
         program.instructions.iter().any(|i| i.opcode == opcode)
     }
 
-    // update_346: `used_range_seek && range_seek_touches_scanned_index`.
+    // codegen_row_stmt_update_compile_update_with_catalog_8d819a73: `used_range_seek && range_seek_touches_scanned_index`.
     // Observable: the two-pass plan opens an ephemeral rowid table.
     fn update_program(sql: &str) -> Program {
         let update = match parse_update(sql) {
@@ -679,13 +679,15 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__update_346__v1_range_seek_over_an_index_the_set_touches_uses_two_passes() {
+    fn mcdc__codegen_row_stmt_update_compile_update_with_catalog_8d819a73__v1_range_seek_over_an_index_the_set_touches_uses_two_passes(
+    ) {
         let p = update_program("UPDATE t SET a = 9 WHERE a BETWEEN 1 AND 5");
         assert!(has(&p, Opcode::OpenEphemeral), "{p:?}");
     }
 
     #[test]
-    fn mcdc__update_346__v2_range_seek_over_an_untouched_index_is_single_pass() {
+    fn mcdc__codegen_row_stmt_update_compile_update_with_catalog_8d819a73__v2_range_seek_over_an_untouched_index_is_single_pass(
+    ) {
         let p = update_program("UPDATE t SET b = 9 WHERE a BETWEEN 1 AND 5");
         assert!(
             has(&p, Opcode::IdxRowid) && !has(&p, Opcode::OpenEphemeral),
@@ -694,7 +696,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__update_346__v3_no_range_seek_is_a_plain_scan() {
+    fn mcdc__codegen_row_stmt_update_compile_update_with_catalog_8d819a73__v3_no_range_seek_is_a_plain_scan(
+    ) {
         let p = update_program("UPDATE t SET a = 9 WHERE b = 1");
         assert!(
             !has(&p, Opcode::IdxRowid) && !has(&p, Opcode::OpenEphemeral),

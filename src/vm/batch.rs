@@ -1,15 +1,4 @@
 //! `BatchExecutor`: the vectorized/columnar query VM, one of `sql-vm`'s
-//!
-//! **MC/DC obligation ids (db-core#219):** `cargo-mvl-mcdc` names an
-//! obligation `<file-stem>_<line>`, so this file and
-//! `src/codegen/batch.rs` -- same stem, both long -- collide whenever a
-//! decision in each sits on the same line number, and
-//! `unit_mcdc_discharge` rejects the snapshot. This doc block is
-//! deliberately eleven lines long: it offsets every decision below so
-//! that none currently shares a line with a `codegen::batch` decision.
-//! If a later edit re-introduces a collision, the fix is the one that
-//! test's message gives (shift one of the two decisions), and this
-//! block is the cheapest place to do it.
 //! three executors (see crate root docs) -- extracted from column-rs's
 //! private `src/vm.rs`, which was its only consumer, so any engine
 //! executing queries in batches over `sql_expr`-compiled programs
@@ -481,7 +470,6 @@ impl Opcode {
     /// no source text left at execution time, but there's always a specific
     /// instruction that failed).
     pub fn name(&self) -> &'static str {
-        // #264: line-shift buffer to avoid an MC/DC id collision.
         match self {
             Opcode::LoadColumn { .. } => "LoadColumn",
             Opcode::LoadConst { .. } => "LoadConst",
@@ -785,7 +773,6 @@ pub struct TopN {
 /// and `DESC`).
 pub fn compare_for_order(a: &Value, b: &Value, descending: bool) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    // #264: line-shift buffer to avoid an MC/DC id collision.
     match (matches!(a, Value::Null), matches!(b, Value::Null)) {
         (true, true) => Ordering::Equal,
         (true, false) => Ordering::Greater,
@@ -863,7 +850,6 @@ fn top_n_reduce(rows: Vec<Vec<Value>>, spec: &TopN) -> Vec<Vec<Value>> {
         if heap.len() < spec.limit {
             heap.push(item);
         } else if let Some(worst) = heap.peek() {
-            // #307: line-shift buffer to avoid an MC/DC id collision.
             if item.cmp(worst) == std::cmp::Ordering::Less {
                 heap.pop();
                 heap.push(item);
@@ -1050,7 +1036,6 @@ impl Hash for JoinKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         for value in &self.0 {
             // Hash by variant too, so Int(1) and Str("1") never collide as keys.
-            // #266: line-shift buffer to avoid an MC/DC id collision.
             match value {
                 Value::Int(v) => {
                     0u8.hash(state);
@@ -1326,7 +1311,6 @@ impl Vm {
         while let Some(op) = program.get(pc) {
             self.check_step_limit(op.name())?;
             match op {
-                // #266: line-shift buffer to avoid an MC/DC id collision.
                 Opcode::NextSegment { loop_start } => match source.next_batch() {
                     Some(next) => {
                         batch = next;
@@ -1397,7 +1381,6 @@ impl Vm {
                     .map(|&a| self.reg(a, opcode))
                     .collect::<Result<_>>()?;
                 let num_rows = arg_regs.first().map_or(batch.num_rows, |r| r.len());
-                // #307: line-shift buffer to avoid an MC/DC id collision.
                 if arg_regs.iter().any(|r| r.len() != num_rows) {
                     return Err(VmError::RegisterLengthMismatch { opcode });
                 }
@@ -1592,7 +1575,6 @@ impl Vm {
                     }
                 })?;
                 for c in key_columns.iter().chain(&payload_columns) {
-                    // #265: line-shift buffer to avoid an MC/DC id collision.
                     if c.len() != base_len {
                         return Err(VmError::RegisterLengthMismatch { opcode });
                     }
@@ -1672,7 +1654,6 @@ impl Vm {
                             emitted.push((row, Some(slot)));
                         }
                     });
-                    // #266: line-shift buffer to avoid an MC/DC id collision.
                     if !matched {
                         if should_emit(*kind, false, false) {
                             emitted.push((row, None));
@@ -1874,9 +1855,6 @@ impl Vm {
     clippy::arithmetic_side_effects,
     reason = "every column slice holds `num_rows` values and every index in `indices`/`partitions` was drawn from `0..num_rows`; `pos + 1` and the running counters are bounded by `num_rows`"
 )]
-// #262: this blank comment line exists only to shift the line numbers of
-// the MC/DC decisions below off the same-basename collision with
-// `src/codegen/batch.rs` (`cargo-mvl-mcdc` ids by basename+line, not path).
 fn compute_window(
     func: WindowFunc,
     offset: Option<i64>,
@@ -1903,12 +1881,8 @@ fn compute_window(
     for key in &partition_order {
         let mut indices = partitions[key].clone();
         indices.sort_by(|&a, &b| {
-            // #263: keep this loop on its own line -- otherwise its
-            // decision collides on line number (basename+line id) with
-            // an unrelated one in src/codegen/batch.rs.
             for (col, descending) in order_cols {
                 let ord = compare_for_order(&col[a], &col[b], *descending);
-                // #307: line-shift buffer to avoid an MC/DC id collision.
                 if ord != std::cmp::Ordering::Equal {
                     return ord;
                 }
@@ -1916,7 +1890,6 @@ fn compute_window(
             std::cmp::Ordering::Equal
         });
 
-        // #265: line-shift buffer to avoid an MC/DC id collision.
         match func {
             WindowFunc::RowNumber => {
                 for (pos, &row) in indices.iter().enumerate() {
@@ -1962,7 +1935,6 @@ fn compute_window(
                 };
                 for (pos, &row) in indices.iter().enumerate() {
                     let pos = len_to_i64(pos);
-                    // #263: line-shift buffer, see the comment above `compute_window`.
                     let target = if func == WindowFunc::Lag {
                         pos - offset
                     } else {
@@ -2004,7 +1976,6 @@ fn compute_window(
             }
             WindowFunc::Sum | WindowFunc::Avg | WindowFunc::Count => {
                 // No ORDER BY: the frame is the whole partition -- one aggregate value for every row.
-                // #265: line-shift buffer to avoid an MC/DC id collision.
                 if order_cols.is_empty() {
                     let agg = whole_partition_aggregate(func, arg_col, &indices)?;
                     for &row in &indices {
@@ -2030,7 +2001,6 @@ fn compute_window(
                         output[row] = match func {
                             WindowFunc::Count => Value::Int(running_count),
                             WindowFunc::Sum => {
-                                // #307: line-shift buffer to avoid an MC/DC id collision.
                                 if running_count > 0 {
                                     Value::Float(running_sum)
                                 } else {
@@ -2072,7 +2042,6 @@ fn whole_partition_aggregate(
     arg_col: Option<&[Value]>,
     indices: &[usize],
 ) -> Result<Value> {
-    // #263: line-shift buffer to avoid an MC/DC id collision.
     if func == WindowFunc::Count {
         let count = match arg_col {
             Some(a) => indices
@@ -2124,7 +2093,6 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
             }
         }
         AggFunc::Avg => {
-            // #265: line-shift buffer to avoid an MC/DC id collision.
             if non_null.is_empty() {
                 Value::Null
             } else {
@@ -2149,19 +2117,16 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
 fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
     // `IsNull`/`IsNotNull` must observe a `Null` operand, so they run
     // before the null-propagation rule below.
-    // #307: line-shift buffer to avoid an MC/DC id collision.
     if matches!(op, MapOp::IsNull) {
         return Value::Bool(matches!(a, Value::Null));
     }
     if matches!(op, MapOp::IsNotNull) {
         return Value::Bool(!matches!(a, Value::Null));
     }
-    // #264: line-shift buffer to avoid an MC/DC id collision.
     if matches!(a, Value::Null) || matches!(b, Value::Null) {
         return Value::Null;
     }
     use std::cmp::Ordering::{Equal, Greater, Less};
-    // #264: line-shift buffer to avoid an MC/DC id collision.
     match op {
         MapOp::Add => arithmetic(op, a, b, |x, y| x + y),
         MapOp::Sub => arithmetic(op, a, b, |x, y| x - y),
@@ -2190,9 +2155,6 @@ fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
         // `Null`); the same semantics here keep this match total without
         // an `unreachable!` the qualified subset forbids.
         MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),
-        // #262: keep this on its own line -- collides on line number
-        // (basename+line id) with an unrelated decision in
-        // src/codegen/batch.rs otherwise.
         MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),
         MapOp::MaskIf => {
             // MaskIf keeps `a` wherever the predicate register is true.
@@ -2220,7 +2182,6 @@ fn arithmetic(op: MapOp, a: &Value, b: &Value, f: impl Fn(f64, f64) -> f64) -> V
         return Value::Null;
     };
     let result = f(x, y);
-    // #307: line-shift buffer to avoid an MC/DC id collision.
     if matches!(a, Value::Int(_)) && matches!(b, Value::Int(_)) && op != MapOp::Div {
         // `as` from `f64` saturates at the `i64` bounds and maps NaN to
         // 0 -- the intended overflow behavior for Int arithmetic here.
@@ -2454,7 +2415,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2147__v1_a_null_propagates() {
+    fn mcdc__vm_batch_apply_map_op_0e991c46__v1_a_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2482,7 +2443,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2147__v2_b_null_propagates() {
+    fn mcdc__vm_batch_apply_map_op_0e991c46__v2_b_null_propagates() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2510,7 +2471,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2147__v3_neither_null_computes_result() {
+    fn mcdc__vm_batch_apply_map_op_0e991c46__v3_neither_null_computes_result() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2538,7 +2499,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2203__v1_both_int_non_div_stays_int() {
+    fn mcdc__vm_batch_arithmetic_f08e9d82__v1_both_int_non_div_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2566,7 +2527,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2203__v2_a_not_int_promotes_to_float() {
+    fn mcdc__vm_batch_arithmetic_f08e9d82__v2_a_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2594,7 +2555,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2203__v3_b_not_int_promotes_to_float() {
+    fn mcdc__vm_batch_arithmetic_f08e9d82__v3_b_not_int_promotes_to_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -2622,7 +2583,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_2203__v4_div_promotes_to_float_even_with_two_ints() {
+    fn mcdc__vm_batch_arithmetic_f08e9d82__v4_div_promotes_to_float_even_with_two_ints() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(

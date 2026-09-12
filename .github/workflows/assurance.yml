@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
 
 env:
-  MVL_RUST_REV: "a64eb33e7c9ef9ad031d22a70405e59aa1ad3cb0"
+  MVL_RUST_REV: "5a5ffd5a8e79298271a65649b3f586ebce2ffb31"
 
 jobs:
   # Line coverage of the SQLite profile -- the exact feature set sqlite-rs

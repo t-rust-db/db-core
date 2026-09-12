@@ -796,7 +796,7 @@ pub fn compile_select_compound(
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::{compile_select_with_catalog, TableSchema};
@@ -835,7 +835,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__entry_152__v1_bare_expression_list_compiles_to_one_row() {
+    fn mcdc__codegen_row_select_entry_compile_select_no_from_b912fd96__v1_bare_expression_list_compiles_to_one_row(
+    ) {
         let p = compile_no_from(&parsed("SELECT 1 + 1")).unwrap();
         assert!(
             has(&p, Opcode::ResultRow) && !has(&p, Opcode::OpenRead),
@@ -844,19 +845,19 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__entry_152__v2_where_is_rejected() {
+    fn mcdc__codegen_row_select_entry_compile_select_no_from_b912fd96__v2_where_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t WHERE 1 = 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_152__v3_group_by_is_rejected() {
+    fn mcdc__codegen_row_select_entry_compile_select_no_from_b912fd96__v3_group_by_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t GROUP BY 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_152__v4_having_is_rejected() {
+    fn mcdc__codegen_row_select_entry_compile_select_no_from_b912fd96__v4_having_is_rejected() {
         let mut select = parsed("SELECT 1");
         select.having = parsed("SELECT 1 FROM t GROUP BY 1 HAVING 1 = 1").having;
         let e = compile_no_from(&select).unwrap_err();
@@ -864,25 +865,25 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__entry_152__v5_order_by_is_rejected() {
+    fn mcdc__codegen_row_select_entry_compile_select_no_from_b912fd96__v5_order_by_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t ORDER BY 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_152__v6_limit_is_rejected() {
+    fn mcdc__codegen_row_select_entry_compile_select_no_from_b912fd96__v6_limit_is_rejected() {
         let e = compile_no_from(&from_less("SELECT 1 FROM t LIMIT 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_152__v7_distinct_is_rejected() {
+    fn mcdc__codegen_row_select_entry_compile_select_no_from_b912fd96__v7_distinct_is_rejected() {
         let e = compile_no_from(&parsed("SELECT DISTINCT 1")).unwrap_err();
         assert!(e.contains(NO_FROM_REJECTION), "{e}");
     }
 
     #[test]
-    fn mcdc__entry_152__v8_compound_is_rejected() {
+    fn mcdc__codegen_row_select_entry_compile_select_no_from_b912fd96__v8_compound_is_rejected() {
         let mut select = parsed("SELECT 1");
         select.compound = from_less("SELECT 1 FROM t UNION ALL SELECT 2 FROM t").compound;
         let e = compile_no_from(&select).unwrap_err();
