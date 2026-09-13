@@ -4010,9 +4010,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "parser_row_error_parse_bool_expr_46bdae1e",
+    "file": "src/parser/row/error.rs",
+    "line": 110,
+    "decision": "match parser.expr() {\n        Ok(expr) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(expr)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_row_error_parse_bool_expr_61b403e2",
+    "file": "src/parser/row/error.rs",
+    "line": 111,
+    "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(expr)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "parser_row_error_parse_insert_e645d4d6",
     "file": "src/parser/row/error.rs",
-    "line": 108,
+    "line": 131,
     "decision": "match parser.parse_insert_stmt() {\n        Ok(insert) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(insert)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4022,7 +4042,7 @@
   {
     "id": "parser_row_error_parse_insert_4c16de47",
     "file": "src/parser/row/error.rs",
-    "line": 109,
+    "line": 132,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(insert)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4032,7 +4052,7 @@
   {
     "id": "parser_row_error_parse_delete_9eedf184",
     "file": "src/parser/row/error.rs",
-    "line": 129,
+    "line": 152,
     "decision": "match parser.parse_delete_stmt() {\n        Ok(delete) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(delete)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4042,7 +4062,7 @@
   {
     "id": "parser_row_error_parse_delete_a7ad88af",
     "file": "src/parser/row/error.rs",
-    "line": 130,
+    "line": 153,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(delete)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4052,7 +4072,7 @@
   {
     "id": "parser_row_error_parse_update_8eaa70cb",
     "file": "src/parser/row/error.rs",
-    "line": 150,
+    "line": 173,
     "decision": "match parser.parse_update_stmt() {\n        Ok(update) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(update)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4062,7 +4082,7 @@
   {
     "id": "parser_row_error_parse_update_d50b0ad0",
     "file": "src/parser/row/error.rs",
-    "line": 151,
+    "line": 174,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(update)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4072,7 +4092,7 @@
   {
     "id": "parser_row_error_parse_create_table_3a0ec7e5",
     "file": "src/parser/row/error.rs",
-    "line": 171,
+    "line": 194,
     "decision": "match parser.parse_create_table_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4082,7 +4102,7 @@
   {
     "id": "parser_row_error_parse_create_table_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 172,
+    "line": 195,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4092,7 +4112,7 @@
   {
     "id": "parser_row_error_parse_create_index_68bd7a47",
     "file": "src/parser/row/error.rs",
-    "line": 192,
+    "line": 215,
     "decision": "match parser.parse_create_index_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4102,7 +4122,7 @@
   {
     "id": "parser_row_error_parse_create_index_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 193,
+    "line": 216,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4112,7 +4132,7 @@
   {
     "id": "parser_row_error_parse_create_view_8f0f383e",
     "file": "src/parser/row/error.rs",
-    "line": 213,
+    "line": 236,
     "decision": "match parser.parse_create_view_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4122,7 +4142,7 @@
   {
     "id": "parser_row_error_parse_create_view_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 214,
+    "line": 237,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4132,7 +4152,7 @@
   {
     "id": "parser_row_error_parse_drop_view_432cca4e",
     "file": "src/parser/row/error.rs",
-    "line": 234,
+    "line": 257,
     "decision": "match parser.parse_drop_view_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4142,7 +4162,7 @@
   {
     "id": "parser_row_error_parse_drop_view_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 235,
+    "line": 258,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4152,7 +4172,7 @@
   {
     "id": "parser_row_error_parse_drop_table_cb90f58a",
     "file": "src/parser/row/error.rs",
-    "line": 255,
+    "line": 278,
     "decision": "match parser.parse_drop_table_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4162,7 +4182,7 @@
   {
     "id": "parser_row_error_parse_drop_table_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 256,
+    "line": 279,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4172,7 +4192,7 @@
   {
     "id": "parser_row_error_parse_drop_index_ae499c08",
     "file": "src/parser/row/error.rs",
-    "line": 276,
+    "line": 299,
     "decision": "match parser.parse_drop_index_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4182,7 +4202,7 @@
   {
     "id": "parser_row_error_parse_drop_index_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 277,
+    "line": 300,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4192,7 +4212,7 @@
   {
     "id": "parser_row_error_parse_begin_a8e36cd8",
     "file": "src/parser/row/error.rs",
-    "line": 297,
+    "line": 320,
     "decision": "match parser.parse_begin_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4202,7 +4222,7 @@
   {
     "id": "parser_row_error_parse_begin_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 298,
+    "line": 321,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4212,7 +4232,7 @@
   {
     "id": "parser_row_error_parse_commit_15328f84",
     "file": "src/parser/row/error.rs",
-    "line": 318,
+    "line": 341,
     "decision": "match parser.parse_commit_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4222,7 +4242,7 @@
   {
     "id": "parser_row_error_parse_commit_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 319,
+    "line": 342,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4232,7 +4252,7 @@
   {
     "id": "parser_row_error_parse_rollback_f9ded0f0",
     "file": "src/parser/row/error.rs",
-    "line": 339,
+    "line": 362,
     "decision": "match parser.parse_rollback_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4242,7 +4262,7 @@
   {
     "id": "parser_row_error_parse_rollback_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 340,
+    "line": 363,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4252,7 +4272,7 @@
   {
     "id": "parser_row_error_parse_pragma_82d0e065",
     "file": "src/parser/row/error.rs",
-    "line": 362,
+    "line": 385,
     "decision": "match parser.parse_pragma_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4262,7 +4282,7 @@
   {
     "id": "parser_row_error_parse_pragma_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 363,
+    "line": 386,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4272,7 +4292,7 @@
   {
     "id": "parser_row_error_parse_analyze_0dcf4796",
     "file": "src/parser/row/error.rs",
-    "line": 384,
+    "line": 407,
     "decision": "match parser.parse_analyze_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4282,7 +4302,7 @@
   {
     "id": "parser_row_error_parse_analyze_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 385,
+    "line": 408,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4292,7 +4312,7 @@
   {
     "id": "parser_row_error_assert_accepted_d2cdaf5e",
     "file": "src/parser/row/error.rs",
-    "line": 404,
+    "line": 427,
     "decision": "match outcome {\n            ParseOutcome::Accepted(_) => {}\n            other => panic!(\"expected accepted for {src:?}, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4302,7 +4322,7 @@
   {
     "id": "parser_row_error_assert_unsupported_3220e95d",
     "file": "src/parser/row/error.rs",
-    "line": 411,
+    "line": 434,
     "decision": "match outcome {\n            ParseOutcome::Unsupported { .. } => {}\n            other => panic!(\"expected unsupported for {src:?}, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4312,7 +4332,7 @@
   {
     "id": "parser_row_error_assert_invalid_05ebdda7",
     "file": "src/parser/row/error.rs",
-    "line": 418,
+    "line": 441,
     "decision": "match outcome {\n            ParseOutcome::Invalid { .. } => {}\n            other => panic!(\"expected invalid for {src:?}, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7992,7 +8012,7 @@
   {
     "id": "codegen_batch_compile_6a3e6d19",
     "file": "src/codegen/batch.rs",
-    "line": 960,
+    "line": 995,
     "decision": "select.scope.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8002,7 +8022,7 @@
   {
     "id": "codegen_batch_compile_c6aad5d2",
     "file": "src/codegen/batch.rs",
-    "line": 963,
+    "line": 998,
     "decision": "has_range_vector_call(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8012,7 +8032,7 @@
   {
     "id": "codegen_batch_compile_24348487",
     "file": "src/codegen/batch.rs",
-    "line": 1001,
+    "line": 1036,
     "decision": "match item {\n            Item::Agg(_, arg, filter) => {\n                let base = arg.as_ref().map(|name| ctx.load_column(name));\n                agg_srcs.push(mask_filtered_source(&mut ctx, base, filter.as_ref()));\n            }\n            // Plain projected columns are emitted (not aggregated), but they\n            // must be loaded here for the same reason as the keys above: a\n            // column first loaded below the Filter keeps its full pre-filter\n            // length while the filtered registers shrink, and Emit then\n            // indexes past the end of the short ones. `load_column` memoizes,\n            // so the projection code further down reuses these registers\n            // instead of emitting a second LoadColumn.\n            Item::Column(name) if group_by.is_empty() => {\n                ctx.load_column(name);\n                agg_srcs.push(None);\n            }\n            Item::Expr(expr) if group_by.is_empty() => {\n                let mut cols = Vec::new();\n                collect_expr_columns(expr, &mut cols);\n                for name in &cols {\n                    ctx.load_column(name);\n                }\n                agg_srcs.push(None);\n            }\n            _ => agg_srcs.push(None),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8022,7 +8042,7 @@
   {
     "id": "codegen_batch_compile_0aa91de1",
     "file": "src/codegen/batch.rs",
-    "line": 1013,
+    "line": 1048,
     "decision": "group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8032,7 +8052,7 @@
   {
     "id": "codegen_batch_compile_0aa91de1_2",
     "file": "src/codegen/batch.rs",
-    "line": 1017,
+    "line": 1052,
     "decision": "group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8042,7 +8062,7 @@
   {
     "id": "codegen_batch_compile_fee390fc",
     "file": "src/codegen/batch.rs",
-    "line": 1029,
+    "line": 1064,
     "decision": "let Some(where_clause) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -8052,7 +8072,7 @@
   {
     "id": "codegen_batch_compile_36d80eeb",
     "file": "src/codegen/batch.rs",
-    "line": 1047,
+    "line": 1082,
     "decision": "let Item::Agg(func, _, _) = item",
     "conditions": 1,
     "vectors_required": 2,
@@ -8062,7 +8082,7 @@
   {
     "id": "codegen_batch_compile_28487222",
     "file": "src/codegen/batch.rs",
-    "line": 1052,
+    "line": 1087,
     "decision": "match func {\n                AggFunc::Sum => Some(AggPart::Sum),\n                AggFunc::Count => Some(AggPart::Count),\n                AggFunc::Min => Some(AggPart::Min),\n                AggFunc::Max => Some(AggPart::Max),\n                AggFunc::Avg => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8072,7 +8092,7 @@
   {
     "id": "codegen_batch_compile_b04f7d58",
     "file": "src/codegen/batch.rs",
-    "line": 1059,
+    "line": 1094,
     "decision": "match simple_part {\n                Some(part) => {\n                    let dst = ctx.alloc();\n                    aggs.push((*func, src));\n                    agg_dst.push(dst);\n                    agg_parts.push(part);\n                    emit_regs.push(dst);\n                }\n                None => {\n                    let sum_dst = ctx.alloc();\n                    let count_dst = ctx.alloc();\n                    aggs.push((AggFunc::Sum, src));\n                    agg_dst.push(sum_dst);\n                    aggs.push((AggFunc::Count, src));\n                    agg_dst.push(count_dst);\n                    let sum_pos = emit_regs.len();\n                    agg_parts.push(AggPart::Avg(sum_pos, sum_pos.saturating_add(1)));\n                    emit_regs.push(sum_dst);\n                    emit_regs.push(count_dst);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8082,7 +8102,7 @@
   {
     "id": "codegen_batch_compile_1f54fcd3",
     "file": "src/codegen/batch.rs",
-    "line": 1080,
+    "line": 1115,
     "decision": "let Item::Column(name) = item",
     "conditions": 1,
     "vectors_required": 2,
@@ -8092,7 +8112,7 @@
   {
     "id": "codegen_batch_compile_0aa91de1_3",
     "file": "src/codegen/batch.rs",
-    "line": 1088,
+    "line": 1123,
     "decision": "group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8102,7 +8122,7 @@
   {
     "id": "codegen_batch_compile_60bff7e7",
     "file": "src/codegen/batch.rs",
-    "line": 1092,
+    "line": 1127,
     "decision": "let Item::Expr(expr) = item",
     "conditions": 1,
     "vectors_required": 2,
@@ -8112,7 +8132,7 @@
   {
     "id": "codegen_batch_compile_0aa91de1_4",
     "file": "src/codegen/batch.rs",
-    "line": 1098,
+    "line": 1133,
     "decision": "group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8122,7 +8142,7 @@
   {
     "id": "codegen_batch_compile_858db603",
     "file": "src/codegen/batch.rs",
-    "line": 1105,
+    "line": 1140,
     "decision": "!aggs.is_empty() || !group_by_regs.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -8132,7 +8152,7 @@
   {
     "id": "codegen_batch_compile_0aa91de1_5",
     "file": "src/codegen/batch.rs",
-    "line": 1106,
+    "line": 1141,
     "decision": "group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8142,7 +8162,7 @@
   {
     "id": "codegen_batch_compile_3755607c",
     "file": "src/codegen/batch.rs",
-    "line": 1145,
+    "line": 1180,
     "decision": "group_by_present || has_agg",
     "conditions": 2,
     "vectors_required": 3,
@@ -8152,7 +8172,7 @@
   {
     "id": "codegen_batch_compile_701773a3",
     "file": "src/codegen/batch.rs",
-    "line": 1158,
+    "line": 1193,
     "decision": "let Some((col, descending)) = order_by",
     "conditions": 1,
     "vectors_required": 2,
@@ -8162,7 +8182,7 @@
   {
     "id": "codegen_batch_compile_358b089c",
     "file": "src/codegen/batch.rs",
-    "line": 1165,
+    "line": 1200,
     "decision": "let Some(n) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -8172,7 +8192,7 @@
   {
     "id": "codegen_batch_split_qualified_0753a7e1",
     "file": "src/codegen/batch.rs",
-    "line": 1174,
+    "line": 1209,
     "decision": "match name.split_once('.') {\n        Some((table, column)) => (Some(table), column),\n        None => (None, name),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8182,7 +8202,7 @@
   {
     "id": "codegen_batch_compile_join_0ffeac98",
     "file": "src/codegen/batch.rs",
-    "line": 1199,
+    "line": 1234,
     "decision": "!matches!(join.op, JoinOp::Inner | JoinOp::Left)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8192,7 +8212,7 @@
   {
     "id": "codegen_batch_compile_join_ea4e2d14",
     "file": "src/codegen/batch.rs",
-    "line": 1206,
+    "line": 1241,
     "decision": "!needed.contains(extra)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8202,7 +8222,7 @@
   {
     "id": "codegen_batch_compile_join_33ab037d",
     "file": "src/codegen/batch.rs",
-    "line": 1216,
+    "line": 1251,
     "decision": "match prefix {\n            None => left_columns.push(name.clone()),\n            Some(p) if p == from_name => left_columns.push(name.clone()),\n            Some(p) if p == join.table => right_columns.push(name.clone()),\n            Some(_) => return Err(PlanError::UnknownColumn(name.clone())),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8212,7 +8232,7 @@
   {
     "id": "codegen_batch_compile_join_fc3a2c18",
     "file": "src/codegen/batch.rs",
-    "line": 1218,
+    "line": 1253,
     "decision": "p == from_name",
     "conditions": 1,
     "vectors_required": 2,
@@ -8222,7 +8242,7 @@
   {
     "id": "codegen_batch_compile_join_1a0c1673",
     "file": "src/codegen/batch.rs",
-    "line": 1219,
+    "line": 1254,
     "decision": "p == join.table",
     "conditions": 1,
     "vectors_required": 2,
@@ -8232,7 +8252,7 @@
   {
     "id": "codegen_batch_compile_join_6b984032",
     "file": "src/codegen/batch.rs",
-    "line": 1253,
+    "line": 1288,
     "decision": "match join.op {\n        JoinOp::Inner => crate::vm::batch::JoinKind::Inner,\n        JoinOp::Left => crate::vm::batch::JoinKind::Left,\n        other => return Err(PlanError::UnsupportedJoinKind(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8242,7 +8262,7 @@
   {
     "id": "codegen_batch_compile_window_3432ca56",
     "file": "src/codegen/batch.rs",
-    "line": 1353,
+    "line": 1388,
     "decision": "!needed.iter().any(|n| n == name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8252,7 +8272,7 @@
   {
     "id": "codegen_batch_compile_window_8c3138d4",
     "file": "src/codegen/batch.rs",
-    "line": 1359,
+    "line": 1394,
     "decision": "match item {\n            Item::Column(name) => push_needed(name, &mut needed),\n            Item::Window(spec) => {\n                if let Some(arg) = &spec.arg {\n                    push_needed(arg, &mut needed);\n                }\n                for p in &spec.partition_by {\n                    push_needed(p, &mut needed);\n                }\n                for (o, _) in &spec.order_by {\n                    push_needed(o, &mut needed);\n                }\n            }\n            Item::Agg(..) | Item::Star | Item::Expr(_) => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8262,7 +8282,7 @@
   {
     "id": "codegen_batch_compile_window_191cd68b",
     "file": "src/codegen/batch.rs",
-    "line": 1362,
+    "line": 1397,
     "decision": "let Some(arg) = &spec.arg",
     "conditions": 1,
     "vectors_required": 2,
@@ -8272,7 +8292,7 @@
   {
     "id": "codegen_batch_compile_window_86b2dbc4",
     "file": "src/codegen/batch.rs",
-    "line": 1422,
+    "line": 1457,
     "decision": "match item {\n            Item::Window(spec) => {\n                let base = spec.arg.as_ref().map(|name| ctx.load_column(name));\n                mask_filtered_source(&mut ctx, base, spec.filter.as_ref())\n            }\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8282,7 +8302,7 @@
   {
     "id": "codegen_batch_compile_window_82e048b0",
     "file": "src/codegen/batch.rs",
-    "line": 1436,
+    "line": 1471,
     "decision": "match item {\n            Item::Column(name) => emit_regs.push(column_reg(name)?),\n            Item::Window(spec) => {\n                let dst = next_reg;\n                next_reg = next_reg.saturating_add(1);\n                program.push(Instruction::with_comment(\n                    Opcode::Window {\n                        func: map_window_func(spec.func),\n                        // Already resolved (and `FILTER`-masked, if any)\n                        // above -- same register `column_reg(arg)` would\n                        // give when there's no filter, since `needed`\n                        // seeded `ctx`'s `column_regs`.\n                        arg: *filtered_arg,\n                        offset: spec.offset,\n                        partition_by: spec\n                            .partition_by\n                            .iter()\n                            .map(|p| column_reg(p))\n                            .collect::<Result<Vec<_>>>()?\n                            .into(),\n                        order_by: spec\n                            .order_by\n                            .iter()\n                            .map(|(o, desc)| Ok((column_reg(o)?, *desc)))\n                            .collect::<Result<Vec<_>>>()?\n                            .into(),\n                        dst,\n                    },\n                    format!(\"r{dst} = {}\", window_detail(spec)),\n                ));\n                emit_regs.push(dst);\n            }\n            Item::Agg(..) | Item::Star | Item::Expr(_) => {\n                let reg = *null_reg.get_or_insert_with(|| {\n                    let reg = next_reg;\n                    next_reg = next_reg.saturating_add(1);\n                    program.push(Instruction::new(Opcode::LoadConst {\n                        reg,\n                        value: Value::Null,\n                    }));\n                    reg\n                });\n                emit_regs.push(reg);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8292,7 +8312,7 @@
   {
     "id": "codegen_batch_compile_window_701773a3",
     "file": "src/codegen/batch.rs",
-    "line": 1503,
+    "line": 1538,
     "decision": "let Some((col, descending)) = order_by",
     "conditions": 1,
     "vectors_required": 2,
@@ -8302,7 +8322,7 @@
   {
     "id": "codegen_batch_compile_window_358b089c",
     "file": "src/codegen/batch.rs",
-    "line": 1510,
+    "line": 1545,
     "decision": "let Some(n) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -8312,7 +8332,7 @@
   {
     "id": "codegen_batch_map_window_func_b27cbf54",
     "file": "src/codegen/batch.rs",
-    "line": 1526,
+    "line": 1561,
     "decision": "match func {\n        WindowFunc::RowNumber => Vm::RowNumber,\n        WindowFunc::Rank => Vm::Rank,\n        WindowFunc::DenseRank => Vm::DenseRank,\n        WindowFunc::Lag => Vm::Lag,\n        WindowFunc::Lead => Vm::Lead,\n        WindowFunc::FirstValue => Vm::FirstValue,\n        WindowFunc::LastValue => Vm::LastValue,\n        WindowFunc::Sum => Vm::Sum,\n        WindowFunc::Avg => Vm::Avg,\n        WindowFunc::Count => Vm::Count,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8322,7 +8342,7 @@
   {
     "id": "codegen_batch_explain_6416ea7f",
     "file": "src/codegen/batch.rs",
-    "line": 1649,
+    "line": 1684,
     "decision": "has_window",
     "conditions": 1,
     "vectors_required": 2,
@@ -8332,7 +8352,7 @@
   {
     "id": "codegen_batch_explain_2bdba3ef",
     "file": "src/codegen/batch.rs",
-    "line": 1651,
+    "line": 1686,
     "decision": "is_semi_join",
     "conditions": 1,
     "vectors_required": 2,
@@ -8342,7 +8362,7 @@
   {
     "id": "codegen_batch_explain_14afa5f4",
     "file": "src/codegen/batch.rs",
-    "line": 1661,
+    "line": 1696,
     "decision": "match (&columns_to_load, join) {\n        (Some(cols), Some(_)) => cols\n            .iter()\n            .filter(|n| split_qualified(n).0.is_none_or(|t| t == from_name))\n            .cloned()\n            .collect(),\n        (Some(cols), None) => cols.clone(),\n        (None, _) => referenced_columns(select)?,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8352,7 +8372,7 @@
   {
     "id": "codegen_batch_explain_01a16c1c",
     "file": "src/codegen/batch.rs",
-    "line": 1670,
+    "line": 1705,
     "decision": "let Some(j) = join",
     "conditions": 1,
     "vectors_required": 2,
@@ -8362,7 +8382,7 @@
   {
     "id": "codegen_batch_explain_6971a0b9",
     "file": "src/codegen/batch.rs",
-    "line": 1673,
+    "line": 1708,
     "decision": "let Some(AstExpr {\n        kind: ExprKind::InSubquery { expr, .. },\n        ..\n    }) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -8372,7 +8392,7 @@
   {
     "id": "codegen_batch_explain_6e91b9da",
     "file": "src/codegen/batch.rs",
-    "line": 1678,
+    "line": 1713,
     "decision": "let Some(col_name) = expr_column_name(expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8382,7 +8402,7 @@
   {
     "id": "codegen_batch_explain_c35882c6",
     "file": "src/codegen/batch.rs",
-    "line": 1683,
+    "line": 1718,
     "decision": "!main_cols.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8392,7 +8412,7 @@
   {
     "id": "codegen_batch_explain_2bdba3ef_2",
     "file": "src/codegen/batch.rs",
-    "line": 1687,
+    "line": 1722,
     "decision": "is_semi_join",
     "conditions": 1,
     "vectors_required": 2,
@@ -8402,7 +8422,7 @@
   {
     "id": "codegen_batch_explain_86015fb4",
     "file": "src/codegen/batch.rs",
-    "line": 1688,
+    "line": 1723,
     "decision": "let Some(AstExpr {\n            kind: ExprKind::InSubquery { expr, subquery, .. },\n            ..\n        }) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -8412,7 +8432,7 @@
   {
     "id": "codegen_batch_explain_399389ea",
     "file": "src/codegen/batch.rs",
-    "line": 1701,
+    "line": 1736,
     "decision": "!sub_cols.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8422,7 +8442,7 @@
   {
     "id": "codegen_batch_explain_983134d1",
     "file": "src/codegen/batch.rs",
-    "line": 1715,
+    "line": 1750,
     "decision": "let Some(join) = join",
     "conditions": 1,
     "vectors_required": 2,
@@ -8432,7 +8452,7 @@
   {
     "id": "codegen_batch_explain_a9a53d95",
     "file": "src/codegen/batch.rs",
-    "line": 1727,
+    "line": 1762,
     "decision": "!right_cols.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8442,7 +8462,7 @@
   {
     "id": "codegen_batch_explain_1adedc77",
     "file": "src/codegen/batch.rs",
-    "line": 1733,
+    "line": 1768,
     "decision": "match join.op {\n            JoinOp::Inner => \"HASH JOIN\",\n            JoinOp::Left => \"LEFT HASH JOIN\",\n            JoinOp::Right => \"RIGHT HASH JOIN\",\n            JoinOp::Full => \"FULL HASH JOIN\",\n            JoinOp::Cross => \"CROSS JOIN\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8452,7 +8472,7 @@
   {
     "id": "codegen_batch_explain_6416ea7f_2",
     "file": "src/codegen/batch.rs",
-    "line": 1743,
+    "line": 1778,
     "decision": "has_window",
     "conditions": 1,
     "vectors_required": 2,
@@ -8462,7 +8482,7 @@
   {
     "id": "codegen_batch_explain_1ef4fc0d",
     "file": "src/codegen/batch.rs",
-    "line": 1745,
+    "line": 1780,
     "decision": "let Item::Window(spec) = item",
     "conditions": 1,
     "vectors_required": 2,
@@ -8472,7 +8492,7 @@
   {
     "id": "codegen_batch_explain_bf203319",
     "file": "src/codegen/batch.rs",
-    "line": 1749,
+    "line": 1784,
     "decision": "let Some(program) = &program",
     "conditions": 1,
     "vectors_required": 2,
@@ -8482,7 +8502,7 @@
   {
     "id": "codegen_batch_explain_43e7e12d",
     "file": "src/codegen/batch.rs",
-    "line": 1750,
+    "line": 1785,
     "decision": "program\n            .opcodes()\n            .any(|op| matches!(op, Opcode::Filter { .. }))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8492,7 +8512,7 @@
   {
     "id": "codegen_batch_explain_fee390fc",
     "file": "src/codegen/batch.rs",
-    "line": 1754,
+    "line": 1789,
     "decision": "let Some(where_clause) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -8502,7 +8522,7 @@
   {
     "id": "codegen_batch_explain_e132c1ae",
     "file": "src/codegen/batch.rs",
-    "line": 1763,
+    "line": 1798,
     "decision": "!group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8512,7 +8532,7 @@
   {
     "id": "codegen_batch_explain_d3c9e140",
     "file": "src/codegen/batch.rs",
-    "line": 1766,
+    "line": 1801,
     "decision": "matches!(classify_item(item), Ok(Item::Agg(..)))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8522,7 +8542,7 @@
   {
     "id": "codegen_batch_explain_d3c9e140_2",
     "file": "src/codegen/batch.rs",
-    "line": 1775,
+    "line": 1810,
     "decision": "matches!(classify_item(item), Ok(Item::Agg(..)))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8532,7 +8552,7 @@
   {
     "id": "codegen_batch_explain_4a09e420",
     "file": "src/codegen/batch.rs",
-    "line": 1783,
+    "line": 1818,
     "decision": "matches!(select.distinct, Some(Distinctness::Distinct))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8542,7 +8562,7 @@
   {
     "id": "codegen_batch_explain_a91e86c6",
     "file": "src/codegen/batch.rs",
-    "line": 1788,
+    "line": 1823,
     "decision": "let Some((column, descending)) = select_order_by(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8552,7 +8572,7 @@
   {
     "id": "codegen_batch_explain_c0950ae3",
     "file": "src/codegen/batch.rs",
-    "line": 1797,
+    "line": 1832,
     "decision": "let Some(limit) = select_limit(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8562,7 +8582,7 @@
   {
     "id": "codegen_batch_render_agg_pair_d7518bb1",
     "file": "src/codegen/batch.rs",
-    "line": 1858,
+    "line": 1893,
     "decision": "match src {\n        Some(s) => format!(\"{func:?}({s})\"),\n        None => format!(\"{func:?}\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8572,7 +8592,7 @@
   {
     "id": "codegen_batch_render_operands_abd02bfe",
     "file": "src/codegen/batch.rs",
-    "line": 1868,
+    "line": 1903,
     "decision": "match op {\n        Opcode::LoadColumn { reg, column } => format!(\"reg={reg} column={column}\"),\n        Opcode::LoadConst { reg, value } => format!(\"reg={reg} value={value}\"),\n        Opcode::Map { dst, op, a, b } => format!(\"dst={dst} op={op:?} a={a} b={b}\"),\n        Opcode::Filter { predicate } => format!(\"predicate=r{predicate}\"),\n        Opcode::Reduce { func, src, dst } => {\n            format!(\"dst={dst} {}\", render_agg_pair(*func, *src))\n        }\n        Opcode::GroupReduce {\n            group_by,\n            aggs,\n            agg_dst,\n        } => {\n            let aggs: Vec<String> = aggs\n                .iter()\n                .map(|(func, src)| render_agg_pair(*func, *src))\n                .collect();\n            format!(\n                \"group_by={group_by:?} aggs=[{}] agg_dst={agg_dst:?}\",\n                aggs.join(\", \")\n            )\n        }\n        Opcode::HashBuild {\n            key_cols,\n            payload_cols,\n            table,\n        } => format!(\"key_cols={key_cols:?} payload_cols={payload_cols:?} table={table}\"),\n        Opcode::HashProbe {\n            key_cols,\n            table,\n            payload_dst,\n            kind,\n        } => format!(\"key_cols={key_cols:?} table={table} payload_dst={payload_dst:?} kind={kind:?}\"),\n        Opcode::Window {\n            func,\n            arg,\n            offset,\n            partition_by,\n            order_by,\n            dst,\n        } => format!(\n            \"dst={dst} func={func:?} arg={arg:?} offset={offset:?} partition_by={partition_by:?} order_by={order_by:?}\"\n        ),\n        Opcode::Scan => String::new(),\n        Opcode::Emit { registers } => format!(\"registers={registers:?}\"),\n        Opcode::NextSegment { loop_start } => format!(\"loop_start={loop_start}\"),\n        Opcode::Halt => String::new(),\n        Opcode::Combine {\n            agg_parts,\n            num_group_keys,\n            distinct,\n        } => format!(\"agg_parts={agg_parts:?} num_group_keys={num_group_keys} distinct={distinct}\"),\n        Opcode::Sort { col, descending } => format!(\"col={col} descending={descending}\"),\n        Opcode::Limit { n } => format!(\"n={n}\"),\n        Opcode::Call { dst, name, args } => format!(\"dst={dst} name={name} args={args:?}\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8582,7 +8602,7 @@
   {
     "id": "codegen_batch_explain_opcodes_662b2e01",
     "file": "src/codegen/batch.rs",
-    "line": 1937,
+    "line": 1972,
     "decision": "matches!(\n        &select.where_clause,\n        Some(AstExpr {\n            kind: ExprKind::InSubquery { .. },\n            ..\n        })\n    )",
     "conditions": 1,
     "vectors_required": 2,
@@ -8592,7 +8612,7 @@
   {
     "id": "codegen_batch_explain_opcodes_810fe752",
     "file": "src/codegen/batch.rs",
-    "line": 1959,
+    "line": 1994,
     "decision": "select.from.as_ref().is_some_and(|f| !f.joins.is_empty())",
     "conditions": 1,
     "vectors_required": 2,
@@ -8602,7 +8622,7 @@
   {
     "id": "codegen_batch_explain_opcodes_6416ea7f",
     "file": "src/codegen/batch.rs",
-    "line": 1982,
+    "line": 2017,
     "decision": "has_window",
     "conditions": 1,
     "vectors_required": 2,
@@ -8612,7 +8632,7 @@
   {
     "id": "codegen_batch_window_func_name_b9e23cda",
     "file": "src/codegen/batch.rs",
-    "line": 2013,
+    "line": 2048,
     "decision": "match func {\n        WindowFunc::RowNumber => \"ROW_NUMBER\",\n        WindowFunc::Rank => \"RANK\",\n        WindowFunc::DenseRank => \"DENSE_RANK\",\n        WindowFunc::Lag => \"LAG\",\n        WindowFunc::Lead => \"LEAD\",\n        WindowFunc::FirstValue => \"FIRST_VALUE\",\n        WindowFunc::LastValue => \"LAST_VALUE\",\n        WindowFunc::Sum => \"SUM\",\n        WindowFunc::Avg => \"AVG\",\n        WindowFunc::Count => \"COUNT\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8622,7 +8642,7 @@
   {
     "id": "codegen_batch_select_item_label_c8284e64",
     "file": "src/codegen/batch.rs",
-    "line": 2031,
+    "line": 2066,
     "decision": "let ResultColumn::Expr {\n        alias: Some(alias), ..\n    } = item",
     "conditions": 1,
     "vectors_required": 2,
@@ -8632,7 +8652,7 @@
   {
     "id": "codegen_batch_select_item_label_922f4b93",
     "file": "src/codegen/batch.rs",
-    "line": 2037,
+    "line": 2072,
     "decision": "match classify_item(item) {\n        Ok(Item::Column(name)) => name,\n        Ok(Item::Star) => \"*\".to_string(),\n        Ok(Item::Agg(func, arg, _)) => match arg {\n            Some(col) => format!(\"{}({col})\", agg_func_name(func)),\n            None => format!(\"{}(*)\", agg_func_name(func)),\n        },\n        Ok(Item::Window(spec)) => format!(\"{}()\", window_func_name(spec.func)),\n        Ok(Item::Expr(expr)) => expr_to_string(&expr),\n        Err(_) => String::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8642,7 +8662,7 @@
   {
     "id": "codegen_batch_select_item_label_878a4955",
     "file": "src/codegen/batch.rs",
-    "line": 2040,
+    "line": 2075,
     "decision": "match arg {\n            Some(col) => format!(\"{}({col})\", agg_func_name(func)),\n            None => format!(\"{}(*)\", agg_func_name(func)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8652,7 +8672,7 @@
   {
     "id": "codegen_batch_window_detail_1a6041d0",
     "file": "src/codegen/batch.rs",
-    "line": 2057,
+    "line": 2092,
     "decision": "!spec.partition_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8662,7 +8682,7 @@
   {
     "id": "codegen_batch_window_detail_6522998c",
     "file": "src/codegen/batch.rs",
-    "line": 2060,
+    "line": 2095,
     "decision": "!spec.order_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8672,7 +8692,7 @@
   {
     "id": "codegen_batch_window_detail_c17aa996",
     "file": "src/codegen/batch.rs",
-    "line": 2066,
+    "line": 2101,
     "decision": "*desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -8682,7 +8702,7 @@
   {
     "id": "codegen_batch_window_detail_16a7702a",
     "file": "src/codegen/batch.rs",
-    "line": 2075,
+    "line": 2110,
     "decision": "!over.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8692,7 +8712,7 @@
   {
     "id": "codegen_batch_literal_to_string_003fb36b",
     "file": "src/codegen/batch.rs",
-    "line": 2084,
+    "line": 2119,
     "decision": "match lit {\n        AstLiteral::Integer(v) => v.to_string(),\n        AstLiteral::Float(v) => v.to_string(),\n        AstLiteral::Str(v) => format!(\"'{v}'\"),\n        AstLiteral::Blob(_) => \"x'...'\".to_string(),\n        AstLiteral::Null => \"NULL\".to_string(),\n        AstLiteral::True => \"TRUE\".to_string(),\n        AstLiteral::False => \"FALSE\".to_string(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8702,7 +8722,7 @@
   {
     "id": "codegen_batch_bin_op_str_3750afb6",
     "file": "src/codegen/batch.rs",
-    "line": 2096,
+    "line": 2131,
     "decision": "match op {\n        AstBinOp::Add => \"+\",\n        AstBinOp::Sub => \"-\",\n        AstBinOp::Mul => \"*\",\n        AstBinOp::Div => \"/\",\n        AstBinOp::Eq => \"=\",\n        AstBinOp::Ne => \"!=\",\n        AstBinOp::Lt => \"<\",\n        AstBinOp::Le => \"<=\",\n        AstBinOp::Gt => \">\",\n        AstBinOp::Ge => \">=\",\n        AstBinOp::And => \"AND\",\n        AstBinOp::Or => \"OR\",\n        AstBinOp::Concat => \"||\",\n        AstBinOp::BitAnd => \"&\",\n        AstBinOp::BitOr => \"|\",\n        AstBinOp::Shl => \"<<\",\n        AstBinOp::Shr => \">>\",\n        AstBinOp::Mod => \"%\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8712,7 +8732,7 @@
   {
     "id": "codegen_batch_expr_to_string_b58daf04",
     "file": "src/codegen/batch.rs",
-    "line": 2121,
+    "line": 2156,
     "decision": "match &expr.kind {\n        // A `Column` always carries a name; `expr_column_name` is `None`\n        // only for non-column kinds, which this arm excludes. Plan text.\n        ExprKind::Column { .. } => expr_column_name(expr).unwrap_or_default(),\n        ExprKind::Literal(lit) => literal_to_string(lit),\n        ExprKind::Paren(inner) => expr_to_string(inner),\n        ExprKind::Binary { op, lhs, rhs } => {\n            format!(\n                \"{} {} {}\",\n                expr_to_string(lhs),\n                bin_op_str(*op),\n                expr_to_string(rhs)\n            )\n        }\n        ExprKind::InSubquery { expr, subquery, .. } => {\n            // Plan text only: the real compile reports a missing alias as\n            // `PlanError::Internal`; here it just renders as \"\".\n            let from = subquery\n                .from\n                .as_ref()\n                .and_then(|f| table_name(f).ok())\n                .unwrap_or_default();\n            format!(\"{} IN (SELECT ... FROM {from})\", expr_to_string(expr))\n        }\n        ExprKind::Exists { subquery, negated } => {\n            // Plan text only: the real compile reports a missing alias as\n            // `PlanError::Internal`; here it just renders as \"\".\n            let from = subquery\n                .from\n                .as_ref()\n                .and_then(|f| table_name(f).ok())\n                .unwrap_or_default();\n            format!(\n                \"{}EXISTS (SELECT ... FROM {from})\",\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        ExprKind::Unary {\n            op: crate::parser::ast::UnaryOp::Not,\n            expr: inner,\n        } => format!(\"NOT {}\", expr_to_string(inner)),\n        ExprKind::Unary {\n            op: crate::parser::ast::UnaryOp::Minus,\n            expr: inner,\n        } => format!(\"-{}\", expr_to_string(inner)),\n        ExprKind::Unary { expr: inner, .. } => expr_to_string(inner),\n        ExprKind::IsNull { expr, negated } => {\n            format!(\n                \"{} IS {}NULL\",\n                expr_to_string(expr),\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        ExprKind::Is { lhs, rhs, negated }\n            if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>\n        {\n            format!(\n                \"{} IS {}NULL\",\n                expr_to_string(lhs),\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        _ => String::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8722,7 +8742,7 @@
   {
     "id": "codegen_batch_expr_to_string_50192d90",
     "file": "src/codegen/batch.rs",
-    "line": 2175,
+    "line": 2210,
     "decision": "matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8732,7 +8752,7 @@
   {
     "id": "codegen_batch_push_unique_c03a600a",
     "file": "src/codegen/batch.rs",
-    "line": 2188,
+    "line": 2223,
     "decision": "!out.contains(&name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8742,7 +8762,7 @@
   {
     "id": "codegen_batch_collect_expr_columns_0ab5c21d",
     "file": "src/codegen/batch.rs",
-    "line": 2194,
+    "line": 2229,
     "decision": "match &expr.kind {\n        ExprKind::Column { .. } => {\n            if let Some(name) = expr_column_name(expr) {\n                push_unique(out, name);\n            }\n        }\n        ExprKind::Literal(_) => {}\n        ExprKind::Paren(inner) => collect_expr_columns(inner, out),\n        ExprKind::Binary { lhs, rhs, .. } => {\n            collect_expr_columns(lhs, out);\n            collect_expr_columns(rhs, out);\n        }\n        ExprKind::InSubquery { expr, .. } => collect_expr_columns(expr, out),\n        ExprKind::Exists { .. } => {}\n        ExprKind::Unary { expr: inner, .. } => collect_expr_columns(inner, out),\n        ExprKind::IsNull { expr, .. } => collect_expr_columns(expr, out),\n        ExprKind::Is { lhs, .. } => collect_expr_columns(lhs, out),\n        ExprKind::Like { expr, pattern, .. } => {\n            collect_expr_columns(expr, out);\n            collect_expr_columns(pattern, out);\n        }\n        // A scalar call's (#307) column references are its arguments' --\n        // needed so a bare (non-`GROUP BY`) `SELECT json_extract(msg, ...)`\n        // pre-loads `msg` before `Filter`, same as any other expression.\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        } => {\n            for arg in list {\n                collect_expr_columns(arg, out);\n            }\n        }\n        _ => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8752,7 +8772,7 @@
   {
     "id": "codegen_batch_collect_expr_columns_657beef1",
     "file": "src/codegen/batch.rs",
-    "line": 2196,
+    "line": 2231,
     "decision": "let Some(name) = expr_column_name(expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8762,7 +8782,7 @@
   {
     "id": "codegen_batch_referenced_columns_41a85e57",
     "file": "src/codegen/batch.rs",
-    "line": 2240,
+    "line": 2275,
     "decision": "match item {\n            Item::Column(name) => push_unique(&mut out, name.clone()),\n            Item::Star => {}\n            Item::Agg(_, arg, filter) => {\n                if let Some(name) = arg {\n                    push_unique(&mut out, name.clone());\n                }\n                if let Some(f) = filter {\n                    let mut cols = Vec::new();\n                    collect_expr_columns(f, &mut cols);\n                    for name in cols {\n                        push_unique(&mut out, name);\n                    }\n                }\n            }\n            Item::Window(spec) => {\n                if let Some(arg) = &spec.arg {\n                    push_unique(&mut out, arg.clone());\n                }\n                for name in &spec.partition_by {\n                    push_unique(&mut out, name.clone());\n                }\n                for (name, _) in &spec.order_by {\n                    push_unique(&mut out, name.clone());\n                }\n                if let Some(f) = &spec.filter {\n                    collect_expr_columns(f, &mut out);\n                }\n            }\n            Item::Expr(expr) => collect_expr_columns(expr, &mut out),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8772,7 +8792,7 @@
   {
     "id": "codegen_batch_referenced_columns_db22fa33",
     "file": "src/codegen/batch.rs",
-    "line": 2244,
+    "line": 2279,
     "decision": "let Some(name) = arg",
     "conditions": 1,
     "vectors_required": 2,
@@ -8782,7 +8802,7 @@
   {
     "id": "codegen_batch_referenced_columns_64cb657e",
     "file": "src/codegen/batch.rs",
-    "line": 2247,
+    "line": 2282,
     "decision": "let Some(f) = filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -8792,7 +8812,7 @@
   {
     "id": "codegen_batch_referenced_columns_191cd68b",
     "file": "src/codegen/batch.rs",
-    "line": 2256,
+    "line": 2291,
     "decision": "let Some(arg) = &spec.arg",
     "conditions": 1,
     "vectors_required": 2,
@@ -8802,7 +8822,7 @@
   {
     "id": "codegen_batch_referenced_columns_782e8a25",
     "file": "src/codegen/batch.rs",
-    "line": 2265,
+    "line": 2300,
     "decision": "let Some(f) = &spec.filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -8812,7 +8832,7 @@
   {
     "id": "codegen_batch_referenced_columns_fee390fc",
     "file": "src/codegen/batch.rs",
-    "line": 2272,
+    "line": 2307,
     "decision": "let Some(where_clause) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -8822,7 +8842,7 @@
   {
     "id": "codegen_batch_referenced_columns_c16d1873",
     "file": "src/codegen/batch.rs",
-    "line": 2275,
+    "line": 2310,
     "decision": "let Some(from) = &select.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -8832,7 +8852,7 @@
   {
     "id": "codegen_batch_referenced_columns_f88fb30c",
     "file": "src/codegen/batch.rs",
-    "line": 2281,
+    "line": 2316,
     "decision": "let Some((column, _)) = select_order_by(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8842,7 +8862,7 @@
   {
     "id": "codegen_batch_referenced_columns_64caf832",
     "file": "src/codegen/batch.rs",
-    "line": 2292,
+    "line": 2327,
     "decision": "!is_select_item_label",
     "conditions": 1,
     "vectors_required": 2,
@@ -32520,6 +32540,26 @@
     "wildcard_risk": false
   },
   {
+    "id": "engine_predicate_compile_79c2d7a0",
+    "file": "src/engine/predicate.rs",
+    "line": 43,
+    "decision": "match parse_bool_expr(expr) {\n            ParseOutcome::Accepted(expr) => *expr,\n            ParseOutcome::Unsupported { message, .. } => {\n                return Err(EngineError::new(ErrorKind::Unsupported, message))\n            }\n            ParseOutcome::Invalid { message, .. } => {\n                return Err(EngineError::new(ErrorKind::Parse, message))\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_predicate_compile_f57eced0",
+    "file": "src/engine/predicate.rs",
+    "line": 55,
+    "decision": "!schema_columns.iter().any(|c| c == name)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "coerce_skip_while_dad9882a",
     "file": "src/coerce.rs",
     "line": 14,
@@ -32842,7 +32882,7 @@
   {
     "id": "engine_fmt_d9ad12ef",
     "file": "src/engine.rs",
-    "line": 75,
+    "line": 85,
     "decision": "match self {\n            Mode::Row => \"row\",\n            Mode::Batch => \"batch\",\n            Mode::Stream => \"stream\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32852,7 +32892,7 @@
   {
     "id": "engine_fmt_8999c8cc",
     "file": "src/engine.rs",
-    "line": 107,
+    "line": 117,
     "decision": "match self {\n            Cell::Null => Ok(()),\n            Cell::Int(n) => write!(f, \"{n}\"),\n            Cell::Real(x) => f.write_str(&crate::value::format_real(*x)),\n            Cell::Bool(b) => f.write_str(if *b { \"1\" } else { \"0\" }),\n            Cell::Text(s) => f.write_str(s),\n            Cell::Blob(bytes) => {\n                f.write_str(\"X'\")?;\n                for b in bytes {\n                    write!(f, \"{b:02X}\")?;\n                }\n                f.write_str(\"'\")\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32862,7 +32902,7 @@
   {
     "id": "engine_fmt_b34c2caa",
     "file": "src/engine.rs",
-    "line": 111,
+    "line": 121,
     "decision": "*b",
     "conditions": 1,
     "vectors_required": 2,
@@ -32872,7 +32912,7 @@
   {
     "id": "engine_from_59f226b4",
     "file": "src/engine.rs",
-    "line": 126,
+    "line": 136,
     "decision": "match v {\n            crate::value::Value::Null => Cell::Null,\n            crate::value::Value::Integer(n) => Cell::Int(n),\n            crate::value::Value::Real(x) => Cell::Real(x),\n            crate::value::Value::Text(s) => Cell::Text(s.to_string()),\n            crate::value::Value::Blob(b) => Cell::Blob(b.to_vec()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32882,7 +32922,7 @@
   {
     "id": "engine_from_bb21e74f",
     "file": "src/engine.rs",
-    "line": 138,
+    "line": 148,
     "decision": "match v {\n            crate::value::Value::Null => Cell::Null,\n            crate::value::Value::Integer(n) => Cell::Int(*n),\n            crate::value::Value::Real(x) => Cell::Real(*x),\n            crate::value::Value::Text(s) => Cell::Text(s.to_string()),\n            crate::value::Value::Blob(b) => Cell::Blob(b.to_vec()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32892,8 +32932,18 @@
   {
     "id": "engine_from_96d2e1ed",
     "file": "src/engine.rs",
-    "line": 151,
+    "line": 161,
     "decision": "match v {\n            crate::vm::batch::Value::Null => Cell::Null,\n            crate::vm::batch::Value::Int(n) => Cell::Int(n),\n            crate::vm::batch::Value::Float(x) => Cell::Real(x),\n            crate::vm::batch::Value::Bool(b) => Cell::Bool(b),\n            crate::vm::batch::Value::Str(s) => Cell::Text(s.into_owned()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_from_a0b9b46a",
+    "file": "src/engine.rs",
+    "line": 180,
+    "decision": "match c {\n            Cell::Null | Cell::Blob(_) => crate::vm::batch::Value::Null,\n            Cell::Int(n) => crate::vm::batch::Value::Int(n),\n            Cell::Real(x) => crate::vm::batch::Value::Float(x),\n            Cell::Bool(b) => crate::vm::batch::Value::Bool(b),\n            Cell::Text(s) => crate::vm::batch::Value::Str(s.into()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -32902,7 +32952,7 @@
   {
     "id": "engine_fmt_1a9219e1",
     "file": "src/engine.rs",
-    "line": 312,
+    "line": 341,
     "decision": "match self {\n            ErrorKind::Open => \"open\",\n            ErrorKind::Parse => \"parse\",\n            ErrorKind::Compile => \"compile\",\n            ErrorKind::Execute => \"execute\",\n            ErrorKind::Unsupported => \"unsupported\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32912,7 +32962,7 @@
   {
     "id": "engine_single_statement_6b98feb3",
     "file": "src/engine.rs",
-    "line": 394,
+    "line": 442,
     "decision": "match (stmts.next(), stmts.next()) {\n        (Some(one), None) => Ok(one),\n        (None, _) => Err(EngineError::new(ErrorKind::Parse, \"empty statement\")),\n        (Some(_), Some(_)) => Err(EngineError::new(\n            ErrorKind::Unsupported,\n            \"EXPLAIN takes a single statement\",\n        )),\n    }",
     "conditions": 0,
     "vectors_required": 0,
