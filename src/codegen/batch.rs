@@ -51,8 +51,9 @@ use crate::parser::ast::{
     FunctionArgs, JoinConstraint, JoinOp, Literal as AstLiteral, ResultColumn, Select,
     TableRefKind,
 };
-use crate::vm::batch::{AggFunc, AggPart, Instruction, MapOp, Opcode, Program, Value};
+use crate::vm::batch::{AggFunc, AggPart, Instruction, MapOp, Opcode, Program, ScanSource, Value};
 use crate::vm::engine::JoinProgram;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -1212,6 +1213,26 @@ pub fn split_qualified(name: &str) -> (Option<&str>, &str) {
     }
 }
 
+/// Which physical source backs a [`compile_join`] build (right/`JOIN`)
+/// side (ADR 0024, #382/#386). `compile_join` classifies a query purely
+/// from its `Select` AST -- it has no way to tell a SQLite lookup table
+/// from a stream table or an already-materialized batch on its own -- so
+/// the caller supplies this, having already applied ADR-0019/ADR-0022's
+/// fixed build-side rule (the lookup/`JOIN`-target side always builds,
+/// never chosen by cost).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildSourceKind {
+    /// Build side is a SQLite table read through `engine::row` (ADR-0019,
+    /// `engine::cross_mode`).
+    RowTable,
+    /// Build side is windowed stream segments (ADR-0022).
+    Stream,
+    /// Build side is already an in-memory `Batch` -- today's only
+    /// `compile_join` callers outside cross-mode queries (a plain
+    /// table-to-table batch join, and this module's own unit tests).
+    InMemory,
+}
+
 /// Plan a query with exactly one `JOIN` (INNER or LEFT; only the first
 /// join clause is honored -- chained/multi-way joins aren't supported).
 /// An unqualified column name is assumed to belong to the `FROM` table; a
@@ -1223,8 +1244,8 @@ pub fn split_qualified(name: &str) -> (Option<&str>, &str) {
 /// `LEFT JOIN` probe row, same as any other right-table column). Probe
 /// side: every left-table column is loaded, then the hash table is probed,
 /// landing the right side's payload right after the left columns.
-pub fn compile_join(select: &Select) -> Result<JoinProgram> {
-    compile_join_impl(select, None)
+pub fn compile_join(select: &Select, build_source: BuildSourceKind) -> Result<JoinProgram> {
+    compile_join_impl(select, None, build_source)
 }
 
 /// Like [`compile_join`], but `build_table` names the table that must
@@ -1241,11 +1262,19 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
 /// calling convention) -- swapping which side keeps unmatched rows would
 /// require a `RIGHT JOIN`-shaped algorithm, which isn't implemented.
 /// Returns [`PlanError::UnsupportedJoinKind`] for that combination.
-pub fn compile_join_build_side(select: &Select, build_table: &str) -> Result<JoinProgram> {
-    compile_join_impl(select, Some(build_table))
+pub fn compile_join_build_side(
+    select: &Select,
+    build_table: &str,
+    build_source: BuildSourceKind,
+) -> Result<JoinProgram> {
+    compile_join_impl(select, Some(build_table), build_source)
 }
 
-fn compile_join_impl(select: &Select, build_override: Option<&str>) -> Result<JoinProgram> {
+fn compile_join_impl(
+    select: &Select,
+    build_override: Option<&str>,
+    build_source: BuildSourceKind,
+) -> Result<JoinProgram> {
     let Some(from) = &select.from else {
         return Err(PlanError::UnknownColumn("SELECT without FROM".into()));
     };
@@ -1308,14 +1337,53 @@ fn compile_join_impl(select: &Select, build_override: Option<&str>) -> Result<Jo
         .iter()
         .position(|n| n == build_key)
         .ok_or_else(|| PlanError::UnknownColumn(build_key.clone()))?;
+    // `ScanSource` names where the build side comes from (ADR 0024,
+    // #382/#386) -- a no-op to the VM (the batch it operates on still
+    // arrives however the caller resolves it, `vm::engine::run_join_segments`
+    // (#385)), but a real, visible first step in the emitted program so
+    // `explain_opcodes` shows a cross-mode join's build side instead of the
+    // "not available" gap this ADR closes. `InMemory` carries an empty
+    // placeholder `Batch`: the real one is resolved at execution time
+    // (`ScanSourceResolver`), never read back out of this opcode. The
+    // build table's name is whichever side actually builds (ADR-0021's
+    // `from_builds` may swap it from the `JOIN` target to the `FROM` table).
+    let build_table_name = if from_builds {
+        from_name
+    } else {
+        join.table.as_str()
+    };
+    let scan_source = match build_source {
+        BuildSourceKind::RowTable => Opcode::ScanSource(ScanSource::RowTable {
+            table: Cow::Owned(build_table_name.to_string()),
+            columns: build_columns
+                .iter()
+                .map(|n| Cow::Owned(split_qualified(n).1.to_string()))
+                .collect(),
+        }),
+        BuildSourceKind::Stream => Opcode::ScanSource(ScanSource::Stream {
+            handle: 0,
+            columns: build_columns
+                .iter()
+                .map(|n| Cow::Owned(n.clone()))
+                .collect(),
+            #[cfg(feature = "vm-stream")]
+            scope: None,
+        }),
+        BuildSourceKind::InMemory => {
+            Opcode::ScanSource(ScanSource::InMemory(crate::vm::batch::Batch::default()))
+        }
+    };
     let build = Program::from_opcodes(
-        build_columns
-            .iter()
-            .enumerate()
-            .map(|(reg, name)| Opcode::LoadColumn {
-                reg,
-                column: name.clone().into(),
-            })
+        std::iter::once(scan_source)
+            .chain(
+                build_columns
+                    .iter()
+                    .enumerate()
+                    .map(|(reg, name)| Opcode::LoadColumn {
+                        reg,
+                        column: name.clone().into(),
+                    }),
+            )
             .chain(std::iter::once(Opcode::HashBuild {
                 key_cols: vec![build_key_reg].into(),
                 payload_cols: (0..build_columns.len()).collect::<Vec<_>>().into(),
@@ -2066,7 +2134,7 @@ pub fn explain_opcodes(select: &Select) -> Result<Vec<OpcodeSection>> {
             rows: render_program(&semi.body),
         }])
     } else if select.from.as_ref().is_some_and(|f| !f.joins.is_empty()) {
-        let join = compile_join(select)?;
+        let join = compile_join(select, BuildSourceKind::InMemory)?;
         let table = select
             .from
             .as_ref()
@@ -2415,7 +2483,10 @@ mod tests {
     #[test]
     fn compile_join_without_a_join_clause_is_a_plan_error() {
         let query = sql::parse("SELECT a FROM t").unwrap();
-        assert_eq!(compile_join(&query).err(), Some(PlanError::NoJoinClause));
+        assert_eq!(
+            compile_join(&query, BuildSourceKind::InMemory).err(),
+            Some(PlanError::NoJoinClause)
+        );
     }
     use crate::vm::engine::bounded_scan_limit;
 
@@ -2651,7 +2722,7 @@ mod tests {
             "SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.rkey",
         )
         .unwrap();
-        let plan = compile_join(&query).unwrap();
+        let plan = compile_join(&query, BuildSourceKind::InMemory).unwrap();
         assert_eq!(plan.left_columns, vec!["orders.id", "orders.region_key"]);
         assert_eq!(plan.right_columns, vec!["regions.budget", "regions.rkey"]);
         assert_eq!(plan.payload_dst, vec![2, 3]);
@@ -2670,7 +2741,7 @@ mod tests {
 
         let bad = sql::parse("SELECT a.id FROM a JOIN b ON a.id = c.id").unwrap();
         assert_eq!(
-            compile_join(&bad),
+            compile_join(&bad, BuildSourceKind::InMemory),
             Err(PlanError::UnknownColumn("c.id".into()))
         );
     }
@@ -2682,7 +2753,7 @@ mod tests {
              JOIN orders ON regions.rkey = orders.region_key",
         )
         .unwrap();
-        let plan = compile_join_build_side(&query, "regions").unwrap();
+        let plan = compile_join_build_side(&query, "regions", BuildSourceKind::InMemory).unwrap();
         // `left_columns`/`right_columns` stay probe/build (not from/join):
         // `orders` (the JOIN target) now probes, `regions` (the FROM
         // table) now builds, even though it's written first (ADR-0021).
@@ -2711,7 +2782,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            compile_join_build_side(&query, "regions"),
+            compile_join_build_side(&query, "regions", BuildSourceKind::InMemory),
             Err(PlanError::UnsupportedJoinKind(JoinOp::Left))
         );
     }
@@ -2726,7 +2797,7 @@ mod tests {
              JOIN orders ON regions.rkey = orders.region_key",
         )
         .unwrap();
-        assert!(compile_join_build_side(&query, "regions").is_ok());
+        assert!(compile_join_build_side(&query, "regions", BuildSourceKind::InMemory).is_ok());
     }
 
     /// MC/DC vector: leaf B (`join.op != Inner`) true alone -- a plain
@@ -2741,7 +2812,7 @@ mod tests {
              LEFT JOIN orders ON regions.rkey = orders.region_key",
         )
         .unwrap();
-        assert!(compile_join(&query).is_ok());
+        assert!(compile_join(&query, BuildSourceKind::InMemory).is_ok());
     }
 
     #[test]
@@ -2958,7 +3029,7 @@ mod tests {
             "SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.region_key = regions.rkey",
         )
         .unwrap();
-        let join = compile_join(&query).unwrap();
+        let join = compile_join(&query, BuildSourceKind::InMemory).unwrap();
         let sections = explain_opcodes(&query).unwrap();
 
         assert_eq!(sections.len(), 3);

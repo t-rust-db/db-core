@@ -187,7 +187,12 @@ pub fn run_query(
 ) -> Result<QueryResult, EngineError> {
     let select = parse(sql)?;
     let lookup_table = resolve_sides(&select, lookup)?;
-    let plan = planner::compile_join_build_side(&select, &lookup_table).map_err(plan_err)?;
+    let plan = planner::compile_join_build_side(
+        &select,
+        &lookup_table,
+        planner::BuildSourceKind::RowTable,
+    )
+    .map_err(plan_err)?;
 
     let stream_columns = driving.column_requests(&plan.left_columns)?;
     let segments = driving.segments(&stream_columns);
@@ -453,7 +458,8 @@ pub fn run_stream_stream_query(
     let (left_alias, right_alias) = resolve_stream_stream_sides(&select)?;
     let scope = super::stream::resolve_scope(&select);
     let normalized = alias_normalize(select, &left_alias, &right_alias);
-    let plan = planner::compile_join(&normalized).map_err(plan_err)?;
+    let plan =
+        planner::compile_join(&normalized, planner::BuildSourceKind::Stream).map_err(plan_err)?;
 
     let left_cols = left.column_requests(&plan.left_columns)?;
     let left_segments = left.segments_in_range(&left_cols, scope);

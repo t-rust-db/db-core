@@ -18,7 +18,8 @@
 
 use db_core::codegen::batch::{
     compile, compile_join, compile_semi_join, compile_window, expand_star, explain,
-    explain_opcodes, output_column_names, split_qualified, PlanError, TableStats, WindowFunc,
+    explain_opcodes, output_column_names, split_qualified, BuildSourceKind, PlanError, TableStats,
+    WindowFunc,
 };
 use db_core::parser::column::parse;
 use db_core::vm::batch::{JoinKind, MapOp, Opcode};
@@ -66,7 +67,11 @@ fn compile_where_not_like_emits_a_negated_like_map_op() {
 
 #[test]
 fn compile_join_builds_build_and_probe_programs() {
-    let plan = compile_join(&select("SELECT a.x, b.y FROM a JOIN b ON a.id = b.fk")).unwrap();
+    let plan = compile_join(
+        &select("SELECT a.x, b.y FROM a JOIN b ON a.id = b.fk"),
+        BuildSourceKind::InMemory,
+    )
+    .unwrap();
     assert!(!plan.left_columns.is_empty());
     assert!(!plan.right_columns.is_empty());
     assert!(!plan.build.instructions.is_empty());
@@ -75,7 +80,7 @@ fn compile_join_builds_build_and_probe_programs() {
 
 #[test]
 fn compile_join_rejects_a_query_with_no_join() {
-    let err = compile_join(&select("SELECT x FROM a")).unwrap_err();
+    let err = compile_join(&select("SELECT x FROM a"), BuildSourceKind::InMemory).unwrap_err();
     assert!(matches!(err, PlanError::NoJoinClause));
 }
 
@@ -210,9 +215,10 @@ fn compile_join_reports_unsupported_join_kind_as_a_typed_error() {
     // `PlanError::UnsupportedJoinKind` payload -- `Right`/`Full`/`Cross`
     // parse but only `Inner`/`Left` execute.
     let _ = JoinKind::Inner;
-    let err = compile_join(&select(
-        "SELECT a.x, b.y FROM a RIGHT JOIN b ON a.id = b.fk",
-    ))
+    let err = compile_join(
+        &select("SELECT a.x, b.y FROM a RIGHT JOIN b ON a.id = b.fk"),
+        BuildSourceKind::InMemory,
+    )
     .unwrap_err();
     assert!(matches!(err, PlanError::UnsupportedJoinKind(_)));
 }
