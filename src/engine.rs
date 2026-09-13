@@ -39,6 +39,16 @@ pub mod column;
 #[cfg(feature = "engine-stream")]
 pub mod stream;
 
+/// Compiling and evaluating a bare boolean expression against one
+/// already-materialized row (#369) -- [`Engine::compile_predicate`]'s
+/// return type. Reuses `WHERE`'s own grammar and compiler; needs no
+/// particular mode, just `vm-batch` to run the compiled expression.
+#[cfg(feature = "vm-batch")]
+pub mod predicate;
+
+#[cfg(feature = "vm-batch")]
+pub use predicate::CompiledPredicate;
+
 /// Cross-mode joins (#312 ADR-0019, #314): a SQLite table as a
 /// `vm::batch::Batch`/`Source`, the lookup side of a batch/stream-driving
 /// join. Deliberately not part of `row`'s module tree (ADR 0000 §(c): the
@@ -154,6 +164,25 @@ impl From<crate::vm::batch::Value> for Cell {
             crate::vm::batch::Value::Float(x) => Cell::Real(x),
             crate::vm::batch::Value::Bool(b) => Cell::Bool(b),
             crate::vm::batch::Value::Str(s) => Cell::Text(s.into_owned()),
+        }
+    }
+}
+
+/// The reverse of the conversion above: a materialized [`Cell`] going back
+/// into the batch VM to be evaluated (`engine::predicate`, #369).
+/// `Cell::Blob` has no `vm::batch::Value` counterpart -- it becomes `Null`,
+/// same as `vm::batch::Value` losing precision it never had; a predicate
+/// referencing a blob column degrades to comparing against `NULL` rather
+/// than panicking.
+#[cfg(feature = "vm-batch")]
+impl From<Cell> for crate::vm::batch::Value {
+    fn from(c: Cell) -> Self {
+        match c {
+            Cell::Null | Cell::Blob(_) => crate::vm::batch::Value::Null,
+            Cell::Int(n) => crate::vm::batch::Value::Int(n),
+            Cell::Real(x) => crate::vm::batch::Value::Float(x),
+            Cell::Bool(b) => crate::vm::batch::Value::Bool(b),
+            Cell::Text(s) => crate::vm::batch::Value::Str(s.into()),
         }
     }
 }
@@ -380,6 +409,25 @@ pub trait Engine {
     /// Tables (and their columns) known from the file's schema, without
     /// running a query. Empty for a file with no tables.
     fn tables(&self) -> Result<Vec<TableInfo>, EngineError>;
+
+    /// Compiles `expr` -- a bare boolean expression, the same grammar
+    /// `WHERE` uses -- against this engine's current schema (db-studio's
+    /// highlight/dim/filter feature, #369): a column `expr` references
+    /// that no table currently has is an [`ErrorKind::Compile`] error,
+    /// not a silent `false` at eval time. The result evaluates repeatedly
+    /// against individual rows via [`CompiledPredicate::eval`] with no
+    /// further file access -- row, batch, and stream engines alike, since
+    /// this is a function of the schema and the compiled expression, not
+    /// of how the engine drives its own queries.
+    #[cfg(feature = "vm-batch")]
+    fn compile_predicate(&self, expr: &str) -> Result<CompiledPredicate, EngineError> {
+        let schema_columns: Vec<String> = self
+            .tables()?
+            .into_iter()
+            .flat_map(|t| t.columns.into_iter().map(|c| c.name))
+            .collect();
+        CompiledPredicate::compile(expr, &schema_columns)
+    }
 }
 
 /// `explain_*` (and the batch engine's `run_query`) take exactly one

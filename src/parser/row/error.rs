@@ -14,7 +14,7 @@ use super::grammar::Parser;
 use super::tokenizer::Tokenizer;
 use crate::parser::ast::{
     Analyze, Begin, Commit, CreateIndex, CreateTable, CreateView, Delete, DropIndex, DropTable,
-    DropView, Explain, Insert, Pragma, Rollback, Select, Update,
+    DropView, Explain, Expr, Insert, Pragma, Rollback, Select, Update,
 };
 use crate::parser::Span;
 
@@ -87,6 +87,29 @@ pub fn parse_explain(src: &str) -> ParseOutcome<Explain> {
     match parser.parse_explain_stmt() {
         Ok(explain) => match parser.expect_end() {
             Ok(()) => ParseOutcome::Accepted(Box::new(explain)),
+            Err(ParseFail::Unsupported { message, span }) => {
+                ParseOutcome::Unsupported { message, span }
+            }
+            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },
+        },
+        Err(ParseFail::Unsupported { message, span }) => {
+            ParseOutcome::Unsupported { message, span }
+        }
+        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },
+    }
+}
+
+/// Parses a single bare boolean expression -- the same grammar `WHERE`
+/// already uses (`Parser::expr`), with no surrounding `SELECT` -- for a
+/// caller that only wants to compile a predicate against a schema (db-core
+/// #369), not a whole statement. Never panics -- any input produces one of
+/// the three [`ParseOutcome`] variants.
+pub fn parse_bool_expr(src: &str) -> ParseOutcome<Expr> {
+    let tokens = Tokenizer::tokenize(src);
+    let mut parser = Parser::new(tokens);
+    match parser.expr() {
+        Ok(expr) => match parser.expect_end() {
+            Ok(()) => ParseOutcome::Accepted(Box::new(expr)),
             Err(ParseFail::Unsupported { message, span }) => {
                 ParseOutcome::Unsupported { message, span }
             }

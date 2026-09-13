@@ -177,7 +177,9 @@ pub fn db_core::codegen::batch::WindowSpec::eq(&self, &db_core::codegen::batch::
 impl core::fmt::Debug for db_core::codegen::batch::WindowSpec
 pub fn db_core::codegen::batch::WindowSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::batch::WindowSpec
+pub fn db_core::codegen::batch::bool_expr_columns(&db_core::parser::ast::Expr) -> alloc::vec::Vec<alloc::string::String>
 pub fn db_core::codegen::batch::compile(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
+pub fn db_core::codegen::batch::compile_bool_expr(&db_core::parser::ast::Expr) -> db_core::vm::batch::Program
 pub fn db_core::codegen::batch::compile_join(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
 pub fn db_core::codegen::batch::compile_semi_join(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::codegen::batch::SemiJoinProgram>
 pub fn db_core::codegen::batch::compile_window(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
@@ -549,6 +551,7 @@ pub fn db_core::engine::column::BatchEngine::table_name(&self) -> &str
 impl core::fmt::Debug for db_core::engine::column::BatchEngine
 pub fn db_core::engine::column::BatchEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::engine::Engine for db_core::engine::column::BatchEngine
+pub fn db_core::engine::column::BatchEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
 pub fn db_core::engine::column::BatchEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
 pub fn db_core::engine::column::BatchEngine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::column::BatchEngine::mode(&self) -> db_core::engine::Mode
@@ -577,6 +580,15 @@ impl db_core::vm::batch::Source for db_core::engine::cross_mode::RowTableSource
 pub fn db_core::engine::cross_mode::RowTableSource::next_batch(&mut self) -> core::option::Option<db_core::vm::batch::Batch>
 pub fn db_core::engine::cross_mode::materialize_table(&db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &db_core::schema::TableSchema, &[alloc::string::String]) -> core::result::Result<db_core::vm::batch::Batch, db_core::vm::batch::VmError>
 pub fn db_core::engine::cross_mode::scan_table_as_batch(&db_core::engine::row::RowEngine, &str, &[alloc::string::String]) -> core::result::Result<db_core::vm::batch::Batch, db_core::engine::EngineError>
+pub mod db_core::engine::predicate
+pub struct db_core::engine::predicate::CompiledPredicate
+impl db_core::engine::predicate::CompiledPredicate
+pub fn db_core::engine::predicate::CompiledPredicate::compile(&str, &[alloc::string::String]) -> core::result::Result<Self, db_core::engine::EngineError>
+pub fn db_core::engine::predicate::CompiledPredicate::eval(&self, &[db_core::engine::Cell], &[alloc::string::String]) -> core::result::Result<bool, db_core::engine::EngineError>
+impl core::clone::Clone for db_core::engine::predicate::CompiledPredicate
+pub fn db_core::engine::predicate::CompiledPredicate::clone(&self) -> db_core::engine::predicate::CompiledPredicate
+impl core::fmt::Debug for db_core::engine::predicate::CompiledPredicate
+pub fn db_core::engine::predicate::CompiledPredicate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod db_core::engine::resolve
 pub fn db_core::engine::resolve::explain_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &std::path::Path, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::run_query(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
@@ -721,6 +733,7 @@ pub fn db_core::engine::row::RowEngine::path(&self) -> &std::path::Path
 impl core::fmt::Debug for db_core::engine::row::RowEngine
 pub fn db_core::engine::row::RowEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::engine::Engine for db_core::engine::row::RowEngine
+pub fn db_core::engine::row::RowEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
 pub fn db_core::engine::row::RowEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
 pub fn db_core::engine::row::RowEngine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::row::RowEngine::mode(&self) -> db_core::engine::Mode
@@ -761,6 +774,7 @@ pub fn db_core::engine::stream::StreamEngine::tail_source(&self, &[db_core::stor
 impl core::fmt::Debug for db_core::engine::stream::StreamEngine
 pub fn db_core::engine::stream::StreamEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::engine::Engine for db_core::engine::stream::StreamEngine
+pub fn db_core::engine::stream::StreamEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
 pub fn db_core::engine::stream::StreamEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
 pub fn db_core::engine::stream::StreamEngine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::stream::StreamEngine::mode(&self) -> db_core::engine::Mode
@@ -785,6 +799,8 @@ impl core::cmp::PartialEq for db_core::engine::Cell
 pub fn db_core::engine::Cell::eq(&self, &db_core::engine::Cell) -> bool
 impl core::convert::From<&db_core::value::Value> for db_core::engine::Cell
 pub fn db_core::engine::Cell::from(&db_core::value::Value) -> Self
+impl core::convert::From<db_core::engine::Cell> for db_core::vm::batch::Value
+pub fn db_core::vm::batch::Value::from(db_core::engine::Cell) -> Self
 impl core::convert::From<db_core::value::Value> for db_core::engine::Cell
 pub fn db_core::engine::Cell::from(db_core::value::Value) -> Self
 impl core::convert::From<db_core::vm::batch::Value> for db_core::engine::Cell
@@ -857,6 +873,14 @@ pub fn db_core::engine::ColumnInfo::eq(&self, &db_core::engine::ColumnInfo) -> b
 impl core::fmt::Debug for db_core::engine::ColumnInfo
 pub fn db_core::engine::ColumnInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::engine::ColumnInfo
+pub struct db_core::engine::CompiledPredicate
+impl db_core::engine::predicate::CompiledPredicate
+pub fn db_core::engine::predicate::CompiledPredicate::compile(&str, &[alloc::string::String]) -> core::result::Result<Self, db_core::engine::EngineError>
+pub fn db_core::engine::predicate::CompiledPredicate::eval(&self, &[db_core::engine::Cell], &[alloc::string::String]) -> core::result::Result<bool, db_core::engine::EngineError>
+impl core::clone::Clone for db_core::engine::predicate::CompiledPredicate
+pub fn db_core::engine::predicate::CompiledPredicate::clone(&self) -> db_core::engine::predicate::CompiledPredicate
+impl core::fmt::Debug for db_core::engine::predicate::CompiledPredicate
+pub fn db_core::engine::predicate::CompiledPredicate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::engine::EngineError
 pub db_core::engine::EngineError::kind: db_core::engine::ErrorKind
 pub db_core::engine::EngineError::message: alloc::string::String
@@ -950,6 +974,7 @@ impl core::fmt::Debug for db_core::engine::TableInfo
 pub fn db_core::engine::TableInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::engine::TableInfo
 pub trait db_core::engine::Engine
+pub fn db_core::engine::Engine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
 pub fn db_core::engine::Engine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
 pub fn db_core::engine::Engine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::Engine::mode(&self) -> db_core::engine::Mode
@@ -958,6 +983,7 @@ pub fn db_core::engine::Engine::run_query(&mut self, &str) -> core::result::Resu
 pub fn db_core::engine::Engine::stats(&self) -> db_core::engine::FileStats
 pub fn db_core::engine::Engine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
 impl db_core::engine::Engine for db_core::engine::column::BatchEngine
+pub fn db_core::engine::column::BatchEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
 pub fn db_core::engine::column::BatchEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
 pub fn db_core::engine::column::BatchEngine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::column::BatchEngine::mode(&self) -> db_core::engine::Mode
@@ -966,6 +992,7 @@ pub fn db_core::engine::column::BatchEngine::run_query(&mut self, &str) -> core:
 pub fn db_core::engine::column::BatchEngine::stats(&self) -> db_core::engine::FileStats
 pub fn db_core::engine::column::BatchEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
 impl db_core::engine::Engine for db_core::engine::row::RowEngine
+pub fn db_core::engine::row::RowEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
 pub fn db_core::engine::row::RowEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
 pub fn db_core::engine::row::RowEngine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::row::RowEngine::mode(&self) -> db_core::engine::Mode
@@ -974,6 +1001,7 @@ pub fn db_core::engine::row::RowEngine::run_query(&mut self, &str) -> core::resu
 pub fn db_core::engine::row::RowEngine::stats(&self) -> db_core::engine::FileStats
 pub fn db_core::engine::row::RowEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
 impl db_core::engine::Engine for db_core::engine::stream::StreamEngine
+pub fn db_core::engine::stream::StreamEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
 pub fn db_core::engine::stream::StreamEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
 pub fn db_core::engine::stream::StreamEngine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::stream::StreamEngine::mode(&self) -> db_core::engine::Mode
@@ -1863,6 +1891,7 @@ impl<T: core::fmt::Debug> core::fmt::Debug for db_core::parser::row::error::Pars
 pub fn db_core::parser::row::error::ParseOutcome<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::parser::row::error::parse_analyze(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Analyze>
 pub fn db_core::parser::row::error::parse_begin(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Begin>
+pub fn db_core::parser::row::error::parse_bool_expr(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Expr>
 pub fn db_core::parser::row::error::parse_commit(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Commit>
 pub fn db_core::parser::row::error::parse_create_index(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::CreateIndex>
 pub fn db_core::parser::row::error::parse_create_table(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::CreateTable>
@@ -2137,6 +2166,7 @@ pub fn db_core::parser::row::error::ParseOutcome<T>::fmt(&self, &mut core::fmt::
 pub fn db_core::parser::row::ends_with_semicolon(&str) -> bool
 pub fn db_core::parser::row::parse_analyze(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Analyze>
 pub fn db_core::parser::row::parse_begin(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Begin>
+pub fn db_core::parser::row::parse_bool_expr(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Expr>
 pub fn db_core::parser::row::parse_commit(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Commit>
 pub fn db_core::parser::row::parse_create_index(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::CreateIndex>
 pub fn db_core::parser::row::parse_create_table(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::CreateTable>
@@ -3700,6 +3730,7 @@ pub const db_core::storage::row::vfs::fcntl::F_UNLCK: i16
 pub const db_core::storage::row::vfs::fcntl::F_WRLCK: i16
 pub const db_core::storage::row::vfs::fcntl::O_NOFOLLOW: std::os::raw::c_int
 pub fn db_core::storage::row::vfs::fcntl::fcntl_call(&std::fs::File, db_core::storage::row::vfs::fcntl::FcntlArg<'_>) -> core::io::error::Result<std::os::raw::c_int>
+pub fn db_core::storage::row::vfs::fcntl::fsync(&std::fs::File) -> core::io::error::Result<()>
 pub type db_core::storage::row::vfs::fcntl::off_t = i64
 pub mod db_core::storage::row::vfs::lock
 pub enum db_core::storage::row::vfs::lock::LockLevel
@@ -5417,6 +5448,8 @@ impl core::clone::Clone for db_core::vm::batch::Value
 pub fn db_core::vm::batch::Value::clone(&self) -> db_core::vm::batch::Value
 impl core::cmp::PartialEq for db_core::vm::batch::Value
 pub fn db_core::vm::batch::Value::eq(&self, &db_core::vm::batch::Value) -> bool
+impl core::convert::From<db_core::engine::Cell> for db_core::vm::batch::Value
+pub fn db_core::vm::batch::Value::from(db_core::engine::Cell) -> Self
 impl core::convert::From<db_core::vm::batch::Value> for db_core::engine::Cell
 pub fn db_core::engine::Cell::from(db_core::vm::batch::Value) -> Self
 impl core::fmt::Debug for db_core::vm::batch::Value
