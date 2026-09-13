@@ -55,3 +55,4 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0021](0021-sqlite-as-driving-side.md) — Cross-mode joins: make SQLite-as-driving-side order-independent, not unsupported
 - [0022](0022-unbounded-stream-stream-joins.md) — Cross-mode joins: windowed (not unbounded) stream-to-stream joins
 - [0023](0023-key-restricted-materialization.md) — Cross-mode joins: measure before building key-restricted lookup materialization
+- [0024](0024-cross-mode-scan-source-opcode.md) — Cross-mode joins: compile the build side into `vm::batch` via a `ScanSource` opcode, unifying cross-mode `explain_opcodes` with single-engine queries
