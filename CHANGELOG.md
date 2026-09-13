@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.90.0] - 2026-09-13
+
+### Added
+
+- **Windowed stream-to-stream joins** (#372, ADR-0022): `engine::resolve::run_stream_stream_query`/`explain_stream_stream_plan` join two `StreamEngine` sources via a self-join (`FROM log AS a JOIN log AS b ON ... SINCE ...`), reusing `compile_join`/`HashBuild`/`HashProbe` unchanged. A `SINCE`/`UNTIL` time window is required -- with no bounded side to hash-build from, the window is what makes the join finite; an unwindowed or non-time-scoped (`LINES`/`BYTES`) self-join is rejected as `ErrorKind::Unsupported`. New `StreamEngine::segments_in_range` bounds a side's segments by observed-time overlap, and the build side's row count is capped to bound memory use.
+- **Self-join column disambiguation** in `parser::column::validate_select`: when two aliases in one `FROM`/`JOIN` resolve to the same real table (a self-join), the alias-to-real-name rewrite is skipped for those aliases so `a.col`/`b.col` survive as written instead of collapsing onto the same name.
+
+### Fixed
+
+- **`engine::predicate`/`Engine::compile_predicate` (#369) feature gate**: was gated on `vm-batch` alone but also needs `codegen-batch` (`storage-stream` implies `vm-batch` transitively without implying `codegen-batch`, same root cause as db-core#356).
+
 ## [0.89.0] - 2026-09-13
 
 ### Added
