@@ -52,7 +52,10 @@ use std::sync::Arc;
 use super::cross_mode;
 use super::row::RowEngine;
 use super::stream::StreamEngine;
-use super::{single_statement, Cell, Engine, EngineError, ErrorKind, PlanRow, QueryResult};
+use super::{
+    single_statement, Cell, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeRow,
+    OpcodeSection, PlanRow, QueryResult, TableInfo,
+};
 use crate::codegen::batch::{self as planner, split_qualified, PlanError, TableStats};
 use crate::parser::ast::{Select, TableRefKind};
 use crate::parser::ParseError;
@@ -61,6 +64,7 @@ use crate::vm::batch::{Batch, ScanSource, Segment as VmSegment, Value};
 use crate::vm::engine::run_join_segments;
 use crate::vm::stream::Scope;
 use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 
 /// Cap on rows materialized into one in-memory [`Batch`] for the windowed
 /// stream-to-stream join's build side (`materialize_segments`). Without a
@@ -544,4 +548,223 @@ pub fn explain_stream_stream_plan(
             detail: n.detail,
         })
         .collect())
+}
+
+/// `EXPLAIN` (bare opcode listing) for a stream/SQLite cross-mode query
+/// (ADR 0024, #382/#387): the same `compile_join` plan [`run_query`]
+/// executes, rendered via `codegen::batch`'s existing opcode renderer --
+/// the same mechanism a single-engine batch query's `EXPLAIN` already
+/// uses, not a divergent cross-mode-only format.
+fn explain_opcodes_query(
+    lookup: &RowEngine,
+    sql: &str,
+) -> Result<Vec<planner::OpcodeSection>, EngineError> {
+    let select = parse(sql)?;
+    resolve_sides(&select, lookup)?;
+    let plan =
+        planner::compile_join(&select, planner::BuildSourceKind::RowTable).map_err(plan_err)?;
+    Ok(vec![
+        planner::OpcodeSection {
+            label: "JOIN build (sqlite)".to_string(),
+            rows: planner::render_program(&plan.build),
+        },
+        planner::OpcodeSection {
+            label: "JOIN probe (stream log)".to_string(),
+            rows: planner::render_program(&plan.probe),
+        },
+        planner::OpcodeSection {
+            label: "JOIN body".to_string(),
+            rows: planner::render_program(&plan.body),
+        },
+    ])
+}
+
+/// `EXPLAIN` (bare opcode listing) for a windowed stream-to-stream join
+/// (ADR-0022, ADR 0024, #382/#387), mirroring [`explain_opcodes_query`].
+fn explain_opcodes_stream_stream_query(
+    sql: &str,
+) -> Result<Vec<planner::OpcodeSection>, EngineError> {
+    let select = parse(sql)?;
+    let (left_alias, right_alias) = resolve_stream_stream_sides(&select)?;
+    let normalized = alias_normalize(select, &left_alias, &right_alias);
+    let plan =
+        planner::compile_join(&normalized, planner::BuildSourceKind::Stream).map_err(plan_err)?;
+    Ok(vec![
+        planner::OpcodeSection {
+            label: format!("JOIN build (stream {right_alias})"),
+            rows: planner::render_program(&plan.build),
+        },
+        planner::OpcodeSection {
+            label: format!("JOIN probe (stream {left_alias})"),
+            rows: planner::render_program(&plan.probe),
+        },
+        planner::OpcodeSection {
+            label: "JOIN body".to_string(),
+            rows: planner::render_program(&plan.body),
+        },
+    ])
+}
+
+/// `codegen::batch::OpcodeSection`/`OpcodeRow` (this crate's planner-level
+/// opcode listing) -> `engine::OpcodeSection`/`OpcodeRow` (the
+/// engine-facing shape every [`Engine::explain_opcodes`] impl returns) --
+/// the same conversion `engine::column::BatchEngine::explain_opcodes`
+/// already does, folding a planner row's `comment` into `operands` as a
+/// trailing `; comment`.
+fn to_engine_opcode_sections(sections: Vec<planner::OpcodeSection>) -> Vec<OpcodeSection> {
+    sections
+        .into_iter()
+        .map(|s| OpcodeSection {
+            label: s.label,
+            rows: s
+                .rows
+                .into_iter()
+                .map(|r| OpcodeRow {
+                    addr: r.addr,
+                    opcode: r.opcode.to_string(),
+                    operands: if r.comment.is_empty() {
+                        r.operands
+                    } else {
+                        format!("{}  ; {}", r.operands, r.comment)
+                    },
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// A cross-mode engine spanning two files at once (ADR-0019/ADR-0022,
+/// #382/#387): either a stream `FROM` joined to one SQLite lookup table,
+/// or two stream engines joined via a windowed self-join. Routing only --
+/// every variant dispatches to the free-function query logic this module
+/// already had (`run_query`/`run_stream_stream_query`/`explain_plan`/
+/// `explain_stream_stream_plan`), which in turn compiles through
+/// `codegen::batch::compile_join` and executes through
+/// `vm::engine::run_join_segments` exactly as before #385/#386 -- this
+/// struct adds no new query behavior, only a real [`Engine`] impl so
+/// cross-mode `EXPLAIN`/`explain_opcodes` has a home (closing the gap
+/// db-studio#54's F3 view worked around with a placeholder).
+///
+/// [`Engine::open`] takes one `path`, which cannot express the two files a
+/// cross-mode query needs -- construct via
+/// [`CrossModeEngine::open_stream_sqlite`]/
+/// [`CrossModeEngine::open_stream_stream`] instead; `open` itself always
+/// returns a typed [`ErrorKind::Unsupported`] error (never a panic or a
+/// silently wrong single-file open) so implementing the trait doesn't
+/// imply `open` is a usable construction path for this engine.
+#[derive(Debug)]
+pub enum CrossModeEngine {
+    /// A stream `FROM` (`log`) joined to one SQLite lookup table (ADR-0019).
+    StreamSqlite {
+        /// The stream engine's `FROM` side.
+        driving: StreamEngine,
+        /// The SQLite `JOIN`-target lookup engine.
+        lookup: RowEngine,
+        /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
+        lookup_path: PathBuf,
+    },
+    /// Two stream engines joined via a windowed self-join (ADR-0022).
+    StreamStream {
+        /// The `FROM` side's stream engine (query alias: `FROM log AS <alias>`).
+        left: StreamEngine,
+        /// The `JOIN` side's stream engine (query alias: `JOIN log AS <alias>`).
+        right: StreamEngine,
+    },
+}
+
+impl CrossModeEngine {
+    /// Opens a stream/SQLite cross-mode engine (ADR-0019): `driving_path`
+    /// backs the query's `log` `FROM` side, `lookup_path` its SQLite
+    /// `JOIN`-target lookup table.
+    pub fn open_stream_sqlite(
+        driving_path: &Path,
+        lookup_path: &Path,
+    ) -> Result<Self, EngineError> {
+        Ok(CrossModeEngine::StreamSqlite {
+            driving: StreamEngine::open(driving_path)?,
+            lookup: RowEngine::open(lookup_path)?,
+            lookup_path: lookup_path.to_path_buf(),
+        })
+    }
+
+    /// Opens a windowed stream-to-stream cross-mode engine (ADR-0022):
+    /// `left_path`/`right_path` back the self-join's `FROM`/`JOIN` `log`
+    /// aliases respectively.
+    pub fn open_stream_stream(left_path: &Path, right_path: &Path) -> Result<Self, EngineError> {
+        Ok(CrossModeEngine::StreamStream {
+            left: StreamEngine::open(left_path)?,
+            right: StreamEngine::open(right_path)?,
+        })
+    }
+}
+
+impl Engine for CrossModeEngine {
+    fn open(_path: &Path) -> Result<Self, EngineError> {
+        Err(EngineError::new(
+            ErrorKind::Unsupported,
+            "a cross-mode engine spans two files; use \
+             CrossModeEngine::open_stream_sqlite or \
+             CrossModeEngine::open_stream_stream instead of Engine::open",
+        ))
+    }
+
+    fn mode(&self) -> Mode {
+        Mode::Cross
+    }
+
+    fn run_query(&mut self, sql: &str) -> Result<QueryResult, EngineError> {
+        match self {
+            CrossModeEngine::StreamSqlite {
+                driving, lookup, ..
+            } => run_query(driving, lookup, sql),
+            CrossModeEngine::StreamStream { left, right } => {
+                run_stream_stream_query(left, right, sql)
+            }
+        }
+    }
+
+    fn explain_plan(&self, sql: &str) -> Result<Vec<PlanRow>, EngineError> {
+        match self {
+            CrossModeEngine::StreamSqlite {
+                driving,
+                lookup,
+                lookup_path,
+            } => explain_plan(driving, lookup, lookup_path, sql),
+            CrossModeEngine::StreamStream { left, right } => {
+                explain_stream_stream_plan(left, right, sql)
+            }
+        }
+    }
+
+    fn explain_opcodes(&self, sql: &str) -> Result<Vec<OpcodeSection>, EngineError> {
+        let sections = match self {
+            CrossModeEngine::StreamSqlite { lookup, .. } => explain_opcodes_query(lookup, sql)?,
+            CrossModeEngine::StreamStream { .. } => explain_opcodes_stream_stream_query(sql)?,
+        };
+        Ok(to_engine_opcode_sections(sections))
+    }
+
+    fn stats(&self) -> FileStats {
+        match self {
+            CrossModeEngine::StreamSqlite { driving, .. } => driving.stats(),
+            CrossModeEngine::StreamStream { left, .. } => left.stats(),
+        }
+    }
+
+    fn tables(&self) -> Result<Vec<TableInfo>, EngineError> {
+        match self {
+            CrossModeEngine::StreamSqlite {
+                driving, lookup, ..
+            } => {
+                let mut tables = driving.tables()?;
+                tables.extend(lookup.tables()?);
+                Ok(tables)
+            }
+            CrossModeEngine::StreamStream { left, right } => {
+                let mut tables = left.tables()?;
+                tables.extend(right.tables()?);
+                Ok(tables)
+            }
+        }
+    }
 }

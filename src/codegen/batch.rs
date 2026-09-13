@@ -1991,7 +1991,7 @@ pub struct OpcodeSection {
     pub rows: Vec<OpcodeRow>,
 }
 
-fn render_program(program: &Program) -> Vec<OpcodeRow> {
+pub(crate) fn render_program(program: &Program) -> Vec<OpcodeRow> {
     program
         .instructions
         .iter()

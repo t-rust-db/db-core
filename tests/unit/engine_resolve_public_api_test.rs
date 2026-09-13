@@ -27,11 +27,11 @@
 use std::path::{Path, PathBuf};
 
 use db_core::engine::resolve::{
-    explain_plan, explain_stream_stream_plan, run_query, run_stream_stream_query,
+    explain_plan, explain_stream_stream_plan, run_query, run_stream_stream_query, CrossModeEngine,
 };
 use db_core::engine::row::RowEngine;
 use db_core::engine::stream::StreamEngine;
-use db_core::engine::{Cell, Engine, ErrorKind};
+use db_core::engine::{Cell, Engine, ErrorKind, Mode};
 
 const LOG_FIXTURE: &str = "tests/fixtures/stream/syslog-1k.log";
 const ROW_FIXTURE: &str = "tests/corpus/fixtures/btrees/table_single_page.db";
@@ -111,6 +111,44 @@ fn joins_warn_log_lines_against_a_sqlite_hosts_lookup_table() {
             _ => assert_eq!(region, &Cell::Null, "unmatched host {host} must be NULL"),
         }
     }
+}
+
+/// #387: the same stream/SQLite cross-mode join, but routed through
+/// `CrossModeEngine`'s `Engine` impl instead of the free functions --
+/// `run_query`/`explain_opcodes` must agree with the free-function path
+/// above, and `explain_opcodes` (previously "not available" for cross-mode
+/// queries, db-studio#54) must return a real, non-empty opcode dump naming
+/// the join.
+#[test]
+fn cross_mode_engine_routes_run_query_and_explain_opcodes() {
+    let db = HostsDb::new("cross-mode-engine");
+    let mut engine = CrossModeEngine::open_stream_sqlite(Path::new(LOG_FIXTURE), db.path())
+        .expect("open cross-mode engine");
+    assert_eq!(engine.mode(), Mode::Cross);
+
+    let sql = "SELECT log.hostname, hosts.region FROM log \
+               JOIN hosts ON log.hostname = hosts.name \
+               WHERE severity >= 'WARN'";
+    let result = engine.run_query(sql).expect("cross-mode join via Engine");
+    assert_eq!(result.columns, vec!["log.hostname", "hosts.region"]);
+    assert!(!result.rows.is_empty());
+
+    let sections = engine
+        .explain_opcodes(sql)
+        .expect("explain_opcodes via Engine");
+    assert!(!sections.is_empty());
+    assert!(sections.iter().any(|s| s.label.contains("JOIN build")));
+    assert!(sections.iter().any(|s| s.label.contains("JOIN probe")));
+    assert!(sections.iter().any(|s| !s.rows.is_empty()));
+}
+
+/// `Engine::open`'s single `path` cannot express a cross-mode engine's two
+/// files -- it must fail with a typed error, not panic or silently open
+/// only one side.
+#[test]
+fn cross_mode_engine_open_is_unsupported() {
+    let err = CrossModeEngine::open(Path::new(LOG_FIXTURE)).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
 }
 
 #[test]

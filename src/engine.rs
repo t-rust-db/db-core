@@ -82,6 +82,11 @@ pub enum Mode {
     Batch,
     /// `storage::stream` + a streaming VM: log files.
     Stream,
+    /// A cross-mode join spanning two files at once (ADR-0019/ADR-0022,
+    /// #382): stream/SQLite or stream/stream. No single `storage`/`vm`
+    /// pair backs this alone -- `engine::resolve`'s `CrossModeEngine`
+    /// routes to whichever pair the query actually names.
+    Cross,
 }
 
 impl fmt::Display for Mode {
@@ -90,6 +95,7 @@ impl fmt::Display for Mode {
             Mode::Row => "row",
             Mode::Batch => "batch",
             Mode::Stream => "stream",
+            Mode::Cross => "cross",
         })
     }
 }
