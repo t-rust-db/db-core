@@ -387,6 +387,7 @@ impl Engine for RowEngine {
             .collect();
         Ok(vec![OpcodeSection {
             label: "main".to_string(),
+            lane: "row",
             rows,
         }])
     }

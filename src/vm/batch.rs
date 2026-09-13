@@ -122,7 +122,7 @@ impl Value {
 /// #264: columns are `Arc`-shared, not `Vec`-owned, so cloning a `Batch`
 /// (e.g. [`Segment::load`]) and loading a column into a register
 /// ([`Opcode::LoadColumn`]) are both a refcount bump, not a per-cell copy.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Batch {
     /// Column values by column name; every column has exactly `num_rows` entries.
     pub columns: HashMap<String, Arc<Vec<Value>>>,
@@ -389,6 +389,14 @@ pub enum Opcode {
     /// Marks the top of the per-segment loop; a no-op on its own (the
     /// current batch is already loaded by [`Vm::run`]).
     Scan,
+    /// Names where a cross-mode join's build side materializes its
+    /// [`Batch`] from (ADR 0024, #382/#384) -- a no-op in the per-segment
+    /// [`Vm::step`], like [`Opcode::Scan`]/[`Opcode::Combine`]; resolving a
+    /// [`ScanSource`] into an actual `Batch` is
+    /// [`crate::vm::engine`]'s job (#385), not this executor's, since only
+    /// the orchestration layer above a single segment's batch is allowed to
+    /// depend on how a row table or stream engine is reached.
+    ScanSource(ScanSource),
     /// Append the current values of `registers` (transposed row-major) to
     /// the VM's output.
     Emit {
@@ -464,6 +472,52 @@ pub enum Opcode {
     },
 }
 
+/// Where [`Opcode::ScanSource`] materializes a cross-mode join's build side
+/// from (ADR 0024, #382/#384) -- a closed enum, not a trait object, so
+/// every source's row/batch/stream origin stays visible and exhaustively
+/// matchable at the opcode level, instead of being erased behind
+/// `Box<dyn Segment>` once past construction. `vm::batch` cannot depend on
+/// `engine`'s concrete `RowEngine`/`StreamEngine` types (that would invert
+/// the layering ADR-0001 fixes), so [`ScanSource::RowTable`] and
+/// [`ScanSource::Stream`] name their source by value (table name, stream
+/// handle) rather than by reference -- the same indirection
+/// [`Opcode::HashBuild`]/[`Opcode::HashProbe`]'s `table: usize` already
+/// uses to point at a resource resolved elsewhere. Resolving a `ScanSource`
+/// into an actual [`Batch`] is [`crate::vm::engine`]'s job (#385); this
+/// type only names the resource.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScanSource {
+    /// A SQLite table read through `engine::row`, by name.
+    RowTable {
+        /// The table's name.
+        table: Cow<'static, str>,
+        /// Columns to materialize, in the build program's register order.
+        columns: Cow<'static, [Cow<'static, str>]>,
+    },
+    /// A windowed (or unbounded) set of stream segments, identified by an
+    /// opaque handle the executor resolves to a concrete stream engine --
+    /// mirrors `vm::stream::Scope`'s windowing (`SINCE`/`UNTIL`). `vm::batch`
+    /// builds without `vm-stream` enabled (`vm-stream` depends on
+    /// `vm-batch`, never the reverse), so this variant cannot name
+    /// `vm::stream::Scope` directly; `scope` is only present when
+    /// `vm-stream` is, and its resolver (#385, `vm::engine`, which does
+    /// depend on `vm::stream`) is responsible for interpreting it.
+    Stream {
+        /// Opaque identifier for which stream engine/table to read;
+        /// meaningful only to whatever resolves this opcode.
+        handle: usize,
+        /// Columns to materialize, in the build program's register order.
+        columns: Cow<'static, [Cow<'static, str>]>,
+        /// The windowing scope, if any -- required for stream-to-stream
+        /// joins (ADR 0022), since neither side is bounded by construction.
+        #[cfg(feature = "vm-stream")]
+        scope: Option<crate::vm::stream::Scope>,
+    },
+    /// An already-materialized batch -- no scan needed (e.g. a
+    /// table-to-table batch join's build side, or a literal input).
+    InMemory(Batch),
+}
+
 impl Opcode {
     /// The opcode's variant name, used as `VmError`'s runtime-error context
     /// (the execution-time equivalent of `Span` for parse errors -- there's
@@ -481,6 +535,7 @@ impl Opcode {
             Opcode::HashProbe { .. } => "HashProbe",
             Opcode::Window { .. } => "Window",
             Opcode::Scan => "Scan",
+            Opcode::ScanSource { .. } => "ScanSource",
             Opcode::Emit { .. } => "Emit",
             Opcode::NextSegment { .. } => "NextSegment",
             Opcode::Halt => "Halt",
@@ -1833,13 +1888,18 @@ impl Vm {
             // Meaningful only as loop markers interpreted by `run` --
             // and `Combine`/`Sort`/`Limit` are the cross-segment
             // sequential phase applied once by `crate::vm::engine::run`,
-            // never inside a single segment.
+            // never inside a single segment. `ScanSource` is likewise a
+            // no-op here: resolving it into a `Batch` happens above the
+            // per-segment `Vm`, in `crate::vm::engine` (#385) -- this
+            // ticket (#384) only defines the opcode/type, no emitted
+            // program references it yet.
             Opcode::Scan
             | Opcode::NextSegment { .. }
             | Opcode::Halt
             | Opcode::Combine { .. }
             | Opcode::Sort { .. }
-            | Opcode::Limit { .. } => {}
+            | Opcode::Limit { .. }
+            | Opcode::ScanSource { .. } => {}
         }
         Ok(())
     }

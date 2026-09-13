@@ -1122,6 +1122,7 @@ impl Engine for StreamEngine {
             .into_iter()
             .map(|s| OpcodeSection {
                 label: s.label,
+                lane: "stream",
                 rows: s
                     .rows
                     .into_iter()

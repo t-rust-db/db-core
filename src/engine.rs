@@ -82,6 +82,11 @@ pub enum Mode {
     Batch,
     /// `storage::stream` + a streaming VM: log files.
     Stream,
+    /// A cross-mode join spanning two files at once (ADR-0019/ADR-0022,
+    /// #382): stream/SQLite or stream/stream. No single `storage`/`vm`
+    /// pair backs this alone -- `engine::resolve`'s `CrossModeEngine`
+    /// routes to whichever pair the query actually names.
+    Cross,
 }
 
 impl fmt::Display for Mode {
@@ -90,6 +95,7 @@ impl fmt::Display for Mode {
             Mode::Row => "row",
             Mode::Batch => "batch",
             Mode::Stream => "stream",
+            Mode::Cross => "cross",
         })
     }
 }
@@ -268,6 +274,17 @@ pub struct OpcodeRow {
 pub struct OpcodeSection {
     /// Section name.
     pub label: String,
+    /// Which physical engine executes this section's opcodes: `"row"`,
+    /// `"batch"`, or `"stream"` (ADR 0024, #382/#388). A single-engine
+    /// query's sections all share its own [`Mode`]; a cross-mode query's
+    /// sections can differ per section -- e.g. a stream/SQLite join's
+    /// build section is `"row"` (the SQLite lookup scan), its probe
+    /// section `"stream"` (the driving tail), its body `"batch"` (every
+    /// join always executes on `vm::batch` regardless of either side's
+    /// origin). This is what closes db-studio#54's "not available for
+    /// cross-mode joins" gap with real, labelled lanes instead of a
+    /// placeholder.
+    pub lane: &'static str,
     /// The section's instructions, in address order.
     pub rows: Vec<OpcodeRow>,
 }

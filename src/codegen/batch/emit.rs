@@ -915,7 +915,8 @@ fn render_opcode(op: &Opcode) -> String {
         Opcode::HashBuild { .. }
         | Opcode::HashProbe { .. }
         | Opcode::Window { .. }
-        | Opcode::Call { .. } => {
+        | Opcode::Call { .. }
+        | Opcode::ScanSource { .. } => {
             // Same `compile_error!`-in-generated-source strategy as
             // `render_expr_kind`'s unsupported arm: loud at the consumer's
             // build, no panic here.
