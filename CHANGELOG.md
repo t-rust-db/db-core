@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.89.0] - 2026-09-13
+
+### Added
+
+- **`Engine::compile_predicate`/`CompiledPredicate::eval`** (#369): compile a bare boolean expression -- the same grammar `WHERE` already uses -- against the engine's current schema, then evaluate it repeatedly against individual already-materialized rows (as `Cell`s keyed by column name), with no file I/O or engine re-query. Reuses `codegen::batch`'s existing expression compiler, so `LIKE`/`GLOB` (#352) and anything else `WHERE` accepts work the same way here. Built for db-studio's highlight/dim/filter feature (db-studio#45).
+
 ## [0.88.2] - 2026-09-12
 
 ### Fixed

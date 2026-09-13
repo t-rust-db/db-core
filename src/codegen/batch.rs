@@ -908,6 +908,41 @@ fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
     }
 }
 
+/// Column names `expr` references, in first-encountered order (public
+/// wrapper over [`collect_expr_columns`] for `engine::predicate`, #369,
+/// which needs this ahead of compiling to validate against a schema).
+pub fn bool_expr_columns(expr: &AstExpr) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_expr_columns(expr, &mut out);
+    out
+}
+
+/// Compiles a bare boolean expression -- not part of a `SELECT`, no table
+/// scan -- into a [`Program`] that filters a single-row [`Batch`] and
+/// emits no columns: run over a one-row segment, a non-empty result means
+/// the row satisfied `expr` (db-core#369, `engine::predicate`). Shares
+/// [`compile_expr`]'s lowering, so it accepts exactly the same expression
+/// subset (including `LIKE`/`GLOB`, #352) as a `WHERE` clause does.
+///
+/// [`Batch`]: crate::vm::batch::Batch
+pub fn compile_bool_expr(expr: &AstExpr) -> Program {
+    let mut ctx = Ctx {
+        next_reg: 0,
+        column_regs: HashMap::new(),
+        program: Vec::new(),
+    };
+    let predicate = compile_expr(expr, &mut ctx);
+    ctx.push_commented(
+        Opcode::Filter { predicate },
+        format!("WHERE {}", expr_to_string(expr)),
+    );
+    ctx.push(Opcode::Emit {
+        registers: vec![predicate].into(),
+    });
+    ctx.push(Opcode::Halt);
+    Program::new(ctx.program)
+}
+
 /// Folds an aggregate's or window function's `FILTER (WHERE ...)` clause
 /// into its source register: with no filter, `base` (the plain argument
 /// column, `None` for `COUNT(*)`) passes through unchanged. With a filter,
