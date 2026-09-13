@@ -14,15 +14,68 @@
 //!
 //! The merge/sort/limit logic itself ([`finalize`]) is column-rs's former
 //! `query::post_process`, moved here unchanged -- it never touched storage.
-//! Likewise [`run_join`], the two-phase `HashBuild`/`HashProbe` driver
-//! over two already-materialized tables, and [`semi_filter`].
+//! Likewise [`run_join`]/[`run_join_segments`], the two-phase
+//! `HashBuild`/`HashProbe` driver: the build side is named by a
+//! [`super::batch::ScanSource`] (ADR 0024, #382) rather than always being
+//! an already-materialized table, resolved via [`ScanSourceResolver`] when
+//! it isn't. And [`semi_filter`].
 
 use super::batch::{
     compare_for_order, run_parallel, run_parallel_top_n, AggPart, Batch, JoinTables, Opcode,
-    Program, Result, Segment, TopN, Value, Vm, VmError,
+    Program, Result, ScanSource, Segment, TopN, Value, Vm, VmError,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+/// Materializes a cross-mode join's build side (ADR 0024, #382/#385): a
+/// [`ScanSource::RowTable`] or [`ScanSource::Stream`] names *where* to read
+/// from, but `vm::engine` cannot reach a SQLite table or a stream engine
+/// itself without inverting the `engine` -> `vm` layering (ADR 0001) --
+/// the caller supplies this (`engine::resolve`, which already depends on
+/// both `vm::batch` and the row/stream engines). Never called for
+/// [`ScanSource::InMemory`] -- see [`resolve_scan_source`].
+pub trait ScanSourceResolver {
+    /// Materializes `source` (never [`ScanSource::InMemory`]) into a [`Batch`].
+    fn resolve(&self, source: &ScanSource) -> Result<Batch>;
+}
+
+/// Any closure of this shape is a [`ScanSourceResolver`] -- lets a caller
+/// (`engine::resolve`) hand `run_join_segments` a resolver that borrows its
+/// enclosing function's locals via closure capture, with no named lifetime
+/// spelled out anywhere (the qualified subset, `make check-mvl-limit`,
+/// forbids explicit lifetimes beyond function-scoped elision, which a
+/// hand-written `struct Resolver<'a> { .. }` would need).
+impl<F: Fn(&ScanSource) -> Result<Batch>> ScanSourceResolver for F {
+    fn resolve(&self, source: &ScanSource) -> Result<Batch> {
+        self(source)
+    }
+}
+
+/// A [`ScanSourceResolver`] that always errors -- for callers that only
+/// ever hand [`run_join`]/[`run_join_segments`] a [`ScanSource::InMemory`]
+/// build side (an already-materialized [`Batch`], as [`run_join`] itself
+/// always supplies) and so have no real source to resolve.
+pub struct NoResolver;
+
+impl ScanSourceResolver for NoResolver {
+    fn resolve(&self, source: &ScanSource) -> Result<Batch> {
+        Err(VmError::MalformedProgram {
+            opcode: "ScanSource",
+            reason: format!("no resolver supplied to materialize {source:?}"),
+        })
+    }
+}
+
+/// Materializes `source` into a [`Batch`]: [`ScanSource::InMemory`] is
+/// already one (no resolver call needed); anything else is handed to
+/// `resolver`. Generic, not `&dyn ScanSourceResolver` -- the qualified
+/// subset (`make check-mvl-limit`) forbids dynamic dispatch.
+fn resolve_scan_source<R: ScanSourceResolver>(source: ScanSource, resolver: &R) -> Result<Batch> {
+    match source {
+        ScanSource::InMemory(batch) => Ok(batch),
+        other => resolver.resolve(&other),
+    }
+}
 
 /// A [`Segment`] over an already-materialized [`Batch`] -- for the join/
 /// semi-join/window paths, which build one in-memory table and then run
@@ -338,9 +391,15 @@ pub struct JoinProgram {
 /// Execute a [`JoinProgram`] over two fully materialized tables: run the
 /// build program on `right`, the probe program on `left`, assemble the
 /// joined batch (left columns then right payload), and run `body` over it
-/// as a single in-memory segment via [`run`].
+/// as a single in-memory segment via [`run`]. Both sides are already
+/// `Batch`es, so no [`ScanSourceResolver`] is needed (see [`NoResolver`]).
 pub fn run_join(left: &Batch, right: &Batch, plan: &JoinProgram) -> Result<Vec<Vec<Value>>> {
-    run_join_segments(vec![InMemorySegment(left.clone())], right, plan)
+    run_join_segments(
+        vec![InMemorySegment(left.clone())],
+        ScanSource::InMemory(right.clone()),
+        plan,
+        &NoResolver,
+    )
 }
 
 /// [`run_join`] with the probe (left) side as segments (#272): the build
@@ -351,16 +410,24 @@ pub fn run_join(left: &Batch, right: &Batch, plan: &JoinProgram) -> Result<Vec<V
 /// [`JoinedSegment`] hands its probe registers straight to the body as a
 /// [`Batch`] (moved, not copied).
 ///
+/// `right` names where the build side comes from (ADR 0024, #382/#385): an
+/// already-materialized [`ScanSource::InMemory`] batch needs no resolver
+/// (see [`run_join`]); a [`ScanSource::RowTable`]/[`ScanSource::Stream`]
+/// is materialized by `resolver`, supplied by the caller since `vm::engine`
+/// cannot reach a SQLite table or a stream engine itself.
+///
 /// Takes `left` by value so a segment can be wrapped without a borrow
 /// (the qualified subset forbids the struct lifetime that would need).
-pub fn run_join_segments<S: Segment>(
+pub fn run_join_segments<S: Segment, R: ScanSourceResolver>(
     left: Vec<S>,
-    right: &Batch,
+    right: ScanSource,
     plan: &JoinProgram,
+    resolver: &R,
 ) -> Result<Vec<Vec<Value>>> {
+    let right_batch = resolve_scan_source(right, resolver)?;
     let build: Vec<Opcode> = plan.build.opcodes().cloned().collect();
     let mut builder = Vm::new();
-    builder.execute(right, &build)?;
+    builder.execute(&right_batch, &build)?;
     let tables = builder.join_tables();
 
     let shape = Arc::new(JoinShape {

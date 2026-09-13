@@ -57,9 +57,10 @@ use crate::codegen::batch::{self as planner, split_qualified, PlanError, TableSt
 use crate::parser::ast::{Select, TableRefKind};
 use crate::parser::ParseError;
 use crate::storage::stream::{ColumnRequest, StreamSegment};
-use crate::vm::batch::{Batch, Segment as VmSegment, Value};
+use crate::vm::batch::{Batch, ScanSource, Segment as VmSegment, Value};
 use crate::vm::engine::run_join_segments;
 use crate::vm::stream::Scope;
+use std::borrow::Cow;
 
 /// Cap on rows materialized into one in-memory [`Batch`] for the windowed
 /// stream-to-stream join's build side (`materialize_segments`). Without a
@@ -196,10 +197,31 @@ pub fn run_query(
         .iter()
         .map(|n| split_qualified(n).1.to_string())
         .collect();
-    let lookup_batch = cross_mode::scan_table_as_batch(lookup, &lookup_table, &raw_lookup_cols)?;
-    let lookup_batch = requalify(lookup_batch, &raw_lookup_cols, &plan.right_columns);
+    // Resolves `ScanSource::RowTable` by scanning `lookup_table` through
+    // `engine::row` (ADR 0024, #385) -- the same materialization
+    // `cross_mode::scan_table_as_batch` always did, now reached via
+    // `run_join_segments`'s opcode-named build side instead of being
+    // materialized before that call. Requalifies raw SQLite column names to
+    // the query's qualified names (`requalify`), since only the resolver
+    // sees the raw scan. A closure, not a hand-written `struct
+    // Resolver<'a>` -- the qualified subset forbids the named lifetime
+    // that would need (`make check-mvl-limit`).
+    let resolver = |_source: &ScanSource| -> crate::vm::batch::Result<Batch> {
+        let batch = cross_mode::scan_table_as_batch(lookup, &lookup_table, &raw_lookup_cols)
+            .map_err(|e| crate::vm::batch::VmError::SegmentLoad {
+                reason: e.to_string(),
+            })?;
+        Ok(requalify(batch, &raw_lookup_cols, &plan.right_columns))
+    };
+    let source = ScanSource::RowTable {
+        table: Cow::Owned(lookup_table.clone()),
+        columns: raw_lookup_cols
+            .iter()
+            .map(|c| Cow::Owned(c.clone()))
+            .collect(),
+    };
 
-    let rows = run_join_segments(segments, &lookup_batch, &plan)
+    let rows = run_join_segments(segments, source, &plan, &resolver)
         .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
 
     Ok(QueryResult {
@@ -438,9 +460,28 @@ pub fn run_stream_stream_query(
 
     let right_cols = right.column_requests(&plan.right_columns)?;
     let right_segments = right.segments_in_range(&right_cols, scope);
-    let right_batch = materialize_segments(&right_segments, &right_cols)?;
+    // Resolves `ScanSource::Stream` by materializing `right_segments` (ADR
+    // 0022's windowed build side, ADR 0024's opcode-named routing, #385) --
+    // the same materialization `materialize_segments` always did. A
+    // closure, not a hand-written `struct Resolver<'a>` -- see the
+    // matching comment in `run_query`, above.
+    let resolver = |_source: &ScanSource| -> crate::vm::batch::Result<Batch> {
+        materialize_segments(&right_segments, &right_cols).map_err(|e| {
+            crate::vm::batch::VmError::SegmentLoad {
+                reason: e.to_string(),
+            }
+        })
+    };
+    let source = ScanSource::Stream {
+        handle: 0,
+        columns: right_cols
+            .iter()
+            .map(|c| Cow::Owned(c.key.clone()))
+            .collect(),
+        scope: Some(scope),
+    };
 
-    let rows = run_join_segments(left_segments, &right_batch, &plan)
+    let rows = run_join_segments(left_segments, source, &plan, &resolver)
         .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
 
     Ok(QueryResult {

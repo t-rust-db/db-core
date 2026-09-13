@@ -22,10 +22,12 @@
 use db_core::codegen::batch::compile_join;
 use db_core::parser::column::parse;
 use db_core::vm::batch::{
-    compare_for_order, AggFunc, Batch, Instruction, JoinKind, MapOp, Opcode, Program, Segment,
-    Source, TopN, Value, Vm, VmError, WindowFunc,
+    compare_for_order, AggFunc, Batch, Instruction, JoinKind, MapOp, Opcode, Program, ScanSource,
+    Segment, Source, TopN, Value, Vm, VmError, WindowFunc,
 };
-use db_core::vm::engine::{run, run_join, run_join_segments, InMemorySegment, JoinProgram};
+use db_core::vm::engine::{
+    run, run_join, run_join_segments, InMemorySegment, JoinProgram, NoResolver,
+};
 use std::sync::Arc;
 
 #[test]
@@ -271,8 +273,9 @@ fn run_join_segments_matches_single_segment_run_join_for_inner_join_group_by() {
     let single = run_join(&concat(&facts), &customers, &plan).unwrap();
     let segmented = run_join_segments(
         facts.into_iter().map(InMemorySegment).collect(),
-        &customers,
+        ScanSource::InMemory(customers.clone()),
         &plan,
+        &NoResolver,
     )
     .unwrap();
 
@@ -297,8 +300,9 @@ fn run_join_segments_matches_single_segment_run_join_for_left_join_group_by() {
     let single = run_join(&concat(&facts), &customers, &plan).unwrap();
     let segmented = run_join_segments(
         facts.into_iter().map(InMemorySegment).collect(),
-        &customers,
+        ScanSource::InMemory(customers.clone()),
         &plan,
+        &NoResolver,
     )
     .unwrap();
 
@@ -323,7 +327,13 @@ fn run_join_segments_reports_a_probe_error_from_inside_a_segment() {
     )
     .unwrap();
     let bad_left = Batch::new(1).with_column("bench.not_customer_id", vec![Value::Int(1)]);
-    let err = run_join_segments(vec![InMemorySegment(bad_left)], &customers, &plan).unwrap_err();
+    let err = run_join_segments(
+        vec![InMemorySegment(bad_left)],
+        ScanSource::InMemory(customers),
+        &plan,
+        &NoResolver,
+    )
+    .unwrap_err();
     assert!(
         matches!(err, VmError::UnknownColumn { .. }),
         "expected UnknownColumn, got {err:?}"
