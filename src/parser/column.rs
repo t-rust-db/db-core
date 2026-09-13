@@ -1509,6 +1509,73 @@ mod tests {
         assert_eq!(column_name(lhs).unwrap(), "customers.id");
     }
 
+    /// A self-join (`FROM log AS a JOIN log AS b`, ADR-0022, #372): both
+    /// aliases resolve to the same real table, so neither is rewritten --
+    /// `a.host`/`b.host` must stay literal (not collapse to `log.host`
+    /// twice, which would destroy the only thing disambiguating the two
+    /// sides).
+    #[test]
+    fn self_join_leaves_both_aliases_unrewritten() {
+        let q =
+            parse("SELECT a.host, b.host FROM log AS a JOIN log AS b ON a.host = b.host").unwrap();
+        assert_eq!(
+            col_names(&q),
+            vec!["a.host".to_string(), "b.host".to_string()]
+        );
+        let join = &q.from.as_ref().unwrap().joins[0];
+        let Some(JoinConstraint::On(on_expr)) = &join.constraint else {
+            panic!("expected ON")
+        };
+        assert_eq!(
+            extract_equi_join(on_expr).unwrap(),
+            ("a.host".to_string(), "b.host".to_string())
+        );
+    }
+
+    /// Three aliases colliding on one real table (`log AS a JOIN log AS b
+    /// JOIN log AS c`): the "exactly one alias claims this real name"
+    /// gate excludes all three from rewriting, not just a pairwise
+    /// collision -- `a.host`/`b.host`/`c.host` all stay literal.
+    #[test]
+    fn three_way_self_join_leaves_every_alias_unrewritten() {
+        let q = parse(
+            "SELECT a.host, b.host, c.host FROM log AS a \
+             JOIN log AS b ON a.host = b.host \
+             JOIN log AS c ON b.host = c.host",
+        )
+        .unwrap();
+        assert_eq!(
+            col_names(&q),
+            vec![
+                "a.host".to_string(),
+                "b.host".to_string(),
+                "c.host".to_string()
+            ]
+        );
+    }
+
+    /// An ordinary (non-colliding) join alongside a self-joined pair in
+    /// the same query still gets its own alias rewritten normally -- the
+    /// collision exclusion is scoped to the real names that actually
+    /// collide, not the whole query.
+    #[test]
+    fn self_join_pair_does_not_suppress_rewriting_for_an_unrelated_alias() {
+        let q = parse(
+            "SELECT a.host, b.host, c.name FROM log AS a \
+             JOIN log AS b ON a.host = b.host \
+             JOIN hosts AS c ON a.host = c.name",
+        )
+        .unwrap();
+        assert_eq!(
+            col_names(&q),
+            vec![
+                "a.host".to_string(),
+                "b.host".to_string(),
+                "hosts.name".to_string()
+            ]
+        );
+    }
+
     #[test]
     fn parses_cross_join_with_limit() {
         let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();

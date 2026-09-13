@@ -49,9 +49,20 @@ use super::{single_statement, Cell, Engine, EngineError, ErrorKind, PlanRow, Que
 use crate::codegen::batch::{self as planner, split_qualified, PlanError, TableStats};
 use crate::parser::ast::{Select, TableRefKind};
 use crate::parser::ParseError;
-use crate::storage::stream::StreamSegment;
+use crate::storage::stream::{ColumnRequest, StreamSegment};
 use crate::vm::batch::{Batch, Segment as VmSegment, Value};
 use crate::vm::engine::run_join_segments;
+use crate::vm::stream::Scope;
+
+/// Cap on rows materialized into one in-memory [`Batch`] for the windowed
+/// stream-to-stream join's build side (`materialize_segments`). Without a
+/// cap, a wide `SINCE`/`UNTIL` window (or a stream with a large retained
+/// ring) has no ceiling on the single allocation `materialize_segments`
+/// builds -- unlike the stream/SQLite path, where the SQLite side is
+/// already bounded by construction. Matches the order of magnitude of
+/// [`crate::storage::stream::segment::SEGMENT_MAX_ROWS`] times a modest
+/// number of segments; revisit if a real workload needs more.
+const MAX_STREAM_STREAM_BUILD_ROWS: usize = 1_000_000;
 
 fn plan_err(e: PlanError) -> EngineError {
     match e {
@@ -302,13 +313,24 @@ fn resolve_stream_stream_sides(select: &Select) -> Result<(String, String), Engi
         ));
     }
 
-    if select.scope.is_none() {
-        return Err(EngineError::new(
-            ErrorKind::Unsupported,
-            "a stream-to-stream join requires a SINCE/UNTIL window: with no \
-             SQLite side to bound the query, the window is what makes the \
-             join finite (ADR-0022)",
-        ));
+    match select.scope.as_ref() {
+        None => {
+            return Err(EngineError::new(
+                ErrorKind::Unsupported,
+                "a stream-to-stream join requires a SINCE/UNTIL window: with no \
+                 SQLite side to bound the query, the window is what makes the \
+                 join finite (ADR-0022)",
+            ));
+        }
+        Some(_) if !matches!(super::stream::resolve_scope(select), Scope::Time(_)) => {
+            return Err(EngineError::new(
+                ErrorKind::Unsupported,
+                "a stream-to-stream join requires a time-based SINCE/UNTIL window \
+                 (e.g. `SINCE 1 hour`); `LINES`/`BYTES` scopes don't bound either \
+                 side by time and can't make the join finite (ADR-0022)",
+            ));
+        }
+        Some(_) => {}
     }
 
     Ok((left_alias.to_string(), right_alias.to_string()))
@@ -337,8 +359,17 @@ fn alias_normalize(mut select: Select, left_alias: &str, right_alias: &str) -> S
 /// needs one materialized batch (`run_join_segments`'s `right: &Batch`),
 /// same shape as [`cross_mode::scan_table_as_batch`] produces for a
 /// SQLite lookup table, just assembled from segments instead of a table
-/// scan.
-fn materialize_segments(segments: &[StreamSegment]) -> Result<Batch, EngineError> {
+/// scan. `columns` (the same requests `segments` were read with) is
+/// always used for the output's column set -- a window matching zero
+/// segments must still produce a zero-*row*, but not zero-*column*,
+/// `Batch`: `codegen::batch`'s `LoadColumn` addresses the build side by
+/// name regardless of whether any row was found, so every requested
+/// column must exist (empty) rather than only whichever columns the
+/// first loaded segment happened to carry.
+fn materialize_segments(
+    segments: &[StreamSegment],
+    columns: &[ColumnRequest],
+) -> Result<Batch, EngineError> {
     let loaded: Vec<Arc<Batch>> = segments
         .iter()
         .map(|s| {
@@ -347,18 +378,26 @@ fn materialize_segments(segments: &[StreamSegment]) -> Result<Batch, EngineError
         })
         .collect::<Result<_, _>>()?;
 
-    let num_rows = loaded.iter().map(|b| b.num_rows).sum();
+    let num_rows: usize = loaded.iter().map(|b| b.num_rows).sum();
+    if num_rows > MAX_STREAM_STREAM_BUILD_ROWS {
+        return Err(EngineError::new(
+            ErrorKind::Unsupported,
+            format!(
+                "stream-to-stream join build side has {num_rows} rows in this \
+                 window, over the {MAX_STREAM_STREAM_BUILD_ROWS}-row limit; \
+                 narrow the SINCE/UNTIL window"
+            ),
+        ));
+    }
     let mut out = Batch::new(num_rows);
-    if let Some(first) = loaded.first() {
-        for name in first.columns.keys() {
-            let mut values: Vec<Value> = Vec::with_capacity(num_rows);
-            for batch in &loaded {
-                if let Some(col) = batch.columns.get(name) {
-                    values.extend(col.iter().cloned());
-                }
+    for request in columns {
+        let mut values: Vec<Value> = Vec::with_capacity(num_rows);
+        for batch in &loaded {
+            if let Some(col) = batch.columns.get(&request.key) {
+                values.extend(col.iter().cloned());
             }
-            out.columns.insert(name.clone(), Arc::new(values));
         }
+        out.columns.insert(request.key.clone(), Arc::new(values));
     }
     Ok(out)
 }
@@ -384,7 +423,7 @@ pub fn run_stream_stream_query(
 
     let right_cols = right.column_requests(&plan.right_columns)?;
     let right_segments = right.segments_in_range(&right_cols, scope);
-    let right_batch = materialize_segments(&right_segments)?;
+    let right_batch = materialize_segments(&right_segments, &right_cols)?;
 
     let rows = run_join_segments(left_segments, &right_batch, &plan)
         .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;

@@ -7182,7 +7182,7 @@
   {
     "id": "parser_column_parses_is_null_ed581d7b",
     "file": "src/parser/column.rs",
-    "line": 1623,
+    "line": 1690,
     "decision": "match &where_expr(&q).kind {\n            ExprKind::IsNull { negated, .. } => assert!(!negated),\n            ExprKind::Is { negated, .. } => assert!(!negated),\n            other => panic!(\"expected IsNull-shaped expr, found {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7192,7 +7192,7 @@
   {
     "id": "parser_column_parses_is_not_null_9a123387",
     "file": "src/parser/column.rs",
-    "line": 1633,
+    "line": 1700,
     "decision": "match &where_expr(&q).kind {\n            ExprKind::IsNull { negated, .. } => assert!(negated),\n            ExprKind::Is { negated, .. } => assert!(negated),\n            other => panic!(\"expected IsNull-shaped expr, found {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31982,7 +31982,7 @@
   {
     "id": "engine_resolve_plan_err_bbf17c28",
     "file": "src/engine/resolve.rs",
-    "line": 57,
+    "line": 68,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31992,7 +31992,7 @@
   {
     "id": "engine_resolve_resolve_sides_ecf724d4",
     "file": "src/engine/resolve.rs",
-    "line": 82,
+    "line": 93,
     "decision": "from.joins.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -32002,7 +32002,7 @@
   {
     "id": "engine_resolve_resolve_sides_b1eae5e8",
     "file": "src/engine/resolve.rs",
-    "line": 107,
+    "line": 118,
     "decision": "!from_name.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32012,7 +32012,7 @@
   {
     "id": "engine_resolve_resolve_sides_366039e9",
     "file": "src/engine/resolve.rs",
-    "line": 108,
+    "line": 119,
     "decision": "join_name.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32022,7 +32022,7 @@
   {
     "id": "engine_resolve_resolve_sides_b233fcd5",
     "file": "src/engine/resolve.rs",
-    "line": 128,
+    "line": 139,
     "decision": "!known",
     "conditions": 1,
     "vectors_required": 2,
@@ -32032,7 +32032,7 @@
   {
     "id": "engine_resolve_requalify_b9fe93b0",
     "file": "src/engine/resolve.rs",
-    "line": 146,
+    "line": 157,
     "decision": "let Some(values) = columns.remove(r)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32042,7 +32042,7 @@
   {
     "id": "engine_resolve_explain_plan_cbd67ad2",
     "file": "src/engine/resolve.rs",
-    "line": 213,
+    "line": 224,
     "decision": "table.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32052,7 +32052,7 @@
   {
     "id": "engine_resolve_explain_plan_6d0bbb8e",
     "file": "src/engine/resolve.rs",
-    "line": 215,
+    "line": 226,
     "decision": "table.eq_ignore_ascii_case(&lookup_table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32062,7 +32062,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_ecf724d4",
     "file": "src/engine/resolve.rs",
-    "line": 247,
+    "line": 258,
     "decision": "from.joins.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -32072,7 +32072,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_0cfb5f70",
     "file": "src/engine/resolve.rs",
-    "line": 272,
+    "line": 283,
     "decision": "!from_name.eq_ignore_ascii_case(super::stream::TABLE)\n        || !join_name.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 2,
     "vectors_required": 3,
@@ -32082,7 +32082,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_b20d52d9",
     "file": "src/engine/resolve.rs",
-    "line": 298,
+    "line": 309,
     "decision": "left_alias.eq_ignore_ascii_case(right_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32090,10 +32090,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_resolve_stream_stream_sides_60b473b3",
+    "id": "engine_resolve_resolve_stream_stream_sides_06064080",
     "file": "src/engine/resolve.rs",
-    "line": 305,
-    "decision": "select.scope.is_none()",
+    "line": 316,
+    "decision": "match select.scope.as_ref() {\n        None => {\n            return Err(EngineError::new(\n                ErrorKind::Unsupported,\n                \"a stream-to-stream join requires a SINCE/UNTIL window: with no \\\n                 SQLite side to bound the query, the window is what makes the \\\n                 join finite (ADR-0022)\",\n            ));\n        }\n        Some(_) if !matches!(super::stream::resolve_scope(select), Scope::Time(_)) => {\n            return Err(EngineError::new(\n                ErrorKind::Unsupported,\n                \"a stream-to-stream join requires a time-based SINCE/UNTIL window \\\n                 (e.g. `SINCE 1 hour`); `LINES`/`BYTES` scopes don't bound either \\\n                 side by time and can't make the join finite (ADR-0022)\",\n            ));\n        }\n        Some(_) => {}\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_resolve_stream_stream_sides_9a3b2404",
+    "file": "src/engine/resolve.rs",
+    "line": 325,
+    "decision": "!matches!(super::stream::resolve_scope(select), Scope::Time(_))",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -32102,7 +32112,7 @@
   {
     "id": "engine_resolve_alias_normalize_f42b0018",
     "file": "src/engine/resolve.rs",
-    "line": 325,
+    "line": 347,
     "decision": "let Some(from) = &mut select.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -32112,7 +32122,7 @@
   {
     "id": "engine_resolve_alias_normalize_567a3ca4",
     "file": "src/engine/resolve.rs",
-    "line": 327,
+    "line": 349,
     "decision": "let Some(join) = from.joins.first_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32120,20 +32130,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_materialize_segments_7161585a",
+    "id": "engine_resolve_materialize_segments_cdfe5103",
     "file": "src/engine/resolve.rs",
-    "line": 352,
-    "decision": "let Some(first) = loaded.first()",
+    "line": 382,
+    "decision": "num_rows > MAX_STREAM_STREAM_BUILD_ROWS",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_materialize_segments_32eac62b",
+    "id": "engine_resolve_materialize_segments_cfd2fd17",
     "file": "src/engine/resolve.rs",
-    "line": 356,
-    "decision": "let Some(col) = batch.columns.get(name)",
+    "line": 396,
+    "decision": "let Some(col) = batch.columns.get(&request.key)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -32142,7 +32152,7 @@
   {
     "id": "engine_resolve_explain_stream_stream_plan_3be1fe26",
     "file": "src/engine/resolve.rs",
-    "line": 424,
+    "line": 463,
     "decision": "table.eq_ignore_ascii_case(&left_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32152,7 +32162,7 @@
   {
     "id": "engine_resolve_explain_stream_stream_plan_6b519d7c",
     "file": "src/engine/resolve.rs",
-    "line": 426,
+    "line": 465,
     "decision": "table.eq_ignore_ascii_case(&right_alias)",
     "conditions": 1,
     "vectors_required": 2,
