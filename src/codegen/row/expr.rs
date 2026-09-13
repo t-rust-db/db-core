@@ -22,8 +22,10 @@
 //! mode, e.g. column reads and affinity/collation lookups).
 
 mod cond;
-// File is `expr_value.rs`, not `value.rs`: MC/DC obligation ids are keyed by
-// basename+line and this module collided with the crate-level `src/value.rs`.
+// File is `expr_value.rs`, not `value.rs`: MC/DC obligation ids used to be
+// keyed by basename+line and this module collided with the crate-level
+// `src/value.rs`. Ids are module-path-qualified since mvl-rust#121, so the
+// name no longer matters; kept to avoid churning the file for nothing.
 #[path = "expr/expr_value.rs"]
 mod value;
 

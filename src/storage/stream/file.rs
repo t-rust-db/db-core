@@ -360,15 +360,15 @@ mod tests {
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#299 MC/DC backfill).
 
     use super::tests::{lines, tmp};
     use super::LogFile;
 
-    // file_120: `loaded < min_bytes && self.tail_off > 0`
+    // storage_stream_file_read_tail_c82dd615: `loaded < min_bytes && self.tail_off > 0`
     #[test]
-    fn mcdc__file_120__v1_both_true_keeps_reading_backwards() {
+    fn mcdc__storage_stream_file_read_tail_c82dd615__v1_both_true_keeps_reading_backwards() {
         let t = tmp("mcdc_v1", b"l1\nl2\nl3\nl4\n");
         let mut lf = LogFile::open(&t.0).unwrap();
         // Not enough loaded yet (true) and there's still file before
@@ -379,7 +379,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__file_120__v2_min_bytes_already_satisfied() {
+    fn mcdc__storage_stream_file_read_tail_c82dd615__v2_min_bytes_already_satisfied() {
         let t = tmp("mcdc_v2", b"l1\nl2\nl3\nl4\n");
         let mut lf = LogFile::open(&t.0).unwrap();
         // A tiny min_bytes is satisfied by the first block read, so the
@@ -391,7 +391,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__file_120__v3_tail_off_reaches_zero_before_min_bytes() {
+    fn mcdc__storage_stream_file_read_tail_c82dd615__v3_tail_off_reaches_zero_before_min_bytes() {
         let t = tmp("mcdc_v3", b"");
         let mut lf = LogFile::open(&t.0).unwrap();
         // Empty file: `loaded < min_bytes` stays true (nothing loaded),

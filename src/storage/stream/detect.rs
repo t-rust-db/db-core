@@ -438,6 +438,43 @@ mod tests {
     use super::*;
     use crate::storage::stream::batch::{FieldColumn, SourceKind};
 
+    // storage_stream_detect_cri_payload_0ce37649 (`cri_payload`):
+    // `(stream == "stdout" || stream == "stderr") && (tag == "F" || tag == "P")`
+    // -- MC/DC vectors (`mcdc__<id>__vN`, joined to tests/mcdc/obligations.json
+    // by `make test-mcdc`).
+    const CRI_TS: &str = "2026-09-10T08:00:05.123456789Z";
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_detect_cri_payload_0ce37649__v1_stdout_full_line() {
+        let line = format!("{CRI_TS} stdout F hello world");
+        assert_eq!(cri_payload(line.as_bytes()), Some("hello world"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_detect_cri_payload_0ce37649__v2_stderr_full_line() {
+        let line = format!("{CRI_TS} stderr F oops");
+        assert_eq!(cri_payload(line.as_bytes()), Some("oops"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_detect_cri_payload_0ce37649__v3_stdout_partial_line() {
+        let line = format!("{CRI_TS} stdout P partial");
+        assert_eq!(cri_payload(line.as_bytes()), Some("partial"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_detect_cri_payload_0ce37649__v4_unknown_stream_rejected() {
+        let line = format!("{CRI_TS} stdin F hello");
+        assert_eq!(cri_payload(line.as_bytes()), None);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_detect_cri_payload_0ce37649__v5_unknown_tag_rejected() {
+        let line = format!("{CRI_TS} stdout X hello");
+        assert_eq!(cri_payload(line.as_bytes()), None);
+    }
+
     #[test]
     fn detect_line_classifies_each_format() {
         assert_eq!(detect_line(b"{\"a\":1}"), Format::Jsonl);

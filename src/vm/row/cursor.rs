@@ -1839,7 +1839,7 @@ mod tests {
     /// matters here, not the entries' actual content.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_683__v1_new_key_at_capacity_is_rejected() {
+    fn mcdc__vm_row_cursor_ephemeral_idx_insert_a165b7fb__v1_new_key_at_capacity_is_rejected() {
         let mut c = EphemeralIndexCursor {
             entries: (0..MAX_EPHEMERAL_ROWS)
                 .map(|i| (i.to_le_bytes().to_vec(), Vec::new()))
@@ -1857,10 +1857,10 @@ mod tests {
     /// MC/DC vector (obligation `cursor_695`): leaf A (`!contains_key`)
     /// true, leaf B (`len() >= MAX_EPHEMERAL_ROWS`) false -- an ordinary
     /// insert under capacity succeeds. Independence pair for B against
-    /// `mcdc__cursor_683__v1_new_key_at_capacity_is_rejected`.
+    /// `mcdc__vm_row_cursor_ephemeral_idx_insert_a165b7fb__v1_new_key_at_capacity_is_rejected`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_683__v2_new_key_under_capacity_is_accepted() {
+    fn mcdc__vm_row_cursor_ephemeral_idx_insert_a165b7fb__v2_new_key_under_capacity_is_accepted() {
         let mut c = EphemeralIndexCursor::new();
         let key = [Value::Integer(1)];
         let collations = [Collation::Binary];
@@ -1874,10 +1874,11 @@ mod tests {
     /// already-present key is accepted (an update, not a new row) even
     /// with the table at capacity, since leaf B is never reached.
     /// Independence pair for A against
-    /// `mcdc__cursor_683__v1_new_key_at_capacity_is_rejected`.
+    /// `mcdc__vm_row_cursor_ephemeral_idx_insert_a165b7fb__v1_new_key_at_capacity_is_rejected`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_683__v3_existing_key_at_capacity_is_still_accepted() {
+    fn mcdc__vm_row_cursor_ephemeral_idx_insert_a165b7fb__v3_existing_key_at_capacity_is_still_accepted(
+    ) {
         let key = [Value::Integer(-1)];
         let collations = [Collation::Binary];
         let encoded = encode_key(&key, &collations);
@@ -1926,7 +1927,7 @@ mod tests {
         assert!(c.insert(2, vec![Value::Integer(1), Value::Integer(2)]));
     }
 
-    // #254 tagged MC/DC vectors (obligation `cursor_481`): `next()`'s
+    // #254 tagged MC/DC vectors (obligation `vm_row_cursor_next_664e4c8e`): `next()`'s
     // cached-index guard `self.at_row && rows[idx].rowid == after`.
 
     fn ephemeral_1_2_3() -> EphemeralTableCursor {
@@ -1939,7 +1940,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_481__v1_valid_hint_steps_to_the_following_row() {
+    fn mcdc__vm_row_cursor_next_664e4c8e__v1_valid_hint_steps_to_the_following_row() {
         let mut c = ephemeral_1_2_3();
         assert!(c.rewind());
         assert!(c.next());
@@ -1949,7 +1950,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_481__v2_after_a_delete_next_resumes_past_the_deleted_rowid() {
+    fn mcdc__vm_row_cursor_next_664e4c8e__v2_after_a_delete_next_resumes_past_the_deleted_rowid() {
         let mut c = ephemeral_1_2_3();
         assert!(c.rewind());
         assert!(c.next());
@@ -1960,7 +1961,8 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__cursor_481__v3_stale_hint_after_a_sibling_insert_falls_back_to_search() {
+    fn mcdc__vm_row_cursor_next_664e4c8e__v3_stale_hint_after_a_sibling_insert_falls_back_to_search(
+    ) {
         let mut c = ephemeral_1_2_3();
         assert!(c.rewind());
         assert!(c.next()); // at rowid 2, index 1

@@ -3,8 +3,9 @@
 //! Validates that every `mcdc__<id>__vN_<description>` tagged test
 //! (db-core#111, ported from sqlite-rs's `tests/unit/mcdc_discharge_test.rs`)
 //! still names a real obligation -- the failure mode this guards against is
-//! silent: a code edit shifts a decision's line number, the obligation id
-//! (`<file>_<line>`) changes, and the old tagged tests keep passing
+//! silent: a code edit changes a decision's text (or a tool upgrade its id
+//! scheme), the obligation id (`<module-slug>_<fn>_<decision-hash>`,
+//! mvl-rust#121) changes, and the old tagged tests keep passing
 //! (they're ordinary `#[test]` fns exercising real behavior) while quietly
 //! no longer counting toward MC/DC discharge, because `cargo-mvl-mcdc
 //! harvest` joins tagged tests to obligations by id and finds no match.
@@ -93,10 +94,11 @@ fn known_obligation_ids() -> HashSet<String> {
 }
 
 /// Every `(id, file)` pair in the committed snapshot, in file order --
-/// `id` is `<basename>_<line>`, so two files sharing a basename (e.g.
-/// `src/codegen/batch.rs` and `src/vm/batch.rs`, since #192's module
-/// move) can coincidentally collide on the same line number and
-/// therefore the same id. `cargo-mvl-mcdc harvest` joins tagged tests to
+/// `id` is `<module-slug>_<fn>_<decision-hash>` (mvl-rust#121), so a
+/// collision would take two files with the same module path, or the
+/// tool regressing to its old `<basename>_<line>` scheme under which
+/// `src/codegen/batch.rs` and `src/vm/batch.rs` collided routinely
+/// (db-core#363). `cargo-mvl-mcdc harvest` joins tagged tests to
 /// obligations by id alone, so a collision silently misattributes one
 /// file's discharged vectors to the other's obligation -- `make
 /// test-mcdc` then reports the real one stuck at 0/N with no indication
@@ -126,14 +128,6 @@ fn obligation_id_file_pairs() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Pre-existing cross-file collisions between `src/codegen/batch.rs` and
-/// `src/vm/batch.rs` (same basename, coincidentally overlapping line
-/// numbers -- both files are large and grow independently, so some
-/// overlap is inevitable and not worth fighting line-by-line every time
-/// either shifts). Known and accepted as of db-core#196; anything beyond
-/// this fixed set is a *new* collision and must fail the test below.
-const KNOWN_BATCH_COLLISIONS: &[&str] = &["batch_427", "batch_699"];
-
 #[test]
 fn every_obligation_id_in_the_snapshot_is_unique_across_files() {
     let mut files_by_id: HashMap<String, HashSet<String>> = HashMap::new();
@@ -148,7 +142,7 @@ fn every_obligation_id_in_the_snapshot_is_unique_across_files() {
     // id are the failure mode this guards.
     let mut collisions: Vec<String> = files_by_id
         .into_iter()
-        .filter(|(id, files)| files.len() > 1 && !KNOWN_BATCH_COLLISIONS.contains(&id.as_str()))
+        .filter(|(_, files)| files.len() > 1)
         .map(|(id, files)| {
             let mut files: Vec<String> = files.into_iter().collect();
             files.sort();
@@ -162,11 +156,9 @@ fn every_obligation_id_in_the_snapshot_is_unique_across_files() {
         "these obligation ids are shared by more than one file in \
          tests/mcdc/obligations.json -- `cargo-mvl-mcdc harvest` joins tagged tests \
          to obligations by id alone, so a shared id silently misattributes discharged \
-         vectors between the files (typically two files with the same basename, e.g. \
-         a module move that leaves both `src/codegen/batch.rs` and `src/vm/batch.rs` \
-         with a decision on the same line number). `cargo-mvl-mcdc`'s id scheme can't \
-         disambiguate this on its own -- rename one file, or move one of the colliding \
-         decisions to a different line, then re-run `make mcdc-obligations`:\n{}",
+         vectors between the files. Ids are `<module-slug>_<fn>_<decision-hash>` \
+         (mvl-rust#121), so this means two files resolve to the same module slug -- \
+         check the paths below, then re-run `make mcdc-obligations`:\n{}",
         collisions.join("\n")
     );
 }

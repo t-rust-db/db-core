@@ -372,7 +372,7 @@ mod tests {
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#299 MC/DC backfill).
 
     use super::Ring;
@@ -400,9 +400,9 @@ mod mcdc_vectors {
         Arc::new(v.remove(0))
     }
 
-    // ring_210: `self.bytes > self.budget && self.segs.len() > 1`
+    // storage_stream_ring_evict_over_budget_9dad8d76: `self.bytes > self.budget && self.segs.len() > 1`
     #[test]
-    fn mcdc__ring_210__v1_both_true_evicts() {
+    fn mcdc__storage_stream_ring_evict_over_budget_9dad8d76__v1_both_true_evicts() {
         let a = make_seg(0, 1, 10);
         let size = a.byte_len();
         let mut ring = Ring::new(size + 1);
@@ -414,7 +414,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__ring_210__v2_bytes_not_over_budget_no_eviction() {
+    fn mcdc__storage_stream_ring_evict_over_budget_9dad8d76__v2_bytes_not_over_budget_no_eviction()
+    {
         let a = make_seg(0, 1, 10);
         let size = a.byte_len();
         let mut ring = Ring::new(size * 10);
@@ -426,7 +427,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__ring_210__v3_over_budget_but_single_segment_kept() {
+    fn mcdc__storage_stream_ring_evict_over_budget_9dad8d76__v3_over_budget_but_single_segment_kept(
+    ) {
         let mut ring = Ring::new(1);
         // bytes > budget is true (any segment exceeds budget of 1 byte),
         // but segs.len() > 1 is false (only one segment held) -- the

@@ -1865,15 +1865,15 @@ mod tests {
     #[allow(non_snake_case)]
     mod mcdc_vectors {
         //! Tagged MC/DC vectors for this file's multi-leaf decisions
-        //! (`mcdc__<file-stem>_<line>__vN`, joined to
+        //! (`mcdc__<id>__vN`, joined to
         //! `tests/mcdc/obligations.json` by `make test-mcdc`; db-core#299
         //! follow-up).
 
         use super::*;
 
-        // pager_804: `!self.dirty.is_empty() || self.tx_lock_level > LockLevel::Shared`
+        // storage_row_pager_set_journal_mode_dce82034: `!self.dirty.is_empty() || self.tx_lock_level > LockLevel::Shared`
         #[test]
-        fn mcdc__pager_804__v1_both_false_switch_is_allowed() {
+        fn mcdc__storage_row_pager_set_journal_mode_dce82034__v1_both_false_switch_is_allowed() {
             let mut vfs = MemoryVfs::new();
             vfs.insert("/test.db", vec![0u8; 512]);
             let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
@@ -1882,7 +1882,7 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__pager_804__v2_dirty_pages_pending_is_rejected() {
+        fn mcdc__storage_row_pager_set_journal_mode_dce82034__v2_dirty_pages_pending_is_rejected() {
             let mut vfs = MemoryVfs::new();
             vfs.insert("/test.db", vec![0u8; 512]);
             let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
@@ -1893,7 +1893,8 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__pager_804__v3_escalated_lock_with_no_dirty_pages_is_rejected() {
+        fn mcdc__storage_row_pager_set_journal_mode_dce82034__v3_escalated_lock_with_no_dirty_pages_is_rejected(
+        ) {
             let mut vfs = MemoryVfs::new();
             vfs.insert("/test.db", vec![0u8; 512]);
             let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();

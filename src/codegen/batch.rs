@@ -543,7 +543,6 @@ fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
                     "subquery in JOIN is not supported by the batch planner".into(),
                 ));
             };
-            // MC/DC: this decision must not share a line number with one in `src/vm/batch.rs` (ids are basename+line).
             let (left_col, right_col) = match &j.constraint {
                 Some(JoinConstraint::On(expr)) => extract_equi_join(expr)
                     .ok_or_else(|| PlanError::UnknownColumn("JOIN ON must be col = col".into()))?,
@@ -1171,11 +1170,6 @@ pub fn compile(select: &Select) -> Result<Program> {
 }
 
 /// Split a (possibly qualified) column name into `(table_prefix, column)`.
-// One-line disambiguator (MC/DC obligation harvest): without this,
-// `codegen::batch::split_qualified`'s decision below and `vm::batch`'s
-// own decision land on the same line number in two same-basename files,
-// which `cargo-mvl-mcdc`'s id scheme (file basename + line) cannot tell
-// apart (db-core#299's snapshot workflow).
 pub fn split_qualified(name: &str) -> (Option<&str>, &str) {
     match name.split_once('.') {
         Some((table, column)) => (Some(table), column),
@@ -1652,16 +1646,6 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
 
     // Semi-joins compile with `where_clause` stripped, mirroring
     // `compile_semi_join` (the `IN` subquery isn't a VM predicate).
-    // MC/DC id-collision guard (db-core#299 snapshot workflow): this
-    // decision's harvested line number must not coincide with one in
-    // `src/vm/batch.rs` (same basename, which is all the id scheme
-    // keys on). Line count matters here, not content -- re-run `make
-    // mcdc-obligations` plus `cargo test --test unit_mcdc_discharge`
-    // after editing this comment.
-    // MC/DC id-collision guard padding (4 lines): keeps this
-    // decision's harvested line number away from an unrelated
-    // decision at the same line in `src/vm/batch.rs` (same
-    // basename, which is all the id scheme keys on).
     let program = if has_window {
         None
     } else if is_semi_join {
@@ -1796,7 +1780,6 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
         // DISTINCT runs as a post-Finalize dedup pass, after GROUP BY's
         // hash-aggregate merge and before ORDER BY/LIMIT (see
         // `compile`'s `distinct` handling) -- the plan reflects that order.
-        // MC/DC: this decision must not share a line number with one in `src/vm/batch.rs` (ids are basename+line).
         if matches!(select.distinct, Some(Distinctness::Distinct)) {
             b.push(0, "DISTINCT".to_string());
         }
@@ -1996,7 +1979,6 @@ pub fn explain_opcodes(select: &Select) -> Result<Vec<OpcodeSection>> {
                 rows: render_program(&join.body),
             },
         ])
-    // MC/DC: this decision must not share a line number with one in `src/vm/batch.rs` (ids are basename+line).
     } else if has_window {
         Ok(vec![OpcodeSection {
             label: "body".to_string(),
@@ -2075,7 +2057,6 @@ fn window_detail(spec: &WindowSpec) -> String {
     if !spec.partition_by.is_empty() {
         over.push(format!("PARTITION BY {}", spec.partition_by.join(", ")));
     }
-    // MC/DC: this decision must not share a line number with one in `src/vm/batch.rs` (ids are basename+line).
     if !spec.order_by.is_empty() {
         let cols: Vec<String> = spec
             .order_by
@@ -2490,7 +2471,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1088__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__codegen_batch_compile_858db603__v1_agg_without_group_by_emits_group_reduce() {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2501,7 +2482,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1088__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__codegen_batch_compile_858db603__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2512,7 +2493,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1088__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__codegen_batch_compile_858db603__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -2525,7 +2506,8 @@ mod tests {
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1128__v1_group_by_without_agg_column_merges_partial_aggregates() {
+    fn mcdc__codegen_batch_compile_3755607c__v1_group_by_without_agg_column_merges_partial_aggregates(
+    ) {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
@@ -2535,7 +2517,8 @@ mod tests {
     /// MC/DC vector (obligation `batch_1127`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1128__v2_agg_column_without_group_by_merges_partial_aggregates() {
+    fn mcdc__codegen_batch_compile_3755607c__v2_agg_column_without_group_by_merges_partial_aggregates(
+    ) {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();
@@ -2546,7 +2529,7 @@ mod tests {
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__batch_1128__v3_no_group_by_no_agg_column_concatenates_segments() {
+    fn mcdc__codegen_batch_compile_3755607c__v3_no_group_by_no_agg_column_concatenates_segments() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let fin = program.instructions.last().unwrap();

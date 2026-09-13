@@ -583,7 +583,7 @@ mod tests {
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#299 MC/DC backfill).
 
     use super::tests::block;
@@ -594,9 +594,9 @@ mod mcdc_vectors {
         Source::new(SourceKind::File, "/var/log/t.log")
     }
 
-    // segment_182: `consumed == 0 || batch.is_empty()`
+    // storage_stream_segment_seal_block_02e1e2c5: `consumed == 0 || batch.is_empty()`
     #[test]
-    fn mcdc__segment_182__v1_both_true_no_newline_at_all() {
+    fn mcdc__storage_stream_segment_seal_block_02e1e2c5__v1_both_true_no_newline_at_all() {
         // No `\n` anywhere: parse_batch never advances `consumed` and
         // never parses a line, so both leafs are true.
         let b = block("no newline here");
@@ -605,7 +605,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__segment_182__v2_consumed_nonzero_but_batch_empty() {
+    fn mcdc__storage_stream_segment_seal_block_02e1e2c5__v2_consumed_nonzero_but_batch_empty() {
         // A lone blank line: `consumed` advances past the `\n` (nonzero,
         // so the first leaf is false), but the empty line before it isn't
         // parsed into a row, so `batch.is_empty()` is true.
@@ -615,7 +615,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__segment_182__v3_both_false_makes_progress() {
+    fn mcdc__storage_stream_segment_seal_block_02e1e2c5__v3_both_false_makes_progress() {
         // A complete, non-blank line: `consumed` advances (false) and the
         // batch gets a row (`is_empty()` false) -- neither leaf breaks the
         // loop, so a segment is produced.

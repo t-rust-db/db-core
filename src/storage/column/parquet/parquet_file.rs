@@ -1238,15 +1238,16 @@ mod tests {
     #[allow(non_snake_case)]
     mod mcdc_vectors {
         //! Tagged MC/DC vectors for this file's multi-leaf decisions
-        //! (`mcdc__<file-stem>_<line>__vN`, joined to
+        //! (`mcdc__<id>__vN`, joined to
         //! `tests/mcdc/obligations.json` by `make test-mcdc`; db-core#299
         //! follow-up).
 
         use super::*;
 
-        // parquet_file_474: `dictionary.is_none() || !matches!(data_page_header.encoding, PlainDictionary | RleDictionary)`
+        // storage_column_parquet_parquet_file_read_column_dictionary_indices_1b5585c0: `dictionary.is_none() || !matches!(data_page_header.encoding, PlainDictionary | RleDictionary)`
         #[test]
-        fn mcdc__parquet_file_474__v1_both_false_returns_the_dictionary() {
+        fn mcdc__storage_column_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v1_both_false_returns_the_dictionary(
+        ) {
             let (page_bytes, meta_bytes) =
                 build_int64_dictionary_chunk(&[10, 20, 30], &[2, 0, 1], 4);
             let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
@@ -1260,7 +1261,8 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__parquet_file_474__v2_no_dictionary_page_returns_none() {
+        fn mcdc__storage_column_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v2_no_dictionary_page_returns_none(
+        ) {
             // A plain (non-dictionary) chunk: the first Data page arrives
             // with `dictionary` still `None`, so the `||`'s first leaf
             // alone must short-circuit to `None` regardless of encoding.
@@ -1274,7 +1276,8 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__parquet_file_474__v3_dictionary_present_but_plain_data_page_returns_none() {
+        fn mcdc__storage_column_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v3_dictionary_present_but_plain_data_page_returns_none(
+        ) {
             // A dictionary page followed by a *PLAIN* (not
             // PLAIN_DICTIONARY) data page: `dictionary.is_none()` is
             // false, but the encoding check is true, so the `||` must

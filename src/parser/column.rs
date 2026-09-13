@@ -1505,21 +1505,21 @@ mod tests {
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
-    /// MC/DC vector (obligation `column_773`, the CROSS JOIN LIMIT rule
+    /// MC/DC vector (obligation `parser_column_validate_select_4cae2899`, the CROSS JOIN LIMIT rule
     /// `has_cross_join && select.limit.is_none()`): both leaves true --
     /// the query is rejected.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_773__v1_cross_join_without_limit_is_rejected() {
+    fn mcdc__parser_column_validate_select_4cae2899__v1_cross_join_without_limit_is_rejected() {
         let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
-    /// MC/DC vector (obligation `column_773`): leaf B (`limit.is_none()`)
+    /// MC/DC vector (obligation `parser_column_validate_select_4cae2899`): leaf B (`limit.is_none()`)
     /// false with a CROSS JOIN present -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_773__v2_cross_join_with_limit_is_accepted() {
+    fn mcdc__parser_column_validate_select_4cae2899__v2_cross_join_with_limit_is_accepted() {
         let q = parse("SELECT id FROM a CROSS JOIN b LIMIT 10").unwrap();
         assert!(matches!(
             q.limit.as_ref().unwrap().limit.kind,
@@ -1527,32 +1527,34 @@ mod tests {
         ));
     }
 
-    /// MC/DC vector (obligation `column_773`): leaf A (`has_cross_join`)
+    /// MC/DC vector (obligation `parser_column_validate_select_4cae2899`): leaf A (`has_cross_join`)
     /// false with no LIMIT -- accepted.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_773__v3_non_cross_join_without_limit_is_accepted() {
+    fn mcdc__parser_column_validate_select_4cae2899__v3_non_cross_join_without_limit_is_accepted() {
         let q = parse("SELECT id FROM t RIGHT JOIN u ON t.k = u.k").unwrap();
         assert!(q.limit.is_none());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_811__v1_agg_without_window_validates_group_by_keys() {
+    fn mcdc__parser_column_validate_select_8e763e04__v1_agg_without_window_validates_group_by_keys()
+    {
         let err = parse("SELECT foo, SUM(amount) FROM t").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_811__v2_no_agg_skips_group_by_key_validation() {
+    fn mcdc__parser_column_validate_select_8e763e04__v2_no_agg_skips_group_by_key_validation() {
         let q = parse("SELECT foo, bar FROM t").unwrap();
         assert_eq!(q.columns.len(), 2);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_811__v3_agg_with_window_skips_group_by_key_validation() {
+    fn mcdc__parser_column_validate_select_8e763e04__v3_agg_with_window_skips_group_by_key_validation(
+    ) {
         let q =
             parse("SELECT region, SUM(amount), ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap();
         assert_eq!(q.columns.len(), 3);
@@ -1647,19 +1649,19 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_763__v1_window_beside_computed_expr_is_rejected() {
+    fn mcdc__parser_column_validate_select_184ed0c3__v1_window_beside_computed_expr_is_rejected() {
         assert!(parse("SELECT id + 1, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_err());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_763__v2_window_beside_bare_column_is_accepted() {
+    fn mcdc__parser_column_validate_select_184ed0c3__v2_window_beside_bare_column_is_accepted() {
         assert!(parse("SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__column_763__v3_computed_expr_without_window_is_accepted() {
+    fn mcdc__parser_column_validate_select_184ed0c3__v3_computed_expr_without_window_is_accepted() {
         assert!(parse("SELECT id + 1 FROM t").is_ok());
     }
 
@@ -1667,7 +1669,7 @@ mod tests {
     // !has_window && has_expr` decision that no longer exists -- an
     // unaliased computed expression alongside an aggregate is still
     // rejected, but now via the per-item `select_keys` loop under
-    // `column_811` (`has_agg && !has_window`), not a standalone `&&
+    // `parser_column_validate_select_8e763e04` (`has_agg && !has_window`), not a standalone `&&
     // has_expr` leaf. Kept as ordinary regression tests, not re-tagged,
     // since there is no longer a matching multi-leaf decision to name.
     #[test]
@@ -1690,5 +1692,24 @@ mod tests {
         assert!(
             parse("SELECT SUM(amount), id + 1, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_err()
         );
+    }
+
+    // parser_column_validate_select_b892af2d (`validate_select`):
+    // `has_window && has_expr` -- MC/DC vectors (`mcdc__<id>__vN`, joined to
+    // tests/mcdc/obligations.json by `make test-mcdc`).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_select_b892af2d__v1_window_beside_expr_is_rejected() {
+        assert!(parse("SELECT id + 1, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_err());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_select_b892af2d__v2_expr_without_window_is_accepted() {
+        assert!(parse("SELECT id + 1 FROM t").is_ok());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_select_b892af2d__v3_window_without_expr_is_accepted() {
+        assert!(parse("SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_ok());
     }
 }

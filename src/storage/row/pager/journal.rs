@@ -369,7 +369,7 @@ mod tests {
         assert_eq!(page_checksum(42, &page), 42);
     }
 
-    // journal_156: `idx > 0 && idx < page.len()` in page_checksum's sampling
+    // storage_row_pager_journal_page_checksum_247b853d: `idx > 0 && idx < page.len()` in page_checksum's sampling
     // loop. Only 2 of the 3 MC/DC vectors are reachable through this
     // public function: `idx` is seeded as `page.len().saturating_sub(200)`
     // and only ever decreases by further `saturating_sub(200)` steps, so
@@ -377,15 +377,36 @@ mod tests {
     // idx >= page.len()" combination is structurally unreachable, not
     // just untested.
     #[test]
-    fn mcdc__journal_156__v1_both_true_the_loop_samples() {
+    fn mcdc__storage_row_pager_journal_page_checksum_247b853d__v1_both_true_the_loop_samples() {
         let page = vec![1u8; 512];
         assert_eq!(page_checksum(0, &page), 2);
     }
 
     #[test]
-    fn mcdc__journal_156__v2_idx_zero_the_loop_never_runs() {
+    fn mcdc__storage_row_pager_journal_page_checksum_247b853d__v2_idx_zero_the_loop_never_runs() {
         let page = vec![0xffu8; 100];
         assert_eq!(page_checksum(42, &page), 42);
+    }
+
+    /// Third vector, leaf B (`idx < page.len()`) false with leaf A true:
+    /// structurally unreachable (see the note above -- `idx` starts at
+    /// `len - 200` and only ever decreases), so this pins the invariant
+    /// that makes it so instead: for every page size the guard's second
+    /// leaf holds on the first iteration, and the sampled sum matches a
+    /// direct recomputation.
+    #[test]
+    fn mcdc__storage_row_pager_journal_page_checksum_247b853d__v3_idx_never_reaches_len() {
+        for len in [201usize, 512, 1024, 4096, 65536] {
+            let page: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            let mut expected = 7u32;
+            let mut idx = len - 200;
+            while idx > 0 {
+                assert!(idx < len, "idx {idx} escaped page of {len}");
+                expected = expected.wrapping_add(u32::from(page[idx]));
+                idx = idx.saturating_sub(200);
+            }
+            assert_eq!(page_checksum(7, &page), expected, "len {len}");
+        }
     }
 
     #[test]

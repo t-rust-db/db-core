@@ -283,7 +283,7 @@ pub(crate) fn hoist_uncorrelated_where_subqueries(
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::{compile_select_with_catalog, CodegenError, TableSchema};
@@ -319,7 +319,7 @@ mod mcdc_vectors {
         compile_select_with_catalog(&sel(sql), &catalog[0], &catalog)
     }
 
-    // correlation_82: `!qualifier_ok || !schema.columns...any(name)` inside
+    // codegen_row_subquery_correlation_walk_expr_for_correlation_6b2b445a: `!qualifier_ok || !schema.columns...any(name)` inside
     // `subquery_is_correlated`. Observable through hoisting (#306): an
     // uncorrelated scalar subquery in the outer WHERE is evaluated once,
     // before the outer table's `Rewind`; a correlated one is re-evaluated
@@ -340,19 +340,22 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__correlation_82__v1_outer_qualifier_marks_the_subquery_correlated() {
+    fn mcdc__codegen_row_subquery_correlation_walk_expr_for_correlation_6b2b445a__v1_outer_qualifier_marks_the_subquery_correlated(
+    ) {
         let p = compile_tu("SELECT a FROM t WHERE a = (SELECT b FROM u WHERE u.b = t.a)").unwrap();
         assert!(!subquery_open_precedes_outer_rewind(&p), "{p:?}");
     }
 
     #[test]
-    fn mcdc__correlation_82__v2_bare_column_not_in_the_subquery_table_is_correlated() {
+    fn mcdc__codegen_row_subquery_correlation_walk_expr_for_correlation_6b2b445a__v2_bare_column_not_in_the_subquery_table_is_correlated(
+    ) {
         let p = compile_tu("SELECT a FROM t WHERE a = (SELECT b FROM u WHERE a = 1)").unwrap();
         assert!(!subquery_open_precedes_outer_rewind(&p), "{p:?}");
     }
 
     #[test]
-    fn mcdc__correlation_82__v3_own_column_with_own_qualifier_is_uncorrelated_and_hoisted() {
+    fn mcdc__codegen_row_subquery_correlation_walk_expr_for_correlation_6b2b445a__v3_own_column_with_own_qualifier_is_uncorrelated_and_hoisted(
+    ) {
         let p = compile_tu("SELECT a FROM t WHERE a = (SELECT b FROM u WHERE u.b = 1)").unwrap();
         assert!(subquery_open_precedes_outer_rewind(&p), "{p:?}");
     }

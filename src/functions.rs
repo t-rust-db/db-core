@@ -1206,103 +1206,103 @@ mod regex_lite {
             assert!(compile("[abc").is_none());
         }
 
-        /// MC/DC vector (obligation `functions_931`, `parse_class`'s
+        /// MC/DC vector (obligation `functions_parse_class_d7d31f3a`, `parse_class`'s
         /// terminator check `chars[i] == ']' && i > class_start`): leaf A
         /// false (not a `]`) -- an ordinary class member, scanning
         /// continues.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_931__v1_non_bracket_continues() {
+        fn mcdc__functions_parse_class_d7d31f3a__v1_non_bracket_continues() {
             assert_eq!(extract("[ab]", "xaz", 0), Some("a".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_931`): leaf A true, leaf B
+        /// MC/DC vector (obligation `functions_parse_class_d7d31f3a`): leaf A true, leaf B
         /// (past the class start) false -- a `]` as the very first class
         /// character is a literal member, not the terminator.
-        /// Independence pair for B against `mcdc__functions_931__
+        /// Independence pair for B against `mcdc__functions_parse_class_d7d31f3a__
         /// v3_bracket_past_start_terminates`.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_931__v2_leading_bracket_is_literal_member() {
+        fn mcdc__functions_parse_class_d7d31f3a__v2_leading_bracket_is_literal_member() {
             assert_eq!(extract("[]a]", "x]z", 0), Some("]".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_931`): both leaves true --
+        /// MC/DC vector (obligation `functions_parse_class_d7d31f3a`): both leaves true --
         /// a `]` past the class start terminates the class. Independence
-        /// pair for A against `mcdc__functions_931__v1_non_bracket_
+        /// pair for A against `mcdc__functions_parse_class_d7d31f3a__v1_non_bracket_
         /// continues`.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_931__v3_bracket_past_start_terminates() {
+        fn mcdc__functions_parse_class_d7d31f3a__v3_bracket_past_start_terminates() {
             assert_eq!(extract("[a]b", "xay", 0), None);
             assert_eq!(extract("[a]b", "xaby", 0), Some("ab".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_934`, `parse_class`'s
+        /// MC/DC vector (obligation `functions_parse_class_328d12a6`, `parse_class`'s
         /// range-detection decision `i+2 < chars.len() && chars[i+1] ==
         /// '-' && chars[i+2] != ']'`, 3 conditions): all leaves true -- a
         /// real range like `a-z`.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_934__v1_all_true_is_range() {
+        fn mcdc__functions_parse_class_328d12a6__v1_all_true_is_range() {
             assert_eq!(extract("[a-z]", "XmY", 0), Some("m".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_934`): leaves A and B
+        /// MC/DC vector (obligation `functions_parse_class_328d12a6`): leaves A and B
         /// true, leaf C (`chars[i+2] != ']'`) false -- `-` immediately
         /// followed by the class terminator is not a range, so `-` is a
         /// literal member.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_934__v2_dash_before_terminator_is_literal() {
+        fn mcdc__functions_parse_class_328d12a6__v2_dash_before_terminator_is_literal() {
             assert_eq!(extract("[a-]", "x-y", 0), Some("-".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_934`): leaf A true, leaf B
+        /// MC/DC vector (obligation `functions_parse_class_328d12a6`): leaf A true, leaf B
         /// (`chars[i+1] == '-'`) false -- no dash follows, so it's a
         /// plain class member, not a range.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_934__v3_no_dash_is_not_range() {
+        fn mcdc__functions_parse_class_328d12a6__v3_no_dash_is_not_range() {
             assert_eq!(extract("[ab]", "xbz", 0), Some("b".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_934`): leaf A
+        /// MC/DC vector (obligation `functions_parse_class_328d12a6`): leaf A
         /// (`i+2 < chars.len()`) false -- too close to the end of the
         /// class for a range, so treated as a literal member.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_934__v4_too_short_for_range() {
+        fn mcdc__functions_parse_class_328d12a6__v4_too_short_for_range() {
             assert_eq!(extract("[a]", "xay", 0), Some("a".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_1106`, `try_repeat`'s
+        /// MC/DC vector (obligation `functions_try_repeat_d84b03c5`, `try_repeat`'s
         /// collection-loop decision `positions.len() - 1 < max &&
         /// text.get(cur).is_some_and(...)`): both leaves true -- under
         /// the repeat cap and the next character still matches, so
         /// collection continues.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_1106__v1_under_cap_and_matches_continues() {
+        fn mcdc__functions_try_repeat_d84b03c5__v1_under_cap_and_matches_continues() {
             assert_eq!(extract("ab+c", "abbbc", 0), Some("abbbc".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_1106`): leaf A true, leaf
+        /// MC/DC vector (obligation `functions_try_repeat_d84b03c5`): leaf A true, leaf
         /// B false -- still under the cap, but the next character
         /// doesn't match the atom, so collection stops with zero
         /// repeats.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_1106__v2_under_cap_but_no_match_stops() {
+        fn mcdc__functions_try_repeat_d84b03c5__v2_under_cap_but_no_match_stops() {
             assert_eq!(extract("ab*c", "ac", 0), Some("ac".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_1106`): leaf A false --
+        /// MC/DC vector (obligation `functions_try_repeat_d84b03c5`): leaf A false --
         /// the repeat cap is reached, so collection stops regardless of
         /// whether another character would have matched.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_1106__v3_cap_reached_stops() {
+        fn mcdc__functions_try_repeat_d84b03c5__v3_cap_reached_stops() {
             assert_eq!(extract("ab?c", "abc", 0), Some("abc".to_string()));
         }
     }
@@ -1671,16 +1671,16 @@ mod tests {
     /// (`a` is NULL) true -- returns `a` (NULL) regardless of `b`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_144__v1_lhs_null_returns_lhs() {
+    fn mcdc__functions_nullif_0e991c46__v1_lhs_null_returns_lhs() {
         assert_eq!(v("nullif", &[Value::Null, Value::Integer(1)]), Value::Null);
     }
 
     /// MC/DC vector (obligation `functions_117`): both leaves false --
     /// the equal-value comparison actually runs. Independence pair for A
-    /// against `mcdc__functions_144__v1_lhs_null_returns_lhs`.
+    /// against `mcdc__functions_nullif_0e991c46__v1_lhs_null_returns_lhs`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_144__v2_neither_null_compares() {
+    fn mcdc__functions_nullif_0e991c46__v2_neither_null_compares() {
         assert_eq!(
             v("nullif", &[Value::Integer(1), Value::Integer(1)]),
             Value::Null
@@ -1689,10 +1689,10 @@ mod tests {
 
     /// MC/DC vector (obligation `functions_117`): leaf B (`b` is NULL)
     /// true, leaf A false -- returns `a` unchanged. Independence pair for
-    /// B against `mcdc__functions_144__v2_neither_null_compares`.
+    /// B against `mcdc__functions_nullif_0e991c46__v2_neither_null_compares`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_144__v3_rhs_null_returns_lhs() {
+    fn mcdc__functions_nullif_0e991c46__v3_rhs_null_returns_lhs() {
         assert_eq!(
             v("nullif", &[Value::Integer(1), Value::Null]),
             Value::Integer(1)
@@ -1704,16 +1704,16 @@ mod tests {
     /// Some(Value::Null))`): leaf A (`args[0]` is NULL) true.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_270__v1_first_arg_null() {
+    fn mcdc__functions_round_fn_a3154251__v1_first_arg_null() {
         assert_eq!(v("round", &[Value::Null, Value::Integer(1)]), Value::Null);
     }
 
     /// MC/DC vector (obligation `functions_243`): both leaves false --
     /// rounding actually runs. Independence pair for A against
-    /// `mcdc__functions_270__v1_first_arg_null`.
+    /// `mcdc__functions_round_fn_a3154251__v1_first_arg_null`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_270__v2_neither_null_rounds() {
+    fn mcdc__functions_round_fn_a3154251__v2_neither_null_rounds() {
         assert_eq!(
             v("round", &[Value::Real(2.5), Value::Integer(0)]),
             Value::Real(3.0)
@@ -1722,10 +1722,10 @@ mod tests {
 
     /// MC/DC vector (obligation `functions_243`): leaf B (the optional
     /// second arg is present and NULL) true, leaf A false. Independence
-    /// pair for B against `mcdc__functions_270__v2_neither_null_rounds`.
+    /// pair for B against `mcdc__functions_round_fn_a3154251__v2_neither_null_rounds`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_270__v3_second_arg_null() {
+    fn mcdc__functions_round_fn_a3154251__v3_second_arg_null() {
         assert_eq!(v("round", &[Value::Real(2.5), Value::Null]), Value::Null);
     }
 
@@ -1734,7 +1734,7 @@ mod tests {
     /// Value::Null)`): leaf A (`args[0]` is NULL) true.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_313__v1_haystack_null() {
+    fn mcdc__functions_instr_0d4e3e9a__v1_haystack_null() {
         assert_eq!(
             v("instr", &[Value::Null, Value::Text("a".to_string().into())]),
             Value::Null
@@ -1743,10 +1743,10 @@ mod tests {
 
     /// MC/DC vector (obligation `functions_286`): both leaves false --
     /// the search actually runs. Independence pair for A against
-    /// `mcdc__functions_313__v1_haystack_null`.
+    /// `mcdc__functions_instr_0d4e3e9a__v1_haystack_null`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_313__v2_neither_null_searches() {
+    fn mcdc__functions_instr_0d4e3e9a__v2_neither_null_searches() {
         assert_eq!(
             v(
                 "instr",
@@ -1761,10 +1761,10 @@ mod tests {
 
     /// MC/DC vector (obligation `functions_286`): leaf B (`args[1]` is
     /// NULL) true, leaf A false. Independence pair for B against
-    /// `mcdc__functions_313__v2_neither_null_searches`.
+    /// `mcdc__functions_instr_0d4e3e9a__v2_neither_null_searches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_313__v3_needle_null() {
+    fn mcdc__functions_instr_0d4e3e9a__v3_needle_null() {
         assert_eq!(
             v(
                 "instr",
@@ -1947,13 +1947,13 @@ mod tests {
         assert!(glob_match("5", "[0-9]"));
     }
 
-    /// MC/DC vector (obligation `functions_353`, `substr`'s decision
+    /// MC/DC vector (obligation `functions_substr_3985c4c8`, `substr`'s decision
     /// `matches!(args[1], Value::Null) || args.get(2).is_some_and(|v|
     /// matches!(v, Value::Null))`): leaf A (`y` is NULL) true -- returns
     /// NULL regardless of `z`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_353__v1_y_null_returns_null() {
+    fn mcdc__functions_substr_3985c4c8__v1_y_null_returns_null() {
         assert_eq!(
             v(
                 "substr",
@@ -1963,12 +1963,12 @@ mod tests {
         );
     }
 
-    /// MC/DC vector (obligation `functions_353`): leaf A false, leaf B
+    /// MC/DC vector (obligation `functions_substr_3985c4c8`): leaf A false, leaf B
     /// (`z` is NULL) true -- also returns NULL. Independence pair for B
-    /// against `mcdc__functions_353__v3_neither_null_extracts`.
+    /// against `mcdc__functions_substr_3985c4c8__v3_neither_null_extracts`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_353__v2_z_null_returns_null() {
+    fn mcdc__functions_substr_3985c4c8__v2_z_null_returns_null() {
         assert_eq!(
             v(
                 "substr",
@@ -1982,12 +1982,12 @@ mod tests {
         );
     }
 
-    /// MC/DC vector (obligation `functions_353`): both leaves false --
+    /// MC/DC vector (obligation `functions_substr_3985c4c8`): both leaves false --
     /// substr actually runs. Independence pair for A against
-    /// `mcdc__functions_353__v1_y_null_returns_null`.
+    /// `mcdc__functions_substr_3985c4c8__v1_y_null_returns_null`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_353__v3_neither_null_extracts() {
+    fn mcdc__functions_substr_3985c4c8__v3_neither_null_extracts() {
         assert_eq!(
             v(
                 "substr",
@@ -1997,296 +1997,296 @@ mod tests {
         );
     }
 
-    /// MC/DC vector (obligation `functions_494`, `like_rec`'s decision
+    /// MC/DC vector (obligation `functions_like_rec_c331028c`, `like_rec`'s decision
     /// `Some(pc) == escape && pi.saturating_add(1) < p.len()`): leaf A
     /// (`pc` is the escape char) false -- the escape branch is skipped
     /// entirely and `pc` is handled as a normal pattern char.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_494__v1_not_escape_char_skips_branch() {
+    fn mcdc__functions_like_rec_c331028c__v1_not_escape_char_skips_branch() {
         assert!(like_match("a", "a", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_494`): leaf A true, leaf B
+    /// MC/DC vector (obligation `functions_like_rec_c331028c`): leaf A true, leaf B
     /// (a char follows the escape) false -- the escape char is the last
     /// pattern char, so the branch is skipped and it's matched literally
     /// instead. Independence pair for B against
-    /// `mcdc__functions_494__v3_escape_with_following_char_takes_branch`.
+    /// `mcdc__functions_like_rec_c331028c__v3_escape_with_following_char_takes_branch`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_494__v2_trailing_escape_has_no_following_char() {
+    fn mcdc__functions_like_rec_c331028c__v2_trailing_escape_has_no_following_char() {
         assert!(like_match("\\", "\\", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_494`): both leaves true -- the
+    /// MC/DC vector (obligation `functions_like_rec_c331028c`): both leaves true -- the
     /// escape branch is taken, so the following char is matched
     /// literally. Independence pair for A against
-    /// `mcdc__functions_494__v1_not_escape_char_skips_branch`.
+    /// `mcdc__functions_like_rec_c331028c__v1_not_escape_char_skips_branch`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_494__v3_escape_with_following_char_takes_branch() {
+    fn mcdc__functions_like_rec_c331028c__v3_escape_with_following_char_takes_branch() {
         assert!(like_match("%", "\\%", Some('\\')));
         assert!(!like_match("x", "\\%", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_496`, `like_rec`'s escaped-
+    /// MC/DC vector (obligation `functions_like_rec_8f97ac22`, `like_rec`'s escaped-
     /// literal decision `ti >= t.len() || !ascii_eq(t[ti], literal)`):
     /// leaf A (text exhausted) true -- no match regardless of `literal`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_496__v1_text_exhausted_no_match() {
+    fn mcdc__functions_like_rec_8f97ac22__v1_text_exhausted_no_match() {
         assert!(!like_match("", "\\%", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_496`): leaf A false, leaf B
+    /// MC/DC vector (obligation `functions_like_rec_8f97ac22`): leaf A false, leaf B
     /// (char mismatch) true -- no match. Independence pair for B against
-    /// `mcdc__functions_496__v3_escaped_literal_matches`.
+    /// `mcdc__functions_like_rec_8f97ac22__v3_escaped_literal_matches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_496__v2_escaped_literal_mismatches() {
+    fn mcdc__functions_like_rec_8f97ac22__v2_escaped_literal_mismatches() {
         assert!(!like_match("x", "\\%", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_496`): both leaves false --
+    /// MC/DC vector (obligation `functions_like_rec_8f97ac22`): both leaves false --
     /// the escaped literal matches, so matching continues. Independence
-    /// pair for A against `mcdc__functions_496__v1_text_exhausted_no_match`.
+    /// pair for A against `mcdc__functions_like_rec_8f97ac22__v1_text_exhausted_no_match`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_496__v3_escaped_literal_matches() {
+    fn mcdc__functions_like_rec_8f97ac22__v3_escaped_literal_matches() {
         assert!(like_match("%", "\\%", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_506`, `like_rec`'s `%`
+    /// MC/DC vector (obligation `functions_like_rec_01f56809`, `like_rec`'s `%`
     /// collapse-loop decision `pi < p.len() && p[pi] == '%'`): both
     /// leaves true -- a run of two `%` collapses through one extra
     /// iteration.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_506__v1_run_of_percent_collapses() {
+    fn mcdc__functions_like_rec_01f56809__v1_run_of_percent_collapses() {
         assert!(like_match("axb", "a%%b", None));
     }
 
-    /// MC/DC vector (obligation `functions_506`): leaf A true, leaf B
+    /// MC/DC vector (obligation `functions_like_rec_01f56809`): leaf A true, leaf B
     /// (next pattern char is `%`) false -- the loop stops after a single
     /// `%` because the following char differs. Independence pair for B
-    /// against `mcdc__functions_506__v1_run_of_percent_collapses`.
+    /// against `mcdc__functions_like_rec_01f56809__v1_run_of_percent_collapses`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_506__v2_single_percent_then_other_char() {
+    fn mcdc__functions_like_rec_01f56809__v2_single_percent_then_other_char() {
         assert!(like_match("axb", "a%b", None));
     }
 
-    /// MC/DC vector (obligation `functions_506`): leaf A (more pattern
+    /// MC/DC vector (obligation `functions_like_rec_01f56809`): leaf A (more pattern
     /// left) false -- the loop stops because `%` is the last pattern
     /// char, matching the rest of the text unconditionally. Independence
-    /// pair for A against `mcdc__functions_506__v2_single_percent_then_other_char`.
+    /// pair for A against `mcdc__functions_like_rec_01f56809__v2_single_percent_then_other_char`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_506__v3_trailing_percent_matches_end() {
+    fn mcdc__functions_like_rec_01f56809__v3_trailing_percent_matches_end() {
         assert!(like_match("axyz", "a%", None));
     }
 
-    /// MC/DC vector (obligation `functions_527`, `like_rec`'s literal
+    /// MC/DC vector (obligation `functions_like_rec_ec8f55a3`, `like_rec`'s literal
     /// char decision `ti >= t.len() || !ascii_eq(t[ti], pc)`): leaf A
     /// (text exhausted) true -- no match regardless of `pc`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_527__v1_text_exhausted_no_match() {
+    fn mcdc__functions_like_rec_ec8f55a3__v1_text_exhausted_no_match() {
         assert!(!like_match("", "a", None));
     }
 
-    /// MC/DC vector (obligation `functions_527`): leaf A false, leaf B
+    /// MC/DC vector (obligation `functions_like_rec_ec8f55a3`): leaf A false, leaf B
     /// (char mismatch) true -- no match. Independence pair for B against
-    /// `mcdc__functions_527__v3_literal_matches`.
+    /// `mcdc__functions_like_rec_ec8f55a3__v3_literal_matches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_527__v2_literal_mismatches() {
+    fn mcdc__functions_like_rec_ec8f55a3__v2_literal_mismatches() {
         assert!(!like_match("x", "a", None));
     }
 
-    /// MC/DC vector (obligation `functions_527`): both leaves false --
+    /// MC/DC vector (obligation `functions_like_rec_ec8f55a3`): both leaves false --
     /// the literal matches. Independence pair for A against
-    /// `mcdc__functions_527__v1_text_exhausted_no_match`.
+    /// `mcdc__functions_like_rec_ec8f55a3__v1_text_exhausted_no_match`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_527__v3_literal_matches() {
+    fn mcdc__functions_like_rec_ec8f55a3__v3_literal_matches() {
         assert!(like_match("a", "a", None));
     }
 
-    /// MC/DC vector (obligation `functions_557`, `glob_rec`'s `*`
+    /// MC/DC vector (obligation `functions_glob_rec_01d0fd5a`, `glob_rec`'s `*`
     /// collapse-loop decision `pi < p.len() && p[pi] == '*'`): both
     /// leaves true -- a run of two `*` collapses through one extra
     /// iteration.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_557__v1_run_of_star_collapses() {
+    fn mcdc__functions_glob_rec_01d0fd5a__v1_run_of_star_collapses() {
         assert!(glob_match("axb", "a**b"));
     }
 
-    /// MC/DC vector (obligation `functions_557`): leaf A true, leaf B
+    /// MC/DC vector (obligation `functions_glob_rec_01d0fd5a`): leaf A true, leaf B
     /// (next pattern char is `*`) false -- the loop stops after a single
     /// `*` because the following char differs. Independence pair for B
-    /// against `mcdc__functions_557__v1_run_of_star_collapses`.
+    /// against `mcdc__functions_glob_rec_01d0fd5a__v1_run_of_star_collapses`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_557__v2_single_star_then_other_char() {
+    fn mcdc__functions_glob_rec_01d0fd5a__v2_single_star_then_other_char() {
         assert!(glob_match("axb", "a*b"));
     }
 
-    /// MC/DC vector (obligation `functions_557`): leaf A (more pattern
+    /// MC/DC vector (obligation `functions_glob_rec_01d0fd5a`): leaf A (more pattern
     /// left) false -- the loop stops because `*` is the last pattern
     /// char, matching the rest of the text unconditionally. Independence
-    /// pair for A against `mcdc__functions_557__v2_single_star_then_other_char`.
+    /// pair for A against `mcdc__functions_glob_rec_01d0fd5a__v2_single_star_then_other_char`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_557__v3_trailing_star_matches_end() {
+    fn mcdc__functions_glob_rec_01d0fd5a__v3_trailing_star_matches_end() {
         assert!(glob_match("axyz", "a*"));
     }
 
-    /// MC/DC vector (obligation `functions_581`, `glob_rec`'s character-
+    /// MC/DC vector (obligation `functions_glob_rec_36b485df`, `glob_rec`'s character-
     /// class decision `ti >= t.len() || !matches`): leaf A (text
     /// exhausted) true -- no match regardless of `matches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_581__v1_text_exhausted_no_match() {
+    fn mcdc__functions_glob_rec_36b485df__v1_text_exhausted_no_match() {
         assert!(!glob_match("", "[a-z]"));
     }
 
-    /// MC/DC vector (obligation `functions_581`): leaf A false, leaf B
+    /// MC/DC vector (obligation `functions_glob_rec_36b485df`): leaf A false, leaf B
     /// (class didn't match) true -- no match. Independence pair for B
-    /// against `mcdc__functions_581__v3_class_matches`.
+    /// against `mcdc__functions_glob_rec_36b485df__v3_class_matches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_581__v2_class_mismatches() {
+    fn mcdc__functions_glob_rec_36b485df__v2_class_mismatches() {
         assert!(!glob_match("Z", "[a-z]"));
     }
 
-    /// MC/DC vector (obligation `functions_581`): both leaves false --
+    /// MC/DC vector (obligation `functions_glob_rec_36b485df`): both leaves false --
     /// the class matches. Independence pair for A against
-    /// `mcdc__functions_581__v1_text_exhausted_no_match`.
+    /// `mcdc__functions_glob_rec_36b485df__v1_text_exhausted_no_match`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_581__v3_class_matches() {
+    fn mcdc__functions_glob_rec_36b485df__v3_class_matches() {
         assert!(glob_match("m", "[a-z]"));
     }
 
-    /// MC/DC vector (obligation `functions_588`, `glob_rec`'s literal
+    /// MC/DC vector (obligation `functions_glob_rec_688fbf64`, `glob_rec`'s literal
     /// char decision `ti >= t.len() || t[ti] != c`): leaf A (text
     /// exhausted) true -- no match regardless of `c`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_588__v1_text_exhausted_no_match() {
+    fn mcdc__functions_glob_rec_688fbf64__v1_text_exhausted_no_match() {
         assert!(!glob_match("", "a"));
     }
 
-    /// MC/DC vector (obligation `functions_588`): leaf A false, leaf B
+    /// MC/DC vector (obligation `functions_glob_rec_688fbf64`): leaf A false, leaf B
     /// (char mismatch) true -- no match. Independence pair for B against
-    /// `mcdc__functions_588__v3_literal_matches`.
+    /// `mcdc__functions_glob_rec_688fbf64__v3_literal_matches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_588__v2_literal_mismatches() {
+    fn mcdc__functions_glob_rec_688fbf64__v2_literal_mismatches() {
         assert!(!glob_match("x", "a"));
     }
 
-    /// MC/DC vector (obligation `functions_588`): both leaves false --
+    /// MC/DC vector (obligation `functions_glob_rec_688fbf64`): both leaves false --
     /// the literal matches. Independence pair for A against
-    /// `mcdc__functions_588__v1_text_exhausted_no_match`.
+    /// `mcdc__functions_glob_rec_688fbf64__v1_text_exhausted_no_match`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_588__v3_literal_matches() {
+    fn mcdc__functions_glob_rec_688fbf64__v3_literal_matches() {
         assert!(glob_match("a", "a"));
     }
 
-    /// MC/DC vector (obligation `functions_613`, `glob_class`'s
+    /// MC/DC vector (obligation `functions_glob_class_1d2aadbb`, `glob_class`'s
     /// terminator decision `p[i] == ']' && i > class_start`): leaf A
     /// (`p[i]` is `']'`) false -- an ordinary class char, loop keeps
     /// going.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_613__v1_non_bracket_continues() {
+    fn mcdc__functions_glob_class_1d2aadbb__v1_non_bracket_continues() {
         assert!(glob_match("a", "[ab]"));
     }
 
-    /// MC/DC vector (obligation `functions_613`): leaf A true, leaf B
+    /// MC/DC vector (obligation `functions_glob_class_1d2aadbb`): leaf A true, leaf B
     /// (past the class start) false -- a `]` as the very first class
     /// char is a literal member, not the terminator. Independence pair
-    /// for B against `mcdc__functions_613__v3_bracket_past_start_terminates`.
+    /// for B against `mcdc__functions_glob_class_1d2aadbb__v3_bracket_past_start_terminates`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_613__v2_leading_bracket_is_literal_member() {
+    fn mcdc__functions_glob_class_1d2aadbb__v2_leading_bracket_is_literal_member() {
         assert!(glob_match("]", "[]a]"));
     }
 
-    /// MC/DC vector (obligation `functions_613`): both leaves true -- a
+    /// MC/DC vector (obligation `functions_glob_class_1d2aadbb`): both leaves true -- a
     /// `]` past the class start terminates the class. Independence pair
-    /// for A against `mcdc__functions_613__v1_non_bracket_continues`.
+    /// for A against `mcdc__functions_glob_class_1d2aadbb__v1_non_bracket_continues`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_613__v3_bracket_past_start_terminates() {
+    fn mcdc__functions_glob_class_1d2aadbb__v3_bracket_past_start_terminates() {
         assert!(!glob_match("a", "[a]b"));
         assert!(glob_match("ab", "[a]b"));
     }
 
-    /// MC/DC vector (obligation `functions_617`, `glob_class`'s range-
+    /// MC/DC vector (obligation `functions_glob_class_18591d42`, `glob_class`'s range-
     /// detection decision `i.saturating_add(2) < p.len() && p[i + 1] ==
     /// '-' && p[i + 2] != ']'`, 3 conditions): all leaves true -- a real
     /// range like `a-z`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_617__v1_all_true_is_range() {
+    fn mcdc__functions_glob_class_18591d42__v1_all_true_is_range() {
         assert!(glob_match("m", "[a-z]"));
     }
 
-    /// MC/DC vector (obligation `functions_617`): leaves A and B true,
+    /// MC/DC vector (obligation `functions_glob_class_18591d42`): leaves A and B true,
     /// leaf C (`p[i+2] != ']'`) false -- `-` immediately followed by the
     /// class terminator is not a range, so `-` is a literal member.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_617__v2_dash_before_terminator_is_literal() {
+    fn mcdc__functions_glob_class_18591d42__v2_dash_before_terminator_is_literal() {
         assert!(glob_match("-", "[a-]"));
     }
 
-    /// MC/DC vector (obligation `functions_617`): leaf A true, leaf B
+    /// MC/DC vector (obligation `functions_glob_class_18591d42`): leaf A true, leaf B
     /// (`p[i+1] == '-'`) false -- no dash follows, so it's a plain class
     /// member, not a range.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_617__v3_no_dash_is_not_range() {
+    fn mcdc__functions_glob_class_18591d42__v3_no_dash_is_not_range() {
         assert!(glob_match("b", "[ab]"));
     }
 
-    /// MC/DC vector (obligation `functions_617`): leaf A (`i+2 <
+    /// MC/DC vector (obligation `functions_glob_class_18591d42`): leaf A (`i+2 <
     /// p.len()`) false -- too close to the end of the pattern for a
     /// range, so treated as a literal member (the class ends up
     /// unterminated here, so `glob` reports no match).
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_617__v4_too_short_for_range() {
+    fn mcdc__functions_glob_class_18591d42__v4_too_short_for_range() {
         assert!(!glob_match("a", "[a-"));
     }
 
-    /// MC/DC vector (obligation `functions_623`, `glob_class`'s range-
+    /// MC/DC vector (obligation `functions_glob_class_78a99761`, `glob_class`'s range-
     /// bounds decision `c >= lo && c <= hi`): both leaves true -- `c`
     /// falls inside `[lo, hi]`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_623__v1_within_bounds_matches() {
+    fn mcdc__functions_glob_class_78a99761__v1_within_bounds_matches() {
         assert!(glob_match("m", "[a-z]"));
     }
 
-    /// MC/DC vector (obligation `functions_623`): leaf A (`c >= lo`)
+    /// MC/DC vector (obligation `functions_glob_class_78a99761`): leaf A (`c >= lo`)
     /// false -- below the lower bound, no match regardless of `c <= hi`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_623__v2_below_lower_bound() {
+    fn mcdc__functions_glob_class_78a99761__v2_below_lower_bound() {
         assert!(!glob_match("A", "[a-z]"));
     }
 
-    /// MC/DC vector (obligation `functions_623`): leaf A true, leaf B
+    /// MC/DC vector (obligation `functions_glob_class_78a99761`): leaf A true, leaf B
     /// (`c <= hi`) false -- above the upper bound, no match.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_623__v3_above_upper_bound() {
+    fn mcdc__functions_glob_class_78a99761__v3_above_upper_bound() {
         assert!(!glob_match("~", "[a-z]"));
     }
 

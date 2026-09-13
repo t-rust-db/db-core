@@ -1138,7 +1138,7 @@ impl Engine for StreamEngine {
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#299 MC/DC backfill).
 
     use super::{Range, ScopeReport, StreamEngine, Value};
@@ -1157,9 +1157,70 @@ mod mcdc_vectors {
         p
     }
 
-    // stream_357 (`requests`): `is_predefined(col) || self.fields.iter().any(|f| f == col)`
+    /// `Box<dyn Clock>` needs a concrete forwarding type over the shared
+    /// `Arc<FakeClock>`, same as `tests/unit/engine_stream_standing_queries_test.rs`.
+    struct FakeClockHandle(std::sync::Arc<crate::clock::FakeClock>);
+    impl crate::clock::Clock for FakeClockHandle {
+        fn now_ns(&self) -> i64 {
+            self.0.now_ns()
+        }
+    }
+
+    /// A `count_over_time(message) RANGE 10 seconds > 3` standing query
+    /// over four same-second lines (count = 4, so the threshold holds from
+    /// the first poll on), with `for_duration` = 5s and a fake clock at t=0.
+    fn threshold_query() -> (
+        StreamEngine,
+        std::sync::Arc<crate::clock::FakeClock>,
+        super::StandingQuery,
+    ) {
+        let p = temp_log_with(&"<134>Sep 10 08:00:01 h app: msg\n".repeat(4));
+        let clock = std::sync::Arc::new(crate::clock::FakeClock::new(0));
+        let mut e = StreamEngine::open(&p).unwrap();
+        e.set_clock(Box::new(FakeClockHandle(clock.clone())));
+        let sq = super::StandingQuery::new(
+            &e,
+            "SELECT count_over_time(message) RANGE 10 seconds FROM log",
+            super::EmitMode::Threshold {
+                op: crate::parser::ast::BinaryOp::Gt,
+                threshold: 3.0,
+            },
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(5),
+        )
+        .unwrap();
+        (e, clock, sq)
+    }
+
+    // engine_stream_poll_threshold_531505eb (`poll_threshold`):
+    // `held_ns >= for_ns && !self.fired_for_current_hold`.
     #[test]
-    fn mcdc__stream_214__v1_predefined_alone_is_enough() {
+    fn mcdc__engine_stream_poll_threshold_531505eb__v1_held_long_enough_and_unfired_fires() {
+        let (mut e, clock, mut sq) = threshold_query();
+        assert!(sq.poll(&mut e).unwrap().is_none()); // starts the hold at t=0
+        clock.advance(6_000_000_000);
+        assert!(sq.poll(&mut e).unwrap().is_some());
+    }
+    #[test]
+    fn mcdc__engine_stream_poll_threshold_531505eb__v2_not_held_long_enough_stays_silent() {
+        let (mut e, clock, mut sq) = threshold_query();
+        assert!(sq.poll(&mut e).unwrap().is_none());
+        clock.advance(3_000_000_000);
+        assert!(sq.poll(&mut e).unwrap().is_none());
+    }
+    #[test]
+    fn mcdc__engine_stream_poll_threshold_531505eb__v3_already_fired_for_this_hold_stays_silent() {
+        let (mut e, clock, mut sq) = threshold_query();
+        assert!(sq.poll(&mut e).unwrap().is_none());
+        clock.advance(6_000_000_000);
+        assert!(sq.poll(&mut e).unwrap().is_some());
+        clock.advance(1_000_000_000);
+        assert!(sq.poll(&mut e).unwrap().is_none());
+    }
+
+    // engine_stream_requests_39699173 (`requests`): `is_predefined(col) || self.fields.iter().any(|f| f == col)`
+    #[test]
+    fn mcdc__engine_stream_requests_39699173__v1_predefined_alone_is_enough() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
         let e = StreamEngine::open(&p).unwrap();
         // "severity" is predefined (true) and not a seen Tier-3 field
@@ -1168,7 +1229,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__stream_214__v2_seen_tier3_field_alone_is_enough() {
+    fn mcdc__engine_stream_requests_39699173__v2_seen_tier3_field_alone_is_enough() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h nginx[7]: msg\n");
         let e = StreamEngine::open(&p).unwrap();
         // "pid" is not predefined (false) but was seen as a Tier-3 field
@@ -1177,7 +1238,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__stream_214__v3_neither_is_unknown() {
+    fn mcdc__engine_stream_requests_39699173__v3_neither_is_unknown() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
         let e = StreamEngine::open(&p).unwrap();
         // Not predefined and never seen as a field -- both leafs false.
@@ -1202,7 +1263,7 @@ mod mcdc_vectors {
     // stream_474 (`merge_retained_summaries`):
     // `!select.group_by.is_empty() || select.where_clause.is_some()`
     #[test]
-    fn mcdc__stream_480__v1_group_by_alone_short_circuits() {
+    fn mcdc__engine_stream_merge_retained_summaries_8f6287cc__v1_group_by_alone_short_circuits() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
         let e = StreamEngine::open(&p).unwrap();
         let select = parse("SELECT severity, count(*) FROM log GROUP BY severity");
@@ -1215,7 +1276,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__stream_480__v2_where_alone_short_circuits() {
+    fn mcdc__engine_stream_merge_retained_summaries_8f6287cc__v2_where_alone_short_circuits() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
         let e = StreamEngine::open(&p).unwrap();
         let select = parse("SELECT count(*) FROM log WHERE severity >= 0");
@@ -1228,7 +1289,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__stream_480__v3_neither_lets_the_merge_proceed() {
+    fn mcdc__engine_stream_merge_retained_summaries_8f6287cc__v3_neither_lets_the_merge_proceed() {
         let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n<134>Sep 10 08:00:02 h app: msg\n");
         let mut e = StreamEngine::open_with_budget(&p, 1).unwrap();
         e.refresh().unwrap(); // no-op; establishes a deterministic ring state

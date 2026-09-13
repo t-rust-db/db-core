@@ -696,7 +696,7 @@ pub(super) fn synthesize_equality_constraint(
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::dispatch::{compile_statement, DispatchError};
@@ -744,11 +744,12 @@ mod mcdc_vectors {
     }
 
     // ---------------------------------------------------------------------
-    // joins_81 -- `compile_select_joined`'s FULL JOIN dispatch:
+    // codegen_row_select_joins_compile_select_joined_13abcba3 -- `compile_select_joined`'s FULL JOIN dispatch:
     // `joins.len() == 1 && first.op == Full`.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__joins_81__v1_single_full_join_takes_the_dedicated_emitter() {
+    fn mcdc__codegen_row_select_joins_compile_select_joined_13abcba3__v1_single_full_join_takes_the_dedicated_emitter(
+    ) {
         let p = ok(
             "SELECT a.k, b.k FROM a FULL JOIN b ON a.k = b.k",
             &two_tables(),
@@ -759,7 +760,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__joins_81__v2_full_join_among_two_joins_is_rejected() {
+    fn mcdc__codegen_row_select_joins_compile_select_joined_13abcba3__v2_full_join_among_two_joins_is_rejected(
+    ) {
         let mut schemas = two_tables();
         schemas.push(table("c", 4, &["k", "x"]));
         let e = err_text(
@@ -770,7 +772,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__joins_81__v3_single_inner_join_takes_the_ordinary_join_tree() {
+    fn mcdc__codegen_row_select_joins_compile_select_joined_13abcba3__v3_single_inner_join_takes_the_ordinary_join_tree(
+    ) {
         let p = ok("SELECT a.k, b.k FROM a JOIN b ON a.k = b.k", &two_tables());
         assert!(!has(&p, Opcode::OpenEphemeral), "{p:?}");
     }
@@ -780,7 +783,8 @@ mod mcdc_vectors {
     // routes a join to the grouped emitter, which rejects DISTINCT.
     // ---------------------------------------------------------------------
     #[test]
-    fn mcdc__joins_461__v1_group_by_routes_to_the_grouped_join() {
+    fn mcdc__codegen_row_select_joins_compile_select_joined_scan_8e3e2857__v1_group_by_routes_to_the_grouped_join(
+    ) {
         let e = err_text(
             "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k GROUP BY a.k",
             &two_tables(),
@@ -792,7 +796,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__joins_461__v2_aggregate_without_group_by_routes_to_the_grouped_join() {
+    fn mcdc__codegen_row_select_joins_compile_select_joined_scan_8e3e2857__v2_aggregate_without_group_by_routes_to_the_grouped_join(
+    ) {
         let e = err_text(
             "SELECT DISTINCT count(*) FROM a JOIN b ON a.k = b.k",
             &two_tables(),
@@ -804,7 +809,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__joins_461__v3_neither_is_a_plain_joined_scan() {
+    fn mcdc__codegen_row_select_joins_compile_select_joined_scan_8e3e2857__v3_neither_is_a_plain_joined_scan(
+    ) {
         let p = ok(
             "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k",
             &two_tables(),

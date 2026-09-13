@@ -423,7 +423,6 @@ fn rewrite_severity_expr(e: &mut Expr) -> Result<()> {
     match &mut e.kind {
         ExprKind::Binary { op, lhs, rhs } => {
             if is_comparison(*op) {
-                // #307: line-shift buffer to avoid an MC/DC id collision.
                 if is_severity_column(lhs) {
                     rewrite_severity_value(rhs)?;
                 } else if is_severity_column(rhs) {
@@ -472,6 +471,45 @@ mod tests {
     fn compiled(sql: &str, scope: Scope) -> Result<Program> {
         let select = parse(sql).unwrap();
         compile(&select, scope, 0)
+    }
+
+    /// The first result column of `sql` as a bare `Expr`.
+    fn first_column_expr(sql: &str) -> Expr {
+        // The shared row grammar, not the batch validator behind `parse`:
+        // the latter rejects any function name outside its aggregate list
+        // before `aggregate_in` ever sees the expression.
+        let crate::parser::row::error::ParseOutcome::Accepted(select) =
+            crate::parser::row::error::parse_select(sql)
+        else {
+            panic!("{sql} did not parse")
+        };
+        match select.columns.into_iter().next() {
+            Some(ResultColumn::Expr { expr, .. }) => expr,
+            other => panic!("expected an expression column, got {other:?}"),
+        }
+    }
+
+    // codegen_stream_aggregate_in_e9d2f9c1 (`aggregate_in`):
+    // `AggFunc::from_name(name).is_some() && !matches!(tail, Some(t) if t.over.is_some())`
+    // -- MC/DC vectors (`mcdc__<id>__vN`, joined to tests/mcdc/obligations.json
+    // by `make test-mcdc`).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_stream_aggregate_in_e9d2f9c1__v1_plain_aggregate_is_found() {
+        let expr = first_column_expr("SELECT count(message) FROM log");
+        assert!(aggregate_in(&expr).is_some());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_stream_aggregate_in_e9d2f9c1__v2_non_aggregate_function_is_not() {
+        let expr = first_column_expr("SELECT length(message) FROM log");
+        assert!(aggregate_in(&expr).is_none());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_stream_aggregate_in_e9d2f9c1__v3_windowed_aggregate_is_not() {
+        let expr = first_column_expr("SELECT count(message) OVER () FROM log");
+        assert!(aggregate_in(&expr).is_none());
     }
 
     #[test]
@@ -571,12 +609,12 @@ mod tests {
         Scope::Time(Duration::from_secs(3600))
     }
 
-    // stream_173 (`range_vector_query`): `!select.group_by.is_empty() ||
+    // codegen_stream_range_vector_query_85dd6808 (`range_vector_query`): `!select.group_by.is_empty() ||
     // select.having.is_some() || !select.order_by.is_empty() ||
     // select.limit.is_some()`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__stream_173__v1_all_false_compiles() {
+    fn mcdc__codegen_stream_range_vector_query_85dd6808__v1_all_false_compiles() {
         let program = compiled(
             "SELECT count_over_time(message) RANGE 10 seconds FROM log",
             default_scope(),
@@ -587,7 +625,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__stream_173__v2_group_by_alone_rejects() {
+    fn mcdc__codegen_stream_range_vector_query_85dd6808__v2_group_by_alone_rejects() {
         let err = compiled(
             "SELECT count_over_time(message) RANGE 10 seconds FROM log GROUP BY severity",
             default_scope(),
@@ -598,7 +636,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__stream_173__v3_having_alone_rejects() {
+    fn mcdc__codegen_stream_range_vector_query_85dd6808__v3_having_alone_rejects() {
         // `HAVING` has no grammar/validator support at all yet (rejected
         // unconditionally, pre-existing and unrelated to #308), so this
         // leaf can't be exercised through `parse` -- built directly
@@ -615,7 +653,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__stream_173__v4_order_by_alone_rejects() {
+    fn mcdc__codegen_stream_range_vector_query_85dd6808__v4_order_by_alone_rejects() {
         let err = compiled(
             "SELECT count_over_time(message) RANGE 10 seconds FROM log ORDER BY severity",
             default_scope(),
@@ -626,7 +664,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__stream_173__v5_limit_alone_rejects() {
+    fn mcdc__codegen_stream_range_vector_query_85dd6808__v5_limit_alone_rejects() {
         let err = compiled(
             "SELECT count_over_time(message) RANGE 10 seconds FROM log LIMIT 5",
             default_scope(),
@@ -635,11 +673,11 @@ mod tests {
         assert!(err.to_string().contains("stands alone"));
     }
 
-    // stream_206 (`range_vector_query`): `arg_column.is_none() &&
+    // codegen_stream_range_vector_query_d399a6bf (`range_vector_query`): `arg_column.is_none() &&
     // !matches!(func, RangeAggFunc::Count | RangeAggFunc::Rate)`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__stream_206__v1_both_true_rejects_sum_with_no_column() {
+    fn mcdc__codegen_stream_range_vector_query_d399a6bf__v1_both_true_rejects_sum_with_no_column() {
         let err = compiled(
             "SELECT sum_over_time(*) RANGE 10 seconds FROM log",
             default_scope(),
@@ -650,7 +688,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__stream_206__v2_no_column_but_count_is_fine() {
+    fn mcdc__codegen_stream_range_vector_query_d399a6bf__v2_no_column_but_count_is_fine() {
         let program = compiled(
             "SELECT count_over_time(*) RANGE 10 seconds FROM log",
             default_scope(),
@@ -661,7 +699,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__stream_206__v3_a_column_is_fine_even_for_sum() {
+    fn mcdc__codegen_stream_range_vector_query_d399a6bf__v3_a_column_is_fine_even_for_sum() {
         let program = compiled(
             "SELECT sum_over_time(severity) RANGE 10 seconds FROM log",
             default_scope(),

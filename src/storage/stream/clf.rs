@@ -463,55 +463,55 @@ mod tests {
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#299 MC/DC backfill).
 
     use super::ClfParser;
 
-    // clf_267: `year < 1970 || month == 0 || month > 12 || day == 0
+    // storage_stream_clf_epoch_nanos_c3b66372: `year < 1970 || month == 0 || month > 12 || day == 0
     //   || day > 31 || hour > 23 || minute > 59 || second > 59`
     #[test]
-    fn mcdc__clf_267__v1_year_before_epoch() {
+    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v1_year_before_epoch() {
         assert_eq!(ClfParser::epoch_nanos(1969, 1, 1, 0, 0, 0), None);
     }
 
     #[test]
-    fn mcdc__clf_267__v2_month_zero() {
+    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v2_month_zero() {
         assert_eq!(ClfParser::epoch_nanos(2026, 0, 1, 0, 0, 0), None);
     }
 
     #[test]
-    fn mcdc__clf_267__v3_month_over_twelve() {
+    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v3_month_over_twelve() {
         assert_eq!(ClfParser::epoch_nanos(2026, 13, 1, 0, 0, 0), None);
     }
 
     #[test]
-    fn mcdc__clf_267__v4_day_zero() {
+    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v4_day_zero() {
         assert_eq!(ClfParser::epoch_nanos(2026, 1, 0, 0, 0, 0), None);
     }
 
     #[test]
-    fn mcdc__clf_267__v5_day_over_thirty_one() {
+    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v5_day_over_thirty_one() {
         assert_eq!(ClfParser::epoch_nanos(2026, 1, 32, 0, 0, 0), None);
     }
 
     #[test]
-    fn mcdc__clf_267__v6_hour_over_twenty_three() {
+    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v6_hour_over_twenty_three() {
         assert_eq!(ClfParser::epoch_nanos(2026, 1, 1, 24, 0, 0), None);
     }
 
     #[test]
-    fn mcdc__clf_267__v7_minute_over_fifty_nine() {
+    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v7_minute_over_fifty_nine() {
         assert_eq!(ClfParser::epoch_nanos(2026, 1, 1, 0, 60, 0), None);
     }
 
     #[test]
-    fn mcdc__clf_267__v8_second_over_fifty_nine() {
+    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v8_second_over_fifty_nine() {
         assert_eq!(ClfParser::epoch_nanos(2026, 1, 1, 0, 0, 60), None);
     }
 
     #[test]
-    fn mcdc__clf_267__v9_all_false_is_valid() {
+    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v9_all_false_is_valid() {
         assert!(ClfParser::epoch_nanos(2026, 1, 1, 0, 0, 0).is_some());
     }
 }

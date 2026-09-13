@@ -651,7 +651,7 @@ mod tests {
 )]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#299 MC/DC backfill).
 
     use super::tests::{entries, group, leaf_elem, map_group};
@@ -659,10 +659,11 @@ mod mcdc_vectors {
     use crate::storage::column::parquet::footer::{PhysicalType, Repetition};
     use crate::storage::column::parquet::schema_tree::build_schema_tree;
 
-    // nested_114: `node.children.len() == 1
+    // storage_column_parquet_nested_build_field_b085c86f: `node.children.len() == 1
     //     && node.children[0].element.repetition == Some(Repeated)`
     #[test]
-    fn mcdc__nested_114__v1_both_true_is_a_two_level_list() {
+    fn mcdc__storage_column_parquet_nested_build_field_b085c86f__v1_both_true_is_a_two_level_list()
+    {
         // "nums { repeated int32 element }": exactly one child, and that
         // child is repeated -- both leafs true, so it's a 2-level list.
         let schema = vec![
@@ -686,7 +687,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__nested_114__v2_more_than_one_child_is_a_struct() {
+    fn mcdc__storage_column_parquet_nested_build_field_b085c86f__v2_more_than_one_child_is_a_struct(
+    ) {
         // Two children -- first leaf (`len() == 1`) is false, so this
         // falls through to the struct path regardless of repetition.
         let schema = vec![
@@ -710,7 +712,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__nested_114__v3_one_child_not_repeated_is_a_struct() {
+    fn mcdc__storage_column_parquet_nested_build_field_b085c86f__v3_one_child_not_repeated_is_a_struct(
+    ) {
         // Exactly one child (first leaf true), but that child is not
         // repeated (second leaf false) -- still a struct, not a list.
         let schema = vec![
@@ -728,9 +731,10 @@ mod mcdc_vectors {
         assert!(matches!(result[0].1[0], NestedValue::Struct(_)));
     }
 
-    // nested_178: `!key_node.is_leaf() || !value_node.is_leaf()`
+    // storage_column_parquet_nested_build_map_field_dd34e07a: `!key_node.is_leaf() || !value_node.is_leaf()`
     #[test]
-    fn mcdc__nested_178__v1_key_not_leaf_is_unsupported() {
+    fn mcdc__storage_column_parquet_nested_build_map_field_dd34e07a__v1_key_not_leaf_is_unsupported(
+    ) {
         let schema = vec![
             group("root", Repetition::Required, 1),
             map_group("m", Repetition::Optional, 1),
@@ -746,7 +750,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__nested_178__v2_key_leaf_value_not_leaf_is_unsupported() {
+    fn mcdc__storage_column_parquet_nested_build_map_field_dd34e07a__v2_key_leaf_value_not_leaf_is_unsupported(
+    ) {
         let schema = vec![
             group("root", Repetition::Required, 1),
             map_group("m", Repetition::Optional, 1),
@@ -762,7 +767,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__nested_178__v3_both_leaves_is_supported() {
+    fn mcdc__storage_column_parquet_nested_build_map_field_dd34e07a__v3_both_leaves_is_supported() {
         let schema = vec![
             group("root", Repetition::Required, 1),
             map_group("m", Repetition::Optional, 1),
@@ -784,7 +789,7 @@ mod mcdc_vectors {
         assert!(matches!(result[0].1[0], NestedValue::List(_)));
     }
 
-    // nested_285: `i >= rep_levels.len() || rep_levels[i] == 0`
+    // storage_column_parquet_nested_build_repeated_f1168f62: `i >= rep_levels.len() || rep_levels[i] == 0`
     fn two_level_list_tree() -> SchemaNode {
         let schema = vec![
             group("root", Repetition::Required, 1),
@@ -795,7 +800,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__nested_285__v1_reaches_end_of_rep_levels() {
+    fn mcdc__storage_column_parquet_nested_build_repeated_f1168f62__v1_reaches_end_of_rep_levels() {
         // Single-element list: after pushing the one element, `i` equals
         // `rep_levels.len()` -- the first leaf is true (short-circuits).
         let tree = two_level_list_tree();
@@ -814,7 +819,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__nested_285__v2_hits_a_row_boundary_before_the_end() {
+    fn mcdc__storage_column_parquet_nested_build_repeated_f1168f62__v2_hits_a_row_boundary_before_the_end(
+    ) {
         // Two entries, but the second starts a new row (`rep_levels[1] ==
         // 0`) -- `i < len` so the first leaf is false, the second is true.
         let tree = two_level_list_tree();
@@ -837,7 +843,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__nested_285__v3_neither_leaf_true_keeps_accumulating() {
+    fn mcdc__storage_column_parquet_nested_build_repeated_f1168f62__v3_neither_leaf_true_keeps_accumulating(
+    ) {
         // Two entries in the same list (`rep_levels[1] == 1`): both leafs
         // false at the first check, so the loop continues to a second
         // element before eventually breaking at the true end.

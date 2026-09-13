@@ -272,7 +272,7 @@ pub(super) fn emit_dedup_check(
 #[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<file-stem>_<line>__vN`, joined to `tests/mcdc/obligations.json`
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::{
@@ -332,7 +332,8 @@ mod mcdc_vectors {
 
     // --- projection_78: `pseudo && rowid_alias == idx` --------------------
     #[test]
-    fn mcdc__projection_79__v1_sorted_rowid_alias_is_re_read_as_a_pseudo_column() {
+    fn mcdc__codegen_row_select_projection_compile_row_values_7db81c2f__v1_sorted_rowid_alias_is_re_read_as_a_pseudo_column(
+    ) {
         let p = compile(
             "SELECT a FROM t ORDER BY b",
             &schema("INTEGER", false, true),
@@ -349,14 +350,16 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__projection_79__v2_unsorted_rowid_alias_is_read_via_rowid() {
+    fn mcdc__codegen_row_select_projection_compile_row_values_7db81c2f__v2_unsorted_rowid_alias_is_read_via_rowid(
+    ) {
         let p = compile("SELECT a FROM t", &schema("INTEGER", false, true));
         assert!(!has(&p, Opcode::OpenPseudo));
         assert!(has(&p, Opcode::Rowid));
     }
 
     #[test]
-    fn mcdc__projection_79__v3_sorted_ordinary_column_never_touches_rowid() {
+    fn mcdc__codegen_row_select_projection_compile_row_values_7db81c2f__v3_sorted_ordinary_column_never_touches_rowid(
+    ) {
         let p = compile(
             "SELECT a FROM t ORDER BY b",
             &schema("INTEGER", false, false),
