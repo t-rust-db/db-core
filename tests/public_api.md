@@ -181,6 +181,7 @@ pub fn db_core::codegen::batch::bool_expr_columns(&db_core::parser::ast::Expr) -
 pub fn db_core::codegen::batch::compile(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
 pub fn db_core::codegen::batch::compile_bool_expr(&db_core::parser::ast::Expr) -> db_core::vm::batch::Program
 pub fn db_core::codegen::batch::compile_join(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
+pub fn db_core::codegen::batch::compile_join_build_side(&db_core::parser::ast::Select, &str) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
 pub fn db_core::codegen::batch::compile_semi_join(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::codegen::batch::SemiJoinProgram>
 pub fn db_core::codegen::batch::compile_window(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
 pub fn db_core::codegen::batch::expand_star(&db_core::parser::ast::Select, &[alloc::string::String]) -> db_core::codegen::batch::Result<db_core::parser::ast::Select>

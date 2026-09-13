@@ -1224,6 +1224,28 @@ pub fn split_qualified(name: &str) -> (Option<&str>, &str) {
 /// side: every left-table column is loaded, then the hash table is probed,
 /// landing the right side's payload right after the left columns.
 pub fn compile_join(select: &Select) -> Result<JoinProgram> {
+    compile_join_impl(select, None)
+}
+
+/// Like [`compile_join`], but `build_table` names the table that must
+/// build the hash side regardless of whether it's written as the `FROM`
+/// table or the `JOIN` target (ADR-0021) -- used by cross-mode joins
+/// (`engine::resolve`), where the SQLite lookup side must always build
+/// (ADR-0019) even when the query names it first (`hosts JOIN log`, not
+/// just `log JOIN hosts`).
+///
+/// Only sound for `INNER JOIN` when `build_table` names the `FROM` table:
+/// a `LEFT JOIN`'s probe side is always the one whose unmatched rows are
+/// kept, and that must stay the driving/stream side (probe execution is
+/// fixed to the stream segments by [`crate::vm::engine::run_join_segments`]'s
+/// calling convention) -- swapping which side keeps unmatched rows would
+/// require a `RIGHT JOIN`-shaped algorithm, which isn't implemented.
+/// Returns [`PlanError::UnsupportedJoinKind`] for that combination.
+pub fn compile_join_build_side(select: &Select, build_table: &str) -> Result<JoinProgram> {
+    compile_join_impl(select, Some(build_table))
+}
+
+fn compile_join_impl(select: &Select, build_override: Option<&str>) -> Result<JoinProgram> {
     let Some(from) = &select.from else {
         return Err(PlanError::UnknownColumn("SELECT without FROM".into()));
     };
@@ -1244,24 +1266,50 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
     }
 
     let from_name = table_name(from)?;
-    let mut left_columns = Vec::new();
-    let mut right_columns = Vec::new();
+    let mut from_columns = Vec::new();
+    let mut join_columns = Vec::new();
     for name in &needed {
         let (prefix, _) = split_qualified(name);
         match prefix {
-            None => left_columns.push(name.clone()),
-            Some(p) if p == from_name => left_columns.push(name.clone()),
-            Some(p) if p == join.table => right_columns.push(name.clone()),
+            None => from_columns.push(name.clone()),
+            Some(p) if p == from_name => from_columns.push(name.clone()),
+            Some(p) if p == join.table => join_columns.push(name.clone()),
             Some(_) => return Err(PlanError::UnknownColumn(name.clone())),
         }
     }
 
-    let right_key_reg = right_columns
+    // By default (and always for a plain `compile_join` call) the JOIN
+    // target builds, the FROM table probes -- today's position-based rule.
+    // `build_override` swaps this when the caller names the FROM table as
+    // the side that must build.
+    let from_builds = match build_override {
+        None => false,
+        Some(name) if name == join.table => false,
+        Some(name) if name == from_name => true,
+        Some(_) => {
+            return Err(PlanError::Internal(
+                "compile_join_build_side: build_table names neither the \
+                 FROM table nor the JOIN target"
+                    .into(),
+            ))
+        }
+    };
+    if from_builds && join.op != JoinOp::Inner {
+        return Err(PlanError::UnsupportedJoinKind(join.op));
+    }
+
+    let (build_columns, build_key, probe_columns, probe_key) = if from_builds {
+        (from_columns, &join.left_col, join_columns, &join.right_col)
+    } else {
+        (join_columns, &join.right_col, from_columns, &join.left_col)
+    };
+
+    let build_key_reg = build_columns
         .iter()
-        .position(|n| n == &join.right_col)
-        .ok_or_else(|| PlanError::UnknownColumn(join.right_col.clone()))?;
+        .position(|n| n == build_key)
+        .ok_or_else(|| PlanError::UnknownColumn(build_key.clone()))?;
     let build = Program::from_opcodes(
-        right_columns
+        build_columns
             .iter()
             .enumerate()
             .map(|(reg, name)| Opcode::LoadColumn {
@@ -1269,20 +1317,21 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
                 column: name.clone().into(),
             })
             .chain(std::iter::once(Opcode::HashBuild {
-                key_cols: vec![right_key_reg].into(),
-                payload_cols: (0..right_columns.len()).collect::<Vec<_>>().into(),
+                key_cols: vec![build_key_reg].into(),
+                payload_cols: (0..build_columns.len()).collect::<Vec<_>>().into(),
                 table: 0,
             })),
     );
 
-    let left_key_reg = left_columns
+    let probe_key_reg = probe_columns
         .iter()
-        .position(|n| n == &join.left_col)
-        .ok_or_else(|| PlanError::UnknownColumn(join.left_col.clone()))?;
-    let payload_dst: Vec<usize> = (0..right_columns.len())
-        .map(|i| left_columns.len().saturating_add(i))
+        .position(|n| n == probe_key)
+        .ok_or_else(|| PlanError::UnknownColumn(probe_key.clone()))?;
+    let payload_dst: Vec<usize> = (0..build_columns.len())
+        .map(|i| probe_columns.len().saturating_add(i))
         .collect();
-    // Already rejected at the top of `compile_join`; returning the same
+    // Already rejected above (either at the top of this function, or by
+    // the `from_builds && join.op != Inner` check); returning the same
     // error here keeps this match total without an `unreachable!` the
     // qualified subset (`make check-mvl-limit`) forbids.
     let join_kind = match join.op {
@@ -1291,7 +1340,7 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
         other => return Err(PlanError::UnsupportedJoinKind(other)),
     };
     let probe = Program::from_opcodes(
-        left_columns
+        probe_columns
             .iter()
             .enumerate()
             .map(|(reg, name)| Opcode::LoadColumn {
@@ -1299,7 +1348,7 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
                 column: name.clone().into(),
             })
             .chain(std::iter::once(Opcode::HashProbe {
-                key_cols: vec![left_key_reg].into(),
+                key_cols: vec![probe_key_reg].into(),
                 table: 0,
                 payload_dst: payload_dst.clone().into(),
                 kind: join_kind,
@@ -1307,8 +1356,8 @@ pub fn compile_join(select: &Select) -> Result<JoinProgram> {
     );
 
     Ok(JoinProgram {
-        left_columns,
-        right_columns,
+        left_columns: probe_columns,
+        right_columns: build_columns,
         build,
         probe,
         payload_dst,
@@ -2599,6 +2648,75 @@ mod tests {
             compile_join(&bad),
             Err(PlanError::UnknownColumn("c.id".into()))
         );
+    }
+
+    #[test]
+    fn compile_join_build_side_swaps_build_and_probe_when_from_table_must_build() {
+        let query = sql::parse(
+            "SELECT regions.budget, orders.id FROM regions \
+             JOIN orders ON regions.rkey = orders.region_key",
+        )
+        .unwrap();
+        let plan = compile_join_build_side(&query, "regions").unwrap();
+        // `left_columns`/`right_columns` stay probe/build (not from/join):
+        // `orders` (the JOIN target) now probes, `regions` (the FROM
+        // table) now builds, even though it's written first (ADR-0021).
+        assert_eq!(plan.left_columns, vec!["orders.id", "orders.region_key"]);
+        assert_eq!(plan.right_columns, vec!["regions.budget", "regions.rkey"]);
+        assert!(matches!(
+            plan.build.opcodes().last(),
+            Some(Opcode::HashBuild { .. })
+        ));
+        assert!(matches!(
+            plan.probe.opcodes().last(),
+            Some(Opcode::HashProbe { .. })
+        ));
+    }
+
+    /// MC/DC vector (`compile_join_impl`'s `from_builds && join.op !=
+    /// JoinOp::Inner` guard): both leaves true -- `LEFT JOIN` with the
+    /// `build_table` named as the `FROM` table is rejected (would need
+    /// `RIGHT JOIN` semantics, not implemented).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_join_impl_ee5464fc__v1_from_builds_and_left_join_is_rejected() {
+        let query = sql::parse(
+            "SELECT regions.budget FROM regions \
+             LEFT JOIN orders ON regions.rkey = orders.region_key",
+        )
+        .unwrap();
+        assert_eq!(
+            compile_join_build_side(&query, "regions"),
+            Err(PlanError::UnsupportedJoinKind(JoinOp::Left))
+        );
+    }
+
+    /// MC/DC vector: leaf A (`from_builds`) true alone -- `INNER JOIN`
+    /// with the `FROM` table forced to build is accepted (leaf B false).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_join_impl_ee5464fc__v2_from_builds_and_inner_join_is_accepted() {
+        let query = sql::parse(
+            "SELECT regions.budget FROM regions \
+             JOIN orders ON regions.rkey = orders.region_key",
+        )
+        .unwrap();
+        assert!(compile_join_build_side(&query, "regions").is_ok());
+    }
+
+    /// MC/DC vector: leaf B (`join.op != Inner`) true alone -- a plain
+    /// `LEFT JOIN` (`from_builds` false, the JOIN target still builds) is
+    /// accepted, unaffected by the `build_table` override.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_join_impl_ee5464fc__v3_left_join_without_from_builds_is_accepted(
+    ) {
+        let query = sql::parse(
+            "SELECT regions.budget FROM regions \
+             LEFT JOIN orders ON regions.rkey = orders.region_key",
+        )
+        .unwrap();
+        assert!(compile_join(&query).is_ok());
     }
 
     #[test]
