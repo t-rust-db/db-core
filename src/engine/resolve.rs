@@ -21,18 +21,36 @@
 //! enforces this by source scan).
 //!
 //! v1 scope, per epic #317: exactly one `JOIN`, the stream table as the
-//! driving side, one SQLite lookup table. Two unbounded streams joined,
-//! SQLite as the driving side, and key-restricted materialization are all
-//! out of scope.
+//! driving side, one SQLite lookup table. SQLite as the driving side and
+//! key-restricted materialization are still out of scope.
+//!
+//! [`run_stream_stream_query`]/[`explain_stream_stream_plan`] (ADR-0022,
+//! #372) join two stream sources instead: both are the same table `log`,
+//! so the query is a self-join and must alias both sides
+//! (`FROM log AS a JOIN log AS b ON ...`) -- `alias_normalize` rewrites
+//! each side's [`TableRefKind`] to its alias before compiling, so
+//! `codegen::batch`'s existing table-name-based column classification
+//! tells the two sides apart unmodified. A time window (`SINCE`/`UNTIL`)
+//! is required, not optional: with no bounded side to hash-build from,
+//! the window is what makes the join finite (a query with neither is
+//! rejected as `ErrorKind::Unsupported`, distinct from the "not a
+//! stream/SQLite pair" rejection above). The `JOIN` target still builds
+//! (unchanged from the stream/SQLite convention); the difference is that
+//! *both* sides are now windowed to a finite segment set first
+//! (`StreamEngine::segments_in_range`) rather than one side being
+//! naturally bounded (a SQLite table) and the other left unbounded.
+
+use std::sync::Arc;
 
 use super::cross_mode;
 use super::row::RowEngine;
 use super::stream::StreamEngine;
 use super::{single_statement, Cell, Engine, EngineError, ErrorKind, PlanRow, QueryResult};
 use crate::codegen::batch::{self as planner, split_qualified, PlanError, TableStats};
-use crate::parser::ast::Select;
+use crate::parser::ast::{Select, TableRefKind};
 use crate::parser::ParseError;
-use crate::vm::batch::Batch;
+use crate::storage::stream::StreamSegment;
+use crate::vm::batch::{Batch, Segment as VmSegment, Value};
 use crate::vm::engine::run_join_segments;
 
 fn plan_err(e: PlanError) -> EngineError {
@@ -196,6 +214,217 @@ pub fn explain_plan(
             stream_stats.clone()
         } else if table.eq_ignore_ascii_case(&lookup_table) {
             lookup_stats.clone()
+        } else {
+            TableStats {
+                row_groups: 0,
+                rows: 0,
+                source: None,
+            }
+        }
+    })
+    .map_err(plan_err)?;
+
+    Ok(nodes
+        .into_iter()
+        .map(|n| PlanRow {
+            id: i64::from(n.id),
+            parent: i64::from(n.parent),
+            detail: n.detail,
+        })
+        .collect())
+}
+
+/// Validates a windowed stream-to-stream self-join and returns
+/// `(left_alias, right_alias)`: exactly one `JOIN`, both sides literally
+/// the stream table `log`, both aliased (required -- a self-join can't
+/// otherwise disambiguate `a.col` from `b.col`) with distinct aliases,
+/// and a `SINCE`/`UNTIL` window on the query. See the module docs.
+fn resolve_stream_stream_sides(select: &Select) -> Result<(String, String), EngineError> {
+    let from = select
+        .from
+        .as_ref()
+        .ok_or_else(|| EngineError::new(ErrorKind::Compile, "SELECT without FROM"))?;
+    if from.joins.len() > 1 {
+        return Err(EngineError::new(
+            ErrorKind::Unsupported,
+            "cross-mode joins support exactly one JOIN clause",
+        ));
+    }
+    let Some(join) = from.joins.first() else {
+        return Err(EngineError::new(
+            ErrorKind::Compile,
+            "not a join: use the stream engine directly for a single-table query",
+        ));
+    };
+    let from_name = from.first.name().ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Unsupported,
+            "a subquery FROM is not supported in a stream-to-stream join",
+        )
+    })?;
+    let join_name = join.table.name().ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Unsupported,
+            "a subquery JOIN target is not supported in a stream-to-stream join",
+        )
+    })?;
+
+    if !from_name.eq_ignore_ascii_case(super::stream::TABLE)
+        || !join_name.eq_ignore_ascii_case(super::stream::TABLE)
+    {
+        return Err(EngineError::new(
+            ErrorKind::Compile,
+            format!(
+                "a stream-to-stream join requires both sides to be `log` \
+                 (the stream table); got `{from_name}` JOIN `{join_name}`"
+            ),
+        ));
+    }
+
+    let left_alias = from.first.alias.as_deref().ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Unsupported,
+            "a stream-to-stream self-join requires an alias on the FROM \
+             side, e.g. `FROM log AS a`",
+        )
+    })?;
+    let right_alias = join.table.alias.as_deref().ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Unsupported,
+            "a stream-to-stream self-join requires an alias on the JOIN \
+             side, e.g. `JOIN log AS b`",
+        )
+    })?;
+    if left_alias.eq_ignore_ascii_case(right_alias) {
+        return Err(EngineError::new(
+            ErrorKind::Compile,
+            format!("the FROM and JOIN aliases must differ, got `{left_alias}` twice"),
+        ));
+    }
+
+    if select.scope.is_none() {
+        return Err(EngineError::new(
+            ErrorKind::Unsupported,
+            "a stream-to-stream join requires a SINCE/UNTIL window: with no \
+             SQLite side to bound the query, the window is what makes the \
+             join finite (ADR-0022)",
+        ));
+    }
+
+    Ok((left_alias.to_string(), right_alias.to_string()))
+}
+
+/// Rewrites both sides' [`TableRefKind`] from the literal table name
+/// (`log`, on both sides of a self-join) to their alias, and strips
+/// `scope` (mirroring `codegen::stream`'s own stripping of `SINCE`/`UNTIL`
+/// before delegating to the batch planner) -- the window was already
+/// consumed by [`resolve_stream_stream_sides`]/[`resolve_scope`] before
+/// this runs. After this, `codegen::batch`'s existing table-name-based
+/// column classification (`a.col` vs `b.col`) works unmodified.
+fn alias_normalize(mut select: Select, left_alias: &str, right_alias: &str) -> Select {
+    if let Some(from) = &mut select.from {
+        from.first.kind = TableRefKind::Name(left_alias.to_string());
+        if let Some(join) = from.joins.first_mut() {
+            join.table.kind = TableRefKind::Name(right_alias.to_string());
+        }
+    }
+    select.scope = None;
+    select
+}
+
+/// Loads every segment in `segments` and concatenates them, column-wise,
+/// into one [`Batch`] -- the windowed stream-to-stream join's build side
+/// needs one materialized batch (`run_join_segments`'s `right: &Batch`),
+/// same shape as [`cross_mode::scan_table_as_batch`] produces for a
+/// SQLite lookup table, just assembled from segments instead of a table
+/// scan.
+fn materialize_segments(segments: &[StreamSegment]) -> Result<Batch, EngineError> {
+    let loaded: Vec<Arc<Batch>> = segments
+        .iter()
+        .map(|s| {
+            s.load()
+                .map_err(|e| EngineError::new(ErrorKind::Execute, e))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let num_rows = loaded.iter().map(|b| b.num_rows).sum();
+    let mut out = Batch::new(num_rows);
+    if let Some(first) = loaded.first() {
+        for name in first.columns.keys() {
+            let mut values: Vec<Value> = Vec::with_capacity(num_rows);
+            for batch in &loaded {
+                if let Some(col) = batch.columns.get(name) {
+                    values.extend(col.iter().cloned());
+                }
+            }
+            out.columns.insert(name.clone(), Arc::new(values));
+        }
+    }
+    Ok(out)
+}
+
+/// Runs a windowed stream-to-stream self-join: `log AS <left_alias>`
+/// joined to `log AS <right_alias>`, `left` and `right` each backing one
+/// alias (positionally: `left` is the `FROM` side, `right` is the `JOIN`
+/// side). See the module docs for the required-window, alias-disambiguated
+/// self-join shape (ADR-0022, #372).
+pub fn run_stream_stream_query(
+    left: &StreamEngine,
+    right: &StreamEngine,
+    sql: &str,
+) -> Result<QueryResult, EngineError> {
+    let select = parse(sql)?;
+    let (left_alias, right_alias) = resolve_stream_stream_sides(&select)?;
+    let scope = super::stream::resolve_scope(&select);
+    let normalized = alias_normalize(select, &left_alias, &right_alias);
+    let plan = planner::compile_join(&normalized).map_err(plan_err)?;
+
+    let left_cols = left.column_requests(&plan.left_columns)?;
+    let left_segments = left.segments_in_range(&left_cols, scope);
+
+    let right_cols = right.column_requests(&plan.right_columns)?;
+    let right_segments = right.segments_in_range(&right_cols, scope);
+    let right_batch = materialize_segments(&right_segments)?;
+
+    let rows = run_join_segments(left_segments, &right_batch, &plan)
+        .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
+
+    Ok(QueryResult {
+        columns: planner::output_column_names(&normalized),
+        rows: rows
+            .into_iter()
+            .map(|r| r.into_iter().map(Cell::from).collect())
+            .collect(),
+        scope_report: None,
+    })
+}
+
+/// `EXPLAIN QUERY PLAN` for a windowed stream-to-stream join, labelling
+/// each side by its alias and file path (mirroring [`explain_plan`]'s
+/// stream/SQLite labelling).
+pub fn explain_stream_stream_plan(
+    left: &StreamEngine,
+    right: &StreamEngine,
+    sql: &str,
+) -> Result<Vec<PlanRow>, EngineError> {
+    let select = parse(sql)?;
+    let (left_alias, right_alias) = resolve_stream_stream_sides(&select)?;
+    let normalized = alias_normalize(select, &left_alias, &right_alias);
+
+    let left_stats = TableStats {
+        source: Some(format!("stream {}", left.path().display())),
+        ..left.table_stats()
+    };
+    let right_stats = TableStats {
+        source: Some(format!("stream {}", right.path().display())),
+        ..right.table_stats()
+    };
+
+    let nodes = planner::explain(&normalized, |table| {
+        if table.eq_ignore_ascii_case(&left_alias) {
+            left_stats.clone()
+        } else if table.eq_ignore_ascii_case(&right_alias) {
+            right_stats.clone()
         } else {
             TableStats {
                 row_groups: 0,

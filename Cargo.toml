@@ -117,7 +117,7 @@ required-features = ["engine-row"]
 [[test]]
 name = "unit_engine_predicate_public_api"
 path = "tests/unit/engine_predicate_public_api_test.rs"
-required-features = ["engine-row", "vm-batch"]
+required-features = ["engine-row", "vm-batch", "codegen-batch"]
 
 [[test]]
 name = "unit_engine_resolve_public_api"

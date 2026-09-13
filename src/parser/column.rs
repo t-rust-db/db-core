@@ -661,7 +661,16 @@ fn validate_select(select: &mut Select) -> Result<()> {
         return Err(unsupported(select.span, "HAVING".into()));
     }
 
-    let mut aliases: HashMap<String, String> = HashMap::new();
+    // (alias, real_table) in FROM-then-JOIN order; deferred into `aliases`
+    // below rather than inserted directly, so a self-join (two aliases for
+    // the same real table -- e.g. `log AS a JOIN log AS b`, ADR-0022,
+    // #372) can be detected and excluded: rewriting both `a.col`/`b.col`
+    // to the same `log.col` would collapse the only thing that
+    // distinguishes the two sides, so neither alias is rewritten in that
+    // case -- `a.col`/`b.col` stay literal, and a consumer that needs to
+    // tell the two `log` occurrences apart (`engine::resolve`) resolves
+    // them itself from the un-rewritten aliases.
+    let mut alias_order: Vec<(String, String)> = Vec::new();
     let from_name;
     let mut has_cross_join = false;
     {
@@ -685,7 +694,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
             }
         };
         if let Some(alias) = &from_clause.first.alias {
-            aliases.insert(alias.clone(), from_name.clone());
+            alias_order.push((alias.clone(), from_name.clone()));
         }
 
         for j in &mut from_clause.joins {
@@ -699,7 +708,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 }
             };
             if let Some(alias) = &j.table.alias {
-                aliases.insert(alias.clone(), table.clone());
+                alias_order.push((alias.clone(), table.clone()));
             }
             if j.op == JoinOp::Cross {
                 has_cross_join = true;
@@ -714,6 +723,18 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 None if j.op == JoinOp::Cross => {}
                 None => return Err(unsupported(j.table.span, "join without ON".into())),
             }
+        }
+    }
+
+    let mut real_name_counts: HashMap<String, usize> = HashMap::new();
+    for (_, real) in &alias_order {
+        let count = real_name_counts.entry(real.clone()).or_insert(0);
+        *count = count.saturating_add(1);
+    }
+    let mut aliases: HashMap<String, String> = HashMap::new();
+    for (alias, real) in alias_order {
+        if real_name_counts.get(&real) == Some(&1) {
+            aliases.insert(alias, real);
         }
     }
 

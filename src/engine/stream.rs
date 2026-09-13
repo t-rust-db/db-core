@@ -279,6 +279,38 @@ impl StreamEngine {
             .collect()
     }
 
+    /// [`Self::segments`], but bounded to `scope`'s effective time window
+    /// (observed-time overlap, same rule [`Self::select_segments`] applies
+    /// to an ordinary single-table query) -- the windowed counterpart used
+    /// by a windowed stream-to-stream join (ADR-0022, #372) to bound both
+    /// sides to a finite segment set before hashing. `Scope::Lines`/
+    /// `Bytes` have no fixed nanosecond edge, so every held segment is
+    /// returned unfiltered, same as an unbounded query.
+    #[must_use]
+    pub(crate) fn segments_in_range(
+        &self,
+        columns: &[ColumnRequest],
+        scope: Scope,
+    ) -> Vec<StreamSegment> {
+        let now = self.clock.now_ns();
+        let range = effective_time_range(&scope, now, &[]);
+        let candidates: Vec<&Arc<Segment>> = match &range {
+            Some(r) => self
+                .ring
+                .segments()
+                .filter(|s| match s.minmax_observed() {
+                    Some((lo, hi)) => lo < r.end && hi >= r.start,
+                    None => true,
+                })
+                .collect(),
+            None => self.ring.segments().collect(),
+        };
+        candidates
+            .into_iter()
+            .map(|s| StreamSegment::new(Arc::clone(s), columns.to_vec()))
+            .collect()
+    }
+
     /// A live source over the file's head, independent of this engine's
     /// ring: each `next_batch()` is the newly appended lines with `columns`.
     pub fn tail_source(
@@ -831,7 +863,7 @@ fn stream_err(e: StreamPlanError) -> EngineError {
 /// wired up yet).
 const DEFAULT_SCOPE: Duration = Duration::from_secs(3600);
 
-fn resolve_scope(select: &Select) -> Scope {
+pub(crate) fn resolve_scope(select: &Select) -> Scope {
     let Some(since) = select.scope.as_ref().and_then(|c| c.since.as_ref()) else {
         return Scope::Time(DEFAULT_SCOPE);
     };

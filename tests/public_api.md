@@ -591,7 +591,9 @@ impl core::fmt::Debug for db_core::engine::predicate::CompiledPredicate
 pub fn db_core::engine::predicate::CompiledPredicate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod db_core::engine::resolve
 pub fn db_core::engine::resolve::explain_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &std::path::Path, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::explain_stream_stream_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::stream::StreamEngine, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::run_query(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::run_stream_stream_query(&db_core::engine::stream::StreamEngine, &db_core::engine::stream::StreamEngine, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 pub mod db_core::engine::row
 pub mod db_core::engine::row::adapter
 pub struct db_core::engine::row::adapter::BtreeSchemaStorage
@@ -3730,6 +3732,7 @@ pub const db_core::storage::row::vfs::fcntl::F_UNLCK: i16
 pub const db_core::storage::row::vfs::fcntl::F_WRLCK: i16
 pub const db_core::storage::row::vfs::fcntl::O_NOFOLLOW: std::os::raw::c_int
 pub fn db_core::storage::row::vfs::fcntl::fcntl_call(&std::fs::File, db_core::storage::row::vfs::fcntl::FcntlArg<'_>) -> core::io::error::Result<std::os::raw::c_int>
+pub fn db_core::storage::row::vfs::fcntl::fsync(&std::fs::File) -> core::io::error::Result<()>
 pub type db_core::storage::row::vfs::fcntl::off_t = i64
 pub mod db_core::storage::row::vfs::lock
 pub enum db_core::storage::row::vfs::lock::LockLevel
