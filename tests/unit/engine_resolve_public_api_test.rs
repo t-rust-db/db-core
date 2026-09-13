@@ -350,9 +350,17 @@ fn explain_labels_each_side_by_source_mode_and_file() {
 // --- Windowed stream-to-stream joins (ADR-0022, #372) ---
 
 fn temp_log(name: &str, text: &str) -> PathBuf {
+    // A bare pid-scoped name collides across parallel `#[test]` threads
+    // sharing this process (`stream_stream_fixtures` is called by several
+    // tests): one thread's `write` can race another's `open`/`write` on the
+    // exact same path, torn-reading a corrupt file (#381 investigation).
+    // A per-call counter makes every call's path unique regardless of
+    // thread interleaving.
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "db-core-resolve-stream-stream-{}-{name}.log",
+        "db-core-resolve-stream-stream-{}-{n}-{name}.log",
         std::process::id()
     ));
     std::fs::write(&p, text).unwrap();
