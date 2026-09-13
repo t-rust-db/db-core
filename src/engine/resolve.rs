@@ -8,10 +8,16 @@
 //!
 //! No new opcodes, no new join operator: this module is pure dispatch --
 //! per ADR-0019, the lookup (SQLite) side is always the `HashBuild`/build
-//! side, so the query must write it as the `JOIN` target, with the stream
-//! table `log` as `FROM`. Writing it the other way round (SQLite driving)
-//! is out of scope for v1 (epic #317's "out of scope" section) and is
-//! rejected as [`ErrorKind::Unsupported`], not silently reinterpreted.
+//! side. The query may write it as either the `FROM` table or the `JOIN`
+//! target (ADR-0021, #371): `resolve_sides` determines which side is
+//! which by table identity, not grammar position, and
+//! `codegen::batch::compile_join_build_side` assigns build/probe roles
+//! accordingly. The one exception: a `LEFT JOIN` with the SQLite table
+//! written as `FROM` (e.g. `hosts LEFT JOIN log`) stays rejected as
+//! [`ErrorKind::Unsupported`] -- a `LEFT JOIN`'s kept (unmatched-preserved)
+//! side is always the probe side, and probe execution is fixed to the
+//! stream segments by `run_join_segments`'s calling convention, so that
+//! query shape would need `RIGHT JOIN` semantics, which isn't implemented.
 //!
 //! A sibling seam to [`cross_mode`](super::cross_mode), for the same
 //! reason: ADR 0000 §(c) forbids the SQLite side from naming `vm::batch`,
@@ -20,9 +26,10 @@
 //! `engine::stream` or `engine::column` (`tests/unit/layer_isolation_test.rs`
 //! enforces this by source scan).
 //!
-//! v1 scope, per epic #317: exactly one `JOIN`, the stream table as the
-//! driving side, one SQLite lookup table. SQLite as the driving side and
-//! key-restricted materialization are still out of scope.
+//! v1 scope, per epic #317 and ADR-0021 (#368): exactly one `JOIN`, the
+//! stream table as one side (either grammar position, INNER only when the
+//! SQLite table is written as `FROM`), one SQLite lookup table.
+//! Key-restricted materialization is still out of scope (ADR-0023).
 //!
 //! [`run_stream_stream_query`]/[`explain_stream_stream_plan`] (ADR-0022,
 //! #372) join two stream sources instead: both are the same table `log`,
@@ -83,8 +90,10 @@ fn parse(sql: &str) -> Result<Select, EngineError> {
 }
 
 /// Which side of the query's `FROM`/`JOIN` is the stream table `log`, and
-/// the name of the SQLite lookup table on the other side. Rejects
-/// anything that isn't exactly "stream `FROM`, SQLite `JOIN`".
+/// the name of the SQLite lookup table on the other side -- in either
+/// grammar position (ADR-0021, #371). Rejects anything that isn't exactly
+/// one `JOIN` between `log` and one known SQLite table, and rejects a
+/// `LEFT JOIN` written with the SQLite table as `FROM` (see module docs).
 fn resolve_sides(select: &Select, lookup: &RowEngine) -> Result<String, EngineError> {
     let from = select
         .from
@@ -115,14 +124,20 @@ fn resolve_sides(select: &Select, lookup: &RowEngine) -> Result<String, EngineEr
         )
     })?;
 
-    if !from_name.eq_ignore_ascii_case(super::stream::TABLE) {
-        if join_name.eq_ignore_ascii_case(super::stream::TABLE) {
+    let lookup_name = if from_name.eq_ignore_ascii_case(super::stream::TABLE) {
+        join_name
+    } else if join_name.eq_ignore_ascii_case(super::stream::TABLE) {
+        if join.op != crate::parser::ast::JoinOp::Inner {
             return Err(EngineError::new(
                 ErrorKind::Unsupported,
-                "the stream table `log` must be the driving (FROM) side; \
-                 SQLite as the driving side is out of scope (#317)",
+                "a LEFT JOIN with the SQLite table as FROM would need to \
+                 keep all SQLite rows, but the stream side must always be \
+                 the probe side -- write this as `log LEFT JOIN ...` \
+                 instead, or use INNER JOIN",
             ));
         }
+        from_name
+    } else {
         return Err(EngineError::new(
             ErrorKind::Compile,
             format!(
@@ -130,19 +145,19 @@ fn resolve_sides(select: &Select, lookup: &RowEngine) -> Result<String, EngineEr
                  to a SQLite lookup table; got `{from_name}` JOIN `{join_name}`"
             ),
         ));
-    }
+    };
 
     let known = lookup
         .tables()?
         .into_iter()
-        .any(|t| t.name.eq_ignore_ascii_case(join_name));
+        .any(|t| t.name.eq_ignore_ascii_case(lookup_name));
     if !known {
         return Err(EngineError::new(
             ErrorKind::Compile,
-            format!("unknown lookup table: {join_name}"),
+            format!("unknown lookup table: {lookup_name}"),
         ));
     }
-    Ok(join_name.to_string())
+    Ok(lookup_name.to_string())
 }
 
 /// Rekeys a materialized lookup [`Batch`] from unqualified column names
@@ -171,7 +186,7 @@ pub fn run_query(
 ) -> Result<QueryResult, EngineError> {
     let select = parse(sql)?;
     let lookup_table = resolve_sides(&select, lookup)?;
-    let plan = planner::compile_join(&select).map_err(plan_err)?;
+    let plan = planner::compile_join_build_side(&select, &lookup_table).map_err(plan_err)?;
 
     let stream_columns = driving.column_requests(&plan.left_columns)?;
     let segments = driving.segments(&stream_columns);

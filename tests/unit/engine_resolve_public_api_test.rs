@@ -114,15 +114,50 @@ fn joins_warn_log_lines_against_a_sqlite_hosts_lookup_table() {
 }
 
 #[test]
-fn rejects_sqlite_as_the_driving_side() {
+fn accepts_sqlite_as_the_driving_side_for_inner_join() {
     let db = HostsDb::new("driving-side");
     let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
     let lookup = RowEngine::open(db.path()).expect("open hosts db");
 
+    // Same join as `joins_warn_log_lines_against_a_sqlite_hosts_lookup_table`,
+    // with `hosts` written as the FROM table (ADR-0021, #371): only matched
+    // hosts survive (INNER JOIN), so `db01` -- absent from `hosts` -- must
+    // not appear.
+    let result = run_query(
+        &driving,
+        &lookup,
+        "SELECT hosts.region, log.hostname FROM hosts \
+         JOIN log ON hosts.name = log.hostname \
+         WHERE log.severity >= 'WARN'",
+    )
+    .expect("cross-mode join with SQLite as the driving side");
+
+    assert_eq!(result.columns, vec!["hosts.region", "log.hostname"]);
+    assert!(!result.rows.is_empty());
+    for row in &result.rows {
+        let region = text(&row[0]);
+        let host = text(&row[1]);
+        match host {
+            "web01" => assert_eq!(region, "eu"),
+            "web02" => assert_eq!(region, "us"),
+            other => panic!("unmatched host {other} must not survive an INNER JOIN"),
+        }
+    }
+}
+
+#[test]
+fn rejects_left_join_with_sqlite_as_the_driving_side() {
+    let db = HostsDb::new("driving-side-left-join");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    // `hosts LEFT JOIN log` would need to keep all `hosts` rows, but the
+    // stream side must always be the probe side (see module docs) -- that
+    // shape needs RIGHT JOIN semantics, which isn't implemented.
     let err = run_query(
         &driving,
         &lookup,
-        "SELECT hosts.region FROM hosts JOIN log ON hosts.name = log.hostname",
+        "SELECT hosts.region FROM hosts LEFT JOIN log ON hosts.name = log.hostname",
     )
     .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Unsupported);

@@ -181,6 +181,7 @@ pub fn db_core::codegen::batch::bool_expr_columns(&db_core::parser::ast::Expr) -
 pub fn db_core::codegen::batch::compile(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
 pub fn db_core::codegen::batch::compile_bool_expr(&db_core::parser::ast::Expr) -> db_core::vm::batch::Program
 pub fn db_core::codegen::batch::compile_join(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
+pub fn db_core::codegen::batch::compile_join_build_side(&db_core::parser::ast::Select, &str) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
 pub fn db_core::codegen::batch::compile_semi_join(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::codegen::batch::SemiJoinProgram>
 pub fn db_core::codegen::batch::compile_window(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
 pub fn db_core::codegen::batch::expand_star(&db_core::parser::ast::Select, &[alloc::string::String]) -> db_core::codegen::batch::Result<db_core::parser::ast::Select>
@@ -3732,6 +3733,7 @@ pub const db_core::storage::row::vfs::fcntl::F_UNLCK: i16
 pub const db_core::storage::row::vfs::fcntl::F_WRLCK: i16
 pub const db_core::storage::row::vfs::fcntl::O_NOFOLLOW: std::os::raw::c_int
 pub fn db_core::storage::row::vfs::fcntl::fcntl_call(&std::fs::File, db_core::storage::row::vfs::fcntl::FcntlArg<'_>) -> core::io::error::Result<std::os::raw::c_int>
+pub fn db_core::storage::row::vfs::fcntl::fsync(&std::fs::File) -> core::io::error::Result<()>
 pub type db_core::storage::row::vfs::fcntl::off_t = i64
 pub mod db_core::storage::row::vfs::lock
 pub enum db_core::storage::row::vfs::lock::LockLevel
