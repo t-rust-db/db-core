@@ -227,6 +227,23 @@ fn multi_table_shapes_are_unsupported_not_wrong() {
 }
 
 #[test]
+fn window_function_in_the_select_list_is_unsupported() {
+    let mut e = open();
+    let err = e
+        .run_query("SELECT sum(amount) OVER () FROM production")
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported, "{err}");
+}
+
+#[test]
+fn debug_format_names_the_path_table_and_row_counts() {
+    let e = open();
+    let debug = format!("{e:?}");
+    assert!(debug.contains("BatchEngine"), "{debug}");
+    assert!(debug.contains("production"), "{debug}");
+}
+
+#[test]
 fn run_query_takes_exactly_one_statement() {
     let mut e = open();
     let err = e

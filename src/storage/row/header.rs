@@ -493,6 +493,98 @@ mod tests {
         let err = DatabaseHeader::parse(&bytes).unwrap_err();
         assert_eq!(err, HeaderError::InvalidPageSize { raw: 600 });
     }
+
+    #[test]
+    fn invalid_write_version_byte_errors() {
+        let mut bytes = fixture("pagesizes", "page_size_512.db");
+        bytes[18] = 3;
+        let err = DatabaseHeader::parse(&bytes).unwrap_err();
+        assert_eq!(
+            err,
+            HeaderError::InvalidFileFormatVersion {
+                field: VersionField::Write,
+                value: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_read_version_byte_errors() {
+        let mut bytes = fixture("pagesizes", "page_size_512.db");
+        bytes[19] = 0;
+        let err = DatabaseHeader::parse(&bytes).unwrap_err();
+        assert_eq!(
+            err,
+            HeaderError::InvalidFileFormatVersion {
+                field: VersionField::Read,
+                value: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn header_error_display_covers_every_variant() {
+        assert_eq!(
+            HeaderError::TooShort { len: 3 }.to_string(),
+            "header is 3 bytes, need at least 100"
+        );
+        assert_eq!(
+            HeaderError::InvalidMagic.to_string(),
+            "missing or invalid SQLite magic string"
+        );
+        assert_eq!(
+            HeaderError::InvalidPageSize { raw: 3 }.to_string(),
+            "invalid page size encoding 3 (must be a power of two from 512 to 32768, or 1 for 65536)"
+        );
+        assert_eq!(
+            HeaderError::InvalidFileFormatVersion {
+                field: VersionField::Write,
+                value: 9,
+            }
+            .to_string(),
+            "invalid Write version byte 9 (must be 1 or 2)"
+        );
+        assert_eq!(
+            HeaderError::InvalidReservedSpace {
+                reserved_space: 255,
+                page_size: 512,
+            }
+            .to_string(),
+            "reserved space 255 leaves no usable bytes in a 512-byte page"
+        );
+        assert_eq!(
+            HeaderError::InvalidTextEncoding { raw: 9 }.to_string(),
+            "invalid text encoding 9 (must be 1, 2, or 3)"
+        );
+    }
+
+    #[test]
+    fn new_empty_page1_parses_back_as_a_fresh_header() {
+        for page_size in [512u32, 4096, 65536] {
+            let page1 = DatabaseHeader::new_empty_page1(page_size);
+            assert_eq!(page1.len(), page_size as usize);
+            let header = DatabaseHeader::parse(&page1).unwrap();
+            assert_eq!(header.page_size, page_size, "{page_size}");
+            assert_eq!(header.reserved_space, 0);
+            assert_eq!(header.page_count, 1);
+            assert_eq!(header.schema_format, 4);
+            assert_eq!(header.text_encoding, TextEncoding::Utf8);
+            assert_eq!(header.journal_mode(), JournalMode::Legacy);
+            // Page 1's own b-tree header, right after the 100-byte file
+            // header: leaf-table page type, cell content area starting
+            // at the very end of the page (0 for the 65536 case, which
+            // encodes as a 16-bit 0 the same way the page-size field
+            // does).
+            assert_eq!(page1[HEADER_LEN], 0x0d);
+            let content_start = u16::from_be_bytes([page1[HEADER_LEN + 5], page1[HEADER_LEN + 6]]);
+            let expected = if page_size == 65536 {
+                0
+            } else {
+                page_size as u16
+            };
+            assert_eq!(content_start, expected, "{page_size}");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1712,4 +1712,120 @@ mod tests {
     fn mcdc__parser_column_validate_select_b892af2d__v3_window_without_expr_is_accepted() {
         assert!(parse("SELECT id, ROW_NUMBER() OVER (ORDER BY id) FROM t").is_ok());
     }
+
+    // --- resolve_expr_aliases ---------------------------------------------
+    //
+    // `FROM orders o` registers `o -> orders`; every `o.col` reachable
+    // from the query must come back as `orders.col`. Checked through the
+    // AST's Debug rendering so one helper covers every operator arm
+    // without a bespoke walker per shape: the table-ref's own
+    // `alias: Some("o")` legitimately survives, so the probe is
+    // specifically the *column* qualifier field `table: Some(..)`.
+
+    fn assert_alias_resolved(sql: &str) -> Select {
+        let q = parse(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let dbg = format!("{q:?}");
+        assert!(dbg.contains("table: Some(\"orders\")"), "{sql}: {dbg}");
+        assert!(
+            !dbg.contains("table: Some(\"o\")"),
+            "{sql}: alias `o` survived resolution: {dbg}"
+        );
+        q
+    }
+
+    #[test]
+    fn alias_resolves_through_unary_paren_and_binary_operators() {
+        assert_alias_resolved("SELECT o.id FROM orders o WHERE -o.amount > 1 AND (o.a + o.b) > 2");
+    }
+
+    #[test]
+    fn alias_resolves_through_is_null_like_and_in_subquery() {
+        assert_alias_resolved("SELECT o.id FROM orders o WHERE o.a IS NULL");
+        assert_alias_resolved("SELECT o.id FROM orders o WHERE o.name LIKE o.pattern");
+        assert_alias_resolved("SELECT o.id FROM orders o WHERE o.id IN (SELECT id FROM other)");
+    }
+
+    #[test]
+    fn alias_resolves_through_aggregate_args_group_by_and_order_by() {
+        assert_alias_resolved(
+            "SELECT o.region, COUNT(o.id) FROM orders o GROUP BY o.region ORDER BY o.region",
+        );
+    }
+
+    #[test]
+    fn alias_resolves_through_window_filter_partition_and_order() {
+        assert_alias_resolved(
+            "SELECT SUM(o.amount) FILTER (WHERE o.amount > 0) \
+             OVER (PARTITION BY o.region ORDER BY o.id) FROM orders o",
+        );
+    }
+
+    #[test]
+    fn alias_resolves_on_both_sides_of_a_join_on_clause() {
+        let q =
+            assert_alias_resolved("SELECT o.id FROM orders o JOIN items i ON o.id = i.order_id");
+        let dbg = format!("{q:?}");
+        assert!(dbg.contains("table: Some(\"items\")"), "{dbg}");
+        assert!(!dbg.contains("table: Some(\"i\")"), "{dbg}");
+    }
+
+    #[test]
+    fn alias_resolution_walks_shapes_the_subset_then_rejects() {
+        // Resolution runs before validation, so these arms of
+        // `resolve_expr_aliases` are exercised even though `validate_expr`
+        // declines the shape afterwards -- the rejection is the observable
+        // outcome, the walk is the point.
+        for sql in [
+            "SELECT o.id FROM orders o WHERE o.a BETWEEN o.lo AND o.hi",
+            "SELECT o.id FROM orders o WHERE o.a IN (o.b, 2)",
+            "SELECT o.id FROM orders o WHERE o.name LIKE o.p ESCAPE '\\'",
+            "SELECT CASE o.a WHEN o.b THEN o.c ELSE o.d END FROM orders o",
+            "SELECT CAST(o.a AS INTEGER) FROM orders o",
+            "SELECT o.id FROM orders o WHERE o.a COLLATE NOCASE = 'x'",
+            "SELECT o.id FROM orders o WHERE o.a IS o.b",
+        ] {
+            assert!(
+                parse(sql).is_err(),
+                "{sql}: expected the subset to reject this"
+            );
+        }
+    }
+
+    // --- ParseError / column_name / ast_binop_allowed ----------------------
+
+    #[test]
+    fn parse_error_span_and_display_cover_both_variants() {
+        // A truncated query surfaces as `Unexpected` ("found Eof"), not
+        // `UnexpectedEof`: `parse()` maps every shared-grammar outcome
+        // through `from_outcome`, which only ever builds `Unexpected`.
+        let truncated = parse("SELECT id FROM").unwrap_err();
+        assert!(
+            truncated.to_string().starts_with("unexpected token at"),
+            "{truncated}"
+        );
+
+        let rejected = parse("SELECT id FROM orders WHERE amount % 2 = 0").unwrap_err();
+        let span = rejected.span();
+        assert!(!span.is_unknown());
+        assert!(
+            rejected.to_string().starts_with("unexpected token at"),
+            "{rejected}"
+        );
+
+        // `UnexpectedEof` is part of the public error type even though no
+        // current code path constructs it -- its `span()`/`Display` arms
+        // are still contract, exercised here by direct construction.
+        let eof = ParseError::UnexpectedEof { span };
+        assert_eq!(eof.span(), span);
+        assert!(
+            eof.to_string().starts_with("unexpected end of query at"),
+            "{eof}"
+        );
+    }
+
+    #[test]
+    fn catalog_qualified_column_and_non_column_join_operand_are_rejected() {
+        assert!(parse("SELECT db.orders.id FROM orders").is_err());
+        assert!(parse("SELECT o.id FROM orders o JOIN items i ON o.id + 1 = i.oid").is_err());
+    }
 }

@@ -35,6 +35,56 @@ path = "tests/unit/index_seek_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_index_ordered_scan"
+path = "tests/unit/index_ordered_scan_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_join_level"
+path = "tests/unit/join_level_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_insert_constraints"
+path = "tests/unit/insert_constraints_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_dispatch"
+path = "tests/unit/dispatch_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_select_compound"
+path = "tests/unit/select_compound_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_projection"
+path = "tests/unit/projection_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_memoized_subquery"
+path = "tests/unit/memoized_subquery_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_eqp"
+path = "tests/unit/eqp_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_cond"
+path = "tests/unit/cond_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_update_constraints"
+path = "tests/unit/update_constraints_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_engine_column_public_api"
 path = "tests/unit/engine_column_public_api_test.rs"
 required-features = ["engine-column"]

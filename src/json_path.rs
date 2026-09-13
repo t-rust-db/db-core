@@ -267,4 +267,76 @@ mod tests {
         let (v, _) = parse_value(r#"{"a":1}"#).expect("parses");
         assert_eq!(lookup(&v, "$"), Some(v));
     }
+
+    #[test]
+    fn parse_value_handles_every_scalar_and_leading_whitespace() {
+        assert_eq!(parse_value("  true"), Some((JsonValue::Bool(true), "")));
+        assert_eq!(parse_value("false,"), Some((JsonValue::Bool(false), ",")));
+        assert_eq!(parse_value("null"), Some((JsonValue::Null, "")));
+        assert_eq!(parse_value(r#""s" x"#), Some((JsonValue::Str("s"), " x")));
+        assert_eq!(parse_value("-42]"), Some((JsonValue::Int(-42), "]")));
+        assert_eq!(
+            parse_value("[1, [2]] tail"),
+            Some((JsonValue::Array("[1, [2]]"), " tail"))
+        );
+        // Unknown leading byte, and empty input, are both malformed.
+        assert!(parse_value("?").is_none());
+        assert!(parse_value("").is_none());
+        // A prefix that looks like a keyword but isn't one.
+        assert!(parse_value("tru").is_none());
+    }
+
+    #[test]
+    fn parse_number_covers_float_exponent_and_overflow_forms() {
+        assert_eq!(parse_value("1.25"), Some((JsonValue::Float(1.25), "")));
+        assert_eq!(parse_value("1e3"), Some((JsonValue::Float(1000.0), "")));
+        assert_eq!(parse_value("2E-2"), Some((JsonValue::Float(0.02), "")));
+        assert_eq!(parse_value("5e+1"), Some((JsonValue::Float(50.0), "")));
+        // Too large for i64 falls back to a float rather than failing.
+        assert_eq!(
+            parse_value("99999999999999999999"),
+            Some((JsonValue::Float(1e20), ""))
+        );
+        // A bare minus sign has no digits.
+        assert!(parse_value("-").is_none());
+    }
+
+    #[test]
+    fn strings_keep_escapes_verbatim_and_arrays_skip_brackets_inside_strings() {
+        assert_eq!(
+            parse_value(r#""a\"b\\c""#),
+            Some((JsonValue::Str(r#"a\"b\\c"#), ""))
+        );
+        // An unterminated string is malformed.
+        assert!(parse_value(r#""open"#).is_none());
+        // A `]` inside a string must not close the array early, and an
+        // escaped quote inside that string must not end the string.
+        assert_eq!(
+            parse_value(r#"["x]\"y", 1]"#),
+            Some((JsonValue::Array(r#"["x]\"y", 1]"#), ""))
+        );
+        // An unterminated array is malformed.
+        assert!(parse_value("[1, 2").is_none());
+    }
+
+    #[test]
+    fn object_with_whitespace_and_missing_colon_or_key() {
+        let (v, rest) = parse_object(r#" { "a" : 1 , "b" : 2 } "#).expect("parses");
+        assert_eq!(rest, " ");
+        assert_eq!(
+            v,
+            JsonValue::Object(vec![("a", JsonValue::Int(1)), ("b", JsonValue::Int(2))])
+        );
+        assert!(parse_object(r#"{"a" 1}"#).is_none());
+        assert!(parse_object(r#"{1:2}"#).is_none());
+        assert!(parse_object(r#"{"a":1,}"#).is_none());
+    }
+
+    #[test]
+    fn lookup_tolerates_a_missing_dollar_and_empty_segments() {
+        let (v, _) = parse_value(r#"{"a":{"b":1}}"#).expect("parses");
+        assert_eq!(lookup(&v, "a.b"), Some(JsonValue::Int(1)));
+        assert_eq!(lookup(&v, "$..a..b"), Some(JsonValue::Int(1)));
+        assert_eq!(lookup(&v, ""), Some(v.clone()));
+    }
 }
