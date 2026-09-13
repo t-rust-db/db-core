@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.90.1] - 2026-09-13
+
+### Added
+
+- **SQLite as the driving side of a cross-mode join** (ADR-0021, #371): `engine::resolve` now accepts a join written with the SQLite lookup table as the `FROM` table (`hosts JOIN log`, not `log JOIN hosts`), expanding the scope of cross-mode joins. INNER JOIN only: a LEFT JOIN with SQLite driving remains unsupported (would need RIGHT JOIN semantics, #368). Implements `codegen::batch::compile_join_build_side` to compile build/probe roles based on table identity rather than grammar position.
+
+### Fixed
+
+- **Public API snapshot** (`tests/public_api.md`): removed spurious platform-specific `vfs::fcntl::fsync` entry reintroduced during conflict resolution of the rebase (macOS-only, CI runs on Linux).
+- **`explain_plan_shares_run_querys_side_resolution_errors` test**: updated assertion to reflect that `hosts JOIN log` (SQLite as FROM/driving side) is now accepted for INNER JOIN, so swapped the case to the still-rejected shape (SQLite driving a LEFT JOIN).
+
 ## [0.90.0] - 2026-09-13
 
 ### Added
