@@ -1993,6 +1993,7 @@ fn render_operands(op: &Opcode) -> String {
             "dst={dst} func={func:?} arg={arg:?} offset={offset:?} partition_by={partition_by:?} order_by={order_by:?}"
         ),
         Opcode::Scan => String::new(),
+        Opcode::ScanSource(source) => render_scan_source(source),
         Opcode::Emit { registers } => format!("registers={registers:?}"),
         Opcode::NextSegment { loop_start } => format!("loop_start={loop_start}"),
         Opcode::Halt => String::new(),
@@ -2004,6 +2005,30 @@ fn render_operands(op: &Opcode) -> String {
         Opcode::Sort { col, descending } => format!("col={col} descending={descending}"),
         Opcode::Limit { n } => format!("n={n}"),
         Opcode::Call { dst, name, args } => format!("dst={dst} name={name} args={args:?}"),
+    }
+}
+
+/// Human-readable operands for one [`crate::vm::batch::ScanSource`] --
+/// names the lane (row/stream/in-memory) `Opcode::ScanSource` reads its
+/// build side from, per ADR 0024's requirement that cross-mode `EXPLAIN`
+/// output keep each source's origin visible.
+fn render_scan_source(source: &crate::vm::batch::ScanSource) -> String {
+    use crate::vm::batch::ScanSource;
+    match source {
+        ScanSource::RowTable { table, columns } => {
+            format!("row table={table} columns={columns:?}")
+        }
+        #[cfg(feature = "vm-stream")]
+        ScanSource::Stream {
+            handle,
+            columns,
+            scope,
+        } => format!("stream handle={handle} columns={columns:?} scope={scope:?}"),
+        #[cfg(not(feature = "vm-stream"))]
+        ScanSource::Stream { handle, columns } => {
+            format!("stream handle={handle} columns={columns:?}")
+        }
+        ScanSource::InMemory(batch) => format!("in-memory rows={}", batch.num_rows),
     }
 }
 
