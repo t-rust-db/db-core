@@ -44,8 +44,10 @@ impl Report {
         }
     }
 
-    /// Times `f` and records one row named `name`.
-    pub fn bench<R>(&mut self, name: &str, mut f: impl FnMut() -> R) {
+    /// Times `f`, records one row named `name`, and returns its median
+    /// ns/call (for a caller that wants to compute something from the
+    /// number without re-running the benchmark, e.g. a break-even point).
+    pub fn bench<R>(&mut self, name: &str, mut f: impl FnMut() -> R) -> f64 {
         // Warm-up: run until the warm-up budget is spent, estimating the
         // per-call cost as we go.
         let start = Instant::now();
@@ -80,13 +82,15 @@ impl Report {
             let idx = ((samples.len() - 1) as f64 * q).round() as usize;
             samples[idx.min(samples.len() - 1)]
         };
+        let median_ns = pick(0.5);
         self.rows.push(Row {
             name: name.to_string(),
             calls,
             min_ns: samples[0],
-            median_ns: pick(0.5),
+            median_ns,
             p95_ns: pick(0.95),
         });
+        median_ns
     }
 
     /// Prints the table and writes `target/perf/<bench>.json`.

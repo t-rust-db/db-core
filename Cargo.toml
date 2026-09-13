@@ -1,7 +1,7 @@
 [package]
 name = "db-core"
 version = "0.90.1"
-# The three [[bench]] targets are declared explicitly; `benches/common.rs`
+# The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
 edition = "2021"
@@ -214,6 +214,10 @@ harness = false
 name = "stream_materialize"
 harness = false
 required-features = ["engine-stream"]
+
+[[bench]]
+name = "cross_mode_lookup"
+harness = false
 
 [features]
 # Every feature on by default (db-core#111): `cargo-mvl-mcdc harvest`
