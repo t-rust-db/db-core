@@ -378,6 +378,7 @@ impl Engine for BatchEngine {
             .into_iter()
             .map(|s| OpcodeSection {
                 label: s.label,
+                lane: "batch",
                 rows: s
                     .rows
                     .into_iter()

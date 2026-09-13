@@ -555,53 +555,78 @@ pub fn explain_stream_stream_plan(
 /// executes, rendered via `codegen::batch`'s existing opcode renderer --
 /// the same mechanism a single-engine batch query's `EXPLAIN` already
 /// uses, not a divergent cross-mode-only format.
+/// `(lane, section)` pairs: `lane` is `"row"`/`"stream"`/`"batch"` (ADR
+/// 0024, #382/#388), naming which physical engine executes that section's
+/// opcodes -- a stream/SQLite join's build side is a SQLite scan (`"row"`),
+/// its probe side the driving tail (`"stream"`), its body always `vm::batch`
+/// (`"batch"`) regardless of either side's origin.
 fn explain_opcodes_query(
     lookup: &RowEngine,
     sql: &str,
-) -> Result<Vec<planner::OpcodeSection>, EngineError> {
+) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
     let select = parse(sql)?;
     resolve_sides(&select, lookup)?;
     let plan =
         planner::compile_join(&select, planner::BuildSourceKind::RowTable).map_err(plan_err)?;
     Ok(vec![
-        planner::OpcodeSection {
-            label: "JOIN build (sqlite)".to_string(),
-            rows: planner::render_program(&plan.build),
-        },
-        planner::OpcodeSection {
-            label: "JOIN probe (stream log)".to_string(),
-            rows: planner::render_program(&plan.probe),
-        },
-        planner::OpcodeSection {
-            label: "JOIN body".to_string(),
-            rows: planner::render_program(&plan.body),
-        },
+        (
+            "row",
+            planner::OpcodeSection {
+                label: "JOIN build (sqlite)".to_string(),
+                rows: planner::render_program(&plan.build),
+            },
+        ),
+        (
+            "stream",
+            planner::OpcodeSection {
+                label: "JOIN probe (stream log)".to_string(),
+                rows: planner::render_program(&plan.probe),
+            },
+        ),
+        (
+            "batch",
+            planner::OpcodeSection {
+                label: "JOIN body".to_string(),
+                rows: planner::render_program(&plan.body),
+            },
+        ),
     ])
 }
 
 /// `EXPLAIN` (bare opcode listing) for a windowed stream-to-stream join
-/// (ADR-0022, ADR 0024, #382/#387), mirroring [`explain_opcodes_query`].
+/// (ADR-0022, ADR 0024, #382/#388), mirroring [`explain_opcodes_query`].
+/// Both sides are `"stream"` here (ADR-0022 has no SQLite side); the body
+/// is still `"batch"`.
 fn explain_opcodes_stream_stream_query(
     sql: &str,
-) -> Result<Vec<planner::OpcodeSection>, EngineError> {
+) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
     let select = parse(sql)?;
     let (left_alias, right_alias) = resolve_stream_stream_sides(&select)?;
     let normalized = alias_normalize(select, &left_alias, &right_alias);
     let plan =
         planner::compile_join(&normalized, planner::BuildSourceKind::Stream).map_err(plan_err)?;
     Ok(vec![
-        planner::OpcodeSection {
-            label: format!("JOIN build (stream {right_alias})"),
-            rows: planner::render_program(&plan.build),
-        },
-        planner::OpcodeSection {
-            label: format!("JOIN probe (stream {left_alias})"),
-            rows: planner::render_program(&plan.probe),
-        },
-        planner::OpcodeSection {
-            label: "JOIN body".to_string(),
-            rows: planner::render_program(&plan.body),
-        },
+        (
+            "stream",
+            planner::OpcodeSection {
+                label: format!("JOIN build (stream {right_alias})"),
+                rows: planner::render_program(&plan.build),
+            },
+        ),
+        (
+            "stream",
+            planner::OpcodeSection {
+                label: format!("JOIN probe (stream {left_alias})"),
+                rows: planner::render_program(&plan.probe),
+            },
+        ),
+        (
+            "batch",
+            planner::OpcodeSection {
+                label: "JOIN body".to_string(),
+                rows: planner::render_program(&plan.body),
+            },
+        ),
     ])
 }
 
@@ -610,12 +635,15 @@ fn explain_opcodes_stream_stream_query(
 /// engine-facing shape every [`Engine::explain_opcodes`] impl returns) --
 /// the same conversion `engine::column::BatchEngine::explain_opcodes`
 /// already does, folding a planner row's `comment` into `operands` as a
-/// trailing `; comment`.
-fn to_engine_opcode_sections(sections: Vec<planner::OpcodeSection>) -> Vec<OpcodeSection> {
+/// trailing `; comment`, plus the `lane` each `(lane, section)` pair names.
+fn to_engine_opcode_sections(
+    sections: Vec<(&'static str, planner::OpcodeSection)>,
+) -> Vec<OpcodeSection> {
     sections
         .into_iter()
-        .map(|s| OpcodeSection {
+        .map(|(lane, s)| OpcodeSection {
             label: s.label,
+            lane,
             rows: s
                 .rows
                 .into_iter()

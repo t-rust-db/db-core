@@ -60,6 +60,19 @@ pub fn db_core::codegen::batch::emit::render_joined(&str, &str, &db_core::parser
 pub fn db_core::codegen::batch::emit::render_semi_join(&str, &str, &db_core::parser::ast::Select, &str) -> db_core::codegen::batch::emit::Result<alloc::string::String>
 pub fn db_core::codegen::batch::emit::render_windowed(&str, &str, &db_core::parser::ast::Select) -> db_core::codegen::batch::emit::Result<alloc::string::String>
 pub type db_core::codegen::batch::emit::Result<T> = core::result::Result<T, db_core::codegen::batch::emit::EmitError>
+pub enum db_core::codegen::batch::BuildSourceKind
+pub db_core::codegen::batch::BuildSourceKind::InMemory
+pub db_core::codegen::batch::BuildSourceKind::RowTable
+pub db_core::codegen::batch::BuildSourceKind::Stream
+impl core::clone::Clone for db_core::codegen::batch::BuildSourceKind
+pub fn db_core::codegen::batch::BuildSourceKind::clone(&self) -> db_core::codegen::batch::BuildSourceKind
+impl core::cmp::Eq for db_core::codegen::batch::BuildSourceKind
+impl core::cmp::PartialEq for db_core::codegen::batch::BuildSourceKind
+pub fn db_core::codegen::batch::BuildSourceKind::eq(&self, &db_core::codegen::batch::BuildSourceKind) -> bool
+impl core::fmt::Debug for db_core::codegen::batch::BuildSourceKind
+pub fn db_core::codegen::batch::BuildSourceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::codegen::batch::BuildSourceKind
+impl core::marker::StructuralPartialEq for db_core::codegen::batch::BuildSourceKind
 pub enum db_core::codegen::batch::PlanError
 pub db_core::codegen::batch::PlanError::Internal(alloc::string::String)
 pub db_core::codegen::batch::PlanError::NoJoinClause
@@ -180,8 +193,8 @@ impl core::marker::StructuralPartialEq for db_core::codegen::batch::WindowSpec
 pub fn db_core::codegen::batch::bool_expr_columns(&db_core::parser::ast::Expr) -> alloc::vec::Vec<alloc::string::String>
 pub fn db_core::codegen::batch::compile(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
 pub fn db_core::codegen::batch::compile_bool_expr(&db_core::parser::ast::Expr) -> db_core::vm::batch::Program
-pub fn db_core::codegen::batch::compile_join(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
-pub fn db_core::codegen::batch::compile_join_build_side(&db_core::parser::ast::Select, &str) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
+pub fn db_core::codegen::batch::compile_join(&db_core::parser::ast::Select, db_core::codegen::batch::BuildSourceKind) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
+pub fn db_core::codegen::batch::compile_join_build_side(&db_core::parser::ast::Select, &str, db_core::codegen::batch::BuildSourceKind) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
 pub fn db_core::codegen::batch::compile_semi_join(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::codegen::batch::SemiJoinProgram>
 pub fn db_core::codegen::batch::compile_window(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
 pub fn db_core::codegen::batch::expand_star(&db_core::parser::ast::Select, &[alloc::string::String]) -> db_core::codegen::batch::Result<db_core::parser::ast::Select>
@@ -591,6 +604,28 @@ pub fn db_core::engine::predicate::CompiledPredicate::clone(&self) -> db_core::e
 impl core::fmt::Debug for db_core::engine::predicate::CompiledPredicate
 pub fn db_core::engine::predicate::CompiledPredicate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod db_core::engine::resolve
+pub enum db_core::engine::resolve::CrossModeEngine
+pub db_core::engine::resolve::CrossModeEngine::StreamSqlite
+pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::driving: db_core::engine::stream::StreamEngine
+pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::lookup: db_core::engine::row::RowEngine
+pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::lookup_path: std::path::PathBuf
+pub db_core::engine::resolve::CrossModeEngine::StreamStream
+pub db_core::engine::resolve::CrossModeEngine::StreamStream::left: db_core::engine::stream::StreamEngine
+pub db_core::engine::resolve::CrossModeEngine::StreamStream::right: db_core::engine::stream::StreamEngine
+impl db_core::engine::resolve::CrossModeEngine
+pub fn db_core::engine::resolve::CrossModeEngine::open_stream_sqlite(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::open_stream_stream(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
+impl core::fmt::Debug for db_core::engine::resolve::CrossModeEngine
+pub fn db_core::engine::resolve::CrossModeEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl db_core::engine::Engine for db_core::engine::resolve::CrossModeEngine
+pub fn db_core::engine::resolve::CrossModeEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::mode(&self) -> db_core::engine::Mode
+pub fn db_core::engine::resolve::CrossModeEngine::open(&std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::run_query(&mut self, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::stats(&self) -> db_core::engine::FileStats
+pub fn db_core::engine::resolve::CrossModeEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::explain_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &std::path::Path, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::explain_stream_stream_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::stream::StreamEngine, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::run_query(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
@@ -852,6 +887,7 @@ impl core::marker::Copy for db_core::engine::FileStats
 impl core::marker::StructuralPartialEq for db_core::engine::FileStats
 pub enum db_core::engine::Mode
 pub db_core::engine::Mode::Batch
+pub db_core::engine::Mode::Cross
 pub db_core::engine::Mode::Row
 pub db_core::engine::Mode::Stream
 impl core::clone::Clone for db_core::engine::Mode
@@ -914,6 +950,7 @@ pub fn db_core::engine::OpcodeRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> 
 impl core::marker::StructuralPartialEq for db_core::engine::OpcodeRow
 pub struct db_core::engine::OpcodeSection
 pub db_core::engine::OpcodeSection::label: alloc::string::String
+pub db_core::engine::OpcodeSection::lane: &'static str
 pub db_core::engine::OpcodeSection::rows: alloc::vec::Vec<db_core::engine::OpcodeRow>
 impl core::clone::Clone for db_core::engine::OpcodeSection
 pub fn db_core::engine::OpcodeSection::clone(&self) -> db_core::engine::OpcodeSection
@@ -994,6 +1031,15 @@ pub fn db_core::engine::column::BatchEngine::open(&std::path::Path) -> core::res
 pub fn db_core::engine::column::BatchEngine::run_query(&mut self, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 pub fn db_core::engine::column::BatchEngine::stats(&self) -> db_core::engine::FileStats
 pub fn db_core::engine::column::BatchEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
+impl db_core::engine::Engine for db_core::engine::resolve::CrossModeEngine
+pub fn db_core::engine::resolve::CrossModeEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::mode(&self) -> db_core::engine::Mode
+pub fn db_core::engine::resolve::CrossModeEngine::open(&std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::run_query(&mut self, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::stats(&self) -> db_core::engine::FileStats
+pub fn db_core::engine::resolve::CrossModeEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
 impl db_core::engine::Engine for db_core::engine::row::RowEngine
 pub fn db_core::engine::row::RowEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
 pub fn db_core::engine::row::RowEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
@@ -5419,6 +5465,7 @@ pub db_core::vm::batch::Opcode::Reduce::dst: usize
 pub db_core::vm::batch::Opcode::Reduce::func: db_core::vm::batch::AggFunc
 pub db_core::vm::batch::Opcode::Reduce::src: core::option::Option<usize>
 pub db_core::vm::batch::Opcode::Scan
+pub db_core::vm::batch::Opcode::ScanSource(db_core::vm::batch::ScanSource)
 pub db_core::vm::batch::Opcode::Sort
 pub db_core::vm::batch::Opcode::Sort::col: usize
 pub db_core::vm::batch::Opcode::Sort::descending: bool
@@ -5438,6 +5485,22 @@ pub fn db_core::vm::batch::Opcode::eq(&self, &db_core::vm::batch::Opcode) -> boo
 impl core::fmt::Debug for db_core::vm::batch::Opcode
 pub fn db_core::vm::batch::Opcode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::Opcode
+pub enum db_core::vm::batch::ScanSource
+pub db_core::vm::batch::ScanSource::InMemory(db_core::vm::batch::Batch)
+pub db_core::vm::batch::ScanSource::RowTable
+pub db_core::vm::batch::ScanSource::RowTable::columns: alloc::borrow::Cow<'static, [alloc::borrow::Cow<'static, str>]>
+pub db_core::vm::batch::ScanSource::RowTable::table: alloc::borrow::Cow<'static, str>
+pub db_core::vm::batch::ScanSource::Stream
+pub db_core::vm::batch::ScanSource::Stream::columns: alloc::borrow::Cow<'static, [alloc::borrow::Cow<'static, str>]>
+pub db_core::vm::batch::ScanSource::Stream::handle: usize
+pub db_core::vm::batch::ScanSource::Stream::scope: core::option::Option<db_core::vm::stream::Scope>
+impl core::clone::Clone for db_core::vm::batch::ScanSource
+pub fn db_core::vm::batch::ScanSource::clone(&self) -> db_core::vm::batch::ScanSource
+impl core::cmp::PartialEq for db_core::vm::batch::ScanSource
+pub fn db_core::vm::batch::ScanSource::eq(&self, &db_core::vm::batch::ScanSource) -> bool
+impl core::fmt::Debug for db_core::vm::batch::ScanSource
+pub fn db_core::vm::batch::ScanSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::vm::batch::ScanSource
 pub enum db_core::vm::batch::Value
 pub db_core::vm::batch::Value::Bool(bool)
 pub db_core::vm::batch::Value::Float(f64)
@@ -5521,10 +5584,13 @@ pub fn db_core::vm::batch::Batch::new(usize) -> Self
 pub fn db_core::vm::batch::Batch::with_column(self, impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<db_core::vm::batch::Value>) -> Self
 impl core::clone::Clone for db_core::vm::batch::Batch
 pub fn db_core::vm::batch::Batch::clone(&self) -> db_core::vm::batch::Batch
+impl core::cmp::PartialEq for db_core::vm::batch::Batch
+pub fn db_core::vm::batch::Batch::eq(&self, &db_core::vm::batch::Batch) -> bool
 impl core::default::Default for db_core::vm::batch::Batch
 pub fn db_core::vm::batch::Batch::default() -> db_core::vm::batch::Batch
 impl core::fmt::Debug for db_core::vm::batch::Batch
 pub fn db_core::vm::batch::Batch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::vm::batch::Batch
 pub struct db_core::vm::batch::Instruction
 pub db_core::vm::batch::Instruction::comment: core::option::Option<alloc::string::String>
 pub db_core::vm::batch::Instruction::opcode: db_core::vm::batch::Opcode
@@ -5627,11 +5693,20 @@ pub fn db_core::vm::engine::JoinProgram::eq(&self, &db_core::vm::engine::JoinPro
 impl core::fmt::Debug for db_core::vm::engine::JoinProgram
 pub fn db_core::vm::engine::JoinProgram::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::engine::JoinProgram
+pub struct db_core::vm::engine::NoResolver
+impl db_core::vm::engine::ScanSourceResolver for db_core::vm::engine::NoResolver
+pub fn db_core::vm::engine::NoResolver::resolve(&self, &db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
+pub trait db_core::vm::engine::ScanSourceResolver
+pub fn db_core::vm::engine::ScanSourceResolver::resolve(&self, &db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
+impl db_core::vm::engine::ScanSourceResolver for db_core::vm::engine::NoResolver
+pub fn db_core::vm::engine::NoResolver::resolve(&self, &db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
+impl<F: core::ops::function::Fn(&db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>> db_core::vm::engine::ScanSourceResolver for F
+pub fn F::resolve(&self, &db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
 pub fn db_core::vm::engine::bounded_scan_limit(&db_core::vm::batch::Program) -> core::option::Option<usize>
 pub fn db_core::vm::engine::finalize(&[db_core::vm::batch::AggPart], usize, bool, core::option::Option<(usize, bool)>, core::option::Option<usize>, alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub fn db_core::vm::engine::run<S: db_core::vm::batch::Segment>(&[S], &db_core::vm::batch::Program) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub fn db_core::vm::engine::run_join(&db_core::vm::batch::Batch, &db_core::vm::batch::Batch, &db_core::vm::engine::JoinProgram) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
-pub fn db_core::vm::engine::run_join_segments<S: db_core::vm::batch::Segment>(alloc::vec::Vec<S>, &db_core::vm::batch::Batch, &db_core::vm::engine::JoinProgram) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
+pub fn db_core::vm::engine::run_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, db_core::vm::batch::ScanSource, &db_core::vm::engine::JoinProgram, &R) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub fn db_core::vm::engine::semi_filter(&db_core::vm::batch::Batch, &str, &std::collections::hash::set::HashSet<alloc::string::String>) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
 pub mod db_core::vm::join
 pub enum db_core::vm::join::JoinKind

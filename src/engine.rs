@@ -274,6 +274,17 @@ pub struct OpcodeRow {
 pub struct OpcodeSection {
     /// Section name.
     pub label: String,
+    /// Which physical engine executes this section's opcodes: `"row"`,
+    /// `"batch"`, or `"stream"` (ADR 0024, #382/#388). A single-engine
+    /// query's sections all share its own [`Mode`]; a cross-mode query's
+    /// sections can differ per section -- e.g. a stream/SQLite join's
+    /// build section is `"row"` (the SQLite lookup scan), its probe
+    /// section `"stream"` (the driving tail), its body `"batch"` (every
+    /// join always executes on `vm::batch` regardless of either side's
+    /// origin). This is what closes db-studio#54's "not available for
+    /// cross-mode joins" gap with real, labelled lanes instead of a
+    /// placeholder.
+    pub lane: &'static str,
     /// The section's instructions, in address order.
     pub rows: Vec<OpcodeRow>,
 }

@@ -140,6 +140,26 @@ fn cross_mode_engine_routes_run_query_and_explain_opcodes() {
     assert!(sections.iter().any(|s| s.label.contains("JOIN build")));
     assert!(sections.iter().any(|s| s.label.contains("JOIN probe")));
     assert!(sections.iter().any(|s| !s.rows.is_empty()));
+
+    // #388: each section's lane names which physical engine executes it --
+    // the SQLite lookup build side is "row", the driving stream probe side
+    // is "stream", and the join body always runs on vm::batch ("batch")
+    // regardless of either side's origin.
+    let build = sections
+        .iter()
+        .find(|s| s.label.contains("JOIN build"))
+        .expect("build section");
+    assert_eq!(build.lane, "row");
+    let probe = sections
+        .iter()
+        .find(|s| s.label.contains("JOIN probe"))
+        .expect("probe section");
+    assert_eq!(probe.lane, "stream");
+    let body = sections
+        .iter()
+        .find(|s| s.label.contains("JOIN body"))
+        .expect("body section");
+    assert_eq!(body.lane, "batch");
 }
 
 /// `Engine::open`'s single `path` cannot express a cross-mode engine's two
@@ -447,6 +467,45 @@ fn windowed_self_join_matches_on_hostname_and_nulls_unmatched_rows() {
             other => panic!("unexpected host {other}"),
         }
     }
+}
+
+/// #387/#388: the same windowed stream-to-stream join routed through
+/// `CrossModeEngine`, with both sides' opcode sections lane-labeled
+/// `"stream"` (ADR-0022 has no SQLite side) and the body `"batch"`.
+#[test]
+fn cross_mode_engine_routes_stream_stream_explain_opcodes() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let mut engine =
+        CrossModeEngine::open_stream_stream(&a_path, &b_path).expect("open cross-mode engine");
+    assert_eq!(engine.mode(), Mode::Cross);
+
+    let sql = "SELECT a.hostname, b.tag FROM log AS a \
+               LEFT JOIN log AS b ON a.hostname = b.hostname \
+               SINCE 1 hour";
+    let result = engine
+        .run_query(sql)
+        .expect("windowed self-join via Engine");
+    assert_eq!(result.columns, vec!["a.hostname", "b.tag"]);
+    assert_eq!(result.rows.len(), 2);
+
+    let sections = engine
+        .explain_opcodes(sql)
+        .expect("explain_opcodes via Engine");
+    let build = sections
+        .iter()
+        .find(|s| s.label.contains("JOIN build"))
+        .expect("build section");
+    assert_eq!(build.lane, "stream");
+    let probe = sections
+        .iter()
+        .find(|s| s.label.contains("JOIN probe"))
+        .expect("probe section");
+    assert_eq!(probe.lane, "stream");
+    let body = sections
+        .iter()
+        .find(|s| s.label.contains("JOIN body"))
+        .expect("body section");
+    assert_eq!(body.lane, "batch");
 }
 
 #[test]
