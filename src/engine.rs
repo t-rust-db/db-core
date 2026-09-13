@@ -42,11 +42,15 @@ pub mod stream;
 /// Compiling and evaluating a bare boolean expression against one
 /// already-materialized row (#369) -- [`Engine::compile_predicate`]'s
 /// return type. Reuses `WHERE`'s own grammar and compiler; needs no
-/// particular mode, just `vm-batch` to run the compiled expression.
-#[cfg(feature = "vm-batch")]
+/// particular mode, just `vm-batch` to run the compiled expression and
+/// `codegen-batch` to compile it -- gating on `vm-batch` alone breaks a
+/// minimal-features build that enables `vm-batch` transitively (e.g.
+/// `storage-stream` -> `vm-stream` -> `vm-batch`) without `codegen-batch`
+/// (same root cause as db-core#356).
+#[cfg(all(feature = "vm-batch", feature = "codegen-batch"))]
 pub mod predicate;
 
-#[cfg(feature = "vm-batch")]
+#[cfg(all(feature = "vm-batch", feature = "codegen-batch"))]
 pub use predicate::CompiledPredicate;
 
 /// Cross-mode joins (#312 ADR-0019, #314): a SQLite table as a
@@ -419,7 +423,7 @@ pub trait Engine {
     /// further file access -- row, batch, and stream engines alike, since
     /// this is a function of the schema and the compiled expression, not
     /// of how the engine drives its own queries.
-    #[cfg(feature = "vm-batch")]
+    #[cfg(all(feature = "vm-batch", feature = "codegen-batch"))]
     fn compile_predicate(&self, expr: &str) -> Result<CompiledPredicate, EngineError> {
         let schema_columns: Vec<String> = self
             .tables()?

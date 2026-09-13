@@ -591,7 +591,9 @@ impl core::fmt::Debug for db_core::engine::predicate::CompiledPredicate
 pub fn db_core::engine::predicate::CompiledPredicate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod db_core::engine::resolve
 pub fn db_core::engine::resolve::explain_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &std::path::Path, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::explain_stream_stream_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::stream::StreamEngine, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::run_query(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::run_stream_stream_query(&db_core::engine::stream::StreamEngine, &db_core::engine::stream::StreamEngine, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 pub mod db_core::engine::row
 pub mod db_core::engine::row::adapter
 pub struct db_core::engine::row::adapter::BtreeSchemaStorage

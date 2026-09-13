@@ -6782,7 +6782,7 @@
   {
     "id": "parser_column_validate_select_ec956ec2",
     "file": "src/parser/column.rs",
-    "line": 674,
+    "line": 683,
     "decision": "match &mut from_clause.first.kind {\n            TableRefKind::Name(name) => name.clone(),\n            TableRefKind::Subquery(subselect) => {\n                let Some(alias) = from_clause.first.alias.clone() else {\n                    return Err(unsupported(\n                        from_clause.first.span,\n                        \"a subquery in FROM requires an alias\".into(),\n                    ));\n                };\n                validate_select(subselect)?;\n                alias\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6792,7 +6792,7 @@
   {
     "id": "parser_column_validate_select_4f49920a",
     "file": "src/parser/column.rs",
-    "line": 687,
+    "line": 696,
     "decision": "let Some(alias) = &from_clause.first.alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -6802,7 +6802,7 @@
   {
     "id": "parser_column_validate_select_6f175796",
     "file": "src/parser/column.rs",
-    "line": 692,
+    "line": 701,
     "decision": "j.natural",
     "conditions": 1,
     "vectors_required": 2,
@@ -6812,7 +6812,7 @@
   {
     "id": "parser_column_validate_select_003bcc70",
     "file": "src/parser/column.rs",
-    "line": 695,
+    "line": 704,
     "decision": "match &j.table.kind {\n                TableRefKind::Name(table) => table.clone(),\n                TableRefKind::Subquery(_) => {\n                    return Err(unsupported(j.table.span, \"subquery in JOIN\".into()))\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6822,7 +6822,7 @@
   {
     "id": "parser_column_validate_select_20906431",
     "file": "src/parser/column.rs",
-    "line": 701,
+    "line": 710,
     "decision": "let Some(alias) = &j.table.alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -6832,7 +6832,7 @@
   {
     "id": "parser_column_validate_select_712c06c4",
     "file": "src/parser/column.rs",
-    "line": 704,
+    "line": 713,
     "decision": "j.op == JoinOp::Cross",
     "conditions": 1,
     "vectors_required": 2,
@@ -6842,7 +6842,7 @@
   {
     "id": "parser_column_validate_select_e208fc74",
     "file": "src/parser/column.rs",
-    "line": 707,
+    "line": 716,
     "decision": "match &j.constraint {\n                Some(JoinConstraint::On(expr)) => {\n                    extract_equi_join(expr)?;\n                }\n                Some(JoinConstraint::Using(_)) => {\n                    return Err(unsupported(j.table.span, \"USING join\".into()))\n                }\n                None if j.op == JoinOp::Cross => {}\n                None => return Err(unsupported(j.table.span, \"join without ON\".into())),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6852,8 +6852,18 @@
   {
     "id": "parser_column_validate_select_712c06c4_2",
     "file": "src/parser/column.rs",
-    "line": 714,
+    "line": 723,
     "decision": "j.op == JoinOp::Cross",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_column_validate_select_4efc088b",
+    "file": "src/parser/column.rs",
+    "line": 736,
+    "decision": "real_name_counts.get(&real) == Some(&1)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -6862,7 +6872,7 @@
   {
     "id": "parser_column_validate_select_50437a12",
     "file": "src/parser/column.rs",
-    "line": 720,
+    "line": 741,
     "decision": "!aliases.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -6872,7 +6882,7 @@
   {
     "id": "parser_column_validate_select_fb6b358f",
     "file": "src/parser/column.rs",
-    "line": 721,
+    "line": 742,
     "decision": "let Some(where_clause) = &mut select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -6882,7 +6892,7 @@
   {
     "id": "parser_column_validate_select_2df8cbb9",
     "file": "src/parser/column.rs",
-    "line": 725,
+    "line": 746,
     "decision": "let crate::parser::ast::ResultColumn::Expr { expr, .. } = col",
     "conditions": 1,
     "vectors_required": 2,
@@ -6892,7 +6902,7 @@
   {
     "id": "parser_column_validate_select_e529865c",
     "file": "src/parser/column.rs",
-    "line": 735,
+    "line": 756,
     "decision": "let Some(from_clause) = select.from.as_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -6902,7 +6912,7 @@
   {
     "id": "parser_column_validate_select_be8fdf18",
     "file": "src/parser/column.rs",
-    "line": 737,
+    "line": 758,
     "decision": "let Some(JoinConstraint::On(expr)) = &mut j.constraint",
     "conditions": 1,
     "vectors_required": 2,
@@ -6912,7 +6922,7 @@
   {
     "id": "parser_column_validate_select_fb6b358f_2",
     "file": "src/parser/column.rs",
-    "line": 744,
+    "line": 765,
     "decision": "let Some(where_clause) = &mut select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -6922,7 +6932,7 @@
   {
     "id": "parser_column_validate_select_6415568f",
     "file": "src/parser/column.rs",
-    "line": 752,
+    "line": 773,
     "decision": "select.order_by.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -6932,7 +6942,7 @@
   {
     "id": "parser_column_validate_select_37e02a93",
     "file": "src/parser/column.rs",
-    "line": 755,
+    "line": 776,
     "decision": "let Some(term) = select.order_by.first()",
     "conditions": 1,
     "vectors_required": 2,
@@ -6942,7 +6952,7 @@
   {
     "id": "parser_column_validate_select_a7326c49",
     "file": "src/parser/column.rs",
-    "line": 756,
+    "line": 777,
     "decision": "term.nulls_last.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -6952,7 +6962,7 @@
   {
     "id": "parser_column_validate_select_79ad0f01",
     "file": "src/parser/column.rs",
-    "line": 759,
+    "line": 780,
     "decision": "match &term.expr.kind {\n            ExprKind::Column { .. } => {\n                column_name(&term.expr)?;\n            }\n            ExprKind::FunctionCall {\n                name,\n                distinct,\n                args,\n                tail,\n            } if !matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {\n                if *distinct {\n                    return Err(unsupported(\n                        term.expr.span,\n                        \"DISTINCT inside an aggregate\".into(),\n                    ));\n                }\n                validate_aggregate_call(&term.expr, name, args)?;\n            }\n            _ => {\n                return Err(unsupported(\n                    term.expr.span,\n                    format!(\n                        \"expected a column reference or aggregate, found {:?}\",\n                        term.expr.kind\n                    ),\n                ))\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6962,7 +6972,7 @@
   {
     "id": "parser_column_validate_select_702232e7",
     "file": "src/parser/column.rs",
-    "line": 768,
+    "line": 789,
     "decision": "!matches!(tail.as_deref(), Some(t) if t.over.is_some())",
     "conditions": 1,
     "vectors_required": 2,
@@ -6972,7 +6982,7 @@
   {
     "id": "parser_column_validate_select_3a6ee6e5",
     "file": "src/parser/column.rs",
-    "line": 769,
+    "line": 790,
     "decision": "*distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -6982,7 +6992,7 @@
   {
     "id": "parser_column_validate_select_4b82305b",
     "file": "src/parser/column.rs",
-    "line": 789,
+    "line": 810,
     "decision": "match &select.limit {\n        Some(l) => matches!(&l.limit.kind, ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0),\n        None => true,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6992,7 +7002,7 @@
   {
     "id": "parser_column_validate_select_2107b5da",
     "file": "src/parser/column.rs",
-    "line": 793,
+    "line": 814,
     "decision": "let Some(l) = &select.limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -7002,7 +7012,7 @@
   {
     "id": "parser_column_validate_select_184ed0c3",
     "file": "src/parser/column.rs",
-    "line": 794,
+    "line": 815,
     "decision": "!limit_ok",
     "conditions": 1,
     "vectors_required": 2,
@@ -7012,7 +7022,7 @@
   {
     "id": "parser_column_validate_select_91043f75",
     "file": "src/parser/column.rs",
-    "line": 797,
+    "line": 818,
     "decision": "let Some(offset) = &l.offset",
     "conditions": 1,
     "vectors_required": 2,
@@ -7022,7 +7032,7 @@
   {
     "id": "parser_column_validate_select_683470e6",
     "file": "src/parser/column.rs",
-    "line": 798,
+    "line": 819,
     "decision": "!matches!(&offset.kind, ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7032,7 +7042,7 @@
   {
     "id": "parser_column_validate_select_4cae2899",
     "file": "src/parser/column.rs",
-    "line": 804,
+    "line": 825,
     "decision": "has_cross_join && select.limit.is_none()",
     "conditions": 2,
     "vectors_required": 3,
@@ -7042,7 +7052,7 @@
   {
     "id": "parser_column_validate_select_b892af2d",
     "file": "src/parser/column.rs",
-    "line": 836,
+    "line": 857,
     "decision": "has_window && has_expr",
     "conditions": 2,
     "vectors_required": 3,
@@ -7052,7 +7062,7 @@
   {
     "id": "parser_column_validate_select_8e763e04",
     "file": "src/parser/column.rs",
-    "line": 842,
+    "line": 863,
     "decision": "has_agg && !has_window",
     "conditions": 2,
     "vectors_required": 3,
@@ -7062,7 +7072,7 @@
   {
     "id": "parser_column_validate_select_3a275d00",
     "file": "src/parser/column.rs",
-    "line": 853,
+    "line": 874,
     "decision": "match item {\n                ItemKind::Column(name) => select_keys.push(name.clone()),\n                ItemKind::Expr => match col {\n                    crate::parser::ast::ResultColumn::Expr {\n                        alias: Some(alias), ..\n                    } => select_keys.push(alias.clone()),\n                    _ => {\n                        return Err(unsupported(\n                            select.span,\n                            \"a computed expression alongside an aggregate requires GROUP BY \\\n                             and an AS alias\"\n                                .into(),\n                        ))\n                    }\n                },\n                ItemKind::Agg | ItemKind::Star | ItemKind::Window => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7072,7 +7082,7 @@
   {
     "id": "parser_column_validate_select_73950e9c",
     "file": "src/parser/column.rs",
-    "line": 855,
+    "line": 876,
     "decision": "match col {\n                    crate::parser::ast::ResultColumn::Expr {\n                        alias: Some(alias), ..\n                    } => select_keys.push(alias.clone()),\n                    _ => {\n                        return Err(unsupported(\n                            select.span,\n                            \"a computed expression alongside an aggregate requires GROUP BY \\\n                             and an AS alias\"\n                                .into(),\n                        ))\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7082,7 +7092,7 @@
   {
     "id": "parser_column_validate_select_ab708f0d",
     "file": "src/parser/column.rs",
-    "line": 876,
+    "line": 897,
     "decision": "select_keys != group_by",
     "conditions": 1,
     "vectors_required": 2,
@@ -7092,7 +7102,7 @@
   {
     "id": "parser_column_validate_select_0aa91de1",
     "file": "src/parser/column.rs",
-    "line": 877,
+    "line": 898,
     "decision": "group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7102,7 +7112,7 @@
   {
     "id": "parser_column_parse_d2e8f12b",
     "file": "src/parser/column.rs",
-    "line": 899,
+    "line": 920,
     "decision": "match crate::parser::row::parse_select(sql_text) {\n        ParseOutcome::Accepted(mut select) => {\n            validate_select(&mut select)?;\n            Ok(*select)\n        }\n        ParseOutcome::Unsupported { message, span } | ParseOutcome::Invalid { message, span } => {\n            Err(from_outcome(message, span))\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7112,7 +7122,7 @@
   {
     "id": "parser_column_parse_explain_d923390a",
     "file": "src/parser/column.rs",
-    "line": 933,
+    "line": 954,
     "decision": "!starts_with_explain",
     "conditions": 1,
     "vectors_required": 2,
@@ -7122,7 +7132,7 @@
   {
     "id": "parser_column_parse_explain_686f12b1",
     "file": "src/parser/column.rs",
-    "line": 936,
+    "line": 957,
     "decision": "match crate::parser::row::parse_explain(sql_text) {\n        ParseOutcome::Accepted(explain) => {\n            let form = if explain.query_plan {\n                Explain::QueryPlan\n            } else {\n                Explain::Opcodes\n            };\n            let mut select = *explain.select;\n            validate_select(&mut select)?;\n            Ok((form, select))\n        }\n        ParseOutcome::Unsupported { message, span } | ParseOutcome::Invalid { message, span } => {\n            Err(from_outcome(message, span))\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7132,7 +7142,7 @@
   {
     "id": "parser_column_parse_explain_89444f51",
     "file": "src/parser/column.rs",
-    "line": 938,
+    "line": 959,
     "decision": "explain.query_plan",
     "conditions": 1,
     "vectors_required": 2,
@@ -7142,7 +7152,7 @@
   {
     "id": "parser_column_bare_col_0f88bcf2",
     "file": "src/parser/column.rs",
-    "line": 961,
+    "line": 982,
     "decision": "match rc {\n            ResultColumn::Expr { expr, alias: None }\n                if matches!(expr.kind, ExprKind::Column { .. }) =>\n            {\n                column_name(expr).ok()\n            }\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7152,7 +7162,7 @@
   {
     "id": "parser_column_bare_col_0fa6e87f",
     "file": "src/parser/column.rs",
-    "line": 963,
+    "line": 984,
     "decision": "matches!(expr.kind, ExprKind::Column { .. })",
     "conditions": 1,
     "vectors_required": 2,
@@ -7162,7 +7172,7 @@
   {
     "id": "parser_column_from_name_f82695b0",
     "file": "src/parser/column.rs",
-    "line": 982,
+    "line": 1003,
     "decision": "match &from.first.kind {\n            TableRefKind::Name(name) => name,\n            TableRefKind::Subquery(_) => from.first.alias.as_deref().unwrap(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7172,7 +7182,7 @@
   {
     "id": "parser_column_parses_is_null_ed581d7b",
     "file": "src/parser/column.rs",
-    "line": 1602,
+    "line": 1690,
     "decision": "match &where_expr(&q).kind {\n            ExprKind::IsNull { negated, .. } => assert!(!negated),\n            ExprKind::Is { negated, .. } => assert!(!negated),\n            other => panic!(\"expected IsNull-shaped expr, found {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7182,7 +7192,7 @@
   {
     "id": "parser_column_parses_is_not_null_9a123387",
     "file": "src/parser/column.rs",
-    "line": 1612,
+    "line": 1700,
     "decision": "match &where_expr(&q).kind {\n            ExprKind::IsNull { negated, .. } => assert!(negated),\n            ExprKind::Is { negated, .. } => assert!(negated),\n            other => panic!(\"expected IsNull-shaped expr, found {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31540,9 +31550,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "engine_stream_segments_in_range_863dde07",
+    "file": "src/engine/stream.rs",
+    "line": 297,
+    "decision": "match &range {\n            Some(r) => self\n                .ring\n                .segments()\n                .filter(|s| match s.minmax_observed() {\n                    Some((lo, hi)) => lo < r.end && hi >= r.start,\n                    None => true,\n                })\n                .collect(),\n            None => self.ring.segments().collect(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_stream_segments_in_range_89be6955",
+    "file": "src/engine/stream.rs",
+    "line": 301,
+    "decision": "match s.minmax_observed() {\n                    Some((lo, hi)) => lo < r.end && hi >= r.start,\n                    None => true,\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_stream_parse_for_table_3d18a962",
     "file": "src/engine/stream.rs",
-    "line": 308,
+    "line": 340,
     "decision": "!from.eq_ignore_ascii_case(TABLE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31552,7 +31582,7 @@
   {
     "id": "engine_stream_parse_for_table_7fbb1501",
     "file": "src/engine/stream.rs",
-    "line": 314,
+    "line": 346,
     "decision": "let Some(join) = select.from.as_ref().and_then(|f| f.joins.first())",
     "conditions": 1,
     "vectors_required": 2,
@@ -31562,7 +31592,7 @@
   {
     "id": "engine_stream_parse_for_table_b4904d00",
     "file": "src/engine/stream.rs",
-    "line": 321,
+    "line": 353,
     "decision": "in_subquery(&select).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31572,7 +31602,7 @@
   {
     "id": "engine_stream_parse_for_table_006bb6a6",
     "file": "src/engine/stream.rs",
-    "line": 327,
+    "line": 359,
     "decision": "select.columns.iter().any(is_window_column)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31582,7 +31612,7 @@
   {
     "id": "engine_stream_requests_39699173",
     "file": "src/engine/stream.rs",
-    "line": 363,
+    "line": 395,
     "decision": "is_predefined(col) || self.fields.iter().any(|f| f == col)",
     "conditions": 2,
     "vectors_required": 3,
@@ -31592,7 +31622,7 @@
   {
     "id": "engine_stream_select_segments_d336fecc",
     "file": "src/engine/stream.rs",
-    "line": 398,
+    "line": 430,
     "decision": "match &requested_range {\n            Some(range) => self\n                .ring\n                .segments()\n                .filter(|s| match s.minmax_observed() {\n                    Some((lo, hi)) => lo < range.end && hi >= range.start,\n                    None => true,\n                })\n                .cloned()\n                .collect(),\n            None => self.ring.segments().cloned().collect(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31602,7 +31632,7 @@
   {
     "id": "engine_stream_select_segments_5db614c3",
     "file": "src/engine/stream.rs",
-    "line": 402,
+    "line": 434,
     "decision": "match s.minmax_observed() {\n                    Some((lo, hi)) => lo < range.end && hi >= range.start,\n                    None => true,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31612,7 +31642,7 @@
   {
     "id": "engine_stream_select_segments_cacdca9c",
     "file": "src/engine/stream.rs",
-    "line": 411,
+    "line": 443,
     "decision": "let IndexPred::DictEq { column, value } = pred",
     "conditions": 1,
     "vectors_required": 2,
@@ -31622,7 +31652,7 @@
   {
     "id": "engine_stream_select_segments_6c275be9",
     "file": "src/engine/stream.rs",
-    "line": 436,
+    "line": 468,
     "decision": "match (&requested_range, self.ring.segments().next()) {\n            (Some(range), Some(oldest)) => oldest\n                .minmax_observed()\n                .is_some_and(|(oldest_lo, _)| range.start < oldest_lo),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31632,7 +31662,7 @@
   {
     "id": "engine_stream_merge_retained_summaries_8f6287cc",
     "file": "src/engine/stream.rs",
-    "line": 480,
+    "line": 512,
     "decision": "!select.group_by.is_empty() || select.where_clause.is_some()",
     "conditions": 2,
     "vectors_required": 3,
@@ -31642,7 +31672,7 @@
   {
     "id": "engine_stream_merge_retained_summaries_1577ae23",
     "file": "src/engine/stream.rs",
-    "line": 487,
+    "line": 519,
     "decision": "summaries.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31652,7 +31682,7 @@
   {
     "id": "engine_stream_run_compiled_e260c777",
     "file": "src/engine/stream.rs",
-    "line": 518,
+    "line": 550,
     "decision": "let Some(epilogue) = &program.epilogue",
     "conditions": 1,
     "vectors_required": 2,
@@ -31662,7 +31692,7 @@
   {
     "id": "engine_stream_type_name_fc4694f0",
     "file": "src/engine/stream.rs",
-    "line": 553,
+    "line": 585,
     "decision": "match name {\n            \"timestamp\" | \"observed_ts\" | \"severity\" => \"INTEGER\",\n            \"severity_text\" | \"facility\" | \"message\" | \"raw\" => \"TEXT\",\n            other => {\n                self.ring\n                    .segments()\n                    .find_map(|s| s.field(other))\n                    .map_or(\"TEXT\", |c| match c {\n                        OwnedColumn::Int(_) => \"INTEGER\",\n                        OwnedColumn::Float(_) => \"REAL\",\n                        OwnedColumn::Bool(_) => \"BOOLEAN\",\n                        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => \"TEXT\",\n                    })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31672,7 +31702,7 @@
   {
     "id": "engine_stream_type_name_cc86c7b7",
     "file": "src/engine/stream.rs",
-    "line": 560,
+    "line": 592,
     "decision": "match c {\n                        OwnedColumn::Int(_) => \"INTEGER\",\n                        OwnedColumn::Float(_) => \"REAL\",\n                        OwnedColumn::Bool(_) => \"BOOLEAN\",\n                        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => \"TEXT\",\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31682,7 +31712,7 @@
   {
     "id": "engine_stream_new_1fb719e4",
     "file": "src/engine/stream.rs",
-    "line": 628,
+    "line": 660,
     "decision": "let EmitMode::Threshold { op, .. } = &mode",
     "conditions": 1,
     "vectors_required": 2,
@@ -31692,7 +31722,7 @@
   {
     "id": "engine_stream_new_7d7d3711",
     "file": "src/engine/stream.rs",
-    "line": 629,
+    "line": 661,
     "decision": "!is_comparison_op(*op)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31702,7 +31732,7 @@
   {
     "id": "engine_stream_poll_fcd96cc4",
     "file": "src/engine/stream.rs",
-    "line": 684,
+    "line": 716,
     "decision": "match self.mode.clone() {\n            EmitMode::Rows => Ok(Some(StandingQueryEvent { result })),\n            EmitMode::OnChange => Ok(self.poll_on_change(result)),\n            EmitMode::Threshold { op, threshold } => {\n                Ok(self.poll_threshold(engine, op, threshold, result))\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31712,7 +31742,7 @@
   {
     "id": "engine_stream_poll_on_change_61db9430",
     "file": "src/engine/stream.rs",
-    "line": 702,
+    "line": 734,
     "decision": "!changed",
     "conditions": 1,
     "vectors_required": 2,
@@ -31722,7 +31752,7 @@
   {
     "id": "engine_stream_poll_on_change_4606dc4a",
     "file": "src/engine/stream.rs",
-    "line": 706,
+    "line": 738,
     "decision": "result.rows.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31732,7 +31762,7 @@
   {
     "id": "engine_stream_poll_threshold_6e508dc2",
     "file": "src/engine/stream.rs",
-    "line": 728,
+    "line": 760,
     "decision": "!holds",
     "conditions": 1,
     "vectors_required": 2,
@@ -31742,7 +31772,7 @@
   {
     "id": "engine_stream_poll_threshold_531505eb",
     "file": "src/engine/stream.rs",
-    "line": 737,
+    "line": 769,
     "decision": "held_ns >= for_ns && !self.fired_for_current_hold",
     "conditions": 2,
     "vectors_required": 3,
@@ -31752,7 +31782,7 @@
   {
     "id": "engine_stream_latest_scalar_37f34c29",
     "file": "src/engine/stream.rs",
-    "line": 763,
+    "line": 795,
     "decision": "match cell {\n        Cell::Null => Value::Null,\n        Cell::Int(n) => Value::Int(*n),\n        Cell::Real(x) => Value::Float(*x),\n        Cell::Bool(b) => Value::Bool(*b),\n        Cell::Text(s) => Value::Str(s.clone().into()),\n        Cell::Blob(_) => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31762,7 +31792,7 @@
   {
     "id": "engine_stream_in_subquery_38ffb216",
     "file": "src/engine/stream.rs",
-    "line": 786,
+    "line": 818,
     "decision": "match &select.where_clause {\n        Some(Expr {\n            kind: ExprKind::InSubquery { subquery, .. },\n            ..\n        }) => Some(subquery),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31772,7 +31802,7 @@
   {
     "id": "engine_stream_is_window_column_21d3bda9",
     "file": "src/engine/stream.rs",
-    "line": 796,
+    "line": 828,
     "decision": "match column {\n        ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { tail, .. },\n                    ..\n                },\n            ..\n        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31782,7 +31812,7 @@
   {
     "id": "engine_stream_plan_err_bbf17c28",
     "file": "src/engine/stream.rs",
-    "line": 810,
+    "line": 842,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31792,7 +31822,7 @@
   {
     "id": "engine_stream_stream_err_1678805e",
     "file": "src/engine/stream.rs",
-    "line": 820,
+    "line": 852,
     "decision": "match e {\n        StreamPlanError::Rejected { .. } => EngineError::new(ErrorKind::Unsupported, e),\n        StreamPlanError::InvalidLiteral { .. } => EngineError::new(ErrorKind::Compile, e),\n        StreamPlanError::Batch(inner) => plan_err(inner),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31802,7 +31832,7 @@
   {
     "id": "engine_stream_resolve_scope_0dc91c0c",
     "file": "src/engine/stream.rs",
-    "line": 838,
+    "line": 870,
     "decision": "match since.unit {\n        ScopeUnit::Seconds => Scope::Time(Duration::from_secs(since.amount)),\n        ScopeUnit::Minutes => Scope::Time(Duration::from_secs(since.amount.saturating_mul(60))),\n        ScopeUnit::Hours => Scope::Time(Duration::from_secs(since.amount.saturating_mul(3_600))),\n        ScopeUnit::Days => Scope::Time(Duration::from_secs(since.amount.saturating_mul(86_400))),\n        ScopeUnit::Lines => Scope::Lines(since.amount),\n        ScopeUnit::Bytes => Scope::Bytes(since.amount),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31812,7 +31842,7 @@
   {
     "id": "engine_stream_effective_time_range_1af8cdb6",
     "file": "src/engine/stream.rs",
-    "line": 855,
+    "line": 887,
     "decision": "let Scope::Time(d) = scope",
     "conditions": 1,
     "vectors_required": 2,
@@ -31822,7 +31852,7 @@
   {
     "id": "engine_stream_effective_time_range_57bf47a7",
     "file": "src/engine/stream.rs",
-    "line": 861,
+    "line": 893,
     "decision": "let IndexPred::TimeRange { lo: plo, hi: phi } = pred",
     "conditions": 1,
     "vectors_required": 2,
@@ -31832,7 +31862,7 @@
   {
     "id": "engine_stream_run_range_vector_epilogue_bcac83c3",
     "file": "src/engine/stream.rs",
-    "line": 886,
+    "line": 918,
     "decision": "match r.first() {\n                Some(Value::Int(n)) => *n,\n                _ => 0,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31842,7 +31872,7 @@
   {
     "id": "engine_stream_range_vector_label_d12f9f48",
     "file": "src/engine/stream.rs",
-    "line": 907,
+    "line": 939,
     "decision": "match select.columns.first() {\n        Some(ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { name, args, .. },\n                    ..\n                },\n            ..\n        }) => {\n            let arg = match args {\n                FunctionArgs::Star => \"*\".to_string(),\n                FunctionArgs::List(list) => list\n                    .iter()\n                    .filter_map(|e| match &e.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    })\n                    .next()\n                    .unwrap_or_default(),\n            };\n            format!(\"{}({arg})\", name.to_ascii_uppercase())\n        }\n        _ => \"value\".to_string(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31852,7 +31882,7 @@
   {
     "id": "engine_stream_range_vector_label_6b4abdc3",
     "file": "src/engine/stream.rs",
-    "line": 916,
+    "line": 948,
     "decision": "match args {\n                FunctionArgs::Star => \"*\".to_string(),\n                FunctionArgs::List(list) => list\n                    .iter()\n                    .filter_map(|e| match &e.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    })\n                    .next()\n                    .unwrap_or_default(),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31862,7 +31892,7 @@
   {
     "id": "engine_stream_range_vector_label_74294c50",
     "file": "src/engine/stream.rs",
-    "line": 920,
+    "line": 952,
     "decision": "match &e.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31872,7 +31902,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_7e0ed34f",
     "file": "src/engine/stream.rs",
-    "line": 957,
+    "line": 989,
     "decision": "tail\n        .as_deref()\n        .is_some_and(|t| t.filter.is_some() || t.over.is_some())",
     "conditions": 1,
     "vectors_required": 2,
@@ -31882,7 +31912,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_14643cbb",
     "file": "src/engine/stream.rs",
-    "line": 964,
+    "line": 996,
     "decision": "matches!(agg, AggFunc::Avg)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31892,7 +31922,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_b27ce420",
     "file": "src/engine/stream.rs",
-    "line": 967,
+    "line": 999,
     "decision": "match args {\n        FunctionArgs::Star if matches!(agg, AggFunc::Count) => Some((agg, None)),\n        FunctionArgs::Star => None,\n        FunctionArgs::List(list) => match list.as_slice() {\n            [Expr {\n                kind: ExprKind::Column {\n                    table: None, name, ..\n                },\n                ..\n            }] => Some((agg, Some(name.clone()))),\n            _ => None,\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31902,7 +31932,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_f9ab63a4",
     "file": "src/engine/stream.rs",
-    "line": 968,
+    "line": 1000,
     "decision": "matches!(agg, AggFunc::Count)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31912,7 +31942,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_addc219d",
     "file": "src/engine/stream.rs",
-    "line": 970,
+    "line": 1002,
     "decision": "match list.as_slice() {\n            [Expr {\n                kind: ExprKind::Column {\n                    table: None, name, ..\n                },\n                ..\n            }] => Some((agg, Some(name.clone()))),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31922,7 +31952,7 @@
   {
     "id": "engine_stream_fold_summaries_into_30d16295",
     "file": "src/engine/stream.rs",
-    "line": 1003,
+    "line": 1035,
     "decision": "match agg {\n        AggFunc::Count => {\n            let live_n = match live {\n                Some(Value::Int(n)) => n,\n                _ => 0,\n            };\n            let total = summaries\n                .iter()\n                .filter_map(column_summary)\n                .map(|c| c.count)\n                .fold(live_n, |acc, c| {\n                    acc.saturating_add(i64::try_from(c).unwrap_or(i64::MAX))\n                });\n            Value::Int(total)\n        }\n        AggFunc::Sum => {\n            let live_v = live.and_then(|v| v.as_f64()).unwrap_or(0.0);\n            let total = summaries\n                .iter()\n                .filter_map(column_summary)\n                .fold(live_v, |acc, c| acc + c.sum);\n            Value::Float(total)\n        }\n        AggFunc::Min => summaries\n            .iter()\n            .filter_map(column_summary)\n            .filter(|c| c.count > 0)\n            .map(|c| c.min)\n            .fold(live.and_then(|v| v.as_f64()), |acc, v| {\n                Some(acc.map_or(v, |a| a.min(v)))\n            })\n            .map_or(Value::Null, Value::Float),\n        AggFunc::Max => summaries\n            .iter()\n            .filter_map(column_summary)\n            .filter(|c| c.count > 0)\n            .map(|c| c.max)\n            .fold(live.and_then(|v| v.as_f64()), |acc, v| {\n                Some(acc.map_or(v, |a| a.max(v)))\n            })\n            .map_or(Value::Null, Value::Float),\n        // `single_ungrouped_aggregate` never returns `Avg` (its own\n        // finalized sum/count can't be re-merged, see this fn's doc\n        // comment) -- a non-panicking fallback here costs nothing and\n        // keeps this helper safe to call with any `AggFunc` value.\n        AggFunc::Avg => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31932,7 +31962,7 @@
   {
     "id": "engine_stream_fold_summaries_into_3097eb02",
     "file": "src/engine/stream.rs",
-    "line": 1005,
+    "line": 1037,
     "decision": "match live {\n                Some(Value::Int(n)) => n,\n                _ => 0,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31942,7 +31972,7 @@
   {
     "id": "engine_stream_explain_opcodes_85c1e877",
     "file": "src/engine/stream.rs",
-    "line": 1099,
+    "line": 1131,
     "decision": "r.comment.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31952,7 +31982,7 @@
   {
     "id": "engine_resolve_plan_err_bbf17c28",
     "file": "src/engine/resolve.rs",
-    "line": 39,
+    "line": 68,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31962,7 +31992,7 @@
   {
     "id": "engine_resolve_resolve_sides_ecf724d4",
     "file": "src/engine/resolve.rs",
-    "line": 64,
+    "line": 93,
     "decision": "from.joins.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -31972,7 +32002,7 @@
   {
     "id": "engine_resolve_resolve_sides_b1eae5e8",
     "file": "src/engine/resolve.rs",
-    "line": 89,
+    "line": 118,
     "decision": "!from_name.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31982,7 +32012,7 @@
   {
     "id": "engine_resolve_resolve_sides_366039e9",
     "file": "src/engine/resolve.rs",
-    "line": 90,
+    "line": 119,
     "decision": "join_name.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31992,7 +32022,7 @@
   {
     "id": "engine_resolve_resolve_sides_b233fcd5",
     "file": "src/engine/resolve.rs",
-    "line": 110,
+    "line": 139,
     "decision": "!known",
     "conditions": 1,
     "vectors_required": 2,
@@ -32002,7 +32032,7 @@
   {
     "id": "engine_resolve_requalify_b9fe93b0",
     "file": "src/engine/resolve.rs",
-    "line": 128,
+    "line": 157,
     "decision": "let Some(values) = columns.remove(r)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32012,7 +32042,7 @@
   {
     "id": "engine_resolve_explain_plan_cbd67ad2",
     "file": "src/engine/resolve.rs",
-    "line": 195,
+    "line": 224,
     "decision": "table.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32022,8 +32052,118 @@
   {
     "id": "engine_resolve_explain_plan_6d0bbb8e",
     "file": "src/engine/resolve.rs",
-    "line": 197,
+    "line": 226,
     "decision": "table.eq_ignore_ascii_case(&lookup_table)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_resolve_stream_stream_sides_ecf724d4",
+    "file": "src/engine/resolve.rs",
+    "line": 258,
+    "decision": "from.joins.len() > 1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_resolve_stream_stream_sides_0cfb5f70",
+    "file": "src/engine/resolve.rs",
+    "line": 283,
+    "decision": "!from_name.eq_ignore_ascii_case(super::stream::TABLE)\n        || !join_name.eq_ignore_ascii_case(super::stream::TABLE)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_resolve_stream_stream_sides_b20d52d9",
+    "file": "src/engine/resolve.rs",
+    "line": 309,
+    "decision": "left_alias.eq_ignore_ascii_case(right_alias)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_resolve_stream_stream_sides_06064080",
+    "file": "src/engine/resolve.rs",
+    "line": 316,
+    "decision": "match select.scope.as_ref() {\n        None => {\n            return Err(EngineError::new(\n                ErrorKind::Unsupported,\n                \"a stream-to-stream join requires a SINCE/UNTIL window: with no \\\n                 SQLite side to bound the query, the window is what makes the \\\n                 join finite (ADR-0022)\",\n            ));\n        }\n        Some(_) if !matches!(super::stream::resolve_scope(select), Scope::Time(_)) => {\n            return Err(EngineError::new(\n                ErrorKind::Unsupported,\n                \"a stream-to-stream join requires a time-based SINCE/UNTIL window \\\n                 (e.g. `SINCE 1 hour`); `LINES`/`BYTES` scopes don't bound either \\\n                 side by time and can't make the join finite (ADR-0022)\",\n            ));\n        }\n        Some(_) => {}\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_resolve_stream_stream_sides_9a3b2404",
+    "file": "src/engine/resolve.rs",
+    "line": 325,
+    "decision": "!matches!(super::stream::resolve_scope(select), Scope::Time(_))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_alias_normalize_f42b0018",
+    "file": "src/engine/resolve.rs",
+    "line": 347,
+    "decision": "let Some(from) = &mut select.from",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_alias_normalize_567a3ca4",
+    "file": "src/engine/resolve.rs",
+    "line": 349,
+    "decision": "let Some(join) = from.joins.first_mut()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_materialize_segments_cdfe5103",
+    "file": "src/engine/resolve.rs",
+    "line": 382,
+    "decision": "num_rows > MAX_STREAM_STREAM_BUILD_ROWS",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_materialize_segments_cfd2fd17",
+    "file": "src/engine/resolve.rs",
+    "line": 396,
+    "decision": "let Some(col) = batch.columns.get(&request.key)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_explain_stream_stream_plan_3be1fe26",
+    "file": "src/engine/resolve.rs",
+    "line": 463,
+    "decision": "table.eq_ignore_ascii_case(&left_alias)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_explain_stream_stream_plan_6b519d7c",
+    "file": "src/engine/resolve.rs",
+    "line": 465,
+    "decision": "table.eq_ignore_ascii_case(&right_alias)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -32882,7 +33022,7 @@
   {
     "id": "engine_fmt_d9ad12ef",
     "file": "src/engine.rs",
-    "line": 85,
+    "line": 89,
     "decision": "match self {\n            Mode::Row => \"row\",\n            Mode::Batch => \"batch\",\n            Mode::Stream => \"stream\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32892,7 +33032,7 @@
   {
     "id": "engine_fmt_8999c8cc",
     "file": "src/engine.rs",
-    "line": 117,
+    "line": 121,
     "decision": "match self {\n            Cell::Null => Ok(()),\n            Cell::Int(n) => write!(f, \"{n}\"),\n            Cell::Real(x) => f.write_str(&crate::value::format_real(*x)),\n            Cell::Bool(b) => f.write_str(if *b { \"1\" } else { \"0\" }),\n            Cell::Text(s) => f.write_str(s),\n            Cell::Blob(bytes) => {\n                f.write_str(\"X'\")?;\n                for b in bytes {\n                    write!(f, \"{b:02X}\")?;\n                }\n                f.write_str(\"'\")\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32902,7 +33042,7 @@
   {
     "id": "engine_fmt_b34c2caa",
     "file": "src/engine.rs",
-    "line": 121,
+    "line": 125,
     "decision": "*b",
     "conditions": 1,
     "vectors_required": 2,
@@ -32912,7 +33052,7 @@
   {
     "id": "engine_from_59f226b4",
     "file": "src/engine.rs",
-    "line": 136,
+    "line": 140,
     "decision": "match v {\n            crate::value::Value::Null => Cell::Null,\n            crate::value::Value::Integer(n) => Cell::Int(n),\n            crate::value::Value::Real(x) => Cell::Real(x),\n            crate::value::Value::Text(s) => Cell::Text(s.to_string()),\n            crate::value::Value::Blob(b) => Cell::Blob(b.to_vec()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32922,7 +33062,7 @@
   {
     "id": "engine_from_bb21e74f",
     "file": "src/engine.rs",
-    "line": 148,
+    "line": 152,
     "decision": "match v {\n            crate::value::Value::Null => Cell::Null,\n            crate::value::Value::Integer(n) => Cell::Int(*n),\n            crate::value::Value::Real(x) => Cell::Real(*x),\n            crate::value::Value::Text(s) => Cell::Text(s.to_string()),\n            crate::value::Value::Blob(b) => Cell::Blob(b.to_vec()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32932,7 +33072,7 @@
   {
     "id": "engine_from_96d2e1ed",
     "file": "src/engine.rs",
-    "line": 161,
+    "line": 165,
     "decision": "match v {\n            crate::vm::batch::Value::Null => Cell::Null,\n            crate::vm::batch::Value::Int(n) => Cell::Int(n),\n            crate::vm::batch::Value::Float(x) => Cell::Real(x),\n            crate::vm::batch::Value::Bool(b) => Cell::Bool(b),\n            crate::vm::batch::Value::Str(s) => Cell::Text(s.into_owned()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32942,7 +33082,7 @@
   {
     "id": "engine_from_a0b9b46a",
     "file": "src/engine.rs",
-    "line": 180,
+    "line": 184,
     "decision": "match c {\n            Cell::Null | Cell::Blob(_) => crate::vm::batch::Value::Null,\n            Cell::Int(n) => crate::vm::batch::Value::Int(n),\n            Cell::Real(x) => crate::vm::batch::Value::Float(x),\n            Cell::Bool(b) => crate::vm::batch::Value::Bool(b),\n            Cell::Text(s) => crate::vm::batch::Value::Str(s.into()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32952,7 +33092,7 @@
   {
     "id": "engine_fmt_1a9219e1",
     "file": "src/engine.rs",
-    "line": 341,
+    "line": 345,
     "decision": "match self {\n            ErrorKind::Open => \"open\",\n            ErrorKind::Parse => \"parse\",\n            ErrorKind::Compile => \"compile\",\n            ErrorKind::Execute => \"execute\",\n            ErrorKind::Unsupported => \"unsupported\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32962,7 +33102,7 @@
   {
     "id": "engine_single_statement_6b98feb3",
     "file": "src/engine.rs",
-    "line": 442,
+    "line": 446,
     "decision": "match (stmts.next(), stmts.next()) {\n        (Some(one), None) => Ok(one),\n        (None, _) => Err(EngineError::new(ErrorKind::Parse, \"empty statement\")),\n        (Some(_), Some(_)) => Err(EngineError::new(\n            ErrorKind::Unsupported,\n            \"EXPLAIN takes a single statement\",\n        )),\n    }",
     "conditions": 0,
     "vectors_required": 0,

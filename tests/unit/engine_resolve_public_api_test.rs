@@ -26,7 +26,9 @@
 
 use std::path::{Path, PathBuf};
 
-use db_core::engine::resolve::{explain_plan, run_query};
+use db_core::engine::resolve::{
+    explain_plan, explain_stream_stream_plan, run_query, run_stream_stream_query,
+};
 use db_core::engine::row::RowEngine;
 use db_core::engine::stream::StreamEngine;
 use db_core::engine::{Cell, Engine, ErrorKind};
@@ -302,6 +304,330 @@ fn explain_labels_each_side_by_source_mode_and_file() {
         details
             .iter()
             .any(|d| d.starts_with("SCAN hosts") && d.contains("[sqlite")),
+        "{details:?}"
+    );
+}
+
+// --- Windowed stream-to-stream joins (ADR-0022, #372) ---
+
+fn temp_log(name: &str, text: &str) -> PathBuf {
+    let mut p = std::env::temp_dir();
+    p.push(format!(
+        "db-core-resolve-stream-stream-{}-{name}.log",
+        std::process::id()
+    ));
+    std::fs::write(&p, text).unwrap();
+    p
+}
+
+/// `a` (requests): `web01`, `web02`. `b` (auth): `web01` only -- `web02`
+/// has no match on `b`, so a LEFT JOIN must surface it as NULL, never a
+/// silent drop, exactly like the stream/SQLite join's unmatched-host case.
+fn stream_stream_fixtures() -> (PathBuf, PathBuf) {
+    let a = temp_log(
+        "requests",
+        "<134>Sep 10 08:00:01 web01 nginx[1]: request 1\n\
+         <134>Sep 10 08:00:02 web02 nginx[2]: request 2\n",
+    );
+    let b = temp_log(
+        "auth",
+        "<38>Sep 10 08:00:03 web01 sshd[10]: session opened\n",
+    );
+    (a, b)
+}
+
+#[test]
+fn windowed_self_join_matches_on_hostname_and_nulls_unmatched_rows() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let result = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT a.hostname, b.tag FROM log AS a \
+         LEFT JOIN log AS b ON a.hostname = b.hostname \
+         SINCE 1 hour",
+    )
+    .expect("windowed stream-to-stream join");
+
+    assert_eq!(result.columns, vec!["a.hostname", "b.tag"]);
+    assert_eq!(result.rows.len(), 2);
+    for row in &result.rows {
+        let host = text(&row[0]);
+        let tag = &row[1];
+        match host {
+            "web01" => assert_eq!(tag, &Cell::Text("sshd".to_string())),
+            "web02" => assert_eq!(tag, &Cell::Null, "unmatched host must be NULL, not dropped"),
+            other => panic!("unexpected host {other}"),
+        }
+    }
+}
+
+#[test]
+fn rejects_a_stream_stream_join_with_no_window() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let err = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT a.hostname, b.tag FROM log AS a LEFT JOIN log AS b ON a.hostname = b.hostname",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+    assert!(
+        err.message.contains("window"),
+        "expected a window-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn rejects_a_stream_stream_join_missing_an_alias() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    // Neither side aliased: both a `FROM`/`JOIN` name of literally `log`.
+    let err = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT log.hostname FROM log JOIN log ON log.hostname = log.hostname SINCE 1 hour",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+    assert!(err.message.contains("alias"), "{}", err.message);
+}
+
+/// MC/DC vector (`resolve_stream_stream_sides`'s `!from_is_log ||
+/// !join_is_log` guard): leaf A (`!from_is_log`) true alone.
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__engine_resolve_resolve_stream_stream_sides_0cfb5f70__v1_from_side_not_log() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let err = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT x.hostname FROM hosts AS x JOIN log AS y ON x.hostname = y.hostname SINCE 1 hour",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Compile);
+}
+
+/// MC/DC vector: leaf B (`!join_is_log`) true alone.
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__engine_resolve_resolve_stream_stream_sides_0cfb5f70__v2_join_side_not_log() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let err = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT x.hostname FROM log AS x JOIN hosts AS y ON x.hostname = y.hostname SINCE 1 hour",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Compile);
+}
+
+/// MC/DC vector: both leaves false -- both sides are `log`, so this check
+/// passes (the subsequent alias check is what actually rejects here).
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__engine_resolve_resolve_stream_stream_sides_0cfb5f70__v3_both_sides_log() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let err = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT log.hostname FROM log JOIN log ON log.hostname = log.hostname SINCE 1 hour",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+    assert!(err.message.contains("alias"));
+}
+
+#[test]
+fn rejects_a_stream_stream_join_with_duplicate_aliases() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let err = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT x.hostname FROM log AS x JOIN log AS x ON x.hostname = x.hostname SINCE 1 hour",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Compile);
+}
+
+/// A thin `Clock` forwarding to a shared `Arc<FakeClock>`, matching
+/// `engine_stream_standing_queries_test.rs`'s own convention (`Box<dyn
+/// Clock>` needs a concrete forwarding type since `FakeClock` itself
+/// isn't boxed by the test).
+struct FakeClockHandle(std::sync::Arc<db_core::clock::FakeClock>);
+
+impl db_core::clock::Clock for FakeClockHandle {
+    fn now_ns(&self) -> i64 {
+        self.0.now_ns()
+    }
+}
+
+/// Opens the fixture as usual (so format detection sees real content, not
+/// an empty file), then swaps in a fake clock pinned to the real time the
+/// segments were actually observed at -- so the clock can be moved
+/// forward deterministically afterward without re-detecting or
+/// re-admitting anything.
+fn open_with_fake_clock_at_now(
+    path: &Path,
+) -> (StreamEngine, std::sync::Arc<db_core::clock::FakeClock>) {
+    let now_ns = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    )
+    .unwrap();
+    let clock = std::sync::Arc::new(db_core::clock::FakeClock::new(now_ns));
+    let mut e = StreamEngine::open(path).expect("open");
+    e.set_clock(Box::new(FakeClockHandle(clock.clone())));
+    (e, clock)
+}
+
+/// A window excluding every segment on both sides (the fake clock jumped
+/// 2 hours past the real observation time, then queried with a 1-hour
+/// `SINCE`) must materialize the (empty) build side to a zero-row,
+/// zero-column `Batch` (`materialize_segments`'s `loaded.first()` is
+/// `None`) and produce zero output rows -- not an error -- rather than
+/// panicking or erroring on the column-less batch.
+#[test]
+fn windowed_self_join_with_a_window_excluding_every_segment_returns_zero_rows() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let (a, a_clock) = open_with_fake_clock_at_now(&a_path);
+    let (b, b_clock) = open_with_fake_clock_at_now(&b_path);
+
+    let two_hours_ns = 2 * 3_600 * 1_000_000_000;
+    a_clock.advance(two_hours_ns);
+    b_clock.advance(two_hours_ns);
+
+    let result = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT a.hostname, b.tag FROM log AS a \
+         LEFT JOIN log AS b ON a.hostname = b.hostname \
+         SINCE 1 hour",
+    )
+    .expect("windowed stream-to-stream join with a window matching no segment");
+
+    assert_eq!(result.rows.len(), 0, "{:?}", result.rows);
+}
+
+/// INNER JOIN through the stream-stream path: unmatched rows on either
+/// side must be dropped, not surfaced as NULL (distinguishing this from
+/// the LEFT JOIN coverage above).
+#[test]
+fn windowed_self_join_inner_join_drops_unmatched_rows() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let result = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT a.hostname, b.tag FROM log AS a \
+         JOIN log AS b ON a.hostname = b.hostname \
+         SINCE 1 hour",
+    )
+    .expect("windowed stream-to-stream inner join");
+
+    assert_eq!(result.rows.len(), 1, "{:?}", result.rows);
+    assert_eq!(text(&result.rows[0][0]), "web01");
+}
+
+/// More than one `JOIN` is rejected for the stream-stream path
+/// specifically (mirrors the stream/SQLite path's own rejection, but
+/// exercised through `run_stream_stream_query` rather than inferred).
+#[test]
+fn rejects_a_stream_stream_query_with_more_than_one_join() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let err = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT x.hostname FROM log AS x \
+         JOIN log AS y ON x.hostname = y.hostname \
+         JOIN log AS z ON y.hostname = z.hostname \
+         SINCE 1 hour",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+    assert!(err.message.contains("JOIN"), "{}", err.message);
+}
+
+/// A `LINES`/`BYTES` scope passes the "some scope is present" check but
+/// has no fixed time edge (`StreamEngine::segments_in_range`), so it
+/// can't actually bound either side finitely -- must be rejected the same
+/// as no scope at all, with a message distinguishing it from a plain
+/// missing-window rejection.
+#[test]
+fn rejects_a_stream_stream_join_with_a_non_time_scope() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let err = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT a.hostname, b.tag FROM log AS a \
+         LEFT JOIN log AS b ON a.hostname = b.hostname \
+         SINCE 10 lines",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+    assert!(
+        err.message.contains("time-based"),
+        "expected a time-based-scope-specific message, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn explain_stream_stream_labels_each_side_by_alias_and_file() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let plan = explain_stream_stream_plan(
+        &a,
+        &b,
+        "SELECT a.hostname, b.tag FROM log AS a \
+         LEFT JOIN log AS b ON a.hostname = b.hostname \
+         SINCE 1 hour",
+    )
+    .expect("explain stream-to-stream join");
+
+    let details: Vec<&str> = plan.iter().map(|n| n.detail.as_str()).collect();
+    assert!(
+        details
+            .iter()
+            .any(|d| d.starts_with("SCAN a") && d.contains("[stream")),
+        "{details:?}"
+    );
+    assert!(
+        details
+            .iter()
+            .any(|d| d.starts_with("SCAN b") && d.contains("[stream")),
         "{details:?}"
     );
 }

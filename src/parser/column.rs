@@ -661,7 +661,16 @@ fn validate_select(select: &mut Select) -> Result<()> {
         return Err(unsupported(select.span, "HAVING".into()));
     }
 
-    let mut aliases: HashMap<String, String> = HashMap::new();
+    // (alias, real_table) in FROM-then-JOIN order; deferred into `aliases`
+    // below rather than inserted directly, so a self-join (two aliases for
+    // the same real table -- e.g. `log AS a JOIN log AS b`, ADR-0022,
+    // #372) can be detected and excluded: rewriting both `a.col`/`b.col`
+    // to the same `log.col` would collapse the only thing that
+    // distinguishes the two sides, so neither alias is rewritten in that
+    // case -- `a.col`/`b.col` stay literal, and a consumer that needs to
+    // tell the two `log` occurrences apart (`engine::resolve`) resolves
+    // them itself from the un-rewritten aliases.
+    let mut alias_order: Vec<(String, String)> = Vec::new();
     let from_name;
     let mut has_cross_join = false;
     {
@@ -685,7 +694,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
             }
         };
         if let Some(alias) = &from_clause.first.alias {
-            aliases.insert(alias.clone(), from_name.clone());
+            alias_order.push((alias.clone(), from_name.clone()));
         }
 
         for j in &mut from_clause.joins {
@@ -699,7 +708,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 }
             };
             if let Some(alias) = &j.table.alias {
-                aliases.insert(alias.clone(), table.clone());
+                alias_order.push((alias.clone(), table.clone()));
             }
             if j.op == JoinOp::Cross {
                 has_cross_join = true;
@@ -714,6 +723,18 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 None if j.op == JoinOp::Cross => {}
                 None => return Err(unsupported(j.table.span, "join without ON".into())),
             }
+        }
+    }
+
+    let mut real_name_counts: HashMap<String, usize> = HashMap::new();
+    for (_, real) in &alias_order {
+        let count = real_name_counts.entry(real.clone()).or_insert(0);
+        *count = count.saturating_add(1);
+    }
+    let mut aliases: HashMap<String, String> = HashMap::new();
+    for (alias, real) in alias_order {
+        if real_name_counts.get(&real) == Some(&1) {
+            aliases.insert(alias, real);
         }
     }
 
@@ -1486,6 +1507,73 @@ mod tests {
             panic!("expected a Binary WHERE expression")
         };
         assert_eq!(column_name(lhs).unwrap(), "customers.id");
+    }
+
+    /// A self-join (`FROM log AS a JOIN log AS b`, ADR-0022, #372): both
+    /// aliases resolve to the same real table, so neither is rewritten --
+    /// `a.host`/`b.host` must stay literal (not collapse to `log.host`
+    /// twice, which would destroy the only thing disambiguating the two
+    /// sides).
+    #[test]
+    fn self_join_leaves_both_aliases_unrewritten() {
+        let q =
+            parse("SELECT a.host, b.host FROM log AS a JOIN log AS b ON a.host = b.host").unwrap();
+        assert_eq!(
+            col_names(&q),
+            vec!["a.host".to_string(), "b.host".to_string()]
+        );
+        let join = &q.from.as_ref().unwrap().joins[0];
+        let Some(JoinConstraint::On(on_expr)) = &join.constraint else {
+            panic!("expected ON")
+        };
+        assert_eq!(
+            extract_equi_join(on_expr).unwrap(),
+            ("a.host".to_string(), "b.host".to_string())
+        );
+    }
+
+    /// Three aliases colliding on one real table (`log AS a JOIN log AS b
+    /// JOIN log AS c`): the "exactly one alias claims this real name"
+    /// gate excludes all three from rewriting, not just a pairwise
+    /// collision -- `a.host`/`b.host`/`c.host` all stay literal.
+    #[test]
+    fn three_way_self_join_leaves_every_alias_unrewritten() {
+        let q = parse(
+            "SELECT a.host, b.host, c.host FROM log AS a \
+             JOIN log AS b ON a.host = b.host \
+             JOIN log AS c ON b.host = c.host",
+        )
+        .unwrap();
+        assert_eq!(
+            col_names(&q),
+            vec![
+                "a.host".to_string(),
+                "b.host".to_string(),
+                "c.host".to_string()
+            ]
+        );
+    }
+
+    /// An ordinary (non-colliding) join alongside a self-joined pair in
+    /// the same query still gets its own alias rewritten normally -- the
+    /// collision exclusion is scoped to the real names that actually
+    /// collide, not the whole query.
+    #[test]
+    fn self_join_pair_does_not_suppress_rewriting_for_an_unrelated_alias() {
+        let q = parse(
+            "SELECT a.host, b.host, c.name FROM log AS a \
+             JOIN log AS b ON a.host = b.host \
+             JOIN hosts AS c ON a.host = c.name",
+        )
+        .unwrap();
+        assert_eq!(
+            col_names(&q),
+            vec![
+                "a.host".to_string(),
+                "b.host".to_string(),
+                "hosts.name".to_string()
+            ]
+        );
     }
 
     #[test]
