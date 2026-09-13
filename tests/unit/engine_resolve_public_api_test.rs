@@ -304,11 +304,15 @@ fn explain_plan_shares_run_querys_side_resolution_errors() {
     let err = explain_plan(&driving, &lookup, db.path(), "SELECT 1").unwrap_err();
     assert_eq!(err.kind, ErrorKind::Parse);
 
+    // `hosts LEFT JOIN log` with SQLite as the driving side is rejected by
+    // `run_query` too (`rejects_left_join_with_sqlite_as_the_driving_side`,
+    // ADR-0021, #371) -- unlike the plain `JOIN` shape, which is now
+    // accepted (`accepts_sqlite_as_the_driving_side_for_inner_join`).
     let err = explain_plan(
         &driving,
         &lookup,
         db.path(),
-        "SELECT hosts.region FROM hosts JOIN log ON hosts.name = log.hostname",
+        "SELECT hosts.region FROM hosts LEFT JOIN log ON hosts.name = log.hostname",
     )
     .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Unsupported);
