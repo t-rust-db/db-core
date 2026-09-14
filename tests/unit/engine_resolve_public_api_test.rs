@@ -171,6 +171,75 @@ fn cross_mode_engine_open_is_unsupported() {
     assert_eq!(err.kind, ErrorKind::Unsupported);
 }
 
+/// #366: `CrossModeEngine::StreamSqlite`'s `explain_plan`/`stats`/`tables`
+/// -- routed through the `Engine` trait, not the free functions -- were
+/// untested. `explain_plan` must label both sides by mode (mirroring
+/// `explain_plan`'s own doc comment); `stats` reports the driving
+/// (stream) side's `FileStats::Stream`; `tables` merges both engines'
+/// schemas (`log` plus whatever the SQLite lookup file declares).
+#[test]
+fn cross_mode_engine_stream_sqlite_explain_plan_stats_and_tables() {
+    let db = HostsDb::new("cross-mode-engine-explain-plan");
+    let engine = CrossModeEngine::open_stream_sqlite(Path::new(LOG_FIXTURE), db.path())
+        .expect("open cross-mode engine");
+
+    let plan = engine
+        .explain_plan(
+            "SELECT log.hostname, hosts.region FROM log \
+             JOIN hosts ON log.hostname = hosts.name",
+        )
+        .expect("explain_plan via Engine");
+    assert!(!plan.is_empty());
+    let details: Vec<&str> = plan.iter().map(|n| n.detail.as_str()).collect();
+    assert!(details.iter().any(|d| d.contains("[stream")), "{details:?}");
+    assert!(details.iter().any(|d| d.contains("[sqlite")), "{details:?}");
+
+    assert!(matches!(
+        engine.stats(),
+        db_core::engine::FileStats::Stream { .. }
+    ));
+
+    let tables = engine.tables().expect("tables via Engine");
+    let names: Vec<&str> = tables.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"log"), "{names:?}");
+    assert!(names.contains(&"hosts"), "{names:?}");
+}
+
+/// #366: same as above, for the `StreamStream` (windowed self-join)
+/// variant -- `explain_plan` labels both aliases by stream file path,
+/// `stats` reports the `left` engine's stats, `tables` merges `left` and
+/// `right` (both `log`, since a self-join has one physical table each).
+#[test]
+fn cross_mode_engine_stream_stream_explain_plan_stats_and_tables() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let engine =
+        CrossModeEngine::open_stream_stream(&a_path, &b_path).expect("open cross-mode engine");
+
+    let plan = engine
+        .explain_plan(
+            "SELECT a.hostname, b.tag FROM log AS a \
+             JOIN log AS b ON a.hostname = b.hostname \
+             SINCE 1 hour",
+        )
+        .expect("explain_plan via Engine");
+    assert!(!plan.is_empty());
+    let details: Vec<&str> = plan.iter().map(|n| n.detail.as_str()).collect();
+    assert_eq!(
+        details.iter().filter(|d| d.contains("[stream")).count(),
+        2,
+        "{details:?}"
+    );
+
+    assert!(matches!(
+        engine.stats(),
+        db_core::engine::FileStats::Stream { .. }
+    ));
+
+    let tables = engine.tables().expect("tables via Engine");
+    assert_eq!(tables.len(), 2);
+    assert!(tables.iter().all(|t| t.name == "log"));
+}
+
 #[test]
 fn accepts_sqlite_as_the_driving_side_for_inner_join() {
     let db = HostsDb::new("driving-side");
@@ -543,6 +612,60 @@ fn rejects_a_stream_stream_join_missing_an_alias() {
     .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Unsupported);
     assert!(err.message.contains("alias"), "{}", err.message);
+}
+
+/// #366: `resolve_stream_stream_sides`'s "not a join" branch -- a
+/// single-table query has no `from.joins` entry at all, distinct from
+/// (and checked before) any alias/window validation.
+#[test]
+fn rejects_a_stream_stream_query_with_no_join_at_all() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let err = run_stream_stream_query(&a, &b, "SELECT hostname FROM log").unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Compile);
+    assert!(err.message.contains("single-table"), "{}", err.message);
+}
+
+/// #366: a `FROM` subquery is rejected the same way on the stream-stream
+/// path as on the stream/SQLite path (`rejects_a_subquery_from_clause`,
+/// above) -- `resolve_stream_stream_sides` has its own copy of this check.
+#[test]
+fn rejects_a_stream_stream_join_with_a_subquery_from_clause() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let err = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT x.hostname FROM (SELECT hostname FROM log) x \
+         JOIN log AS b ON x.hostname = b.hostname SINCE 1 hour",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+    assert!(err.message.contains("subquery"), "{}", err.message);
+}
+
+/// #366: the `FROM`-side alias check short-circuits before the `JOIN`-side
+/// one ever runs, so `rejects_a_stream_stream_join_missing_an_alias` (with
+/// *neither* side aliased) never actually exercises the `JOIN`-side
+/// rejection. This aliases the `FROM` side only, isolating it.
+#[test]
+fn rejects_a_stream_stream_join_missing_the_join_side_alias() {
+    let (a_path, b_path) = stream_stream_fixtures();
+    let a = StreamEngine::open(&a_path).expect("open a");
+    let b = StreamEngine::open(&b_path).expect("open b");
+
+    let err = run_stream_stream_query(
+        &a,
+        &b,
+        "SELECT a.hostname FROM log AS a JOIN log ON a.hostname = log.hostname SINCE 1 hour",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+    assert!(err.message.contains("JOIN"), "{}", err.message);
 }
 
 /// MC/DC vector (`resolve_stream_stream_sides`'s `!from_is_log ||
