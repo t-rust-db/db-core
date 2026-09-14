@@ -1433,6 +1433,197 @@ fn compile_join_impl(
     })
 }
 
+/// Plan a cross-mode star join (#394): the driving table (`from.first`)
+/// joined to N SQLite lookup tables, one per `JOIN` clause, e.g. `log JOIN
+/// hosts ON log.host_id = hosts.id JOIN users ON log.user_id = users.id`.
+/// Unlike [`compile_join`]/[`compile_join_build_side`], the driving side
+/// never swaps position and always probes: every join key must be a column
+/// of the driving table (`engine::resolve::resolve_multi_sides` enforces
+/// this before calling in), so every SQLite lookup builds independently --
+/// no lookup table is ever joined against another lookup table's payload.
+/// `lookup_tables` names each `JOIN` target's table, in query/`JOIN` order
+/// (one entry per join; `resolve_multi_sides` has already confirmed each is
+/// a known SQLite table).
+///
+/// Only `INNER`/`LEFT` per join (same restriction as [`compile_join`]); a
+/// single `JOIN` is also accepted here (equivalent to
+/// `compile_join_build_side` with the JOIN target as the build table).
+pub fn compile_cross_mode_multi_join(
+    select: &Select,
+    lookup_tables: &[String],
+) -> Result<crate::vm::engine::MultiJoinProgram> {
+    let Some(from) = &select.from else {
+        return Err(PlanError::UnknownColumn("SELECT without FROM".into()));
+    };
+    let joins = extract_joins(from)?;
+    if joins.is_empty() {
+        return Err(PlanError::NoJoinClause);
+    }
+    if joins.len() != lookup_tables.len() {
+        return Err(PlanError::Internal(
+            "compile_cross_mode_multi_join: lookup_tables must have exactly \
+             one entry per JOIN clause"
+                .into(),
+        ));
+    }
+    for (join, table) in joins.iter().zip(lookup_tables) {
+        if !join.table.eq_ignore_ascii_case(table) {
+            return Err(PlanError::Internal(format!(
+                "compile_cross_mode_multi_join: lookup_tables[{table}] does \
+                 not match JOIN target `{}`",
+                join.table
+            )));
+        }
+        if !matches!(join.op, JoinOp::Inner | JoinOp::Left) {
+            return Err(PlanError::UnsupportedJoinKind(join.op));
+        }
+    }
+
+    let body = compile(select)?;
+    let from_name = table_name(from)?;
+
+    let mut needed: Vec<String> = body.columns_to_load();
+    for j in &joins {
+        for extra in [&j.left_col, &j.right_col] {
+            if !needed.contains(extra) {
+                needed.push(extra.clone());
+            }
+        }
+    }
+
+    // Split the needed columns into the driving side's columns (probe,
+    // register order below) and each join's own build-side columns --
+    // mirrors `compile_join_impl`'s binary split, generalized to N sides.
+    let mut from_columns: Vec<String> = Vec::new();
+    let mut join_columns: Vec<Vec<String>> = vec![Vec::new(); joins.len()];
+    for name in &needed {
+        let (prefix, _) = split_qualified(name);
+        let owner = match prefix {
+            None => None,
+            Some(p) if p == from_name => None,
+            Some(p) => joins.iter().position(|j| j.table == p),
+        };
+        match owner {
+            None => from_columns.push(name.clone()),
+            Some(i) => join_columns
+                .get_mut(i)
+                .ok_or_else(|| PlanError::UnknownColumn(name.clone()))?
+                .push(name.clone()),
+        }
+    }
+
+    // Which of `left_col`/`right_col` belongs to the driving side (the
+    // probe key) vs. this join's own table (the build key) -- checked by
+    // membership rather than assumed lhs/rhs order, since each join's `ON`
+    // may write either side first.
+    fn owner_of(col: &str, from_name: &str, join_table: &str) -> Result<&'static str> {
+        let (prefix, _) = split_qualified(col);
+        match prefix {
+            None => Ok("from"),
+            Some(p) if p == from_name => Ok("from"),
+            Some(p) if p == join_table => Ok("join"),
+            Some(_) => Err(PlanError::UnknownColumn(col.to_string())),
+        }
+    }
+
+    let probe_reg_of: HashMap<&str, usize> = from_columns
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.as_str(), i))
+        .collect();
+
+    let mut builds = Vec::with_capacity(joins.len());
+    let mut probe_ops: Vec<Opcode> = from_columns
+        .iter()
+        .enumerate()
+        .map(|(reg, name)| Opcode::LoadColumn {
+            reg,
+            column: name.clone().into(),
+        })
+        .collect();
+    let mut next_payload_reg = from_columns.len();
+
+    for (i, join) in joins.iter().enumerate() {
+        let left_owner = owner_of(&join.left_col, from_name, &join.table)?;
+        let right_owner = owner_of(&join.right_col, from_name, &join.table)?;
+        let (probe_key, build_key) = match (left_owner, right_owner) {
+            ("from", "join") => (&join.left_col, &join.right_col),
+            ("join", "from") => (&join.right_col, &join.left_col),
+            _ => {
+                return Err(PlanError::UnknownColumn(format!(
+                    "JOIN ON must equate the driving table to `{}`",
+                    join.table
+                )))
+            }
+        };
+
+        let build_columns = join_columns.get(i).cloned().unwrap_or_default();
+        let build_key_reg = build_columns
+            .iter()
+            .position(|n| n == build_key)
+            .ok_or_else(|| PlanError::UnknownColumn(build_key.clone()))?;
+
+        let scan_source = Opcode::ScanSource(ScanSource::RowTable {
+            table: Cow::Owned(join.table.clone()),
+            columns: build_columns
+                .iter()
+                .map(|n| Cow::Owned(split_qualified(n).1.to_string()))
+                .collect(),
+        });
+        let build = Program::from_opcodes(
+            std::iter::once(scan_source)
+                .chain(
+                    build_columns
+                        .iter()
+                        .enumerate()
+                        .map(|(reg, name)| Opcode::LoadColumn {
+                            reg,
+                            column: name.clone().into(),
+                        }),
+                )
+                .chain(std::iter::once(Opcode::HashBuild {
+                    key_cols: vec![build_key_reg].into(),
+                    payload_cols: (0..build_columns.len()).collect::<Vec<_>>().into(),
+                    table: i,
+                })),
+        );
+
+        let probe_key_reg = *probe_reg_of
+            .get(probe_key.as_str())
+            .ok_or_else(|| PlanError::UnknownColumn(probe_key.clone()))?;
+        let payload_dst: Vec<usize> = (0..build_columns.len())
+            .map(|k| next_payload_reg.saturating_add(k))
+            .collect();
+        next_payload_reg = next_payload_reg.saturating_add(build_columns.len());
+
+        let join_kind = match join.op {
+            JoinOp::Inner => crate::vm::batch::JoinKind::Inner,
+            JoinOp::Left => crate::vm::batch::JoinKind::Left,
+            other => return Err(PlanError::UnsupportedJoinKind(other)),
+        };
+        probe_ops.push(Opcode::HashProbe {
+            key_cols: vec![probe_key_reg].into(),
+            table: i,
+            payload_dst: payload_dst.clone().into(),
+            kind: join_kind,
+        });
+
+        builds.push(crate::vm::engine::JoinBuildSide {
+            table_name: join.table.clone(),
+            right_columns: build_columns,
+            build,
+            payload_dst,
+        });
+    }
+
+    Ok(crate::vm::engine::MultiJoinProgram {
+        left_columns: from_columns,
+        builds,
+        probe: Program::from_opcodes(probe_ops),
+        body,
+    })
+}
+
 /// A planned `WHERE col IN (SELECT ...)` semi-join: the caller plans and
 /// runs `subquery` via [`compile`] on its own table, collects the allowed
 /// key set, filters the main table on `key_column` (see

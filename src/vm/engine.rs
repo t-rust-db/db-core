@@ -487,6 +487,147 @@ impl<S: Segment> Segment for JoinedSegment<S> {
     }
 }
 
+/// One `JOIN` target's build side within a [`MultiJoinProgram`] (#394): the
+/// SQLite lookup table's name, the payload columns it carries (in
+/// `payload_dst` order), the program that hashes it into `table: <index in
+/// MultiJoinProgram::builds>`, and where the shared probe program lands
+/// that payload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinBuildSide {
+    /// The build side's table name (for diagnostics; not read by execution).
+    pub table_name: String,
+    /// Build-side column names carried as join payload, in `payload_dst` order.
+    pub right_columns: Vec<String>,
+    /// Program run over this table to populate its hash table (`table:
+    /// <index>`, matching this side's position in `MultiJoinProgram::builds`).
+    pub build: Program,
+    /// Registers in the shared probe program this build's payload lands in.
+    pub payload_dst: Vec<usize>,
+}
+
+/// A star join (#394): one driving/probe table joined to N SQLite lookup
+/// tables, each via its own `HashBuild`/`HashProbe` pair (`table: 0..N`).
+/// Unlike [`JoinProgram`], every join key is a column of the driving side
+/// (`engine::resolve`'s `resolve_multi_sides` enforces this) -- no lookup
+/// table is joined against another lookup table's payload, so every build
+/// runs independently and the probe program chains their `HashProbe`s in
+/// `builds` order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultiJoinProgram {
+    /// Driving-side column names, in the register order the probe program loads them.
+    pub left_columns: Vec<String>,
+    /// One entry per `JOIN` clause, in query order == `table` index order.
+    pub builds: Vec<JoinBuildSide>,
+    /// Program run over the driving side: loads `left_columns`, then probes
+    /// every build's hash table in order.
+    pub probe: Program,
+    /// The flat query body (ending in `Finalize`) run over the joined batch.
+    pub body: Program,
+}
+
+/// [`run_join_segments`] generalized to N build sides (#394): each of
+/// `rights` is resolved and hashed in turn (`table: 0, 1, .., N-1`, matching
+/// `plan.builds`' order) into one shared [`JoinTables`], via
+/// [`super::batch::Vm::clear_registers`] between builds so each build's
+/// registers don't leak into the next -- built tables persist across that
+/// call, only registers/selection reset. The probe side then runs exactly
+/// like [`run_join_segments`], with `plan.probe` chaining one `HashProbe`
+/// per build instead of one.
+///
+/// `rights.len()` must equal `plan.builds.len()`; mismatched lengths are a
+/// caller (planner) bug, surfaced as [`VmError::MalformedProgram`] rather
+/// than a panic or a silently truncated join.
+pub fn run_multi_join_segments<S: Segment, R: ScanSourceResolver>(
+    left: Vec<S>,
+    rights: Vec<ScanSource>,
+    plan: &MultiJoinProgram,
+    resolver: &R,
+) -> Result<Vec<Vec<Value>>> {
+    if rights.len() != plan.builds.len() {
+        return Err(VmError::MalformedProgram {
+            opcode: "HashBuild",
+            reason: format!(
+                "{} build sources supplied for {} planned joins",
+                rights.len(),
+                plan.builds.len()
+            ),
+        });
+    }
+
+    let mut builder = Vm::new();
+    for (i, (right, build_side)) in rights.into_iter().zip(&plan.builds).enumerate() {
+        if i > 0 {
+            builder.clear_registers();
+        }
+        let right_batch = resolve_scan_source(right, resolver)?;
+        let build: Vec<Opcode> = build_side.build.opcodes().cloned().collect();
+        builder.execute(&right_batch, &build)?;
+    }
+    let tables = builder.join_tables();
+
+    let shape = Arc::new(MultiJoinShape {
+        probe: plan.probe.opcodes().cloned().collect(),
+        left_columns: plan.left_columns.clone(),
+        builds: plan
+            .builds
+            .iter()
+            .map(|b| (b.right_columns.clone(), b.payload_dst.clone()))
+            .collect(),
+    });
+    let segments: Vec<MultiJoinedSegment<S>> = left
+        .into_iter()
+        .map(|segment| MultiJoinedSegment {
+            left: segment,
+            tables: tables.clone(),
+            shape: Arc::clone(&shape),
+        })
+        .collect();
+    run(&segments, &plan.body)
+}
+
+/// The per-plan, read-only part every [`MultiJoinedSegment`] of one
+/// multi-join shares -- [`JoinShape`] generalized to N builds.
+struct MultiJoinShape {
+    probe: Vec<Opcode>,
+    left_columns: Vec<String>,
+    /// One `(right_columns, payload_dst)` per build, in `table` index order.
+    builds: Vec<(Vec<String>, Vec<usize>)>,
+}
+
+/// [`JoinedSegment`] generalized to N builds (#394): probes every build's
+/// hash table via the shared chained probe program, then assembles the
+/// joined batch from the driving columns followed by each build's payload,
+/// in `builds` order.
+struct MultiJoinedSegment<S: Segment> {
+    left: S,
+    tables: JoinTables,
+    shape: Arc<MultiJoinShape>,
+}
+
+impl<S: Segment> Segment for MultiJoinedSegment<S> {
+    fn load(&self) -> Result<Arc<Batch>> {
+        let batch = self.left.load()?;
+        let mut vm = Vm::with_join_tables(self.tables.clone());
+        vm.execute(&batch, &self.shape.probe)?;
+
+        let num_rows = vm.register(0)?.len();
+        let mut joined = Batch::new(num_rows);
+        for (reg, name) in self.shape.left_columns.iter().enumerate() {
+            joined
+                .columns
+                .insert(name.clone(), Arc::new(vm.take_register(reg)?));
+        }
+        for (right_columns, payload_dst) in &self.shape.builds {
+            for (name, &reg) in right_columns.iter().zip(payload_dst) {
+                joined
+                    .columns
+                    .insert(name.clone(), Arc::new(vm.take_register(reg)?));
+            }
+        }
+        Ok(Arc::new(joined))
+    }
+}
+
 /// Keep only the rows of `batch` whose `key_column` value (stringified)
 /// appears in `allowed` -- the `WHERE col IN (SELECT ...)` semi-join
 /// filter, applied before the flat body runs over the survivors.

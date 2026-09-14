@@ -31,6 +31,16 @@
 //! SQLite table is written as `FROM`), one SQLite lookup table.
 //! Key-restricted materialization is still out of scope (ADR-0023).
 //!
+//! #394 extends this to N SQLite lookup tables via a star join: `log JOIN
+//! hosts ON log.host_id = hosts.id JOIN users ON log.user_id = users.id`.
+//! This shape is stricter than the single-`JOIN` case -- `log` must be
+//! written first (no SQLite-first grammar position, since there's no
+//! single "other side" to swap into with N lookup tables) and every join
+//! key must be a column of `log` (no lookup table is joined against
+//! another lookup table's payload). See [`resolve_multi_sides`] and
+//! [`crate::codegen::batch::compile_cross_mode_multi_join`].
+//! `EXPLAIN`/`explain_opcodes` don't support this shape yet.
+//!
 //! [`run_stream_stream_query`]/[`explain_stream_stream_plan`] (ADR-0022,
 //! #372) join two stream sources instead: both are the same table `log`,
 //! so the query is a self-join and must alias both sides
@@ -165,6 +175,77 @@ fn resolve_sides(select: &Select, lookup: &RowEngine) -> Result<String, EngineEr
     Ok(lookup_name.to_string())
 }
 
+/// Resolves a cross-mode *star* join (#394): `log` (the stream engine's
+/// table) as the sole `FROM`/driving/probe side, joined to N SQLite lookup
+/// tables, one per `JOIN` clause, in `JOIN` order -- e.g. `log JOIN hosts
+/// ON log.host_id = hosts.id JOIN users ON log.user_id = users.id`. Unlike
+/// [`resolve_sides`] (exactly one `JOIN`, either grammar position), this
+/// requires `log` written first: with N lookup sides there's no single
+/// "other side" position to swap into, so the driving table must always be
+/// `FROM`. Used only when `from.joins.len() > 1`; the single-`JOIN` case
+/// keeps using [`resolve_sides`] (which also accepts the SQLite-first
+/// grammar `resolve_multi_sides` does not).
+fn resolve_multi_sides(select: &Select, lookup: &RowEngine) -> Result<Vec<String>, EngineError> {
+    let from = select
+        .from
+        .as_ref()
+        .ok_or_else(|| EngineError::new(ErrorKind::Compile, "SELECT without FROM"))?;
+    let from_name = from.first.name().ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Unsupported,
+            "a subquery FROM is not supported in a cross-mode join",
+        )
+    })?;
+    if !from_name.eq_ignore_ascii_case(super::stream::TABLE) {
+        return Err(EngineError::new(
+            ErrorKind::Unsupported,
+            "a multi-way cross-mode join requires the stream table `log` \
+             written first (`log JOIN a JOIN b ...`); it cannot be the \
+             build side when there is more than one JOIN",
+        ));
+    }
+
+    let known: Vec<TableInfo> = lookup.tables()?;
+    let mut lookup_tables = Vec::with_capacity(from.joins.len());
+    for join in &from.joins {
+        let join_name = join.table.name().ok_or_else(|| {
+            EngineError::new(
+                ErrorKind::Unsupported,
+                "a subquery JOIN target is not supported in a cross-mode join",
+            )
+        })?;
+        if join_name.eq_ignore_ascii_case(super::stream::TABLE) {
+            return Err(EngineError::new(
+                ErrorKind::Unsupported,
+                "a multi-way cross-mode join supports the stream table \
+                 `log` only once, as the FROM side",
+            ));
+        }
+        let is_known = known.iter().any(|t| t.name.eq_ignore_ascii_case(join_name));
+        if !is_known {
+            return Err(EngineError::new(
+                ErrorKind::Compile,
+                format!("unknown lookup table: {join_name}"),
+            ));
+        }
+        if lookup_tables
+            .iter()
+            .any(|t: &String| t.eq_ignore_ascii_case(join_name))
+        {
+            return Err(EngineError::new(
+                ErrorKind::Unsupported,
+                format!(
+                    "a multi-way cross-mode join cannot join the same \
+                     lookup table (`{join_name}`) twice -- aliasing a \
+                     repeated JOIN target isn't supported yet"
+                ),
+            ));
+        }
+        lookup_tables.push(join_name.to_string());
+    }
+    Ok(lookup_tables)
+}
+
 /// Rekeys a materialized lookup [`Batch`] from unqualified column names
 /// (what [`cross_mode::scan_table_as_batch`] resolves against the SQLite
 /// schema) to the qualified names `compile_join`'s `LoadColumn` opcodes
@@ -190,6 +271,14 @@ pub fn run_query(
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
     let select = parse(sql)?;
+    let from = select
+        .from
+        .as_ref()
+        .ok_or_else(|| EngineError::new(ErrorKind::Compile, "SELECT without FROM"))?;
+    if from.joins.len() > 1 {
+        return run_multi_query(driving, lookup, select);
+    }
+
     let lookup_table = resolve_sides(&select, lookup)?;
     let plan = planner::compile_join_build_side(
         &select,
@@ -243,6 +332,81 @@ pub fn run_query(
     })
 }
 
+/// [`run_query`]'s `from.joins.len() > 1` branch (#394): `log` joined to N
+/// SQLite lookup tables. See [`resolve_multi_sides`] for the accepted query
+/// shape and [`crate::codegen::batch::compile_cross_mode_multi_join`] for
+/// how the star-join plan is built.
+fn run_multi_query(
+    driving: &StreamEngine,
+    lookup: &RowEngine,
+    select: Select,
+) -> Result<QueryResult, EngineError> {
+    let lookup_tables = resolve_multi_sides(&select, lookup)?;
+    let plan = planner::compile_cross_mode_multi_join(&select, &lookup_tables).map_err(plan_err)?;
+
+    let stream_columns = driving.column_requests(&plan.left_columns)?;
+    let segments = driving.segments(&stream_columns);
+
+    // Every build's raw (unqualified) SQLite column names, in the same
+    // `plan.builds` order the resolver below is called for (see
+    // `run_query`'s matching comment for why this is a closure).
+    let raw_cols: Vec<Vec<String>> = plan
+        .builds
+        .iter()
+        .map(|b| {
+            b.right_columns
+                .iter()
+                .map(|n| split_qualified(n).1.to_string())
+                .collect()
+        })
+        .collect();
+    let resolver = |source: &ScanSource| -> crate::vm::batch::Result<Batch> {
+        let ScanSource::RowTable { table, .. } = source else {
+            return Err(crate::vm::batch::VmError::MalformedProgram {
+                opcode: "ScanSource",
+                reason: format!("expected a RowTable source, got {source:?}"),
+            });
+        };
+        let (build, raw) = plan
+            .builds
+            .iter()
+            .zip(&raw_cols)
+            .find(|(b, _)| b.table_name == table.as_ref())
+            .ok_or_else(|| crate::vm::batch::VmError::MalformedProgram {
+                opcode: "ScanSource",
+                reason: format!("no planned build side for table `{table}`"),
+            })?;
+        let batch =
+            cross_mode::scan_table_as_batch(lookup, &build.table_name, raw).map_err(|e| {
+                crate::vm::batch::VmError::SegmentLoad {
+                    reason: e.to_string(),
+                }
+            })?;
+        Ok(requalify(batch, raw, &build.right_columns))
+    };
+    let sources: Vec<ScanSource> = plan
+        .builds
+        .iter()
+        .zip(&raw_cols)
+        .map(|(b, raw)| ScanSource::RowTable {
+            table: Cow::Owned(b.table_name.clone()),
+            columns: raw.iter().map(|c| Cow::Owned(c.clone())).collect(),
+        })
+        .collect();
+
+    let rows = crate::vm::engine::run_multi_join_segments(segments, sources, &plan, &resolver)
+        .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
+
+    Ok(QueryResult {
+        columns: planner::output_column_names(&select),
+        rows: rows
+            .into_iter()
+            .map(|r| r.into_iter().map(Cell::from).collect())
+            .collect(),
+        scope_report: None,
+    })
+}
+
 /// `EXPLAIN QUERY PLAN` for a cross-mode `SELECT`, labelling each side of
 /// the join by execution mode and file (#315): `log` gets `driving.path()`
 /// under `stream`, the lookup table gets `lookup_file`'s display path
@@ -254,6 +418,13 @@ pub fn explain_plan(
     sql: &str,
 ) -> Result<Vec<PlanRow>, EngineError> {
     let select = parse(sql)?;
+    if select.from.as_ref().is_some_and(|f| f.joins.len() > 1) {
+        return Err(EngineError::new(
+            ErrorKind::Unsupported,
+            "EXPLAIN QUERY PLAN for a multi-way cross-mode join (#394) is \
+             not yet supported; run the query directly instead",
+        ));
+    }
     let lookup_table = resolve_sides(&select, lookup)?;
 
     let stream_stats = TableStats {
@@ -565,6 +736,13 @@ fn explain_opcodes_query(
     sql: &str,
 ) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
     let select = parse(sql)?;
+    if select.from.as_ref().is_some_and(|f| f.joins.len() > 1) {
+        return Err(EngineError::new(
+            ErrorKind::Unsupported,
+            "EXPLAIN for a multi-way cross-mode join (#394) is not yet \
+             supported; run the query directly instead",
+        ));
+    }
     resolve_sides(&select, lookup)?;
     let plan =
         planner::compile_join(&select, planner::BuildSourceKind::RowTable).map_err(plan_err)?;

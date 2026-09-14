@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.92.0] - 2026-09-14
+
+### Added
+
+- **Multi-way SQLite joins in a cross-mode query** (#394): a cross-mode `SELECT` can now join the driving stream table against N SQLite lookup tables in one query (`log JOIN hosts ON log.host_id = hosts.id JOIN users ON log.user_id = users.id`), not just one. This is a star join -- every join key must be a column of the driving table `log` (no lookup table is joined against another lookup table's payload), and `log` must be written first (`resolve_multi_sides`), unlike the single-`JOIN` case which accepts either grammar position. New: `codegen::batch::compile_cross_mode_multi_join`, `vm::engine::{MultiJoinProgram, JoinBuildSide, run_multi_join_segments}`. `EXPLAIN`/`explain_opcodes` for this shape are not yet supported (reject with `ErrorKind::Unsupported`); the single-`JOIN` path (`resolve_sides`/`compile_join`/`compile_join_build_side`) is unchanged.
+
 ## [0.91.0] - 2026-09-14
 
 ### Added

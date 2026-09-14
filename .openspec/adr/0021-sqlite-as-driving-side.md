@@ -70,7 +70,14 @@ one-lookup-table v1 scope is otherwise unchanged.
 ### What does not change
 
 - Still exactly one `JOIN`, still exactly one stream table, still exactly
-  one SQLite lookup table.
+  one SQLite lookup table. (#394 lifts the one-SQLite-lookup-table limit
+  for a *star* join — `log JOIN a JOIN b ...`, every join key a column of
+  `log` — via a separate `resolve_multi_sides`/
+  `compile_cross_mode_multi_join`/`run_multi_join_segments` path that
+  requires `log` written first, since N lookup tables have no single
+  "other side" to swap into. The single-`JOIN`, either-grammar-position
+  path this ADR describes is unchanged and still used whenever there is
+  exactly one `JOIN`.)
 - `EXPLAIN` (`explain_plan`, `src/engine/resolve.rs`) needs no change: it
   derives its plan-node labels from resolved table identity via its own
   closure, independent of `compile_join`/`compile_join_build_side` and
