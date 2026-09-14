@@ -193,6 +193,7 @@ impl core::marker::StructuralPartialEq for db_core::codegen::batch::WindowSpec
 pub fn db_core::codegen::batch::bool_expr_columns(&db_core::parser::ast::Expr) -> alloc::vec::Vec<alloc::string::String>
 pub fn db_core::codegen::batch::compile(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
 pub fn db_core::codegen::batch::compile_bool_expr(&db_core::parser::ast::Expr) -> db_core::vm::batch::Program
+pub fn db_core::codegen::batch::compile_cross_mode_multi_join(&db_core::parser::ast::Select, &[alloc::string::String]) -> db_core::codegen::batch::Result<db_core::vm::engine::MultiJoinProgram>
 pub fn db_core::codegen::batch::compile_join(&db_core::parser::ast::Select, db_core::codegen::batch::BuildSourceKind) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
 pub fn db_core::codegen::batch::compile_join_build_side(&db_core::parser::ast::Select, &str, db_core::codegen::batch::BuildSourceKind) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
 pub fn db_core::codegen::batch::compile_semi_join(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::codegen::batch::SemiJoinProgram>
@@ -5679,6 +5680,18 @@ pub mod db_core::vm::engine
 pub struct db_core::vm::engine::InMemorySegment(pub db_core::vm::batch::Batch)
 impl db_core::vm::batch::Segment for db_core::vm::engine::InMemorySegment
 pub fn db_core::vm::engine::InMemorySegment::load(&self) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
+pub struct db_core::vm::engine::JoinBuildSide
+pub db_core::vm::engine::JoinBuildSide::build: db_core::vm::batch::Program
+pub db_core::vm::engine::JoinBuildSide::payload_dst: alloc::vec::Vec<usize>
+pub db_core::vm::engine::JoinBuildSide::right_columns: alloc::vec::Vec<alloc::string::String>
+pub db_core::vm::engine::JoinBuildSide::table_name: alloc::string::String
+impl core::clone::Clone for db_core::vm::engine::JoinBuildSide
+pub fn db_core::vm::engine::JoinBuildSide::clone(&self) -> db_core::vm::engine::JoinBuildSide
+impl core::cmp::PartialEq for db_core::vm::engine::JoinBuildSide
+pub fn db_core::vm::engine::JoinBuildSide::eq(&self, &db_core::vm::engine::JoinBuildSide) -> bool
+impl core::fmt::Debug for db_core::vm::engine::JoinBuildSide
+pub fn db_core::vm::engine::JoinBuildSide::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::vm::engine::JoinBuildSide
 pub struct db_core::vm::engine::JoinProgram
 pub db_core::vm::engine::JoinProgram::body: db_core::vm::batch::Program
 pub db_core::vm::engine::JoinProgram::build: db_core::vm::batch::Program
@@ -5693,6 +5706,18 @@ pub fn db_core::vm::engine::JoinProgram::eq(&self, &db_core::vm::engine::JoinPro
 impl core::fmt::Debug for db_core::vm::engine::JoinProgram
 pub fn db_core::vm::engine::JoinProgram::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::engine::JoinProgram
+pub struct db_core::vm::engine::MultiJoinProgram
+pub db_core::vm::engine::MultiJoinProgram::body: db_core::vm::batch::Program
+pub db_core::vm::engine::MultiJoinProgram::builds: alloc::vec::Vec<db_core::vm::engine::JoinBuildSide>
+pub db_core::vm::engine::MultiJoinProgram::left_columns: alloc::vec::Vec<alloc::string::String>
+pub db_core::vm::engine::MultiJoinProgram::probe: db_core::vm::batch::Program
+impl core::clone::Clone for db_core::vm::engine::MultiJoinProgram
+pub fn db_core::vm::engine::MultiJoinProgram::clone(&self) -> db_core::vm::engine::MultiJoinProgram
+impl core::cmp::PartialEq for db_core::vm::engine::MultiJoinProgram
+pub fn db_core::vm::engine::MultiJoinProgram::eq(&self, &db_core::vm::engine::MultiJoinProgram) -> bool
+impl core::fmt::Debug for db_core::vm::engine::MultiJoinProgram
+pub fn db_core::vm::engine::MultiJoinProgram::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::vm::engine::MultiJoinProgram
 pub struct db_core::vm::engine::NoResolver
 impl db_core::vm::engine::ScanSourceResolver for db_core::vm::engine::NoResolver
 pub fn db_core::vm::engine::NoResolver::resolve(&self, &db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
@@ -5707,6 +5732,7 @@ pub fn db_core::vm::engine::finalize(&[db_core::vm::batch::AggPart], usize, bool
 pub fn db_core::vm::engine::run<S: db_core::vm::batch::Segment>(&[S], &db_core::vm::batch::Program) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub fn db_core::vm::engine::run_join(&db_core::vm::batch::Batch, &db_core::vm::batch::Batch, &db_core::vm::engine::JoinProgram) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub fn db_core::vm::engine::run_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, db_core::vm::batch::ScanSource, &db_core::vm::engine::JoinProgram, &R) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
+pub fn db_core::vm::engine::run_multi_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, alloc::vec::Vec<db_core::vm::batch::ScanSource>, &db_core::vm::engine::MultiJoinProgram, &R) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub fn db_core::vm::engine::semi_filter(&db_core::vm::batch::Batch, &str, &std::collections::hash::set::HashSet<alloc::string::String>) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
 pub mod db_core::vm::join
 pub enum db_core::vm::join::JoinKind
