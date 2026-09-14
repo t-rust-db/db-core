@@ -39,10 +39,18 @@ const ROW_FIXTURE: &str = "tests/corpus/fixtures/btrees/table_single_page.db";
 /// A writable copy of the SQLite fixture, removed on drop, with a `hosts`
 /// dimension table: `web01`/`eu`, `web02`/`us`; `db01` deliberately absent
 /// (an unmatched driving key must surface as `NULL`, never a silent drop).
+/// Optionally also seeds an `owners` table (`web01`/`alice`, `web02`/`bob`)
+/// keyed the same way, for the multi-way star-join tests (#394): a second,
+/// independent SQLite lookup table joined to `log` on the same driving
+/// column `hosts` is joined on.
 struct HostsDb(PathBuf);
 
 impl HostsDb {
     fn new(label: &str) -> Self {
+        Self::with_owners(label, false)
+    }
+
+    fn with_owners(label: &str, seed_owners: bool) -> Self {
         let mut path = std::env::temp_dir();
         path.push(format!(
             "db-core-resolve-{label}-{}-{}.db",
@@ -61,6 +69,15 @@ impl HostsDb {
                  INSERT INTO hosts VALUES ('web02', 'us');",
             )
             .expect("seed hosts table");
+        if seed_owners {
+            engine
+                .run_query(
+                    "CREATE TABLE owners(host TEXT PRIMARY KEY, owner TEXT);\
+                     INSERT INTO owners VALUES ('web01', 'alice');\
+                     INSERT INTO owners VALUES ('web02', 'bob');",
+                )
+                .expect("seed owners table");
+        }
         HostsDb(path)
     }
 
@@ -329,8 +346,12 @@ fn a_select_with_no_from_clause_does_not_parse() {
     assert_eq!(err.kind, ErrorKind::Parse);
 }
 
+/// #394: multiple `JOIN`s against the same physical table are still
+/// rejected -- aliasing a repeated lookup target isn't supported by the
+/// multi-way star-join path, unlike joining N *distinct* SQLite tables
+/// (see `joins_warn_log_lines_against_two_independent_sqlite_lookup_tables`).
 #[test]
-fn rejects_more_than_one_join_clause() {
+fn rejects_more_than_one_join_clause_against_the_same_table() {
     let db = HostsDb::new("two-joins");
     let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
     let lookup = RowEngine::open(db.path()).expect("open hosts db");
@@ -897,4 +918,135 @@ fn explain_stream_stream_labels_each_side_by_alias_and_file() {
             .any(|d| d.starts_with("SCAN b") && d.contains("[stream")),
         "{details:?}"
     );
+}
+
+/// #394: `log` joined to two independent SQLite lookup tables in one
+/// query (`hosts` and `owners`, both keyed on `hostname`) -- the star-join
+/// shape `resolve_multi_sides`/`compile_cross_mode_multi_join` add on top
+/// of the single-`JOIN` path above.
+#[test]
+fn joins_warn_log_lines_against_two_independent_sqlite_lookup_tables() {
+    let db = HostsDb::with_owners("multi-join", true);
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts+owners db");
+
+    let result = run_query(
+        &driving,
+        &lookup,
+        "SELECT log.hostname, hosts.region, owners.owner FROM log \
+         JOIN hosts ON log.hostname = hosts.name \
+         JOIN owners ON log.hostname = owners.host \
+         WHERE severity >= 'WARN'",
+    )
+    .expect("multi-way cross-mode join");
+
+    assert_eq!(
+        result.columns,
+        vec!["log.hostname", "hosts.region", "owners.owner"]
+    );
+    assert!(!result.rows.is_empty());
+    for row in &result.rows {
+        let host = text(&row[0]);
+        let (region, owner) = (&row[1], &row[2]);
+        match host {
+            "web01" => {
+                assert_eq!(region, &Cell::Text("eu".to_string()));
+                assert_eq!(owner, &Cell::Text("alice".to_string()));
+            }
+            "web02" => {
+                assert_eq!(region, &Cell::Text("us".to_string()));
+                assert_eq!(owner, &Cell::Text("bob".to_string()));
+            }
+            _ => {
+                assert_eq!(region, &Cell::Null, "unmatched host {host} must be NULL");
+                assert_eq!(owner, &Cell::Null, "unmatched host {host} must be NULL");
+            }
+        }
+    }
+}
+
+/// #394: a three-way star join (`log` against `hosts`, `owners`, and a
+/// third ad hoc lookup table created inline) still resolves and executes
+/// correctly -- proves the generalization isn't hard-coded to two sides.
+#[test]
+fn joins_warn_log_lines_against_three_independent_sqlite_lookup_tables() {
+    let db = HostsDb::with_owners("three-way-join", true);
+    let mut seed = RowEngine::open(db.path()).expect("open db to seed a third table");
+    seed.run_query(
+        "CREATE TABLE tiers(host TEXT PRIMARY KEY, tier TEXT);\
+         INSERT INTO tiers VALUES ('web01', 'gold');\
+         INSERT INTO tiers VALUES ('web02', 'silver');",
+    )
+    .expect("seed tiers table");
+    drop(seed);
+
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts+owners+tiers db");
+
+    let result = run_query(
+        &driving,
+        &lookup,
+        "SELECT log.hostname, hosts.region, owners.owner, tiers.tier FROM log \
+         JOIN hosts ON log.hostname = hosts.name \
+         JOIN owners ON log.hostname = owners.host \
+         JOIN tiers ON log.hostname = tiers.host \
+         WHERE severity >= 'WARN'",
+    )
+    .expect("three-way cross-mode join");
+
+    assert_eq!(
+        result.columns,
+        vec!["log.hostname", "hosts.region", "owners.owner", "tiers.tier"]
+    );
+    assert!(!result.rows.is_empty());
+    for row in &result.rows {
+        let host = text(&row[0]);
+        if host == "web01" {
+            assert_eq!(row[3], Cell::Text("gold".to_string()));
+        } else if host == "web02" {
+            assert_eq!(row[3], Cell::Text("silver".to_string()));
+        } else {
+            assert_eq!(row[3], Cell::Null, "unmatched host {host} must be NULL");
+        }
+    }
+}
+
+/// #394: the stream table must be written first (`FROM log`) once there is
+/// more than one `JOIN` -- there's no single "other side" to swap into with
+/// N lookup tables, unlike the single-`JOIN` case.
+#[test]
+fn rejects_a_multi_join_with_the_sqlite_table_written_first() {
+    let db = HostsDb::with_owners("multi-join-wrong-order", true);
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts+owners db");
+
+    let err = run_query(
+        &driving,
+        &lookup,
+        "SELECT hosts.region FROM hosts \
+         JOIN log ON hosts.name = log.hostname \
+         JOIN owners ON log.hostname = owners.host",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
+}
+
+/// #394: every `JOIN` target in a multi-way cross-mode query must be a
+/// known SQLite table -- a second `log` (the stream table again) is
+/// rejected, not silently treated as a third lookup side.
+#[test]
+fn rejects_a_multi_join_that_repeats_the_stream_table() {
+    let db = HostsDb::with_owners("multi-join-repeat-log", true);
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts+owners db");
+
+    let err = run_query(
+        &driving,
+        &lookup,
+        "SELECT hosts.region FROM log \
+         JOIN hosts ON log.hostname = hosts.name \
+         JOIN log AS l2 ON log.hostname = l2.hostname",
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported);
 }
