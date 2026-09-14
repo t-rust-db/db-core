@@ -4,6 +4,24 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.91.0] - 2026-09-14
+
+### Added
+
+- **`ScanSource` opcode for cross-mode joins** (epic #382, ADR-0024, #384-#388): the build side of a cross-mode join now compiles into the VM's own opcode program instead of being materialized in Rust before execution reaches `vm::engine`. `Opcode::ScanSource(ScanSource)` (`RowTable`/`Stream`/`InMemory`) is emitted by `compile_join` ahead of `HashBuild`; `vm::engine::run_join_segments` resolves `RowTable`/`Stream` sources through a caller-supplied `ScanSourceResolver` seam (keeping the engine/VM layering intact -- `vm::engine` still can't reach a SQLite table or a stream engine directly), while `InMemory` needs no resolver.
+- **`engine::resolve::CrossModeEngine`**: a real `Engine` impl spanning a stream-driven SQLite-lookup join (ADR-0019) or a windowed stream-stream self-join (ADR-0022) -- pure routing onto the existing `run_query`/`run_stream_stream_query`/`explain_plan`/`explain_stream_stream_plan` free functions. This closes the gap db-studio#54 had to work around: cross-mode queries now have a real `explain_opcodes`, not just `explain_plan`.
+- **`OpcodeSection::lane`**: a `&'static str` ("row"/"batch"/"stream") naming which physical engine executes that section's opcodes. Single-engine `Engine` impls set it to their own fixed mode; `CrossModeEngine::explain_opcodes` sets it per section -- a stream/SQLite join's build side is labeled "row" (the SQLite lookup scan), its probe side "stream" (the driving tail), its body always "batch" (every join executes on `vm::batch` regardless of either side's origin).
+- **SQLite as the driving side of a cross-mode join** (ADR-0021, #371): `engine::resolve` now accepts a join written with the SQLite lookup table as the `FROM` table (`hosts JOIN log`, not `log JOIN hosts`). INNER JOIN only -- a LEFT JOIN with SQLite driving remains unsupported (would need RIGHT JOIN semantics, #368).
+
+### Fixed
+
+- **`temp_log` fixture path collision** (#381): a per-call atomic counter makes every call's path unique, fixing a parallel-test file race that intermittently corrupted `windowed_self_join_inner_join_drops_unmatched_rows` and its siblings (previously named by pid + a fixed label alone).
+
+### Changed
+
+- `compile_join` takes a `BuildSourceKind` (`RowTable`/`Stream`/`InMemory`), supplied by the caller (`compile_join` classifies a query purely from its `Select` AST and has no way to tell a SQLite lookup table from a stream table or an already-materialized batch on its own).
+- Benchmarked whole-table vs. key-restricted lookup materialization (#373, `benches/cross_mode_lookup.rs`) -- informs future work on `cross_mode::scan_table_as_batch`, no behavior change.
+
 ## [0.90.1] - 2026-09-13
 
 ### Added
