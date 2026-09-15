@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.95.0] - 2026-09-15
+
+### Added
+
+- **Stream profile charter gate** (#403): `tools/check_sqlite_profile.py` is generalized from a hardcoded SQLite-only script into a named-profile gate (`PROFILES` table); SQLite profile behavior/output is unchanged. Adds a `stream` profile for the log engine's execution mode (`parser-column, vm-batch, vm-stream, codegen-batch, codegen-stream, storage-stream, engine-stream`), currently passing with zero third-party dependencies and zero `unsafe` sites. ADR-0000's invariants (a) dependency closure and (b) `unsafe` carve-outs now apply to both profiles; invariant (c) mode isolation stays SQLite-only, since the stream profile legitimately compiles `vm::batch`/`codegen::batch`. New `make check-stream-profile`, wired into `make ci` and CI (`.github/workflows/ci.yml`).
+
 ## [0.94.0] - 2026-09-15
 
 ### Changed
