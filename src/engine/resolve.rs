@@ -812,8 +812,8 @@ fn explain_opcodes_stream_stream_query(
 /// opcode listing) -> `engine::OpcodeSection`/`OpcodeRow` (the
 /// engine-facing shape every [`Engine::explain_opcodes`] impl returns) --
 /// the same conversion `engine::column::BatchEngine::explain_opcodes`
-/// already does, folding a planner row's `comment` into `operands` as a
-/// trailing `; comment`, plus the `lane` each `(lane, section)` pair names.
+/// already does, passing a planner row's `comment` and `is_finalize`
+/// through untouched, plus the `lane` each `(lane, section)` pair names.
 fn to_engine_opcode_sections(
     sections: Vec<(&'static str, planner::OpcodeSection)>,
 ) -> Vec<OpcodeSection> {
@@ -828,11 +828,9 @@ fn to_engine_opcode_sections(
                 .map(|r| OpcodeRow {
                     addr: r.addr,
                     opcode: r.opcode.to_string(),
-                    operands: if r.comment.is_empty() {
-                        r.operands
-                    } else {
-                        format!("{}  ; {}", r.operands, r.comment)
-                    },
+                    operands: r.operands,
+                    comment: r.comment,
+                    is_finalize: r.is_finalize,
                 })
                 .collect(),
         })

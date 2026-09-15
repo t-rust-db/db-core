@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.93.0] - 2026-09-15
+
+### Changed
+
+- **`engine::OpcodeRow` carries `comment` and `is_finalize`** (#401): all four producers (row, batch/column, stream, cross-mode resolve) now pass an instruction's annotation and its `Combine`-barrier marker through as real fields instead of folding `comment` into `operands` as a trailing `; comment` (batch/stream/resolve) or dropping it outright (row). `is_finalize` is `true` exactly on a batch program's `Combine` row -- the boundary between the parallel per-segment phase and the sequential merge phase (ADR-0007, #48) -- and always `false` for row/stream sections, which have no `Combine` opcode. `p5` (row programs' opcode flags) remains unsurfaced, documented on the struct. Breaking for any external constructor of `OpcodeRow` literals; db-studio is the only known consumer.
+
 ## [0.92.0] - 2026-09-14
 
 ### Added

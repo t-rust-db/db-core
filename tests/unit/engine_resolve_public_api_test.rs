@@ -157,6 +157,13 @@ fn cross_mode_engine_routes_run_query_and_explain_opcodes() {
     assert!(sections.iter().any(|s| s.label.contains("JOIN build")));
     assert!(sections.iter().any(|s| s.label.contains("JOIN probe")));
     assert!(sections.iter().any(|s| !s.rows.is_empty()));
+    assert!(
+        sections
+            .iter()
+            .flat_map(|s| &s.rows)
+            .all(|r| !r.operands.contains(';')),
+        "comment must not be folded into operands: {sections:?}"
+    );
 
     // #388: each section's lane names which physical engine executes it --
     // the SQLite lookup build side is "row", the driving stream probe side

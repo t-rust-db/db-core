@@ -1129,11 +1129,9 @@ impl Engine for StreamEngine {
                     .map(|r| OpcodeRow {
                         addr: r.addr,
                         opcode: r.opcode.to_string(),
-                        operands: if r.comment.is_empty() {
-                            r.operands
-                        } else {
-                            format!("{}  ; {}", r.operands, r.comment)
-                        },
+                        operands: r.operands,
+                        comment: r.comment,
+                        is_finalize: r.is_finalize,
                     })
                     .collect(),
             })

@@ -383,6 +383,8 @@ impl Engine for RowEngine {
                 addr: r.addr,
                 opcode: r.opcode.to_string(),
                 operands: format!("{} {} {} {}", r.p1, r.p2, r.p3, r.p4),
+                comment: r.comment,
+                is_finalize: false,
             })
             .collect();
         Ok(vec![OpcodeSection {
