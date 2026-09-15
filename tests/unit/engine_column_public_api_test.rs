@@ -289,6 +289,10 @@ fn explain_opcodes_returns_the_sections_the_engine_runs() {
         for (i, r) in s.rows.iter().enumerate() {
             assert_eq!(r.addr, i, "addresses dense per section: {sections:?}");
             assert!(!r.opcode.is_empty());
+            assert!(
+                !r.operands.contains(';'),
+                "comment must not be folded into operands: {r:?}"
+            );
         }
     }
     let opcodes: Vec<&str> = sections
@@ -296,6 +300,17 @@ fn explain_opcodes_returns_the_sections_the_engine_runs() {
         .flat_map(|s| s.rows.iter().map(|r| r.opcode.as_str()))
         .collect();
     assert!(opcodes.iter().any(|o| o.starts_with("Load")), "{opcodes:?}");
+
+    let all_rows: Vec<_> = sections.iter().flat_map(|s| &s.rows).collect();
+    assert!(
+        all_rows.iter().any(|r| !r.comment.is_empty()),
+        "batch rows should carry a real comment: {all_rows:?}"
+    );
+    assert_eq!(
+        all_rows.iter().filter(|r| r.is_finalize).count(),
+        all_rows.iter().filter(|r| r.opcode == "Combine").count(),
+        "is_finalize true exactly on Combine rows: {all_rows:?}"
+    );
 }
 
 #[test]

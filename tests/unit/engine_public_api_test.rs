@@ -293,8 +293,16 @@ fn explain_opcodes_is_one_main_section_in_address_order() {
     for (i, r) in rows.iter().enumerate() {
         assert_eq!(r.addr, i, "addresses are dense and ordered: {rows:?}");
         assert!(!r.opcode.is_empty());
+        assert!(
+            !r.is_finalize,
+            "row programs have no Combine opcode: {rows:?}"
+        );
     }
     assert!(rows.iter().any(|r| r.opcode == "Halt"), "{rows:?}");
+    assert!(
+        rows.iter().any(|r| !r.comment.is_empty()),
+        "comment_for should annotate at least one instruction: {rows:?}"
+    );
 
     // Non-SELECT statements have opcodes too.
     let dml = engine.explain_opcodes("INSERT INTO o VALUES (1)").unwrap();

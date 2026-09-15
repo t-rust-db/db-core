@@ -264,8 +264,21 @@ pub struct OpcodeRow {
     /// The opcode's mnemonic.
     pub opcode: String,
     /// Operands, rendered. Row: `p1 p2 p3 p4`; batch: whatever the batch
-    /// opcode carries.
+    /// opcode carries. Never contains a folded-in comment.
     pub operands: String,
+    /// Human-readable annotation of what this instruction does (ADR-0007).
+    /// Row programs source it from `vm::row::explain::ExplainRow::comment`;
+    /// batch/stream/cross-mode programs from `codegen::batch::OpcodeRow::comment`.
+    ///
+    /// `p5` (row programs' opcode flags) is intentionally not surfaced here;
+    /// SQLite's `EXPLAIN` gives it its own column, which is out of scope for
+    /// this struct.
+    pub comment: String,
+    /// True exactly on the `Combine` row of a batch program: the boundary
+    /// between the parallel per-segment phase and the sequential merge phase
+    /// (ADR-0007, #48). Always `false` for row and stream sections, which
+    /// have no `Combine` opcode.
+    pub is_finalize: bool,
 }
 
 /// A labelled run of opcodes. Row programs are one section (`main`);

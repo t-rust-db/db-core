@@ -939,6 +939,8 @@ pub fn db_core::engine::EngineError::fmt(&self, &mut core::fmt::Formatter<'_>) -
 impl core::marker::StructuralPartialEq for db_core::engine::EngineError
 pub struct db_core::engine::OpcodeRow
 pub db_core::engine::OpcodeRow::addr: usize
+pub db_core::engine::OpcodeRow::comment: alloc::string::String
+pub db_core::engine::OpcodeRow::is_finalize: bool
 pub db_core::engine::OpcodeRow::opcode: alloc::string::String
 pub db_core::engine::OpcodeRow::operands: alloc::string::String
 impl core::clone::Clone for db_core::engine::OpcodeRow
