@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.95.1] - 2026-09-15
+
+### Fixed
+
+- **`AVG` never merged across segments** (#404): `vm::engine::merge_rows`'s `AggPart::Avg` arm was a no-op -- codegen allocates two registers (sum, count) per `AVG` but pushes only one `AggPart::Avg` entry into `agg_parts`, and the merge loop was bounded by `agg_parts.len()`, so the count register (past the end of that list) was never merged across segments. With more than one segment, `AVG` silently returned the first segment's local average instead of the true merged mean. A related bug in `finalize_row`/`merge_rows` indexed the emitted row by its position in `agg_parts` instead of the row's own (wider, once an `AVG` is present) cursor, silently corrupting or dropping whichever aggregate followed an `AVG` in the same query. Both fixed with a running row cursor. Caught by a new segment-split invariance harness (`tests/integration/segment_split_invariance_test.rs`, ADR-0025 obligation 1).
+
 ## [0.95.0] - 2026-09-15
 
 ### Added
