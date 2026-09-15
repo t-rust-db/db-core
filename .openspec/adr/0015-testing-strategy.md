@@ -107,7 +107,29 @@ though it needs an external tool and is not in the workflow.
 - **Oracle parity against `sqlite3`** (corpus fixtures, sqllogictest,
   TCL-derived suites) -- the embedding engine's and the benchmark repo's
   job. `db-core` has no on-disk fixtures and never shells out to an
-  oracle; `examples/oracle_check.rs` is a manual aid, not a suite.
+  oracle for the SQLite path.
+
+  The column and stream modes are the exception, each with its own oracle
+  (ADR 0000 §(f), db-core#406) since neither has a sqlite3-shaped
+  counterpart to defer to:
+  - **Column**: `examples/column_oracle.rs` runs a query against a Parquet
+    fixture through `engine::column::BatchEngine`; `tools/
+    check_column_oracle.sh` runs the same query through the `duckdb` CLI
+    reading the same file and diffs the two. Deliberately local-only
+    (`make check-column-oracle`), never CI -- a DuckDB binary is a new
+    external dependency with its own supply chain, and this crate does
+    not accept that onto the machine that runs untrusted PRs. Run by hand
+    after a change to `storage::column` or `vm::batch`'s aggregate merge
+    path.
+  - **Stream ("oracle by construction")**: a test independently
+    re-derives the expected answer from the fixture's raw bytes -- its
+    own facility table, its own substring search -- rather than trusting
+    the engine's own parser to grade itself. Named after
+    `tests/unit/engine_stream_public_api_test.rs`'s `oracle()` (syslog PRI
+    field) and `json_status_oracle()` (JSON `"status"` key) helpers, which
+    predate this ADR entry; new stream tests asserting an aggregate or a
+    filter's row count follow the same shape rather than hand-computing
+    one expected number.
 - **Physical storage** (pages, WAL, b-tree, crash safety) -- `db-storage`.
 - **Terminal and CLI behaviour** -- `db-cli`.
 - **End-to-end performance** -- the benchmark repo. `db-core`'s own

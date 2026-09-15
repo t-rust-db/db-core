@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-coverage-profile test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
+.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures check-coverage-profile test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
 
 help: ## Show this help
 	@echo ""
@@ -161,6 +161,21 @@ check-stream-profile: ## Charter gate: the stream profile is dependency-free and
 # so only invariant (b) -- the unsafe carve-out -- is checked here.
 check-column-profile: ## Charter gate: the column profile carries exactly its named unsafe carve-out (tools/check_sqlite_profile.py)
 	@python3 tools/check_sqlite_profile.py column
+
+# ADR 0000 §(f), db-core#406: the column half of oracle parity -- the
+# column engine's query results against DuckDB reading the same Parquet
+# fixtures. Deliberately local-only, not a CI gate and not in the weekly
+# assurance workflow: unlike sqlite3 (a system package `apt install`s),
+# a DuckDB binary in CI is a new external dependency with its own supply
+# chain, and this charter's whole ethos is minimizing exactly that. Run by
+# hand before/after a change to `storage::column` or `vm::batch`'s
+# aggregate merge path; needs `duckdb` on PATH (`brew install duckdb` or
+# https://duckdb.org/docs/installation).
+check-column-oracle: ## Local-only: column engine query results agree with DuckDB over Parquet fixtures (tools/check_column_oracle.sh)
+	@tools/check_column_oracle.sh
+
+gen-parquet-fixtures: ## Regenerate the codec-variant Parquet fixtures check-column-oracle reads (tools/gen_parquet_fixtures.sh)
+	@tools/gen_parquet_fixtures.sh
 
 # ADR 0000 §(g): the coverage floor as a claim about the safe-SQLite
 # artifact -- instrumented over the profile, not --all-features. Too slow
