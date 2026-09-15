@@ -80,10 +80,8 @@ fn open_missing_or_non_parquet_file_is_an_open_error() {
     assert!(err.message.contains("no-such.parquet"), "{err}");
 
     // A real file that is not Parquet (a SQLite fixture).
-    let err = BatchEngine::open(Path::new(
-        "tests/fixtures/btrees/table_single_page.db",
-    ))
-    .unwrap_err();
+    let err =
+        BatchEngine::open(Path::new("tests/fixtures/btrees/table_single_page.db")).unwrap_err();
     assert_eq!(err.kind, ErrorKind::Open, "{err}");
 }
 

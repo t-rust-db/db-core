@@ -184,6 +184,11 @@ path = "tests/spike/002_arrow_optimization/01_groupreduce_key_hashing.rs"
 name = "02_groupreduce_key_hashing_adjusted"
 path = "tests/spike/002_arrow_optimization/02_groupreduce_key_hashing_adjusted.rs"
 
+[[test]]
+name = "integration_opcode_granularity"
+path = "tests/integration/opcode_granularity_test.rs"
+required-features = ["engine-row", "engine-column", "engine-stream"]
+
 [dependencies]
 # Storage backends (ADR 0016: db-storage absorbed as the `storage` module).
 # Both optional, pulled in only by storage-column (the only consumer of
