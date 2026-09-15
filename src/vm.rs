@@ -43,9 +43,9 @@
 //! Each is gated behind its own Cargo feature (`batch`/`row`/`stream`, all
 //! off by default) -- a consumer enables only the one(s) it uses, so e.g.
 //! column-rs (which only ever needs `batch`) doesn't compile `row`/`stream`
-//! or pull in dependencies only one of them needs (`batch` needs `rayon`
-//! today; `row`/`stream` may grow their own deps later without forcing a
-//! `batch`-only consumer to rebuild with something new).
+//! or pull in dependencies only one of them needs -- each executor may grow
+//! its own deps later without forcing a `batch`-only consumer to rebuild
+//! with something new.
 
 #![forbid(unsafe_code)]
 

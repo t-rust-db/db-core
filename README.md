@@ -72,5 +72,5 @@ db-core = { git = "...", default-features = false, features = ["parser-column", 
 `default = ["parser-column", "vm-batch", "codegen-batch", "emit-batch"]` so a plain
 `cargo test` exercises real content. A consumer that only needs one
 execution mode sets `default-features = false` and lists exactly the
-features it uses — the others' modules and dependencies (e.g. `rayon`,
-needed only by `vm-batch`) then never compile.
+features it uses — the others' modules and any dependencies they alone need
+then never compile.
