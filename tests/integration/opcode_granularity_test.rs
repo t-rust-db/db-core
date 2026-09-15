@@ -15,7 +15,8 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    reason = "test code fails fast (db-core#230)"
+    clippy::arithmetic_side_effects,
+    reason = "test code fails fast (db-core#230); clippy.toml's allow-*-in-tests does not reach helper fns outside #[test]"
 )]
 
 use std::path::{Path, PathBuf};
@@ -35,7 +36,10 @@ struct TempDb(PathBuf);
 impl TempDb {
     fn new() -> Self {
         let mut path = std::env::temp_dir();
-        path.push(format!("db-core-opcode-granularity-{}.db", std::process::id()));
+        path.push(format!(
+            "db-core-opcode-granularity-{}.db",
+            std::process::id()
+        ));
         std::fs::copy(ROW_FIXTURE, &path).expect("copy fixture");
         TempDb(path)
     }
