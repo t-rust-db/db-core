@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.96.0"
+version = "0.97.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -77,6 +77,11 @@ required-features = ["engine-row"]
 [[test]]
 name = "unit_group_by_output_subroutine"
 path = "tests/unit/group_by_output_subroutine_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_group_by_reset_subroutine"
+path = "tests/unit/group_by_reset_subroutine_test.rs"
 required-features = ["engine-row"]
 
 [[test]]

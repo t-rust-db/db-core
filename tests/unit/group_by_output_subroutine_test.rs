@@ -89,20 +89,25 @@ fn sorted_group_by_emits_the_output_epilogue_once() {
         1,
         "AggFinal should appear once, in the shared subroutine: {rows:?}"
     );
+    // db-core#409 added a second subroutine (accumulator reset), so
+    // `BeginSubrtn`/`Gosub`/`Return` now count both subroutines'
+    // entry/call/exit points, not just the output epilogue's --
+    // `tests/unit/group_by_reset_subroutine_test.rs` asserts the reset
+    // subroutine's own shape specifically.
     assert_eq!(
         count(&rows, "BeginSubrtn"),
-        1,
-        "the output subroutine should have exactly one entry point: {rows:?}"
+        2,
+        "both the output and reset subroutines should have exactly one entry point each: {rows:?}"
     );
     assert_eq!(
         count(&rows, "Gosub"),
-        2,
-        "both the boundary and tail flush sites should call via Gosub: {rows:?}"
+        4,
+        "boundary and tail flush call the output subroutine; pre-loop and boundary call the reset subroutine: {rows:?}"
     );
     assert_eq!(
         count(&rows, "Return"),
-        1,
-        "the subroutine should return exactly once: {rows:?}"
+        2,
+        "each subroutine should return exactly once: {rows:?}"
     );
 }
 
@@ -123,9 +128,9 @@ fn index_ordered_group_by_emits_the_output_epilogue_once() {
     let rows = opcodes(&e, "SELECT b, count(*) FROM gbst GROUP BY b");
 
     assert_eq!(count(&rows, "AggFinal"), 1, "{rows:?}");
-    assert_eq!(count(&rows, "BeginSubrtn"), 1, "{rows:?}");
-    assert_eq!(count(&rows, "Gosub"), 2, "{rows:?}");
-    assert_eq!(count(&rows, "Return"), 1, "{rows:?}");
+    assert_eq!(count(&rows, "BeginSubrtn"), 2, "{rows:?}");
+    assert_eq!(count(&rows, "Gosub"), 4, "{rows:?}");
+    assert_eq!(count(&rows, "Return"), 2, "{rows:?}");
 }
 
 /// Behavior must be unchanged by the factoring -- same grouped counts,

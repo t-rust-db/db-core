@@ -227,6 +227,7 @@ fn opcode_name(opcode: Opcode) -> &'static str {
         Opcode::Function => "Function",
         Opcode::AggStep => "AggStep",
         Opcode::AggFinal => "AggFinal",
+        Opcode::AggReset => "AggReset",
         Opcode::Integer => "Integer",
         Opcode::Int64 => "Int64",
         Opcode::Real => "Real",
@@ -329,6 +330,7 @@ fn comment_for(opcode: Opcode, p1: i32, p2: i32, p3: i32) -> String {
         Opcode::NewRowid => format!("r[{p2}] = cursor {p1} new rowid"),
         Opcode::Delete => format!("cursor {p1} delete current row"),
         Opcode::Copy => format!("r[{p2}] = r[{p1}]"),
+        Opcode::AggReset => format!("aggregate slot {p1} reset"),
         _ => String::new(),
     }
 }
