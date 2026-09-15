@@ -1707,13 +1707,27 @@ impl Vm {
                 self.selection = Some(Selection { base_len, indices });
             }
             Opcode::Reduce { func, src, dst } => {
-                // #265: see the comment on `Map`'s same call.
+                // #265: see the comment on `Map`'s same call. Also
+                // clears `typed_registers` when it actually resolves a
+                // selection, so the typed fast path below only ever
+                // fires over an unfiltered (or already-compacted) typed
+                // column -- never a stale, wrong-length shadow.
                 self.resolve_selection(opcode)?;
                 let result = match src {
-                    Some(reg) => reduce_values(*func, self.reg(*reg, opcode)?),
+                    Some(reg) => {
+                        let typed = self
+                            .typed_registers
+                            .get(reg)
+                            .and_then(|column| typed_reduce_values(*func, column));
+                        match typed {
+                            Some(result) => result,
+                            None => reduce_values(*func, self.reg(*reg, opcode)?),
+                        }
+                    }
                     None => reduce_count_star(*func, batch.num_rows),
                 };
                 self.registers.insert(*dst, Arc::new(vec![result]));
+                self.typed_registers.remove(dst);
             }
             Opcode::GroupReduce {
                 group_by,
@@ -2352,6 +2366,55 @@ fn reduce_count_star(func: AggFunc, num_rows: usize) -> Value {
         AggFunc::Count => Value::Int(len_to_i64(num_rows)),
         _ => Value::Null,
     }
+}
+
+/// Fast path for [`Opcode::Reduce`]'s global (non-grouped) aggregate
+/// when `src` is a typed `Int`/`Float` [`Column`] (#130 child 4 slice 3,
+/// db-core#433): iterates the packed buffer + validity bitmap directly
+/// instead of boxing every value into `Value` and coercing through
+/// `Value::as_f64`. Matches [`reduce_values`]'s output shape exactly --
+/// `Sum`/`Avg`/`Min`/`Max` always produce `Value::Float` (even over
+/// `Int` data), `Count` stays `Value::Int`, and an all-NULL/all-invalid
+/// column yields `Value::Null` for `Sum`/`Avg`/`Min`/`Max` (never `0`).
+/// `None` when `column` isn't `Int`/`Float`, so the caller falls back to
+/// [`reduce_values`] over the materialized register.
+fn typed_reduce_values(func: AggFunc, column: &Column) -> Option<Value> {
+    if !matches!(column, Column::Int { .. } | Column::Float { .. }) {
+        return None;
+    }
+    let len = column.len();
+    let non_null = || (0..len).filter_map(|i| column_num_at(column, i).map(|(x, _)| x));
+    Some(match func {
+        AggFunc::Count => Value::Int(len_to_i64((0..len).filter(|&i| !column.is_null(i)).count())),
+        AggFunc::Sum => {
+            let (sum, count) =
+                non_null().fold((0.0, 0usize), |(s, c), x| (s + x, c.saturating_add(1)));
+            if count == 0 {
+                Value::Null
+            } else {
+                Value::Float(sum)
+            }
+        }
+        AggFunc::Avg => {
+            let (sum, count) =
+                non_null().fold((0.0, 0usize), |(s, c), x| (s + x, c.saturating_add(1)));
+            if count == 0 {
+                Value::Null
+            } else {
+                Value::Float(sum / count as f64)
+            }
+        }
+        AggFunc::Min => non_null()
+            .fold(None, |acc: Option<f64>, v| {
+                Some(acc.map_or(v, |a| a.min(v)))
+            })
+            .map_or(Value::Null, Value::Float),
+        AggFunc::Max => non_null()
+            .fold(None, |acc: Option<f64>, v| {
+                Some(acc.map_or(v, |a| a.max(v)))
+            })
+            .map_or(Value::Null, Value::Float),
+    })
 }
 
 fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
@@ -3731,6 +3794,75 @@ mod tests {
     #[test]
     fn reduce_sum_of_all_nulls_is_null() {
         let batch = Batch::new(2).with_column("amount", vec![Value::Null, Value::Null]);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "amount".into(),
+                },
+                Opcode::Reduce {
+                    func: AggFunc::Sum,
+                    src: Some(0),
+                    dst: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(1).unwrap(), &[Value::Null]);
+    }
+
+    #[test]
+    fn reduce_over_a_typed_int_column_matches_the_value_path() {
+        // #433: a typed Int source register must produce identical
+        // results, for every AggFunc, to the equivalent Vec<Value>
+        // column -- including Count staying Int while the rest promote
+        // to Float, and NULLs being skipped rather than zero-filled.
+        let batch = Batch::new(4).with_typed_column(
+            "amount",
+            Column::from(vec![
+                Value::Int(10),
+                Value::Null,
+                Value::Int(20),
+                Value::Int(30),
+            ]),
+        );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[Opcode::LoadColumn {
+                reg: 0,
+                column: "amount".into(),
+            }],
+        )
+        .unwrap();
+        assert!(matches!(vm.typed_register(0), Some(Column::Int { .. })));
+
+        for (func, expected) in [
+            (AggFunc::Sum, Value::Float(60.0)),
+            (AggFunc::Avg, Value::Float(20.0)),
+            (AggFunc::Min, Value::Float(10.0)),
+            (AggFunc::Max, Value::Float(30.0)),
+            (AggFunc::Count, Value::Int(3)),
+        ] {
+            vm.step(
+                &batch,
+                &Opcode::Reduce {
+                    func,
+                    src: Some(0),
+                    dst: 1,
+                },
+            )
+            .unwrap();
+            assert_eq!(vm.register(1).unwrap(), &[expected], "{func:?}");
+        }
+    }
+
+    #[test]
+    fn reduce_over_an_all_invalid_typed_column_is_null_not_zero() {
+        let batch =
+            Batch::new(2).with_typed_column("amount", Column::from(vec![Value::Null, Value::Null]));
         let mut vm = Vm::new();
         vm.execute(
             &batch,

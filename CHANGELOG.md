@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.101.0] - 2026-09-15
+
+### Added
+
+- **`Reduce` (global aggregate) ported to `Column` dispatch** (#433, epic #130 child 4, slice 3): `Vm::typed_reduce_values` computes `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` directly over a typed `Int`/`Float` source column's packed buffer + validity bitmap, matching `reduce_values`'s output shape exactly (`Sum`/`Avg`/`Min`/`Max` always `Float` even over `Int` data, `Count` stays `Int`, all-invalid yields `Null` not `0`) -- differentially tested against the existing `Vec<Value>` path. `GroupReduce`'s per-group accumulators and `Combine`'s cross-segment merge (which operates on already-emitted rows, not registers) are explicitly deferred to future slices.
+
 ## [0.100.0] - 2026-09-15
 
 ### Added
