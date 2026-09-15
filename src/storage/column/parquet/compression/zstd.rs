@@ -98,7 +98,8 @@ mod tests {
             "{err:?}"
         );
         assert!(
-            err.to_string().starts_with("zstd decompressed size mismatch:"),
+            err.to_string()
+                .starts_with("zstd decompressed size mismatch:"),
             "{err}"
         );
     }

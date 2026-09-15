@@ -785,12 +785,18 @@ mod tests {
         // ORDER BY a DESC without an index -- exercises the table
         // cursor's last()/prev() in reverse, and column() falling back
         // to a direct read on an entry with nothing cached yet.
-        let rows = e.run_query("SELECT a FROM rs ORDER BY a DESC").unwrap().rows;
+        let rows = e
+            .run_query("SELECT a FROM rs ORDER BY a DESC")
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 3);
 
         // ORDER BY b DESC over the index -- the index cursor's own
         // last()/prev().
-        let rows = e.run_query("SELECT b FROM rs ORDER BY b DESC").unwrap().rows;
+        let rows = e
+            .run_query("SELECT b FROM rs ORDER BY b DESC")
+            .unwrap()
+            .rows;
         assert_eq!(rows.len(), 3);
 
         // A ranged WHERE over the indexed column reaches idx_compare

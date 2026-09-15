@@ -514,10 +514,7 @@ mod tests {
             "DELETE FROM t UNION SELECT 1",
         );
         assert_invalid(parse_delete("DELETE FROM"), "DELETE FROM");
-        assert_invalid(
-            parse_delete("DELETE FROM t)"),
-            "DELETE FROM t)",
-        );
+        assert_invalid(parse_delete("DELETE FROM t)"), "DELETE FROM t)");
     }
 
     #[test]
@@ -531,10 +528,7 @@ mod tests {
             "UPDATE t1 SET x=1 UNION SELECT 1",
         );
         assert_invalid(parse_update("UPDATE t1 SET"), "UPDATE t1 SET");
-        assert_invalid(
-            parse_update("UPDATE t1 SET x=1)"),
-            "UPDATE t1 SET x=1)",
-        );
+        assert_invalid(parse_update("UPDATE t1 SET x=1)"), "UPDATE t1 SET x=1)");
     }
 
     #[test]

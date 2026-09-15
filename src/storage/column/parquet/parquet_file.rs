@@ -976,7 +976,12 @@ mod tests {
     /// already-PLAIN-encoded page body -- one round-trip-through-`ParquetFile`
     /// builder for every `read_*_column` (#407: these otherwise have no
     /// coverage above `reader::read_*_column`'s own unit-level tests).
-    fn build_typed_chunk(physical_type: i32, body: &[u8], num_values: i32, base_offset: i64) -> (Vec<u8>, Vec<u8>) {
+    fn build_typed_chunk(
+        physical_type: i32,
+        body: &[u8],
+        num_values: i32,
+        base_offset: i64,
+    ) -> (Vec<u8>, Vec<u8>) {
         let header = build_page_header(num_values, body.len() as i32);
         let mut page_bytes = header.clone();
         page_bytes.extend_from_slice(body);
@@ -1419,7 +1424,10 @@ mod tests {
     // full `ParquetFile::open` -> `RowGroupReader` round trip.
     #[test]
     fn reads_an_int32_column_through_a_full_file_round_trip() {
-        let body: Vec<u8> = [7i32, -3, 100].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let body: Vec<u8> = [7i32, -3, 100]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         let (page_bytes, meta_bytes) = build_typed_chunk(1, &body, 3, 4);
         let file_bytes = build_file_from_chunk_typed(&page_bytes, meta_bytes, 3, 1, None);
         let file = ParquetFile::open(&file_bytes).unwrap();
@@ -1432,7 +1440,10 @@ mod tests {
 
     #[test]
     fn reads_a_float_column_through_a_full_file_round_trip() {
-        let body: Vec<u8> = [1.5f32, -2.5].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let body: Vec<u8> = [1.5f32, -2.5]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         let (page_bytes, meta_bytes) = build_typed_chunk(4, &body, 2, 4);
         let file_bytes = build_file_from_chunk_typed(&page_bytes, meta_bytes, 2, 4, None);
         let file = ParquetFile::open(&file_bytes).unwrap();
@@ -1646,7 +1657,10 @@ mod tests_289 {
     fn every_file_error_variant_displays_a_useful_message() {
         let cases: Vec<(FileError, &str)> = vec![
             (FileError::Footer(FooterError::FileTooShort), "footer"),
-            (FileError::Page(PageError::MissingDataPageHeader), "DATA_PAGE"),
+            (
+                FileError::Page(PageError::MissingDataPageHeader),
+                "DATA_PAGE",
+            ),
             (FileError::Read(ReadError::UnexpectedEof), "end of page"),
             (
                 FileError::Compression(CompressionError::UnsupportedCodec(99)),
@@ -1697,5 +1711,4 @@ mod tests_289 {
             Err(FileError::Footer(FooterError::FileTooShort))
         ));
     }
-
 }

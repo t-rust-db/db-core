@@ -712,7 +712,10 @@ mod tests {
     #[test]
     fn read_error_wraps_an_encoding_error_via_from() {
         let e: ReadError = EncodingError::UnexpectedEof.into();
-        assert!(matches!(e, ReadError::Encoding(EncodingError::UnexpectedEof)));
+        assert!(matches!(
+            e,
+            ReadError::Encoding(EncodingError::UnexpectedEof)
+        ));
     }
 
     fn header(num_values: i32) -> DataPageHeader {

@@ -317,9 +317,7 @@ fn right_join_on_a_unique_indexed_column_still_tracks_matched_rows() {
     )
     .unwrap();
     let rows = e
-        .run_query(
-            "SELECT rjui_a.k, rjui_b.v FROM rjui_a RIGHT JOIN rjui_b ON rjui_b.k = rjui_a.k",
-        )
+        .run_query("SELECT rjui_a.k, rjui_b.v FROM rjui_a RIGHT JOIN rjui_b ON rjui_b.k = rjui_a.k")
         .unwrap()
         .rows;
     assert_eq!(ints(&rows), vec![vec![5, 500], vec![-1, 900]]);
