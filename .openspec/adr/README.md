@@ -56,3 +56,4 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0022](0022-unbounded-stream-stream-joins.md) — Cross-mode joins: windowed (not unbounded) stream-to-stream joins
 - [0023](0023-key-restricted-materialization.md) — Cross-mode joins: measure before building key-restricted lookup materialization
 - [0024](0024-cross-mode-scan-source-opcode.md) — Cross-mode joins: compile the build side into `vm::batch` via a `ScanSource` opcode, unifying cross-mode `explain_opcodes` with single-engine queries
+- [0025](0025-audit-model-for-batch-and-stream-kernels.md) — Audit model for `vm::batch`/`vm::stream`: the kernel, not the opcode, is the audit unit; segment-split invariance as the headline obligation
