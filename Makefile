@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-coverage-profile test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
+.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-coverage-profile test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
 
 help: ## Show this help
 	@echo ""
@@ -156,6 +156,12 @@ check-sqlite-profile: ## Charter gate: the SQLite profile is dependency-free, un
 check-stream-profile: ## Charter gate: the stream profile is dependency-free and unsafe-confined (tools/check_sqlite_profile.py)
 	@python3 tools/check_sqlite_profile.py stream
 
+# The column profile: the Parquet analytics mode (db-core#405). ADR 0000
+# §The column profile: not first-party-only by design (memmap2/ruzstd),
+# so only invariant (b) -- the unsafe carve-out -- is checked here.
+check-column-profile: ## Charter gate: the column profile carries exactly its named unsafe carve-out (tools/check_sqlite_profile.py)
+	@python3 tools/check_sqlite_profile.py column
+
 # ADR 0000 §(g): the coverage floor as a claim about the safe-SQLite
 # artifact -- instrumented over the profile, not --all-features. Too slow
 # for every PR; .github/workflows/assurance.yml runs it weekly.
@@ -292,6 +298,7 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) check-features
 	$(MAKE) check-sqlite-profile
 	$(MAKE) check-stream-profile
+	$(MAKE) check-column-profile
 	$(MAKE) check-mcdc-fresh
 	$(MAKE) check-mvl-limit
 	$(MAKE) check-public-api-fresh
