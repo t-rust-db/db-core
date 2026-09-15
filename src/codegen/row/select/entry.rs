@@ -272,12 +272,13 @@ where
         )? {
             return Ok(());
         }
-        // #631 spike: prefer the Sorter-backed `compile_grouped_scan`
-        // path over #570's HashAgg opcodes — sqlite3's own C
-        // implementation gets this fast via the Sorter, so the gap is
-        // implementation overhead to hunt down, not the algorithm.
-        // `try_compile_hash_grouped_scan` (hash.rs) and its opcodes are
-        // kept intact, just not wired into this dispatch.
+        // #631 spike: the Sorter-backed `compile_grouped_scan` path won
+        // over #570's HashAgg opcodes — sqlite3's own C implementation
+        // gets this fast via the Sorter, so the gap was implementation
+        // overhead to hunt down, not the algorithm. #570's unwired
+        // codegen (`aggregate/hash.rs`) is deleted per ADR-0015 §5
+        // (#407); its `vm::row` HashAgg* opcodes remain, now with no
+        // emitter.
         return compile_grouped_scan(
             em, reg, select, schema, cursors, end_label, catalog, false, None, sink,
         );
