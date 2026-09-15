@@ -85,10 +85,11 @@ test-mcdc: mcdc-obligations ## MC/DC dashboard for all of src/; fails if any mul
 
 COVERAGE_MIN := 80
 
-# hash.rs (#570) is a spike kept intact but deliberately unwired from GROUP
-# BY dispatch (#631, see entry.rs) -- production code never calls it, so
-# covering it would mean testing the dispatch decision, not the code.
-COVERAGE_EXCLUDE_REGEX := codegen/row/select/aggregate/hash\.rs
+# ADR-0000 (g): the coverage floor accounts for all of db-core, and every
+# exception is named here with a justification. There are none: #570's
+# unwired hash-agg spike, the only previous entry, was deleted (#407)
+# rather than exempted. `^$` matches nothing.
+COVERAGE_EXCLUDE_REGEX := ^$$
 
 coverage: ## Line coverage report over the library + tests/unit (cargo-llvm-cov); spikes excluded
 	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \

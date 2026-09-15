@@ -1,7 +1,6 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
 mod accum;
-mod hash;
 mod join;
 
 use super::limit_scan::{compile_limit_setup, LimitState};
@@ -21,7 +20,6 @@ pub(super) use accum::{
 // #631 spike: no longer wired into GROUP BY dispatch (see entry.rs),
 // kept for possible reuse; `allow` avoids `-D warnings` failing lint.
 #[allow(unused_imports)]
-pub(in crate::codegen::row::select) use hash::try_compile_hash_grouped_scan;
 pub(crate) use join::compile_joined_grouped_scan;
 
 /// The index-only `count(*)` plan [`try_compile_index_only_count`]
