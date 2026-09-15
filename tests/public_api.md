@@ -5373,6 +5373,38 @@ impl core::fmt::Debug for db_core::vm::batch::AggPart
 pub fn db_core::vm::batch::AggPart::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::AggPart
 impl core::marker::StructuralPartialEq for db_core::vm::batch::AggPart
+pub enum db_core::vm::batch::Column
+pub db_core::vm::batch::Column::Bool
+pub db_core::vm::batch::Column::Bool::data: alloc::vec::Vec<bool>
+pub db_core::vm::batch::Column::Bool::valid: db_core::vm::column::Bitmap
+pub db_core::vm::batch::Column::Dict
+pub db_core::vm::batch::Column::Dict::dict: alloc::vec::Vec<alloc::sync::Arc<str>>
+pub db_core::vm::batch::Column::Dict::indices: alloc::vec::Vec<u32>
+pub db_core::vm::batch::Column::Dict::valid: db_core::vm::column::Bitmap
+pub db_core::vm::batch::Column::Float
+pub db_core::vm::batch::Column::Float::data: alloc::vec::Vec<f64>
+pub db_core::vm::batch::Column::Float::valid: db_core::vm::column::Bitmap
+pub db_core::vm::batch::Column::Int
+pub db_core::vm::batch::Column::Int::data: alloc::vec::Vec<i64>
+pub db_core::vm::batch::Column::Int::valid: db_core::vm::column::Bitmap
+pub db_core::vm::batch::Column::Str
+pub db_core::vm::batch::Column::Str::data: alloc::string::String
+pub db_core::vm::batch::Column::Str::offsets: alloc::vec::Vec<u32>
+pub db_core::vm::batch::Column::Str::valid: db_core::vm::column::Bitmap
+impl db_core::vm::column::Column
+pub fn db_core::vm::column::Column::get(&self, usize) -> db_core::vm::batch::Value
+pub fn db_core::vm::column::Column::is_empty(&self) -> bool
+pub fn db_core::vm::column::Column::is_null(&self, usize) -> bool
+pub fn db_core::vm::column::Column::len(&self) -> usize
+impl core::clone::Clone for db_core::vm::column::Column
+pub fn db_core::vm::column::Column::clone(&self) -> db_core::vm::column::Column
+impl core::cmp::PartialEq for db_core::vm::column::Column
+pub fn db_core::vm::column::Column::eq(&self, &db_core::vm::column::Column) -> bool
+impl core::convert::From<alloc::vec::Vec<db_core::vm::batch::Value>> for db_core::vm::column::Column
+pub fn db_core::vm::column::Column::from(alloc::vec::Vec<db_core::vm::batch::Value>) -> Self
+impl core::fmt::Debug for db_core::vm::column::Column
+pub fn db_core::vm::column::Column::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::vm::column::Column
 pub enum db_core::vm::batch::JoinKind
 pub db_core::vm::batch::JoinKind::Anti
 pub db_core::vm::batch::JoinKind::Full
@@ -5582,9 +5614,11 @@ impl core::marker::StructuralPartialEq for db_core::vm::batch::WindowFunc
 pub struct db_core::vm::batch::Batch
 pub db_core::vm::batch::Batch::columns: std::collections::hash::map::HashMap<alloc::string::String, alloc::sync::Arc<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub db_core::vm::batch::Batch::num_rows: usize
+pub db_core::vm::batch::Batch::typed_columns: std::collections::hash::map::HashMap<alloc::string::String, alloc::sync::Arc<db_core::vm::column::Column>>
 impl db_core::vm::batch::Batch
 pub fn db_core::vm::batch::Batch::new(usize) -> Self
 pub fn db_core::vm::batch::Batch::with_column(self, impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<db_core::vm::batch::Value>) -> Self
+pub fn db_core::vm::batch::Batch::with_typed_column(self, impl core::convert::Into<alloc::string::String>, db_core::vm::column::Column) -> Self
 impl core::clone::Clone for db_core::vm::batch::Batch
 pub fn db_core::vm::batch::Batch::clone(&self) -> db_core::vm::batch::Batch
 impl core::cmp::PartialEq for db_core::vm::batch::Batch
@@ -5653,6 +5687,7 @@ pub fn db_core::vm::batch::Vm::register(&self, usize) -> db_core::vm::batch::Res
 pub fn db_core::vm::batch::Vm::run<T: db_core::vm::batch::Source>(&mut self, &mut T, &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub fn db_core::vm::batch::Vm::take_output(&mut self) -> alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>
 pub fn db_core::vm::batch::Vm::take_register(&mut self, usize) -> db_core::vm::batch::Result<alloc::vec::Vec<db_core::vm::batch::Value>>
+pub fn db_core::vm::batch::Vm::typed_register(&self, usize) -> core::option::Option<&db_core::vm::column::Column>
 pub fn db_core::vm::batch::Vm::with_join_tables(db_core::vm::batch::JoinTables) -> Self
 impl core::default::Default for db_core::vm::batch::Vm
 pub fn db_core::vm::batch::Vm::default() -> db_core::vm::batch::Vm

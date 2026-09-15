@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.99.0] - 2026-09-15
+
+### Added
+
+- **`LoadColumn`/`Filter` ported to `Column` dispatch** (#429, epic #130 child 4, slice 1): `Batch` gains `typed_columns` (a `Column`-backed representation, additive alongside the existing `Vec<Value>`-backed `columns`) and `Batch::with_typed_column`; `Vm` gains `typed_registers` alongside `registers`. `LoadColumn` populates both -- `registers` as a materialized safety net every un-migrated opcode keeps reading unchanged, `typed_registers` for two new fast paths: `Filter`'s predicate mask reads a typed `Bool` column's bitmap+data directly instead of matching `Value::Bool(true)` per element, and `Map`'s `Eq`/`Ne` against a `Dict` column and a resolved string literal compares dictionary codes instead of decoding every row (`Vm::dict_literal_compare`) -- the concrete `= 'kern'` case #399 names, differentially tested against the equivalent `Str`/`Vec<Value>` path. `resolve_selection` clears `typed_registers` on compaction to avoid a stale, wrong-length shadow. `LoadColumn` still materializes `Vec<Value>` eagerly rather than lazily, since several un-migrated opcodes (`Emit`, `HashProbe`, `GroupReduce`, `HashBuild`, `Window`) manipulate `Arc<Vec<Value>>` directly in ways a lazy register model would need much larger changes to support correctly -- left to a later #428 slice.
+
 ## [0.98.0] - 2026-09-15
 
 ### Added
