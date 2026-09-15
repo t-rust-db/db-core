@@ -29,17 +29,33 @@ parser-row, vm-row, codegen-row, storage-row, engine-row
 ```
 
 Everything this profile compiles is on the audit path. The set is
-measured, not declared: `tools/check_sqlite_profile.py` takes rustc's
-dep-info for that build and checks the invariants below against the
-files actually compiled.
+measured, not declared: `tools/check_sqlite_profile.py sqlite` takes
+rustc's dep-info for that build and checks the invariants below against
+the files actually compiled.
+
+## The stream profile
+
+The log engine's execution mode (db-core#403):
+
+```
+parser-column, vm-batch, vm-stream, codegen-batch, codegen-stream, storage-stream, engine-stream
+```
+
+Invariants (a) and (b) apply here too -- "under the same bar" from the
+Purpose section above, made mechanical -- via
+`tools/check_sqlite_profile.py stream`. There is no mode-isolation
+invariant for this profile: it legitimately compiles `vm::batch` and
+`codegen::batch` (its planner reuses their types). A column profile is
+deliberately not defined yet; it needs its `unsafe` carve-out decision
+first.
 
 ## Invariants and their gates
 
 | # | Invariant | Gate | Runs |
 |---|---|---|---|
-| (a) | The profile's dependency closure is first-party only (`db-core`). | `make check-sqlite-profile` (`cargo tree` over the profile) | every PR |
-| (b) | `unsafe` on the profile is exactly the named carve-outs, count checked: `storage/row/vfs/fcntl.rs` -- 2 (`fsync`, `fcntl` byte-range locks; ADR-0031 lineage). | `make check-sqlite-profile` (regex over the dep-info file set) | every PR |
-| (c) | The SQLite side (`parser/row`, `vm/row`, `codegen/row`, `storage/row`, `engine/row`) never names `vm::batch`, `vm::engine`, `vm::stream`, `codegen::batch`, `storage::column`, `storage::stream`, `engine::column`, `engine::stream`; and those never name the SQLite side. The profile compiles no file from another mode. | `tests/unit/layer_isolation_test.rs`; `make check-sqlite-profile` | every PR |
+| (a) | The SQLite and stream profiles' dependency closures are first-party only (`db-core`). | `make check-sqlite-profile`, `make check-stream-profile` (`cargo tree` over each profile) | every PR |
+| (b) | `unsafe` on the SQLite profile is exactly the named carve-outs, count checked: `storage/row/vfs/fcntl.rs` -- 2 (`fsync`, `fcntl` byte-range locks; ADR-0031 lineage). The stream profile carries none. | `make check-sqlite-profile`, `make check-stream-profile` (regex over each profile's dep-info file set) | every PR |
+| (c) | The SQLite side (`parser/row`, `vm/row`, `codegen/row`, `storage/row`, `engine/row`) never names `vm::batch`, `vm::engine`, `vm::stream`, `codegen::batch`, `storage::column`, `storage::stream`, `engine::column`, `engine::stream`; and those never name the SQLite side. The SQLite profile compiles no file from another mode. | `tests/unit/layer_isolation_test.rs`; `make check-sqlite-profile` | every PR |
 | (d) | Every Cargo feature builds standalone with its declared implications and nothing else. | `make check-features` | every PR |
 | (e) | The MC/DC obligation snapshot is current and every tagged vector names a real obligation. | `make check-mcdc-fresh`; `tests/unit/mcdc_discharge_test.rs` | every PR |
 | (f) | Oracle parity is the definition of correct: sqlite-rs's corpus and sqllogictest against the pinned sqlite3, on the pinned db-core. | sqlite-rs CI (`corpus`), sqlite-rs `assurance.yml` (weekly) | every sqlite-rs PR; weekly |

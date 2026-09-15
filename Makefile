@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-coverage-profile test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
+.PHONY: help check-sqlite-profile check-stream-profile check-coverage-profile test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
 
 help: ## Show this help
 	@echo ""
@@ -148,7 +148,13 @@ SQLITE_PROFILE := parser-row,vm-row,codegen-row,storage-row,engine-row
 # `unsafe` carve-outs and nothing else, no batch/column/stream file --
 # all measured on what rustc actually compiles for the profile.
 check-sqlite-profile: ## Charter gate: the SQLite profile is dependency-free, unsafe-confined, mode-isolated (tools/check_sqlite_profile.py)
-	@python3 tools/check_sqlite_profile.py
+	@python3 tools/check_sqlite_profile.py sqlite
+
+# The stream profile: the log engine's execution mode (db-core#403). ADR
+# 0000 §Invariants (a)/(b) measured here too -- no mode-isolation check,
+# since the stream profile legitimately compiles vm-batch/codegen-batch.
+check-stream-profile: ## Charter gate: the stream profile is dependency-free and unsafe-confined (tools/check_sqlite_profile.py)
+	@python3 tools/check_sqlite_profile.py stream
 
 # ADR 0000 §(g): the coverage floor as a claim about the safe-SQLite
 # artifact -- instrumented over the profile, not --all-features. Too slow
@@ -285,6 +291,7 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) check-deny
 	$(MAKE) check-features
 	$(MAKE) check-sqlite-profile
+	$(MAKE) check-stream-profile
 	$(MAKE) check-mcdc-fresh
 	$(MAKE) check-mvl-limit
 	$(MAKE) check-public-api-fresh

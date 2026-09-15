@@ -101,6 +101,20 @@ jobs:
           shared-key: sqlite-profile
       - run: make check-sqlite-profile
 
+  # Charter gate (ADR 0000, db-core#403): the stream profile -- the log
+  # engine's execution mode -- resolves to first-party crates only and
+  # carries exactly the named `unsafe` carve-outs (empty, currently).
+  stream-profile:
+    name: Stream profile (charter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: stream-profile
+      - run: make check-stream-profile
+
   # Public API surface (db-core#360): `tests/public_api.md` must match a
   # fresh `cargo-public-api` scan, or a widened/narrowed `pub` surface can
   # ship without a reviewed diff. Needs nightly for rustdoc JSON output,
