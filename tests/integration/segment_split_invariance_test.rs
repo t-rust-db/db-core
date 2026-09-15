@@ -505,31 +505,81 @@ fn stream_aggregates_are_invariant_to_seal_boundaries() {
     }
 }
 
+/// Queries `merge_retained_summaries` (`src/engine/stream.rs`) actually
+/// documents as folding evicted `SegmentSummary` data back in: an
+/// ungrouped `COUNT`/`SUM`/`MIN`/`MAX` with an explicit range wide enough
+/// to require reaching past what the ring alone holds. `GROUP BY` and
+/// `AVG` are excluded on purpose -- that function's own doc comment says
+/// neither is folded from a summary at all (a summary has no rows left
+/// to bucket by group, and `AVG`'s sum/count are already divided by the
+/// time a live answer comes back, so there's nothing left to merge a
+/// summary's own sum/count into) -- so obligation 1 does not yet extend
+/// to them for evicted stream data; that gap is real but is a feature
+/// gap in `merge_retained_summaries`, not a segment-split-invariance bug.
+const EVICTION_QUERIES: &[&str] = &[
+    "SELECT count(*) FROM log SINCE 1 DAY",
+    "SELECT sum(severity) FROM log SINCE 1 DAY",
+    "SELECT min(severity), max(severity) FROM log SINCE 1 DAY",
+];
+
+fn query_eviction_all(e: &mut StreamEngine) -> Vec<Vec<Vec<Cell>>> {
+    EVICTION_QUERIES.iter().map(|sql| rows(e, sql)).collect()
+}
+
+/// A thin `Clock` forwarding to a shared `Arc<FakeClock>`, so a test can
+/// keep advancing the same clock the engine reads `now_ns()` from --
+/// lifted from `tests/unit/engine_stream_summaries_test.rs`'s own helper
+/// of the same shape.
+struct FakeClockHandle(std::sync::Arc<db_core::clock::FakeClock>);
+
+impl db_core::clock::Clock for FakeClockHandle {
+    fn now_ns(&self) -> i64 {
+        self.0.now_ns()
+    }
+}
+
 #[test]
 fn stream_aggregates_are_invariant_to_ring_eviction() {
-    // Same 24 lines, same seal boundaries (one chunk per facility so the
-    // eviction test isn't also a seal-boundary test) -- the only
-    // difference is the ring budget, so the only thing under test is
-    // whether an evicted segment's `SegmentSummary` answers exactly like
-    // a fully resident ring would (`src/storage/stream/segment.rs:82-96`
-    // documents `SegmentSummary` as answering COUNT/SUM/MIN/MAX from
-    // itself alone once the segment it summarizes is gone).
-    let cold_path = temp_log("eviction-cold");
-    let mut cold = ingest_in_batches(&cold_path, 64 * 1024 * 1024, &[6, 6, 6, 6]);
-    let expected = query_all(&mut cold);
+    // ADR 0018's own example, mirrored from
+    // `engine_stream_summaries_test.rs`: a live `SINCE 1 DAY` query over
+    // a ring that has evicted most of that day into summaries must match
+    // a fresh, fully-hot scan of the same file. `FakeClock` makes "1 day"
+    // and "one facility per hour" real simulated units, not a scaled-down
+    // stand-in, and keeps both engines' idea of "now" identical -- a real
+    // wall clock would let the two queries race apart by however long
+    // this test takes to run.
+    let path = temp_log("eviction");
+    let clock = std::sync::Arc::new(db_core::clock::FakeClock::new(0));
+    let mut hot = StreamEngine::open_with_budget(&path, 64).unwrap();
+    hot.set_clock(Box::new(FakeClockHandle(clock.clone())));
 
-    // A tiny budget forces eviction of the earliest facilities' segments
-    // into summaries well before all 24 lines have landed.
-    let hot_path = temp_log("eviction-hot");
-    let mut hot = ingest_in_batches(&hot_path, 64, &[6, 6, 6, 6]);
+    let facilities = [0u8, 4, 9, 16]; // kern, auth, cron, local0
+    let mut n = 0usize;
+    for &f in &facilities {
+        let mut text = String::new();
+        for s in 0u8..6 {
+            text.push_str(&pri_line(f, s, n));
+            n += 1;
+        }
+        append(&path, &text);
+        clock.advance(60 * 60 * 1_000_000_000); // 1 simulated hour
+        assert_eq!(hot.refresh().unwrap(), 6);
+    }
     assert!(
         hot.ring().rows() < 24,
         "test is only meaningful if the tiny-budget ring evicted something \
          (ring holds {} of 24 rows)",
         hot.ring().rows()
     );
-    let got = query_all(&mut hot);
 
+    // The cold, fully-hot oracle: a fresh scan of the whole file, sharing
+    // the same (now fully advanced) clock so `SINCE 1 DAY` covers the
+    // same window on both sides.
+    let mut cold = StreamEngine::open_with_budget(&path, 64 * 1024 * 1024).unwrap();
+    cold.set_clock(Box::new(FakeClockHandle(clock)));
+
+    let expected = query_eviction_all(&mut cold);
+    let got = query_eviction_all(&mut hot);
     assert_eq!(
         got, expected,
         "evicted-segment answers (from SegmentSummary) disagree with the \
@@ -539,11 +589,14 @@ fn stream_aggregates_are_invariant_to_ring_eviction() {
 
 #[test]
 fn stream_aggregates_are_invariant_over_a_real_syslog_fixture() {
-    // The generated-data tests above give full control over facility and
-    // severity; this repeats the same idea (tiny budget forcing eviction
-    // vs a huge, never-evicting budget) over the real seeded fixture used
-    // elsewhere in the suite, so the property is also checked against
-    // data nobody hand-crafted for this test.
+    // The generated-data test above gives full control over facility and
+    // severity with simulated time; this repeats the same idea (tiny
+    // budget forcing eviction vs a huge, never-evicting budget) over the
+    // real seeded fixture used elsewhere in the suite, so the property is
+    // also checked against data nobody hand-crafted for this test. A
+    // 100-year `SINCE` and the real system clock are wide enough that
+    // this fixture's own (unknown, but certainly not centuries-old)
+    // embedded dates fall inside the window regardless.
     //
     // The fixture alone (70 KB) is smaller than one ring block (256 KiB,
     // `storage::stream::file::BLOCK_SIZE`), so it becomes exactly one
@@ -555,6 +608,11 @@ fn stream_aggregates_are_invariant_over_a_real_syslog_fixture() {
     // evicts the original fixture segment first.
     const FIXTURE: &str = "tests/fixtures/stream/syslog-1k.log";
     let fixture_bytes = std::fs::read(FIXTURE).unwrap();
+    const WIDE_EVICTION_QUERIES: &[&str] = &[
+        "SELECT count(*) FROM log SINCE 36500 DAY",
+        "SELECT sum(severity) FROM log SINCE 36500 DAY",
+        "SELECT min(severity), max(severity) FROM log SINCE 36500 DAY",
+    ];
 
     let make = |name: &str, budget: usize| -> StreamEngine {
         let path = temp_log(name);
@@ -581,6 +639,12 @@ fn stream_aggregates_are_invariant_over_a_real_syslog_fixture() {
         resident.ring().rows()
     );
 
+    let query_all = |e: &mut StreamEngine| -> Vec<Vec<Vec<Cell>>> {
+        WIDE_EVICTION_QUERIES
+            .iter()
+            .map(|sql| rows(e, sql))
+            .collect()
+    };
     let expected = query_all(&mut resident);
     let got = query_all(&mut evicting);
     assert_eq!(

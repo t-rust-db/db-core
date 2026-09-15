@@ -269,66 +269,77 @@ pub fn finalize(
 
 /// Combine two emitted rows for the same group key, applying the
 /// associative merge appropriate to each [`AggPart`].
+///
+/// `row_idx` tracks the row cursor directly rather than `parts`'
+/// enumeration index: an `AVG` occupies two `row` registers (sum, count)
+/// but only one `AggPart` entry, so every part after it is offset in
+/// `row` by however many extra registers came before it. Indexing by the
+/// enumeration position instead (as this used to) silently merges the
+/// wrong registers into each other once an `AVG` precedes another
+/// aggregate in the same query -- confirmed live by db-core#404's
+/// segment-split invariance harness, which is also why `finalize_row`
+/// (below) uses the identical cursor.
 #[allow(
     clippy::indexing_slicing,
-    reason = "`parts` has one entry per emitted column, so `i` indexes both rows in \
-              range; `Avg`'s `sum_i`/`count_i` point past `parts`' own end (codegen \
-              allocates two registers -- sum and count -- per `AVG` but pushes only \
-              one `AggPart::Avg` entry), but are always in range of the wider row \
-              itself (db-core#404)"
+    reason = "`row_idx` (and `Avg`'s own `sum_i`/`count_i`) always stay in `row`'s \
+              range by construction (db-core#404)"
 )]
 fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) -> Result<()> {
-    for (i, part) in parts.iter().enumerate() {
+    let mut row_idx = 0usize;
+    for part in parts {
         match part {
-            AggPart::GroupKey => {}
+            AggPart::GroupKey => {
+                row_idx = row_idx.saturating_add(1);
+            }
             AggPart::Sum => {
-                into[i] = Value::Float(partial_f64(&into[i])? + partial_f64(&from[i])?);
+                into[row_idx] =
+                    Value::Float(partial_f64(&into[row_idx])? + partial_f64(&from[row_idx])?);
+                row_idx = row_idx.saturating_add(1);
             }
             // A merged COUNT stays an integer, as a single segment's does
             // (#272): before, it came back as `Float`, so the *type* of
             // `COUNT(*)` depended on how many segments the scan had.
             AggPart::Count => {
-                let total = partial_i64(&into[i])?
-                    .checked_add(partial_i64(&from[i])?)
+                let total = partial_i64(&into[row_idx])?
+                    .checked_add(partial_i64(&from[row_idx])?)
                     .ok_or_else(|| VmError::MalformedProgram {
                         opcode: "Combine",
                         reason: "partial COUNT overflowed i64".to_string(),
                     })?;
-                into[i] = Value::Int(total);
+                into[row_idx] = Value::Int(total);
+                row_idx = row_idx.saturating_add(1);
             }
             AggPart::Min => {
-                if let (Some(a), Some(b)) = (into[i].as_f64(), from[i].as_f64()) {
-                    into[i] = Value::Float(a.min(b));
-                } else if matches!(into[i], Value::Null) {
-                    into[i] = from[i].clone();
+                if let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64()) {
+                    into[row_idx] = Value::Float(a.min(b));
+                } else if matches!(into[row_idx], Value::Null) {
+                    into[row_idx] = from[row_idx].clone();
                 }
+                row_idx = row_idx.saturating_add(1);
             }
             AggPart::Max => {
-                if let (Some(a), Some(b)) = (into[i].as_f64(), from[i].as_f64()) {
-                    into[i] = Value::Float(a.max(b));
-                } else if matches!(into[i], Value::Null) {
-                    into[i] = from[i].clone();
+                if let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64()) {
+                    into[row_idx] = Value::Float(a.max(b));
+                } else if matches!(into[row_idx], Value::Null) {
+                    into[row_idx] = from[row_idx].clone();
                 }
+                row_idx = row_idx.saturating_add(1);
             }
-            // The `AggPart::Avg` entry itself sits at `sum_i` (== `i`), but
-            // `count_i` lives one register past the last `AggPart` entry --
-            // outside this loop's own range -- so it must be merged here
-            // explicitly rather than by falling out of the enumeration.
             // Previously a no-op (db-core#404): with more than one
             // segment, `AVG` silently returned the first segment's local
-            // average instead of the true merged mean.
+            // average instead of the true merged mean. Both registers are
+            // read via `partial_f64`, matching `finalize_row`'s own read
+            // of them below -- the per-segment count register is a
+            // `Value::Int` in real execution, but it is never surfaced on
+            // its own (only ever divided into by `finalize_row`), so
+            // there is no reason to route it through the
+            // integer-overflow-checked `AggPart::Count` path as well.
             AggPart::Avg(sum_i, count_i) => {
-                // Both registers are read via `partial_f64` here, matching
-                // `finalize_row`'s own read of them below -- the per-segment
-                // count register is a `Value::Int` in real execution, but
-                // it is never surfaced on its own (only ever divided into
-                // by `finalize_row`), so there is no reason to route it
-                // through the integer-overflow-checked `AggPart::Count`
-                // path as well.
                 into[*sum_i] =
                     Value::Float(partial_f64(&into[*sum_i])? + partial_f64(&from[*sum_i])?);
                 into[*count_i] =
                     Value::Float(partial_f64(&into[*count_i])? + partial_f64(&from[*count_i])?);
+                row_idx = count_i.saturating_add(1);
             }
         }
     }

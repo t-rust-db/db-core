@@ -197,7 +197,13 @@ required-features = ["engine-row", "engine-column", "engine-stream"]
 [[test]]
 name = "integration_segment_split_invariance"
 path = "tests/integration/segment_split_invariance_test.rs"
-required-features = ["engine-column", "engine-stream", "vm-batch", "codegen-batch"]
+required-features = [
+    "engine-column",
+    "engine-stream",
+    "vm-batch",
+    "codegen-batch",
+    "storage-test-support",
+]
 
 [dependencies]
 # Storage backends (ADR 0016: db-storage absorbed as the `storage` module).
