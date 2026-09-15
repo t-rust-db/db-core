@@ -332,6 +332,12 @@ pub enum Opcode {
     AggStep,
     /// Finalizes the aggregate accumulator in `p1`.
     AggFinal,
+    /// Clears aggregate-context slot `p1` back to empty -- SQLite's own
+    /// `GROUP BY` codegen (`select.c`) resets its accumulator via a
+    /// dedicated pre-fold step (db-core#409); this is that step's
+    /// analogue over `Vm::agg_contexts`, since ours holds accumulator
+    /// state in a disjoint table rather than `Null`-able registers.
+    AggReset,
     // result
     /// `r[p2] = p1` (small integer literal).
     Integer,
@@ -747,7 +753,8 @@ impl Opcode {
             | Opcode::AutoCommit
             | Opcode::SetJournalMode
             | Opcode::IntegrityCheck
-            | Opcode::Synchronous => NONE,
+            | Opcode::Synchronous
+            | Opcode::AggReset => NONE,
             Opcode::Gosub
             | Opcode::Return
             | Opcode::IfNot

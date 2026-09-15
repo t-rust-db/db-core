@@ -1850,6 +1850,10 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             vm.clear_agg_context(instr.p1)?;
             Ok(Step::Next)
         }
+        Opcode::AggReset => {
+            vm.clear_agg_context(instr.p1)?;
+            Ok(Step::Next)
+        }
 
         Opcode::Transaction => {
             if !vm.autocommit {

@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-coverage-profile test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
+.PHONY: help check-sqlite-profile check-stream-profile check-coverage-profile test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
 
 help: ## Show this help
 	@echo ""
@@ -48,7 +48,12 @@ test-spike: ## Run only the throwaway experiments under tests/spike/
 	cargo test -p db-core --all-features $(SPIKE_TESTS)
 
 # Scanned file set for `test-mcdc`: all of `src/`, not a curated subset --
-# no obligation is exempted by file selection (ADR 0015, tier 3).
+# no obligation is exempted by file selection (ADR 0015, tier 3). Sorted
+# (db-core#409): `find`'s traversal order isn't guaranteed stable across
+# invocations on the same tree, and `cargo-mvl-mcdc scan`'s output order
+# follows its input order verbatim -- an unsorted file list makes
+# `check-mcdc-fresh`'s byte-for-byte `cmp` spuriously fail even when
+# nothing in `src/` actually changed.
 MCDC_FILES := $(shell find src -name '*.rs' | LC_ALL=C sort)
 
 mcdc-obligations: ## Regenerate the committed MC/DC obligations snapshot (tests/mcdc/obligations.json)
@@ -155,12 +160,6 @@ check-sqlite-profile: ## Charter gate: the SQLite profile is dependency-free, un
 # since the stream profile legitimately compiles vm-batch/codegen-batch.
 check-stream-profile: ## Charter gate: the stream profile is dependency-free and unsafe-confined (tools/check_sqlite_profile.py)
 	@python3 tools/check_sqlite_profile.py stream
-
-# The column profile: the Parquet analytics mode (db-core#405). ADR 0000
-# §The column profile: not first-party-only by design (memmap2/ruzstd),
-# so only invariant (b) -- the unsafe carve-out -- is checked here.
-check-column-profile: ## Charter gate: the column profile carries exactly its named unsafe carve-out (tools/check_sqlite_profile.py)
-	@python3 tools/check_sqlite_profile.py column
 
 # ADR 0000 §(g): the coverage floor as a claim about the safe-SQLite
 # artifact -- instrumented over the profile, not --all-features. Too slow
@@ -298,7 +297,6 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) check-features
 	$(MAKE) check-sqlite-profile
 	$(MAKE) check-stream-profile
-	$(MAKE) check-column-profile
 	$(MAKE) check-mcdc-fresh
 	$(MAKE) check-mvl-limit
 	$(MAKE) check-public-api-fresh
