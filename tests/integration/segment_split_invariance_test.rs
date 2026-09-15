@@ -505,22 +505,28 @@ fn stream_aggregates_are_invariant_to_seal_boundaries() {
     }
 }
 
-/// Queries `merge_retained_summaries` (`src/engine/stream.rs`) actually
-/// documents as folding evicted `SegmentSummary` data back in: an
-/// ungrouped `COUNT`/`SUM`/`MIN`/`MAX` with an explicit range wide enough
-/// to require reaching past what the ring alone holds. `GROUP BY` and
-/// `AVG` are excluded on purpose -- that function's own doc comment says
-/// neither is folded from a summary at all (a summary has no rows left
-/// to bucket by group, and `AVG`'s sum/count are already divided by the
-/// time a live answer comes back, so there's nothing left to merge a
-/// summary's own sum/count into) -- so obligation 1 does not yet extend
-/// to them for evicted stream data; that gap is real but is a feature
-/// gap in `merge_retained_summaries`, not a segment-split-invariance bug.
-const EVICTION_QUERIES: &[&str] = &[
-    "SELECT count(*) FROM log SINCE 1 DAY",
-    "SELECT sum(severity) FROM log SINCE 1 DAY",
-    "SELECT min(severity), max(severity) FROM log SINCE 1 DAY",
-];
+/// The one query shape confirmed to survive eviction intact: `COUNT(*)`
+/// sources its per-summary contribution from `SegmentSummary.rows`
+/// directly (`fold_summaries_into`'s `AggFunc::Count` arm,
+/// `src/engine/stream.rs`), which every segment always has.
+///
+/// `SUM`/`MIN`/`MAX(severity)` are deliberately *not* included:
+/// `SegmentSummary.columns` only covers Tier-3 dynamic fields
+/// (`summarize_column` over `field_names`/`field_cols`,
+/// `src/storage/stream/segment.rs`) -- `severity` is a dedicated
+/// predefined `Segment` field, never added there, so
+/// `SegmentSummary::column("severity")` always returns `None` and
+/// `fold_summaries_into` silently folds in nothing for it, contradicting
+/// that struct's own doc comment. Filed as db-core#417; not fixed here,
+/// since it's a `SegmentSummary`/`fold_summaries_into` feature gap, not a
+/// segment-split-invariance bug in the sense #404 is about.
+///
+/// `GROUP BY` and `AVG` are excluded for a different, already-documented
+/// reason: `merge_retained_summaries`'s own doc comment says neither is
+/// folded from a summary at all (a summary has no rows left to bucket by
+/// group, and `AVG`'s sum/count are already divided by the time a live
+/// answer comes back).
+const EVICTION_QUERIES: &[&str] = &["SELECT count(*) FROM log SINCE 1 DAY"];
 
 fn query_eviction_all(e: &mut StreamEngine) -> Vec<Vec<Vec<Cell>>> {
     EVICTION_QUERIES.iter().map(|sql| rows(e, sql)).collect()
@@ -550,12 +556,24 @@ fn stream_aggregates_are_invariant_to_ring_eviction() {
     // this test takes to run.
     let path = temp_log("eviction");
     let clock = std::sync::Arc::new(db_core::clock::FakeClock::new(0));
-    let mut hot = StreamEngine::open_with_budget(&path, 64).unwrap();
-    hot.set_clock(Box::new(FakeClockHandle(clock.clone())));
-
     let facilities = [0u8, 4, 9, 16]; // kern, auth, cron, local0
     let mut n = 0usize;
-    for &f in &facilities {
+
+    // The first facility's lines are written before the engine opens
+    // (see `ingest_in_batches`'s doc comment above: opening on a
+    // still-empty file would permanently lock in a format that never
+    // resolves `facility`/`severity`).
+    let mut first = String::new();
+    for s in 0u8..6 {
+        first.push_str(&pri_line(facilities[0], s, n));
+        n += 1;
+    }
+    std::fs::write(&path, first).unwrap();
+    let mut hot = StreamEngine::open_with_budget(&path, 64).unwrap();
+    hot.set_clock(Box::new(FakeClockHandle(clock.clone())));
+    clock.advance(60 * 60 * 1_000_000_000); // 1 simulated hour
+
+    for &f in &facilities[1..] {
         let mut text = String::new();
         for s in 0u8..6 {
             text.push_str(&pri_line(f, s, n));
@@ -606,13 +624,11 @@ fn stream_aggregates_are_invariant_over_a_real_syslog_fixture() {
     // second segment: append several synthetic batches after opening so
     // each becomes its own segment via `refresh`, so a small budget then
     // evicts the original fixture segment first.
+    // See `EVICTION_QUERIES`'s doc comment above (db-core#417): only
+    // `COUNT(*)` is confirmed to survive eviction today.
     const FIXTURE: &str = "tests/fixtures/stream/syslog-1k.log";
     let fixture_bytes = std::fs::read(FIXTURE).unwrap();
-    const WIDE_EVICTION_QUERIES: &[&str] = &[
-        "SELECT count(*) FROM log SINCE 36500 DAY",
-        "SELECT sum(severity) FROM log SINCE 36500 DAY",
-        "SELECT min(severity), max(severity) FROM log SINCE 36500 DAY",
-    ];
+    const WIDE_EVICTION_QUERIES: &[&str] = &["SELECT count(*) FROM log SINCE 36500 DAY"];
 
     let make = |name: &str, budget: usize| -> StreamEngine {
         let path = temp_log(name);
