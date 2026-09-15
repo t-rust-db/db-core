@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.96.0] - 2026-09-15
+
+### Changed
+
+- **`GROUP BY`'s accumulator reset compiled once, not fused** (#409): Pre #396, `GROUP BY` folded a new row into the accumulator and reset at the same time via an `AggStep` with `p5=1` (fused reset+fold). This makes the oracle's actual behavior (SQLite's `select.c` emits two separate instructions: `Gosub` to a reset subroutine, then a plain `AggStep` to fold) impossible to match. New `Opcode::AggReset` (`src/vm/row/program.rs`, `vm.rs`, `explain.rs`) splits them: before each loop and on each group boundary, `AggReset` clears the accumulator state (via `clear_agg_context`, the same method `AggFinal` uses), then a plain `AggStep(p5=0)` folds the row. `emit_reset_gosub`/`emit_reset_subroutine` (mirroring #396's flush pattern) factor this into one Gosub-called subroutine, called from both pre-loop and boundary sites in both `compile_grouped_scan` and `try_compile_index_ordered_group_by`. Behavior unchanged; shape now matches SQLite exactly. Incidental fix: `Makefile`'s `MCDC_FILES` lacked deterministic `sort`, making `check-mcdc-fresh` spuriously fail even with no real changes.
+
 ## [0.95.2] - 2026-09-15
 
 ### Fixed
