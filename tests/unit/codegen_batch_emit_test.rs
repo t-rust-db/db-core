@@ -106,3 +106,9 @@ fn a_plan_error_surfaces_through_emit_error() {
     let e = EmitError::Plan(db_core::codegen::batch::PlanError::NoJoinClause);
     assert_eq!(e.to_string(), "compile_join requires a JOIN clause");
 }
+
+#[test]
+fn an_unsupported_emit_error_names_what_is_missing() {
+    let e = EmitError::Unsupported("window frames");
+    assert_eq!(e.to_string(), "codegen does not support window frames yet");
+}

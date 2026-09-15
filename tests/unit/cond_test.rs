@@ -216,3 +216,17 @@ fn and_or_reorder_the_cheaper_operand_first_but_answer_the_same() {
         .rows;
     assert_eq!(ints(&rows), vec![3]);
 }
+
+#[test]
+fn and_reorder_still_costs_a_unary_operand_correctly() {
+    // `cost_class`'s `Unary` arm (`-a`, cost_class(inner).max(1)) is
+    // otherwise never exercised: every other reorder test above uses a
+    // function call or a bare comparison, never a unary expression on
+    // either side of AND/OR.
+    let (_db, mut e) = seeded("and-unary-cost");
+    let rows = e
+        .run_query("SELECT a FROM ct WHERE -a < 0 AND a = 2")
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![2]);
+}
