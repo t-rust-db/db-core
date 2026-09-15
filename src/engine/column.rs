@@ -415,3 +415,21 @@ impl Engine for BatchEngine {
         }])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{plan_err, ErrorKind, PlanError};
+
+    #[test]
+    fn plan_err_maps_internal_to_a_planner_invariant_execute_error() {
+        let e = plan_err(PlanError::Internal("unreachable branch".into()));
+        assert_eq!(e.kind, ErrorKind::Execute);
+        assert!(e.to_string().contains("planner invariant violated"), "{e}");
+    }
+
+    #[test]
+    fn plan_err_maps_every_other_variant_to_a_compile_error() {
+        let e = plan_err(PlanError::UnknownColumn("missing".into()));
+        assert_eq!(e.kind, ErrorKind::Compile);
+    }
+}

@@ -201,6 +201,82 @@ mod tests {
         let err = decompress(&compressed, 4).unwrap_err();
         assert!(matches!(err, SnappyError::InvalidCopyOffset));
     }
+
+    #[test]
+    fn snappy_roundtrips_with_2byte_copy() {
+        // "WXYZWXYZ": literal "WXYZ" (4 bytes), then a 2-byte-offset copy
+        // of length 4 at offset 4 (self-overlapping, tag & 0x03 == 2).
+        let mut compressed = vec![8u8]; // declared length = 8
+        compressed.push(3u8 << 2); // literal, length_tag=3 => length 4
+        compressed.extend_from_slice(b"WXYZ");
+        let tag = (3u8 << 2) | 0x02; // copy-2byte, len_tag=3 => length 4
+        compressed.push(tag);
+        compressed.extend_from_slice(&4u16.to_le_bytes());
+        let out = decompress(&compressed, 8).unwrap();
+        assert_eq!(out, b"WXYZWXYZ");
+    }
+
+    #[test]
+    fn snappy_roundtrips_with_4byte_copy() {
+        // "ABCDABCD": literal "ABCD" (4 bytes), then a 4-byte-offset copy
+        // of length 4 at offset 4 (self-overlapping, tag & 0x03 == 3).
+        let mut compressed = vec![8u8];
+        compressed.push(3u8 << 2);
+        compressed.extend_from_slice(b"ABCD");
+        let tag = (3u8 << 2) | 0x03; // copy-4byte, len_tag=3 => length 4
+        compressed.push(tag);
+        compressed.extend_from_slice(&4u32.to_le_bytes());
+        let out = decompress(&compressed, 8).unwrap();
+        assert_eq!(out, b"ABCDABCD");
+    }
+
+    #[test]
+    fn snappy_roundtrips_a_long_literal_needing_an_extra_length_byte() {
+        // A literal of 65 bytes: the tag's 6-bit length field can only
+        // reach 60 (tag value 60 => "1 extra byte" per the format), so
+        // 60+ needs `extra_bytes = len_tag - 59` following bytes holding
+        // `len - 1` little-endian.
+        let literal: Vec<u8> = (0..65u8).collect();
+        let mut compressed = vec![65u8]; // declared length = 65
+        compressed.push(60u8 << 2); // len_tag = 60 => 1 extra length byte
+        compressed.push(64u8); // len - 1 = 64 => len = 65
+        compressed.extend_from_slice(&literal);
+        let out = decompress(&compressed, 65).unwrap();
+        assert_eq!(out, literal);
+    }
+
+    #[test]
+    fn an_over_long_varint_is_invalid() {
+        // Five continuation bytes with no terminator: `read_varint`'s
+        // `shift >= 35` guard trips before a sixth byte is even read.
+        let compressed = vec![0x80, 0x80, 0x80, 0x80, 0x80];
+        let err = decompress(&compressed, 0).unwrap_err();
+        assert!(matches!(err, SnappyError::InvalidVarint));
+    }
+
+    #[test]
+    fn a_truncated_varint_is_unexpected_eof() {
+        // A single continuation byte with nothing after it.
+        let compressed = vec![0x80];
+        let err = decompress(&compressed, 0).unwrap_err();
+        assert!(matches!(err, SnappyError::UnexpectedEof));
+    }
+
+    #[test]
+    fn a_short_decode_is_a_size_mismatch() {
+        // Declares length 5 but the block only encodes a 4-byte literal.
+        let mut compressed = vec![5u8];
+        compressed.push(3u8 << 2);
+        compressed.extend_from_slice(b"abcd");
+        let err = decompress(&compressed, 5).unwrap_err();
+        assert!(matches!(
+            err,
+            SnappyError::SizeMismatch {
+                expected: 5,
+                actual: 4
+            }
+        ));
+    }
 }
 
 #[cfg(test)]

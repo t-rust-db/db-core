@@ -69,6 +69,41 @@ mod tests {
         assert_eq!(out, text.as_bytes());
     }
 
+    #[test]
+    fn garbage_bytes_are_not_a_zstd_frame() {
+        let err = decompress(&[0, 1, 2, 3, 4, 5, 6, 7], 8).unwrap_err();
+        assert!(matches!(err, ZstdError::Frame(_)), "{err:?}");
+        assert!(err.to_string().starts_with("zstd frame error:"), "{err}");
+    }
+
+    #[test]
+    fn a_truncated_frame_is_a_read_error() {
+        let text = "hello hello hello world world world zstd zstd zstd test test test";
+        let compressed = zstd_encode_for_test(text.as_bytes());
+        // A valid frame header but a body cut short mid-block: `new()`
+        // accepts the header, `read_to_end` fails partway through.
+        let truncated = &compressed[..compressed.len() - 2];
+        let err = decompress(truncated, text.len()).unwrap_err();
+        assert!(matches!(err, ZstdError::Read(_)), "{err:?}");
+        assert!(err.to_string().starts_with("zstd read error:"), "{err}");
+    }
+
+    #[test]
+    fn a_wrong_declared_size_is_a_size_mismatch() {
+        let text = "hello hello hello world world world zstd zstd zstd test test test";
+        let compressed = zstd_encode_for_test(text.as_bytes());
+        let err = decompress(&compressed, text.len() + 1).unwrap_err();
+        assert!(
+            matches!(err, ZstdError::SizeMismatch { expected, actual } if expected == text.len() + 1 && actual == text.len()),
+            "{err:?}"
+        );
+        assert!(
+            err.to_string()
+                .starts_with("zstd decompressed size mismatch:"),
+            "{err}"
+        );
+    }
+
     /// Shells out to the system `zstd` CLI to produce a real compressed
     /// frame for the round-trip test above (skips gracefully if unavailable).
     fn zstd_encode_for_test(data: &[u8]) -> Vec<u8> {

@@ -225,3 +225,80 @@ pub(crate) fn emit_index_key_ops_from_regs(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen::row::IndexedColumn;
+    use crate::value::Collation;
+
+    fn table(name: &str, root_page: u32, cols: &[&str]) -> TableSchema {
+        TableSchema {
+            name: name.to_string(),
+            root_page,
+            columns: cols.iter().map(|c| (*c).to_string()).collect(),
+            column_types: cols.iter().map(|_| "INTEGER".to_string()).collect(),
+            column_collations: cols.iter().map(|_| Collation::Binary).collect(),
+            ..Default::default()
+        }
+    }
+
+    // Both root-page validators reject a `0` root page (the DDL-layer
+    // sentinel for "not yet allocated") the same way -- untested until
+    // now, since every SQL-level test naturally has a real root page by
+    // the time codegen runs.
+
+    #[test]
+    fn valid_table_root_page_rejects_page_zero() {
+        let schema = table("t", 0, &["a"]);
+        let e = valid_table_root_page(&schema).unwrap_err();
+        assert!(matches!(e, CodegenError::Unsupported { .. }), "{e:?}");
+    }
+
+    #[test]
+    fn valid_index_root_page_rejects_page_zero() {
+        let index = IndexSchema {
+            name: "idx".to_string(),
+            root_page: 0,
+            ..Default::default()
+        };
+        let e = valid_index_root_page(&index).unwrap_err();
+        assert!(matches!(e, CodegenError::Unsupported { .. }), "{e:?}");
+    }
+
+    #[test]
+    fn emit_index_key_ops_rejects_a_desc_index_column() {
+        // #171: no index b-tree comparator understands per-column sort
+        // direction, so a `DESC` index column is rejected outright
+        // rather than silently built as if it were ascending. Not
+        // reachable through SQL today (the DDL parser doesn't accept a
+        // descending index key yet), so this builds the schema by hand.
+        let schema = table("t", 2, &["a", "b"]);
+        let index = IndexSchema {
+            name: "idx_desc".to_string(),
+            root_page: 3,
+            columns: vec![IndexedColumn {
+                name: "a".to_string(),
+                desc: true,
+                collation: Collation::Binary,
+            }],
+            ..Default::default()
+        };
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        let schema_with_index = TableSchema {
+            indexes: vec![index],
+            ..schema
+        };
+        let e = emit_index_key_ops(
+            &mut em,
+            &mut reg,
+            &schema_with_index,
+            0,
+            1,
+            Opcode::IdxInsert,
+        )
+        .unwrap_err();
+        assert!(matches!(e, CodegenError::Unsupported { .. }), "{e:?}");
+    }
+}

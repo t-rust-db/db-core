@@ -24,7 +24,9 @@ confined to two named sites in `storage/row/vfs/fcntl.rs`, and compiles no
 batch/column/stream file; `make check-sqlite-profile` measures all three from
 rustc's dep-info on every PR, `tests/unit/layer_isolation_test.rs` keeps the
 two sides from naming each other, and `.github/workflows/assurance.yml`
-runs the slow checks (profile coverage, MC/DC dashboard) weekly.
+runs the slow MC/DC dashboard weekly. A crate-wide 85% line-coverage floor
+(`make check-coverage`), checked per file as well as in total, runs on
+every PR.
 
 Was six separate crates (`sql-types`, `sql-expr`, `sql-parser`,
 `sql-join`, `sql-vm`, `sql-codegen`) until this repo's merge into one —

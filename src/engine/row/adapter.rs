@@ -716,6 +716,36 @@ impl SchemaStorage for BtreeSchemaStorage {
 mod tests {
     use super::*;
 
+    const FIXTURE: &str = "tests/fixtures/btrees/table_single_page.db";
+
+    struct TempDb(std::path::PathBuf);
+
+    impl TempDb {
+        fn new(label: &str) -> Self {
+            let mut path = std::env::temp_dir();
+            path.push(format!(
+                "db-core-adapter-{label}-{}-{}.db",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .subsec_nanos()
+            ));
+            std::fs::copy(FIXTURE, &path).expect("copy fixture");
+            TempDb(path)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            std::fs::remove_file(&self.0).ok();
+            std::fs::remove_file(format!("{}-journal", self.0.display())).ok();
+        }
+    }
+
     /// `OpenWrite` on a read-only connection (`execute_with_db`) is refused
     /// by the factory — the former `Vm::writer("OpenWrite")` check.
     #[test]
@@ -732,5 +762,106 @@ mod tests {
         let mut factory = StorageFactory::read_only(source, header);
         assert!(factory.open_read(1).is_ok());
         assert!(factory.open_write(1).is_err());
+    }
+
+    /// `TableCursorAdapter::last`/`prev`/`column` (uncached path) and
+    /// `IndexCursorAdapter::last`/`prev`/`idx_compare`/`idx_delete`: a
+    /// reverse table scan, a reverse index scan, and a delete through a
+    /// secondary index, none of which the forward-scan-only tests
+    /// elsewhere exercise.
+    #[test]
+    fn reverse_scans_and_indexed_delete_exercise_last_and_prev() {
+        use crate::engine::{row::RowEngine, Engine};
+
+        let db = TempDb::new("adapter-reverse-scan");
+        let mut e = RowEngine::open(db.path()).unwrap();
+        e.run_query(
+            "CREATE TABLE rs(a INTEGER, b INTEGER); \
+             CREATE INDEX rs_b ON rs(b); \
+             INSERT INTO rs(a, b) VALUES (1, 10), (2, 20), (3, 30)",
+        )
+        .unwrap();
+
+        // ORDER BY a DESC without an index -- exercises the table
+        // cursor's last()/prev() in reverse, and column() falling back
+        // to a direct read on an entry with nothing cached yet.
+        let rows = e
+            .run_query("SELECT a FROM rs ORDER BY a DESC")
+            .unwrap()
+            .rows;
+        assert_eq!(rows.len(), 3);
+
+        // ORDER BY b DESC over the index -- the index cursor's own
+        // last()/prev().
+        let rows = e
+            .run_query("SELECT b FROM rs ORDER BY b DESC")
+            .unwrap()
+            .rows;
+        assert_eq!(rows.len(), 3);
+
+        // A ranged WHERE over the indexed column reaches idx_compare
+        // (the "past the upper bound" check a range scan makes).
+        let rows = e
+            .run_query("SELECT a FROM rs WHERE b > 10 AND b < 30")
+            .unwrap()
+            .rows;
+        assert_eq!(rows.len(), 1);
+
+        // DELETE keyed by the indexed column reaches idx_delete.
+        e.run_query("DELETE FROM rs WHERE b = 20").unwrap();
+        let rows = e.run_query("SELECT count(*) FROM rs").unwrap().rows;
+        assert_eq!(rows[0][0].to_string(), "2");
+    }
+
+    /// `PagerTransaction::begin` (IMMEDIATE/EXCLUSIVE), `set_journal_mode`,
+    /// `synchronous`/`set_synchronous`, and `integrity_check` -- all
+    /// reached only through real PRAGMA/BEGIN SQL, never by the
+    /// mock-hook opcode-dispatch tests in `vm/row/vm.rs`.
+    #[test]
+    fn pragma_and_explicit_transaction_modes_reach_the_real_pager_adapter() {
+        use crate::engine::{row::RowEngine, Engine};
+
+        let db = TempDb::new("adapter-pragma");
+        let mut e = RowEngine::open(db.path()).unwrap();
+        e.run_query("CREATE TABLE pt(a INTEGER)").unwrap();
+
+        e.run_query("PRAGMA journal_mode = WAL").unwrap();
+        e.run_query("PRAGMA synchronous = OFF").unwrap();
+        let rows = e.run_query("PRAGMA synchronous").unwrap().rows;
+        assert_eq!(rows[0][0].to_string(), "0");
+        e.run_query("PRAGMA synchronous = NORMAL").unwrap();
+
+        e.run_query("BEGIN IMMEDIATE; INSERT INTO pt VALUES (1); COMMIT")
+            .unwrap();
+        e.run_query("BEGIN EXCLUSIVE; INSERT INTO pt VALUES (2); COMMIT")
+            .unwrap();
+
+        let rows = e.run_query("PRAGMA integrity_check").unwrap().rows;
+        assert_eq!(rows[0][0].to_string(), "ok");
+    }
+
+    /// `BtreeSchemaStorage::create_index_root`/`populate_index`/
+    /// `free_root`/`write_stat1` (including its per-index
+    /// `count_index_entries_and_avg_eq` loop): `CREATE INDEX` over a
+    /// non-empty table, `ANALYZE` of that table (an index present this
+    /// time, unlike the existing empty-table ANALYZE tests), and
+    /// `DROP INDEX` to free the root.
+    #[test]
+    fn create_index_analyze_and_drop_index_exercise_schema_storage() {
+        use crate::engine::{row::RowEngine, Engine};
+
+        let db = TempDb::new("adapter-schema-storage");
+        let mut e = RowEngine::open(db.path()).unwrap();
+        e.run_query(
+            "CREATE TABLE ss(a INTEGER, b INTEGER); \
+             INSERT INTO ss(a, b) VALUES (1, 1), (2, 1), (3, 2)",
+        )
+        .unwrap();
+        // CREATE INDEX on a non-empty table: create_index_root + populate_index.
+        e.run_query("CREATE INDEX ss_b ON ss(b)").unwrap();
+        // ANALYZE with a real index present: write_stat1's per-index loop.
+        e.run_query("ANALYZE ss").unwrap();
+        // DROP INDEX: free_root.
+        e.run_query("DROP INDEX ss_b").unwrap();
     }
 }

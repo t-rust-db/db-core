@@ -7432,7 +7432,7 @@
   {
     "id": "codegen_row_select_limit_scan_resolved_ints_1ae77512",
     "file": "src/codegen/row/select/limit_scan.rs",
-    "line": 1312,
+    "line": 1325,
     "decision": "match e.kind {\n                ExprKind::Literal(Literal::Integer(n)) => n,\n                _ => panic!(\"expected integer literal, got {e:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7442,7 +7442,7 @@
   {
     "id": "codegen_row_select_limit_scan_schema_cfa672e9",
     "file": "src/codegen/row/select/limit_scan.rs",
-    "line": 1393,
+    "line": 1406,
     "decision": "indexed",
     "conditions": 1,
     "vectors_required": 2,
@@ -7452,7 +7452,7 @@
   {
     "id": "codegen_row_select_limit_scan_schema_3534660c",
     "file": "src/codegen/row/select/limit_scan.rs",
-    "line": 1415,
+    "line": 1428,
     "decision": "alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -21040,9 +21040,39 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_column_parquet_parquet_file_build_file_from_chunk_typed_642303d1",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 1022,
+    "decision": "let Some(len) = type_length",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_build_file_from_chunk_annotated_642303d1",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 1055,
+    "decision": "let Some(len) = type_length",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_build_file_from_chunk_annotated_aafe5a53",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 1061,
+    "decision": "let Some(s) = scale",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_column_parquet_parquet_file_encode_dictionary_indices_9466a82b",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 993,
+    "line": 1090,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -21052,7 +21082,7 @@
   {
     "id": "storage_column_parquet_parquet_file_negative_page_size_is_invalid_metadata_not_a_huge_allocation_a5ccf881",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1331,
+    "line": 1636,
     "decision": "match page_size(\"compressed_page_size\", -1) {\n            Err(FileError::InvalidMetadata { field, value }) => {\n                assert_eq!(field, \"compressed_page_size\");\n                assert_eq!(value, -1);\n            }\n            other => panic!(\"expected InvalidMetadata, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21402,7 +21432,7 @@
   {
     "id": "storage_column_parquet_reader_encode_def_levels_62d37561",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 719,
+    "line": 757,
     "decision": "idx < n && levels[idx] == 1",
     "conditions": 2,
     "vectors_required": 3,
@@ -21412,7 +21442,7 @@
   {
     "id": "storage_column_parquet_reader_encode_dictionary_indices_9466a82b",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 943,
+    "line": 981,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -23140,9 +23170,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_btree_index_index_delete_split_then_delete_descending_hits_the_interior_predecessor_swap_with_a_nonempty_subtree_734b4601",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 538,
+    "decision": "let Err(e) = r",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_btree_index_index_delete_reachable_pages_594ac9a2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 517,
+    "line": 556,
     "decision": "page_type != INTERIOR_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -23152,7 +23192,7 @@
   {
     "id": "storage_row_btree_index_index_delete_freelist_pages_ccf8b9e2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 541,
+    "line": 580,
     "decision": "trunk != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -26932,7 +26972,7 @@
   {
     "id": "storage_stream_batch_field_store_dict_encoding_a639947f",
     "file": "src/storage/stream/batch.rs",
-    "line": 851,
+    "line": 886,
     "decision": "match col {\n            FieldColumn::Dict { dict, indices } => {\n                assert_eq!(dict.len(), 2); // nginx, postgres\n                assert_eq!(indices.len(), 3);\n            }\n            _ => panic!(\"Expected Dict encoding\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26942,7 +26982,7 @@
   {
     "id": "storage_stream_batch_set_int_creates_typed_column_0e41a16d",
     "file": "src/storage/stream/batch.rs",
-    "line": 866,
+    "line": 901,
     "decision": "match store.get(\"status\").unwrap() {\n            FieldColumn::Int(v) => assert_eq!(v, &[Some(200), Some(500)]),\n            other => panic!(\"Expected Int encoding, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26952,7 +26992,7 @@
   {
     "id": "storage_stream_batch_set_int_pads_nulls_for_skipped_rows_43dd5cbe",
     "file": "src/storage/stream/batch.rs",
-    "line": 877,
+    "line": 912,
     "decision": "match store.get(\"status\").unwrap() {\n            FieldColumn::Int(v) => assert_eq!(v, &[None, None, Some(404)]),\n            other => panic!(\"Expected Int encoding, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26962,7 +27002,7 @@
   {
     "id": "storage_stream_batch_set_float_creates_typed_column_5332f345",
     "file": "src/storage/stream/batch.rs",
-    "line": 889,
+    "line": 924,
     "decision": "match store.get(\"duration\").unwrap() {\n            FieldColumn::Float(v) => assert_eq!(v, &[Some(1.5), Some(2.25)]),\n            other => panic!(\"Expected Float encoding, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26972,7 +27012,7 @@
   {
     "id": "storage_stream_batch_int_column_conflicting_with_string_degrades_to_str_preserving_new_value_153bd076",
     "file": "src/storage/stream/batch.rs",
-    "line": 902,
+    "line": 937,
     "decision": "match store.get(\"mixed\").unwrap() {\n            FieldColumn::Str(v) => assert_eq!(v, &[None, Some(\"oops\")]),\n            other => panic!(\"Expected Str degrade, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26982,7 +27022,7 @@
   {
     "id": "storage_stream_batch_string_column_conflicting_with_int_degrades_preserving_existing_strings_55d66c1d",
     "file": "src/storage/stream/batch.rs",
-    "line": 916,
+    "line": 951,
     "decision": "match store.get(\"mixed\").unwrap() {\n            FieldColumn::Str(v) => assert_eq!(v, &[Some(\"hello\"), Some(\"world\"), None]),\n            other => panic!(\"Expected Str degrade preserving prior strings, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

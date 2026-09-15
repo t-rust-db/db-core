@@ -297,6 +297,63 @@ fn join_over_a_large_unindexed_table_builds_a_transient_auto_index() {
 }
 
 #[test]
+fn right_join_on_a_unique_indexed_column_still_tracks_matched_rows() {
+    // A plain (INNER) join over a UniqueIndex access never needs the
+    // "outer join's matched register" bookkeeping -- only a RIGHT/LEFT
+    // join does, to know whether to emit a NULL-padded row for an
+    // unmatched left-side row. Combining UniqueIndex access with a
+    // RIGHT JOIN exercises that `check.sets_matched` branch, which
+    // `join_on_a_unique_indexed_column_seeks_via_that_index` (a plain
+    // JOIN) never reaches.
+    let db = TempDb::new("right-join-unique-index");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE rjui_a(id INTEGER PRIMARY KEY, k INTEGER); \
+         CREATE TABLE rjui_b(id INTEGER PRIMARY KEY, k INTEGER, v INTEGER); \
+         CREATE UNIQUE INDEX rjui_b_k ON rjui_b(k); \
+         INSERT INTO rjui_a(k) VALUES (5); \
+         INSERT INTO rjui_b(k, v) VALUES (5, 500); \
+         INSERT INTO rjui_b(k, v) VALUES (9, 900)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query("SELECT rjui_a.k, rjui_b.v FROM rjui_a RIGHT JOIN rjui_b ON rjui_b.k = rjui_a.k")
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![vec![5, 500], vec![-1, 900]]);
+}
+
+#[test]
+fn right_join_over_an_auto_indexed_table_still_tracks_matched_rows() {
+    // Same reasoning as the unique-index case above, but for the #545
+    // transient-auto-index access path: `join_over_a_large_unindexed_
+    // table_builds_a_transient_auto_index` is a plain JOIN, so it never
+    // reaches the auto-index branch's own `check.sets_matched` arm.
+    let db = TempDb::new("right-join-auto-index");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE rjai_a(id INTEGER PRIMARY KEY, k INTEGER); \
+         CREATE TABLE rjai_b(id INTEGER PRIMARY KEY, k INTEGER, v INTEGER); \
+         INSERT INTO rjai_a(k) VALUES (7)",
+    )
+    .unwrap();
+    for i in 0..30 {
+        e.run_query(&format!(
+            "INSERT INTO rjai_b(k, v) VALUES ({}, {})",
+            i,
+            i * 10
+        ))
+        .unwrap();
+    }
+    e.run_query("ANALYZE").unwrap();
+    let rows = e
+        .run_query("SELECT rjai_a.k, rjai_b.v FROM rjai_a RIGHT JOIN rjai_b ON rjai_b.k = rjai_a.k")
+        .unwrap()
+        .rows;
+    assert_eq!(rows.len(), 30);
+}
+
+#[test]
 fn full_join_emits_matched_rows_and_both_sides_unmatched_rows() {
     let db = TempDb::new("full-join-plain");
     let mut e = open(&db);
@@ -390,4 +447,29 @@ fn join_with_a_where_clause_limit_offset_and_distinct() {
         .unwrap()
         .rows;
     assert_eq!(ints(&rows), vec![vec![1]]);
+}
+
+#[test]
+fn joined_group_by_with_limit_and_offset() {
+    // `compile_limit_setup`'s OFFSET arm, specifically for a joined
+    // `GROUP BY` (`aggregate::join`'s own call site) -- the plain-join
+    // LIMIT/OFFSET test above exercises a different, ungrouped call
+    // site.
+    let db = TempDb::new("join-group-by-limit-offset");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE jgl_a(k INTEGER); \
+         CREATE TABLE jgl_b(k INTEGER, v INTEGER); \
+         INSERT INTO jgl_a VALUES (1), (2), (3); \
+         INSERT INTO jgl_b VALUES (1, 10), (2, 20), (3, 30)",
+    )
+    .unwrap();
+    let rows = e
+        .run_query(
+            "SELECT jgl_a.k, count(*) FROM jgl_a JOIN jgl_b ON jgl_a.k = jgl_b.k \
+             GROUP BY jgl_a.k ORDER BY jgl_a.k LIMIT 1 OFFSET 1",
+        )
+        .unwrap()
+        .rows;
+    assert_eq!(ints(&rows), vec![vec![2, 1]]);
 }

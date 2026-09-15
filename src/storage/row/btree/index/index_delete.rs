@@ -506,6 +506,45 @@ mod tests {
         assert!(cursor.first().unwrap().is_none());
     }
 
+    #[test]
+    fn split_then_delete_descending_hits_the_interior_predecessor_swap_with_a_nonempty_subtree() {
+        // `split_then_delete_all_including_promoted_interior_entries`
+        // deletes ascending, which drains each promoted key's left
+        // subtree to empty before that key is ever the delete target --
+        // always the `None` (subtree exhausted) arm of
+        // `delete_via_predecessor_swap`. Deleting descending instead
+        // reaches a promoted interior key while its left subtree still
+        // has entries left to extract a predecessor from -- the `Some`
+        // arm, which rewrites the interior page with the swapped-in key.
+        let page_size = 512u32;
+        let (vfs, header) = minimal_index_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+
+        let filler = "x".repeat(190);
+        let n = 30i64;
+        let keys: Vec<Vec<Value>> = (1..=n)
+            .map(|i| {
+                vec![
+                    Value::Text(format!("{filler}-{i:04}").into()),
+                    Value::Integer(i),
+                ]
+            })
+            .collect();
+        for k in &keys {
+            insert_entry(&mut pager, &header, 1, k, TextEncoding::Utf8).unwrap();
+        }
+        for (idx, k) in keys.iter().enumerate().rev() {
+            let r = delete_entry(&mut pager, &header, 1, k, TextEncoding::Utf8);
+            if let Err(e) = r {
+                panic!("delete failed at idx {idx}: {:?}", e);
+            }
+        }
+
+        let mut cursor =
+            crate::storage::row::btree::IndexCursor::new(pager, header.usable_page_size(), 1);
+        assert!(cursor.first().unwrap().is_none());
+    }
+
     /// Walks every page number reachable from `page_num` (an index b-tree
     /// root/subtree): itself, plus (for an interior page) every entry's
     /// child and `rightmost`, recursively.

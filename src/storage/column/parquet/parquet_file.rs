@@ -972,6 +972,103 @@ mod tests {
         (page_bytes, meta_bytes)
     }
 
+    /// Like [`build_int64_chunk`] but for any physical type, given its
+    /// already-PLAIN-encoded page body -- one round-trip-through-`ParquetFile`
+    /// builder for every `read_*_column` (#407: these otherwise have no
+    /// coverage above `reader::read_*_column`'s own unit-level tests).
+    fn build_typed_chunk(
+        physical_type: i32,
+        body: &[u8],
+        num_values: i32,
+        base_offset: i64,
+    ) -> (Vec<u8>, Vec<u8>) {
+        let header = build_page_header(num_values, body.len() as i32);
+        let mut page_bytes = header.clone();
+        page_bytes.extend_from_slice(body);
+
+        let mut meta = StructWriter::new();
+        meta.i32_field(1, physical_type);
+        meta.field_header(3, 0x09); // path_in_schema list<string>
+        meta.buf.push((1u8 << 4) | 0x08);
+        meta.write_varint(1);
+        meta.buf.push(b'v');
+        meta.i64_field(5, num_values as i64); // num_values
+        meta.i64_field(6, page_bytes.len() as i64); // total_uncompressed_size
+        meta.i64_field(7, page_bytes.len() as i64); // total_compressed_size
+        meta.i64_field(9, base_offset); // data_page_offset
+        let meta_bytes = meta.finish();
+
+        (page_bytes, meta_bytes)
+    }
+
+    /// Like [`build_file_from_chunk`] but for any physical type (and,
+    /// for `FIXED_LEN_BYTE_ARRAY`, its `type_length`).
+    fn build_file_from_chunk_typed(
+        page_bytes: &[u8],
+        meta_bytes: Vec<u8>,
+        num_rows: i64,
+        physical_type: i32,
+        type_length: Option<i32>,
+    ) -> Vec<u8> {
+        let mut file = Vec::new();
+        file.extend_from_slice(b"PAR1");
+        file.extend_from_slice(page_bytes);
+
+        let column_chunk = build_column_chunk(4, meta_bytes);
+        let row_group = build_row_group(vec![column_chunk], page_bytes.len() as i64, num_rows);
+        let root = build_root_schema_element(1);
+        let mut col = StructWriter::new();
+        col.i32_field(1, physical_type);
+        if let Some(len) = type_length {
+            col.i32_field(2, len);
+        }
+        col.i32_field(3, 0); // REQUIRED -> max_def_level 0
+        col.string_field(4, "v");
+        let col = col.finish();
+        let metadata = build_file_metadata(vec![root, col], num_rows, vec![row_group]);
+        file.extend_from_slice(&metadata);
+        file.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"PAR1");
+        file
+    }
+
+    /// Like [`build_file_from_chunk_typed`] but also annotates the leaf
+    /// with a `converted_type`/`scale` (`TIMESTAMP_MILLIS`, `DECIMAL`).
+    fn build_file_from_chunk_annotated(
+        page_bytes: &[u8],
+        meta_bytes: Vec<u8>,
+        num_rows: i64,
+        physical_type: i32,
+        type_length: Option<i32>,
+        converted_type: i32,
+        scale: Option<i32>,
+    ) -> Vec<u8> {
+        let mut file = Vec::new();
+        file.extend_from_slice(b"PAR1");
+        file.extend_from_slice(page_bytes);
+
+        let column_chunk = build_column_chunk(4, meta_bytes);
+        let row_group = build_row_group(vec![column_chunk], page_bytes.len() as i64, num_rows);
+        let root = build_root_schema_element(1);
+        let mut col = StructWriter::new();
+        col.i32_field(1, physical_type);
+        if let Some(len) = type_length {
+            col.i32_field(2, len);
+        }
+        col.i32_field(3, 0); // REQUIRED -> max_def_level 0
+        col.string_field(4, "v");
+        col.i32_field(6, converted_type);
+        if let Some(s) = scale {
+            col.i32_field(7, s);
+        }
+        let col = col.finish();
+        let metadata = build_file_metadata(vec![root, col], num_rows, vec![row_group]);
+        file.extend_from_slice(&metadata);
+        file.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"PAR1");
+        file
+    }
+
     /// Bit-packs `indices` (one RLE/bit-packed hybrid run, `bit_width`
     /// bits each) the same way a real PLAIN_DICTIONARY/RLE_DICTIONARY data
     /// page body does -- mirrors `reader::tests::encode_dictionary_indices`
@@ -1316,6 +1413,214 @@ mod tests {
             assert!(result.is_none());
         }
     }
+
+    // Physical type ids (thrift `Type` enum): BOOLEAN=0, INT32=1, INT64=2,
+    // INT96=3, FLOAT=4, DOUBLE=5, BYTE_ARRAY=6, FIXED_LEN_BYTE_ARRAY=7.
+    //
+    // `RowGroupReader::read_{int32,float,boolean,string,fixed_len_byte_array,
+    // int96}_column` (and `read_timestamp_column`/`read_decimal_column`,
+    // which delegate to these) are otherwise only covered indirectly by
+    // `reader::read_*_column`'s own byte-level unit tests -- never through a
+    // full `ParquetFile::open` -> `RowGroupReader` round trip.
+    #[test]
+    fn reads_an_int32_column_through_a_full_file_round_trip() {
+        let body: Vec<u8> = [7i32, -3, 100]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let (page_bytes, meta_bytes) = build_typed_chunk(1, &body, 3, 4);
+        let file_bytes = build_file_from_chunk_typed(&page_bytes, meta_bytes, 3, 1, None);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        assert_eq!(
+            rg.read_int32_column(0).unwrap(),
+            vec![Some(7), Some(-3), Some(100)]
+        );
+    }
+
+    #[test]
+    fn reads_a_float_column_through_a_full_file_round_trip() {
+        let body: Vec<u8> = [1.5f32, -2.5]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let (page_bytes, meta_bytes) = build_typed_chunk(4, &body, 2, 4);
+        let file_bytes = build_file_from_chunk_typed(&page_bytes, meta_bytes, 2, 4, None);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        assert_eq!(
+            rg.read_float_column(0).unwrap(),
+            vec![Some(1.5), Some(-2.5)]
+        );
+    }
+
+    #[test]
+    fn reads_a_boolean_column_through_a_full_file_round_trip() {
+        // LSB-first bit-packing: true, false, true, true -> 0b0000_1101.
+        let body = vec![0b0000_1101u8];
+        let (page_bytes, meta_bytes) = build_typed_chunk(0, &body, 4, 4);
+        let file_bytes = build_file_from_chunk_typed(&page_bytes, meta_bytes, 4, 0, None);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        assert_eq!(
+            rg.read_boolean_column(0).unwrap(),
+            vec![Some(true), Some(false), Some(true), Some(true)]
+        );
+    }
+
+    #[test]
+    fn reads_a_string_column_through_a_full_file_round_trip() {
+        let mut body = Vec::new();
+        for s in ["hi", "parquet"] {
+            body.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            body.extend_from_slice(s.as_bytes());
+        }
+        let (page_bytes, meta_bytes) = build_typed_chunk(6, &body, 2, 4);
+        let file_bytes = build_file_from_chunk_typed(&page_bytes, meta_bytes, 2, 6, None);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        assert_eq!(
+            rg.read_string_column(0).unwrap(),
+            vec![Some("hi".to_string()), Some("parquet".to_string())]
+        );
+    }
+
+    #[test]
+    fn reads_a_fixed_len_byte_array_column_through_a_full_file_round_trip() {
+        let body: Vec<u8> = vec![1, 2, 3, 4, 5, 6]; // two 3-byte values
+        let (page_bytes, meta_bytes) = build_typed_chunk(7, &body, 2, 4);
+        let file_bytes = build_file_from_chunk_typed(&page_bytes, meta_bytes, 2, 7, Some(3));
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        assert_eq!(
+            rg.read_fixed_len_byte_array_column(0).unwrap(),
+            vec![Some(vec![1, 2, 3]), Some(vec![4, 5, 6])]
+        );
+    }
+
+    #[test]
+    fn reads_an_int96_column_and_a_timestamp_column_through_a_full_file_round_trip() {
+        // INT96 = 8-byte time-of-day nanos (LE) + 4-byte Julian day (LE).
+        // Julian day for the Unix epoch is 2_440_588; time_nanos 0 -> epoch.
+        let mut body = Vec::new();
+        body.extend_from_slice(&0i64.to_le_bytes());
+        body.extend_from_slice(&2_440_588i32.to_le_bytes());
+        let (page_bytes, meta_bytes) = build_typed_chunk(3, &body, 1, 4);
+        let file_bytes = build_file_from_chunk_typed(&page_bytes, meta_bytes, 1, 3, None);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let int96 = rg.read_int96_column(0).unwrap();
+        assert_eq!(int96.len(), 1);
+        assert_eq!(int96[0].as_ref().unwrap().julian_day, 2_440_588);
+
+        let ts = rg.read_timestamp_column(0).unwrap();
+        assert_eq!(ts, vec![Some(0)]);
+    }
+
+    #[test]
+    fn reads_a_decimal_column_through_a_full_file_round_trip() {
+        let body: Vec<u8> = 12345i32.to_le_bytes().to_vec();
+        let (page_bytes, meta_bytes) = build_typed_chunk(1, &body, 1, 4);
+        let file_bytes = build_file_from_chunk_typed(&page_bytes, meta_bytes, 1, 1, None);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        // `read_decimal_column` needs a DECIMAL-annotated schema (scale in
+        // the leaf's `SchemaElement`), which `build_file_from_chunk_typed`
+        // doesn't set -- so the un-annotated call is the error path this
+        // test actually exercises: `FileMetaData::decimal_scale` fails with
+        // `MissingDecimalScale` before `read_int32_column` is ever reached.
+        let rg = file.row_group(0).unwrap();
+        assert!(matches!(
+            rg.read_decimal_column(0),
+            Err(FileError::MissingDecimalScale)
+        ));
+    }
+
+    /// `read_nested_column` on a flat (non-nested) schema is otherwise
+    /// unreached by every other test in this file, which all go through
+    /// the per-type `read_*_column` fast paths instead -- and it's the
+    /// only caller of `read_leaf_entries`, so this is also the sole
+    /// coverage for that function's PLAIN-encoded, non-dictionary,
+    /// non-repeated (`rep_levels`/`def_levels` both empty) path.
+    #[test]
+    fn read_nested_column_reconstructs_a_flat_int64_column() {
+        let file_bytes = build_file(&[&[10, 20, 30]]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let values = file.read_nested_column(0, "v").unwrap();
+        assert_eq!(
+            values,
+            vec![
+                NestedValue::Scalar(reader::LeafScalar::Int64(10)),
+                NestedValue::Scalar(reader::LeafScalar::Int64(20)),
+                NestedValue::Scalar(reader::LeafScalar::Int64(30)),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_nested_column_on_an_unknown_field_name_errors() {
+        let file_bytes = build_file(&[&[1]]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        assert!(matches!(
+            file.read_nested_column(0, "nope"),
+            Err(FileError::ColumnIndexOutOfRange(0))
+        ));
+    }
+
+    #[test]
+    fn read_nested_column_on_an_out_of_range_row_group_errors() {
+        let file_bytes = build_file(&[&[1]]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        assert!(matches!(
+            file.read_nested_column(5, "v"),
+            Err(FileError::ColumnIndexOutOfRange(5))
+        ));
+    }
+
+    #[test]
+    fn read_timestamp_column_converts_millis_to_micros() {
+        let body: Vec<u8> = 42i64.to_le_bytes().to_vec();
+        let (page_bytes, meta_bytes) = build_typed_chunk(2, &body, 1, 4);
+        // ConvertedType::TimestampMillis == 9.
+        let file_bytes =
+            build_file_from_chunk_annotated(&page_bytes, meta_bytes, 1, 2, None, 9, None);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        assert_eq!(rg.read_timestamp_column(0).unwrap(), vec![Some(42_000)]);
+    }
+
+    #[test]
+    fn read_decimal_column_reads_int32_int64_and_fixed_len_byte_array() {
+        // ConvertedType::Decimal == 5.
+        let int32_body: Vec<u8> = 123i32.to_le_bytes().to_vec();
+        let (page_bytes, meta_bytes) = build_typed_chunk(1, &int32_body, 1, 4);
+        let file_bytes =
+            build_file_from_chunk_annotated(&page_bytes, meta_bytes, 1, 1, None, 5, Some(2));
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let d = rg.read_decimal_column(0).unwrap();
+        assert_eq!(d[0].as_ref().unwrap().unscaled, 123);
+        assert_eq!(d[0].as_ref().unwrap().scale, 2);
+
+        let int64_body: Vec<u8> = 456i64.to_le_bytes().to_vec();
+        let (page_bytes, meta_bytes) = build_typed_chunk(2, &int64_body, 1, 4);
+        let file_bytes =
+            build_file_from_chunk_annotated(&page_bytes, meta_bytes, 1, 2, None, 5, Some(3));
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let d = rg.read_decimal_column(0).unwrap();
+        assert_eq!(d[0].as_ref().unwrap().unscaled, 456);
+        assert_eq!(d[0].as_ref().unwrap().scale, 3);
+
+        let flba_body: Vec<u8> = vec![0, 0, 1, 0]; // big-endian 256
+        let (page_bytes, meta_bytes) = build_typed_chunk(7, &flba_body, 1, 4);
+        let file_bytes =
+            build_file_from_chunk_annotated(&page_bytes, meta_bytes, 1, 7, Some(4), 5, Some(1));
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let d = rg.read_decimal_column(0).unwrap();
+        assert_eq!(d[0].as_ref().unwrap().unscaled, 256);
+        assert_eq!(d[0].as_ref().unwrap().scale, 1);
+    }
 }
 
 #[cfg(test)]
@@ -1341,5 +1646,69 @@ mod tests_289 {
         }
         .to_string()
         .contains("-5"));
+    }
+
+    /// Every `FileError` variant's `Display` renders without panicking and
+    /// names something specific enough to be useful in an error message --
+    /// most variants are only ever constructed deep in a page/column-chunk
+    /// parse path that a well-formed test fixture never reaches, so this is
+    /// the only place they get exercised at all.
+    #[test]
+    fn every_file_error_variant_displays_a_useful_message() {
+        let cases: Vec<(FileError, &str)> = vec![
+            (FileError::Footer(FooterError::FileTooShort), "footer"),
+            (
+                FileError::Page(PageError::MissingDataPageHeader),
+                "DATA_PAGE",
+            ),
+            (FileError::Read(ReadError::UnexpectedEof), "end of page"),
+            (
+                FileError::Compression(CompressionError::UnsupportedCodec(99)),
+                "99",
+            ),
+            (FileError::ColumnIndexOutOfRange(7), "7"),
+            (FileError::ChunkOutOfBounds, "outside the file"),
+            (FileError::MissingColumnMetadata, "meta_data"),
+            (FileError::UnexpectedDictionaryPage, "DICTIONARY_PAGE"),
+            (FileError::MissingDictionaryPage, "DICTIONARY_PAGE"),
+            (FileError::MissingTypeLength, "type_length"),
+            (FileError::MissingDecimalScale, "DECIMAL"),
+            (
+                FileError::UnsupportedTimestampPhysicalType(footer::PhysicalType::Boolean),
+                "timestamp",
+            ),
+            (
+                FileError::UnsupportedDecimalPhysicalType(footer::PhysicalType::ByteArray),
+                "DECIMAL",
+            ),
+            (FileError::UnsupportedNestedDictionary, "dictionary-encoded"),
+            (
+                FileError::UnsupportedNestedEncoding(Encoding::Plain),
+                "encoding",
+            ),
+            (
+                FileError::Nested(NestedError::MissingLeafData("v".to_string())),
+                "'v'",
+            ),
+        ];
+        for (err, needle) in cases {
+            let msg = err.to_string();
+            assert!(
+                msg.contains(needle),
+                "{err:?} displayed as {msg:?}, expected it to contain {needle:?}"
+            );
+        }
+    }
+
+    /// `ParquetFile::open`'s `?` on `footer::parse_footer` is the only
+    /// place `From<FooterError> for FileError` actually fires -- every
+    /// other test opens a well-formed file, so a too-short buffer is the
+    /// only way to reach it.
+    #[test]
+    fn open_on_a_too_short_buffer_wraps_the_footer_error() {
+        assert!(matches!(
+            ParquetFile::open(&[]),
+            Err(FileError::Footer(FooterError::FileTooShort))
+        ));
     }
 }
