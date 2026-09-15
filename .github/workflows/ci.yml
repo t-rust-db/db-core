@@ -156,6 +156,21 @@ jobs:
           shared-key: stream-profile
       - run: make check-stream-profile
 
+  # Charter gate (ADR 0000, db-core#405): the column profile -- the
+  # Parquet analytics mode. Not first-party-only by design (memmap2/
+  # ruzstd are accepted dependencies), so only invariant (b) -- exactly
+  # the named `unsafe` carve-out -- is checked here.
+  column-profile:
+    name: Column profile (charter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: column-profile
+      - run: make check-column-profile
+
   # Public API surface (db-core#360): `tests/public_api.md` must match a
   # fresh `cargo-public-api` scan, or a widened/narrowed `pub` surface can
   # ship without a reviewed diff. Needs nightly for rustdoc JSON output,

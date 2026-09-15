@@ -72,6 +72,20 @@ PROFILES = {
         "allowed_unsafe": {},
         "other_modes": None,
     },
+    # db-core#405: the Parquet analytics mode. Unlike the SQLite/stream
+    # profiles, this one is not first-party-only by design (ADR 0000 §The
+    # column profile) -- memmap2/ruzstd are accepted third-party
+    # dependencies, so invariant (a) is not checked here. Only (b) is.
+    "column": {
+        "features": ["parser-column", "storage-column", "engine-column"],
+        "allowed_unsafe": {
+            # ADR-0016/ADR-0000: `memmap2::Mmap::map`, Safety comment at
+            # the call site.
+            "src/storage/column/mmap.rs": 1,
+        },
+        "other_modes": None,
+        "check_dependency_closure": False,
+    },
 }
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -147,11 +161,12 @@ def check_profile(name: str, profile: dict) -> int:
     violations: list[str] = []
 
     crates = dependency_closure(name, features)
-    foreign = [c for c in crates if c not in FIRST_PARTY]
-    if foreign:
-        violations.append(
-            "(a) dependency closure is not first-party only: " + ", ".join(foreign)
-        )
+    if profile.get("check_dependency_closure", True):
+        foreign = [c for c in crates if c not in FIRST_PARTY]
+        if foreign:
+            violations.append(
+                "(a) dependency closure is not first-party only: " + ", ".join(foreign)
+            )
 
     files = compiled_files(name, features)
     if not files:

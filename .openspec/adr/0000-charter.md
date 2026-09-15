@@ -45,16 +45,32 @@ Invariants (a) and (b) apply here too -- "under the same bar" from the
 Purpose section above, made mechanical -- via
 `tools/check_sqlite_profile.py stream`. There is no mode-isolation
 invariant for this profile: it legitimately compiles `vm::batch` and
-`codegen::batch` (its planner reuses their types). A column profile is
-deliberately not defined yet; it needs its `unsafe` carve-out decision
-first.
+`codegen::batch` (its planner reuses their types).
+
+## The column profile
+
+The Parquet analytics mode (db-core#405):
+
+```
+parser-column, storage-column, engine-column
+```
+
+Unlike the SQLite and stream profiles, this one is **not** first-party-only
+by design: `storage-column = ["dep:memmap2", "dep:ruzstd"]` are the crate's
+only third-party dependencies, accepted because hand-rolling a
+cross-platform mmap wrapper or a from-scratch zstd decoder is not worth the
+risk of getting page-fault/lifetime or decompression edge cases wrong for a
+mode with no oracle-parity invariant (f) obligation. Invariant (a) (first-
+party dependency closure) therefore does not apply to this profile; invariant
+(b) does, with its own carve-out below. `tools/check_sqlite_profile.py
+column` checks (b) only.
 
 ## Invariants and their gates
 
 | # | Invariant | Gate | Runs |
 |---|---|---|---|
 | (a) | The SQLite and stream profiles' dependency closures are first-party only (`db-core`). | `make check-sqlite-profile`, `make check-stream-profile` (`cargo tree` over each profile) | every PR |
-| (b) | `unsafe` on the SQLite profile is exactly the named carve-outs, count checked: `storage/row/vfs/fcntl.rs` -- 2 (`fsync`, `fcntl` byte-range locks; ADR-0031 lineage). The stream profile carries none. | `make check-sqlite-profile`, `make check-stream-profile` (regex over each profile's dep-info file set) | every PR |
+| (b) | `unsafe` on the SQLite profile is exactly the named carve-outs, count checked: `storage/row/vfs/fcntl.rs` -- 2 (`fsync`, `fcntl` byte-range locks; ADR-0031 lineage). The stream profile carries none. The column profile carries one: `storage/column/mmap.rs` -- 1 (`memmap2::Mmap::map`; db-core#405, Safety comment at the call site). | `make check-sqlite-profile`, `make check-stream-profile`, `make check-column-profile` (regex over each profile's dep-info file set) | every PR |
 | (c) | The SQLite side (`parser/row`, `vm/row`, `codegen/row`, `storage/row`, `engine/row`) never names `vm::batch`, `vm::engine`, `vm::stream`, `codegen::batch`, `storage::column`, `storage::stream`, `engine::column`, `engine::stream`; and those never name the SQLite side. The SQLite profile compiles no file from another mode. | `tests/unit/layer_isolation_test.rs`; `make check-sqlite-profile` | every PR |
 | (d) | Every Cargo feature builds standalone with its declared implications and nothing else. | `make check-features` | every PR |
 | (e) | The MC/DC obligation snapshot is current and every tagged vector names a real obligation. | `make check-mcdc-fresh`; `tests/unit/mcdc_discharge_test.rs` | every PR |
