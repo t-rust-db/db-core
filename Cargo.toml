@@ -194,6 +194,11 @@ name = "integration_opcode_granularity"
 path = "tests/integration/opcode_granularity_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream"]
 
+[[test]]
+name = "integration_segment_split_invariance"
+path = "tests/integration/segment_split_invariance_test.rs"
+required-features = ["engine-column", "engine-stream", "vm-batch", "codegen-batch"]
+
 [dependencies]
 # Storage backends (ADR 0016: db-storage absorbed as the `storage` module).
 # Both optional, pulled in only by storage-column (the only consumer of
