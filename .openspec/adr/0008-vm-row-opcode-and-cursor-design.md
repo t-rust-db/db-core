@@ -29,6 +29,14 @@ translation layer exists between planner and VM. This differs from the
 batch VM's typed operands (ADR 0007) on purpose: row opcodes have no
 variable-length operand lists.
 
+**`Gosub`/`Return` calling convention (#396).** `Gosub P1 P2` stores its
+own address in register `P1` and jumps to `P2`; `Return P1` jumps to
+`r[P1] + 1` -- matching SQLite's `OP_Gosub`/`OP_Return` exactly, not a
+bespoke encoding, per this ADR's oracle-parity goal. The row planner's
+`GROUP BY` codegen (`codegen::row::select::aggregate`) is the first
+caller, using the pair to compile its shared output epilogue once
+instead of inlining it at every flush site.
+
 **Cursor abstraction.** `vm::row` drives storage through its own
 storage-agnostic traits and never depends on `db-storage` (ADR 0006):
 

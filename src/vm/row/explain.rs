@@ -149,6 +149,7 @@ fn opcode_name(opcode: Opcode) -> &'static str {
         Opcode::Goto => "Goto",
         Opcode::Once => "Once",
         Opcode::BeginSubrtn => "BeginSubrtn",
+        Opcode::Gosub => "Gosub",
         Opcode::Return => "Return",
         Opcode::Halt => "Halt",
         Opcode::Transaction => "Transaction",
@@ -259,6 +260,7 @@ fn comment_for(opcode: Opcode, p1: i32, p2: i32, p3: i32) -> String {
     match opcode {
         Opcode::Init => format!("start at {p2}"),
         Opcode::Goto => format!("goto {p2}"),
+        Opcode::Gosub => format!("r[{p1}] = return addr, goto {p2}"),
         Opcode::OpenRead => format!("cursor {p1} on root page {p2}"),
         Opcode::OpenWrite => format!("cursor {p1} write on root page {p2}"),
         Opcode::OpenEphemeral => format!("cursor {p1} ephemeral"),
@@ -379,6 +381,7 @@ mod tests {
             (Opcode::Goto, "Goto"),
             (Opcode::Once, "Once"),
             (Opcode::BeginSubrtn, "BeginSubrtn"),
+            (Opcode::Gosub, "Gosub"),
             (Opcode::Return, "Return"),
             (Opcode::Halt, "Halt"),
             (Opcode::Transaction, "Transaction"),
