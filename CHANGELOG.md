@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.95.2] - 2026-09-15
+
+### Fixed
+
+- **`SegmentSummary` now covers predefined fields** (#417): `severity`, `facility`, `timestamp`, and `observed_ts` are dedicated `Segment` struct fields, not part of the Tier-3 `field_names`/`field_cols` `SegmentSummary.columns` was built from -- so `SUM`/`MIN`/`MAX(severity)` over a query reaching into evicted history silently dropped the evicted majority's contribution instead of erroring, contradicting `SegmentSummary`'s own doc comment. `Segment::from_batch` now summarizes these under the same SQL-facing names `storage::stream::adapter` already uses. Found while extending the segment-split invariance harness (#404) to stream eviction.
+
 ## [0.95.1] - 2026-09-15
 
 ### Fixed

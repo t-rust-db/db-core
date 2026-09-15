@@ -28402,7 +28402,7 @@
   {
     "id": "storage_stream_segment_summarize_column_a823f97c",
     "file": "src/storage/stream/segment.rs",
-    "line": 120,
+    "line": 126,
     "decision": "match col {\n        OwnedColumn::Int(v) => Some(fold_numeric(v.iter().filter_map(|x| x.map(|n| n as f64)))),\n        OwnedColumn::Float(v) => Some(fold_numeric(v.iter().filter_map(|x| *x))),\n        OwnedColumn::Dict { indices, .. } => Some(ColumnSummary {\n            count: indices.iter().filter(|i| i.is_some()).count() as u64,\n            ..ColumnSummary::default()\n        }),\n        OwnedColumn::Str(_) | OwnedColumn::Bool(_) => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28412,7 +28412,7 @@
   {
     "id": "storage_stream_segment_fold_numeric_db7f1d82",
     "file": "src/storage/stream/segment.rs",
-    "line": 134,
+    "line": 140,
     "decision": "acc.count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -28422,7 +28422,7 @@
   {
     "id": "storage_stream_segment_seal_block_faf03595",
     "file": "src/storage/stream/segment.rs",
-    "line": 179,
+    "line": 185,
     "decision": "off < block.bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -28432,7 +28432,7 @@
   {
     "id": "storage_stream_segment_seal_block_02e1e2c5",
     "file": "src/storage/stream/segment.rs",
-    "line": 182,
+    "line": 188,
     "decision": "consumed == 0 || batch.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -28442,7 +28442,7 @@
   {
     "id": "storage_stream_segment_from_batch_6a149f18",
     "file": "src/storage/stream/segment.rs",
-    "line": 216,
+    "line": 222,
     "decision": "let Some(col) = batch.fields.get(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28452,7 +28452,7 @@
   {
     "id": "storage_stream_segment_end_off_fcbe87d8",
     "file": "src/storage/stream/segment.rs",
-    "line": 278,
+    "line": 331,
     "decision": "match self.lines.last() {\n            Some(&(start, len)) => {\n                let block_end = u64::from(start)\n                    .saturating_add(u64::from(len))\n                    .saturating_add(1);\n                // `start` is relative to `bytes`; the block's file offset is\n                // `file_off - first_line_start`.\n                let first = self.lines.first().map_or(0, |&(s, _)| u64::from(s));\n                self.file_off\n                    .saturating_sub(first)\n                    .saturating_add(block_end)\n            }\n            None => self.file_off,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28462,7 +28462,7 @@
   {
     "id": "storage_stream_segment_overlaps_event_703b3442",
     "file": "src/storage/stream/segment.rs",
-    "line": 354,
+    "line": 407,
     "decision": "match self.minmax_event {\n            Some((lo, hi)) => lo < range.end && hi >= range.start,\n            None => true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28472,7 +28472,7 @@
   {
     "id": "storage_stream_segment_field_str_885feae4",
     "file": "src/storage/stream/segment.rs",
-    "line": 375,
+    "line": 428,
     "decision": "match self.field(name)? {\n            OwnedColumn::Dict { dict, indices } => {\n                let idx = (*indices.get(i)?)?;\n                dict.get(usize::from(idx)).map(|s| s.as_ref())\n            }\n            OwnedColumn::Str(spans) => {\n                let span = (*spans.get(i)?)?;\n                std::str::from_utf8(self.slice(span)).ok()\n            }\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28482,7 +28482,7 @@
   {
     "id": "storage_stream_segment_span_in_2e85e3d9",
     "file": "src/storage/stream/segment.rs",
-    "line": 413,
+    "line": 466,
     "decision": "end > bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -28492,7 +28492,7 @@
   {
     "id": "storage_stream_segment_minmax_36db5895",
     "file": "src/storage/stream/segment.rs",
-    "line": 422,
+    "line": 475,
     "decision": "match acc {\n            None => (*v, *v),\n            Some((lo, hi)) => (lo.min(*v), hi.max(*v)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28502,7 +28502,7 @@
   {
     "id": "storage_stream_segment_own_column_0746681c",
     "file": "src/storage/stream/segment.rs",
-    "line": 433,
+    "line": 486,
     "decision": "match col {\n        FieldColumn::Dict { dict, indices } => {\n            let mut idx = indices.clone();\n            idx.extend(std::iter::repeat_n(None, pad(idx.len())));\n            OwnedColumn::Dict {\n                dict: dict.iter().map(|s| Arc::<str>::from(*s)).collect(),\n                indices: idx,\n            }\n        }\n        FieldColumn::Str(strs) => {\n            let mut spans: Vec<Option<Span>> = strs\n                .iter()\n                .map(|s| s.and_then(|s| span_in(bytes, s.as_bytes())))\n                .collect();\n            spans.extend(std::iter::repeat_n(None, pad(spans.len())));\n            OwnedColumn::Str(spans)\n        }\n        FieldColumn::Int(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Int(v)\n        }\n        FieldColumn::Float(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Float(v)\n        }\n        FieldColumn::Bool(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Bool(v)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,

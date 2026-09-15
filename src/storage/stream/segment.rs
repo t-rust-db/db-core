@@ -91,18 +91,24 @@ pub struct ColumnSummary {
 }
 
 /// A sealed segment's universal summary: total rows plus one
-/// [`ColumnSummary`] per Tier-3 numeric or dictionary column.
+/// [`ColumnSummary`] per Tier-3 numeric or dictionary column, plus the
+/// predefined numeric/categorical columns every stream table has
+/// (`severity`, `timestamp`, `observed_ts`, `facility` -- #417; these are
+/// not part of `field_names`/`field_cols`, so `from_batch` adds them
+/// separately under the same SQL-facing names
+/// `storage::stream::adapter::column_values` uses).
 #[derive(Debug, Clone, Default)]
 pub struct SegmentSummary {
     /// Rows in the segment -- `COUNT(*)`'s answer directly.
     pub rows: u64,
-    /// `(field name, summary)`, in the same order as the segment's own
-    /// `field_names`/`field_cols`.
+    /// `(field name, summary)` -- the Tier-3 columns first (in the
+    /// segment's own `field_names`/`field_cols` order), then the
+    /// predefined columns.
     pub columns: Vec<(Arc<str>, ColumnSummary)>,
 }
 
 impl SegmentSummary {
-    /// The summary for one Tier-3 field, if it was numeric or a
+    /// The summary for one Tier-3 or predefined field, if it was numeric or a
     /// dictionary (a `Str`/`Bool` column has no entry here).
     #[must_use]
     pub fn column(&self, name: &str) -> Option<&ColumnSummary> {
@@ -219,14 +225,61 @@ impl Segment {
             }
         }
 
+        let mut summary_columns: Vec<(Arc<str>, ColumnSummary)> = field_names
+            .iter()
+            .cloned()
+            .zip(&field_cols)
+            .filter_map(|(name, col)| summarize_column(col).map(|s| (name, s)))
+            .collect();
+        // Predefined fields (#417): these are their own dedicated `Segment`
+        // columns, not part of `field_names`/`field_cols`, so the loop
+        // above never sees them -- `SegmentSummary::column("severity")`
+        // (etc.) returned `None` unconditionally before this, silently
+        // dropping the evicted contribution of a query's SUM/MIN/MAX. The
+        // SQL-facing names here (`severity`, `timestamp`, `observed_ts`,
+        // `facility`) match `storage::stream::adapter::column_values`'s own
+        // names exactly, which is how `engine::stream::fold_summaries_into`
+        // looks them up.
+        summary_columns.push((
+            Arc::from("severity"),
+            fold_numeric(
+                batch
+                    .severity
+                    .iter()
+                    .filter_map(|s| s.map(|s| f64::from(s as u8))),
+            ),
+        ));
+        summary_columns.push((
+            Arc::from("timestamp"),
+            fold_numeric(
+                batch
+                    .timestamp_ns
+                    .iter()
+                    .filter_map(|t| t.map(|n| n as f64)),
+            ),
+        ));
+        summary_columns.push((
+            Arc::from("observed_ts"),
+            fold_numeric(
+                batch
+                    .observed_ts_ns
+                    .iter()
+                    .filter_map(|t| t.map(|n| n as f64)),
+            ),
+        ));
+        // `facility` is categorical (like a Tier-3 `Dict` column): no
+        // meaningful min/max/sum, just a non-null count.
+        summary_columns.push((
+            Arc::from("facility"),
+            ColumnSummary {
+                count: batch.facility.iter().filter(|f| f.is_some()).count() as u64,
+                ..ColumnSummary::default()
+            },
+        ));
+
         let summary = SegmentSummary {
             rows: batch.len() as u64,
-            columns: field_names
-                .iter()
-                .cloned()
-                .zip(&field_cols)
-                .filter_map(|(name, col)| summarize_column(col).map(|s| (name, s)))
-                .collect(),
+            columns: summary_columns,
         };
 
         Self {
@@ -518,6 +571,49 @@ mod tests {
         assert_eq!(pid.count, 2);
         assert_eq!((pid.min, pid.max, pid.sum), (0.0, 0.0, 0.0));
         assert_eq!(s.field("tag").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn summary_covers_predefined_fields_severity_facility_and_timestamps() {
+        // #417: `SegmentSummary` used to only cover Tier-3 dynamic fields
+        // (`tag`/`pid` above); `severity`/`facility`/`timestamp`/
+        // `observed_ts` are predefined `Segment` fields and were silently
+        // absent from every summary, so a query reaching into evicted
+        // history over any of them dropped that history instead of
+        // erroring.
+        let b = block("<134>Sep 10 08:00:01 web01 nginx[12]: GET /a 200\n<131>Sep 10 08:00:02 web01 postgres[7]: ERROR: nope\n");
+        let segs = Segment::seal_block(&b, &src(), &SyslogParser::with_year(2026), 42);
+        let s = &segs[0];
+        let summary = s.summary();
+
+        // `<134>` -> facility 16 (local0), syslog severity 6 -> `Info` (9);
+        // `<131>` -> facility 16, syslog severity 3 -> `Error` (17).
+        let severity = summary.column("severity").expect("severity is summarized");
+        assert_eq!(severity.count, 2);
+        assert_eq!((severity.min, severity.max), (9.0, 17.0));
+        assert!((severity.sum - 26.0).abs() < f64::EPSILON);
+
+        // Categorical, like a Tier-3 `Dict` column: count only.
+        let facility = summary.column("facility").expect("facility is summarized");
+        assert_eq!(facility.count, 2);
+        assert_eq!((facility.min, facility.max, facility.sum), (0.0, 0.0, 0.0));
+
+        // Both lines observed at the same fixed instant (`42`, passed to
+        // `seal_block` above).
+        let observed_ts = summary
+            .column("observed_ts")
+            .expect("observed_ts is summarized");
+        assert_eq!(observed_ts.count, 2);
+        assert_eq!((observed_ts.min, observed_ts.max), (42.0, 42.0));
+
+        // Event timestamps differ by 1 second between the two lines; exact
+        // epoch value isn't the point here, just that they're covered at
+        // all now.
+        let timestamp = summary
+            .column("timestamp")
+            .expect("timestamp is summarized");
+        assert_eq!(timestamp.count, 2);
+        assert!(timestamp.max > timestamp.min);
     }
 
     #[test]
