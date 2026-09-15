@@ -45,13 +45,13 @@ exists for another crate's benefit.
    feature-less `cargo test`, every Cargo feature is on by default.
 
 4. **Coverage** -- `make coverage` / `make check-coverage`
-   (`cargo-llvm-cov`, `COVERAGE_MIN` = 80% line coverage over the library
-   and `tests/unit`). A local floor, not a CI gate: an instrumented run
-   is a second full test pass (`cargo llvm-cov clean` + a fresh
-   `--no-report` build), and unlike `check-mvl-limit`'s pinned-rev
-   install there is no cached-binary pattern yet for `cargo-llvm-cov` in
-   CI. Enforced before a PR, not on every push, until that cost is
-   revisited (`#228`).
+   (`cargo-llvm-cov`, `COVERAGE_MIN` = 85% line coverage over the library
+   and `tests/unit`, `--all-features`). A CI gate (db-core#407, ADR-0000
+   §(g)): checked both crate-wide and per file, so a well-covered file
+   can't mask a thin one. An instrumented run is a second full test pass
+   (`cargo llvm-cov clean` + a fresh `--no-report` build); `ci.yml`'s
+   `coverage` job installs `cargo-llvm-cov` via `taiki-e/install-action`,
+   the same pattern the `public-api` job uses for `cargo-public-api`.
 
 5. **Spikes** -- `tests/spike/`: throwaway experiments. Excluded from
    `make test` and from coverage; run only via `make test-spike`. A
@@ -97,10 +97,12 @@ exists for another crate's benefit.
 ### What gates a merge
 
 `make ci` runs, in the same order as `.github/workflows/ci.yml`: `lint`,
-`check-deny`, `check-mvl-limit`, `test`. All four must pass. `test-mcdc`
-and `check-coverage` are run locally before a PR that adds or moves
-decisions; `test-mcdc` at 100% discharged is a merge requirement even
-though it needs an external tool and is not in the workflow.
+`check-deny`, `check-mvl-limit`, `check-mcdc-fresh`, `check-features`,
+`check-sqlite-profile`, `check-stream-profile`, `check-column-profile`,
+`check-public-api-fresh`, `test`, `check-coverage` (db-core#407: a PR
+gate now, not run locally-only). All must pass. `test-mcdc` at 100%
+discharged is a merge requirement even though it needs an external tool
+and runs only in `assurance.yml`'s weekly dashboard, not this workflow.
 
 ### What db-core does not test
 

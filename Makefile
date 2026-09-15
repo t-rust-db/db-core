@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures check-coverage-profile test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
+.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
 
 help: ## Show this help
 	@echo ""
@@ -83,7 +83,7 @@ test-mcdc: mcdc-obligations ## MC/DC dashboard for all of src/; fails if any mul
 	cargo-mvl-mcdc harvest --obligations=tests/mcdc/obligations.json --run-dir=. 2>/dev/null \
 		| python3 tools/mcdc_report.py $(if $(filter 1,$(VERBOSE)),--verbose,)
 
-COVERAGE_MIN := 80
+COVERAGE_MIN := 85
 
 # ADR-0000 (g): the coverage floor accounts for all of db-core, and every
 # exception is named here with a justification. There are none: #570's
@@ -105,11 +105,23 @@ coverage: ## Line coverage report over the library + tests/unit (cargo-llvm-cov)
 	cargo llvm-cov report --ignore-filename-regex '$(COVERAGE_EXCLUDE_REGEX)'
 	cargo llvm-cov report --ignore-filename-regex '$(COVERAGE_EXCLUDE_REGEX)' --json --output-path target/llvm-cov.json
 
-check-coverage: coverage ## Gate: fail if line coverage is below $(COVERAGE_MIN)%
-	@python3 -c "import json, sys; \
-	  p = json.load(open('target/llvm-cov.json'))['data'][0]['totals']['lines']['percent']; \
-	  print(f'Line coverage: {p:.2f}% (threshold: $(COVERAGE_MIN)%)'); \
-	  sys.exit(0 if p >= $(COVERAGE_MIN) else 1)"
+# db-core#407: one 85% floor over all of db-core, checked two ways from
+# the same `--all-features` run -- the crate-wide total (as before) and,
+# new, every individual file. A crate-wide-only floor lets thin files
+# hide behind well-covered ones; this doesn't move if even one file
+# regresses under the line, and lists every offender in one run rather
+# than the next PR discovering the next file.
+check-coverage: coverage ## Gate: fail if line coverage is below $(COVERAGE_MIN)% crate-wide or in any one file
+	@python3 -c "import json, os, sys; \
+	  root = os.getcwd() + '/'; \
+	  d = json.load(open('target/llvm-cov.json'))['data'][0]; \
+	  total = d['totals']['lines']['percent']; \
+	  print(f'Line coverage: {total:.2f}% (threshold: $(COVERAGE_MIN)%)'); \
+	  below = [(f['summary']['lines']['percent'], f['filename'].removeprefix(root)) for f in d['files'] if f['summary']['lines']['percent'] < $(COVERAGE_MIN)]; \
+	  below.sort(); \
+	  [print(f'  {pct:6.2f}%  {name}') for pct, name in below]; \
+	  print(f'{len(below)} file(s) below $(COVERAGE_MIN)%' if below else 'every file is at or above $(COVERAGE_MIN)%'); \
+	  sys.exit(0 if total >= $(COVERAGE_MIN) and not below else 1)"
 
 # === Gates ===
 
@@ -140,9 +152,6 @@ check-features: ## Each Cargo feature builds standalone (cargo check --no-defaul
 		if out=$$(cargo check -q --no-default-features --features $$f 2>&1); then echo ok; \
 		else echo FAIL; echo "$$out" | grep -E '^error' | head -5; exit 1; fi; \
 	done
-
-# The SQLite profile: the exact feature set sqlite-rs builds db-core with.
-SQLITE_PROFILE := parser-row,vm-row,codegen-row,storage-row,engine-row
 
 # ADR 0000 §Invariants (a)-(c): first-party-only closure, the named
 # `unsafe` carve-outs and nothing else, no batch/column/stream file --
@@ -176,22 +185,6 @@ check-column-oracle: ## Local-only: column engine query results agree with DuckD
 
 gen-parquet-fixtures: ## Regenerate the codec-variant Parquet fixtures check-column-oracle reads (tools/gen_parquet_fixtures.sh)
 	@tools/gen_parquet_fixtures.sh
-
-# ADR 0000 §(g): the coverage floor as a claim about the safe-SQLite
-# artifact -- instrumented over the profile, not --all-features. Too slow
-# for every PR; .github/workflows/assurance.yml runs it weekly.
-check-coverage-profile: ## Coverage floor over the SQLite profile (weekly assurance job)
-	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
-		echo "cargo-llvm-cov not found — install with: cargo install cargo-llvm-cov --locked"; \
-		exit 1; \
-	}
-	cargo llvm-cov clean --workspace
-	cargo llvm-cov --locked --no-default-features --features $(SQLITE_PROFILE) --no-report --lib
-	cargo llvm-cov report --json --output-path target/llvm-cov-profile.json
-	@python3 -c "import json, sys; \
-	  p = json.load(open('target/llvm-cov-profile.json'))['data'][0]['totals']['lines']['percent']; \
-	  print(f'Line coverage (SQLite profile): {p:.2f}% (threshold: $(COVERAGE_MIN)%)'); \
-	  sys.exit(0 if p >= $(COVERAGE_MIN) else 1)"
 
 check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 	@command -v cargo-deny >/dev/null 2>&1 || { \
@@ -318,6 +311,7 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) check-mvl-limit
 	$(MAKE) check-public-api-fresh
 	$(MAKE) test
+	$(MAKE) check-coverage
 	@echo "all CI gates passed"
 
 # === Performance ===
