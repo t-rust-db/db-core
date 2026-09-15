@@ -5678,6 +5678,56 @@ pub fn db_core::vm::batch::compare_for_order(&db_core::vm::batch::Value, &db_cor
 pub fn db_core::vm::batch::run_parallel<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub fn db_core::vm::batch::run_parallel_top_n<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], &db_core::vm::batch::TopN) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub type db_core::vm::batch::Result<T> = core::result::Result<T, db_core::vm::batch::VmError>
+pub mod db_core::vm::column
+pub enum db_core::vm::column::Column
+pub db_core::vm::column::Column::Bool
+pub db_core::vm::column::Column::Bool::data: alloc::vec::Vec<bool>
+pub db_core::vm::column::Column::Bool::valid: db_core::vm::column::Bitmap
+pub db_core::vm::column::Column::Dict
+pub db_core::vm::column::Column::Dict::dict: alloc::vec::Vec<alloc::sync::Arc<str>>
+pub db_core::vm::column::Column::Dict::indices: alloc::vec::Vec<u32>
+pub db_core::vm::column::Column::Dict::valid: db_core::vm::column::Bitmap
+pub db_core::vm::column::Column::Float
+pub db_core::vm::column::Column::Float::data: alloc::vec::Vec<f64>
+pub db_core::vm::column::Column::Float::valid: db_core::vm::column::Bitmap
+pub db_core::vm::column::Column::Int
+pub db_core::vm::column::Column::Int::data: alloc::vec::Vec<i64>
+pub db_core::vm::column::Column::Int::valid: db_core::vm::column::Bitmap
+pub db_core::vm::column::Column::Str
+pub db_core::vm::column::Column::Str::data: alloc::string::String
+pub db_core::vm::column::Column::Str::offsets: alloc::vec::Vec<u32>
+pub db_core::vm::column::Column::Str::valid: db_core::vm::column::Bitmap
+impl db_core::vm::column::Column
+pub fn db_core::vm::column::Column::get(&self, usize) -> db_core::vm::batch::Value
+pub fn db_core::vm::column::Column::is_empty(&self) -> bool
+pub fn db_core::vm::column::Column::is_null(&self, usize) -> bool
+pub fn db_core::vm::column::Column::len(&self) -> usize
+impl core::clone::Clone for db_core::vm::column::Column
+pub fn db_core::vm::column::Column::clone(&self) -> db_core::vm::column::Column
+impl core::cmp::PartialEq for db_core::vm::column::Column
+pub fn db_core::vm::column::Column::eq(&self, &db_core::vm::column::Column) -> bool
+impl core::convert::From<alloc::vec::Vec<db_core::vm::batch::Value>> for db_core::vm::column::Column
+pub fn db_core::vm::column::Column::from(alloc::vec::Vec<db_core::vm::batch::Value>) -> Self
+impl core::fmt::Debug for db_core::vm::column::Column
+pub fn db_core::vm::column::Column::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::vm::column::Column
+pub struct db_core::vm::column::Bitmap
+impl db_core::vm::column::Bitmap
+pub fn db_core::vm::column::Bitmap::all_valid(&self) -> bool
+pub fn db_core::vm::column::Bitmap::from_bools(impl core::iter::traits::exact_size::ExactSizeIterator<Item = bool>) -> Self
+pub fn db_core::vm::column::Bitmap::get(&self, usize) -> bool
+pub fn db_core::vm::column::Bitmap::is_empty(&self) -> bool
+pub fn db_core::vm::column::Bitmap::len(&self) -> usize
+pub fn db_core::vm::column::Bitmap::new(usize, bool) -> Self
+pub fn db_core::vm::column::Bitmap::set(&mut self, usize, bool)
+impl core::clone::Clone for db_core::vm::column::Bitmap
+pub fn db_core::vm::column::Bitmap::clone(&self) -> db_core::vm::column::Bitmap
+impl core::cmp::Eq for db_core::vm::column::Bitmap
+impl core::cmp::PartialEq for db_core::vm::column::Bitmap
+pub fn db_core::vm::column::Bitmap::eq(&self, &db_core::vm::column::Bitmap) -> bool
+impl core::fmt::Debug for db_core::vm::column::Bitmap
+pub fn db_core::vm::column::Bitmap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::vm::column::Bitmap
 pub mod db_core::vm::engine
 pub struct db_core::vm::engine::InMemorySegment(pub db_core::vm::batch::Batch)
 impl db_core::vm::batch::Segment for db_core::vm::engine::InMemorySegment

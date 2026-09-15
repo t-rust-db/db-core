@@ -52,6 +52,8 @@
 #[cfg(feature = "vm-batch")]
 pub mod batch;
 #[cfg(feature = "vm-batch")]
+pub mod column;
+#[cfg(feature = "vm-batch")]
 pub mod engine;
 pub mod join;
 #[cfg(feature = "vm-row")]
