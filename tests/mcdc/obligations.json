@@ -31320,50 +31320,50 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_engine_merge_rows_14047e7a",
+    "id": "vm_engine_merge_rows_03b99934",
     "file": "src/vm/engine.rs",
-    "line": 278,
-    "decision": "match part {\n            AggPart::GroupKey => {}\n            AggPart::Sum => {\n                into[i] = Value::Float(partial_f64(&into[i])? + partial_f64(&from[i])?);\n            }\n            // A merged COUNT stays an integer, as a single segment's does\n            // (#272): before, it came back as `Float`, so the *type* of\n            // `COUNT(*)` depended on how many segments the scan had.\n            AggPart::Count => {\n                let total = partial_i64(&into[i])?\n                    .checked_add(partial_i64(&from[i])?)\n                    .ok_or_else(|| VmError::MalformedProgram {\n                        opcode: \"Combine\",\n                        reason: \"partial COUNT overflowed i64\".to_string(),\n                    })?;\n                into[i] = Value::Int(total);\n            }\n            AggPart::Min => {\n                if let (Some(a), Some(b)) = (into[i].as_f64(), from[i].as_f64()) {\n                    into[i] = Value::Float(a.min(b));\n                } else if matches!(into[i], Value::Null) {\n                    into[i] = from[i].clone();\n                }\n            }\n            AggPart::Max => {\n                if let (Some(a), Some(b)) = (into[i].as_f64(), from[i].as_f64()) {\n                    into[i] = Value::Float(a.max(b));\n                } else if matches!(into[i], Value::Null) {\n                    into[i] = from[i].clone();\n                }\n            }\n            AggPart::Avg(_, _) => {}\n        }",
+    "line": 290,
+    "decision": "match part {\n            AggPart::GroupKey => {\n                row_idx = row_idx.saturating_add(1);\n            }\n            AggPart::Sum => {\n                into[row_idx] =\n                    Value::Float(partial_f64(&into[row_idx])? + partial_f64(&from[row_idx])?);\n                row_idx = row_idx.saturating_add(1);\n            }\n            // A merged COUNT stays an integer, as a single segment's does\n            // (#272): before, it came back as `Float`, so the *type* of\n            // `COUNT(*)` depended on how many segments the scan had.\n            AggPart::Count => {\n                let total = partial_i64(&into[row_idx])?\n                    .checked_add(partial_i64(&from[row_idx])?)\n                    .ok_or_else(|| VmError::MalformedProgram {\n                        opcode: \"Combine\",\n                        reason: \"partial COUNT overflowed i64\".to_string(),\n                    })?;\n                into[row_idx] = Value::Int(total);\n                row_idx = row_idx.saturating_add(1);\n            }\n            AggPart::Min => {\n                if let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64()) {\n                    into[row_idx] = Value::Float(a.min(b));\n                } else if matches!(into[row_idx], Value::Null) {\n                    into[row_idx] = from[row_idx].clone();\n                }\n                row_idx = row_idx.saturating_add(1);\n            }\n            AggPart::Max => {\n                if let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64()) {\n                    into[row_idx] = Value::Float(a.max(b));\n                } else if matches!(into[row_idx], Value::Null) {\n                    into[row_idx] = from[row_idx].clone();\n                }\n                row_idx = row_idx.saturating_add(1);\n            }\n            // Previously a no-op (db-core#404): with more than one\n            // segment, `AVG` silently returned the first segment's local\n            // average instead of the true merged mean. Both registers are\n            // read via `partial_f64`, matching `finalize_row`'s own read\n            // of them below -- the per-segment count register is a\n            // `Value::Int` in real execution, but it is never surfaced on\n            // its own (only ever divided into by `finalize_row`), so\n            // there is no reason to route it through the\n            // integer-overflow-checked `AggPart::Count` path as well.\n            AggPart::Avg(sum_i, count_i) => {\n                into[*sum_i] =\n                    Value::Float(partial_f64(&into[*sum_i])? + partial_f64(&from[*sum_i])?);\n                into[*count_i] =\n                    Value::Float(partial_f64(&into[*count_i])? + partial_f64(&from[*count_i])?);\n                row_idx = count_i.saturating_add(1);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "vm_engine_merge_rows_187e96d7",
+    "id": "vm_engine_merge_rows_9e14e28d",
     "file": "src/vm/engine.rs",
-    "line": 296,
-    "decision": "let (Some(a), Some(b)) = (into[i].as_f64(), from[i].as_f64())",
+    "line": 313,
+    "decision": "let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64())",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "vm_engine_merge_rows_02ec3088",
+    "id": "vm_engine_merge_rows_b9fe8222",
     "file": "src/vm/engine.rs",
-    "line": 298,
-    "decision": "matches!(into[i], Value::Null)",
+    "line": 315,
+    "decision": "matches!(into[row_idx], Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "vm_engine_merge_rows_187e96d7_2",
+    "id": "vm_engine_merge_rows_9e14e28d_2",
     "file": "src/vm/engine.rs",
-    "line": 303,
-    "decision": "let (Some(a), Some(b)) = (into[i].as_f64(), from[i].as_f64())",
+    "line": 321,
+    "decision": "let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64())",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "vm_engine_merge_rows_02ec3088_2",
+    "id": "vm_engine_merge_rows_b9fe8222_2",
     "file": "src/vm/engine.rs",
-    "line": 305,
-    "decision": "matches!(into[i], Value::Null)",
+    "line": 323,
+    "decision": "matches!(into[row_idx], Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -31372,7 +31372,7 @@
   {
     "id": "vm_engine_partial_i64_3d91dd60",
     "file": "src/vm/engine.rs",
-    "line": 318,
+    "line": 352,
     "decision": "match v {\n        Value::Null => Ok(0),\n        Value::Int(n) => Ok(*n),\n        other => Err(VmError::MalformedProgram {\n            opcode: \"Combine\",\n            reason: format!(\"partial COUNT slot holds {other:?}, not an integer\"),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31382,7 +31382,7 @@
   {
     "id": "vm_engine_partial_f64_63645a29",
     "file": "src/vm/engine.rs",
-    "line": 333,
+    "line": 367,
     "decision": "match v {\n        Value::Null => Ok(0.0),\n        other => other.as_f64().ok_or_else(|| VmError::MalformedProgram {\n            opcode: \"Combine\",\n            reason: format!(\"partial aggregate slot holds {other:?}, not a number\"),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31390,20 +31390,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_engine_finalize_row_06123238",
+    "id": "vm_engine_finalize_row_2c22f99c",
     "file": "src/vm/engine.rs",
-    "line": 350,
-    "decision": "skip == Some(i)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_engine_finalize_row_ad54b2d0",
-    "file": "src/vm/engine.rs",
-    "line": 353,
-    "decision": "match part {\n            AggPart::Avg(sum_i, count_i) => {\n                let (sum, count) = (partial_f64(&row[*sum_i])?, partial_f64(&row[*count_i])?);\n                out.push(if count == 0.0 {\n                    Value::Null\n                } else {\n                    Value::Float(sum / count)\n                });\n                skip = Some(*count_i);\n            }\n            _ => out.push(row[i].clone()),\n        }",
+    "line": 386,
+    "decision": "match part {\n            // `Avg`'s two registers (sum, count) occupy one `parts` entry\n            // but two `row` slots; every part after it is offset in `row`\n            // by however many extra registers came before -- comparing\n            // `count_i` against the *parts* enumeration index (as this\n            // used to) confuses the two spaces and, once another\n            // aggregate follows an `AVG` in the same query, silently\n            // corrupts or drops it (db-core#404).\n            AggPart::Avg(sum_i, count_i) => {\n                let (sum, count) = (partial_f64(&row[*sum_i])?, partial_f64(&row[*count_i])?);\n                out.push(if count == 0.0 {\n                    Value::Null\n                } else {\n                    Value::Float(sum / count)\n                });\n                row_idx = count_i.saturating_add(1);\n            }\n            _ => {\n                out.push(row[row_idx].clone());\n                row_idx = row_idx.saturating_add(1);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -31412,7 +31402,7 @@
   {
     "id": "vm_engine_finalize_row_816b515b",
     "file": "src/vm/engine.rs",
-    "line": 356,
+    "line": 396,
     "decision": "count == 0.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31422,7 +31412,7 @@
   {
     "id": "vm_engine_run_multi_join_segments_e916149e",
     "file": "src/vm/engine.rs",
-    "line": 546,
+    "line": 589,
     "decision": "rights.len() != plan.builds.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31432,7 +31422,7 @@
   {
     "id": "vm_engine_run_multi_join_segments_3366051e",
     "file": "src/vm/engine.rs",
-    "line": 559,
+    "line": 602,
     "decision": "i > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31442,7 +31432,7 @@
   {
     "id": "vm_engine_scan_program_f8be12f4",
     "file": "src/vm/engine.rs",
-    "line": 737,
+    "line": 780,
     "decision": "with_filter",
     "conditions": 1,
     "vectors_required": 2,
