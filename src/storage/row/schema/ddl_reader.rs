@@ -635,7 +635,7 @@ mod tests {
     use std::path::Path;
 
     fn read_fixture(family: &str, name: &str) -> Vec<TableSchema> {
-        let path = Path::new("tests/corpus/fixtures").join(family).join(name);
+        let path = Path::new("tests/fixtures").join(family).join(name);
         let vfs = UnixVfs;
         let file = vfs
             .open_read(&path)

@@ -52,7 +52,7 @@ fn walks_an_index(e: &RowEngine, sql: &str) -> bool {
     idx_walk
 }
 
-const FIXTURE: &str = "tests/corpus/fixtures/btrees/table_single_page.db";
+const FIXTURE: &str = "tests/fixtures/btrees/table_single_page.db";
 
 struct TempDb(PathBuf);
 

@@ -5,7 +5,7 @@
 //! explain, ask for stats -- through the trait, including as
 //! `Box<dyn Engine>`, which is how db-studio holds it. The fixture is a
 //! temp copy of a committed SQLite file, so writes never touch
-//! `tests/corpus/fixtures`.
+//! `tests/fixtures`.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -28,7 +28,7 @@ use db_core::engine::{
 };
 use db_core::value::Value;
 
-const FIXTURE: &str = "tests/corpus/fixtures/btrees/table_single_page.db";
+const FIXTURE: &str = "tests/fixtures/btrees/table_single_page.db";
 
 /// A writable copy of the fixture, removed on drop.
 struct TempDb(PathBuf);

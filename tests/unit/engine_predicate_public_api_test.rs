@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use db_core::engine::row::RowEngine;
 use db_core::engine::{Cell, Engine, ErrorKind};
 
-const FIXTURE: &str = "tests/corpus/fixtures/btrees/table_single_page.db";
+const FIXTURE: &str = "tests/fixtures/btrees/table_single_page.db";
 
 /// A writable copy of the fixture, removed on drop.
 struct TempDb(PathBuf);

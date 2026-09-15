@@ -42,7 +42,7 @@ use db_core::engine::cross_mode::scan_table_as_batch;
 use db_core::engine::row::RowEngine;
 use db_core::engine::Engine;
 
-const ROW_FIXTURE: &str = "tests/corpus/fixtures/btrees/table_single_page.db";
+const ROW_FIXTURE: &str = "tests/fixtures/btrees/table_single_page.db";
 const SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 const SELECTIVITIES: [f64; 3] = [0.01, 0.10, 1.00];
 const INSERT_CHUNK: usize = 500;

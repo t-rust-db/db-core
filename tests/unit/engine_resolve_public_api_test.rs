@@ -34,7 +34,7 @@ use db_core::engine::stream::StreamEngine;
 use db_core::engine::{Cell, Engine, ErrorKind, Mode};
 
 const LOG_FIXTURE: &str = "tests/fixtures/stream/syslog-1k.log";
-const ROW_FIXTURE: &str = "tests/corpus/fixtures/btrees/table_single_page.db";
+const ROW_FIXTURE: &str = "tests/fixtures/btrees/table_single_page.db";
 
 /// A writable copy of the SQLite fixture, removed on drop, with a `hosts`
 /// dimension table: `web01`/`eu`, `web02`/`us`; `db01` deliberately absent

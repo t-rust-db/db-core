@@ -25,7 +25,7 @@ use std::path::Path;
 use db_core::engine::column::BatchEngine;
 use db_core::engine::{Cell, Engine, ErrorKind, FileStats, Mode, PlanRow};
 
-const FIXTURE: &str = "tests/corpus/fixtures/parquet/production.parquet";
+const FIXTURE: &str = "tests/fixtures/parquet/production.parquet";
 
 fn open() -> BatchEngine {
     BatchEngine::open(Path::new(FIXTURE)).expect("open fixture")
@@ -81,7 +81,7 @@ fn open_missing_or_non_parquet_file_is_an_open_error() {
 
     // A real file that is not Parquet (a SQLite fixture).
     let err = BatchEngine::open(Path::new(
-        "tests/corpus/fixtures/btrees/table_single_page.db",
+        "tests/fixtures/btrees/table_single_page.db",
     ))
     .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Open, "{err}");

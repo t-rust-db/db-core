@@ -865,7 +865,7 @@ mod tests {
     use std::path::Path;
 
     fn open_cursor(fixture: &str, root_page: u32) -> IndexCursor<VfsPageSource> {
-        let path = Path::new("tests/corpus/fixtures/btrees").join(fixture);
+        let path = Path::new("tests/fixtures/btrees").join(fixture);
         let vfs = UnixVfs;
         let file = vfs.open_read(&path).unwrap();
         let mut header_buf = [0u8; 100];

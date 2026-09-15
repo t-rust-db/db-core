@@ -363,7 +363,7 @@ mod tests {
         // `cargo test` runs with the working directory set to the crate
         // root, so a path relative to it needs no `env!("CARGO_MANIFEST_DIR")`
         // — the mvl-limit gate (Makefile) doesn't allow that macro here.
-        let path = Path::new("tests/corpus/fixtures").join(family).join(name);
+        let path = Path::new("tests/fixtures").join(family).join(name);
         std::fs::read(&path).unwrap_or_else(|e| panic!("reading fixture {path:?}: {e}"))
     }
 

@@ -194,7 +194,7 @@ mod tests {
     use crate::vm::batch::{Instruction, JoinKind, Opcode as BatchOpcode, Program};
     use crate::vm::engine::{run_join, JoinProgram};
 
-    const FIXTURE: &str = "tests/corpus/fixtures/btrees/table_single_page.db";
+    const FIXTURE: &str = "tests/fixtures/btrees/table_single_page.db";
 
     struct TempDb(std::path::PathBuf);
 
