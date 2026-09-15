@@ -2,10 +2,10 @@
 # for every pull request, run on a schedule and on demand, with a job summary
 # instead of a red X -- these report drift; the PR gates block it.
 #
-# `ci.yml` is the PR gate set (lint, deny, features, mvl-limit, mcdc-fresh,
-# sqlite-profile, test). This workflow adds what `make ci` deliberately
-# leaves out: instrumented coverage over the SQLite profile, and the MC/DC
-# discharge dashboard over the whole crate.
+# `ci.yml` is the PR gate set (lint, deny, mvl-limit, mcdc-fresh, features,
+# sqlite-profile, stream-profile, public-api, test). This workflow adds
+# what `make ci` deliberately leaves out: instrumented coverage over the
+# SQLite profile, and the MC/DC discharge dashboard over the whole crate.
 name: Assurance
 
 on:

@@ -49,7 +49,7 @@ test-spike: ## Run only the throwaway experiments under tests/spike/
 
 # Scanned file set for `test-mcdc`: all of `src/`, not a curated subset --
 # no obligation is exempted by file selection (ADR 0015, tier 3).
-MCDC_FILES := $(shell find src -name '*.rs')
+MCDC_FILES := $(shell find src -name '*.rs' | LC_ALL=C sort)
 
 mcdc-obligations: ## Regenerate the committed MC/DC obligations snapshot (tests/mcdc/obligations.json)
 	@command -v cargo-mvl-mcdc >/dev/null 2>&1 || { \
