@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.96.0] - 2026-09-15
+
+### Added
+
+- **Local DuckDB oracle for the column engine; stream's oracle-by-construction pattern named** (#406): `examples/column_oracle.rs` + `tools/check_column_oracle.sh` (`make check-column-oracle`) diff the column engine's query results against DuckDB reading the same Parquet fixtures, across Zstd/Snappy/uncompressed codec variants -- deliberately local-only, never CI, since a DuckDB binary is a new external dependency this charter does not accept onto the machine that runs untrusted PRs. ADR-0000 §(f) and ADR-0015 also name stream's existing "oracle by construction" pattern (`tests/unit/engine_stream_public_api_test.rs`'s `oracle()`/`json_status_oracle()`), which independently re-derives the expected answer from raw fixture bytes instead of trusting the engine's own parser.
+
 ## [0.95.2] - 2026-09-15
 
 ### Fixed
