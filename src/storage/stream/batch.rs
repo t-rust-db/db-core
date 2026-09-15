@@ -819,6 +819,41 @@ mod tests {
     }
 
     #[test]
+    fn facility_from_code_covers_every_defined_code_and_the_gaps() {
+        // Untested until now: every `Facility::from_code`/`as_str` arm.
+        // Codes 12-15 are reserved/unused in RFC 5424's table -- part of
+        // the `None`/gap coverage, not an omission here.
+        let defined: &[(u8, Facility, &str)] = &[
+            (0, Facility::Kern, "kern"),
+            (1, Facility::User, "user"),
+            (2, Facility::Mail, "mail"),
+            (3, Facility::Daemon, "daemon"),
+            (4, Facility::Auth, "auth"),
+            (5, Facility::Syslog, "syslog"),
+            (6, Facility::Lpr, "lpr"),
+            (7, Facility::News, "news"),
+            (8, Facility::Uucp, "uucp"),
+            (9, Facility::Cron, "cron"),
+            (10, Facility::AuthPriv, "authpriv"),
+            (11, Facility::Ftp, "ftp"),
+            (16, Facility::Local0, "local0"),
+            (17, Facility::Local1, "local1"),
+            (18, Facility::Local2, "local2"),
+            (19, Facility::Local3, "local3"),
+            (20, Facility::Local4, "local4"),
+            (21, Facility::Local5, "local5"),
+            (22, Facility::Local6, "local6"),
+            (23, Facility::Local7, "local7"),
+        ];
+        for &(code, facility, name) in defined {
+            assert_eq!(Facility::from_code(code), Some(facility), "code {code}");
+            assert_eq!(facility.as_str(), name, "code {code}");
+        }
+        assert_eq!(Facility::from_code(12), None);
+        assert_eq!(Facility::from_code(255), None);
+    }
+
+    #[test]
     fn batch_push_and_access() {
         let source = Source::new(SourceKind::File, "/var/log/test.log");
         let mut batch = LogBatch::new(source);

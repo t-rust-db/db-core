@@ -678,7 +678,42 @@ pub fn read_int96_column_dictionary(
 )]
 mod tests {
     use super::*;
+    use crate::storage::column::parquet::footer::PhysicalType;
     use crate::storage::column::parquet::page::Encoding;
+
+    #[test]
+    fn read_error_display_covers_every_variant() {
+        assert_eq!(
+            ReadError::Encoding(EncodingError::InvalidVarint).to_string(),
+            "varint too long"
+        );
+        assert_eq!(
+            ReadError::UnexpectedEof.to_string(),
+            "unexpected end of page data"
+        );
+        assert_eq!(
+            ReadError::InvalidValueCount(-1).to_string(),
+            "invalid page value count: -1"
+        );
+        assert_eq!(
+            ReadError::InvalidUtf8.to_string(),
+            "BYTE_ARRAY value is not valid UTF-8"
+        );
+        assert_eq!(
+            ReadError::DictionaryIndexOutOfRange(7).to_string(),
+            "dictionary index 7 out of range"
+        );
+        assert_eq!(
+            ReadError::UnsupportedNestedPhysicalType(PhysicalType::Int96).to_string(),
+            "unsupported physical type in a nested column: Int96"
+        );
+    }
+
+    #[test]
+    fn read_error_wraps_an_encoding_error_via_from() {
+        let e: ReadError = EncodingError::UnexpectedEof.into();
+        assert!(matches!(e, ReadError::Encoding(EncodingError::UnexpectedEof)));
+    }
 
     fn header(num_values: i32) -> DataPageHeader {
         DataPageHeader {

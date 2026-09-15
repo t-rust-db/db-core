@@ -634,7 +634,7 @@ mod tests {
     use crate::storage::row::vfs::{UnixVfs, Vfs, VfsPageSource};
     use std::path::Path;
 
-    fn read_fixture(family: &str, name: &str) -> Vec<TableSchema> {
+    fn fixture_cursor(family: &str, name: &str) -> (TableCursor<VfsPageSource>, TextEncoding) {
         let path = Path::new("tests/fixtures").join(family).join(name);
         let vfs = UnixVfs;
         let file = vfs
@@ -644,8 +644,34 @@ mod tests {
         file.read_at(&mut header_buf, 0).unwrap();
         let header = DatabaseHeader::parse(&header_buf).unwrap();
         let source = VfsPageSource::open(&vfs, &path, header.page_size).unwrap();
-        let mut cursor = TableCursor::new(source, &header, 1);
-        read_schema(&mut cursor, header.text_encoding).unwrap()
+        (TableCursor::new(source, &header, 1), header.text_encoding)
+    }
+
+    fn read_fixture(family: &str, name: &str) -> Vec<TableSchema> {
+        let (mut cursor, encoding) = fixture_cursor(family, name);
+        read_schema(&mut cursor, encoding).unwrap()
+    }
+
+    #[test]
+    fn read_table_and_view_names_lists_the_one_table_and_no_view() {
+        let (mut cursor, encoding) = fixture_cursor("btrees", "table_single_page.db");
+        let names = read_table_and_view_names(&mut cursor, encoding).unwrap();
+        assert_eq!(names, vec!["t".to_string()]);
+    }
+
+    #[test]
+    fn read_views_over_a_view_free_fixture_is_empty() {
+        let (mut cursor, encoding) = fixture_cursor("btrees", "table_single_page.db");
+        let views = read_views(&mut cursor, encoding).unwrap();
+        assert!(views.is_empty(), "{views:?}");
+    }
+
+    #[test]
+    fn ddl_error_display_covers_every_variant() {
+        assert_eq!(
+            DdlError::MalformedRow(3).to_string(),
+            "sqlite_master row has 3 columns, expected 5"
+        );
     }
 
     fn find(schemas: &[TableSchema], name: &str) -> TableSchema {
