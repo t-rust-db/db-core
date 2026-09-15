@@ -1027,6 +1027,43 @@ mod tests {
         file
     }
 
+    /// Like [`build_file_from_chunk_typed`] but also annotates the leaf
+    /// with a `converted_type`/`scale` (`TIMESTAMP_MILLIS`, `DECIMAL`).
+    fn build_file_from_chunk_annotated(
+        page_bytes: &[u8],
+        meta_bytes: Vec<u8>,
+        num_rows: i64,
+        physical_type: i32,
+        type_length: Option<i32>,
+        converted_type: i32,
+        scale: Option<i32>,
+    ) -> Vec<u8> {
+        let mut file = Vec::new();
+        file.extend_from_slice(b"PAR1");
+        file.extend_from_slice(page_bytes);
+
+        let column_chunk = build_column_chunk(4, meta_bytes);
+        let row_group = build_row_group(vec![column_chunk], page_bytes.len() as i64, num_rows);
+        let root = build_root_schema_element(1);
+        let mut col = StructWriter::new();
+        col.i32_field(1, physical_type);
+        if let Some(len) = type_length {
+            col.i32_field(2, len);
+        }
+        col.i32_field(3, 0); // REQUIRED -> max_def_level 0
+        col.string_field(4, "v");
+        col.i32_field(6, converted_type);
+        if let Some(s) = scale {
+            col.i32_field(7, s);
+        }
+        let col = col.finish();
+        let metadata = build_file_metadata(vec![root, col], num_rows, vec![row_group]);
+        file.extend_from_slice(&metadata);
+        file.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"PAR1");
+        file
+    }
+
     /// Bit-packs `indices` (one RLE/bit-packed hybrid run, `bit_width`
     /// bits each) the same way a real PLAIN_DICTIONARY/RLE_DICTIONARY data
     /// page body does -- mirrors `reader::tests::encode_dictionary_indices`
@@ -1486,6 +1523,93 @@ mod tests {
             Err(FileError::MissingDecimalScale)
         ));
     }
+
+    /// `read_nested_column` on a flat (non-nested) schema is otherwise
+    /// unreached by every other test in this file, which all go through
+    /// the per-type `read_*_column` fast paths instead -- and it's the
+    /// only caller of `read_leaf_entries`, so this is also the sole
+    /// coverage for that function's PLAIN-encoded, non-dictionary,
+    /// non-repeated (`rep_levels`/`def_levels` both empty) path.
+    #[test]
+    fn read_nested_column_reconstructs_a_flat_int64_column() {
+        let file_bytes = build_file(&[&[10, 20, 30]]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let values = file.read_nested_column(0, "v").unwrap();
+        assert_eq!(
+            values,
+            vec![
+                NestedValue::Scalar(reader::LeafScalar::Int64(10)),
+                NestedValue::Scalar(reader::LeafScalar::Int64(20)),
+                NestedValue::Scalar(reader::LeafScalar::Int64(30)),
+            ]
+        );
+    }
+
+    #[test]
+    fn read_nested_column_on_an_unknown_field_name_errors() {
+        let file_bytes = build_file(&[&[1]]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        assert!(matches!(
+            file.read_nested_column(0, "nope"),
+            Err(FileError::ColumnIndexOutOfRange(0))
+        ));
+    }
+
+    #[test]
+    fn read_nested_column_on_an_out_of_range_row_group_errors() {
+        let file_bytes = build_file(&[&[1]]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        assert!(matches!(
+            file.read_nested_column(5, "v"),
+            Err(FileError::ColumnIndexOutOfRange(5))
+        ));
+    }
+
+    #[test]
+    fn read_timestamp_column_converts_millis_to_micros() {
+        let body: Vec<u8> = 42i64.to_le_bytes().to_vec();
+        let (page_bytes, meta_bytes) = build_typed_chunk(2, &body, 1, 4);
+        // ConvertedType::TimestampMillis == 9.
+        let file_bytes =
+            build_file_from_chunk_annotated(&page_bytes, meta_bytes, 1, 2, None, 9, None);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        assert_eq!(rg.read_timestamp_column(0).unwrap(), vec![Some(42_000)]);
+    }
+
+    #[test]
+    fn read_decimal_column_reads_int32_int64_and_fixed_len_byte_array() {
+        // ConvertedType::Decimal == 5.
+        let int32_body: Vec<u8> = 123i32.to_le_bytes().to_vec();
+        let (page_bytes, meta_bytes) = build_typed_chunk(1, &int32_body, 1, 4);
+        let file_bytes =
+            build_file_from_chunk_annotated(&page_bytes, meta_bytes, 1, 1, None, 5, Some(2));
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let d = rg.read_decimal_column(0).unwrap();
+        assert_eq!(d[0].as_ref().unwrap().unscaled, 123);
+        assert_eq!(d[0].as_ref().unwrap().scale, 2);
+
+        let int64_body: Vec<u8> = 456i64.to_le_bytes().to_vec();
+        let (page_bytes, meta_bytes) = build_typed_chunk(2, &int64_body, 1, 4);
+        let file_bytes =
+            build_file_from_chunk_annotated(&page_bytes, meta_bytes, 1, 2, None, 5, Some(3));
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let d = rg.read_decimal_column(0).unwrap();
+        assert_eq!(d[0].as_ref().unwrap().unscaled, 456);
+        assert_eq!(d[0].as_ref().unwrap().scale, 3);
+
+        let flba_body: Vec<u8> = vec![0, 0, 1, 0]; // big-endian 256
+        let (page_bytes, meta_bytes) = build_typed_chunk(7, &flba_body, 1, 4);
+        let file_bytes =
+            build_file_from_chunk_annotated(&page_bytes, meta_bytes, 1, 7, Some(4), 5, Some(1));
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let d = rg.read_decimal_column(0).unwrap();
+        assert_eq!(d[0].as_ref().unwrap().unscaled, 256);
+        assert_eq!(d[0].as_ref().unwrap().scale, 1);
+    }
 }
 
 #[cfg(test)]
@@ -1573,4 +1697,5 @@ mod tests_289 {
             Err(FileError::Footer(FooterError::FileTooShort))
         ));
     }
+
 }
