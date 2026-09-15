@@ -4,7 +4,7 @@ mod accum;
 mod hash;
 mod join;
 
-use super::limit_scan::compile_limit_setup;
+use super::limit_scan::{compile_limit_setup, LimitState};
 use super::order_by::{order_by_target_for_expr, OrderByPlan, OrderByTarget};
 use super::range_scan::try_compile_range_row_seek;
 use super::*;
@@ -851,6 +851,60 @@ fn walk_expr_for_column_refs(
 /// zero groups, but a whole-table aggregate with zero matching rows
 /// still produces exactly one row (`count(*) = 0`, other aggregates
 /// `NULL`) — `implicit_group` selects that behavior.
+/// Emits a `Gosub` call (#396) to the shared group-output subroutine
+/// placed at `subrtn_label` by [`emit_flush_subroutine`], storing the
+/// resume address in `return_reg`.
+fn emit_flush_gosub(em: &mut Emitter, return_reg: i32, subrtn_label: Label) {
+    let gosub = em.emit(Instruction::new(Opcode::Gosub, return_reg, 0, 0));
+    em.patch_p2(gosub, subrtn_label);
+}
+
+/// Emits [`flush_group`]'s body exactly once, as a subroutine reached
+/// only via [`emit_flush_gosub`] (#396) — SQLite's own `select.c`
+/// factors its group-output epilogue the same way, via
+/// `OP_Gosub`/`OP_Return`. Placed out of the mainline fallthrough behind
+/// an unconditional `Goto` around it, so normal control flow never
+/// executes it directly.
+#[allow(clippy::too_many_arguments)]
+fn emit_flush_subroutine<F>(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    select: &Select,
+    schema: &TableSchema,
+    catalog: &[TableSchema],
+    snapshot_regs: &[i32],
+    agg_slots: &[AggSlot],
+    limit: Option<&LimitState>,
+    end_label: Label,
+    sink: &mut F,
+    return_reg: i32,
+    subrtn_label: Label,
+) -> Result<(), CodegenError>
+where
+    F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
+{
+    let after_subrtn = em.new_label();
+    let skip_subrtn = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+    em.patch_p2(skip_subrtn, after_subrtn);
+    em.place(subrtn_label);
+    em.emit(Instruction::new(Opcode::BeginSubrtn, 0, 0, 0));
+    flush_group(
+        em,
+        reg,
+        select,
+        schema,
+        catalog,
+        snapshot_regs,
+        agg_slots,
+        limit,
+        end_label,
+        sink,
+    )?;
+    em.emit(Instruction::new(Opcode::Return, return_reg, 0, 0));
+    em.place(after_subrtn);
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(crate) fn compile_grouped_scan<F>(
     em: &mut Emitter,
@@ -1177,22 +1231,14 @@ where
     let goto_not_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
     em.patch_p2(goto_not_boundary, not_boundary_label);
 
+    let flush_return_reg = reg.alloc();
+    let flush_subrtn_label = em.new_label();
+
     em.place(boundary_label);
     let skip_flush = em.new_label();
     let flush_check = em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
     em.patch_p2(flush_check, skip_flush);
-    flush_group(
-        em,
-        reg,
-        select,
-        schema,
-        catalog,
-        &snapshot_regs,
-        &agg_slots,
-        limit.as_ref(),
-        end_label,
-        sink,
-    )?;
+    emit_flush_gosub(em, flush_return_reg, flush_subrtn_label);
     em.place(skip_flush);
     for (&cur, &prev) in cur_key_regs.iter().zip(&prev_key_regs) {
         em.emit(Instruction::new(Opcode::Copy, cur, prev, 0));
@@ -1256,7 +1302,10 @@ where
         let tail_check = em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
         em.patch_p2(tail_check, skip_tail_flush);
     }
-    flush_group(
+    emit_flush_gosub(em, flush_return_reg, flush_subrtn_label);
+    em.place(skip_tail_flush);
+
+    emit_flush_subroutine(
         em,
         reg,
         select,
@@ -1267,8 +1316,9 @@ where
         limit.as_ref(),
         end_label,
         sink,
+        flush_return_reg,
+        flush_subrtn_label,
     )?;
-    em.place(skip_tail_flush);
     Ok(())
 }
 
@@ -1513,22 +1563,14 @@ where
     let goto_not_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
     em.patch_p2(goto_not_boundary, not_boundary_label);
 
+    let flush_return_reg = reg.alloc();
+    let flush_subrtn_label = em.new_label();
+
     em.place(boundary_label);
     let skip_flush = em.new_label();
     let flush_check = em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
     em.patch_p2(flush_check, skip_flush);
-    flush_group(
-        em,
-        reg,
-        select,
-        schema,
-        catalog,
-        &snapshot_regs,
-        &agg_slots,
-        limit.as_ref(),
-        end_label,
-        sink,
-    )?;
+    emit_flush_gosub(em, flush_return_reg, flush_subrtn_label);
     em.place(skip_flush);
     for (&cur, &prev) in cur_key_regs.iter().zip(&prev_key_regs) {
         em.emit(Instruction::new(Opcode::Copy, cur, prev, 0));
@@ -1560,7 +1602,9 @@ where
     // least one row — `have_group_reg` is unconditionally set by then,
     // matching the explicit-`GROUP BY` (non-implicit) case in
     // `compile_grouped_scan`.
-    flush_group(
+    emit_flush_gosub(em, flush_return_reg, flush_subrtn_label);
+
+    emit_flush_subroutine(
         em,
         reg,
         select,
@@ -1571,6 +1615,8 @@ where
         limit.as_ref(),
         end_label,
         sink,
+        flush_return_reg,
+        flush_subrtn_label,
     )?;
     Ok(true)
 }

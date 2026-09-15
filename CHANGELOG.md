@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.94.0] - 2026-09-15
+
+### Changed
+
+- **`GROUP BY`'s output epilogue compiled once, not twice** (#396): `compile_grouped_scan`/`try_compile_index_ordered_group_by` shared a `flush_group` helper but each inlined a fresh copy of its bytecode at both the group-boundary flush site and the end-of-scan tail flush, doubling the `AggFinal`/`MakeRecord`/`OpenPseudo`/projection block in every grouped query's program. New `Opcode::Gosub` (`src/vm/row/program.rs`, `vm.rs`, `explain.rs`) plus the previously-dead `BeginSubrtn`/`Return` now factor that block into one subroutine, called from both sites -- mirroring SQLite's own `select.c`/`addrOutputSubroutine`. `Return`'s calling convention changed to match SQLite exactly (`r[p1] + 1`, not the address stored verbatim) now that a real `Gosub` emitter exists.
+
 ## [0.93.0] - 2026-09-15
 
 ### Changed

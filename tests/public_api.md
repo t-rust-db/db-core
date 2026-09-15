@@ -6610,6 +6610,7 @@ pub db_core::vm::row::program::Opcode::Eq
 pub db_core::vm::row::program::Opcode::Found
 pub db_core::vm::row::program::Opcode::Function
 pub db_core::vm::row::program::Opcode::Ge
+pub db_core::vm::row::program::Opcode::Gosub
 pub db_core::vm::row::program::Opcode::Goto
 pub db_core::vm::row::program::Opcode::Gt
 pub db_core::vm::row::program::Opcode::Halt
@@ -6683,7 +6684,7 @@ pub db_core::vm::row::program::Opcode::Synchronous
 pub db_core::vm::row::program::Opcode::Transaction
 pub db_core::vm::row::program::Opcode::Variable
 impl db_core::vm::row::program::Opcode
-pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 68]
+pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 69]
 impl db_core::vm::row::program::Opcode
 pub fn db_core::vm::row::program::Opcode::register_operands(self) -> db_core::vm::row::program::RegisterOperands
 impl core::clone::Clone for db_core::vm::row::program::Opcode
@@ -7172,6 +7173,7 @@ pub db_core::vm::row::Opcode::Eq
 pub db_core::vm::row::Opcode::Found
 pub db_core::vm::row::Opcode::Function
 pub db_core::vm::row::Opcode::Ge
+pub db_core::vm::row::Opcode::Gosub
 pub db_core::vm::row::Opcode::Goto
 pub db_core::vm::row::Opcode::Gt
 pub db_core::vm::row::Opcode::Halt
@@ -7245,7 +7247,7 @@ pub db_core::vm::row::Opcode::Synchronous
 pub db_core::vm::row::Opcode::Transaction
 pub db_core::vm::row::Opcode::Variable
 impl db_core::vm::row::program::Opcode
-pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 68]
+pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 69]
 impl db_core::vm::row::program::Opcode
 pub fn db_core::vm::row::program::Opcode::register_operands(self) -> db_core::vm::row::program::RegisterOperands
 impl core::clone::Clone for db_core::vm::row::program::Opcode

@@ -51,11 +51,12 @@ impl Opcode {
     /// verbatim (#134). Excludes sqlite-rs's own additions (`AutoCommit`,
     /// `SetJournalMode`, `Synchronous`, `IntegrityCheck`, the index-scan
     /// and DDL families), which the harvested set does not name.
-    pub const ALL: [Opcode; 68] = [
+    pub const ALL: [Opcode; 69] = [
         Opcode::Init,
         Opcode::Goto,
         Opcode::Once,
         Opcode::BeginSubrtn,
+        Opcode::Gosub,
         Opcode::Return,
         Opcode::Halt,
         Opcode::Transaction,
@@ -138,10 +139,12 @@ pub enum Opcode {
     Once,
     /// Marks a subroutine's entry point; falls through.
     BeginSubrtn,
-    /// Jumps to the address stored (as an integer) in register `p1`
-    /// -- the address itself, as sqlite-rs does, not SQLite's
-    /// `r[p1] + 1`; a future `Gosub` emitter stores the target it wants
-    /// resumed at (#260). No codegen emits this yet.
+    /// Stores the address of the instruction after this one (as an
+    /// integer) into register `p1`, then jumps to `p2` -- SQLite's
+    /// `OP_Gosub`.
+    Gosub,
+    /// Jumps to `r[p1] + 1`, matching SQLite's `OP_Return` convention;
+    /// `p1` holds the return address a matching `Gosub` stored.
     Return,
     /// Terminates execution. `p1` is the result code; `p4` may carry an
     /// error message.
@@ -745,7 +748,8 @@ impl Opcode {
             | Opcode::SetJournalMode
             | Opcode::IntegrityCheck
             | Opcode::Synchronous => NONE,
-            Opcode::Return
+            Opcode::Gosub
+            | Opcode::Return
             | Opcode::IfNot
             | Opcode::IfNotZero
             | Opcode::IfPos

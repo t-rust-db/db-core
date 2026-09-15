@@ -1041,9 +1041,17 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             }
         }
         Opcode::BeginSubrtn => Ok(Step::Next),
+        Opcode::Gosub => {
+            let return_addr = i32::try_from(pc).map_err(|_| ExecError::MalformedInstruction {
+                opcode: "Gosub",
+                reason: format!("instruction address {pc} does not fit in a PC"),
+            })?;
+            vm.set_register(instr.p1, Value::Integer(i64::from(return_addr)))?;
+            Ok(Step::Jump(to_pc(instr.p2)))
+        }
         Opcode::Return => match vm.register(instr.p1)? {
             Value::Integer(i) => match i32::try_from(*i) {
-                Ok(target) => Ok(Step::Jump(to_pc(target))),
+                Ok(target) => Ok(Step::Jump(to_pc(target).saturating_add(1))),
                 Err(_) => Err(ExecError::MalformedInstruction {
                     opcode: "Return",
                     reason: format!("return address {i} does not fit in a PC"),
@@ -4368,7 +4376,7 @@ mod tests {
 
     #[test]
     fn opcode_all_is_sqlite_rs_harvested_inventory() {
-        assert_eq!(Opcode::ALL.len(), 68);
+        assert_eq!(Opcode::ALL.len(), 69);
         assert!(Opcode::ALL.contains(&Opcode::SorterOpen));
         assert!(!Opcode::ALL.contains(&Opcode::AutoCommit));
     }
@@ -4829,10 +4837,11 @@ mod tests {
         }
 
         #[test]
-        fn return_jumps_to_the_address_held_in_p1() {
-            // Current semantics: the target is r[p1] itself (sqlite-rs
-            // parity), not SQLite's r[p1]+1 -- see #260.
-            let mut vm = vm_with(0, int(3));
+        fn return_jumps_to_r_p1_plus_one() {
+            // SQLite's OP_Return semantics: the target is r[p1] + 1 (the
+            // instruction after the Gosub that stored r[p1]), not r[p1]
+            // itself.
+            let mut vm = vm_with(0, int(2));
             let program = Program::new(vec![
                 Instruction::new(Opcode::Return, 0, 0, 0),
                 Instruction::new(Opcode::Halt, 1, 0, 0),
@@ -4842,6 +4851,23 @@ mod tests {
                 Instruction::new(Opcode::Halt, 0, 0, 0),
             ]);
             assert_eq!(execute(&mut vm, &program).unwrap(), vec![vec![int(7)]]);
+        }
+
+        #[test]
+        fn gosub_stores_the_return_address_and_jumps_to_p2() {
+            // Gosub at pc 1 stores its own address (1) in r[0] and jumps
+            // to the subroutine at pc 4; Return jumps to r[0] + 1 == 2,
+            // the instruction right after the Gosub.
+            let rows = run(vec![
+                Instruction::new(Opcode::Integer, 5, 1, 0),
+                Instruction::new(Opcode::Gosub, 0, 4, 0),
+                Instruction::new(Opcode::ResultRow, 1, 2, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+                Instruction::new(Opcode::BeginSubrtn, 0, 0, 0),
+                Instruction::new(Opcode::Integer, 9, 2, 0),
+                Instruction::new(Opcode::Return, 0, 0, 0),
+            ]);
+            assert_eq!(rows, vec![vec![int(5), int(9)]]);
         }
 
         #[test]
