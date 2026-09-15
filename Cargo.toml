@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.95.0"
+version = "0.95.1"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -193,6 +193,17 @@ path = "tests/spike/002_arrow_optimization/02_groupreduce_key_hashing_adjusted.r
 name = "integration_opcode_granularity"
 path = "tests/integration/opcode_granularity_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream"]
+
+[[test]]
+name = "integration_segment_split_invariance"
+path = "tests/integration/segment_split_invariance_test.rs"
+required-features = [
+    "engine-column",
+    "engine-stream",
+    "vm-batch",
+    "codegen-batch",
+    "storage-test-support",
+]
 
 [dependencies]
 # Storage backends (ADR 0016: db-storage absorbed as the `storage` module).
