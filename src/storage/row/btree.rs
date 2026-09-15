@@ -1818,7 +1818,7 @@ mod tests {
     use std::path::Path;
 
     fn open_cursor(fixture: &str) -> TableCursor<VfsPageSource> {
-        let path = Path::new("tests/corpus/fixtures/btrees").join(fixture);
+        let path = Path::new("tests/fixtures/btrees").join(fixture);
         let vfs = UnixVfs;
         let file = vfs.open_read(&path).unwrap();
         let mut header_buf = [0u8; 100];
@@ -1975,7 +1975,7 @@ mod tests {
         // page header; this reads sqlite_master (always root page 1)
         // directly, exercising the page-1 cell-pointer-array offset
         // resolution (relative to byte 0, not byte 100).
-        let path = Path::new("tests/corpus/fixtures/btrees/table_single_page.db");
+        let path = Path::new("tests/fixtures/btrees/table_single_page.db");
         let vfs = UnixVfs;
         let file = vfs.open_read(path).unwrap();
         let mut header_buf = [0u8; 100];

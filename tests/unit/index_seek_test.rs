@@ -26,12 +26,12 @@ use std::path::{Path, PathBuf};
 use db_core::engine::row::RowEngine;
 use db_core::engine::{Cell, Engine};
 
-const FIXTURE: &str = "tests/corpus/fixtures/btrees/table_single_page.db";
+const FIXTURE: &str = "tests/fixtures/btrees/table_single_page.db";
 /// Built by sqlite3 3.53.4 (db-core's own DDL does not accept `COLLATE`
 /// inside `CREATE INDEX`): `n(id INTEGER PRIMARY KEY, name TEXT COLLATE
 /// NOCASE, tag TEXT)`, `CREATE INDEX n_name ON n(name COLLATE NOCASE)`,
 /// rows Alice/alice/ALICE/bob/Bob/carol.
-const NOCASE_FIXTURE: &str = "tests/corpus/fixtures/btrees/collate_nocase.db";
+const NOCASE_FIXTURE: &str = "tests/fixtures/btrees/collate_nocase.db";
 
 struct TempDb(PathBuf);
 

@@ -686,7 +686,7 @@ mod tests {
     use std::path::Path;
 
     fn fixture(name: &str) -> Vec<u8> {
-        let path = Path::new("tests/corpus/fixtures/journalstates").join(name);
+        let path = Path::new("tests/fixtures/journalstates").join(name);
         std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
     }
 
