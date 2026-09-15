@@ -271,7 +271,11 @@ pub fn finalize(
 /// associative merge appropriate to each [`AggPart`].
 #[allow(
     clippy::indexing_slicing,
-    reason = "`parts` has one entry per emitted column, so `i` indexes both rows in range"
+    reason = "`parts` has one entry per emitted column, so `i` indexes both rows in \
+              range; `Avg`'s `sum_i`/`count_i` point past `parts`' own end (codegen \
+              allocates two registers -- sum and count -- per `AVG` but pushes only \
+              one `AggPart::Avg` entry), but are always in range of the wider row \
+              itself (db-core#404)"
 )]
 fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) -> Result<()> {
     for (i, part) in parts.iter().enumerate() {
@@ -306,7 +310,26 @@ fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) -> Result<(
                     into[i] = from[i].clone();
                 }
             }
-            AggPart::Avg(_, _) => {}
+            // The `AggPart::Avg` entry itself sits at `sum_i` (== `i`), but
+            // `count_i` lives one register past the last `AggPart` entry --
+            // outside this loop's own range -- so it must be merged here
+            // explicitly rather than by falling out of the enumeration.
+            // Previously a no-op (db-core#404): with more than one
+            // segment, `AVG` silently returned the first segment's local
+            // average instead of the true merged mean.
+            AggPart::Avg(sum_i, count_i) => {
+                // Both registers are read via `partial_f64` here, matching
+                // `finalize_row`'s own read of them below -- the per-segment
+                // count register is a `Value::Int` in real execution, but
+                // it is never surfaced on its own (only ever divided into
+                // by `finalize_row`), so there is no reason to route it
+                // through the integer-overflow-checked `AggPart::Count`
+                // path as well.
+                into[*sum_i] =
+                    Value::Float(partial_f64(&into[*sum_i])? + partial_f64(&from[*sum_i])?);
+                into[*count_i] =
+                    Value::Float(partial_f64(&into[*count_i])? + partial_f64(&from[*count_i])?);
+            }
         }
     }
     Ok(())
@@ -341,16 +364,22 @@ fn partial_f64(v: &Value) -> Result<f64> {
 
 #[allow(
     clippy::indexing_slicing,
-    reason = "`parts` has one entry per emitted column and `Avg`'s sum/count positions were assigned by codegen within that width"
+    reason = "`row_idx` tracks the row cursor directly (not the `parts` \
+              enumeration index), advancing by 2 over an `Avg`'s sum/count \
+              registers and by 1 otherwise, so it always stays in `row`'s range"
 )]
 fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Result<Vec<Value>> {
     let mut out = Vec::with_capacity(parts.len());
-    let mut skip: Option<usize> = None;
-    for (i, part) in parts.iter().enumerate() {
-        if skip == Some(i) {
-            continue;
-        }
+    let mut row_idx = 0usize;
+    for part in parts {
         match part {
+            // `Avg`'s two registers (sum, count) occupy one `parts` entry
+            // but two `row` slots; every part after it is offset in `row`
+            // by however many extra registers came before -- comparing
+            // `count_i` against the *parts* enumeration index (as this
+            // used to) confuses the two spaces and, once another
+            // aggregate follows an `AVG` in the same query, silently
+            // corrupts or drops it (db-core#404).
             AggPart::Avg(sum_i, count_i) => {
                 let (sum, count) = (partial_f64(&row[*sum_i])?, partial_f64(&row[*count_i])?);
                 out.push(if count == 0.0 {
@@ -358,9 +387,12 @@ fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Result<Vec<Value>> {
                 } else {
                     Value::Float(sum / count)
                 });
-                skip = Some(*count_i);
+                row_idx = count_i.saturating_add(1);
             }
-            _ => out.push(row[i].clone()),
+            _ => {
+                out.push(row[row_idx].clone());
+                row_idx = row_idx.saturating_add(1);
+            }
         }
     }
     Ok(out)

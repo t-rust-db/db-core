@@ -11,12 +11,22 @@
 //! interleaved, maximally uneven splits, one row per segment) -- and
 //! demands bit-identical output.
 //!
-//! `COUNT(DISTINCT ...)` is included per the issue's acceptance criteria,
-//! but today `codegen::batch` silently discards the per-function `DISTINCT`
-//! flag (db-core#415), so it currently executes identically to `COUNT`.
-//! That bug does not depend on segmentation -- `COUNT`'s merge is trivially
-//! split-invariant -- so this harness cannot catch it; it is tracked
-//! separately in #415.
+//! `COUNT(DISTINCT ...)` is *not* covered here: the column parser rejects
+//! `DISTINCT` inside any aggregate call at parse time
+//! (`src/parser/column.rs:507-511,790-793`, "DISTINCT inside an
+//! aggregate"), so there is no such query to run a segmentation harness
+//! over in `vm::batch` today.
+//!
+//! While building this harness, it caught a real, pre-existing bug: `AVG`
+//! never merged across segments at all (`merge_rows`'s `AggPart::Avg`
+//! arm was a no-op) -- with more than one segment, `AVG` silently
+//! returned the first segment's local average. A second, related bug in
+//! `finalize_row` corrupted or dropped whichever aggregate followed an
+//! `AVG` in the same query, in any segment count, because it indexed the
+//! emitted row by its position in `agg_parts` instead of tracking the
+//! row's own (wider, once an `AVG` is present) cursor. Both are fixed in
+//! `src/vm/engine.rs` as part of this change; see the `AggPart::Avg` arms
+//! of `merge_rows` and `finalize_row` for the mechanism.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -194,19 +204,6 @@ fn batch_avg_is_segment_split_invariant() {
 }
 
 #[test]
-fn batch_count_distinct_is_segment_split_invariant() {
-    // See module docs / #415: currently equivalent to COUNT, so this is
-    // trivially invariant regardless of segmentation.
-    let (grp, amt) = synthetic_dataset();
-    assert_split_invariant(
-        "SELECT count(distinct amt) FROM t",
-        grp.len(),
-        ("grp", &grp),
-        ("amt", &amt),
-    );
-}
-
-#[test]
 fn batch_group_by_one_key_is_segment_split_invariant() {
     let (grp, amt) = synthetic_dataset();
     assert_split_invariant(
@@ -260,14 +257,28 @@ fn batch_group_by_two_keys_is_segment_split_invariant() {
             .collect()
     }
 
-    let sql = "SELECT grp, sub, count(*), sum(amt) FROM t \
-               GROUP BY grp, sub ORDER BY grp, sub";
+    // `vm::batch` only supports a single `ORDER BY` term, so a two-key
+    // GROUP BY's output is sorted here instead, by the (grp, sub) group
+    // key -- an ordinary caller comparing two runs would do the same.
+    fn sort_by_group_key(rows: &mut [Vec<Value>]) {
+        rows.sort_by(|a, b| {
+            let key = |r: &[Value]| match (&r[0], &r[1]) {
+                (Value::Str(g), Value::Str(s)) => (g.clone(), s.clone()),
+                other => panic!("{other:?}"),
+            };
+            key(a).cmp(&key(b))
+        });
+    }
+
+    let sql = "SELECT grp, sub, count(*), sum(amt) FROM t GROUP BY grp, sub";
     let program = compile(&parse(sql).unwrap()).unwrap();
 
     let sizings = segmentations(n);
-    let baseline = run(&segments3(&sizings[0], &grp, &sub, &amt), &program).unwrap();
+    let mut baseline = run(&segments3(&sizings[0], &grp, &sub, &amt), &program).unwrap();
+    sort_by_group_key(&mut baseline);
     for sizes in &sizings[1..] {
-        let got = run(&segments3(sizes, &grp, &sub, &amt), &program).unwrap();
+        let mut got = run(&segments3(sizes, &grp, &sub, &amt), &program).unwrap();
+        sort_by_group_key(&mut got);
         assert_eq!(
             got, baseline,
             "two-key GROUP BY: segmentation {sizes:?} disagrees with {:?}",
@@ -387,7 +398,6 @@ fn temp_log(name: &str) -> PathBuf {
         std::process::id()
     ));
     std::fs::remove_file(&p).ok();
-    std::fs::write(&p, b"").unwrap();
     p
 }
 
@@ -409,11 +419,16 @@ fn rows(e: &mut StreamEngine, sql: &str) -> Vec<Vec<Cell>> {
         .rows
 }
 
-/// Writes 24 lines (4 facilities x 6 severities) to `path` in `batches`
-/// chunks (varying the chunk sizes varies where a stream engine's seal
-/// boundaries fall relative to the data), refreshing `e` after each
-/// chunk.
-fn ingest_in_batches(e: &mut StreamEngine, path: &Path, batch_sizes: &[usize]) {
+/// 24 lines (4 facilities x 6 severities), split into `batch_sizes`-sized
+/// chunks: the first chunk is written to `path` *before* the engine opens
+/// on it -- `StreamEngine::open_with_budget` detects the log format once,
+/// from whatever bytes are already there, and never re-detects on
+/// `refresh` (`src/engine/stream.rs`'s `open_with_budget`), so opening on
+/// a still-empty file would permanently lock in a format that never
+/// resolves `facility`/`severity`. Every later chunk is appended and
+/// followed by `refresh`, which is what varies where seal boundaries
+/// fall.
+fn ingest_in_batches(path: &Path, budget: usize, batch_sizes: &[usize]) -> StreamEngine {
     let facilities = [0u8, 4, 9, 16]; // kern, auth, cron, local0
     let severities = [0u8, 1, 2, 3, 4, 5];
     let mut n = 0usize;
@@ -421,20 +436,32 @@ fn ingest_in_batches(e: &mut StreamEngine, path: &Path, batch_sizes: &[usize]) {
         .iter()
         .flat_map(|&f| severities.iter().map(move |&s| (f, s)))
         .collect();
-    for &size in batch_sizes {
+
+    let chunk_text = |size: usize, n: &mut usize, remaining: &mut Vec<(u8, u8)>| {
         let mut text = String::new();
         for _ in 0..size {
             let (f, s) = remaining.remove(0);
-            text.push_str(&pri_line(f, s, n));
-            n += 1;
+            text.push_str(&pri_line(f, s, *n));
+            *n += 1;
         }
-        append(path, &text);
+        text
+    };
+
+    let (&first, rest) = batch_sizes
+        .split_first()
+        .expect("batch_sizes must have at least one chunk");
+    std::fs::write(path, chunk_text(first, &mut n, &mut remaining)).unwrap();
+    let mut e = StreamEngine::open_with_budget(path, budget).unwrap();
+
+    for &size in rest {
+        append(path, &chunk_text(size, &mut n, &mut remaining));
         e.refresh().unwrap();
     }
     assert!(
         remaining.is_empty(),
         "batch_sizes did not cover all 24 lines"
     );
+    e
 }
 
 const STREAM_QUERIES: &[&str] = &[
@@ -455,8 +482,7 @@ fn stream_aggregates_are_invariant_to_seal_boundaries() {
     // A "cold" oracle: all 24 lines ingested as one chunk, budget large
     // enough that nothing is ever evicted.
     let oracle_path = temp_log("seal-boundaries-oracle");
-    let mut oracle = StreamEngine::open_with_budget(&oracle_path, 64 * 1024 * 1024).unwrap();
-    ingest_in_batches(&mut oracle, &oracle_path, &[24]);
+    let mut oracle = ingest_in_batches(&oracle_path, 64 * 1024 * 1024, &[24]);
     let expected = query_all(&mut oracle);
 
     // Same 24 rows, same generous budget (no eviction in play here --
@@ -470,8 +496,7 @@ fn stream_aggregates_are_invariant_to_seal_boundaries() {
     ];
     for sizes in variant_seal_boundaries {
         let path = temp_log(&format!("seal-boundaries-{sizes:?}"));
-        let mut e = StreamEngine::open_with_budget(&path, 64 * 1024 * 1024).unwrap();
-        ingest_in_batches(&mut e, &path, sizes);
+        let mut e = ingest_in_batches(&path, 64 * 1024 * 1024, sizes);
         let got = query_all(&mut e);
         assert_eq!(
             got, expected,
@@ -490,15 +515,13 @@ fn stream_aggregates_are_invariant_to_ring_eviction() {
     // documents `SegmentSummary` as answering COUNT/SUM/MIN/MAX from
     // itself alone once the segment it summarizes is gone).
     let cold_path = temp_log("eviction-cold");
-    let mut cold = StreamEngine::open_with_budget(&cold_path, 64 * 1024 * 1024).unwrap();
-    ingest_in_batches(&mut cold, &cold_path, &[6, 6, 6, 6]);
+    let mut cold = ingest_in_batches(&cold_path, 64 * 1024 * 1024, &[6, 6, 6, 6]);
     let expected = query_all(&mut cold);
 
     // A tiny budget forces eviction of the earliest facilities' segments
     // into summaries well before all 24 lines have landed.
     let hot_path = temp_log("eviction-hot");
-    let mut hot = StreamEngine::open_with_budget(&hot_path, 64).unwrap();
-    ingest_in_batches(&mut hot, &hot_path, &[6, 6, 6, 6]);
+    let mut hot = ingest_in_batches(&hot_path, 64, &[6, 6, 6, 6]);
     assert!(
         hot.ring().rows() < 24,
         "test is only meaningful if the tiny-budget ring evicted something \
@@ -518,24 +541,48 @@ fn stream_aggregates_are_invariant_to_ring_eviction() {
 fn stream_aggregates_are_invariant_over_a_real_syslog_fixture() {
     // The generated-data tests above give full control over facility and
     // severity; this repeats the same idea (tiny budget forcing eviction
-    // vs a huge, never-evicting budget) over the real seeded fixture
-    // used elsewhere in the suite, so the property is also checked
-    // against data nobody hand-crafted for this test.
+    // vs a huge, never-evicting budget) over the real seeded fixture used
+    // elsewhere in the suite, so the property is also checked against
+    // data nobody hand-crafted for this test.
+    //
+    // The fixture alone (70 KB) is smaller than one ring block (256 KiB,
+    // `storage::stream::file::BLOCK_SIZE`), so it becomes exactly one
+    // segment at open -- and `Ring::evict_over_budget` never evicts the
+    // last segment regardless of budget ("the ring always holds the
+    // head"). Forcing this fixture's own data to be evicted needs a
+    // second segment: append several synthetic batches after opening so
+    // each becomes its own segment via `refresh`, so a small budget then
+    // evicts the original fixture segment first.
     const FIXTURE: &str = "tests/fixtures/stream/syslog-1k.log";
-    let fixture = Path::new(FIXTURE);
-    let mut resident = StreamEngine::open_with_budget(fixture, 64 * 1024 * 1024).unwrap();
-    let expected = query_all(&mut resident);
+    let fixture_bytes = std::fs::read(FIXTURE).unwrap();
 
-    let mut evicting = StreamEngine::open_with_budget(fixture, 4096).unwrap();
-    evicting.refresh().unwrap();
+    let make = |name: &str, budget: usize| -> StreamEngine {
+        let path = temp_log(name);
+        std::fs::write(&path, &fixture_bytes).unwrap();
+        let mut e = StreamEngine::open_with_budget(&path, budget).unwrap();
+        for batch in 0..8usize {
+            let mut text = String::new();
+            for i in 0..50usize {
+                text.push_str(&pri_line(4, (i % 6) as u8, 100_000 + batch * 50 + i));
+            }
+            append(&path, &text);
+            e.refresh().unwrap();
+        }
+        e
+    };
+
+    let mut resident = make("real-fixture-resident", 64 * 1024 * 1024);
+    let mut evicting = make("real-fixture-evicting", 4096);
     assert!(
-        evicting.ring().rows() < 1000,
+        evicting.ring().rows() < resident.ring().rows(),
         "test is only meaningful if the tiny-budget ring evicted something \
-         (ring holds {} of 1000 rows)",
-        evicting.ring().rows()
+         (evicting holds {}, resident holds {})",
+        evicting.ring().rows(),
+        resident.ring().rows()
     );
-    let got = query_all(&mut evicting);
 
+    let expected = query_all(&mut resident);
+    let got = query_all(&mut evicting);
     assert_eq!(
         got, expected,
         "evicted-segment answers over the real syslog fixture disagree \
