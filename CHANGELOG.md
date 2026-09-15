@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.98.0] - 2026-09-15
+
+### Added
+
+- **Typed `Column`/`Bitmap` core types for `vm::batch`** (#425, epic #130 child 3): `vm::column::Bitmap` is a hand-rolled validity bitmap over `Vec<u64>` (no `unsafe`, no dependency); `vm::column::Column` is an enum over packed `Int`/`Float`/`Bool` buffers, Arrow-style offsets+data for `Str`, and `Dict{dict, indices}`, mirroring `storage::stream::segment::OwnedColumn`'s variant set but with a real per-column bitmap instead of per-element `Option<T>`. `impl From<Vec<Value>> for Column` gives existing `Batch::with_column` test call sites a migration path. Per ADR-0025's constraint on this child, nothing assumes a source-level static schema: the same column name can seal as `Int` in one `Column` and `Str` in the next. Additive only -- does not change `Batch`'s field or wire any `Opcode` kernel to `Column` (that's child 4). Prerequisite for #399 (stream storage boundary), found missing while validating that issue.
+
 ## [0.97.0] - 2026-09-15
 
 ### Changed
