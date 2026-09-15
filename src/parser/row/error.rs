@@ -452,6 +452,11 @@ mod tests {
             "SELECT 1 UNION SELECT 2 INTERSECT SELECT 3",
         );
         assert_invalid(parse_select("SELECT FROM t"), "SELECT FROM t");
+        // Trailing garbage *after* an otherwise-complete parse -- unlike
+        // the UNION case above (which `select_stmt_body` itself detects
+        // and rejects before `expect_end` ever runs), a stray `)` here
+        // is exactly `expect_end`'s own "unexpected trailing token" arm.
+        assert_invalid(parse_select("SELECT 1)"), "SELECT 1)");
     }
 
     #[test]
@@ -465,6 +470,23 @@ mod tests {
             "EXPLAIN QUERY PLAN SELECT 1 UNION SELECT 2 INTERSECT SELECT 3",
         );
         assert_invalid(parse_explain("EXPLAIN QUERY PLAN"), "EXPLAIN QUERY PLAN");
+        assert_invalid(
+            parse_explain("EXPLAIN QUERY PLAN SELECT 1)"),
+            "EXPLAIN QUERY PLAN SELECT 1)",
+        );
+    }
+
+    #[test]
+    fn bool_expr_three_way_outcome() {
+        // db-core#369's bare-predicate entry point -- untested at every
+        // outcome until now; unlike the statement parsers above it has
+        // no test anywhere, inline or in tests/unit/parser_public_api_test.rs.
+        assert_accepted(parse_bool_expr("a = 1"), "a = 1");
+        assert_unsupported(
+            parse_bool_expr("a = 1 UNION SELECT 1"),
+            "a = 1 UNION SELECT 1",
+        );
+        assert_invalid(parse_bool_expr("a ="), "a =");
     }
 
     #[test]
@@ -478,6 +500,10 @@ mod tests {
             "INSERT INTO t VALUES (CURRENT_TIMESTAMP)",
         );
         assert_invalid(parse_insert("INSERT INTO t"), "INSERT INTO t");
+        assert_invalid(
+            parse_insert("INSERT INTO t VALUES (1, 2))"),
+            "INSERT INTO t VALUES (1, 2))",
+        );
     }
 
     #[test]
@@ -488,6 +514,10 @@ mod tests {
             "DELETE FROM t UNION SELECT 1",
         );
         assert_invalid(parse_delete("DELETE FROM"), "DELETE FROM");
+        assert_invalid(
+            parse_delete("DELETE FROM t)"),
+            "DELETE FROM t)",
+        );
     }
 
     #[test]
@@ -501,6 +531,10 @@ mod tests {
             "UPDATE t1 SET x=1 UNION SELECT 1",
         );
         assert_invalid(parse_update("UPDATE t1 SET"), "UPDATE t1 SET");
+        assert_invalid(
+            parse_update("UPDATE t1 SET x=1)"),
+            "UPDATE t1 SET x=1)",
+        );
     }
 
     #[test]
