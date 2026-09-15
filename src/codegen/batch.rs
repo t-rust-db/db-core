@@ -2668,6 +2668,62 @@ fn referenced_columns(select: &Select) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use crate::parser as sql;
+    use crate::parser::ast::JoinOp;
+
+    #[test]
+    fn plan_error_display_covers_every_variant() {
+        // `NoJoinClause` and `Internal` each already have their own
+        // dedicated test elsewhere; the rest of `PlanError`'s Display
+        // arms are otherwise untested.
+        assert_eq!(
+            PlanError::UnknownColumn("x".into()).to_string(),
+            "unknown column: x"
+        );
+        assert_eq!(
+            PlanError::UnsupportedSemiJoin("shape".into()).to_string(),
+            "unsupported semi-join: shape"
+        );
+        assert_eq!(
+            PlanError::UnsupportedJoinKind(JoinOp::Cross).to_string(),
+            "join kind Cross is not yet executable (only Inner/Left are implemented)"
+        );
+        assert_eq!(
+            PlanError::StarWithAggregation.to_string(),
+            "SELECT * cannot be combined with GROUP BY, an aggregate, or a window function"
+        );
+        assert_eq!(
+            PlanError::UnsupportedSelectItem("thing".into()).to_string(),
+            "unsupported SELECT item: thing"
+        );
+        assert_eq!(
+            PlanError::ScopeClauseUnsupported.to_string(),
+            "SINCE/UNTIL is only available through the stream engine"
+        );
+    }
+
+    #[test]
+    fn window_func_from_name_covers_every_recognized_function_and_rejects_the_rest() {
+        // Only `ROW_NUMBER` is exercised end-to-end (through a real
+        // `OVER` clause) anywhere else in this crate's test suite; the
+        // rest of `from_name`'s match arms are otherwise never reached.
+        let cases: &[(&str, WindowFunc)] = &[
+            ("ROW_NUMBER", WindowFunc::RowNumber),
+            ("row_number", WindowFunc::RowNumber),
+            ("RANK", WindowFunc::Rank),
+            ("DENSE_RANK", WindowFunc::DenseRank),
+            ("LAG", WindowFunc::Lag),
+            ("LEAD", WindowFunc::Lead),
+            ("FIRST_VALUE", WindowFunc::FirstValue),
+            ("LAST_VALUE", WindowFunc::LastValue),
+            ("SUM", WindowFunc::Sum),
+            ("AVG", WindowFunc::Avg),
+            ("COUNT", WindowFunc::Count),
+        ];
+        for &(name, expected) in cases {
+            assert_eq!(WindowFunc::from_name(name), Some(expected), "{name}");
+        }
+        assert_eq!(WindowFunc::from_name("NOT_A_WINDOW_FUNC"), None);
+    }
 
     /// db-core#231: dispatch only routes joined queries to `compile_join`;
     /// a caller that doesn't gets a typed error, not a panic.

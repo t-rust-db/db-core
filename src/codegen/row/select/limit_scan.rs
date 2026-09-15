@@ -1253,6 +1253,19 @@ mod tests {
         assert_eq!(resolved(&constants, "b"), Some(5));
     }
 
+    /// Same chain, opposite conjunct order (`a = 5 AND a = b`): the
+    /// fixed-point loop's other propagation direction (from an
+    /// already-known left operand `a` out to the linked `b`), which the
+    /// order above never reaches -- there, `b` is always the side
+    /// already known when the link is walked.
+    #[test]
+    fn propagate_constants_resolves_direct_chain_in_reverse_conjunct_order() {
+        let where_expr = and(eq(col("a"), lit_int(5)), eq(col("a"), col("b")));
+        let constants = propagate_constants(&where_expr);
+        assert_eq!(resolved(&constants, "a"), Some(5));
+        assert_eq!(resolved(&constants, "b"), Some(5));
+    }
+
     /// #605: propagation follows a multi-hop chain (`a = b AND b = c AND
     /// c = 5`), not just a single indirection.
     #[test]
