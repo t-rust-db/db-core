@@ -14,6 +14,7 @@
 //! once rather than row-by-row.
 
 use crate::value::len_to_i64;
+pub use crate::vm::column::Column;
 pub use crate::vm::join::JoinKind;
 use crate::vm::join::{should_emit, JoinHashTable};
 use std::borrow::Cow;
@@ -126,6 +127,13 @@ impl Value {
 pub struct Batch {
     /// Column values by column name; every column has exactly `num_rows` entries.
     pub columns: HashMap<String, Arc<Vec<Value>>>,
+    /// Typed columns (#425/#429), keyed separately from `columns` -- a
+    /// given column name lives in exactly one of the two maps.
+    /// [`Opcode::LoadColumn`] loads these into a typed register
+    /// (`Vm`'s `typed_registers`) without a per-row `Value` allocation;
+    /// opcodes not yet ported to `Column` dispatch (#130 child 4) still
+    /// read them transparently, materialized on demand.
+    pub typed_columns: HashMap<String, Arc<Column>>,
     /// Number of rows in this batch (the length of every column).
     pub num_rows: usize,
 }
@@ -135,6 +143,7 @@ impl Batch {
     pub fn new(num_rows: usize) -> Self {
         Batch {
             columns: HashMap::new(),
+            typed_columns: HashMap::new(),
             num_rows,
         }
     }
@@ -142,6 +151,15 @@ impl Batch {
     /// Builder-style: adds (or replaces) the column `name` with `values`.
     pub fn with_column(mut self, name: impl Into<String>, values: Vec<Value>) -> Self {
         self.columns.insert(name.into(), Arc::new(values));
+        self
+    }
+
+    /// Builder-style: adds (or replaces) the column `name` with a typed
+    /// [`Column`] (#425) instead of a boxed `Vec<Value>` -- the
+    /// representation [`Opcode::LoadColumn`] can load into a register
+    /// without a per-row allocation (#429).
+    pub fn with_typed_column(mut self, name: impl Into<String>, column: Column) -> Self {
+        self.typed_columns.insert(name.into(), Arc::new(column));
         self
     }
 }
@@ -1191,6 +1209,13 @@ struct Selection {
 #[derive(Default)]
 pub struct Vm {
     registers: HashMap<usize, Arc<Vec<Value>>>,
+    /// Typed registers (#429): a register loaded from a
+    /// [`Batch::typed_columns`] entry lives here instead of `registers`,
+    /// with no per-row `Value` materialized. Opcodes ported to `Column`
+    /// dispatch (currently `Filter`'s Bool predicate, and `Map`'s
+    /// `Eq`/`Ne` against a `Dict` column) read it directly; every other
+    /// opcode reads through [`Vm::reg`], which materializes on demand.
+    typed_registers: HashMap<usize, Arc<Column>>,
     output: Vec<Vec<Value>>,
     join_tables: JoinTables,
     /// A pending `Filter` result not yet applied to `registers`. See
@@ -1244,6 +1269,15 @@ impl Vm {
         self.reg(reg, "register")
     }
 
+    /// The current contents of typed register `reg` (#429) -- populated
+    /// alongside `register`'s `Vec<Value>` copy by
+    /// [`Opcode::LoadColumn`], for opcodes that dispatch on [`Column`]
+    /// directly instead of paying the per-element `Value` cost. `None`
+    /// if `reg` was never loaded from a [`Batch::typed_columns`] entry.
+    pub fn typed_register(&self, reg: usize) -> Option<&Column> {
+        self.typed_registers.get(&reg).map(Arc::as_ref)
+    }
+
     /// Move register `reg` out of the VM (it becomes unknown afterwards),
     /// or [`VmError::UnknownRegister`] if it was never written -- for
     /// callers assembling a [`Batch`] from finished registers without
@@ -1253,6 +1287,7 @@ impl Vm {
     /// still shared with its batch (e.g. an untransformed `LoadColumn`)
     /// is cloned instead.
     pub fn take_register(&mut self, reg: usize) -> Result<Vec<Value>> {
+        self.typed_registers.remove(&reg);
         let values = self
             .registers
             .remove(&reg)
@@ -1337,7 +1372,65 @@ impl Vm {
             }
             *values = Arc::new(compacted);
         }
+        // #429: `typed_registers` shadows a `registers` entry loaded
+        // straight from `Batch::typed_columns`, uncompacted. Once a
+        // selection is resolved, `registers` above just got compacted to
+        // the surviving rows while any typed shadow would still be the
+        // original full-length `Column` -- stale and wrong-length for
+        // `Filter`/`Map`'s fast paths to read afterward. Clearing them
+        // is conservative (falls back to the general `Value` path for
+        // that register from here on) but always correct.
+        self.typed_registers.clear();
         Ok(())
+    }
+
+    /// Fast path for [`Opcode::Map`] with `Eq`/`Ne` where one operand is a
+    /// [`Column::Dict`] register and the other resolves to a single
+    /// string literal (a `LoadConst`-broadcast register, or any register
+    /// whose every value is the same `Value::Str`): compares dictionary
+    /// codes instead of decoding every row's string (db-core#399/#429).
+    /// `None` when neither operand fits that shape, so the caller falls
+    /// back to the general elementwise [`apply_map_op`] path.
+    fn dict_literal_compare(
+        &self,
+        op: MapOp,
+        a: usize,
+        b: usize,
+        opcode: &'static str,
+    ) -> Result<Option<Vec<Value>>> {
+        if !matches!(op, MapOp::Eq | MapOp::Ne) {
+            return Ok(None);
+        }
+        for (dict_reg, other_reg) in [(a, b), (b, a)] {
+            let Some(column) = self.typed_registers.get(&dict_reg) else {
+                continue;
+            };
+            let Column::Dict {
+                dict,
+                indices,
+                valid,
+            } = column.as_ref()
+            else {
+                continue;
+            };
+            let other = self.reg(other_reg, opcode)?;
+            let Some(literal) = single_str_literal(other) else {
+                continue;
+            };
+            let code = dict.iter().position(|s| s.as_ref() == literal);
+            let result = (0..indices.len())
+                .map(|i| {
+                    if !valid.get(i) {
+                        return Value::Null;
+                    }
+                    let idx_code = indices.get(i).and_then(|&idx| usize::try_from(idx).ok());
+                    let is_eq = idx_code == code;
+                    Value::Bool(if op == MapOp::Eq { is_eq } else { !is_eq })
+                })
+                .collect();
+            return Ok(Some(result));
+        }
+        Ok(None)
     }
 
     /// Take (and clear) the rows collected so far by [`Opcode::Emit`] --
@@ -1397,15 +1490,26 @@ impl Vm {
         let opcode = op.name();
         match op {
             Opcode::LoadColumn { reg, column } => {
-                let values =
-                    batch
-                        .columns
-                        .get(column.as_ref())
-                        .ok_or_else(|| VmError::UnknownColumn {
+                if let Some(typed) = batch.typed_columns.get(column.as_ref()) {
+                    // #429: also materialize into `registers` so every
+                    // opcode not yet ported to `Column` dispatch (#130
+                    // child 4) keeps working completely unchanged --
+                    // `typed_registers` is the accelerated path `Filter`
+                    // and `Map`'s `Dict`-literal comparison consult
+                    // instead of paying this cost.
+                    let materialized: Vec<Value> = (0..typed.len()).map(|i| typed.get(i)).collect();
+                    self.registers.insert(*reg, Arc::new(materialized));
+                    self.typed_registers.insert(*reg, Arc::clone(typed));
+                } else {
+                    let values = batch.columns.get(column.as_ref()).ok_or_else(|| {
+                        VmError::UnknownColumn {
                             opcode,
                             column: column.to_string(),
-                        })?;
-                self.registers.insert(*reg, Arc::clone(values));
+                        }
+                    })?;
+                    self.registers.insert(*reg, Arc::clone(values));
+                    self.typed_registers.remove(reg);
+                }
             }
             Opcode::LoadConst { reg, value } => {
                 self.registers
@@ -1416,16 +1520,22 @@ impl Vm {
                 // concept), so any pending selection must be resolved
                 // (compacted) first rather than taught to this opcode.
                 self.resolve_selection(opcode)?;
-                let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);
-                if a_vals.len() != b_vals.len() {
-                    return Err(VmError::RegisterLengthMismatch { opcode });
-                }
-                let result: Vec<Value> = a_vals
-                    .iter()
-                    .zip(b_vals)
-                    .map(|(x, y)| apply_map_op(*op, x, y))
-                    .collect();
+                let result = match self.dict_literal_compare(*op, *a, *b, opcode)? {
+                    Some(result) => result,
+                    None => {
+                        let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);
+                        if a_vals.len() != b_vals.len() {
+                            return Err(VmError::RegisterLengthMismatch { opcode });
+                        }
+                        a_vals
+                            .iter()
+                            .zip(b_vals.iter())
+                            .map(|(x, y)| apply_map_op(*op, x, y))
+                            .collect()
+                    }
+                };
                 self.registers.insert(*dst, Arc::new(result));
+                self.typed_registers.remove(dst);
             }
             Opcode::Call { dst, name, args } => {
                 // Elementwise, like `Map`: resolve any pending selection
@@ -1457,11 +1567,25 @@ impl Vm {
                 // register -- registers stay exactly as they are;
                 // whichever opcode later actually needs dense rows
                 // resolves this (see `Selection`).
-                let mask: Vec<bool> = self
-                    .reg(*predicate, opcode)?
-                    .iter()
-                    .map(|v| matches!(v, Value::Bool(true)))
-                    .collect();
+                let mask: Vec<bool> = match self.typed_registers.get(predicate) {
+                    // #429: a typed Bool predicate register (e.g. loaded
+                    // straight from a sealed segment's Bool column) reads
+                    // its bitmap-backed buffer directly, skipping the
+                    // `Value::Bool(true)` match entirely.
+                    Some(column) => match column.as_ref() {
+                        Column::Bool { data, valid } => (0..data.len())
+                            .map(|i| valid.get(i) && data.get(i).copied().unwrap_or(false))
+                            .collect(),
+                        other => (0..other.len())
+                            .map(|i| matches!(other.get(i), Value::Bool(true)))
+                            .collect(),
+                    },
+                    None => self
+                        .reg(*predicate, opcode)?
+                        .iter()
+                        .map(|v| matches!(v, Value::Bool(true)))
+                        .collect(),
+                };
                 let base_len = mask.len();
                 for values in self.registers.values() {
                     if values.len() != base_len {
@@ -2263,6 +2387,22 @@ fn as_bool(v: &Value) -> bool {
     matches!(v, Value::Bool(true))
 }
 
+/// `Some(s)` if every value in `values` is the same `Value::Str(s)`
+/// (typically a `LoadConst`-broadcast register); `None` if `values` is
+/// empty, holds anything else, or the strings differ. Used by
+/// [`Vm::dict_literal_compare`] to recognize a comparison against a
+/// literal.
+fn single_str_literal(values: &[Value]) -> Option<&str> {
+    let Value::Str(first) = values.first()? else {
+        return None;
+    };
+    let first = first.as_ref();
+    values
+        .iter()
+        .all(|v| matches!(v, Value::Str(s) if s.as_ref() == first))
+        .then_some(first)
+}
+
 fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
         (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),
@@ -2379,6 +2519,235 @@ mod tests {
                 opcode: "LoadColumn",
                 column: "missing".into()
             }
+        );
+    }
+
+    #[test]
+    fn load_column_reads_a_typed_column_into_matching_values() {
+        // #429: a `Batch::with_typed_column` column materializes into the
+        // same `Value`s a `Vec<Value>`-backed column would, so every
+        // opcode not yet ported to `Column` dispatch sees no difference.
+        let batch = Batch::new(3).with_typed_column(
+            "id",
+            Column::from(vec![Value::Int(1), Value::Null, Value::Int(3)]),
+        );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[Opcode::LoadColumn {
+                reg: 0,
+                column: "id".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Int(1), Value::Null, Value::Int(3)]
+        );
+        assert!(matches!(vm.typed_register(0), Some(Column::Int { .. })));
+    }
+
+    #[test]
+    fn filter_on_a_typed_bool_predicate_matches_the_value_path() {
+        // #429: Filter's typed-Bool fast path (reading the Column's
+        // bitmap+data directly) must keep only rows the equivalent
+        // `Vec<Value>` path would -- including a NULL predicate reading
+        // as "not kept", same as `Value::Bool(true)` matching does.
+        let batch = Batch::new(4)
+            .with_column(
+                "id",
+                vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+            )
+            .with_typed_column(
+                "keep",
+                Column::from(vec![
+                    Value::Bool(true),
+                    Value::Bool(false),
+                    Value::Null,
+                    Value::Bool(true),
+                ]),
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "id".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "keep".into(),
+                },
+                Opcode::Filter { predicate: 1 },
+                Opcode::Emit {
+                    registers: vec![0].into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.take_output(),
+            vec![vec![Value::Int(1)], vec![Value::Int(4)]]
+        );
+    }
+
+    #[test]
+    fn map_eq_on_dict_column_compares_codes_against_a_literal() {
+        // #399/#429: `= 'kern'` on a Dict column must compare dictionary
+        // codes, not decode every row back to a String, and must agree
+        // with the equivalent `Vec<Value>`/`Str` comparison.
+        let dict: Vec<std::sync::Arc<str>> = vec!["kern".into(), "user".into()];
+        let tag_column = Column::Dict {
+            dict,
+            indices: vec![0, 1, 0],
+            valid: crate::vm::column::Bitmap::from_bools([true, true, false].into_iter()),
+        };
+        let batch = Batch::new(3).with_typed_column("tag", tag_column);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "tag".into(),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Str("kern".into()),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Eq,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Bool(true), Value::Bool(false), Value::Null]
+        );
+
+        // Differential check: the same query over an equivalent
+        // `Vec<Value>`/`Str` column must agree exactly.
+        let str_batch = Batch::new(3).with_column(
+            "tag",
+            vec![
+                Value::Str("kern".into()),
+                Value::Str("user".into()),
+                Value::Null,
+            ],
+        );
+        let mut str_vm = Vm::new();
+        str_vm
+            .execute(
+                &str_batch,
+                &[
+                    Opcode::LoadColumn {
+                        reg: 0,
+                        column: "tag".into(),
+                    },
+                    Opcode::LoadConst {
+                        reg: 1,
+                        value: Value::Str("kern".into()),
+                    },
+                    Opcode::Map {
+                        dst: 2,
+                        op: MapOp::Eq,
+                        a: 0,
+                        b: 1,
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(vm.register(2).unwrap(), str_vm.register(2).unwrap());
+    }
+
+    #[test]
+    fn map_eq_on_dict_column_against_a_literal_not_in_the_dictionary() {
+        let dict: Vec<std::sync::Arc<str>> = vec!["kern".into(), "user".into()];
+        let tag_column = Column::Dict {
+            dict,
+            indices: vec![0, 1],
+            valid: crate::vm::column::Bitmap::new(2, true),
+        };
+        let batch = Batch::new(2).with_typed_column("tag", tag_column);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "tag".into(),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Str("nope".into()),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Ne,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Bool(true), Value::Bool(true)]
+        );
+    }
+
+    #[test]
+    fn typed_column_survives_a_resolved_selection_via_the_materialized_register() {
+        // #429: once `resolve_selection` compacts registers (here via
+        // `Map` after a `Filter`), the typed shadow is cleared -- but
+        // the always-populated `registers` copy keeps everything correct,
+        // just without the fast path from then on.
+        let batch = Batch::new(3)
+            .with_typed_column(
+                "n",
+                Column::from(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+            )
+            .with_column(
+                "keep",
+                vec![Value::Bool(true), Value::Bool(false), Value::Bool(true)],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "n".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "keep".into(),
+                },
+                Opcode::Filter { predicate: 1 },
+                Opcode::LoadConst {
+                    reg: 2,
+                    value: Value::Int(1),
+                },
+                Opcode::Map {
+                    dst: 3,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 2,
+                },
+                Opcode::Emit {
+                    registers: vec![3].into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.take_output(),
+            vec![vec![Value::Int(2)], vec![Value::Int(4)]]
         );
     }
 
