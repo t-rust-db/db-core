@@ -903,6 +903,48 @@ where
     Ok(())
 }
 
+/// Emits a `Gosub` call (#409) to the shared accumulator-reset
+/// subroutine placed at `subrtn_label` by [`emit_reset_subroutine`],
+/// storing the resume address in `return_reg` -- called once before the
+/// sorted loop and once per group boundary, mirroring SQLite's own
+/// `select.c` (`Gosub` to its reset subroutine at both sites, confirmed
+/// against a real `sqlite3` oracle in #409's issue).
+fn emit_reset_gosub(em: &mut Emitter, return_reg: i32, subrtn_label: Label) {
+    let gosub = em.emit(Instruction::new(Opcode::Gosub, return_reg, 0, 0));
+    em.patch_p2(gosub, subrtn_label);
+}
+
+/// Emits the accumulator-reset body exactly once, as a subroutine
+/// reached only via [`emit_reset_gosub`] (#409): clears every aggregate
+/// slot's context (`AggReset`) and reopens each `DISTINCT`-guarded
+/// slot's dedup cursor -- the reset half of what [`emit_agg_step`]'s
+/// `reset: true` used to fuse into a single `AggStep`, split out so a
+/// group's first row can be reset via `Gosub` and folded via a plain
+/// (non-reset) `AggStep` immediately after, matching SQLite's two
+/// separate instructions rather than our previous one fused opcode.
+/// Placed out of the mainline fallthrough behind an unconditional
+/// `Goto` around it, same shape as [`emit_flush_subroutine`].
+fn emit_reset_subroutine(
+    em: &mut Emitter,
+    agg_slots: &[AggSlot],
+    return_reg: i32,
+    subrtn_label: Label,
+) {
+    let after_subrtn = em.new_label();
+    let skip_subrtn = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+    em.patch_p2(skip_subrtn, after_subrtn);
+    em.place(subrtn_label);
+    em.emit(Instruction::new(Opcode::BeginSubrtn, 0, 0, 0));
+    for agg in agg_slots {
+        em.emit(Instruction::new(Opcode::AggReset, agg.slot, 0, 0));
+        if let Some(eph_cursor) = agg.eph_cursor {
+            em.emit(Instruction::new(Opcode::OpenEphemeral, eph_cursor, 0, 0));
+        }
+    }
+    em.emit(Instruction::new(Opcode::Return, return_reg, 0, 0));
+    em.place(after_subrtn);
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(crate) fn compile_grouped_scan<F>(
     em: &mut Emitter,
@@ -1152,6 +1194,15 @@ where
         })
         .collect();
 
+    // Reset the accumulators before the sorted loop starts (#409),
+    // matching SQLite's own `select.c` `Gosub` at this point in its
+    // `GROUP BY` codegen -- harmless for the implicit whole-table group
+    // over a zero-row table (the slots are already unset) but needed
+    // for the boundary-site `Gosub` below to share one subroutine body.
+    let reset_return_reg = reg.alloc();
+    let reset_subrtn_label = em.new_label();
+    emit_reset_gosub(em, reset_return_reg, reset_subrtn_label);
+
     // `OpenPseudo` only records `cursors.pseudo -> sorter_data_reg` (the
     // register index, not a snapshot of its value, per
     // `CursorSlot::Pseudo`) — so it only needs to run once, before the
@@ -1242,13 +1293,15 @@ where
         em.emit(Instruction::new(Opcode::Copy, cur, prev, 0));
     }
     em.emit(Instruction::new(Opcode::Integer, 1, have_group_reg, 0));
-    // This is a *new* group's first row: fold it in with `reset: true`
-    // so a slot number reused from the previous group starts a fresh
-    // accumulator rather than continuing the old one — then skip the
-    // plain (non-reset) fold below, which is only for a group's
-    // second-and-later rows.
+    // This is a *new* group's first row: reset via the shared
+    // subroutine (#409, mirroring SQLite's own `Gosub` at every group
+    // boundary) so a slot number reused from the previous group starts
+    // a fresh accumulator, then fold this row's value with a plain
+    // (non-reset) `AggStep` — then skip the fold below, which is only
+    // for a group's second-and-later rows.
+    emit_reset_gosub(em, reset_return_reg, reset_subrtn_label);
     for agg in &agg_slots {
-        emit_agg_step(em, reg, &pseudo_scope, agg, true)?;
+        emit_agg_step(em, reg, &pseudo_scope, agg, false)?;
     }
     // A plain (non-aggregate) result/`HAVING` column has no aggregate
     // to fold, so it takes on a single "arbitrary row" from the group
@@ -1317,6 +1370,7 @@ where
         flush_return_reg,
         flush_subrtn_label,
     )?;
+    emit_reset_subroutine(em, &agg_slots, reset_return_reg, reset_subrtn_label);
     Ok(())
 }
 
@@ -1487,6 +1541,12 @@ where
         })
         .collect();
 
+    // Reset the accumulators before the index walk starts (#409), same
+    // rationale as `compile_grouped_scan`'s own pre-loop `Gosub`.
+    let reset_return_reg = reg.alloc();
+    let reset_subrtn_label = em.new_label();
+    emit_reset_gosub(em, reset_return_reg, reset_subrtn_label);
+
     let (rewind_op, next_op) = if forward {
         (Opcode::IdxRewind, Opcode::IdxNext)
     } else {
@@ -1574,8 +1634,9 @@ where
         em.emit(Instruction::new(Opcode::Copy, cur, prev, 0));
     }
     em.emit(Instruction::new(Opcode::Integer, 1, have_group_reg, 0));
+    emit_reset_gosub(em, reset_return_reg, reset_subrtn_label);
     for agg in &agg_slots {
-        emit_agg_step(em, reg, &table_scope, agg, true)?;
+        emit_agg_step(em, reg, &table_scope, agg, false)?;
     }
     let after_accumulate = em.new_label();
     let goto_after_accumulate = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
@@ -1616,6 +1677,7 @@ where
         flush_return_reg,
         flush_subrtn_label,
     )?;
+    emit_reset_subroutine(em, &agg_slots, reset_return_reg, reset_subrtn_label);
     Ok(true)
 }
 
@@ -1963,5 +2025,27 @@ mod mcdc_vectors {
         schema.without_rowid = true;
         let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[schema]);
         assert!(has(&p, Opcode::SorterOpen), "{p:?}");
+    }
+
+    // ---------------------------------------------------------------------
+    // aggregate_940 -- `emit_reset_subroutine`'s `let Some(eph_cursor) =
+    // agg.eph_cursor` (#409): only a `DISTINCT` aggregate slot reopens its
+    // dedup cursor from the shared reset subroutine.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__codegen_row_select_aggregate_emit_reset_subroutine_6ed41c5c__v1_a_plain_aggregate_slot_has_no_dedup_cursor_to_reopen(
+    ) {
+        let p = ok("SELECT a, count(*) FROM t GROUP BY a", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::OpenEphemeral), "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_aggregate_emit_reset_subroutine_6ed41c5c__v2_a_distinct_aggregate_slot_reopens_its_dedup_cursor(
+    ) {
+        let p = ok(
+            "SELECT a, count(DISTINCT b) FROM t GROUP BY a",
+            &[t_indexed_a()],
+        );
+        assert!(has(&p, Opcode::OpenEphemeral), "{p:?}");
     }
 }

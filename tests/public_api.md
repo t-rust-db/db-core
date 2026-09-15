@@ -6581,6 +6581,7 @@ pub mod db_core::vm::row::program
 pub enum db_core::vm::row::program::Opcode
 pub db_core::vm::row::program::Opcode::Add
 pub db_core::vm::row::program::Opcode::AggFinal
+pub db_core::vm::row::program::Opcode::AggReset
 pub db_core::vm::row::program::Opcode::AggStep
 pub db_core::vm::row::program::Opcode::Analyze
 pub db_core::vm::row::program::Opcode::AutoCommit
@@ -7144,6 +7145,7 @@ impl core::marker::StructuralPartialEq for db_core::functions::FunctionError
 pub enum db_core::vm::row::Opcode
 pub db_core::vm::row::Opcode::Add
 pub db_core::vm::row::Opcode::AggFinal
+pub db_core::vm::row::Opcode::AggReset
 pub db_core::vm::row::Opcode::AggStep
 pub db_core::vm::row::Opcode::Analyze
 pub db_core::vm::row::Opcode::AutoCommit

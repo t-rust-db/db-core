@@ -80,6 +80,11 @@ path = "tests/unit/group_by_output_subroutine_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_group_by_reset_subroutine"
+path = "tests/unit/group_by_reset_subroutine_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_cond"
 path = "tests/unit/cond_test.rs"
 required-features = ["engine-row"]
