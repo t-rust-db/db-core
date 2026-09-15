@@ -14,7 +14,7 @@
 //! once rather than row-by-row.
 
 use crate::value::len_to_i64;
-pub use crate::vm::column::Column;
+pub use crate::vm::column::{Bitmap, Column};
 pub use crate::vm::join::JoinKind;
 use crate::vm::join::{should_emit, JoinHashTable};
 use std::borrow::Cow;
@@ -1433,6 +1433,88 @@ impl Vm {
         Ok(None)
     }
 
+    /// Fast path for [`Opcode::Map`]'s `Add`/`Sub`/`Mul`/`Div` when
+    /// *both* operands are typed `Int`/`Float` columns (#130 child 4
+    /// slice 2, db-core#431): computes over the packed buffers, honoring
+    /// the same NULL-propagation and Int/Float promotion rules as
+    /// [`arithmetic`] (Int stays Int unless `Div`; either NULL operand
+    /// yields a NULL row). `None` when the op isn't one of these four or
+    /// either operand isn't a typed numeric column (including a
+    /// `LoadConst`-broadcast literal, which is a plain `Vec<Value>`
+    /// register, not a typed one) -- the caller falls back to the
+    /// general elementwise path, which handles that case correctly, just
+    /// without the typed fast path.
+    fn typed_arithmetic(
+        &self,
+        op: MapOp,
+        a: usize,
+        b: usize,
+        opcode: &'static str,
+    ) -> Result<Option<Column>> {
+        if !matches!(op, MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div) {
+            return Ok(None);
+        }
+        let (Some(a_col), Some(b_col)) =
+            (self.typed_registers.get(&a), self.typed_registers.get(&b))
+        else {
+            return Ok(None);
+        };
+        if !matches!(a_col.as_ref(), Column::Int { .. } | Column::Float { .. })
+            || !matches!(b_col.as_ref(), Column::Int { .. } | Column::Float { .. })
+        {
+            return Ok(None);
+        }
+        if a_col.len() != b_col.len() {
+            return Err(VmError::RegisterLengthMismatch { opcode });
+        }
+        let len = a_col.len();
+        let result_is_int = matches!(a_col.as_ref(), Column::Int { .. })
+            && matches!(b_col.as_ref(), Column::Int { .. })
+            && op != MapOp::Div;
+        let mut valid_bits = Vec::with_capacity(len);
+        if result_is_int {
+            let mut data = Vec::with_capacity(len);
+            for i in 0..len {
+                match (column_num_at(a_col, i), column_num_at(b_col, i)) {
+                    (Some((x, _)), Some((y, _))) => {
+                        #[allow(
+                            clippy::cast_possible_truncation,
+                            reason = "saturating f64 -> i64 is arithmetic's documented overflow semantics, mirrored here for the typed fast path"
+                        )]
+                        data.push(arith_op(op, x, y) as i64);
+                        valid_bits.push(true);
+                    }
+                    _ => {
+                        data.push(0);
+                        valid_bits.push(false);
+                    }
+                }
+            }
+            Ok(Some(Column::Int {
+                data,
+                valid: Bitmap::from_bools(valid_bits.into_iter()),
+            }))
+        } else {
+            let mut data = Vec::with_capacity(len);
+            for i in 0..len {
+                match (column_num_at(a_col, i), column_num_at(b_col, i)) {
+                    (Some((x, _)), Some((y, _))) => {
+                        data.push(arith_op(op, x, y));
+                        valid_bits.push(true);
+                    }
+                    _ => {
+                        data.push(0.0);
+                        valid_bits.push(false);
+                    }
+                }
+            }
+            Ok(Some(Column::Float {
+                data,
+                valid: Bitmap::from_bools(valid_bits.into_iter()),
+            }))
+        }
+    }
+
     /// Take (and clear) the rows collected so far by [`Opcode::Emit`] --
     /// for callers driving [`Self::execute`] batch-by-batch themselves
     /// (e.g. a bounded scan that stops once enough rows are collected,
@@ -1520,22 +1602,31 @@ impl Vm {
                 // concept), so any pending selection must be resolved
                 // (compacted) first rather than taught to this opcode.
                 self.resolve_selection(opcode)?;
-                let result = match self.dict_literal_compare(*op, *a, *b, opcode)? {
-                    Some(result) => result,
-                    None => {
-                        let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);
-                        if a_vals.len() != b_vals.len() {
-                            return Err(VmError::RegisterLengthMismatch { opcode });
-                        }
-                        a_vals
-                            .iter()
-                            .zip(b_vals.iter())
-                            .map(|(x, y)| apply_map_op(*op, x, y))
-                            .collect()
+                if let Some(result) = self.dict_literal_compare(*op, *a, *b, opcode)? {
+                    self.registers.insert(*dst, Arc::new(result));
+                    self.typed_registers.remove(dst);
+                } else if let Some(column) = self.typed_arithmetic(*op, *a, *b, opcode)? {
+                    // #431: a genuine typed Column result -- also
+                    // materialize into `registers` (same pattern as
+                    // `LoadColumn`, #429) so a downstream un-migrated
+                    // opcode keeps working unchanged.
+                    let materialized: Vec<Value> =
+                        (0..column.len()).map(|i| column.get(i)).collect();
+                    self.registers.insert(*dst, Arc::new(materialized));
+                    self.typed_registers.insert(*dst, Arc::new(column));
+                } else {
+                    let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);
+                    if a_vals.len() != b_vals.len() {
+                        return Err(VmError::RegisterLengthMismatch { opcode });
                     }
-                };
-                self.registers.insert(*dst, Arc::new(result));
-                self.typed_registers.remove(dst);
+                    let result: Vec<Value> = a_vals
+                        .iter()
+                        .zip(b_vals.iter())
+                        .map(|(x, y)| apply_map_op(*op, x, y))
+                        .collect();
+                    self.registers.insert(*dst, Arc::new(result));
+                    self.typed_registers.remove(dst);
+                }
             }
             Opcode::Call { dst, name, args } => {
                 // Elementwise, like `Map`: resolve any pending selection
@@ -2387,6 +2478,49 @@ fn as_bool(v: &Value) -> bool {
     matches!(v, Value::Bool(true))
 }
 
+/// Row `i` of a typed `Int`/`Float` [`Column`] as `(value, is_int)`, or
+/// `None` if `i` is NULL, out of range, or `column` isn't `Int`/`Float`.
+/// A plain function (not a lifetime-carrying wrapper type) because
+/// `vm/batch.rs` is in the qualified subset (`make check-mvl-limit`),
+/// which allows only function-scoped lifetime elision.
+fn column_num_at(column: &Column, i: usize) -> Option<(f64, bool)> {
+    match column {
+        Column::Int { data, valid } => {
+            if !valid.get(i) {
+                return None;
+            }
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "matches Value::as_f64's existing `*v as f64` widening for Int"
+            )]
+            data.get(i).map(|&x| (x as f64, true))
+        }
+        Column::Float { data, valid } => {
+            if !valid.get(i) {
+                return None;
+            }
+            data.get(i).map(|&x| (x, false))
+        }
+        _ => None,
+    }
+}
+
+/// `a op b` for [`Vm::typed_arithmetic`]'s four arithmetic ops -- the
+/// same four [`arithmetic`] handles, applied directly to `f64` since the
+/// typed fast path already knows both operands are numeric and non-NULL.
+/// Total over [`MapOp`] (never actually reached for a non-arithmetic op:
+/// [`Vm::typed_arithmetic`] guards on that before calling) rather than
+/// `unreachable!`, which the qualified subset forbids.
+fn arith_op(op: MapOp, x: f64, y: f64) -> f64 {
+    match op {
+        MapOp::Add => x + y,
+        MapOp::Sub => x - y,
+        MapOp::Mul => x * y,
+        MapOp::Div => x / y,
+        _ => 0.0,
+    }
+}
+
 /// `Some(s)` if every value in `values` is the same `Value::Str(s)`
 /// (typically a `LoadConst`-broadcast register); `None` if `values` is
 /// empty, holds anything else, or the strings differ. Used by
@@ -2699,6 +2833,174 @@ mod tests {
             vm.register(2).unwrap(),
             &[Value::Bool(true), Value::Bool(true)]
         );
+    }
+
+    #[test]
+    fn map_add_on_two_typed_int_columns_matches_the_value_path() {
+        // #431: two typed Int columns must produce the same Int result,
+        // with the same NULL propagation, as the equivalent Vec<Value>
+        // path, and the destination register should itself be typed.
+        let batch = Batch::new(3)
+            .with_typed_column(
+                "a",
+                Column::from(vec![Value::Int(1), Value::Int(2), Value::Null]),
+            )
+            .with_typed_column(
+                "b",
+                Column::from(vec![Value::Int(10), Value::Null, Value::Int(30)]),
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "a".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "b".into(),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Int(11), Value::Null, Value::Null]
+        );
+        assert!(matches!(vm.typed_register(2), Some(Column::Int { .. })));
+
+        let str_batch = Batch::new(3)
+            .with_column("a", vec![Value::Int(1), Value::Int(2), Value::Null])
+            .with_column("b", vec![Value::Int(10), Value::Null, Value::Int(30)]);
+        let mut str_vm = Vm::new();
+        str_vm
+            .execute(
+                &str_batch,
+                &[
+                    Opcode::LoadColumn {
+                        reg: 0,
+                        column: "a".into(),
+                    },
+                    Opcode::LoadColumn {
+                        reg: 1,
+                        column: "b".into(),
+                    },
+                    Opcode::Map {
+                        dst: 2,
+                        op: MapOp::Add,
+                        a: 0,
+                        b: 1,
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(vm.register(2).unwrap(), str_vm.register(2).unwrap());
+    }
+
+    #[test]
+    fn map_div_on_typed_int_columns_promotes_to_float() {
+        let batch = Batch::new(2)
+            .with_typed_column("a", Column::from(vec![Value::Int(7), Value::Int(9)]))
+            .with_typed_column("b", Column::from(vec![Value::Int(2), Value::Int(3)]));
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "a".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "b".into(),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Div,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Float(3.5), Value::Float(3.0)]
+        );
+        assert!(matches!(vm.typed_register(2), Some(Column::Float { .. })));
+    }
+
+    #[test]
+    fn map_add_on_typed_int_and_typed_float_columns_promotes_to_float() {
+        let batch = Batch::new(2)
+            .with_typed_column("a", Column::from(vec![Value::Int(1), Value::Int(2)]))
+            .with_typed_column(
+                "b",
+                Column::from(vec![Value::Float(0.5), Value::Float(1.5)]),
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "a".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "b".into(),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Float(1.5), Value::Float(3.5)]
+        );
+    }
+
+    #[test]
+    fn map_add_falls_back_to_the_value_path_when_one_operand_is_a_broadcast_const() {
+        // #431's fast path is scoped to two typed columns; a `LoadConst`
+        // broadcast is a plain `Vec<Value>` register, so this must still
+        // produce the correct result via the general path.
+        let batch =
+            Batch::new(2).with_typed_column("a", Column::from(vec![Value::Int(1), Value::Int(2)]));
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "a".into(),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(10),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Int(11), Value::Int(12)]);
     }
 
     #[test]

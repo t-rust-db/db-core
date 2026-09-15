@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.100.0] - 2026-09-15
+
+### Added
+
+- **`Map` arithmetic (`Add`/`Sub`/`Mul`/`Div`) ported to `Column` dispatch** (#431, epic #130 child 4, slice 2): `Vm::typed_arithmetic` computes over packed `Int`/`Float` buffers into a genuine typed `Column` result when both `Map` operands are typed registers, honoring the same NULL-propagation and Int-stays-Int-unless-`Div` promotion rules as the existing `Vec<Value>` path -- differentially tested against it. Also materializes into `registers` (the #429 `LoadColumn` safety-net pattern) so un-migrated opcodes keep working. Scoped to both operands being typed columns; a `LoadConst`-broadcast literal falls back to the general path correctly, just without the fast path.
+
 ## [0.99.0] - 2026-09-15
 
 ### Added

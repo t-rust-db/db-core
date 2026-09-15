@@ -5628,6 +5628,23 @@ pub fn db_core::vm::batch::Batch::default() -> db_core::vm::batch::Batch
 impl core::fmt::Debug for db_core::vm::batch::Batch
 pub fn db_core::vm::batch::Batch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::Batch
+pub struct db_core::vm::batch::Bitmap
+impl db_core::vm::column::Bitmap
+pub fn db_core::vm::column::Bitmap::all_valid(&self) -> bool
+pub fn db_core::vm::column::Bitmap::from_bools(impl core::iter::traits::exact_size::ExactSizeIterator<Item = bool>) -> Self
+pub fn db_core::vm::column::Bitmap::get(&self, usize) -> bool
+pub fn db_core::vm::column::Bitmap::is_empty(&self) -> bool
+pub fn db_core::vm::column::Bitmap::len(&self) -> usize
+pub fn db_core::vm::column::Bitmap::new(usize, bool) -> Self
+pub fn db_core::vm::column::Bitmap::set(&mut self, usize, bool)
+impl core::clone::Clone for db_core::vm::column::Bitmap
+pub fn db_core::vm::column::Bitmap::clone(&self) -> db_core::vm::column::Bitmap
+impl core::cmp::Eq for db_core::vm::column::Bitmap
+impl core::cmp::PartialEq for db_core::vm::column::Bitmap
+pub fn db_core::vm::column::Bitmap::eq(&self, &db_core::vm::column::Bitmap) -> bool
+impl core::fmt::Debug for db_core::vm::column::Bitmap
+pub fn db_core::vm::column::Bitmap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::vm::column::Bitmap
 pub struct db_core::vm::batch::Instruction
 pub db_core::vm::batch::Instruction::comment: core::option::Option<alloc::string::String>
 pub db_core::vm::batch::Instruction::opcode: db_core::vm::batch::Opcode
