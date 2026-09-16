@@ -172,6 +172,35 @@ fn is_identity_finalize(
     agg_parts.is_empty() && !distinct && order_by.is_none() && limit.is_none()
 }
 
+/// Whether [`run_streaming`] can stream `program` at all -- i.e. whether
+/// it would return `Ok` rather than [`VmError::NotStreamable`], without
+/// running anything. A caller that wants to commit to a row-by-row
+/// consumer (print a header, hand out a writer) before the first chunk
+/// arrives needs this decided up front: `run_streaming` itself only
+/// discovers a non-streamable shape after it has already started
+/// producing output for the streamable cases, which is too late for a
+/// caller that already committed (#456).
+pub fn is_streamable(program: &Program) -> bool {
+    let (_, combine, sort, limit_op) = program.split_finalize();
+    let Some(Opcode::Combine {
+        agg_parts,
+        distinct,
+        ..
+    }) = combine
+    else {
+        return true;
+    };
+    let order_by = match sort {
+        Some(Opcode::Sort { col, descending }) => Some((*col, *descending)),
+        _ => None,
+    };
+    let limit = match limit_op {
+        Some(Opcode::Limit { n }) => Some(*n),
+        _ => None,
+    };
+    is_identity_finalize(agg_parts, *distinct, &order_by, limit)
+}
+
 /// Streaming counterpart to [`run`] (#456): hands each segment's chunks to
 /// `sink`, in segment order, as soon as they are ready, instead of
 /// collecting the whole result into one [`QueryOutput`] first. Peak memory

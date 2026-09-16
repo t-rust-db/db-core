@@ -5889,6 +5889,7 @@ impl<F: core::ops::function::Fn(&db_core::vm::batch::ScanSource) -> db_core::vm:
 pub fn F::resolve(&self, &db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
 pub fn db_core::vm::engine::bounded_scan_limit(&db_core::vm::batch::Program) -> core::option::Option<usize>
 pub fn db_core::vm::engine::finalize(&[db_core::vm::batch::AggPart], usize, bool, core::option::Option<(usize, bool)>, core::option::Option<usize>, alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::engine::is_streamable(&db_core::vm::batch::Program) -> bool
 pub fn db_core::vm::engine::run<S: db_core::vm::batch::Segment>(&[S], &db_core::vm::batch::Program) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::engine::run_join(&db_core::vm::batch::Batch, &db_core::vm::batch::Batch, &db_core::vm::engine::JoinProgram) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::engine::run_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, db_core::vm::batch::ScanSource, &db_core::vm::engine::JoinProgram, &R) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
