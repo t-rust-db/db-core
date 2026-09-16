@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.103.0] - 2026-09-16
+
+### Added
+
+- **`vm::engine::run_streaming`** (#456): streams a plain scan/filter/projection's chunks to a caller-supplied sink, in segment order, as each becomes ready, instead of collecting the whole result into one `QueryOutput` first (`vm::batch::run_parallel_streaming`/`run_morsels_ordered` underneath). Peak memory is bounded by an ordering window (twice the worker pool), not the result size. Only programs `vm::engine::run`'s own identity-Combine short-circuit accepts can stream -- an aggregate, `DISTINCT`, `ORDER BY`, or `LIMIT` needs every segment's output before producing even its first row, so `run_streaming` returns the new `VmError::NotStreamable` for those; `vm::engine::is_streamable` lets a caller check this up front, before committing to a sink (e.g. printing a header), rather than discovering it mid-stream. `run` and its output are unchanged. column-rs's `-c` one-shot mode is the first consumer (t-rust-db/column-rs#34). Measured on the 10M-row parity suite: `scan` 1015 -> 970 ms / 1272 -> 524 MB, `filter_50pct` 1039 -> 990 ms / 1377 -> 592 MB; `group_by` (not streamable) flat at 217 MB.
+
 ## [0.102.1] - 2026-09-16
 
 ### Fixed
