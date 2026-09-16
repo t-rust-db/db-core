@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.101.7] - 2026-09-16
+
+### Fixed
+
+- **Row hashing holds a `u64` per row, not a 72-byte `DefaultHasher`** (#444): `hash_columns_by_row` (#440) kept one live SipHash state per row for its whole column-by-column fold -- 8.85 MB per 122,880-row segment, ~106 MB across in-flight morsels, for 8 bytes of output per row. Each value is now hashed one-shot on the stack and mixed into a `Vec<u64>` accumulator (`mix_hash`); build and probe share the one function so join hashes stay consistent. Measured on the 10M-row parity suite: `group_by` 80.8 ms / 282 MB -> 69.8 ms / 221 MB, `join` 130.8 ms / 352 MB -> 120.5 ms / 242 MB.
+
 ## [0.101.6] - 2026-09-16
 
 ### Changed
