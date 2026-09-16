@@ -3782,6 +3782,7 @@ pub const db_core::storage::row::vfs::fcntl::F_UNLCK: i16
 pub const db_core::storage::row::vfs::fcntl::F_WRLCK: i16
 pub const db_core::storage::row::vfs::fcntl::O_NOFOLLOW: std::os::raw::c_int
 pub fn db_core::storage::row::vfs::fcntl::fcntl_call(&std::fs::File, db_core::storage::row::vfs::fcntl::FcntlArg<'_>) -> core::io::error::Result<std::os::raw::c_int>
+pub fn db_core::storage::row::vfs::fcntl::fsync(&std::fs::File) -> core::io::error::Result<()>
 pub type db_core::storage::row::vfs::fcntl::off_t = i64
 pub mod db_core::storage::row::vfs::lock
 pub enum db_core::storage::row::vfs::lock::LockLevel
@@ -5871,8 +5872,6 @@ pub fn db_core::vm::join::JoinHashTable<K, V, S>::with_capacity_and_hasher(usize
 impl<K: core::hash::Hash + core::cmp::Eq, V> db_core::vm::join::JoinHashTable<K, V, std::hash::random::RandomState>
 pub fn db_core::vm::join::JoinHashTable<K, V, std::hash::random::RandomState>::new() -> Self
 pub fn db_core::vm::join::JoinHashTable<K, V, std::hash::random::RandomState>::with_capacity(usize) -> Self
-impl core::fmt::Debug for db_core::vm::join::JoinHashTable<JoinKey, alloc::vec::Vec<db_core::vm::batch::Value>>
-pub fn db_core::vm::join::JoinHashTable<JoinKey, alloc::vec::Vec<db_core::vm::batch::Value>>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<K: core::hash::Hash + core::cmp::Eq, V> core::default::Default for db_core::vm::join::JoinHashTable<K, V, std::hash::random::RandomState>
 pub fn db_core::vm::join::JoinHashTable<K, V, std::hash::random::RandomState>::default() -> Self
 pub fn db_core::vm::join::should_emit(db_core::vm::batch::JoinKind, bool, bool) -> bool
