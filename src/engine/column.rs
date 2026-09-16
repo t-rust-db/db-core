@@ -159,6 +159,15 @@ struct RowGroupSegment<'a, 'm> {
     columns: Vec<Leaf>,
 }
 
+/// One column's decoded shape out of a row group: either every row's
+/// [`Value`] (the plain path) or a [`Column::Dict`] (#457's dictionary
+/// path), so `load` can share one `map_err` and one `with_*` dispatch
+/// across every [`PhysicalType`] arm instead of duplicating both per arm.
+enum Decoded {
+    Values(Vec<Value>),
+    Dict(Column),
+}
+
 impl Segment for RowGroupSegment<'_, '_> {
     fn load(&self) -> Result<Arc<Batch>, VmError> {
         let rg = self
@@ -180,94 +189,71 @@ impl Segment for RowGroupSegment<'_, '_> {
         })?;
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in &self.columns {
-            let load_err = |e: crate::storage::FileError| VmError::SegmentLoad {
-                reason: format!("row group {}: column `{name}`: {e}", self.row_group_index),
-            };
-            match physical_type {
-                PhysicalType::Int64 => {
-                    let values = rg
-                        .read_int64_column(*index)
-                        .map(|col| {
-                            col.into_iter()
-                                .map(|v| v.map_or(Value::Null, Value::Int))
-                                .collect()
-                        })
-                        .map_err(load_err)?;
-                    batch = batch.with_column(name.clone(), values);
-                }
-                PhysicalType::Int32 => {
-                    let values = rg
-                        .read_int32_column(*index)
-                        .map(|col| {
-                            col.into_iter()
-                                .map(|v| v.map_or(Value::Null, |i| Value::Int(i64::from(i))))
-                                .collect()
-                        })
-                        .map_err(load_err)?;
-                    batch = batch.with_column(name.clone(), values);
-                }
-                PhysicalType::Double => {
-                    let values = rg
-                        .read_double_column(*index)
-                        .map(|col| {
-                            col.into_iter()
-                                .map(|v| v.map_or(Value::Null, Value::Float))
-                                .collect()
-                        })
-                        .map_err(load_err)?;
-                    batch = batch.with_column(name.clone(), values);
-                }
-                PhysicalType::Float => {
-                    let values = rg
-                        .read_float_column(*index)
-                        .map(|col| {
-                            col.into_iter()
-                                .map(|v| v.map_or(Value::Null, |f| Value::Float(f64::from(f))))
-                                .collect()
-                        })
-                        .map_err(load_err)?;
-                    batch = batch.with_column(name.clone(), values);
-                }
-                PhysicalType::Boolean => {
-                    let values = rg
-                        .read_boolean_column(*index)
-                        .map(|col| {
-                            col.into_iter()
-                                .map(|v| v.map_or(Value::Null, Value::Bool))
-                                .collect()
-                        })
-                        .map_err(load_err)?;
-                    batch = batch.with_column(name.clone(), values);
-                }
+            let decoded = match physical_type {
+                PhysicalType::Int64 => rg.read_int64_column(*index).map(|col| {
+                    Decoded::Values(
+                        col.into_iter()
+                            .map(|v| v.map_or(Value::Null, Value::Int))
+                            .collect(),
+                    )
+                }),
+                PhysicalType::Int32 => rg.read_int32_column(*index).map(|col| {
+                    Decoded::Values(
+                        col.into_iter()
+                            .map(|v| v.map_or(Value::Null, |i| Value::Int(i64::from(i))))
+                            .collect(),
+                    )
+                }),
+                PhysicalType::Double => rg.read_double_column(*index).map(|col| {
+                    Decoded::Values(
+                        col.into_iter()
+                            .map(|v| v.map_or(Value::Null, Value::Float))
+                            .collect(),
+                    )
+                }),
+                PhysicalType::Float => rg.read_float_column(*index).map(|col| {
+                    Decoded::Values(
+                        col.into_iter()
+                            .map(|v| v.map_or(Value::Null, |f| Value::Float(f64::from(f))))
+                            .collect(),
+                    )
+                }),
+                PhysicalType::Boolean => rg.read_boolean_column(*index).map(|col| {
+                    Decoded::Values(
+                        col.into_iter()
+                            .map(|v| v.map_or(Value::Null, Value::Bool))
+                            .collect(),
+                    )
+                }),
                 // #457: a `PLAIN_DICTIONARY`-encoded string column
                 // materializes as `Column::Dict` (one dict entry per
                 // distinct value, one `u32` code per row) instead of
                 // decoding every row to its own owned `String` -- the
-                // dictionary case column-rs's `GroupReduce`/`Map` dict
-                // fast paths were already built to consume. A column with
-                // no dictionary page, or one that falls back to `PLAIN`
+                // dictionary case column-rs's `GroupReduce`/`Map` dict fast
+                // paths were already built to consume. A column with no
+                // dictionary page, or one that falls back to `PLAIN`
                 // partway through (`Ok(None)`), decodes the plain way
                 // unchanged.
-                _ => match rg
+                _ => rg
                     .read_string_column_dictionary_indices(*index)
-                    .map_err(load_err)?
-                {
-                    Some((dict, codes)) => {
-                        batch = batch.with_typed_column(name.clone(), dict_column(dict, codes));
-                    }
-                    None => {
-                        let values = rg
-                            .read_string_column(*index)
-                            .map(|col| {
+                    .and_then(|maybe_dict| match maybe_dict {
+                        Some((dict, codes)) => Ok(Decoded::Dict(dict_column(dict, codes))),
+                        None => rg.read_string_column(*index).map(|col| {
+                            Decoded::Values(
                                 col.into_iter()
                                     .map(|v| v.map_or(Value::Null, |s| Value::Str(s.into())))
-                                    .collect()
-                            })
-                            .map_err(load_err)?;
-                        batch = batch.with_column(name.clone(), values);
-                    }
-                },
+                                    .collect(),
+                            )
+                        }),
+                    }),
             }
+            .map_err(|e| VmError::SegmentLoad {
+                reason: format!("row group {}: column `{name}`: {e}", self.row_group_index),
+            })?;
+            batch = match decoded {
+                Decoded::Values(values) => batch.with_column(name.clone(), values),
+                Decoded::Dict(column) => batch.with_typed_column(name.clone(), column),
+            };
         }
         Ok(Arc::new(batch))
     }
