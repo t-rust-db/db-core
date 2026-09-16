@@ -387,6 +387,29 @@ fn detects_and_parses_a_logfmt_file_not_as_syslog() {
     }
 }
 
+/// A flattened nested-object field (`req.method`, one level of JSONL
+/// object nesting per `storage::stream::jsonl`) is a literal field name,
+/// not a qualified `table.column` reference -- `requests()` must check
+/// the whole name before stripping what it assumes is a table prefix, or
+/// `SELECT req.method` (and therefore `SELECT *`, which expands to the
+/// same column expressions) fails with a spurious "unknown column".
+#[test]
+fn select_star_resolves_flattened_nested_object_columns() {
+    let mut e = StreamEngine::open(Path::new(JSONL_FIXTURE)).expect("open jsonl fixture");
+    let got = rows(&mut e, "SELECT * FROM log LIMIT 3");
+    assert!(!got.is_empty(), "SELECT * must return rows, not error");
+}
+
+#[test]
+fn flattened_nested_object_column_is_directly_queryable() {
+    let mut e = StreamEngine::open(Path::new(JSONL_FIXTURE)).expect("open jsonl fixture");
+    let got = rows(&mut e, "SELECT req.method FROM log LIMIT 1");
+    match &got[0][0] {
+        Cell::Text(method) => assert_eq!(method, "DELETE"),
+        other => panic!("expected Text req.method, got {other:?}"),
+    }
+}
+
 /// #348: same guarantee for a JSON-Lines file.
 #[test]
 fn detects_and_parses_a_jsonl_file_not_as_syslog() {
