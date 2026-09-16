@@ -4,15 +4,11 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
-## [0.104.0] - 2026-09-16
+## [0.103.0] - 2026-09-16
 
 ### Added
 
 - **Dict-encoded Parquet columns reach `vm::batch` as `Column::Dict`** (#457): `RowGroupSegment::load` now tries `ParquetFile::read_string_column_dictionary_indices` before the plain string decode, so a `PLAIN_DICTIONARY`-encoded column materializes as dict + per-row `u32` code + validity bitmap instead of one owned `String` per row (a column with no dictionary page, or one that falls back to `PLAIN` mid-chunk, still decodes the plain way). `GroupReduce` gained a matching fast path for a single dict group-by column: groups by integer code through a `dict.len()`-sized array instead of hashing decoded strings, decoding only the codes that end up in the output. Row-group skip-on-literal (mirroring `OwnedColumn::dict_contains` for stream segments) is left as a follow-up.
-
-## [0.103.0] - 2026-09-16
-
-### Added
 
 - **`vm::engine::run_streaming`** (#456): streams a plain scan/filter/projection's chunks to a caller-supplied sink, in segment order, as each becomes ready, instead of collecting the whole result into one `QueryOutput` first (`vm::batch::run_parallel_streaming`/`run_morsels_ordered` underneath). Peak memory is bounded by an ordering window (twice the worker pool), not the result size. Only programs `vm::engine::run`'s own identity-Combine short-circuit accepts can stream -- an aggregate, `DISTINCT`, `ORDER BY`, or `LIMIT` needs every segment's output before producing even its first row, so `run_streaming` returns the new `VmError::NotStreamable` for those; `vm::engine::is_streamable` lets a caller check this up front, before committing to a sink (e.g. printing a header), rather than discovering it mid-stream. `run` and its output are unchanged. column-rs's `-c` one-shot mode is the first consumer (t-rust-db/column-rs#34). Measured on the 10M-row parity suite: `scan` 1015 -> 970 ms / 1272 -> 524 MB, `filter_50pct` 1039 -> 990 ms / 1377 -> 592 MB; `group_by` (not streamable) flat at 217 MB.
 
