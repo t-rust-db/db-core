@@ -914,6 +914,7 @@ fn render_opcode(op: &Opcode) -> String {
         // implementation at that point, not before.
         Opcode::HashBuild { .. }
         | Opcode::HashProbe { .. }
+        | Opcode::HashProbeGroupReduce { .. }
         | Opcode::Window { .. }
         | Opcode::Call { .. }
         | Opcode::ScanSource { .. } => {

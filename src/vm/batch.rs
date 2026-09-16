@@ -379,6 +379,40 @@ pub enum Opcode {
         /// Which rows to emit for matches/non-matches.
         kind: JoinKind,
     },
+    /// #441: `Opcode::HashProbe` immediately followed by an
+    /// `Opcode::GroupReduce` over the joined row, fused into one pass so a
+    /// join whose output feeds only an aggregate never materializes a
+    /// joined row per match. `codegen::batch::compile_join_impl` emits
+    /// this instead of `HashProbe` exactly when the join body is `GROUP
+    /// BY`/aggregate-only (no `Map`/`Filter`/`Window` between the probe
+    /// and the reduce) -- every other join shape still goes through the
+    /// unfused `HashProbe` + a separate `GroupReduce`.
+    ///
+    /// Each `group_by`/`aggs` source is a [`ValueSource`]: a probe-side
+    /// register (already loaded, like `HashProbe`'s `key_cols`) or a
+    /// build-side payload column index (in `HashBuild`'s `payload_cols`
+    /// order -- NULL for an unmatched probe row, matching `HashProbe`'s
+    /// own NULL-fill for `payload_dst`). Grouping/hashing reuses
+    /// `GroupReduce`'s semantics exactly (`Null` groups with `Null`); join
+    /// matching reuses `HashProbe`'s (`kind`'s [`should_emit`] rule, NULL
+    /// keys never matching).
+    HashProbeGroupReduce {
+        /// Probe-side registers forming the compound join key.
+        key_cols: Cow<'static, [usize]>,
+        /// Identifier of the table built by [`Opcode::HashBuild`].
+        table: usize,
+        /// Which rows contribute for matches/non-matches.
+        kind: JoinKind,
+        /// `(value source, destination register)` pairs identifying a
+        /// group, mirroring [`Opcode::GroupReduce`]'s dual-purpose
+        /// `group_by` (the destination is written with one value per
+        /// distinct group, in discovery order).
+        group_by: Cow<'static, [(ValueSource, usize)]>,
+        /// `(aggregate, source)` pairs; `None` source is `COUNT(*)`.
+        aggs: Cow<'static, [(AggFunc, Option<ValueSource>)]>,
+        /// Destination register for each entry of `aggs`, in order.
+        agg_dst: Cow<'static, [usize]>,
+    },
     /// `func(...) OVER (PARTITION BY ... ORDER BY ...)`: partitions the
     /// current live rows by `partition_by` (empty = one partition), sorts
     /// each partition by `order_by`, computes `func` per row within its
@@ -552,6 +586,7 @@ impl Opcode {
             Opcode::GroupReduce { .. } => "GroupReduce",
             Opcode::HashBuild { .. } => "HashBuild",
             Opcode::HashProbe { .. } => "HashProbe",
+            Opcode::HashProbeGroupReduce { .. } => "HashProbeGroupReduce",
             Opcode::Window { .. } => "Window",
             Opcode::Scan => "Scan",
             Opcode::ScanSource { .. } => "ScanSource",
@@ -1198,6 +1233,192 @@ impl fmt::Debug for BuildTable {
             .field("len", &self.index.len())
             .field("capacity", &self.index.capacity())
             .finish()
+    }
+}
+
+/// #441: where [`Opcode::HashProbeGroupReduce`] reads one `GROUP BY` key
+/// component or aggregate input from, for a given matched (or unmatched)
+/// row -- a probe-side register (already loaded, like `HashProbe`'s
+/// `key_cols`) or a build-side payload column (in `HashBuild`'s
+/// `payload_cols` order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueSource {
+    /// A probe-side register, read at the current probe row.
+    Probe(usize),
+    /// A build-side payload column index, read at the matched build row --
+    /// `Value::Null` for an unmatched (`Left`) probe row, matching
+    /// `HashProbe`'s own NULL-fill for `payload_dst`.
+    Payload(usize),
+}
+
+/// A running per-group accumulator for one `Opcode::HashProbeGroupReduce`
+/// aggregate (#441) -- the fused-loop equivalent of collecting every
+/// matched row's value into a `Vec<Value>` and calling [`reduce_values`]
+/// once at the end (what `Opcode::GroupReduce` does): same output for
+/// every [`AggFunc`], but O(1) per row instead of O(matched rows) memory,
+/// which is the whole point of fusing the join and the reduce. Tracks
+/// `non_null_count` (`COUNT(x)`'s denominator: every non-`Null` value)
+/// separately from `numeric_count` (`SUM`/`AVG`/`MIN`/`MAX`'s: every value
+/// [`Value::as_f64`] accepts) because a non-numeric, non-`Null` value
+/// (e.g. a `Str`) counts for the former but not the latter -- exactly
+/// [`reduce_values`]'s own distinction between its `values` and `non_null`
+/// slices.
+#[derive(Debug, Clone, Copy, Default)]
+struct RunningAgg {
+    row_count: i64,
+    non_null_count: i64,
+    numeric_count: i64,
+    sum: f64,
+    min: Option<f64>,
+    max: Option<f64>,
+}
+
+impl RunningAgg {
+    /// Folds one more row into this group's accumulator. `value` is
+    /// `None` for `COUNT(*)` (no source column -- only `row_count`
+    /// matters); `Some` for every other case, `Value::Null` included.
+    fn push(&mut self, value: Option<&Value>) {
+        self.row_count = self.row_count.saturating_add(1);
+        let Some(value) = value else {
+            return;
+        };
+        if !matches!(value, Value::Null) {
+            self.non_null_count = self.non_null_count.saturating_add(1);
+        }
+        if let Some(x) = value.as_f64() {
+            self.sum += x;
+            self.numeric_count = self.numeric_count.saturating_add(1);
+            self.min = Some(self.min.map_or(x, |m| m.min(x)));
+            self.max = Some(self.max.map_or(x, |m| m.max(x)));
+        }
+    }
+
+    /// The aggregate's final value, matching [`reduce_values`] exactly.
+    /// `is_count_star` is `src.is_none()` on the originating `(AggFunc,
+    /// Option<ValueSource>)` pair -- `COUNT(*)` counts every row
+    /// regardless of `func`, `COUNT(x)` counts `x`'s non-`Null` rows.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "numeric_count only grows by +1 per row (`push`), so at any batch/segment-sized row count it converts to f64 without a precision-affecting magnitude"
+    )]
+    fn finalize(&self, func: AggFunc, is_count_star: bool) -> Value {
+        match func {
+            AggFunc::Count => Value::Int(if is_count_star {
+                self.row_count
+            } else {
+                self.non_null_count
+            }),
+            AggFunc::Sum => {
+                if self.numeric_count == 0 {
+                    Value::Null
+                } else {
+                    Value::Float(self.sum)
+                }
+            }
+            AggFunc::Avg => {
+                if self.numeric_count == 0 {
+                    Value::Null
+                } else {
+                    Value::Float(self.sum / self.numeric_count as f64)
+                }
+            }
+            AggFunc::Min => self.min.map_or(Value::Null, Value::Float),
+            AggFunc::Max => self.max.map_or(Value::Null, Value::Float),
+        }
+    }
+}
+
+/// Resolves one [`ValueSource`] for a given probe row / matched build row
+/// (#441) -- `probe_columns` is a small (usually one-entry) list of
+/// `(register, column)` pairs, linearly scanned rather than hashed since a
+/// `GROUP BY`/aggregate over a join rarely references more than a
+/// handful of distinct probe-side registers.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`build_row`, when `Some`, always came from `BuildTable::index` in this same opcode's caller, so it is in range for `bt.payload`'s equal-length columns (same invariant `join_keys_match` relies on); `ValueSource::Probe` registers are looked up by value, not indexed"
+)]
+fn resolve_value_source<'a>(
+    source: ValueSource,
+    probe_columns: &'a [(usize, &'a [Value])],
+    probe_row: usize,
+    bt: &'a BuildTable,
+    build_row: Option<usize>,
+) -> &'a Value {
+    const NULL_VALUE: Value = Value::Null;
+    match source {
+        ValueSource::Probe(reg) => probe_columns
+            .iter()
+            .find(|(r, _)| *r == reg)
+            .map_or(&NULL_VALUE, |(_, col)| &col[probe_row]),
+        ValueSource::Payload(i) => build_row.map_or(&NULL_VALUE, |br| &bt.payload[i][br]),
+    }
+}
+
+/// Folds one joined (or, for an unmatched `Left` probe row, NULL-payload)
+/// row into `Opcode::HashProbeGroupReduce`'s running group state (#441) --
+/// the fused equivalent of `Opcode::GroupReduce`'s per-row grouping loop,
+/// except values are read straight from `probe_columns`/`bt` instead of
+/// from a materialized joined row, and folded into a [`RunningAgg`]
+/// instead of collected into a per-group `Vec<Value>`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "this is the fused hot loop's entire per-row state; bundling it into an ad-hoc struct used nowhere else would not simplify anything"
+)]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`g` (an existing group) always came from `group_keys`/`accumulators`, which grow together one entry per new group (below); `group_keys[g]`/`accumulators[i][g]` are therefore always in range"
+)]
+fn fold_group_row(
+    group_by: &[(ValueSource, usize)],
+    aggs: &[(AggFunc, Option<ValueSource>)],
+    probe_columns: &[(usize, &[Value])],
+    bt: &BuildTable,
+    probe_row: usize,
+    build_row: Option<usize>,
+    group_index: &mut HashMap<u64, Vec<usize>>,
+    group_keys: &mut Vec<Vec<Value>>,
+    accumulators: &mut [Vec<RunningAgg>],
+) {
+    // #439-style probe-before-insert: hash and compare each `group_by`
+    // component as it's resolved, and only collect a `Vec<Value>` key
+    // (one allocation) on a genuine new group -- an existing group (the
+    // overwhelming majority of rows once there are only a handful of
+    // groups) allocates nothing here.
+    let mut hasher = DefaultHasher::new();
+    for (src, _) in group_by {
+        hash_group_value(
+            resolve_value_source(*src, probe_columns, probe_row, bt, build_row),
+            &mut hasher,
+        );
+    }
+    let hash = hasher.finish();
+    let bucket = group_index.entry(hash).or_default();
+    let existing = bucket.iter().copied().find(|&g| {
+        group_by.iter().enumerate().all(|(i, (src, _))| {
+            group_keys[g][i] == *resolve_value_source(*src, probe_columns, probe_row, bt, build_row)
+        })
+    });
+    let group = match existing {
+        Some(g) => g,
+        None => {
+            let key_values: Vec<Value> = group_by
+                .iter()
+                .map(|(src, _)| {
+                    resolve_value_source(*src, probe_columns, probe_row, bt, build_row).clone()
+                })
+                .collect();
+            let g = group_keys.len();
+            group_keys.push(key_values);
+            bucket.push(g);
+            for accs in accumulators.iter_mut() {
+                accs.push(RunningAgg::default());
+            }
+            g
+        }
+    };
+    for (i, (_func, src)) in aggs.iter().enumerate() {
+        let value = src.map(|s| resolve_value_source(s, probe_columns, probe_row, bt, build_row));
+        accumulators[i][group].push(value);
     }
 }
 
@@ -2064,6 +2285,140 @@ impl Vm {
                         })
                         .collect::<Result<_>>()?;
                     self.registers.insert(*dst, Arc::new(col));
+                }
+            }
+            Opcode::HashProbeGroupReduce {
+                key_cols,
+                table,
+                kind,
+                group_by,
+                aggs,
+                agg_dst,
+            } => {
+                // #441: same probe-resolution rule as `Opcode::HashProbe`
+                // above -- this opcode reshapes nothing (there is no
+                // per-row output to reshape), but still reads live
+                // registers by row index below, so any pending selection
+                // must be resolved first.
+                self.resolve_selection(opcode)?;
+                let key_columns: Vec<&[Value]> = key_cols
+                    .iter()
+                    .map(|r| self.reg(*r, opcode))
+                    .collect::<Result<_>>()?;
+                let num_rows = key_columns.first().map(|c| c.len()).ok_or_else(|| {
+                    VmError::MalformedProgram {
+                        opcode,
+                        reason: "hash probe has no key columns".to_string(),
+                    }
+                })?;
+                let bt = Arc::clone(self.join_tables.0.get(table).ok_or(
+                    VmError::UnknownJoinTable {
+                        opcode,
+                        table: *table,
+                    },
+                )?);
+
+                // Every distinct probe-side register a `group_by`/`aggs`
+                // source reads -- resolved once up front, like
+                // `key_columns`, rather than re-looked-up per row.
+                let mut probe_columns: Vec<(usize, &[Value])> = Vec::new();
+                for reg in group_by
+                    .iter()
+                    .filter_map(|(src, _)| match src {
+                        ValueSource::Probe(reg) => Some(*reg),
+                        ValueSource::Payload(_) => None,
+                    })
+                    .chain(aggs.iter().filter_map(|(_, src)| match src {
+                        Some(ValueSource::Probe(reg)) => Some(*reg),
+                        _ => None,
+                    }))
+                {
+                    if !probe_columns.iter().any(|(r, _)| *r == reg) {
+                        probe_columns.push((reg, self.reg(reg, opcode)?));
+                    }
+                }
+
+                // #440-style hash-then-verify probe, but folding each real
+                // match straight into a group's `RunningAgg`s instead of
+                // recording `(row, build_row)` pairs to reshape later
+                // (#439's `HashProbe`) or materializing a joined row at
+                // all (this is the whole point of #441): a join feeding
+                // only an aggregate never allocates one register set per
+                // matched row, only one `RunningAgg` per *group*.
+                let hashes = hash_columns_by_row(&key_columns, num_rows, |row| row);
+                let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
+                let mut group_keys: Vec<Vec<Value>> = Vec::new();
+                let mut accumulators: Vec<Vec<RunningAgg>> = vec![Vec::new(); aggs.len()];
+                for row in 0..num_rows {
+                    let mut matched = false;
+                    let emit_payload =
+                        !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
+                    bt.index.for_each_match_slot(&hashes[row], |slot| {
+                        let Some(&build_row) = bt.index.value_at(slot) else {
+                            return;
+                        };
+                        if !join_keys_match(&key_columns, row, &bt.keys, build_row) {
+                            return;
+                        }
+                        matched = true;
+                        if emit_payload {
+                            fold_group_row(
+                                group_by,
+                                aggs,
+                                &probe_columns,
+                                &bt,
+                                row,
+                                Some(build_row),
+                                &mut group_index,
+                                &mut group_keys,
+                                &mut accumulators,
+                            );
+                        }
+                    });
+                    if !matched {
+                        if should_emit(*kind, false, false) {
+                            fold_group_row(
+                                group_by,
+                                aggs,
+                                &probe_columns,
+                                &bt,
+                                row,
+                                None,
+                                &mut group_index,
+                                &mut group_keys,
+                                &mut accumulators,
+                            );
+                        }
+                    } else if matches!(kind, JoinKind::Semi) {
+                        // Mirrors `Opcode::HashProbe`'s own `Semi` handling:
+                        // at most one contribution per probe row, with every
+                        // `Payload` source NULL (semi-joins never surface
+                        // the build side's columns).
+                        fold_group_row(
+                            group_by,
+                            aggs,
+                            &probe_columns,
+                            &bt,
+                            row,
+                            None,
+                            &mut group_index,
+                            &mut group_keys,
+                            &mut accumulators,
+                        );
+                    }
+                }
+
+                for (i, (_src, dst)) in group_by.iter().enumerate() {
+                    let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
+                    self.registers.insert(*dst, Arc::new(column));
+                }
+                for (i, (func, src)) in aggs.iter().enumerate() {
+                    let is_count_star = src.is_none();
+                    let result: Vec<Value> = accumulators[i]
+                        .iter()
+                        .map(|acc| acc.finalize(*func, is_count_star))
+                        .collect();
+                    self.registers.insert(agg_dst[i], Arc::new(result));
                 }
             }
             Opcode::Window {

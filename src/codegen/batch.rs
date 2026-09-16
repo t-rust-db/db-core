@@ -51,7 +51,9 @@ use crate::parser::ast::{
     FunctionArgs, JoinConstraint, JoinOp, Literal as AstLiteral, ResultColumn, Select,
     TableRefKind,
 };
-use crate::vm::batch::{AggFunc, AggPart, Instruction, MapOp, Opcode, Program, ScanSource, Value};
+use crate::vm::batch::{
+    AggFunc, AggPart, Instruction, MapOp, Opcode, Program, ScanSource, Value, ValueSource,
+};
 use crate::vm::engine::JoinProgram;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -1407,21 +1409,37 @@ fn compile_join_impl(
         JoinOp::Left => crate::vm::batch::JoinKind::Left,
         other => return Err(PlanError::UnsupportedJoinKind(other)),
     };
-    let probe = Program::from_opcodes(
-        probe_columns
-            .iter()
-            .enumerate()
-            .map(|(reg, name)| Opcode::LoadColumn {
-                reg,
-                column: name.clone().into(),
-            })
-            .chain(std::iter::once(Opcode::HashProbe {
+    let fused = try_fuse_group_by(
+        &body,
+        &probe_columns,
+        &build_columns,
+        probe_key_reg,
+        join_kind,
+    );
+    let probe_load = probe_columns
+        .iter()
+        .enumerate()
+        .map(|(reg, name)| Opcode::LoadColumn {
+            reg,
+            column: name.clone().into(),
+        });
+    let (probe, body, fused_group_by) = match fused {
+        Some((fused_op, fused_output, trimmed_body)) => (
+            Program::from_opcodes(probe_load.chain(std::iter::once(fused_op))),
+            trimmed_body,
+            Some(fused_output),
+        ),
+        None => (
+            Program::from_opcodes(probe_load.chain(std::iter::once(Opcode::HashProbe {
                 key_cols: vec![probe_key_reg].into(),
                 table: 0,
                 payload_dst: payload_dst.clone().into(),
                 kind: join_kind,
-            })),
-    );
+            }))),
+            body,
+            None,
+        ),
+    };
 
     Ok(JoinProgram {
         left_columns: probe_columns,
@@ -1430,7 +1448,108 @@ fn compile_join_impl(
         probe,
         payload_dst,
         body,
+        fused_group_by,
     })
+}
+
+/// #441: detects whether `body` is exactly `[LoadColumn]* GroupReduce
+/// [suffix]` -- no `Map`/`Filter`/`Window` between the last `LoadColumn`
+/// and the `GroupReduce` -- meaning the join's output feeds only a
+/// `GROUP BY`/aggregate and nothing else touches the joined row first.
+/// When it is, returns the `Opcode::HashProbeGroupReduce` to run instead
+/// of `Opcode::HashProbe`, the `(register, synthetic name)` pairs its
+/// `group_by`/`agg_dst` registers should be read back through (see
+/// [`JoinProgram::fused_group_by`]), and `body`'s trimmed suffix (every
+/// opcode after the `GroupReduce`, unchanged). Returns `None` for every
+/// other shape -- including a body with no `GroupReduce` at all (a plain,
+/// non-aggregate join) -- which keeps that join on the existing unfused
+/// path with byte-for-byte identical `probe`/`body` programs.
+type FusedGroupBy = (Opcode, Vec<(usize, String)>, Program);
+
+fn try_fuse_group_by(
+    body: &Program,
+    probe_columns: &[String],
+    build_columns: &[String],
+    probe_key_reg: usize,
+    join_kind: crate::vm::batch::JoinKind,
+) -> Option<FusedGroupBy> {
+    let ops: Vec<&Opcode> = body.opcodes().collect();
+    let mut name_by_reg: HashMap<usize, String> = HashMap::new();
+    let mut idx = 0;
+    while let Some(Opcode::LoadColumn { reg, column }) = ops.get(idx) {
+        name_by_reg.insert(*reg, column.to_string());
+        idx = idx.saturating_add(1);
+    }
+    let Some(Opcode::GroupReduce {
+        group_by,
+        aggs,
+        agg_dst,
+    }) = ops.get(idx)
+    else {
+        return None;
+    };
+
+    let resolve_source = |reg: usize| -> Option<ValueSource> {
+        let name = name_by_reg.get(&reg)?;
+        if let Some(pos) = probe_columns.iter().position(|c| c == name) {
+            Some(ValueSource::Probe(pos))
+        } else {
+            build_columns
+                .iter()
+                .position(|c| c == name)
+                .map(ValueSource::Payload)
+        }
+    };
+
+    let mut fused_group_by: Vec<(ValueSource, usize)> = Vec::with_capacity(group_by.len());
+    for reg in group_by.iter() {
+        fused_group_by.push((resolve_source(*reg)?, *reg));
+    }
+    let mut fused_aggs: Vec<(AggFunc, Option<ValueSource>)> = Vec::with_capacity(aggs.len());
+    for (func, src) in aggs.iter() {
+        let resolved = match src {
+            Some(reg) => Some(resolve_source(*reg)?),
+            None => None,
+        };
+        fused_aggs.push((*func, resolved));
+    }
+
+    let fused_op = Opcode::HashProbeGroupReduce {
+        key_cols: vec![probe_key_reg].into(),
+        table: 0,
+        kind: join_kind,
+        group_by: fused_group_by.into(),
+        aggs: fused_aggs.into(),
+        agg_dst: agg_dst.clone(),
+    };
+
+    let fused_output: Vec<(usize, String)> = group_by
+        .iter()
+        .enumerate()
+        .map(|(i, reg)| (*reg, format!("__fused_group_{i}")))
+        .chain(
+            agg_dst
+                .iter()
+                .enumerate()
+                .map(|(i, reg)| (*reg, format!("__fused_agg_{i}"))),
+        )
+        .collect();
+
+    let reload = fused_output
+        .iter()
+        .map(|(reg, name)| Opcode::LoadColumn {
+            reg: *reg,
+            column: name.clone().into(),
+        })
+        .chain(
+            ops.get(idx.saturating_add(1)..)
+                .into_iter()
+                .flatten()
+                .map(|op| (*op).clone()),
+        );
+    let trimmed_body = Program::from_opcodes(reload);
+
+    Some((fused_op, fused_output, trimmed_body))
 }
 
 /// Plan a cross-mode star join (#394): the driving table (`from.first`)
@@ -2241,6 +2360,26 @@ fn render_operands(op: &Opcode) -> String {
             payload_dst,
             kind,
         } => format!("key_cols={key_cols:?} table={table} payload_dst={payload_dst:?} kind={kind:?}"),
+        Opcode::HashProbeGroupReduce {
+            key_cols,
+            table,
+            kind,
+            group_by,
+            aggs,
+            agg_dst,
+        } => {
+            let aggs: Vec<String> = aggs
+                .iter()
+                .map(|(func, src)| match src {
+                    Some(s) => format!("{func:?}({s:?})"),
+                    None => format!("{func:?}"),
+                })
+                .collect();
+            format!(
+                "key_cols={key_cols:?} table={table} kind={kind:?} group_by={group_by:?} aggs=[{}] agg_dst={agg_dst:?}",
+                aggs.join(", ")
+            )
+        }
         Opcode::Window {
             func,
             arg,
@@ -2991,6 +3130,83 @@ mod tests {
             compile_join(&bad, BuildSourceKind::InMemory),
             Err(PlanError::UnknownColumn("c.id".into()))
         );
+    }
+
+    /// #441: a join whose output feeds only a `GROUP BY`/aggregate fuses
+    /// the probe and the reduce into one opcode instead of the ordinary
+    /// `HashProbe` + separate `GroupReduce`.
+    #[test]
+    fn compile_join_fuses_probe_and_group_reduce_for_an_aggregate_only_body() {
+        let query = sql::parse(
+            "SELECT regions.tier, SUM(orders.amount) FROM orders \
+             JOIN regions ON orders.region_key = regions.rkey \
+             GROUP BY regions.tier",
+        )
+        .unwrap();
+        let plan = compile_join(&query, BuildSourceKind::InMemory).unwrap();
+        assert!(matches!(
+            plan.probe.opcodes().last(),
+            Some(Opcode::HashProbeGroupReduce { .. })
+        ));
+        assert!(!plan
+            .probe
+            .opcodes()
+            .any(|op| matches!(op, Opcode::HashProbe { .. })));
+        assert!(!plan
+            .body
+            .opcodes()
+            .any(|op| matches!(op, Opcode::GroupReduce { .. })));
+        let fused = plan.fused_group_by.expect("fusion should have engaged");
+        assert_eq!(
+            fused.len(),
+            2,
+            "one GROUP BY key register + one SUM register"
+        );
+        // The trimmed body must still end in the usual `Combine` (cross-
+        // segment merge is completely unaffected by fusion).
+        assert!(matches!(
+            plan.body.opcodes().last(),
+            Some(Opcode::Combine { .. })
+        ));
+    }
+
+    /// #441: a plain (non-aggregate) join keeps the exact unfused shape --
+    /// same `HashProbe`, same three-part `explain_opcodes` output as
+    /// before this issue.
+    #[test]
+    fn compile_join_does_not_fuse_a_non_aggregate_body() {
+        let query = sql::parse(
+            "SELECT orders.id, regions.budget FROM orders \
+             JOIN regions ON orders.region_key = regions.rkey",
+        )
+        .unwrap();
+        let plan = compile_join(&query, BuildSourceKind::InMemory).unwrap();
+        assert!(plan.fused_group_by.is_none());
+        assert!(matches!(
+            plan.probe.opcodes().last(),
+            Some(Opcode::HashProbe { .. })
+        ));
+    }
+
+    /// #441: a `WHERE` clause on the joined row (`Filter` between the
+    /// probe's `LoadColumn`s and the `GroupReduce`) is exactly the
+    /// "intervening row-shaping opcode" fusion declines to handle --
+    /// falls back to the unfused path rather than fusing incorrectly.
+    #[test]
+    fn compile_join_does_not_fuse_when_a_filter_precedes_group_reduce() {
+        let query = sql::parse(
+            "SELECT regions.tier, SUM(orders.amount) FROM orders \
+             JOIN regions ON orders.region_key = regions.rkey \
+             WHERE orders.amount > 0 \
+             GROUP BY regions.tier",
+        )
+        .unwrap();
+        let plan = compile_join(&query, BuildSourceKind::InMemory).unwrap();
+        assert!(plan.fused_group_by.is_none());
+        assert!(matches!(
+            plan.probe.opcodes().last(),
+            Some(Opcode::HashProbe { .. })
+        ));
     }
 
     #[test]
