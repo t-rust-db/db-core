@@ -673,3 +673,82 @@ fn stream_aggregates_are_invariant_over_a_real_syslog_fixture() {
          with the fully-resident-ring oracle"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #452: bare aggregates over zero (or filtered) rows.
+//
+// A bare aggregate compiles to `Reduce`, not a keyless `GroupReduce`. The
+// keyless form found zero groups over zero surviving rows and emitted *no
+// row*; SQL requires exactly one: `COUNT(*)` = 0, everything else NULL. The
+// cross-segment merge must keep that row's `SUM`/`AVG` NULL (not `0.0`),
+// and `COUNT(*)` must count the rows that survived the `Filter`, not the
+// batch.
+// ---------------------------------------------------------------------------
+
+fn bare_aggregate_rows(sql: &str, sizes: &[usize]) -> Vec<Vec<Value>> {
+    let (grp, amt) = synthetic_dataset();
+    run_batch(sql, sizes, ("grp", &grp), ("amt", &amt))
+}
+
+#[test]
+fn bare_aggregates_over_zero_surviving_rows_emit_exactly_one_row() {
+    let (grp, _) = synthetic_dataset();
+    let sql = "SELECT count(*), sum(amt), avg(amt), min(amt), max(amt) \
+               FROM t WHERE grp = 'nope'";
+    for sizes in segmentations(grp.len()) {
+        let rows = bare_aggregate_rows(sql, &sizes);
+        assert_eq!(
+            rows,
+            vec![vec![
+                Value::Int(0),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ]],
+            "{sql} over {sizes:?}"
+        );
+    }
+}
+
+#[test]
+fn bare_aggregates_over_an_empty_dataset_emit_exactly_one_row() {
+    let rows = run_batch(
+        "SELECT count(*), sum(amt), avg(amt) FROM t",
+        &[0],
+        ("grp", &[]),
+        ("amt", &[]),
+    );
+    assert_eq!(rows, vec![vec![Value::Int(0), Value::Null, Value::Null]]);
+}
+
+#[test]
+fn bare_count_star_counts_filtered_rows_not_the_batch() {
+    let (grp, amt) = synthetic_dataset();
+    let expected = grp.iter().filter(|g| **g == Value::Str("a".into())).count() as i64;
+    assert!(expected > 0 && (expected as usize) < grp.len());
+    // Two `COUNT(*)`s: the second must not be fooled by the one-row register
+    // the first `Reduce` left behind.
+    let sql = "SELECT count(*), count(*) FROM t WHERE grp = 'a'";
+    for sizes in segmentations(grp.len()) {
+        let rows = bare_aggregate_rows(sql, &sizes);
+        assert_eq!(
+            rows,
+            vec![vec![Value::Int(expected), Value::Int(expected)]],
+            "{sql} over {sizes:?} ({} of {} rows match)",
+            expected,
+            amt.len()
+        );
+    }
+}
+
+#[test]
+fn bare_filtered_aggregates_are_segment_split_invariant() {
+    let (grp, amt) = synthetic_dataset();
+    assert_split_invariant(
+        "SELECT count(*), sum(amt), avg(amt), min(amt), max(amt) FROM t WHERE grp = 'b'",
+        grp.len(),
+        ("grp", &grp),
+        ("amt", &amt),
+    );
+}

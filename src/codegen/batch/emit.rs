@@ -1197,6 +1197,15 @@ mod tests {
     }
 
     #[test]
+    fn generates_const_program_for_a_bare_aggregate_query() {
+        // #452: no GROUP BY means one `Reduce` per aggregate, never a
+        // keyless `GroupReduce`.
+        let src = generate("column_rs", "SELECT count(*), SUM(amount) FROM t").unwrap();
+        assert_eq!(src.matches("Opcode::Reduce {").count(), 2, "{src}");
+        assert!(!src.contains("Opcode::GroupReduce {"), "{src}");
+    }
+
+    #[test]
     fn generates_const_program_for_group_by_aggregate_query() {
         let src = generate(
             "column_rs",
