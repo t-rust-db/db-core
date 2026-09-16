@@ -203,6 +203,78 @@ jobs:
           shared-key: test
       - run: make test
 
+  # Compile-level guard for the AOT emitter (db-core#447). The source
+  # `codegen::batch::emit` generates calls the *consumer's*
+  # `query::run_program`/`execute_*` and iterates the result, so db-core
+  # cannot compile it in-repo without depending on its own downstream --
+  # and its emit tests therefore compare generated *text* only. That is how
+  # #436 changed the query-output type, left three `for row in rows {`
+  # template sites behind, broke every emitted program, and stayed green
+  # across 1888 db-core tests. column-rs's `tests/codegen_e2e.rs` is the one
+  # guard that emits, compiles the result with rustc against the built
+  # `column_rs` rlib, runs it, and diffs against `QueryEngine::execute`.
+  # This job runs it against *this* db-core, through column-rs's own
+  # `[patch] db-core = { path = "../db-core" }` (the sibling layout it and
+  # the benchmark repo already assume), whenever a PR touches the emitter
+  # or the query-output surface -- and always on a push to main.
+  emit-compile-guard:
+    name: Emit compile guard (column-rs codegen_e2e)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: db-core
+          fetch-depth: 0
+      - name: Decide whether the emitter or query-output surface changed
+        id: relevant
+        working-directory: db-core
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" = "push" ]; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git diff --name-only "$BASE" "$HEAD" | grep -qE \
+               '^src/codegen/batch/emit\.rs$|^src/codegen/batch\.rs$|^src/vm/batch\.rs$|^src/vm/engine\.rs$'; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            echo "no emitter/query-output change; skipping"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.relevant.outputs.hit == 'true'
+        with:
+          repository: t-rust-db/column-rs
+          path: column-rs
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.relevant.outputs.hit == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.relevant.outputs.hit == 'true'
+        with:
+          shared-key: emit-compile-guard
+          workspaces: column-rs
+      # A patch only applies when the path crate satisfies column-rs's
+      # version requirement on db-core. If a db-core version bump falls
+      # outside it, cargo silently falls back to the pinned git tag and
+      # this guard would test the *old* db-core -- so fail loudly instead
+      # and point at column-rs's requirement.
+      - name: Assert column-rs resolved db-core to this checkout
+        if: steps.relevant.outputs.hit == 'true'
+        working-directory: column-rs
+        run: |
+          resolved="$(cargo tree -i db-core --edges normal --prefix none | head -1)"
+          echo "db-core resolved to: $resolved"
+          case "$resolved" in
+            *"$GITHUB_WORKSPACE/db-core"*) ;;
+            *) echo "::error::column-rs did not pick up this db-core via its [patch]; bump column-rs's db-core version requirement" ; exit 1 ;;
+          esac
+      - name: Emit, compile and run generated programs against this db-core
+        if: steps.relevant.outputs.hit == 'true'
+        working-directory: column-rs
+        run: cargo test --release --test codegen_e2e
+
   # ADR 0000 §(g), db-core#407: one 85% line-coverage floor over all of
   # db-core (--all-features), crate-wide and per-file, every PR -- no
   # longer a weekly SQLite-profile-only measurement (moved from
