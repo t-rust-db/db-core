@@ -1611,6 +1611,58 @@ fn hash_columns_by_row(
     hashes
 }
 
+/// `GroupReduce` fast path for `GROUP BY <dict column>` (#457): groups by
+/// the row's dictionary code directly instead of hashing a decoded
+/// `Value::Str`. `code_to_group` is a `dict.len() + 1`-sized array indexed
+/// by code (the extra slot is NULL/out-of-range rows), so for the
+/// low-cardinality dictionaries this targets -- a handful of distinct
+/// values over millions of rows -- group lookup is an array index rather
+/// than a hash probe, and only the codes that actually appear ever get
+/// decoded to a `Value`. Group order matches the general hash-based path:
+/// first appearance in row order.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "callers pass `physical(row)` drawn from that same batch's `0..num_rows`, and `dict`/`indices`/`valid` all describe the same column, so `physical(row)` is in range for `indices`/`valid`; `slot` is always `<= dict.len()` by construction, in range for `code_to_group`"
+)]
+fn dict_group_by_single_column(
+    dict: &[Arc<str>],
+    indices: &[u32],
+    valid: &Bitmap,
+    num_rows: usize,
+    physical: impl Fn(usize) -> usize,
+) -> (Vec<usize>, Vec<Vec<Value>>) {
+    let null_slot = dict.len();
+    let mut code_to_group: Vec<Option<usize>> = vec![None; null_slot.saturating_add(1)];
+    let mut group_keys: Vec<Vec<Value>> = Vec::new();
+    let mut row_group = Vec::with_capacity(num_rows);
+    for row in 0..num_rows {
+        let p = physical(row);
+        let slot = if valid.get(p) {
+            usize::try_from(indices[p])
+                .unwrap_or(null_slot)
+                .min(null_slot)
+        } else {
+            null_slot
+        };
+        let group = match code_to_group[slot] {
+            Some(g) => g,
+            None => {
+                let key = if slot == null_slot {
+                    Value::Null
+                } else {
+                    Value::Str(dict[slot].to_string().into())
+                };
+                let g = group_keys.len();
+                group_keys.push(vec![key]);
+                code_to_group[slot] = Some(g);
+                g
+            }
+        };
+        row_group.push(group);
+    }
+    (row_group, group_keys)
+}
+
 /// SQL join-key equality between a probe row and an already-built row's
 /// key columns: NULL never matches anything, including another NULL (as
 /// distinct from [`GroupKey`]'s `GROUP BY` semantics, where `Null ==
@@ -2430,6 +2482,24 @@ impl Vm {
                 // `Filter`. Taken up front so the borrows below are of
                 // `self.registers` alone, not all of `self`.
                 let selection = self.selection.take();
+                // #457: a single dict-encoded group-by column groups by its
+                // integer code instead of decoding every row to a `String`
+                // first -- for a low-cardinality dictionary the group table
+                // degenerates to a `dict.len()`-sized array, skipping the
+                // per-row hash entirely. Only fires for exactly one group-by
+                // column (matching a `GROUP BY <dict col>` with no other
+                // key); a composite key falls back to the general path.
+                let dict_group_by = match &group_by[..] {
+                    [reg] => match self.typed_registers.get(reg).map(Arc::as_ref) {
+                        Some(Column::Dict {
+                            dict,
+                            indices,
+                            valid,
+                        }) => Some((dict.clone(), indices.clone(), valid.clone())),
+                        _ => None,
+                    },
+                    _ => None,
+                };
                 let key_columns: Vec<&[Value]> = group_by
                     .iter()
                     .map(|reg| self.reg(*reg, opcode))
@@ -2469,41 +2539,50 @@ impl Vm {
                         .map_or(row, |sel| sel.indices[row] as usize)
                 };
 
-                // #439/#440: hash column-wise (`hash_columns_by_row`, no
-                // per-row key materialized), then probe by hash first on a
-                // borrowed row view, only clone+allocate a `Vec<Value>`
-                // key on a genuine new group -- the old code built and
-                // cloned that `Vec` (plus its `String`s) for every input
-                // row, even though nearly every row lands in a group that
-                // already exists. `group_index` buckets group ids by hash
-                // (collisions possible, so each bucket is checked for an
-                // exact match) rather than owning a `GroupKey` per entry.
-                let hashes = hash_columns_by_row(&key_columns, num_rows, physical);
-                let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
-                let mut group_keys: Vec<Vec<Value>> = Vec::new();
-                let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
-                for row in 0..num_rows {
-                    let p = physical(row);
-                    let bucket = group_index.entry(hashes[row]).or_default();
-                    let existing = bucket.iter().copied().find(|&g| {
-                        key_columns
-                            .iter()
-                            .enumerate()
-                            .all(|(i, c)| c[p] == group_keys[g][i])
-                    });
-                    let group = match existing {
-                        Some(g) => g,
-                        None => {
-                            let key: Vec<Value> =
-                                key_columns.iter().map(|c| c[p].clone()).collect();
-                            let g = group_keys.len();
-                            group_keys.push(key);
-                            bucket.push(g);
-                            g
+                let (row_group, group_keys): (Vec<usize>, Vec<Vec<Value>>) = match dict_group_by {
+                    Some((dict, indices, valid)) => {
+                        dict_group_by_single_column(&dict, &indices, &valid, num_rows, physical)
+                    }
+                    // #439/#440: hash column-wise (`hash_columns_by_row`, no
+                    // per-row key materialized), then probe by hash first on
+                    // a borrowed row view, only clone+allocate a
+                    // `Vec<Value>` key on a genuine new group -- the old
+                    // code built and cloned that `Vec` (plus its `String`s)
+                    // for every input row, even though nearly every row
+                    // lands in a group that already exists. `group_index`
+                    // buckets group ids by hash (collisions possible, so
+                    // each bucket is checked for an exact match) rather
+                    // than owning a `GroupKey` per entry.
+                    None => {
+                        let hashes = hash_columns_by_row(&key_columns, num_rows, physical);
+                        let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
+                        let mut group_keys: Vec<Vec<Value>> = Vec::new();
+                        let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
+                        for row in 0..num_rows {
+                            let p = physical(row);
+                            let bucket = group_index.entry(hashes[row]).or_default();
+                            let existing = bucket.iter().copied().find(|&g| {
+                                key_columns
+                                    .iter()
+                                    .enumerate()
+                                    .all(|(i, c)| c[p] == group_keys[g][i])
+                            });
+                            let group = match existing {
+                                Some(g) => g,
+                                None => {
+                                    let key: Vec<Value> =
+                                        key_columns.iter().map(|c| c[p].clone()).collect();
+                                    let g = group_keys.len();
+                                    group_keys.push(key);
+                                    bucket.push(g);
+                                    g
+                                }
+                            };
+                            row_group.push(group);
                         }
-                    };
-                    row_group.push(group);
-                }
+                        (row_group, group_keys)
+                    }
+                };
                 let num_groups = group_keys.len();
 
                 for (i, reg) in group_by.iter().enumerate() {
@@ -5078,6 +5157,173 @@ mod tests {
         assert_eq!(
             vm.register(2).unwrap(),
             &[Value::Float(8.0), Value::Float(2.0)]
+        );
+    }
+
+    #[test]
+    fn group_reduce_on_a_dict_column_groups_by_code_and_matches_the_string_path() {
+        // #457: a `Column::Dict` group-by register must produce the same
+        // groups (and in the same first-appearance order) as the general
+        // `Value::Str`-hashing path in `group_reduce_hash_aggregates_by_key`.
+        let dict: Vec<std::sync::Arc<str>> = vec!["east".into(), "west".into()];
+        let region = Column::Dict {
+            dict,
+            indices: vec![0, 1, 0, 1],
+            valid: Bitmap::from_bools([true, true, true, true].into_iter()),
+        };
+        let batch = Batch::new(4)
+            .with_typed_column("region", region)
+            .with_column(
+                "amount",
+                vec![
+                    Value::Int(10),
+                    Value::Int(5),
+                    Value::Int(20),
+                    Value::Int(15),
+                ],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "region".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "amount".into(),
+                },
+                Opcode::GroupReduce {
+                    group_by: vec![0].into(),
+                    aggs: vec![(AggFunc::Sum, Some(1)), (AggFunc::Count, None)].into(),
+                    agg_dst: vec![2, 3].into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Str("east".into()), Value::Str("west".into())]
+        );
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Float(30.0), Value::Float(20.0)]
+        );
+        assert_eq!(vm.register(3).unwrap(), &[Value::Int(2), Value::Int(2)]);
+    }
+
+    #[test]
+    fn group_reduce_on_a_dict_column_groups_null_codes_together() {
+        // #457 acceptance criterion: NULL codes (invalid rows in the
+        // indices vector) all land in one group, like a NULL `Value::Str`
+        // key does in `group_reduce_groups_all_null_keys_together`.
+        let dict: Vec<std::sync::Arc<str>> = vec!["east".into()];
+        let region = Column::Dict {
+            dict,
+            indices: vec![0, 0, 0, 0],
+            valid: Bitmap::from_bools([false, true, false, false].into_iter()),
+        };
+        let batch = Batch::new(4)
+            .with_typed_column("region", region)
+            .with_column(
+                "amount",
+                vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "region".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "amount".into(),
+                },
+                Opcode::GroupReduce {
+                    group_by: vec![0].into(),
+                    aggs: vec![(AggFunc::Sum, Some(1))].into(),
+                    agg_dst: vec![2].into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Null, Value::Str("east".into())]
+        );
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Float(8.0), Value::Float(2.0)]
+        );
+    }
+
+    #[test]
+    fn filter_then_group_reduce_on_a_dict_column_resolves_the_pending_selection() {
+        // #457 + #265: the dict fast path must also respect a pending
+        // `Filter` selection, same as the general hash-based path in
+        // `filter_then_group_reduce_resolves_the_pending_selection`.
+        let dict: Vec<std::sync::Arc<str>> = vec!["east".into(), "west".into()];
+        let region = Column::Dict {
+            dict,
+            indices: vec![0, 1, 0, 1],
+            valid: Bitmap::from_bools([true, true, true, true].into_iter()),
+        };
+        let batch = Batch::new(4)
+            .with_typed_column("region", region)
+            .with_column(
+                "amount",
+                vec![
+                    Value::Int(10),
+                    Value::Int(5),
+                    Value::Int(20),
+                    Value::Int(15),
+                ],
+            )
+            .with_column(
+                "keep",
+                vec![
+                    Value::Bool(true),
+                    Value::Bool(false),
+                    Value::Bool(true),
+                    Value::Bool(true),
+                ],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "region".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "amount".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 2,
+                    column: "keep".into(),
+                },
+                Opcode::Filter { predicate: 2 },
+                Opcode::GroupReduce {
+                    group_by: vec![0].into(),
+                    aggs: vec![(AggFunc::Sum, Some(1))].into(),
+                    agg_dst: vec![3].into(),
+                },
+            ],
+        )
+        .unwrap();
+        // Row 1 (west, 5) is filtered out, so west's sum is just row 3's 15.
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Str("east".into()), Value::Str("west".into())]
+        );
+        assert_eq!(
+            vm.register(3).unwrap(),
+            &[Value::Float(30.0), Value::Float(15.0)]
         );
     }
 
