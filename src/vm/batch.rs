@@ -1166,12 +1166,42 @@ fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
     }
 }
 
+/// One-shot variant-tagged hash of a single [`Value`] (the
+/// [`hash_group_value`] scheme, so `Int(1)` and `Str("1")` never collide).
+fn hash_one_value(value: &Value) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    hash_group_value(value, &mut hasher);
+    hasher.finish()
+}
+
+/// Folds one more column's per-value hash into a row's accumulated hash
+/// (#444). Order-sensitive, so `(a, b)` and `(b, a)` keys land on
+/// different hashes; the multiply-rotate mix keeps the low bits well
+/// distributed for the power-of-two tables downstream.
+const fn mix_hash(acc: u64, value_hash: u64) -> u64 {
+    (acc ^ value_hash)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .rotate_left(29)
+}
+
+/// Seed for [`hash_columns_by_row`]'s accumulators -- non-zero so a
+/// single-column key's hash is a real mix, not just `mix_hash(0, v)`'s
+/// trivially invertible image of `v`.
+const HASH_SEED: u64 = 0x243F_6A88_85A3_08D3;
+
 /// #440: column-wise row hashing for `GroupReduce`/`HashBuild`/`HashProbe` --
-/// one [`DefaultHasher`] per row, folded column by column (outer loop over
-/// `columns`, inner loop over rows) rather than the row-major "gather a
-/// `Vec<Value>` key, then hash it" shape those opcodes used before. Never
-/// materializes a per-row key: the row's contribution to its own hasher is
-/// read straight out of each column in turn.
+/// folded column by column (outer loop over `columns`, inner loop over
+/// rows) rather than the row-major "gather a `Vec<Value>` key, then hash
+/// it" shape those opcodes used before. Never materializes a per-row key:
+/// the row's contribution is read straight out of each column in turn.
+///
+/// #444: the per-row state is one `u64` accumulator (8 B/row), not one
+/// live [`DefaultHasher`] (72 B/row). The original shape held
+/// `72 * num_rows` bytes for the whole fold -- 8.85 MB per 122,880-row
+/// segment, ~106 MB across 12 in-flight morsels, measured as +105 MB RSS
+/// on the parity `group_by` and +214 MB on `join` (which hashes on both
+/// the build and probe side). Each value is hashed one-shot on the stack
+/// and mixed in via [`mix_hash`] instead.
 #[allow(
     clippy::indexing_slicing,
     reason = "callers pass `row`/`physical(row)` drawn from that same batch's `0..num_rows`, and every key/build column here holds exactly `num_rows` values (checked by the caller via `RegisterLengthMismatch` before this runs)"
@@ -1181,13 +1211,13 @@ fn hash_columns_by_row(
     num_rows: usize,
     physical: impl Fn(usize) -> usize,
 ) -> Vec<u64> {
-    let mut hashers: Vec<DefaultHasher> = (0..num_rows).map(|_| DefaultHasher::new()).collect();
+    let mut hashes = vec![HASH_SEED; num_rows];
     for column in columns {
-        for (row, hasher) in hashers.iter_mut().enumerate() {
-            hash_group_value(&column[physical(row)], hasher);
+        for (row, acc) in hashes.iter_mut().enumerate() {
+            *acc = mix_hash(*acc, hash_one_value(&column[physical(row)]));
         }
     }
-    hashers.into_iter().map(|h| h.finish()).collect()
+    hashes
 }
 
 /// SQL join-key equality between a probe row and an already-built row's
