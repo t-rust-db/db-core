@@ -1072,6 +1072,113 @@ fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec
     results.into_iter().map(|(_, result)| result).collect()
 }
 
+/// [`run_morsels`] that hands each result to `sink` **in item order, as it
+/// becomes deliverable**, instead of collecting them all first (#456).
+///
+/// Same claim-a-counter pool of workers; the *calling* thread is the
+/// consumer. Finished results park in an index-keyed map until the next
+/// in-order one is present, so the sink sees item `i` before `i + 1` even
+/// though workers finish out of order. Back-pressure keeps that parking
+/// bounded: a worker only claims item `i` while `i < delivered + window`
+/// (`window` = twice the pool), otherwise it waits -- so at most `window`
+/// results exist that the sink has not consumed, whatever the total. That
+/// bound, not the result size, is the peak the streaming entry points
+/// promise. A sink error cancels: workers stop claiming, in-flight items
+/// finish and are dropped, and the error is returned.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "num_threads/window/next_claim/next_deliver are all bounded by `len` (checked via `usize::min(len)` and the `next_claim >= len`/`next_deliver < len` loop guards), so `+`/`+=` here never overflow a usize in practice; this mirrors run_morsels' own counter, which the same reasoning covers"
+)]
+fn run_morsels_ordered<I: Sync, T: Send>(
+    items: &[I],
+    f: impl Fn(&I) -> T + Sync,
+    mut sink: impl FnMut(T) -> Result<()>,
+) -> Result<()> {
+    use std::collections::BTreeMap;
+    use std::sync::{Condvar, Mutex, PoisonError};
+
+    struct Shared<T> {
+        /// Next item index a worker may claim.
+        next_claim: usize,
+        /// Next item index the sink is owed.
+        next_deliver: usize,
+        /// Finished but not yet delivered, keyed by item index.
+        parked: BTreeMap<usize, T>,
+        /// Set once the sink failed: workers stop claiming.
+        cancelled: bool,
+    }
+
+    let len = items.len();
+    if len == 0 {
+        return Ok(());
+    }
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(len);
+    let window = num_threads * 2;
+    let shared = Mutex::new(Shared {
+        next_claim: 0,
+        next_deliver: 0,
+        parked: BTreeMap::new(),
+        cancelled: false,
+    });
+    let changed = Condvar::new();
+    // Poison recovery is unreachable in practice (see `run_morsels`).
+    let lock = || shared.lock().unwrap_or_else(PoisonError::into_inner);
+
+    let mut outcome = Ok(());
+    std::thread::scope(|scope| {
+        for _ in 0..num_threads {
+            scope.spawn(|| loop {
+                let idx = {
+                    let mut s = lock();
+                    loop {
+                        if s.cancelled || s.next_claim >= len {
+                            return;
+                        }
+                        if s.next_claim < s.next_deliver + window {
+                            break;
+                        }
+                        s = changed.wait(s).unwrap_or_else(PoisonError::into_inner);
+                    }
+                    let idx = s.next_claim;
+                    s.next_claim += 1;
+                    idx
+                };
+                let Some(item) = items.get(idx) else {
+                    return;
+                };
+                let result = f(item);
+                lock().parked.insert(idx, result);
+                changed.notify_all();
+            });
+        }
+
+        let mut s = lock();
+        while s.next_deliver < len {
+            let due = s.next_deliver;
+            let Some(result) = s.parked.remove(&due) else {
+                s = changed.wait(s).unwrap_or_else(PoisonError::into_inner);
+                continue;
+            };
+            s.next_deliver += 1;
+            drop(s);
+            // Let waiting workers claim into the freed window slot while
+            // the sink runs.
+            changed.notify_all();
+            if let Err(e) = sink(result) {
+                lock().cancelled = true;
+                changed.notify_all();
+                outcome = Err(e);
+                return;
+            }
+            s = lock();
+        }
+    });
+    outcome
+}
+
 /// Run `program` (a flat, non-looping instruction list ending in
 /// [`Opcode::Emit`]) against every segment in parallel (morsel-driven: a
 /// fixed thread pool dynamically pulls one segment per task off a shared
@@ -1094,6 +1201,41 @@ pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<Qu
         all.extend(output?);
     }
     Ok(all)
+}
+
+/// [`run_parallel`] that hands each segment's emitted [`Chunk`]s to `sink`
+/// in segment order as soon as they are deliverable, instead of collecting
+/// every segment into one [`QueryOutput`] first (#456).
+///
+/// Concatenating what `sink` receives gives exactly [`run_parallel`]'s
+/// output. Peak memory is bounded by the ordering window (see
+/// [`run_morsels_ordered`]) plus whatever `sink` retains -- O(segments in
+/// flight), not O(result) -- which is the point: a `-c` printer can write
+/// the first segment while the last is still being filtered. `sink` runs
+/// on the calling thread; an error from it stops the run and is returned.
+///
+/// Like `run_parallel`, this does not merge partial aggregates across
+/// segments; `vm::engine::run_streaming` refuses programs that need that.
+pub fn run_parallel_streaming<S: Segment>(
+    segments: &[S],
+    program: &[Opcode],
+    mut sink: impl FnMut(Chunk) -> Result<()>,
+) -> Result<()> {
+    run_morsels_ordered(
+        segments,
+        |segment| -> Result<QueryOutput> {
+            let batch = segment.load()?;
+            let mut vm = Vm::new();
+            vm.execute(&batch, program)?;
+            Ok(std::mem::take(&mut vm.output))
+        },
+        |output| {
+            for chunk in output?.into_chunks() {
+                sink(chunk)?;
+            }
+            Ok(())
+        },
+    )
 }
 
 /// `ORDER BY <col> [ASC|DESC] LIMIT <limit>` spec for [`run_parallel_top_n`]:
@@ -1319,6 +1461,14 @@ pub enum VmError {
         /// What failed, in the backend's own words (file, column, cause).
         reason: String,
     },
+    /// `vm::engine::run_streaming` was given a program whose result cannot
+    /// be streamed segment by segment -- its trailing `Combine` has work to
+    /// do (aggregates, `DISTINCT`, `ORDER BY`, `LIMIT`) that needs every
+    /// segment first. Callers fall back to `vm::engine::run` (#456).
+    NotStreamable {
+        /// Which finalize step needs the whole result.
+        reason: String,
+    },
 }
 
 impl fmt::Display for VmError {
@@ -1349,6 +1499,7 @@ impl fmt::Display for VmError {
                 write!(f, "{opcode}: malformed program: {reason}")
             }
             VmError::SegmentLoad { reason } => write!(f, "segment load failed: {reason}"),
+            VmError::NotStreamable { reason } => write!(f, "cannot stream this program: {reason}"),
         }
     }
 }

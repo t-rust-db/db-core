@@ -21,8 +21,9 @@
 //! it isn't. And [`semi_filter`].
 
 use super::batch::{
-    compare_for_order, run_parallel, run_parallel_top_n, AggPart, Batch, JoinTables, Opcode,
-    Program, QueryOutput, Result, ScanSource, Segment, TopN, Value, Vm, VmError,
+    compare_for_order, run_parallel, run_parallel_streaming, run_parallel_top_n, AggPart, Batch,
+    Chunk, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource, Segment, TopN, Value, Vm,
+    VmError,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -132,7 +133,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
     // Return the chunked output as-is rather than transposing every
     // surviving row into a `Vec` and back (which is what the reverted
     // first attempt did on exactly this path, the one the issue is about).
-    if agg_parts.is_empty() && !distinct && order_by.is_none() && limit.is_none() {
+    if is_identity_finalize(agg_parts, *distinct, &order_by, limit) {
         return run_parallel(segments, &body);
     }
     let output = match (agg_parts.is_empty() && !distinct, order_by, limit) {
@@ -155,6 +156,80 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
         limit,
         output.into_rows(),
     )
+}
+
+/// Whether `program`'s finalize step (a `Combine` plus optional `Sort`/
+/// `Limit`) is the identity -- no aggregates, no `DISTINCT`, no `ORDER BY`,
+/// no `LIMIT` -- so its chunked output can be returned (or streamed) as-is.
+/// Shared by [`run`] and [`run_streaming`] so the two entry points agree
+/// on exactly which programs skip finalize (#456).
+fn is_identity_finalize(
+    agg_parts: &[AggPart],
+    distinct: bool,
+    order_by: &Option<(usize, bool)>,
+    limit: Option<usize>,
+) -> bool {
+    agg_parts.is_empty() && !distinct && order_by.is_none() && limit.is_none()
+}
+
+/// Streaming counterpart to [`run`] (#456): hands each segment's chunks to
+/// `sink`, in segment order, as soon as they are ready, instead of
+/// collecting the whole result into one [`QueryOutput`] first. Peak memory
+/// is bounded by the in-flight window (see
+/// [`super::batch::run_parallel_streaming`]) plus whatever `sink` retains
+/// -- not by the result size, which is `run`'s tradeoff for a plain scan/
+/// filter/projection at result sizes where materializing is the cost.
+///
+/// Only programs [`is_identity_finalize`] accepts can stream: an aggregate,
+/// `DISTINCT`, `ORDER BY`, or `LIMIT` finalize step needs every segment's
+/// output before it can produce its first (and often only) row, which is
+/// exactly what streaming exists to avoid ever holding. Anything else
+/// returns [`VmError::NotStreamable`] -- a typed error, not a panic -- so
+/// the caller can fall back to `run`.
+pub fn run_streaming<S: Segment>(
+    segments: &[S],
+    program: &Program,
+    sink: impl FnMut(Chunk) -> Result<()>,
+) -> Result<()> {
+    let (body, combine, sort, limit_op) = program.split_finalize();
+    let Some(Opcode::Combine {
+        agg_parts,
+        distinct,
+        ..
+    }) = combine
+    else {
+        return run_parallel_streaming(segments, &body, sink);
+    };
+    let order_by = match sort {
+        Some(Opcode::Sort { col, descending }) => Some((*col, *descending)),
+        _ => None,
+    };
+    let limit = match limit_op {
+        Some(Opcode::Limit { n }) => Some(*n),
+        _ => None,
+    };
+    if !is_identity_finalize(agg_parts, *distinct, &order_by, limit) {
+        let reason = if !agg_parts.is_empty() {
+            "query has aggregates".to_string()
+        } else if *distinct {
+            "query is DISTINCT".to_string()
+        } else {
+            match (order_by, limit) {
+                (Some(_), Some(_)) => "query has ORDER BY ... LIMIT".to_string(),
+                (Some(_), None) => "query has ORDER BY".to_string(),
+                (None, Some(_)) => "query has LIMIT".to_string(),
+                // `is_identity_finalize` already rejected `(None, None)`
+                // under `agg_parts.is_empty() && !distinct` -- this arm is
+                // unreachable but still typed, not a panic (db-core#232's
+                // `MalformedProgram` convention).
+                (None, None) => {
+                    "unreachable: no aggregate, DISTINCT, ORDER BY, or LIMIT".to_string()
+                }
+            }
+        };
+        return Err(VmError::NotStreamable { reason });
+    }
+    run_parallel_streaming(segments, &body, sink)
 }
 
 /// The `LIMIT` when `program` can be satisfied by a sequential prefix scan

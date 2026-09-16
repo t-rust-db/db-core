@@ -48,7 +48,7 @@ use db_core::engine::stream::StreamEngine;
 use db_core::engine::{Cell, Engine};
 use db_core::parser::column::parse;
 use db_core::vm::batch::Value;
-use db_core::vm::engine::{run, InMemorySegment};
+use db_core::vm::engine::{run, run_streaming, InMemorySegment};
 
 // ---------------------------------------------------------------------
 // vm::batch: synthetic in-memory segments
@@ -751,4 +751,134 @@ fn bare_filtered_aggregates_are_segment_split_invariant() {
         ("grp", &grp),
         ("amt", &amt),
     );
+}
+
+// ---------------------------------------------------------------------------
+// #456: `run_streaming` must agree with `run` byte-for-byte -- concatenating
+// what the sink receives is exactly `run(...).into_rows()` -- for every
+// segmentation, and must refuse (not silently misbehave on) any program
+// `run`'s identity short-circuit does not take.
+// ---------------------------------------------------------------------------
+
+/// Runs `sql` over `sizes`-segmented `(col_a, col_b)` data through
+/// `run_streaming`, concatenating every sunk chunk into rows the same way
+/// `QueryOutput::into_rows` would.
+fn run_batch_streaming(
+    sql: &str,
+    sizes: &[usize],
+    col_a: (&str, &[Value]),
+    col_b: (&str, &[Value]),
+) -> Vec<Vec<Value>> {
+    let program = compile(&parse(sql).unwrap_or_else(|e| panic!("{sql}: parse error {e}")))
+        .unwrap_or_else(|e| panic!("{sql}: compile error {e}"));
+    let segments = segments_for(sizes, col_a, col_b);
+    let mut rows = Vec::new();
+    run_streaming(&segments, &program, |chunk| {
+        let n = chunk.first().map_or(0, |col| col.len());
+        for r in 0..n {
+            rows.push(chunk.iter().map(|col| col[r].clone()).collect());
+        }
+        Ok(())
+    })
+    .unwrap_or_else(|e| panic!("{sql} over {sizes:?}: {e}"));
+    rows
+}
+
+#[test]
+fn run_streaming_agrees_with_run_for_every_segmentation_of_a_filtered_projection() {
+    let (grp, amt) = synthetic_dataset();
+    for sizes in segmentations(grp.len()) {
+        let sql = "SELECT grp, amt FROM t WHERE grp = 'a'";
+        let expected = run_batch(sql, &sizes, ("grp", &grp), ("amt", &amt));
+        let got = run_batch_streaming(sql, &sizes, ("grp", &grp), ("amt", &amt));
+        assert_eq!(got, expected, "{sql} over {sizes:?}");
+    }
+}
+
+#[test]
+fn run_streaming_agrees_with_run_over_a_plain_scan() {
+    let (grp, amt) = synthetic_dataset();
+    for sizes in segmentations(grp.len()) {
+        let sql = "SELECT grp, amt FROM t";
+        let expected = run_batch(sql, &sizes, ("grp", &grp), ("amt", &amt));
+        let got = run_batch_streaming(sql, &sizes, ("grp", &grp), ("amt", &amt));
+        assert_eq!(got, expected, "{sql} over {sizes:?}");
+    }
+}
+
+#[test]
+fn run_streaming_refuses_aggregates_group_by_order_by_and_limit() {
+    let (grp, amt) = synthetic_dataset();
+    let segments = segments_for(&[grp.len()], ("grp", &grp), ("amt", &amt));
+    for sql in [
+        "SELECT COUNT(*) FROM t",
+        "SELECT grp, COUNT(*) FROM t GROUP BY grp",
+        "SELECT DISTINCT grp FROM t",
+        "SELECT grp, amt FROM t ORDER BY amt",
+        "SELECT grp, amt FROM t LIMIT 3",
+        "SELECT grp, amt FROM t ORDER BY amt LIMIT 3",
+    ] {
+        let program = compile(&parse(sql).unwrap()).unwrap();
+        let err = run_streaming(&segments, &program, |_| Ok(())).unwrap_err();
+        assert!(
+            matches!(err, db_core::vm::batch::VmError::NotStreamable { .. }),
+            "{sql}: expected NotStreamable, got {err:?}"
+        );
+    }
+}
+
+#[test]
+fn run_streaming_delivers_chunks_in_segment_order_under_skewed_costs() {
+    // Segment 0 is the largest (slowest to filter/scan); if chunks were
+    // delivered in *completion* order rather than segment order, a fast
+    // late segment would arrive before it. `assert_eq!` against `run`
+    // below already proves final-row order; this asserts the sink itself
+    // never sees a later segment's chunk before an earlier one's.
+    let (grp, amt) = synthetic_dataset();
+    let sizes = vec![grp.len() - 3, 1, 1, 1];
+    let program = compile(&parse("SELECT grp, amt FROM t").unwrap()).unwrap();
+    let segments = segments_for(&sizes, ("grp", &grp), ("amt", &amt));
+    let mut seen_rows = 0usize;
+    let mut running_offset = 0usize;
+    let mut expected_offsets = Vec::new();
+    for &size in &sizes {
+        expected_offsets.push(running_offset);
+        running_offset += size;
+    }
+    let mut next_expected = 0usize;
+    run_streaming(&segments, &program, |chunk| {
+        let n = chunk.first().map_or(0, |col| col.len());
+        // Each segment here emits exactly one chunk; its first row's
+        // position in the concatenated output must equal the running
+        // offset of the *next* not-yet-seen segment.
+        assert_eq!(
+            seen_rows, expected_offsets[next_expected],
+            "chunk for segment {next_expected} arrived out of segment order"
+        );
+        seen_rows += n;
+        next_expected += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(seen_rows, grp.len());
+}
+
+#[test]
+fn run_streaming_propagates_a_sink_error_instead_of_panicking() {
+    let (grp, amt) = synthetic_dataset();
+    let sizes = segmentations(grp.len())[0].clone();
+    let program = compile(&parse("SELECT grp, amt FROM t").unwrap()).unwrap();
+    let segments = segments_for(&sizes, ("grp", &grp), ("amt", &amt));
+    let mut calls = 0usize;
+    let result = run_streaming(&segments, &program, |_| {
+        calls += 1;
+        Err(db_core::vm::batch::VmError::SegmentLoad {
+            reason: "sink refuses to write".to_string(),
+        })
+    });
+    assert!(matches!(
+        result,
+        Err(db_core::vm::batch::VmError::SegmentLoad { .. })
+    ));
+    assert!(calls >= 1, "sink should have been invoked at least once");
 }
