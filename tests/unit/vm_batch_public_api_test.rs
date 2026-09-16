@@ -253,7 +253,8 @@ fn concat(batches: &[Batch]) -> Batch {
     all
 }
 
-fn sorted(mut rows: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
+fn sorted(output: db_core::vm::batch::QueryOutput) -> Vec<Vec<Value>> {
+    let mut rows = output.into_rows();
     rows.sort_by(|a, b| compare_for_order(&a[0], &b[0], false));
     rows
 }
@@ -312,7 +313,11 @@ fn run_join_segments_matches_single_segment_run_join_for_left_join_group_by() {
     assert_eq!(sorted(segmented), sorted(single.clone()));
     // LEFT keeps customer 3 as a NULL-tier group: four groups.
     assert_eq!(single.len(), 4);
-    assert!(single.iter().any(|row| row[0] == Value::Null));
+    assert!(single
+        .clone()
+        .into_rows()
+        .iter()
+        .any(|row| row[0] == Value::Null));
 }
 
 /// #441: `HashProbeGroupReduce` (engaged via `compile_join` for this
@@ -343,6 +348,7 @@ fn run_join_fuses_group_reduce_with_exact_expected_sums_per_tier() {
     // (id 0) gets rows 0,4,8 -> 0+4+8=12; silver (id 1) gets 1,5,9 ->
     // 15; gold (id 2) gets 2,6,10 -> 18; id 3 (no dimension row) dropped.
     let by_tier: std::collections::HashMap<String, f64> = rows
+        .into_rows()
         .into_iter()
         .map(|row| {
             let Value::Str(tier) = &row[0] else {
@@ -386,6 +392,7 @@ fn run_join_fuses_count_star_and_count_col_correctly() {
     // three tiers. `bench.amount` is never NULL, so COUNT(*) ==
     // COUNT(bench.amount) for every group here.
     assert_eq!(rows.len(), 4);
+    let rows = rows.into_rows();
     for row in &rows {
         assert_eq!(row[1], Value::Int(3), "row={row:?}");
         assert_eq!(row[2], Value::Int(3), "row={row:?}");
@@ -435,7 +442,10 @@ fn run_join_fuses_null_join_key_never_matches() {
         2,
         "the NULL-keyed row must not form its own group"
     );
-    assert!(inner_rows.iter().all(|row| row[0] != Value::Null));
+    assert!(inner_rows
+        .into_rows()
+        .iter()
+        .all(|row| row[0] != Value::Null));
 
     let left_plan = compile_join(
         &parse(
@@ -453,6 +463,7 @@ fn run_join_fuses_null_join_key_never_matches() {
         3,
         "bronze, silver, and one NULL-tier group"
     );
+    let left_rows = left_rows.into_rows();
     let null_group = left_rows
         .iter()
         .find(|row| row[0] == Value::Null)
@@ -585,7 +596,7 @@ fn count_merged_across_segments_stays_an_integer() {
             distinct: false,
         }),
     ]);
-    let mut rows = run(&segments, &program).unwrap();
+    let mut rows = run(&segments, &program).unwrap().into_rows();
     rows.sort_by(|a, b| compare_for_order(&a[0], &b[0], false));
     assert_eq!(
         rows,

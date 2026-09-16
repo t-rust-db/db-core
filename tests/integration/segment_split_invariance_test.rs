@@ -122,7 +122,9 @@ fn run_batch(
     let program = compile(&parse(sql).unwrap_or_else(|e| panic!("{sql}: parse error {e}")))
         .unwrap_or_else(|e| panic!("{sql}: compile error {e}"));
     let segments = segments_for(sizes, col_a, col_b);
-    run(&segments, &program).unwrap_or_else(|e| panic!("{sql} over {sizes:?}: {e}"))
+    run(&segments, &program)
+        .unwrap_or_else(|e| panic!("{sql} over {sizes:?}: {e}"))
+        .into_rows()
 }
 
 /// Asserts every segmentation of `n` rows produces the same rows for `sql`.
@@ -274,10 +276,14 @@ fn batch_group_by_two_keys_is_segment_split_invariant() {
     let program = compile(&parse(sql).unwrap()).unwrap();
 
     let sizings = segmentations(n);
-    let mut baseline = run(&segments3(&sizings[0], &grp, &sub, &amt), &program).unwrap();
+    let mut baseline = run(&segments3(&sizings[0], &grp, &sub, &amt), &program)
+        .unwrap()
+        .into_rows();
     sort_by_group_key(&mut baseline);
     for sizes in &sizings[1..] {
-        let mut got = run(&segments3(sizes, &grp, &sub, &amt), &program).unwrap();
+        let mut got = run(&segments3(sizes, &grp, &sub, &amt), &program)
+            .unwrap()
+            .into_rows();
         sort_by_group_key(&mut got);
         assert_eq!(
             got, baseline,

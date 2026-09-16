@@ -368,7 +368,7 @@ mod tests {
         let program = compile(&select).unwrap();
         let opcodes: Vec<_> = program.opcodes().cloned().collect();
 
-        let rows = run_parallel(&[seg], &opcodes).unwrap();
+        let rows = run_parallel(&[seg], &opcodes).unwrap().into_rows();
         assert_eq!(
             rows.len(),
             1,

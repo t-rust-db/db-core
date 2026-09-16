@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.101.5] - 2026-09-16
+
+### Fixed
+
+- **Query output is column-major instead of row-major** (#436, **breaking**): `Opcode::Emit` built one `Vec<Value>` per output row, measured at 96% of a 5M-row filter's time and RSS -- pure container overhead (a `Vec` header plus a malloc'd buffer per row), not the values themselves. `Vm::run`/`take_output` and every `vm::engine` execution entry point (`run`, `run_join`, `run_join_segments`, `run_multi_join_segments`, `finalize`) now return the new `QueryOutput` (column-major, `columns()[c][r]`) instead of `Vec<Vec<Value>>`; `Opcode::Emit` moves/extends whole columns instead of allocating one `Vec` per row, and segment concatenation (`run_parallel`/`run_parallel_top_n`) is an `O(rows)` `Vec::extend` per column. `QueryOutput` implements `PartialEq<Vec<Vec<Value>>>`/`From` in both directions for callers that only need row-shaped access (`.into_rows()`). `Emit` benchmarked ~18.6x faster (71.4us -> 3.8us). `engine::QueryResult` is intentionally left row-major (shared with the row/stream engines, which never had this problem).
+
 ## [0.101.4] - 2026-09-16
 
 ### Fixed
