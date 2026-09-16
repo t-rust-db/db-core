@@ -12520,9 +12520,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "engine_stream_requests_dc81f428",
+    "file": "src/engine/stream.rs",
+    "line": 403,
+    "decision": "is_predefined(name) || self.fields.iter().any(|f| f == name)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_stream_requests_39699173",
     "file": "src/engine/stream.rs",
-    "line": 395,
+    "line": 410,
     "decision": "is_predefined(col) || self.fields.iter().any(|f| f == col)",
     "conditions": 2,
     "vectors_required": 3,
@@ -12532,7 +12542,7 @@
   {
     "id": "engine_stream_select_segments_d336fecc",
     "file": "src/engine/stream.rs",
-    "line": 430,
+    "line": 445,
     "decision": "match &requested_range {\n            Some(range) => self\n                .ring\n                .segments()\n                .filter(|s| match s.minmax_observed() {\n                    Some((lo, hi)) => lo < range.end && hi >= range.start,\n                    None => true,\n                })\n                .cloned()\n                .collect(),\n            None => self.ring.segments().cloned().collect(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12542,7 +12552,7 @@
   {
     "id": "engine_stream_select_segments_5db614c3",
     "file": "src/engine/stream.rs",
-    "line": 434,
+    "line": 449,
     "decision": "match s.minmax_observed() {\n                    Some((lo, hi)) => lo < range.end && hi >= range.start,\n                    None => true,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12552,7 +12562,7 @@
   {
     "id": "engine_stream_select_segments_cacdca9c",
     "file": "src/engine/stream.rs",
-    "line": 443,
+    "line": 458,
     "decision": "let IndexPred::DictEq { column, value } = pred",
     "conditions": 1,
     "vectors_required": 2,
@@ -12562,7 +12572,7 @@
   {
     "id": "engine_stream_select_segments_6c275be9",
     "file": "src/engine/stream.rs",
-    "line": 468,
+    "line": 483,
     "decision": "match (&requested_range, self.ring.segments().next()) {\n            (Some(range), Some(oldest)) => oldest\n                .minmax_observed()\n                .is_some_and(|(oldest_lo, _)| range.start < oldest_lo),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12572,7 +12582,7 @@
   {
     "id": "engine_stream_merge_retained_summaries_8f6287cc",
     "file": "src/engine/stream.rs",
-    "line": 512,
+    "line": 527,
     "decision": "!select.group_by.is_empty() || select.where_clause.is_some()",
     "conditions": 2,
     "vectors_required": 3,
@@ -12582,7 +12592,7 @@
   {
     "id": "engine_stream_merge_retained_summaries_1577ae23",
     "file": "src/engine/stream.rs",
-    "line": 519,
+    "line": 534,
     "decision": "summaries.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -12592,7 +12602,7 @@
   {
     "id": "engine_stream_run_compiled_e260c777",
     "file": "src/engine/stream.rs",
-    "line": 550,
+    "line": 565,
     "decision": "let Some(epilogue) = &program.epilogue",
     "conditions": 1,
     "vectors_required": 2,
@@ -12602,7 +12612,7 @@
   {
     "id": "engine_stream_type_name_fc4694f0",
     "file": "src/engine/stream.rs",
-    "line": 585,
+    "line": 600,
     "decision": "match name {\n            \"timestamp\" | \"observed_ts\" | \"severity\" => \"INTEGER\",\n            \"severity_text\" | \"facility\" | \"message\" | \"raw\" => \"TEXT\",\n            other => {\n                self.ring\n                    .segments()\n                    .find_map(|s| s.field(other))\n                    .map_or(\"TEXT\", |c| match c {\n                        OwnedColumn::Int(_) => \"INTEGER\",\n                        OwnedColumn::Float(_) => \"REAL\",\n                        OwnedColumn::Bool(_) => \"BOOLEAN\",\n                        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => \"TEXT\",\n                    })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12612,7 +12622,7 @@
   {
     "id": "engine_stream_type_name_cc86c7b7",
     "file": "src/engine/stream.rs",
-    "line": 592,
+    "line": 607,
     "decision": "match c {\n                        OwnedColumn::Int(_) => \"INTEGER\",\n                        OwnedColumn::Float(_) => \"REAL\",\n                        OwnedColumn::Bool(_) => \"BOOLEAN\",\n                        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => \"TEXT\",\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12622,7 +12632,7 @@
   {
     "id": "engine_stream_new_1fb719e4",
     "file": "src/engine/stream.rs",
-    "line": 660,
+    "line": 675,
     "decision": "let EmitMode::Threshold { op, .. } = &mode",
     "conditions": 1,
     "vectors_required": 2,
@@ -12632,7 +12642,7 @@
   {
     "id": "engine_stream_new_7d7d3711",
     "file": "src/engine/stream.rs",
-    "line": 661,
+    "line": 676,
     "decision": "!is_comparison_op(*op)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12642,7 +12652,7 @@
   {
     "id": "engine_stream_poll_fcd96cc4",
     "file": "src/engine/stream.rs",
-    "line": 716,
+    "line": 731,
     "decision": "match self.mode.clone() {\n            EmitMode::Rows => Ok(Some(StandingQueryEvent { result })),\n            EmitMode::OnChange => Ok(self.poll_on_change(result)),\n            EmitMode::Threshold { op, threshold } => {\n                Ok(self.poll_threshold(engine, op, threshold, result))\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12652,7 +12662,7 @@
   {
     "id": "engine_stream_poll_on_change_61db9430",
     "file": "src/engine/stream.rs",
-    "line": 734,
+    "line": 749,
     "decision": "!changed",
     "conditions": 1,
     "vectors_required": 2,
@@ -12662,7 +12672,7 @@
   {
     "id": "engine_stream_poll_on_change_4606dc4a",
     "file": "src/engine/stream.rs",
-    "line": 738,
+    "line": 753,
     "decision": "result.rows.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -12672,7 +12682,7 @@
   {
     "id": "engine_stream_poll_threshold_6e508dc2",
     "file": "src/engine/stream.rs",
-    "line": 760,
+    "line": 775,
     "decision": "!holds",
     "conditions": 1,
     "vectors_required": 2,
@@ -12682,7 +12692,7 @@
   {
     "id": "engine_stream_poll_threshold_531505eb",
     "file": "src/engine/stream.rs",
-    "line": 769,
+    "line": 784,
     "decision": "held_ns >= for_ns && !self.fired_for_current_hold",
     "conditions": 2,
     "vectors_required": 3,
@@ -12692,7 +12702,7 @@
   {
     "id": "engine_stream_latest_scalar_37f34c29",
     "file": "src/engine/stream.rs",
-    "line": 795,
+    "line": 810,
     "decision": "match cell {\n        Cell::Null => Value::Null,\n        Cell::Int(n) => Value::Int(*n),\n        Cell::Real(x) => Value::Float(*x),\n        Cell::Bool(b) => Value::Bool(*b),\n        Cell::Text(s) => Value::Str(s.clone().into()),\n        Cell::Blob(_) => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12702,7 +12712,7 @@
   {
     "id": "engine_stream_in_subquery_38ffb216",
     "file": "src/engine/stream.rs",
-    "line": 818,
+    "line": 833,
     "decision": "match &select.where_clause {\n        Some(Expr {\n            kind: ExprKind::InSubquery { subquery, .. },\n            ..\n        }) => Some(subquery),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12712,7 +12722,7 @@
   {
     "id": "engine_stream_is_window_column_21d3bda9",
     "file": "src/engine/stream.rs",
-    "line": 828,
+    "line": 843,
     "decision": "match column {\n        ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { tail, .. },\n                    ..\n                },\n            ..\n        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12722,7 +12732,7 @@
   {
     "id": "engine_stream_plan_err_bbf17c28",
     "file": "src/engine/stream.rs",
-    "line": 842,
+    "line": 857,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12732,7 +12742,7 @@
   {
     "id": "engine_stream_stream_err_1678805e",
     "file": "src/engine/stream.rs",
-    "line": 852,
+    "line": 867,
     "decision": "match e {\n        StreamPlanError::Rejected { .. } => EngineError::new(ErrorKind::Unsupported, e),\n        StreamPlanError::InvalidLiteral { .. } => EngineError::new(ErrorKind::Compile, e),\n        StreamPlanError::Batch(inner) => plan_err(inner),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12742,7 +12752,7 @@
   {
     "id": "engine_stream_resolve_scope_0dc91c0c",
     "file": "src/engine/stream.rs",
-    "line": 870,
+    "line": 885,
     "decision": "match since.unit {\n        ScopeUnit::Seconds => Scope::Time(Duration::from_secs(since.amount)),\n        ScopeUnit::Minutes => Scope::Time(Duration::from_secs(since.amount.saturating_mul(60))),\n        ScopeUnit::Hours => Scope::Time(Duration::from_secs(since.amount.saturating_mul(3_600))),\n        ScopeUnit::Days => Scope::Time(Duration::from_secs(since.amount.saturating_mul(86_400))),\n        ScopeUnit::Lines => Scope::Lines(since.amount),\n        ScopeUnit::Bytes => Scope::Bytes(since.amount),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12752,7 +12762,7 @@
   {
     "id": "engine_stream_effective_time_range_1af8cdb6",
     "file": "src/engine/stream.rs",
-    "line": 887,
+    "line": 902,
     "decision": "let Scope::Time(d) = scope",
     "conditions": 1,
     "vectors_required": 2,
@@ -12762,7 +12772,7 @@
   {
     "id": "engine_stream_effective_time_range_57bf47a7",
     "file": "src/engine/stream.rs",
-    "line": 893,
+    "line": 908,
     "decision": "let IndexPred::TimeRange { lo: plo, hi: phi } = pred",
     "conditions": 1,
     "vectors_required": 2,
@@ -12772,7 +12782,7 @@
   {
     "id": "engine_stream_run_range_vector_epilogue_bcac83c3",
     "file": "src/engine/stream.rs",
-    "line": 918,
+    "line": 933,
     "decision": "match r.first() {\n                Some(Value::Int(n)) => *n,\n                _ => 0,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12782,7 +12792,7 @@
   {
     "id": "engine_stream_range_vector_label_d12f9f48",
     "file": "src/engine/stream.rs",
-    "line": 939,
+    "line": 954,
     "decision": "match select.columns.first() {\n        Some(ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { name, args, .. },\n                    ..\n                },\n            ..\n        }) => {\n            let arg = match args {\n                FunctionArgs::Star => \"*\".to_string(),\n                FunctionArgs::List(list) => list\n                    .iter()\n                    .filter_map(|e| match &e.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    })\n                    .next()\n                    .unwrap_or_default(),\n            };\n            format!(\"{}({arg})\", name.to_ascii_uppercase())\n        }\n        _ => \"value\".to_string(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12792,7 +12802,7 @@
   {
     "id": "engine_stream_range_vector_label_6b4abdc3",
     "file": "src/engine/stream.rs",
-    "line": 948,
+    "line": 963,
     "decision": "match args {\n                FunctionArgs::Star => \"*\".to_string(),\n                FunctionArgs::List(list) => list\n                    .iter()\n                    .filter_map(|e| match &e.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    })\n                    .next()\n                    .unwrap_or_default(),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12802,7 +12812,7 @@
   {
     "id": "engine_stream_range_vector_label_74294c50",
     "file": "src/engine/stream.rs",
-    "line": 952,
+    "line": 967,
     "decision": "match &e.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12812,7 +12822,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_7e0ed34f",
     "file": "src/engine/stream.rs",
-    "line": 989,
+    "line": 1004,
     "decision": "tail\n        .as_deref()\n        .is_some_and(|t| t.filter.is_some() || t.over.is_some())",
     "conditions": 1,
     "vectors_required": 2,
@@ -12822,7 +12832,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_14643cbb",
     "file": "src/engine/stream.rs",
-    "line": 996,
+    "line": 1011,
     "decision": "matches!(agg, AggFunc::Avg)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12832,7 +12842,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_b27ce420",
     "file": "src/engine/stream.rs",
-    "line": 999,
+    "line": 1014,
     "decision": "match args {\n        FunctionArgs::Star if matches!(agg, AggFunc::Count) => Some((agg, None)),\n        FunctionArgs::Star => None,\n        FunctionArgs::List(list) => match list.as_slice() {\n            [Expr {\n                kind: ExprKind::Column {\n                    table: None, name, ..\n                },\n                ..\n            }] => Some((agg, Some(name.clone()))),\n            _ => None,\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12842,7 +12852,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_f9ab63a4",
     "file": "src/engine/stream.rs",
-    "line": 1000,
+    "line": 1015,
     "decision": "matches!(agg, AggFunc::Count)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12852,7 +12862,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_addc219d",
     "file": "src/engine/stream.rs",
-    "line": 1002,
+    "line": 1017,
     "decision": "match list.as_slice() {\n            [Expr {\n                kind: ExprKind::Column {\n                    table: None, name, ..\n                },\n                ..\n            }] => Some((agg, Some(name.clone()))),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12862,7 +12872,7 @@
   {
     "id": "engine_stream_fold_summaries_into_30d16295",
     "file": "src/engine/stream.rs",
-    "line": 1035,
+    "line": 1050,
     "decision": "match agg {\n        AggFunc::Count => {\n            let live_n = match live {\n                Some(Value::Int(n)) => n,\n                _ => 0,\n            };\n            let total = summaries\n                .iter()\n                .filter_map(column_summary)\n                .map(|c| c.count)\n                .fold(live_n, |acc, c| {\n                    acc.saturating_add(i64::try_from(c).unwrap_or(i64::MAX))\n                });\n            Value::Int(total)\n        }\n        AggFunc::Sum => {\n            let live_v = live.and_then(|v| v.as_f64()).unwrap_or(0.0);\n            let total = summaries\n                .iter()\n                .filter_map(column_summary)\n                .fold(live_v, |acc, c| acc + c.sum);\n            Value::Float(total)\n        }\n        AggFunc::Min => summaries\n            .iter()\n            .filter_map(column_summary)\n            .filter(|c| c.count > 0)\n            .map(|c| c.min)\n            .fold(live.and_then(|v| v.as_f64()), |acc, v| {\n                Some(acc.map_or(v, |a| a.min(v)))\n            })\n            .map_or(Value::Null, Value::Float),\n        AggFunc::Max => summaries\n            .iter()\n            .filter_map(column_summary)\n            .filter(|c| c.count > 0)\n            .map(|c| c.max)\n            .fold(live.and_then(|v| v.as_f64()), |acc, v| {\n                Some(acc.map_or(v, |a| a.max(v)))\n            })\n            .map_or(Value::Null, Value::Float),\n        // `single_ungrouped_aggregate` never returns `Avg` (its own\n        // finalized sum/count can't be re-merged, see this fn's doc\n        // comment) -- a non-panicking fallback here costs nothing and\n        // keeps this helper safe to call with any `AggFunc` value.\n        AggFunc::Avg => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12872,7 +12882,7 @@
   {
     "id": "engine_stream_fold_summaries_into_3097eb02",
     "file": "src/engine/stream.rs",
-    "line": 1037,
+    "line": 1052,
     "decision": "match live {\n                Some(Value::Int(n)) => n,\n                _ => 0,\n            }",
     "conditions": 0,
     "vectors_required": 0,

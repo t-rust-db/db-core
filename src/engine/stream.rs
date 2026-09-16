@@ -391,6 +391,21 @@ impl StreamEngine {
         names
             .iter()
             .map(|name| {
+                // A name that's itself a known field -- e.g. a JSONL
+                // nested object flattened to a dot path like
+                // `req.method` (storage::stream::jsonl) -- is not a
+                // qualified `table.column` reference even though it
+                // contains a literal dot, so it must be checked before
+                // `split_qualified` strips what it assumes is a table
+                // prefix. Only fall back to stripping for a genuinely
+                // qualified name (the cross-mode join case `log.severity`
+                // documented on `column_requests` above).
+                if is_predefined(name) || self.fields.iter().any(|f| f == name) {
+                    return Ok(ColumnRequest {
+                        key: name.clone(),
+                        name: name.clone(),
+                    });
+                }
                 let (_, col) = planner::split_qualified(name);
                 if is_predefined(col) || self.fields.iter().any(|f| f == col) {
                     Ok(ColumnRequest {

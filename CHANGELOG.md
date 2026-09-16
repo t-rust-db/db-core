@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.101.1] - 2026-09-16
+
+### Fixed
+
+- **`SELECT *` no longer fails on flattened JSONL nested-object fields** (#437): `StreamEngine::requests()` treated a flattened dot-path field name (e.g. `req.method`, one level of nesting per `storage::stream::jsonl`) as a qualified `table.column` reference, stripping the `req` prefix and failing to find a field literally named `method`. The literal full name is now checked before falling back to `split_qualified`'s table-prefix stripping, so both `SELECT *` and an explicit `SELECT req.method` resolve correctly; the genuinely-qualified case (`log.severity`, cross-mode joins, #317) is unaffected.
+
 ## [0.101.0] - 2026-09-15
 
 ### Added
