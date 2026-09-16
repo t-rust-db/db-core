@@ -560,8 +560,7 @@ impl StreamEngine {
         let columns = self.requests(&program.body.columns_to_load())?;
         let (segments, mut scope_report) = self.select_segments(&program.prune, &columns);
         let rows = crate::vm::engine::run(&segments, &program.body)
-            .map_err(|e| EngineError::new(ErrorKind::Execute, e))?
-            .into_rows();
+            .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
 
         if let Some(epilogue) = &program.epilogue {
             let (out_columns, out_rows) = run_range_vector_epilogue(select, epilogue, rows)?;

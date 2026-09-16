@@ -4,11 +4,11 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
-## [0.101.5] - 2026-09-16
+## [0.101.6] - 2026-09-16
 
-### Fixed
+### Changed
 
-- **Query output is column-major instead of row-major** (#436, **breaking**): `Opcode::Emit` built one `Vec<Value>` per output row, measured at 96% of a 5M-row filter's time and RSS -- pure container overhead (a `Vec` header plus a malloc'd buffer per row), not the values themselves. `Vm::run`/`take_output` and every `vm::engine` execution entry point (`run`, `run_join`, `run_join_segments`, `run_multi_join_segments`, `finalize`) now return the new `QueryOutput` (column-major, `columns()[c][r]`) instead of `Vec<Vec<Value>>`; `Opcode::Emit` moves/extends whole columns instead of allocating one `Vec` per row, and segment concatenation (`run_parallel`/`run_parallel_top_n`) is an `O(rows)` `Vec::extend` per column. `QueryOutput` implements `PartialEq<Vec<Vec<Value>>>`/`From` in both directions for callers that only need row-shaped access (`.into_rows()`). `Emit` benchmarked ~18.6x faster (71.4us -> 3.8us). `engine::QueryResult` is intentionally left row-major (shared with the row/stream engines, which never had this problem).
+- **Reverted #436's column-major query output** (v0.101.5): it regressed the query it targeted. On `benchmark/parity/column-rs` at 10M rows, `filter_50pct` (5M rows out) went from 651 ms / 1042 MB to 813 ms / 2350 MB; pre-sizing the merge recovered only ~30 ms and ~350 MB of that. Isolating by output column count shows the cost scales with *columns* (~313 MB and +0.11 s per column, against ~124 MB and +0.06 s row-major), not with the merge transient -- `run_morsels` materializes every segment's output before merging, so peak is O(result) either way and the columnar layout makes each of those allocations large and contiguous. `scan` (1K rows out) was 14% faster and 6 MB smaller, so the premise holds; a correct implementation needs a streaming merge rather than an accumulating one. Reopened as #436.
 
 ## [0.101.4] - 2026-09-16
 

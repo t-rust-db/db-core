@@ -660,155 +660,6 @@ impl Instruction {
     }
 }
 
-/// A query's result, stored column-major (#436): `columns()[c][r]` is
-/// output column `c`'s value at row `r`. Replaces the row-major `Vec<Vec<Value>>`
-/// every batch-engine execution entry point (`Opcode::Emit`, [`run_parallel`],
-/// `vm::engine::run`/`run_join`/`finalize`) used to build and pass around --
-/// materializing one `Vec` per row was measured at 96% of a 5M-row filter's
-/// time and RSS, purely container overhead (a `Vec` header plus a malloc'd
-/// buffer per row, for as little as one `i64`/`f64` of payload). `Opcode::Emit`
-/// now moves or extends whole columns; concatenating segments
-/// ([`QueryOutput::extend`]) is an `O(rows)` `Vec::extend` per column, not an
-/// allocation per row.
-///
-/// Row-shaped consumers (a CLI printer, `ORDER BY`'s top-N heap, `GROUP BY`'s
-/// cross-segment merge) still get row-major data where they need it, via
-/// [`QueryOutput::into_rows`] -- but only over however many rows actually
-/// reach that stage (already `LIMIT`ed, or already collapsed to a handful of
-/// groups), not the full survivor count a plain filter/projection produces.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct QueryOutput {
-    columns: Vec<Vec<Value>>,
-}
-
-impl QueryOutput {
-    /// Wraps already column-major data (`columns[c][r]`).
-    pub fn new(columns: Vec<Vec<Value>>) -> Self {
-        Self { columns }
-    }
-
-    /// Transposes row-major data into columns, inferring the column count
-    /// from the first row (0 for an empty `rows`).
-    pub fn from_rows(rows: Vec<Vec<Value>>) -> Self {
-        let num_columns = rows.first().map_or(0, Vec::len);
-        let mut columns: Vec<Vec<Value>> = (0..num_columns)
-            .map(|_| Vec::with_capacity(rows.len()))
-            .collect();
-        for row in rows {
-            for (c, value) in row.into_iter().enumerate() {
-                if let Some(column) = columns.get_mut(c) {
-                    column.push(value);
-                }
-            }
-        }
-        Self { columns }
-    }
-
-    /// Number of output columns.
-    #[must_use]
-    pub fn num_columns(&self) -> usize {
-        self.columns.len()
-    }
-
-    /// Number of rows -- every column's length (they're always equal).
-    #[must_use]
-    pub fn num_rows(&self) -> usize {
-        self.columns.first().map_or(0, Vec::len)
-    }
-
-    /// True when there are no rows.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.num_rows() == 0
-    }
-
-    /// Alias for [`Self::num_rows`] -- callers migrating from the old
-    /// row-major `Vec<Vec<Value>>` (#436) that only ever asked its length.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.num_rows()
-    }
-
-    /// The output, column-major.
-    #[must_use]
-    pub fn columns(&self) -> &[Vec<Value>] {
-        &self.columns
-    }
-
-    /// The output, column-major, moved out.
-    #[must_use]
-    pub fn into_columns(self) -> Vec<Vec<Value>> {
-        self.columns
-    }
-
-    /// Transposes to row-major -- one `Vec<Value>` allocation per row.
-    /// Only meant for however many rows actually need to be row-shaped
-    /// (see the type's own doc comment), not a full survivor set.
-    #[must_use]
-    pub fn into_rows(self) -> Vec<Vec<Value>> {
-        let num_rows = self.num_rows();
-        if self.columns.is_empty() {
-            return Vec::new();
-        }
-        let mut column_iters: Vec<std::vec::IntoIter<Value>> = self
-            .columns
-            .into_iter()
-            .map(IntoIterator::into_iter)
-            .collect();
-        (0..num_rows)
-            .map(|_| {
-                column_iters
-                    .iter_mut()
-                    .map(|it| it.next().unwrap_or(Value::Null))
-                    .collect()
-            })
-            .collect()
-    }
-
-    /// Appends `other`'s rows onto this output's columns, column-wise
-    /// (`Vec::extend`, no per-row allocation). The first call onto an
-    /// empty (column-count-0) output just adopts `other`'s columns.
-    pub fn extend(&mut self, other: QueryOutput) {
-        if self.columns.is_empty() {
-            self.columns = other.columns;
-            return;
-        }
-        for (into, from) in self.columns.iter_mut().zip(other.columns) {
-            into.extend(from);
-        }
-    }
-
-    /// Truncates every column to at most `n` rows.
-    pub fn truncate(&mut self, n: usize) {
-        for column in &mut self.columns {
-            column.truncate(n);
-        }
-    }
-}
-
-/// Row-shape equality against the pre-#436 row-major representation --
-/// lets a caller (or a test asserting an expected result) compare a
-/// [`QueryOutput`] to a `vec![vec![...], ...]` literal directly, without
-/// spelling out a transpose. Transposes `self` (clones), so this is for
-/// convenience/tests, not a hot path.
-impl PartialEq<Vec<Vec<Value>>> for QueryOutput {
-    fn eq(&self, other: &Vec<Vec<Value>>) -> bool {
-        self.clone().into_rows() == *other
-    }
-}
-
-impl From<Vec<Vec<Value>>> for QueryOutput {
-    fn from(rows: Vec<Vec<Value>>) -> Self {
-        Self::from_rows(rows)
-    }
-}
-
-impl From<QueryOutput> for Vec<Vec<Value>> {
-    fn from(output: QueryOutput) -> Self {
-        output.into_rows()
-    }
-}
-
 /// A linear program of [`Instruction`]s, mirroring sqlite-rs's
 /// `vdbe::program::Program`. Everything the executor needs is *in* the
 /// instruction stream: the columns to load are the [`Opcode::LoadColumn`]
@@ -998,18 +849,17 @@ fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec
 ///
 /// `GroupReduce`/`Reduce` results are per-segment only — merging partial
 /// aggregates across segments is not performed here.
-pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<QueryOutput> {
-    let per_segment: Vec<Result<QueryOutput>> = run_morsels(segments, |segment| {
+pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
+    let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments, |segment| {
         let batch = segment.load()?;
         let mut vm = Vm::new();
         vm.execute(&batch, program)?;
         Ok(std::mem::take(&mut vm.output))
     });
 
-    // #436: column-wise `Vec::extend` per segment, not a per-row rebuild.
-    let mut all = QueryOutput::default();
-    for output in per_segment {
-        all.extend(output?);
+    let mut all = Vec::new();
+    for rows in per_segment {
+        all.extend(rows?);
     }
     Ok(all)
 }
@@ -1130,28 +980,19 @@ pub fn run_parallel_top_n<S: Segment>(
     segments: &[S],
     program: &[Opcode],
     spec: &TopN,
-) -> Result<QueryOutput> {
-    // #436: `top_n_reduce`'s heap is inherently row-shaped (each candidate
-    // is compared by one `ORDER BY` column against the current worst kept
-    // row), but it only ever holds `spec.limit` rows at a time -- row-major
-    // here is not the container-overhead problem `Opcode::Emit` had, since
-    // the row count is bounded by the query's own `LIMIT`, not by how many
-    // rows survived the scan.
+) -> Result<Vec<Vec<Value>>> {
     let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments, |segment| {
         let batch = segment.load()?;
         let mut vm = Vm::new();
         vm.execute(&batch, program)?;
-        Ok(top_n_reduce(
-            std::mem::take(&mut vm.output).into_rows(),
-            spec,
-        ))
+        Ok(top_n_reduce(std::mem::take(&mut vm.output), spec))
     });
 
     let mut all = Vec::new();
     for rows in per_segment {
         all.extend(rows?);
     }
-    Ok(QueryOutput::from_rows(top_n_reduce(all, spec)))
+    Ok(top_n_reduce(all, spec))
 }
 
 /// A pathological/buggy compiled program can't run more `Vm::step` calls
@@ -1631,7 +1472,7 @@ pub struct Vm {
     /// `Eq`/`Ne` against a `Dict` column) read it directly; every other
     /// opcode reads through [`Vm::reg`], which materializes on demand.
     typed_registers: HashMap<usize, Arc<Column>>,
-    output: QueryOutput,
+    output: Vec<Vec<Value>>,
     join_tables: JoinTables,
     /// A pending `Filter` result not yet applied to `registers`. See
     /// [`Selection`].
@@ -1934,18 +1775,22 @@ impl Vm {
     /// for callers driving [`Self::execute`] batch-by-batch themselves
     /// (e.g. a bounded scan that stops once enough rows are collected,
     /// #108) rather than via [`Self::run`]/[`run_parallel`].
-    pub fn take_output(&mut self) -> QueryOutput {
+    pub fn take_output(&mut self) -> Vec<Vec<Value>> {
         std::mem::take(&mut self.output)
     }
 
     /// Drive `program` across every batch `source` yields, honoring
     /// [`Opcode::Scan`]/[`Opcode::NextSegment`]/[`Opcode::Halt`] control
     /// flow, and return the rows collected by [`Opcode::Emit`].
-    pub fn run<T: Source>(&mut self, source: &mut T, program: &[Opcode]) -> Result<QueryOutput> {
-        self.output = QueryOutput::default();
+    pub fn run<T: Source>(
+        &mut self,
+        source: &mut T,
+        program: &[Opcode],
+    ) -> Result<Vec<Vec<Value>>> {
+        self.output.clear();
         let mut batch = match source.next_batch() {
             Some(b) => b,
-            None => return Ok(QueryOutput::default()),
+            None => return Ok(Vec::new()),
         };
         self.selection = None;
         let mut pc = 0usize;
@@ -2678,35 +2523,41 @@ impl Vm {
                         return Err(VmError::RegisterLengthMismatch { opcode });
                     }
                 }
-                // #436: build columns directly -- no per-row `Vec`, no
-                // row-major transpose. `Vm::output` is column-major
-                // (`QueryOutput`), so each of `cols` becomes exactly one
-                // output column, moved or extended in one shot instead of
-                // scattering its values into one `Vec` per row.
-                let mut columns: Vec<Vec<Value>> = Vec::with_capacity(cols.len());
+                let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());
+                let mut rows: Vec<Vec<Value>> = (0..num_rows)
+                    .map(|_| Vec::with_capacity(cols.len()))
+                    .collect();
                 for col in cols {
-                    let column: Vec<Value> = if let Some(sel) = &selection {
+                    if let Some(sel) = &selection {
                         // A selected subset can't be moved out of the
                         // `Arc` without leaving the unselected cells
                         // behind, so this always clones.
-                        sel.indices
-                            .iter()
-                            .map(|&idx| col[idx as usize].clone())
-                            .collect()
-                    } else {
-                        // #264: registers built fresh by this step (Map,
-                        // Reduce, ...) hold the only strong reference, so
-                        // `try_unwrap` moves the whole column out for
-                        // free; a register `Arc::clone`d straight from
-                        // the batch (a bare `LoadColumn` with no
-                        // transform, or a repeated register above) is
-                        // still shared with the batch/another emitted
-                        // column, so it's cloned instead.
-                        Arc::try_unwrap(col).unwrap_or_else(|shared| (*shared).clone())
-                    };
-                    columns.push(column);
+                        for (row, &idx) in sel.indices.iter().enumerate() {
+                            rows[row].push(col[idx as usize].clone());
+                        }
+                        continue;
+                    }
+                    // #264: registers built fresh by this step (Map,
+                    // Reduce, ...) hold the only strong reference, so
+                    // `try_unwrap` moves their cells out for free; a
+                    // register `Arc::clone`d straight from the batch (a
+                    // bare `LoadColumn` with no transform, or a repeated
+                    // register above) is still shared with the batch/
+                    // another emitted column, so its cells are cloned.
+                    match Arc::try_unwrap(col) {
+                        Ok(owned) => {
+                            for (row, value) in owned.into_iter().enumerate() {
+                                rows[row].push(value);
+                            }
+                        }
+                        Err(shared) => {
+                            for (row, value) in shared.iter().enumerate() {
+                                rows[row].push(value.clone());
+                            }
+                        }
+                    }
                 }
-                self.output.extend(QueryOutput::new(columns));
+                self.output.extend(rows);
             }
             // Meaningful only as loop markers interpreted by `run` --
             // and `Combine`/`Sort`/`Limit` are the cross-segment
@@ -3205,72 +3056,6 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn query_output_from_rows_round_trips_through_into_rows() {
-        let rows = vec![
-            vec![Value::Int(1), Value::Str("a".into())],
-            vec![Value::Int(2), Value::Str("b".into())],
-        ];
-        let output = QueryOutput::from_rows(rows.clone());
-        assert_eq!(output.num_columns(), 2);
-        assert_eq!(output.num_rows(), 2);
-        assert_eq!(output.clone().into_rows(), rows);
-        // #436: `PartialEq<Vec<Vec<Value>>>` lets a `QueryOutput` compare
-        // directly against a row-major literal, no explicit `into_rows()`.
-        assert_eq!(output, rows);
-    }
-
-    #[test]
-    fn query_output_from_rows_of_empty_vec_has_no_columns() {
-        let output = QueryOutput::from_rows(Vec::new());
-        assert_eq!(output.num_columns(), 0);
-        assert_eq!(output.num_rows(), 0);
-        assert!(output.is_empty());
-    }
-
-    #[test]
-    fn query_output_extend_concatenates_column_wise() {
-        let mut a = QueryOutput::new(vec![vec![Value::Int(1)], vec![Value::Int(10)]]);
-        let b = QueryOutput::new(vec![vec![Value::Int(2)], vec![Value::Int(20)]]);
-        a.extend(b);
-        assert_eq!(a.num_rows(), 2);
-        assert_eq!(
-            a,
-            vec![
-                vec![Value::Int(1), Value::Int(10)],
-                vec![Value::Int(2), Value::Int(20)],
-            ]
-        );
-    }
-
-    #[test]
-    fn query_output_extend_onto_a_default_output_adopts_the_other_columns() {
-        // The shape `Opcode::Emit` and `run_parallel` rely on: the very
-        // first `extend` call onto a brand new (zero-column) `QueryOutput`
-        // must adopt the incoming columns, not try to zip zero columns
-        // against N and silently drop everything.
-        let mut acc = QueryOutput::default();
-        acc.extend(QueryOutput::new(vec![vec![Value::Int(1), Value::Int(2)]]));
-        assert_eq!(acc, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
-    }
-
-    #[test]
-    fn query_output_truncate_shortens_every_column_equally() {
-        let mut output = QueryOutput::new(vec![
-            vec![Value::Int(1), Value::Int(2), Value::Int(3)],
-            vec![Value::Int(10), Value::Int(20), Value::Int(30)],
-        ]);
-        output.truncate(2);
-        assert_eq!(output.num_rows(), 2);
-        assert_eq!(
-            output,
-            vec![
-                vec![Value::Int(1), Value::Int(10)],
-                vec![Value::Int(2), Value::Int(20)],
-            ]
-        );
-    }
 
     #[test]
     fn agg_func_from_name_valid_case_insensitive() {
@@ -5555,7 +5340,7 @@ mod tests {
                 registers: vec![0].into(),
             },
         ];
-        let rows = run_parallel(&segments, &program).unwrap().into_rows();
+        let rows = run_parallel(&segments, &program).unwrap();
         let ids: Vec<i64> = rows
             .iter()
             .map(|r| match &r[0] {
