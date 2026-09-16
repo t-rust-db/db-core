@@ -24,7 +24,7 @@ use crate::parser::ast::{Expr, ExprKind, ResultColumn, Select};
 use crate::parser::ParseError;
 use crate::storage::column::parquet::footer::PhysicalType;
 use crate::storage::{MmapRegion, ParquetFile, PosixVfs, Vfs, VfsFile};
-use crate::vm::batch::{Batch, Program, Segment, Value, VmError};
+use crate::vm::batch::{Batch, Bitmap, Column, Program, Segment, Value, VmError};
 use crate::vm::engine;
 
 use super::{
@@ -159,6 +159,15 @@ struct RowGroupSegment<'a, 'm> {
     columns: Vec<Leaf>,
 }
 
+/// One column's decoded shape out of a row group: either every row's
+/// [`Value`] (the plain path) or a [`Column::Dict`] (#457's dictionary
+/// path), so `load` can share one `map_err` and one `with_*` dispatch
+/// across every [`PhysicalType`] arm instead of duplicating both per arm.
+enum Decoded {
+    Values(Vec<Value>),
+    Dict(Column),
+}
+
 impl Segment for RowGroupSegment<'_, '_> {
     fn load(&self) -> Result<Arc<Batch>, VmError> {
         let rg = self
@@ -180,44 +189,87 @@ impl Segment for RowGroupSegment<'_, '_> {
         })?;
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in &self.columns {
-            let values = match physical_type {
+            let decoded = match physical_type {
                 PhysicalType::Int64 => rg.read_int64_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, Value::Int))
-                        .collect()
+                    Decoded::Values(
+                        col.into_iter()
+                            .map(|v| v.map_or(Value::Null, Value::Int))
+                            .collect(),
+                    )
                 }),
                 PhysicalType::Int32 => rg.read_int32_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, |i| Value::Int(i64::from(i))))
-                        .collect()
+                    Decoded::Values(
+                        col.into_iter()
+                            .map(|v| v.map_or(Value::Null, |i| Value::Int(i64::from(i))))
+                            .collect(),
+                    )
                 }),
                 PhysicalType::Double => rg.read_double_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, Value::Float))
-                        .collect()
+                    Decoded::Values(
+                        col.into_iter()
+                            .map(|v| v.map_or(Value::Null, Value::Float))
+                            .collect(),
+                    )
                 }),
                 PhysicalType::Float => rg.read_float_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, |f| Value::Float(f64::from(f))))
-                        .collect()
+                    Decoded::Values(
+                        col.into_iter()
+                            .map(|v| v.map_or(Value::Null, |f| Value::Float(f64::from(f))))
+                            .collect(),
+                    )
                 }),
                 PhysicalType::Boolean => rg.read_boolean_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, Value::Bool))
-                        .collect()
+                    Decoded::Values(
+                        col.into_iter()
+                            .map(|v| v.map_or(Value::Null, Value::Bool))
+                            .collect(),
+                    )
                 }),
-                _ => rg.read_string_column(*index).map(|col| {
-                    col.into_iter()
-                        .map(|v| v.map_or(Value::Null, |s| Value::Str(s.into())))
-                        .collect()
-                }),
+                // #457: a `PLAIN_DICTIONARY`-encoded string column
+                // materializes as `Column::Dict` (one dict entry per
+                // distinct value, one `u32` code per row) instead of
+                // decoding every row to its own owned `String` -- the
+                // dictionary case column-rs's `GroupReduce`/`Map` dict fast
+                // paths were already built to consume. A column with no
+                // dictionary page, or one that falls back to `PLAIN`
+                // partway through (`Ok(None)`), decodes the plain way
+                // unchanged.
+                _ => rg
+                    .read_string_column_dictionary_indices(*index)
+                    .and_then(|maybe_dict| match maybe_dict {
+                        Some((dict, codes)) => Ok(Decoded::Dict(dict_column(dict, codes))),
+                        None => rg.read_string_column(*index).map(|col| {
+                            Decoded::Values(
+                                col.into_iter()
+                                    .map(|v| v.map_or(Value::Null, |s| Value::Str(s.into())))
+                                    .collect(),
+                            )
+                        }),
+                    }),
             }
             .map_err(|e| VmError::SegmentLoad {
                 reason: format!("row group {}: column `{name}`: {e}", self.row_group_index),
             })?;
-            batch = batch.with_column(name.clone(), values);
+            batch = match decoded {
+                Decoded::Values(values) => batch.with_column(name.clone(), values),
+                Decoded::Dict(column) => batch.with_typed_column(name.clone(), column),
+            };
         }
         Ok(Arc::new(batch))
+    }
+}
+
+/// Converts a Parquet dictionary chunk's `(dict, codes)` (`codes[i]` is
+/// `None` for a NULL row) into the VM's [`Column::Dict`] representation,
+/// which splits nullability out into a [`Bitmap`] and defaults a NULL row's
+/// index to `0` rather than carrying an `Option` per row (#457).
+fn dict_column(dict: Vec<String>, codes: Vec<Option<u32>>) -> Column {
+    let valid = Bitmap::from_bools(codes.iter().map(Option::is_some));
+    let indices = codes.iter().map(|c| c.unwrap_or(0)).collect();
+    Column::Dict {
+        dict: dict.into_iter().map(Into::into).collect(),
+        indices,
+        valid,
     }
 }
 
@@ -419,7 +471,7 @@ impl Engine for BatchEngine {
 
 #[cfg(test)]
 mod tests {
-    use super::{plan_err, ErrorKind, PlanError};
+    use super::{dict_column, plan_err, Column, ErrorKind, PlanError};
 
     #[test]
     fn plan_err_maps_internal_to_a_planner_invariant_execute_error() {
@@ -432,5 +484,47 @@ mod tests {
     fn plan_err_maps_every_other_variant_to_a_compile_error() {
         let e = plan_err(PlanError::UnknownColumn("missing".into()));
         assert_eq!(e.kind, ErrorKind::Compile);
+    }
+
+    #[test]
+    fn dict_column_carries_codes_through_unchanged() {
+        let dict = vec!["east".to_string(), "west".to_string()];
+        let column = dict_column(dict, vec![Some(0), Some(1), Some(0)]);
+        match column {
+            Column::Dict {
+                dict,
+                indices,
+                valid,
+            } => {
+                assert_eq!(
+                    dict.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
+                    ["east", "west"]
+                );
+                assert_eq!(indices, vec![0, 1, 0]);
+                assert!(valid.all_valid());
+            }
+            other => panic!("expected Column::Dict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dict_column_defaults_a_null_rows_code_to_zero_but_marks_it_invalid() {
+        // #457 acceptance criterion: NULL codes (`None` in the Parquet
+        // reader's indices vector) must not read back as a spurious
+        // dictionary entry -- the validity bitmap, not the defaulted `0`
+        // index, is what marks the row NULL.
+        let dict = vec!["east".to_string()];
+        let column = dict_column(dict, vec![Some(0), None, Some(0)]);
+        match &column {
+            Column::Dict { indices, valid, .. } => {
+                assert_eq!(*indices, vec![0, 0, 0]);
+                assert!(valid.get(0));
+                assert!(!valid.get(1));
+                assert!(valid.get(2));
+            }
+            other => panic!("expected Column::Dict, got {other:?}"),
+        }
+        assert!(column.is_null(1));
+        assert!(!column.is_null(0));
     }
 }
