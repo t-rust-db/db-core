@@ -321,6 +321,7 @@ pub fn run_query(
 
     let rows = run_join_segments(segments, source, &plan, &resolver)
         .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
+    let rows = rows.into_rows();
 
     Ok(QueryResult {
         columns: planner::output_column_names(&select),
@@ -396,6 +397,7 @@ fn run_multi_query(
 
     let rows = crate::vm::engine::run_multi_join_segments(segments, sources, &plan, &resolver)
         .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
+    let rows = rows.into_rows();
 
     Ok(QueryResult {
         columns: planner::output_column_names(&select),
@@ -664,6 +666,7 @@ pub fn run_stream_stream_query(
 
     let rows = run_join_segments(left_segments, source, &plan, &resolver)
         .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
+    let rows = rows.into_rows();
 
     Ok(QueryResult {
         columns: planner::output_column_names(&normalized),
