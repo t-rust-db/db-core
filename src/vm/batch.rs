@@ -1148,26 +1148,34 @@ impl Eq for GroupKey {}
 impl Hash for GroupKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         for value in &self.0 {
-            match value {
-                Value::Int(v) => {
-                    0u8.hash(state);
-                    v.hash(state);
-                }
-                Value::Float(v) => {
-                    1u8.hash(state);
-                    v.to_bits().hash(state);
-                }
-                Value::Bool(v) => {
-                    2u8.hash(state);
-                    v.hash(state);
-                }
-                Value::Str(v) => {
-                    3u8.hash(state);
-                    v.hash(state);
-                }
-                Value::Null => 4u8.hash(state),
-            }
+            hash_group_value(value, state);
         }
+    }
+}
+
+/// Variant-tagged hash for a single [`Value`], shared by [`GroupKey`]'s
+/// `Hash` impl and `Opcode::GroupReduce`'s probe-before-insert hot loop
+/// (#439) -- both need the exact same scheme so a probe hash always
+/// matches the hash the group's key was originally inserted under.
+fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
+    match value {
+        Value::Int(v) => {
+            0u8.hash(state);
+            v.hash(state);
+        }
+        Value::Float(v) => {
+            1u8.hash(state);
+            v.to_bits().hash(state);
+        }
+        Value::Bool(v) => {
+            2u8.hash(state);
+            v.hash(state);
+        }
+        Value::Str(v) => {
+            3u8.hash(state);
+            v.hash(state);
+        }
+        Value::Null => 4u8.hash(state),
     }
 }
 
@@ -1780,16 +1788,42 @@ impl Vm {
                         .map_or(row, |sel| sel.indices[row] as usize)
                 };
 
-                let mut group_index: HashMap<GroupKey, usize> = HashMap::new();
+                // #439: probe by hash first, on a borrowed row view, and
+                // only clone+allocate a `Vec<Value>` key on a genuine new
+                // group -- the old code built and cloned that `Vec` (plus
+                // its `String`s) for every input row, even though nearly
+                // every row lands in a group that already exists.
+                // `group_index` buckets group ids by hash (collisions
+                // possible, so each bucket is checked for an exact match)
+                // rather than owning a `GroupKey` per entry.
+                let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
                 let mut group_keys: Vec<Vec<Value>> = Vec::new();
                 let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
                 for row in 0..num_rows {
                     let p = physical(row);
-                    let key: Vec<Value> = key_columns.iter().map(|c| c[p].clone()).collect();
-                    let group = *group_index.entry(GroupKey(key.clone())).or_insert_with(|| {
-                        group_keys.push(key);
-                        group_keys.len() - 1
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    for c in &key_columns {
+                        hash_group_value(&c[p], &mut hasher);
+                    }
+                    let hash = hasher.finish();
+                    let bucket = group_index.entry(hash).or_default();
+                    let existing = bucket.iter().copied().find(|&g| {
+                        key_columns
+                            .iter()
+                            .enumerate()
+                            .all(|(i, c)| c[p] == group_keys[g][i])
                     });
+                    let group = match existing {
+                        Some(g) => g,
+                        None => {
+                            let key: Vec<Value> =
+                                key_columns.iter().map(|c| c[p].clone()).collect();
+                            let g = group_keys.len();
+                            group_keys.push(key);
+                            bucket.push(g);
+                            g
+                        }
+                    };
                     row_group.push(group);
                 }
                 let num_groups = group_keys.len();
