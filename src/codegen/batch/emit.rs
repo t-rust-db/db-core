@@ -289,7 +289,7 @@ pub fn render_flat(
         out,
         "        let rows = {crate_name}::query::run_program(&file, PROGRAM)?;"
     );
-    out.push_str("        for row in rows {\n");
+    out.push_str("        for row in rows.rows() {\n");
     out.push_str(
         "            let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();\n",
     );
@@ -428,7 +428,7 @@ fn render_multi_table(
         "    let rows = {crate_name}::query::{exec_fn}(&main_file, &other_file, &query)?;"
     );
     out.push_str("    println!(\"{}\", COLUMNS.join(\"\\t\"));\n");
-    out.push_str("    for row in rows {\n");
+    out.push_str("    for row in rows.rows() {\n");
     out.push_str("        let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();\n");
     out.push_str("        println!(\"{}\", line.join(\"\\t\"));\n");
     out.push_str("    }\n");
@@ -489,7 +489,7 @@ pub fn render_windowed(crate_name: &str, sql_text: &str, select: &Select) -> Res
         out,
         "        let rows = {crate_name}::query::execute_windowed(&file, &query)?;"
     );
-    out.push_str("        for row in rows {\n");
+    out.push_str("        for row in rows.rows() {\n");
     out.push_str(
         "            let line: Vec<String> = row.iter().map(|v| v.to_string()).collect();\n",
     );

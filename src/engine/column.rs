@@ -339,11 +339,12 @@ impl Engine for BatchEngine {
         let file = self.file()?;
         let columns = resolve_columns(&self.leaves, &program.columns_to_load())?;
         let segments = row_group_segments(&file, &columns);
-        let rows = engine::run(&segments, &program)
+        let output = engine::run(&segments, &program)
             .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
         Ok(QueryResult {
             columns: planner::output_column_names(&select),
-            rows: rows
+            rows: output
+                .into_rows()
                 .into_iter()
                 .map(|r| r.into_iter().map(Cell::from).collect())
                 .collect(),

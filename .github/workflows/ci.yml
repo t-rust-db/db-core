@@ -232,7 +232,14 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
+          # A breaking change to the query-output surface needs a companion
+          # column-rs branch to compile against; the PR body names it with a
+          # line `column-rs-ref: <branch-or-sha>`. Default: column-rs main.
+          ref="$(printf '%s\n' "$PR_BODY" | sed -nE 's/^[[:space:]]*column-rs-ref:[[:space:]]*([^[:space:]]+).*/\1/p' | head -1)"
+          echo "column_rs_ref=${ref:-main}" >> "$GITHUB_OUTPUT"
+          echo "column-rs ref: ${ref:-main}"
           if [ "$EVENT" = "push" ]; then
             echo "hit=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
@@ -249,6 +256,7 @@ jobs:
         if: steps.relevant.outputs.hit == 'true'
         with:
           repository: t-rust-db/column-rs
+          ref: ${{ steps.relevant.outputs.column_rs_ref }}
           path: column-rs
       # column-rs's checked-in `.cargo/config.toml` patches db-core *and*
       # db-cli to sibling paths (`../db-core`, `../db-cli`) unconditionally

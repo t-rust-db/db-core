@@ -5704,6 +5704,34 @@ pub fn db_core::vm::batch::Program::default() -> db_core::vm::batch::Program
 impl core::fmt::Debug for db_core::vm::batch::Program
 pub fn db_core::vm::batch::Program::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::Program
+pub struct db_core::vm::batch::QueryOutput
+impl db_core::vm::batch::QueryOutput
+pub fn db_core::vm::batch::QueryOutput::columns(&self) -> &[alloc::vec::Vec<db_core::vm::batch::Value>]
+pub fn db_core::vm::batch::QueryOutput::extend(&mut self, db_core::vm::batch::QueryOutput)
+pub fn db_core::vm::batch::QueryOutput::from_rows(alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> Self
+pub fn db_core::vm::batch::QueryOutput::into_columns(self) -> alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>
+pub fn db_core::vm::batch::QueryOutput::into_rows(self) -> alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>
+pub fn db_core::vm::batch::QueryOutput::is_empty(&self) -> bool
+pub fn db_core::vm::batch::QueryOutput::len(&self) -> usize
+pub fn db_core::vm::batch::QueryOutput::new(alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> Self
+pub fn db_core::vm::batch::QueryOutput::num_columns(&self) -> usize
+pub fn db_core::vm::batch::QueryOutput::num_rows(&self) -> usize
+pub fn db_core::vm::batch::QueryOutput::truncate(&mut self, usize)
+impl core::clone::Clone for db_core::vm::batch::QueryOutput
+pub fn db_core::vm::batch::QueryOutput::clone(&self) -> db_core::vm::batch::QueryOutput
+impl core::cmp::PartialEq for db_core::vm::batch::QueryOutput
+pub fn db_core::vm::batch::QueryOutput::eq(&self, &db_core::vm::batch::QueryOutput) -> bool
+impl core::cmp::PartialEq<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>> for db_core::vm::batch::QueryOutput
+pub fn db_core::vm::batch::QueryOutput::eq(&self, &alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> bool
+impl core::convert::From<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>> for db_core::vm::batch::QueryOutput
+pub fn db_core::vm::batch::QueryOutput::from(alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> Self
+impl core::convert::From<db_core::vm::batch::QueryOutput> for alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>
+pub fn alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>::from(db_core::vm::batch::QueryOutput) -> Self
+impl core::default::Default for db_core::vm::batch::QueryOutput
+pub fn db_core::vm::batch::QueryOutput::default() -> db_core::vm::batch::QueryOutput
+impl core::fmt::Debug for db_core::vm::batch::QueryOutput
+pub fn db_core::vm::batch::QueryOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::vm::batch::QueryOutput
 pub struct db_core::vm::batch::TopN
 pub db_core::vm::batch::TopN::col: usize
 pub db_core::vm::batch::TopN::descending: bool
@@ -5720,8 +5748,8 @@ pub fn db_core::vm::batch::Vm::execute(&mut self, &db_core::vm::batch::Batch, &[
 pub fn db_core::vm::batch::Vm::join_tables(&self) -> db_core::vm::batch::JoinTables
 pub fn db_core::vm::batch::Vm::new() -> Self
 pub fn db_core::vm::batch::Vm::register(&self, usize) -> db_core::vm::batch::Result<&[db_core::vm::batch::Value]>
-pub fn db_core::vm::batch::Vm::run<T: db_core::vm::batch::Source>(&mut self, &mut T, &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
-pub fn db_core::vm::batch::Vm::take_output(&mut self) -> alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>
+pub fn db_core::vm::batch::Vm::run<T: db_core::vm::batch::Source>(&mut self, &mut T, &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::batch::Vm::take_output(&mut self) -> db_core::vm::batch::QueryOutput
 pub fn db_core::vm::batch::Vm::take_register(&mut self, usize) -> db_core::vm::batch::Result<alloc::vec::Vec<db_core::vm::batch::Value>>
 pub fn db_core::vm::batch::Vm::typed_register(&self, usize) -> core::option::Option<&db_core::vm::column::Column>
 pub fn db_core::vm::batch::Vm::with_join_tables(db_core::vm::batch::JoinTables) -> Self
@@ -5746,8 +5774,8 @@ pub fn db_core::engine::cross_mode::RowTableSource::next_batch(&mut self) -> cor
 impl db_core::vm::batch::Source for db_core::storage::stream::adapter::TailSource
 pub fn db_core::storage::stream::adapter::TailSource::next_batch(&mut self) -> core::option::Option<db_core::vm::batch::Batch>
 pub fn db_core::vm::batch::compare_for_order(&db_core::vm::batch::Value, &db_core::vm::batch::Value, bool) -> core::cmp::Ordering
-pub fn db_core::vm::batch::run_parallel<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
-pub fn db_core::vm::batch::run_parallel_top_n<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], &db_core::vm::batch::TopN) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
+pub fn db_core::vm::batch::run_parallel<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::batch::run_parallel_top_n<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], &db_core::vm::batch::TopN) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub type db_core::vm::batch::Result<T> = core::result::Result<T, db_core::vm::batch::VmError>
 pub mod db_core::vm::column
 pub enum db_core::vm::column::Column
@@ -5852,11 +5880,11 @@ pub fn db_core::vm::engine::NoResolver::resolve(&self, &db_core::vm::batch::Scan
 impl<F: core::ops::function::Fn(&db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>> db_core::vm::engine::ScanSourceResolver for F
 pub fn F::resolve(&self, &db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
 pub fn db_core::vm::engine::bounded_scan_limit(&db_core::vm::batch::Program) -> core::option::Option<usize>
-pub fn db_core::vm::engine::finalize(&[db_core::vm::batch::AggPart], usize, bool, core::option::Option<(usize, bool)>, core::option::Option<usize>, alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
-pub fn db_core::vm::engine::run<S: db_core::vm::batch::Segment>(&[S], &db_core::vm::batch::Program) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
-pub fn db_core::vm::engine::run_join(&db_core::vm::batch::Batch, &db_core::vm::batch::Batch, &db_core::vm::engine::JoinProgram) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
-pub fn db_core::vm::engine::run_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, db_core::vm::batch::ScanSource, &db_core::vm::engine::JoinProgram, &R) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
-pub fn db_core::vm::engine::run_multi_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, alloc::vec::Vec<db_core::vm::batch::ScanSource>, &db_core::vm::engine::MultiJoinProgram, &R) -> db_core::vm::batch::Result<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>>
+pub fn db_core::vm::engine::finalize(&[db_core::vm::batch::AggPart], usize, bool, core::option::Option<(usize, bool)>, core::option::Option<usize>, alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::engine::run<S: db_core::vm::batch::Segment>(&[S], &db_core::vm::batch::Program) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::engine::run_join(&db_core::vm::batch::Batch, &db_core::vm::batch::Batch, &db_core::vm::engine::JoinProgram) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::engine::run_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, db_core::vm::batch::ScanSource, &db_core::vm::engine::JoinProgram, &R) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::engine::run_multi_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, alloc::vec::Vec<db_core::vm::batch::ScanSource>, &db_core::vm::engine::MultiJoinProgram, &R) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::engine::semi_filter(&db_core::vm::batch::Batch, &str, &std::collections::hash::set::HashSet<alloc::string::String>) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
 pub mod db_core::vm::join
 pub enum db_core::vm::join::JoinKind

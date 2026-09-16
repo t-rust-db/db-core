@@ -483,6 +483,7 @@ fn vm_program_matches_raw_loop() {
         vm.execute(batch, &program_add).unwrap();
         let vm_out: Vec<Value> = vm
             .take_output()
+            .into_rows()
             .into_iter()
             .map(|row| row[0].clone())
             .collect();
@@ -496,6 +497,7 @@ fn vm_program_matches_raw_loop() {
     let owned = owned_segments(&batches);
     let parallel_out: Vec<Value> = run_parallel(&owned, &program_add)
         .unwrap()
+        .into_rows()
         .into_iter()
         .map(|row| row[0].clone())
         .collect();
