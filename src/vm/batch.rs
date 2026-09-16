@@ -1337,20 +1337,29 @@ impl RunningAgg {
     clippy::indexing_slicing,
     reason = "`build_row`, when `Some`, always came from `BuildTable::index` in this same opcode's caller, so it is in range for `bt.payload`'s equal-length columns (same invariant `join_keys_match` relies on); `ValueSource::Probe` registers are looked up by value, not indexed"
 )]
-fn resolve_value_source<'a>(
+// A function returning `&Value` borrowed from two independent
+// parameters (`probe_columns`, `bt`) needs an explicit lifetime tying
+// them together, which is outside the qualified subset (function-scoped
+// elision only) -- so this hands the resolved value to a callback
+// instead, staying inside one function's scope and never naming a
+// lifetime at all.
+fn with_value_source<R>(
     source: ValueSource,
-    probe_columns: &'a [(usize, &'a [Value])],
+    probe_columns: &[(usize, &[Value])],
     probe_row: usize,
-    bt: &'a BuildTable,
+    bt: &BuildTable,
     build_row: Option<usize>,
-) -> &'a Value {
-    const NULL_VALUE: Value = Value::Null;
+    f: impl FnOnce(&Value) -> R,
+) -> R {
     match source {
-        ValueSource::Probe(reg) => probe_columns
-            .iter()
-            .find(|(r, _)| *r == reg)
-            .map_or(&NULL_VALUE, |(_, col)| &col[probe_row]),
-        ValueSource::Payload(i) => build_row.map_or(&NULL_VALUE, |br| &bt.payload[i][br]),
+        ValueSource::Probe(reg) => match probe_columns.iter().find(|(r, _)| *r == reg) {
+            Some((_, col)) => f(&col[probe_row]),
+            None => f(&Value::Null),
+        },
+        ValueSource::Payload(i) => match build_row {
+            Some(br) => f(&bt.payload[i][br]),
+            None => f(&Value::Null),
+        },
     }
 }
 
@@ -1386,16 +1395,17 @@ fn fold_group_row(
     // groups) allocates nothing here.
     let mut hasher = DefaultHasher::new();
     for (src, _) in group_by {
-        hash_group_value(
-            resolve_value_source(*src, probe_columns, probe_row, bt, build_row),
-            &mut hasher,
-        );
+        with_value_source(*src, probe_columns, probe_row, bt, build_row, |value| {
+            hash_group_value(value, &mut hasher);
+        });
     }
     let hash = hasher.finish();
     let bucket = group_index.entry(hash).or_default();
     let existing = bucket.iter().copied().find(|&g| {
         group_by.iter().enumerate().all(|(i, (src, _))| {
-            group_keys[g][i] == *resolve_value_source(*src, probe_columns, probe_row, bt, build_row)
+            with_value_source(*src, probe_columns, probe_row, bt, build_row, |value| {
+                group_keys[g][i] == *value
+            })
         })
     });
     let group = match existing {
@@ -1404,7 +1414,7 @@ fn fold_group_row(
             let key_values: Vec<Value> = group_by
                 .iter()
                 .map(|(src, _)| {
-                    resolve_value_source(*src, probe_columns, probe_row, bt, build_row).clone()
+                    with_value_source(*src, probe_columns, probe_row, bt, build_row, Value::clone)
                 })
                 .collect();
             let g = group_keys.len();
@@ -1417,8 +1427,12 @@ fn fold_group_row(
         }
     };
     for (i, (_func, src)) in aggs.iter().enumerate() {
-        let value = src.map(|s| resolve_value_source(s, probe_columns, probe_row, bt, build_row));
-        accumulators[i][group].push(value);
+        match src {
+            Some(s) => with_value_source(*s, probe_columns, probe_row, bt, build_row, |value| {
+                accumulators[i][group].push(Some(value));
+            }),
+            None => accumulators[i][group].push(None),
+        }
     }
 }
 
