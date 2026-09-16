@@ -184,6 +184,7 @@ fn run_join_assembles_a_joined_batch_from_build_and_probe_programs() {
         probe,
         payload_dst: vec![1],
         body,
+        fused_group_by: None,
     };
 
     let rows = run_join(&left, &right, &plan).unwrap();
@@ -312,6 +313,151 @@ fn run_join_segments_matches_single_segment_run_join_for_left_join_group_by() {
     // LEFT keeps customer 3 as a NULL-tier group: four groups.
     assert_eq!(single.len(), 4);
     assert!(single.iter().any(|row| row[0] == Value::Null));
+}
+
+/// #441: `HashProbeGroupReduce` (engaged via `compile_join` for this
+/// aggregate-only body -- see `compile_join_fuses_probe_and_group_reduce_for_an_aggregate_only_body`
+/// in `codegen::batch`) must reproduce the exact numbers the old unfused
+/// `HashProbe` + `GroupReduce` two-phase path would have, not just "some
+/// grouping" -- so this pins down hand-computed sums per tier from
+/// `join_fixture`'s fixed data (12 fact rows, amounts `0..12` as `f64`,
+/// `customer_id = row % 4`, customer 3 has no dimension row and is
+/// dropped by INNER).
+#[test]
+fn run_join_fuses_group_reduce_with_exact_expected_sums_per_tier() {
+    let (facts, customers) = join_fixture();
+    let plan = compile_join(
+        &parse(
+            "SELECT bench_customers.tier, SUM(bench.amount) FROM bench \
+             JOIN bench_customers ON bench.customer_id = bench_customers.customer_id \
+             GROUP BY bench_customers.tier",
+        )
+        .unwrap(),
+        BuildSourceKind::InMemory,
+    )
+    .unwrap();
+    assert!(plan.fused_group_by.is_some(), "fusion should have engaged");
+
+    let rows = run_join(&concat(&facts), &customers, &plan).unwrap();
+    // customer_id cycles 0,1,2,3 over 12 rows (amounts 0..12): bronze
+    // (id 0) gets rows 0,4,8 -> 0+4+8=12; silver (id 1) gets 1,5,9 ->
+    // 15; gold (id 2) gets 2,6,10 -> 18; id 3 (no dimension row) dropped.
+    let by_tier: std::collections::HashMap<String, f64> = rows
+        .into_iter()
+        .map(|row| {
+            let Value::Str(tier) = &row[0] else {
+                panic!("expected tier")
+            };
+            let Value::Float(sum) = row[1] else {
+                panic!("expected sum")
+            };
+            (tier.to_string(), sum)
+        })
+        .collect();
+    assert_eq!(by_tier.len(), 3);
+    assert_eq!(by_tier["bronze"], 12.0);
+    assert_eq!(by_tier["silver"], 15.0);
+    assert_eq!(by_tier["gold"], 18.0);
+}
+
+/// #441: `COUNT(*)` (row count) and `COUNT(col)` (non-`Null` count) must
+/// stay distinct through the fused path exactly like the unfused one --
+/// here every fact row's `bench.amount` is non-`Null`, so both counts
+/// agree per matched tier, but a `LEFT JOIN`'s unmatched rows must still
+/// count for `COUNT(*)` while contributing `Value::Null` to `SUM`/`AVG`.
+#[test]
+fn run_join_fuses_count_star_and_count_col_correctly() {
+    let (facts, customers) = join_fixture();
+    let plan = compile_join(
+        &parse(
+            "SELECT bench_customers.tier, COUNT(*), COUNT(bench.amount) FROM bench \
+             LEFT JOIN bench_customers ON bench.customer_id = bench_customers.customer_id \
+             GROUP BY bench_customers.tier",
+        )
+        .unwrap(),
+        BuildSourceKind::InMemory,
+    )
+    .unwrap();
+    assert!(plan.fused_group_by.is_some(), "fusion should have engaged");
+
+    let rows = run_join(&concat(&facts), &customers, &plan).unwrap();
+    // 12 rows total, customer_id cycles 0,1,2,3: three rows land in
+    // customer 3's unmatched (NULL-tier) group, three each in the other
+    // three tiers. `bench.amount` is never NULL, so COUNT(*) ==
+    // COUNT(bench.amount) for every group here.
+    assert_eq!(rows.len(), 4);
+    for row in &rows {
+        assert_eq!(row[1], Value::Int(3), "row={row:?}");
+        assert_eq!(row[2], Value::Int(3), "row={row:?}");
+    }
+    assert!(rows.iter().any(|row| row[0] == Value::Null));
+}
+
+/// #441: a `NULL` join key never matches anything -- not even another
+/// `NULL` -- so a probe row with a `NULL` key must be treated exactly
+/// like an unmatched row (dropped for `INNER`, NULL-payload-grouped for
+/// `LEFT`), the same rule `HashProbe`'s `join_keys_match` enforces on the
+/// unfused path.
+#[test]
+fn run_join_fuses_null_join_key_never_matches() {
+    let customers = Batch::new(2)
+        .with_column(
+            "bench_customers.customer_id",
+            vec![Value::Int(0), Value::Int(1)],
+        )
+        .with_column(
+            "bench_customers.tier",
+            vec![Value::Str("bronze".into()), Value::Str("silver".into())],
+        );
+    let facts = Batch::new(3)
+        .with_column(
+            "bench.customer_id",
+            vec![Value::Null, Value::Int(0), Value::Int(1)],
+        )
+        .with_column(
+            "bench.amount",
+            vec![Value::Float(99.0), Value::Float(1.0), Value::Float(2.0)],
+        );
+
+    let inner_plan = compile_join(
+        &parse(
+            "SELECT bench_customers.tier, SUM(bench.amount) FROM bench \
+             JOIN bench_customers ON bench.customer_id = bench_customers.customer_id \
+             GROUP BY bench_customers.tier",
+        )
+        .unwrap(),
+        BuildSourceKind::InMemory,
+    )
+    .unwrap();
+    let inner_rows = run_join(&facts, &customers, &inner_plan).unwrap();
+    assert_eq!(
+        inner_rows.len(),
+        2,
+        "the NULL-keyed row must not form its own group"
+    );
+    assert!(inner_rows.iter().all(|row| row[0] != Value::Null));
+
+    let left_plan = compile_join(
+        &parse(
+            "SELECT bench_customers.tier, SUM(bench.amount) FROM bench \
+             LEFT JOIN bench_customers ON bench.customer_id = bench_customers.customer_id \
+             GROUP BY bench_customers.tier",
+        )
+        .unwrap(),
+        BuildSourceKind::InMemory,
+    )
+    .unwrap();
+    let left_rows = run_join(&facts, &customers, &left_plan).unwrap();
+    assert_eq!(
+        left_rows.len(),
+        3,
+        "bronze, silver, and one NULL-tier group"
+    );
+    let null_group = left_rows
+        .iter()
+        .find(|row| row[0] == Value::Null)
+        .expect("the NULL-keyed row should form/join the NULL-tier group");
+    assert_eq!(null_group[1], Value::Float(99.0));
 }
 
 /// #272: a probe-side error inside a segment (here: the left column the

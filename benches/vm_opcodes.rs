@@ -310,6 +310,65 @@ fn bench_batch_hash_join(r: &mut common::Report) {
         let mut vm = BatchVm::with_join_tables(tables.clone());
         vm.execute(black_box(&left), &probe)
     });
+
+    // #441: the same join, but its only consumer is `SUM(amount) GROUP BY
+    // tier` (3 groups) -- the parity `JOIN + GROUP BY` shape. The unfused
+    // program pays `HashProbe`'s per-match reshape (every live register,
+    // full `ROWS`-row cardinality) *and* `GroupReduce`'s own per-row
+    // grouping over that same joined row count; the fused
+    // `HashProbeGroupReduce` never materializes a joined row at all --
+    // only one accumulator per group.
+    let amount = Batch::new(ROWS).with_column(
+        "fk",
+        (0..ROWS as i64)
+            .map(|i| BatchValue::Int(i % dim as i64))
+            .collect(),
+    );
+    let unfused_probe = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "fk".into(),
+        },
+        BatchOpcode::HashProbe {
+            key_cols: vec![0].into(),
+            table: 0,
+            payload_dst: vec![1].into(),
+            kind: db_core::vm::batch::JoinKind::Inner,
+        },
+        BatchOpcode::GroupReduce {
+            group_by: vec![1].into(),
+            aggs: vec![(db_core::vm::batch::AggFunc::Count, None)].into(),
+            agg_dst: vec![2].into(),
+        },
+    ];
+    r.bench(
+        "vm_opcodes/batch::HashProbe+GroupReduce, unfused (1% dim, GROUP BY tier)",
+        || {
+            let mut vm = BatchVm::with_join_tables(tables.clone());
+            vm.execute(black_box(&amount), &unfused_probe)
+        },
+    );
+    let fused_probe = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "fk".into(),
+        },
+        BatchOpcode::HashProbeGroupReduce {
+            key_cols: vec![0].into(),
+            table: 0,
+            kind: db_core::vm::batch::JoinKind::Inner,
+            group_by: vec![(db_core::vm::batch::ValueSource::Payload(0), 1)].into(),
+            aggs: vec![(db_core::vm::batch::AggFunc::Count, None)].into(),
+            agg_dst: vec![2].into(),
+        },
+    ];
+    r.bench(
+        "vm_opcodes/batch::HashProbeGroupReduce, fused (1% dim, GROUP BY tier)",
+        || {
+            let mut vm = BatchVm::with_join_tables(tables.clone());
+            vm.execute(black_box(&amount), &fused_probe)
+        },
+    );
 }
 
 fn bench_batch_emit(r: &mut common::Report) {

@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.101.4] - 2026-09-16
+
+### Fixed
+
+- **`GroupReduce` fuses into `HashProbe` for a join that feeds only a `GROUP BY`/aggregate** (#441): `HashProbe` followed directly by `GroupReduce` (no `Map`/`Filter`/`Window` between them) is detected at plan time and compiled into a single `Opcode::HashProbeGroupReduce` instead -- matches fold straight into a per-group streaming accumulator, never materializing a joined row per match or rebuilding an intermediate `Batch`. Every other join shape (non-aggregate, or with a `WHERE`/projection between the probe and the reduce) is unchanged, byte-for-byte in `explain_opcodes`.
+
 ## [0.101.3] - 2026-09-16
 
 ### Fixed

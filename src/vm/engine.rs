@@ -429,6 +429,19 @@ pub struct JoinProgram {
     pub payload_dst: Vec<usize>,
     /// The flat query body (ending in `Finalize`) run over the joined batch.
     pub body: Program,
+    /// #441: when `Some`, `probe`'s last opcode is
+    /// `Opcode::HashProbeGroupReduce` instead of `Opcode::HashProbe` --
+    /// the join's output feeds only a `GROUP BY`/aggregate, so it was
+    /// fused into the probe itself rather than materializing a joined
+    /// row per match. Lists `(register, synthetic column name)` for each
+    /// of that opcode's `group_by`/`agg_dst` output registers;
+    /// `left_columns`/`right_columns`/`payload_dst` are unused in this
+    /// case (there is no per-row joined output left to reshape), and
+    /// `body` is just the original compiled body's suffix *after* its
+    /// `GroupReduce` (`Emit`, `Combine`, ...), prefixed with `LoadColumn`s
+    /// that read these synthetic names back into the same registers the
+    /// original `GroupReduce` would have written.
+    pub fused_group_by: Option<Vec<(usize, String)>>,
 }
 
 /// Execute a [`JoinProgram`] over two fully materialized tables: run the
@@ -478,6 +491,7 @@ pub fn run_join_segments<S: Segment, R: ScanSourceResolver>(
         left_columns: plan.left_columns.clone(),
         right_columns: plan.right_columns.clone(),
         payload_dst: plan.payload_dst.clone(),
+        fused_group_by: plan.fused_group_by.clone(),
     });
     let segments: Vec<JoinedSegment<S>> = left
         .into_iter()
@@ -496,6 +510,8 @@ struct JoinShape {
     left_columns: Vec<String>,
     right_columns: Vec<String>,
     payload_dst: Vec<usize>,
+    /// #441: see [`JoinProgram::fused_group_by`].
+    fused_group_by: Option<Vec<(usize, String)>>,
 }
 
 /// A left segment plus the already-built join table: [`Segment::load`]
@@ -513,6 +529,24 @@ impl<S: Segment> Segment for JoinedSegment<S> {
         let batch = self.left.load()?;
         let mut vm = Vm::with_join_tables(self.tables.clone());
         vm.execute(&batch, &self.shape.probe)?;
+
+        // #441: a fused join has no per-row joined output to reshape --
+        // `self.shape.probe` already ends in `Opcode::HashProbeGroupReduce`,
+        // whose `group_by`/`agg_dst` registers (one value per *group*, not
+        // per matched row) are exactly what `fused_group_by` names.
+        if let Some(fused) = &self.shape.fused_group_by {
+            let num_rows = match fused.first() {
+                Some((reg, _)) => vm.register(*reg)?.len(),
+                None => 0,
+            };
+            let mut joined = Batch::new(num_rows);
+            for (reg, name) in fused {
+                joined
+                    .columns
+                    .insert(name.clone(), Arc::new(vm.take_register(*reg)?));
+            }
+            return Ok(Arc::new(joined));
+        }
 
         let num_rows = vm.register(0)?.len();
         let mut joined = Batch::new(num_rows);

@@ -5480,6 +5480,13 @@ pub db_core::vm::batch::Opcode::HashProbe::key_cols: alloc::borrow::Cow<'static,
 pub db_core::vm::batch::Opcode::HashProbe::kind: db_core::vm::batch::JoinKind
 pub db_core::vm::batch::Opcode::HashProbe::payload_dst: alloc::borrow::Cow<'static, [usize]>
 pub db_core::vm::batch::Opcode::HashProbe::table: usize
+pub db_core::vm::batch::Opcode::HashProbeGroupReduce
+pub db_core::vm::batch::Opcode::HashProbeGroupReduce::agg_dst: alloc::borrow::Cow<'static, [usize]>
+pub db_core::vm::batch::Opcode::HashProbeGroupReduce::aggs: alloc::borrow::Cow<'static, [(db_core::vm::batch::AggFunc, core::option::Option<db_core::vm::batch::ValueSource>)]>
+pub db_core::vm::batch::Opcode::HashProbeGroupReduce::group_by: alloc::borrow::Cow<'static, [(db_core::vm::batch::ValueSource, usize)]>
+pub db_core::vm::batch::Opcode::HashProbeGroupReduce::key_cols: alloc::borrow::Cow<'static, [usize]>
+pub db_core::vm::batch::Opcode::HashProbeGroupReduce::kind: db_core::vm::batch::JoinKind
+pub db_core::vm::batch::Opcode::HashProbeGroupReduce::table: usize
 pub db_core::vm::batch::Opcode::Limit
 pub db_core::vm::batch::Opcode::Limit::n: usize
 pub db_core::vm::batch::Opcode::LoadColumn
@@ -5557,6 +5564,18 @@ pub fn db_core::vm::batch::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> c
 impl core::fmt::Display for db_core::vm::batch::Value
 pub fn db_core::vm::batch::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::Value
+pub enum db_core::vm::batch::ValueSource
+pub db_core::vm::batch::ValueSource::Payload(usize)
+pub db_core::vm::batch::ValueSource::Probe(usize)
+impl core::clone::Clone for db_core::vm::batch::ValueSource
+pub fn db_core::vm::batch::ValueSource::clone(&self) -> db_core::vm::batch::ValueSource
+impl core::cmp::Eq for db_core::vm::batch::ValueSource
+impl core::cmp::PartialEq for db_core::vm::batch::ValueSource
+pub fn db_core::vm::batch::ValueSource::eq(&self, &db_core::vm::batch::ValueSource) -> bool
+impl core::fmt::Debug for db_core::vm::batch::ValueSource
+pub fn db_core::vm::batch::ValueSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::vm::batch::ValueSource
+impl core::marker::StructuralPartialEq for db_core::vm::batch::ValueSource
 pub enum db_core::vm::batch::VmError
 pub db_core::vm::batch::VmError::MalformedProgram
 pub db_core::vm::batch::VmError::MalformedProgram::opcode: &'static str
@@ -5799,6 +5818,7 @@ impl core::marker::StructuralPartialEq for db_core::vm::engine::JoinBuildSide
 pub struct db_core::vm::engine::JoinProgram
 pub db_core::vm::engine::JoinProgram::body: db_core::vm::batch::Program
 pub db_core::vm::engine::JoinProgram::build: db_core::vm::batch::Program
+pub db_core::vm::engine::JoinProgram::fused_group_by: core::option::Option<alloc::vec::Vec<(usize, alloc::string::String)>>
 pub db_core::vm::engine::JoinProgram::left_columns: alloc::vec::Vec<alloc::string::String>
 pub db_core::vm::engine::JoinProgram::payload_dst: alloc::vec::Vec<usize>
 pub db_core::vm::engine::JoinProgram::probe: db_core::vm::batch::Program

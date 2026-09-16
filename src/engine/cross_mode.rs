@@ -368,6 +368,7 @@ mod tests {
             probe,
             payload_dst: vec![1],
             body,
+            fused_group_by: None,
         };
 
         let rows = run_join(&driving, &lookup, &plan).unwrap();
