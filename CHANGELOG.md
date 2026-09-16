@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.102.1] - 2026-09-16
+
+### Fixed
+
+- **Bare aggregates always emit exactly one row** (#452): an aggregate query with no `GROUP BY` was planned as a `GroupReduce` with zero key columns, which over zero surviving rows found zero groups and emitted no row where SQL requires one (`COUNT(*)` = 0, every other aggregate `NULL`). The planner now emits one `Opcode::Reduce` per aggregate (`GROUP BY` keeps `GroupReduce`), which also puts bare aggregates on the typed `Reduce` fast path (#433). Two latent bugs on that path fixed alongside: `Reduce` `COUNT(*)` counted `batch.num_rows`, ignoring a preceding `Filter` (the VM now records the applied selection's row count), and the cross-segment merge folded all-`NULL` `SUM`/`AVG` partials into `0.0` (`NULL` is now the identity). Measured on the 10M-row parity suite against v0.102.0 (interleaved A/B): `agg_count` 16.1 -> **2.9 ms**, `agg_sum` 30.9 -> **19.1 ms**; all other outputs identical.
+
 ## [0.102.0] - 2026-09-16
 
 ### Changed

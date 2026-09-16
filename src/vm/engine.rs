@@ -303,8 +303,7 @@ fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) -> Result<(
                 row_idx = row_idx.saturating_add(1);
             }
             AggPart::Sum => {
-                into[row_idx] =
-                    Value::Float(partial_f64(&into[row_idx])? + partial_f64(&from[row_idx])?);
+                into[row_idx] = merge_sum_partials(&into[row_idx], &from[row_idx])?;
                 row_idx = row_idx.saturating_add(1);
             }
             // A merged COUNT stays an integer, as a single segment's does
@@ -346,8 +345,7 @@ fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) -> Result<(
             // there is no reason to route it through the
             // integer-overflow-checked `AggPart::Count` path as well.
             AggPart::Avg(sum_i, count_i) => {
-                into[*sum_i] =
-                    Value::Float(partial_f64(&into[*sum_i])? + partial_f64(&from[*sum_i])?);
+                into[*sum_i] = merge_sum_partials(&into[*sum_i], &from[*sum_i])?;
                 into[*count_i] =
                     Value::Float(partial_f64(&into[*count_i])? + partial_f64(&from[*count_i])?);
                 row_idx = count_i.saturating_add(1);
@@ -374,6 +372,18 @@ fn partial_i64(v: &Value) -> Result<i64> {
 /// (a segment that saw no rows); anything else non-numeric is a planner
 /// bug -- before, it silently merged as `0.0` into a plausible wrong total
 /// (db-core#232).
+/// Merges two partial `SUM`s (also `AVG`'s sum slot). A segment with no
+/// surviving rows emits `Null` (#452: `Reduce` always emits one row), and
+/// `Null` must be the identity here -- `Null` with `Null` stays `Null`, so
+/// a `SUM` over zero rows across every segment is `NULL` as SQL requires,
+/// not `0.0`; `Null` with a number is that number.
+fn merge_sum_partials(into: &Value, from: &Value) -> Result<Value> {
+    match (into, from) {
+        (Value::Null, Value::Null) => Ok(Value::Null),
+        _ => Ok(Value::Float(partial_f64(into)? + partial_f64(from)?)),
+    }
+}
+
 fn partial_f64(v: &Value) -> Result<f64> {
     match v {
         Value::Null => Ok(0.0),

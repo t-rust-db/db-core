@@ -1747,6 +1747,14 @@ pub struct Vm {
     /// A pending `Filter` result not yet applied to `registers`. See
     /// [`Selection`].
     selection: Option<Selection>,
+    /// How many rows survived the most recently *applied* selection
+    /// (#452) -- the row count `COUNT(*)` must report after a `Filter`.
+    /// `batch.num_rows` is the unfiltered count, and a register length is
+    /// ambiguous once an earlier `Reduce` has left a one-row `dst` behind,
+    /// so [`Vm::resolve_selection`] records it here. `None` until a
+    /// selection has been applied (every live register still has
+    /// `batch.num_rows` rows); reset wherever `selection` is.
+    selected_rows: Option<usize>,
     /// Instructions executed so far, checked against [`MAX_STEPS`] by
     /// [`Vm::execute`]/[`Vm::run`].
     steps: usize,
@@ -1872,6 +1880,7 @@ impl Vm {
     pub fn clear_registers(&mut self) {
         self.registers.clear();
         self.selection = None;
+        self.selected_rows = None;
     }
 
     /// Eagerly compacts every live register down to the pending
@@ -1884,6 +1893,7 @@ impl Vm {
         let Some(selection) = self.selection.take() else {
             return Ok(());
         };
+        self.selected_rows = Some(selection.indices.len());
         for values in self.registers.values_mut() {
             if values.len() != selection.base_len {
                 return Err(VmError::RegisterLengthMismatch { opcode });
@@ -2059,6 +2069,7 @@ impl Vm {
             None => return Ok(QueryOutput::default()),
         };
         self.selection = None;
+        self.selected_rows = None;
         let mut pc = 0usize;
         while let Some(op) = program.get(pc) {
             self.check_step_limit(op.name())?;
@@ -2071,6 +2082,7 @@ impl Vm {
                         // of the loop body), so any selection pending
                         // from the previous segment is meaningless here.
                         self.selection = None;
+                        self.selected_rows = None;
                         pc = *loop_start;
                     }
                     None => pc = pc.saturating_add(1),
@@ -2247,7 +2259,10 @@ impl Vm {
                             None => reduce_values(*func, self.reg(*reg, opcode)?),
                         }
                     }
-                    None => reduce_count_star(*func, batch.num_rows),
+                    // #452: after a `Filter`, the row count is the applied
+                    // selection's, not the batch's -- `resolve_selection`
+                    // above just recorded it.
+                    None => reduce_count_star(*func, self.selected_rows.unwrap_or(batch.num_rows)),
                 };
                 self.registers.insert(*dst, Arc::new(vec![result]));
                 self.typed_registers.remove(dst);

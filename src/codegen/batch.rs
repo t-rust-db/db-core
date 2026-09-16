@@ -1140,19 +1140,33 @@ pub fn compile(select: &Select) -> Result<Program> {
         }
     }
 
-    if !aggs.is_empty() || !group_by_regs.is_empty() {
-        let comment = if group_by.is_empty() {
-            "aggregate".to_string()
-        } else {
-            format!("GROUP BY {}", group_by.join(", "))
-        };
+    if group_by_regs.is_empty() {
+        // #452: an aggregate with no GROUP BY is a global reduction, one
+        // `Reduce` per aggregate -- not a `GroupReduce` with zero key
+        // columns. The keyless `GroupReduce` cloned every aggregated column
+        // into a single group before reducing it, and, over zero surviving
+        // rows, found zero groups and emitted *no row* where SQL requires
+        // exactly one (`COUNT(*)` = 0, everything else NULL). `Reduce`
+        // always writes one row, and is the opcode #433's typed `Column`
+        // fast path lives on.
+        for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {
+            ctx.push_commented(
+                Opcode::Reduce {
+                    func: *func,
+                    src: *src,
+                    dst: *dst,
+                },
+                "aggregate",
+            );
+        }
+    } else {
         ctx.push_commented(
             Opcode::GroupReduce {
                 group_by: group_by_regs.into(),
                 aggs: aggs.into(),
                 agg_dst: agg_dst.into(),
             },
-            comment,
+            format!("GROUP BY {}", group_by.join(", ")),
         );
     }
 
@@ -3037,18 +3051,21 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_858db603__v1_agg_without_group_by_emits_group_reduce() {
+    fn mcdc__codegen_batch_compile_ce9ae325__v1_agg_without_group_by_emits_reduce() {
+        // #452: a bare aggregate is a global `Reduce`, never a keyless
+        // `GroupReduce` (which emits no row over zero surviving rows).
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
-        assert!(body
+        assert!(body.iter().any(|op| matches!(op, Opcode::Reduce { .. })));
+        assert!(!body
             .iter()
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_858db603__v2_group_by_without_agg_emits_group_reduce() {
+    fn mcdc__codegen_batch_compile_ce9ae325__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -3059,7 +3076,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_858db603__v3_no_agg_no_group_by_omits_group_reduce() {
+    fn mcdc__codegen_batch_compile_ce9ae325__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
