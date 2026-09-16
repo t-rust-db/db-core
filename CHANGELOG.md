@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.101.3] - 2026-09-16
+
+### Fixed
+
+- **`GroupReduce`/`HashBuild`/`HashProbe` hash group/join keys column-wise instead of materializing a row key** (#440): all three built a row-shaped key (a `Vec<Value>` gathered from each key column) before hashing or comparing it. They now hash column-wise into a per-row `u64` (one tight loop per column, no row key ever materialized) and, for `HashBuild`/`HashProbe`, store the build side's key/payload data column-major (one `Vec<Value>` allocation per column, not per row) behind a hash-only index that resolves collisions -- and NULL-never-matches join semantics -- by comparing the actual column values. `GroupReduce`'s own semantics (`NULL` groups together) and #439's probe-before-insert are unchanged, just fed by the new column-wise hash. ~20% faster `HashProbe` (`benches/vm_opcodes.rs::bench_batch_hash_join`, 1% dimension, `Str` payload).
+
 ## [0.101.2] - 2026-09-16
 
 ### Fixed
