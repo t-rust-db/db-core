@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.102.0] - 2026-09-16
+
+### Changed
+
+- **Query output is chunked and column-major** (#436, **breaking**; second attempt, replacing the reverted 90c8571): `Vm::run`/`take_output`, `run_parallel`/`run_parallel_top_n`, and every `vm::engine` execution entry point (`run`, `run_join`, `run_join_segments`, `run_multi_join_segments`, `finalize`) return the new `QueryOutput` -- an ordered list of `Chunk`s (`Vec<Arc<Vec<Value>>>`, one per `Emit`), never concatenated -- instead of row-major `Vec<Vec<Value>>`. `Opcode::Emit` pushes one chunk (with no selection the emitted `Arc` *is* the register's column, so a projection copies nothing); the cross-segment merge moves chunk pointers; `vm::engine::run` returns the chunks untouched when the trailing `Combine` has no work; top-N is fed lazily and holds O(limit). `QueryOutput::rows()`/`into_rows()` give row shape where a consumer needs it (documented as per-row-allocating; walk `chunks()` for large results). The `codegen::batch::emit` AOT templates iterate `rows.rows()`; `engine::QueryResult` stays row-major. Measured on the 10M-row parity suite against v0.101.7 (interleaved A/B): `filter_50pct` 635.7 ms / 1151 MB -> **556.2 ms / 973 MB**, `scan` 16.2 -> 10.2 ms / 43 -> 25 MB, `order_by` 73.8 -> 54.4 ms / 325 -> 225 MB; `filter_1pct`, `join`, `group_by`, aggregates flat. Consumers must read large results by chunk, not by row: column-rs's `-c` printer does (see column-rs#33).
+- CI: the `Emit compile guard` job reads a `column-rs-ref: <branch>` line from the PR body, so a breaking change to the query-output surface can be compiled against its companion column-rs branch (#447 follow-up).
+
 ## [0.101.7] - 2026-09-16
 
 ### Fixed

@@ -22,7 +22,7 @@
 
 use super::batch::{
     compare_for_order, run_parallel, run_parallel_top_n, AggPart, Batch, JoinTables, Opcode,
-    Program, Result, ScanSource, Segment, TopN, Value, Vm, VmError,
+    Program, QueryOutput, Result, ScanSource, Segment, TopN, Value, Vm, VmError,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -105,7 +105,7 @@ impl Segment for InMemorySegment {
 /// - `ORDER BY ... LIMIT ...` without aggregates runs as a bounded top-N
 ///   per segment and at the merge (#109) instead of materializing every
 ///   row before the final sort.
-pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<Vec<Vec<Value>>> {
+pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput> {
     let (body, combine, sort, limit_op) = program.split_finalize();
     let Some(Opcode::Combine {
         agg_parts,
@@ -127,7 +127,15 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<Vec<Vec<Valu
     if let Some(limit) = bounded_scan_limit(program) {
         return bounded_scan(segments, &body, limit);
     }
-    let rows = match (agg_parts.is_empty() && !distinct, order_by, limit) {
+    // #436: `Combine` is always emitted, but for a plain scan/filter/
+    // projection it has nothing to do -- `finalize` would be the identity.
+    // Return the chunked output as-is rather than transposing every
+    // surviving row into a `Vec` and back (which is what the reverted
+    // first attempt did on exactly this path, the one the issue is about).
+    if agg_parts.is_empty() && !distinct && order_by.is_none() && limit.is_none() {
+        return run_parallel(segments, &body);
+    }
+    let output = match (agg_parts.is_empty() && !distinct, order_by, limit) {
         (true, Some((col, descending)), Some(limit)) => run_parallel_top_n(
             segments,
             &body,
@@ -139,7 +147,14 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<Vec<Vec<Valu
         )?,
         _ => run_parallel(segments, &body)?,
     };
-    finalize(agg_parts, *num_group_keys, *distinct, order_by, limit, rows)
+    finalize(
+        agg_parts,
+        *num_group_keys,
+        *distinct,
+        order_by,
+        limit,
+        output.into_rows(),
+    )
 }
 
 /// The `LIMIT` when `program` can be satisfied by a sequential prefix scan
@@ -175,23 +190,19 @@ pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
 /// one's freshly-loaded batch, stopping (and truncating to exactly `limit`
 /// rows) as soon as enough have been collected -- segments past that
 /// point are never loaded.
-fn bounded_scan<S: Segment>(
-    segments: &[S],
-    body: &[Opcode],
-    limit: usize,
-) -> Result<Vec<Vec<Value>>> {
-    let mut rows = Vec::with_capacity(limit);
+fn bounded_scan<S: Segment>(segments: &[S], body: &[Opcode], limit: usize) -> Result<QueryOutput> {
+    let mut output = QueryOutput::default();
     for segment in segments {
-        if rows.len() >= limit {
+        if output.num_rows() >= limit {
             break;
         }
         let batch = segment.load()?;
         let mut vm = Vm::new();
         vm.execute(&batch, body)?;
-        rows.extend(vm.take_output());
+        output.extend(vm.take_output());
     }
-    rows.truncate(limit);
-    Ok(rows)
+    output.truncate(limit);
+    Ok(output)
 }
 
 /// Apply `Combine`/`Sort`/`Limit`'s semantics to a flat row list: merge
@@ -209,7 +220,7 @@ pub fn finalize(
     order_by: Option<(usize, bool)>,
     limit: Option<usize>,
     rows: Vec<Vec<Value>>,
-) -> Result<Vec<Vec<Value>>> {
+) -> Result<QueryOutput> {
     let mut result_rows = if !agg_parts.is_empty() {
         let mut groups: Vec<(Vec<Value>, Vec<Value>)> = Vec::new();
         let mut index: HashMap<String, usize> = HashMap::new();
@@ -264,7 +275,7 @@ pub fn finalize(
         result_rows.truncate(limit);
     }
 
-    Ok(result_rows)
+    Ok(QueryOutput::from_rows(result_rows))
 }
 
 /// Combine two emitted rows for the same group key, applying the
@@ -449,7 +460,7 @@ pub struct JoinProgram {
 /// joined batch (left columns then right payload), and run `body` over it
 /// as a single in-memory segment via [`run`]. Both sides are already
 /// `Batch`es, so no [`ScanSourceResolver`] is needed (see [`NoResolver`]).
-pub fn run_join(left: &Batch, right: &Batch, plan: &JoinProgram) -> Result<Vec<Vec<Value>>> {
+pub fn run_join(left: &Batch, right: &Batch, plan: &JoinProgram) -> Result<QueryOutput> {
     run_join_segments(
         vec![InMemorySegment(left.clone())],
         ScanSource::InMemory(right.clone()),
@@ -479,7 +490,7 @@ pub fn run_join_segments<S: Segment, R: ScanSourceResolver>(
     right: ScanSource,
     plan: &JoinProgram,
     resolver: &R,
-) -> Result<Vec<Vec<Value>>> {
+) -> Result<QueryOutput> {
     let right_batch = resolve_scan_source(right, resolver)?;
     let build: Vec<Opcode> = plan.build.opcodes().cloned().collect();
     let mut builder = Vm::new();
@@ -619,7 +630,7 @@ pub fn run_multi_join_segments<S: Segment, R: ScanSourceResolver>(
     rights: Vec<ScanSource>,
     plan: &MultiJoinProgram,
     resolver: &R,
-) -> Result<Vec<Vec<Value>>> {
+) -> Result<QueryOutput> {
     if rights.len() != plan.builds.len() {
         return Err(VmError::MalformedProgram {
             opcode: "HashBuild",

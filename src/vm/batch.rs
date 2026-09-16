@@ -660,6 +660,237 @@ impl Instruction {
     }
 }
 
+/// One `Opcode::Emit`'s worth of output: one column per output position,
+/// every column the same length. Columns are `Arc`-shared, so a bare
+/// projection's chunk is a refcount bump on the batch's own column, not a
+/// copy.
+pub type Chunk = Vec<Arc<Vec<Value>>>;
+
+/// A query's result as an ordered list of column-major chunks (#436) --
+/// Arrow's ChunkedArray shape. Replaces the row-major `Vec<Vec<Value>>`
+/// every batch-engine execution entry point (`Opcode::Emit`,
+/// [`run_parallel`], `vm::engine::run`/`run_join`/`finalize`) used to
+/// build and pass around: materializing one `Vec` per row was measured at
+/// 96% of a 5M-row filter's time and RSS, purely container overhead (a
+/// `Vec` header plus a malloc'd buffer per row, for as little as one
+/// `i64`/`f64` of payload).
+///
+/// Two invariants give this its cost profile, and the first attempt at
+/// #436 (90c8571, reverted in v0.101.6) broke both:
+///
+/// - **Chunks are never concatenated.** Each `Emit` contributes one chunk;
+///   [`QueryOutput::extend`] moves the other side's chunks in (`O(chunks)`,
+///   no payload copy). The reverted version concatenated per column with
+///   `Vec::extend`, so every not-yet-consumed segment output coexisted
+///   with the growing merged copy -- ~2x peak memory, plus first-touch
+///   page faults for the extra gigabyte: +313 MB per output column at 5M
+///   rows against row-major's +124 MB, and a 25% *slowdown* on the very
+///   query this issue is about.
+/// - **Row shape is produced lazily and only where rows are genuinely
+///   needed.** [`QueryOutput::rows`] yields one row at a time over the
+///   chunks; [`QueryOutput::into_rows`] materializes, and is meant for the
+///   paths whose row count is bounded by `LIMIT` or by how many groups
+///   survive (`ORDER BY`'s top-N heap, `GROUP BY`'s cross-segment merge,
+///   `DISTINCT`), never for a full survivor set. The reverted version
+///   transposed the whole result to rows inside `vm::engine::run` and
+///   back again in `finalize` even when neither had any work to do.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct QueryOutput {
+    /// In emit/segment order. Every chunk has [`Self::num_columns`]
+    /// columns; zero-row chunks are dropped on the way in.
+    chunks: Vec<Chunk>,
+}
+
+impl QueryOutput {
+    /// One chunk from already column-major data (`columns[c][r]`).
+    pub fn new(columns: Vec<Vec<Value>>) -> Self {
+        Self::from_chunk(columns.into_iter().map(Arc::new).collect())
+    }
+
+    /// One chunk from `Arc`-shared columns. A zero-row chunk contributes
+    /// nothing (an output with no rows has no chunks and no column count).
+    pub fn from_chunk(chunk: Chunk) -> Self {
+        let mut out = Self::default();
+        out.push_chunk(chunk);
+        out
+    }
+
+    /// Transposes row-major data into one chunk, inferring the column
+    /// count from the first row (0 for an empty `rows`).
+    pub fn from_rows(rows: Vec<Vec<Value>>) -> Self {
+        let num_columns = rows.first().map_or(0, Vec::len);
+        let mut columns: Vec<Vec<Value>> = (0..num_columns)
+            .map(|_| Vec::with_capacity(rows.len()))
+            .collect();
+        for row in rows {
+            for (c, value) in row.into_iter().enumerate() {
+                if let Some(column) = columns.get_mut(c) {
+                    column.push(value);
+                }
+            }
+        }
+        Self::new(columns)
+    }
+
+    /// Number of output columns (0 when there are no rows).
+    #[must_use]
+    pub fn num_columns(&self) -> usize {
+        self.chunks.first().map_or(0, Vec::len)
+    }
+
+    /// Total rows across every chunk.
+    #[must_use]
+    pub fn num_rows(&self) -> usize {
+        self.chunks.iter().map(chunk_len).sum()
+    }
+
+    /// True when there are no rows.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.chunks.is_empty()
+    }
+
+    /// Alias for [`Self::num_rows`] -- callers migrating from the old
+    /// row-major `Vec<Vec<Value>>` (#436) that only ever asked its length.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.num_rows()
+    }
+
+    /// The chunks, in emit/segment order -- the zero-copy way to consume
+    /// the output column by column.
+    #[must_use]
+    pub fn chunks(&self) -> &[Chunk] {
+        &self.chunks
+    }
+
+    /// The chunks, moved out.
+    #[must_use]
+    pub fn into_chunks(self) -> Vec<Chunk> {
+        self.chunks
+    }
+
+    /// Adds one chunk (one `Emit`'s output). Skips a zero-row chunk, so
+    /// a heavily filtered scan doesn't accumulate one empty chunk per
+    /// segment.
+    pub fn push_chunk(&mut self, chunk: Chunk) {
+        if chunk_len(&chunk) > 0 {
+            self.chunks.push(chunk);
+        }
+    }
+
+    /// Appends `other`'s chunks after this output's -- moves `O(chunks)`
+    /// pointers, copies no payload. This is the cross-segment merge.
+    pub fn extend(&mut self, other: QueryOutput) {
+        self.chunks.extend(other.chunks);
+    }
+
+    /// The output as flat columns, concatenating chunks -- an `O(rows)`
+    /// copy when there is more than one chunk (a single chunk whose
+    /// columns are not shared is moved out for free). For consumers that
+    /// need contiguous columns; iterate [`Self::chunks`] when they don't.
+    #[must_use]
+    pub fn into_columns(self) -> Vec<Vec<Value>> {
+        let num_columns = self.num_columns();
+        let num_rows = self.num_rows();
+        let mut columns: Vec<Vec<Value>> = (0..num_columns)
+            .map(|_| Vec::with_capacity(num_rows))
+            .collect();
+        for chunk in self.chunks {
+            for (column, shared) in columns.iter_mut().zip(chunk) {
+                match Arc::try_unwrap(shared) {
+                    Ok(owned) if column.is_empty() => *column = owned,
+                    Ok(owned) => column.extend(owned),
+                    Err(shared) => column.extend(shared.iter().cloned()),
+                }
+            }
+        }
+        columns
+    }
+
+    /// Yields rows one at a time across the chunks -- one transient
+    /// `Vec<Value>` per yielded row, no materialized row table. The way
+    /// a row-oriented consumer (a printer) should read a large result.
+    pub fn rows(&self) -> impl Iterator<Item = Vec<Value>> + '_ {
+        self.chunks.iter().flat_map(|chunk| {
+            (0..chunk_len(chunk)).map(move |r| {
+                chunk
+                    .iter()
+                    .map(|column| column.get(r).cloned().unwrap_or(Value::Null))
+                    .collect()
+            })
+        })
+    }
+
+    /// Materializes every row -- one `Vec<Value>` allocation per row.
+    /// Only for paths whose row count is bounded by `LIMIT` or by how many
+    /// groups survive (see the type's own doc comment); a large result
+    /// should go through [`Self::rows`] or [`Self::chunks`] instead.
+    #[must_use]
+    pub fn into_rows(self) -> Vec<Vec<Value>> {
+        self.rows().collect()
+    }
+
+    /// Keeps the first `n` rows: whole chunks while they fit, then one
+    /// truncated copy of the chunk that crosses the boundary (bounded by
+    /// `n`, so never a large copy on a `LIMIT` path).
+    pub fn truncate(&mut self, n: usize) {
+        let mut kept = 0usize;
+        let mut cut: Option<usize> = None;
+        for (i, chunk) in self.chunks.iter_mut().enumerate() {
+            let len = chunk_len(chunk);
+            let remaining = n.saturating_sub(kept);
+            if len <= remaining {
+                kept = kept.saturating_add(len);
+                continue;
+            }
+            if remaining > 0 {
+                let head: Chunk = chunk
+                    .iter()
+                    .map(|column| Arc::new(column.iter().take(remaining).cloned().collect()))
+                    .collect();
+                *chunk = head;
+                cut = Some(i.saturating_add(1));
+            } else {
+                cut = Some(i);
+            }
+            break;
+        }
+        if let Some(at) = cut {
+            self.chunks.truncate(at);
+        }
+    }
+}
+
+/// Row count of one chunk -- its first column's length (every column of a
+/// chunk is the same length; an empty chunk has no columns).
+fn chunk_len(chunk: &Chunk) -> usize {
+    chunk.first().map_or(0, |column| column.len())
+}
+
+/// Row-shape equality against the pre-#436 row-major representation --
+/// lets a caller (or a test asserting an expected result) compare a
+/// [`QueryOutput`] to a `vec![vec![...], ...]` literal directly, without
+/// spelling out a transpose. Transposes `self` (clones), so this is for
+/// convenience/tests, not a hot path.
+impl PartialEq<Vec<Vec<Value>>> for QueryOutput {
+    fn eq(&self, other: &Vec<Vec<Value>>) -> bool {
+        self.clone().into_rows() == *other
+    }
+}
+
+impl From<Vec<Vec<Value>>> for QueryOutput {
+    fn from(rows: Vec<Vec<Value>>) -> Self {
+        Self::from_rows(rows)
+    }
+}
+
+impl From<QueryOutput> for Vec<Vec<Value>> {
+    fn from(output: QueryOutput) -> Self {
+        output.into_rows()
+    }
+}
+
 /// A linear program of [`Instruction`]s, mirroring sqlite-rs's
 /// `vdbe::program::Program`. Everything the executor needs is *in* the
 /// instruction stream: the columns to load are the [`Opcode::LoadColumn`]
@@ -849,17 +1080,18 @@ fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec
 ///
 /// `GroupReduce`/`Reduce` results are per-segment only — merging partial
 /// aggregates across segments is not performed here.
-pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<Vec<Vec<Value>>> {
-    let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments, |segment| {
+pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<QueryOutput> {
+    let per_segment: Vec<Result<QueryOutput>> = run_morsels(segments, |segment| {
         let batch = segment.load()?;
         let mut vm = Vm::new();
         vm.execute(&batch, program)?;
         Ok(std::mem::take(&mut vm.output))
     });
 
-    let mut all = Vec::new();
-    for rows in per_segment {
-        all.extend(rows?);
+    // #436: column-wise `Vec::extend` per segment, not a per-row rebuild.
+    let mut all = QueryOutput::default();
+    for output in per_segment {
+        all.extend(output?);
     }
     Ok(all)
 }
@@ -941,15 +1173,17 @@ impl Ord for TopNItem {
 /// bounded max-heap of the current worst kept row: `O(rows.len() log
 /// spec.limit)` and `O(spec.limit)` peak memory, instead of a full sort's
 /// `O(n log n)` time and `O(n)` memory.
-fn top_n_reduce(rows: Vec<Vec<Value>>, spec: &TopN) -> Vec<Vec<Value>> {
+fn top_n_reduce(rows: impl IntoIterator<Item = Vec<Value>>, spec: &TopN) -> Vec<Vec<Value>> {
     use std::collections::BinaryHeap;
 
     if spec.limit == 0 {
         return Vec::new();
     }
 
-    let mut heap: BinaryHeap<TopNItem> =
-        BinaryHeap::with_capacity(spec.limit.min(rows.len()).saturating_add(1));
+    // #436: `rows` is fed lazily (`QueryOutput::rows`), so the heap is the
+    // only row-shaped state -- `O(spec.limit)`, never one `Vec` per
+    // surviving row.
+    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(spec.limit.saturating_add(1));
     for row in rows {
         let item = TopNItem {
             row,
@@ -980,19 +1214,25 @@ pub fn run_parallel_top_n<S: Segment>(
     segments: &[S],
     program: &[Opcode],
     spec: &TopN,
-) -> Result<Vec<Vec<Value>>> {
+) -> Result<QueryOutput> {
+    // #436: `top_n_reduce`'s heap is inherently row-shaped (each candidate
+    // is compared by one `ORDER BY` column against the current worst kept
+    // row), but it only ever holds `spec.limit` rows at a time and is fed
+    // lazily from the segment's chunks -- row-major here is bounded by the
+    // query's own `LIMIT`, not by how many rows survived the scan.
     let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments, |segment| {
         let batch = segment.load()?;
         let mut vm = Vm::new();
         vm.execute(&batch, program)?;
-        Ok(top_n_reduce(std::mem::take(&mut vm.output), spec))
+        let output = std::mem::take(&mut vm.output);
+        Ok(top_n_reduce(output.rows(), spec))
     });
 
     let mut all = Vec::new();
     for rows in per_segment {
         all.extend(rows?);
     }
-    Ok(top_n_reduce(all, spec))
+    Ok(QueryOutput::from_rows(top_n_reduce(all, spec)))
 }
 
 /// A pathological/buggy compiled program can't run more `Vm::step` calls
@@ -1502,7 +1742,7 @@ pub struct Vm {
     /// `Eq`/`Ne` against a `Dict` column) read it directly; every other
     /// opcode reads through [`Vm::reg`], which materializes on demand.
     typed_registers: HashMap<usize, Arc<Column>>,
-    output: Vec<Vec<Value>>,
+    output: QueryOutput,
     join_tables: JoinTables,
     /// A pending `Filter` result not yet applied to `registers`. See
     /// [`Selection`].
@@ -1805,22 +2045,18 @@ impl Vm {
     /// for callers driving [`Self::execute`] batch-by-batch themselves
     /// (e.g. a bounded scan that stops once enough rows are collected,
     /// #108) rather than via [`Self::run`]/[`run_parallel`].
-    pub fn take_output(&mut self) -> Vec<Vec<Value>> {
+    pub fn take_output(&mut self) -> QueryOutput {
         std::mem::take(&mut self.output)
     }
 
     /// Drive `program` across every batch `source` yields, honoring
     /// [`Opcode::Scan`]/[`Opcode::NextSegment`]/[`Opcode::Halt`] control
     /// flow, and return the rows collected by [`Opcode::Emit`].
-    pub fn run<T: Source>(
-        &mut self,
-        source: &mut T,
-        program: &[Opcode],
-    ) -> Result<Vec<Vec<Value>>> {
-        self.output.clear();
+    pub fn run<T: Source>(&mut self, source: &mut T, program: &[Opcode]) -> Result<QueryOutput> {
+        self.output = QueryOutput::default();
         let mut batch = match source.next_batch() {
             Some(b) => b,
-            None => return Ok(Vec::new()),
+            None => return Ok(QueryOutput::default()),
         };
         self.selection = None;
         let mut pc = 0usize;
@@ -2553,41 +2789,27 @@ impl Vm {
                         return Err(VmError::RegisterLengthMismatch { opcode });
                     }
                 }
-                let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());
-                let mut rows: Vec<Vec<Value>> = (0..num_rows)
-                    .map(|_| Vec::with_capacity(cols.len()))
+                // #436: one chunk per `Emit` -- no per-row `Vec`, no
+                // row-major transpose, and no copy at all when there is
+                // no selection: the emitted `Arc` *is* the register's
+                // column (a bare `LoadColumn`'s is the batch's own, shared
+                // by refcount; a `Map`/`Reduce` result is moved as-is).
+                // Only a selected subset has to be materialized, since
+                // the unselected cells can't be left behind in a shared
+                // `Arc`.
+                let chunk: Chunk = cols
+                    .into_iter()
+                    .map(|col| match &selection {
+                        Some(sel) => Arc::new(
+                            sel.indices
+                                .iter()
+                                .map(|&idx| col[idx as usize].clone())
+                                .collect(),
+                        ),
+                        None => col,
+                    })
                     .collect();
-                for col in cols {
-                    if let Some(sel) = &selection {
-                        // A selected subset can't be moved out of the
-                        // `Arc` without leaving the unselected cells
-                        // behind, so this always clones.
-                        for (row, &idx) in sel.indices.iter().enumerate() {
-                            rows[row].push(col[idx as usize].clone());
-                        }
-                        continue;
-                    }
-                    // #264: registers built fresh by this step (Map,
-                    // Reduce, ...) hold the only strong reference, so
-                    // `try_unwrap` moves their cells out for free; a
-                    // register `Arc::clone`d straight from the batch (a
-                    // bare `LoadColumn` with no transform, or a repeated
-                    // register above) is still shared with the batch/
-                    // another emitted column, so its cells are cloned.
-                    match Arc::try_unwrap(col) {
-                        Ok(owned) => {
-                            for (row, value) in owned.into_iter().enumerate() {
-                                rows[row].push(value);
-                            }
-                        }
-                        Err(shared) => {
-                            for (row, value) in shared.iter().enumerate() {
-                                rows[row].push(value.clone());
-                            }
-                        }
-                    }
-                }
-                self.output.extend(rows);
+                self.output.push_chunk(chunk);
             }
             // Meaningful only as loop markers interpreted by `run` --
             // and `Combine`/`Sort`/`Limit` are the cross-segment
@@ -3086,6 +3308,173 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_output_from_rows_round_trips_through_into_rows() {
+        let rows = vec![
+            vec![Value::Int(1), Value::Str("a".into())],
+            vec![Value::Int(2), Value::Str("b".into())],
+        ];
+        let output = QueryOutput::from_rows(rows.clone());
+        assert_eq!(output.num_columns(), 2);
+        assert_eq!(output.num_rows(), 2);
+        assert_eq!(output.clone().into_rows(), rows);
+        // #436: `PartialEq<Vec<Vec<Value>>>` lets a `QueryOutput` compare
+        // directly against a row-major literal, no explicit `into_rows()`.
+        assert_eq!(output, rows);
+    }
+
+    #[test]
+    fn query_output_from_rows_of_empty_vec_has_no_columns() {
+        let output = QueryOutput::from_rows(Vec::new());
+        assert_eq!(output.num_columns(), 0);
+        assert_eq!(output.num_rows(), 0);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn query_output_extend_concatenates_column_wise() {
+        let mut a = QueryOutput::new(vec![vec![Value::Int(1)], vec![Value::Int(10)]]);
+        let b = QueryOutput::new(vec![vec![Value::Int(2)], vec![Value::Int(20)]]);
+        a.extend(b);
+        assert_eq!(a.num_rows(), 2);
+        assert_eq!(
+            a,
+            vec![
+                vec![Value::Int(1), Value::Int(10)],
+                vec![Value::Int(2), Value::Int(20)],
+            ]
+        );
+    }
+
+    #[test]
+    fn query_output_extend_onto_a_default_output_adopts_the_other_columns() {
+        // The shape `Opcode::Emit` and `run_parallel` rely on: the very
+        // first `extend` call onto a brand new (zero-column) `QueryOutput`
+        // must adopt the incoming columns, not try to zip zero columns
+        // against N and silently drop everything.
+        let mut acc = QueryOutput::default();
+        acc.extend(QueryOutput::new(vec![vec![Value::Int(1), Value::Int(2)]]));
+        assert_eq!(acc, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+    }
+
+    #[test]
+    fn query_output_extend_moves_chunks_and_never_concatenates() {
+        // #436's cost profile rests on this: merging segment outputs is a
+        // pointer move per chunk, so peak memory stays at one copy of the
+        // payload. The first attempt concatenated per column instead.
+        let mut a = QueryOutput::new(vec![vec![Value::Int(1)], vec![Value::Int(10)]]);
+        let b = QueryOutput::new(vec![vec![Value::Int(2)], vec![Value::Int(20)]]);
+        let b_col0 = Arc::clone(&b.chunks()[0][0]);
+        a.extend(b);
+        assert_eq!(a.chunks().len(), 2, "two emits stay two chunks");
+        assert_eq!(a.num_rows(), 2);
+        assert_eq!(a.num_columns(), 2);
+        // The second chunk's column is the very same allocation, not a copy.
+        assert!(Arc::ptr_eq(&a.chunks()[1][0], &b_col0));
+        assert_eq!(
+            a,
+            vec![
+                vec![Value::Int(1), Value::Int(10)],
+                vec![Value::Int(2), Value::Int(20)],
+            ]
+        );
+    }
+
+    #[test]
+    fn query_output_push_chunk_drops_an_empty_chunk() {
+        let mut out = QueryOutput::default();
+        out.push_chunk(vec![Arc::new(Vec::new()), Arc::new(Vec::new())]);
+        assert!(out.is_empty());
+        assert_eq!(out.chunks().len(), 0);
+        assert_eq!(out.num_columns(), 0);
+        out.push_chunk(vec![
+            Arc::new(vec![Value::Int(7)]),
+            Arc::new(vec![Value::Int(8)]),
+        ]);
+        assert_eq!(out.chunks().len(), 1);
+        assert_eq!(out, vec![vec![Value::Int(7), Value::Int(8)]]);
+    }
+
+    #[test]
+    fn query_output_rows_iterates_across_chunks_in_order() {
+        let mut out = QueryOutput::new(vec![vec![Value::Int(1), Value::Int(2)]]);
+        out.extend(QueryOutput::new(vec![vec![Value::Int(3)]]));
+        let rows: Vec<Vec<Value>> = out.rows().collect();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(1)],
+                vec![Value::Int(2)],
+                vec![Value::Int(3)]
+            ]
+        );
+        assert_eq!(out.into_rows(), rows);
+    }
+
+    #[test]
+    fn query_output_into_columns_concatenates_chunks() {
+        let mut out = QueryOutput::new(vec![vec![Value::Int(1)], vec![Value::Str("a".into())]]);
+        out.extend(QueryOutput::new(vec![
+            vec![Value::Int(2), Value::Int(3)],
+            vec![Value::Str("b".into()), Value::Str("c".into())],
+        ]));
+        assert_eq!(
+            out.into_columns(),
+            vec![
+                vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+                vec![
+                    Value::Str("a".into()),
+                    Value::Str("b".into()),
+                    Value::Str("c".into())
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn query_output_truncate_crosses_a_chunk_boundary() {
+        // Chunks of 2, 2, 2 rows; keep 3: the first chunk whole, one row of
+        // the second, and the third dropped entirely.
+        let mut out = QueryOutput::new(vec![vec![Value::Int(1), Value::Int(2)]]);
+        out.extend(QueryOutput::new(vec![vec![Value::Int(3), Value::Int(4)]]));
+        out.extend(QueryOutput::new(vec![vec![Value::Int(5), Value::Int(6)]]));
+        out.truncate(3);
+        assert_eq!(out.chunks().len(), 2);
+        assert_eq!(out.num_rows(), 3);
+        assert_eq!(
+            out,
+            vec![
+                vec![Value::Int(1)],
+                vec![Value::Int(2)],
+                vec![Value::Int(3)]
+            ]
+        );
+        // Exactly on a boundary drops the rest without copying anything.
+        out.truncate(2);
+        assert_eq!(out.chunks().len(), 1);
+        assert_eq!(out, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+        // Larger than the row count is a no-op.
+        out.truncate(10);
+        assert_eq!(out.num_rows(), 2);
+    }
+
+    #[test]
+    fn query_output_truncate_shortens_every_column_equally() {
+        let mut output = QueryOutput::new(vec![
+            vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+            vec![Value::Int(10), Value::Int(20), Value::Int(30)],
+        ]);
+        output.truncate(2);
+        assert_eq!(output.num_rows(), 2);
+        assert_eq!(
+            output,
+            vec![
+                vec![Value::Int(1), Value::Int(10)],
+                vec![Value::Int(2), Value::Int(20)],
+            ]
+        );
+    }
 
     #[test]
     fn agg_func_from_name_valid_case_insensitive() {
@@ -5370,7 +5759,7 @@ mod tests {
                 registers: vec![0].into(),
             },
         ];
-        let rows = run_parallel(&segments, &program).unwrap();
+        let rows = run_parallel(&segments, &program).unwrap().into_rows();
         let ids: Vec<i64> = rows
             .iter()
             .map(|r| match &r[0] {

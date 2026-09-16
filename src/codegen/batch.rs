@@ -3646,7 +3646,9 @@ mod tests {
 
     fn run_program(program: &Program) -> Vec<Vec<Value>> {
         use crate::vm::engine::{run, InMemorySegment};
-        run(&[InMemorySegment(amount_batch())], program).unwrap()
+        run(&[InMemorySegment(amount_batch())], program)
+            .unwrap()
+            .into_rows()
     }
 
     #[test]
