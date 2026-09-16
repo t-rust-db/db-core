@@ -18,6 +18,7 @@ pub use crate::vm::column::{Bitmap, Column};
 pub use crate::vm::join::JoinKind;
 use crate::vm::join::{should_emit, JoinHashTable};
 use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -1082,61 +1083,12 @@ impl std::error::Error for VmError {}
 /// Result type of every fallible VM operation, erroring with [`VmError`].
 pub type Result<T> = std::result::Result<T, VmError>;
 
-/// A compound join key built from a probe/build row's key columns.
-///
-/// NULL-safe by construction: [`PartialEq`] treats any key containing a
-/// [`Value::Null`] component as unequal to everything (including another
-/// all-`Null` key), matching SQL's `NULL = NULL` is never true rule. `Hash`
-/// only needs to agree with `Eq` in one direction (equal keys must hash
-/// equal; unequal keys may collide), so hashing every key -- `Null`
-/// included -- by its plain contents is sound even though equality itself
-/// special-cases `Null`.
-#[derive(Debug, Clone)]
-struct JoinKey(Vec<Value>);
-
-impl PartialEq for JoinKey {
-    fn eq(&self, other: &Self) -> bool {
-        if self.0.iter().any(|v| matches!(v, Value::Null)) {
-            return false;
-        }
-        self.0 == other.0
-    }
-}
-
-impl Eq for JoinKey {}
-
-impl Hash for JoinKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        for value in &self.0 {
-            // Hash by variant too, so Int(1) and Str("1") never collide as keys.
-            match value {
-                Value::Int(v) => {
-                    0u8.hash(state);
-                    v.hash(state);
-                }
-                Value::Float(v) => {
-                    1u8.hash(state);
-                    v.to_bits().hash(state);
-                }
-                Value::Bool(v) => {
-                    2u8.hash(state);
-                    v.hash(state);
-                }
-                Value::Str(v) => {
-                    3u8.hash(state);
-                    v.hash(state);
-                }
-                Value::Null => 4u8.hash(state),
-            }
-        }
-    }
-}
-
-/// #263: `Opcode::GroupReduce`'s key -- unlike [`JoinKey`], NULLs must
-/// group together (`GROUP BY` semantics), so `PartialEq`/`Eq` are derived
-/// (plain [`Value`] equality, where `Null == Null`) rather than
-/// hand-written. `Hash` reuses `JoinKey`'s variant-tagged scheme so
-/// `Int(1)` and `Str("1")` still never collide.
+/// #263: `Opcode::GroupReduce`'s key -- `PartialEq`/`Eq` are derived
+/// (plain [`Value`] equality, where `Null == Null`), matching `GROUP BY`
+/// semantics (as distinct from a join key, where NULL never matches
+/// anything, including another NULL -- see [`join_keys_match`]). `Hash`
+/// uses a variant-tagged scheme (shared with joins via
+/// [`hash_group_value`]) so `Int(1)` and `Str("1")` never collide.
 #[derive(Debug, Clone, PartialEq)]
 struct GroupKey(Vec<Value>);
 
@@ -1179,6 +1131,76 @@ fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
     }
 }
 
+/// #440: column-wise row hashing for `GroupReduce`/`HashBuild`/`HashProbe` --
+/// one [`DefaultHasher`] per row, folded column by column (outer loop over
+/// `columns`, inner loop over rows) rather than the row-major "gather a
+/// `Vec<Value>` key, then hash it" shape those opcodes used before. Never
+/// materializes a per-row key: the row's contribution to its own hasher is
+/// read straight out of each column in turn.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "callers pass `row`/`physical(row)` drawn from that same batch's `0..num_rows`, and every key/build column here holds exactly `num_rows` values (checked by the caller via `RegisterLengthMismatch` before this runs)"
+)]
+fn hash_columns_by_row(
+    columns: &[&[Value]],
+    num_rows: usize,
+    physical: impl Fn(usize) -> usize,
+) -> Vec<u64> {
+    let mut hashers: Vec<DefaultHasher> = (0..num_rows).map(|_| DefaultHasher::new()).collect();
+    for column in columns {
+        for (row, hasher) in hashers.iter_mut().enumerate() {
+            hash_group_value(&column[physical(row)], hasher);
+        }
+    }
+    hashers.into_iter().map(|h| h.finish()).collect()
+}
+
+/// SQL join-key equality between a probe row and an already-built row's
+/// key columns: NULL never matches anything, including another NULL (as
+/// distinct from [`GroupKey`]'s `GROUP BY` semantics, where `Null ==
+/// Null`) -- see #440. `build_keys[i][build_row]` is the build-side value
+/// of key column `i`; `probe_columns[i][probe_row]` is its probe-side
+/// counterpart.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`probe_row` is in range for every `probe_columns` entry (same invariant as `hash_columns_by_row`'s caller); `build_row` came from `BuildTable::index`, which only ever stores row numbers `push`ed alongside `build_keys` in `Opcode::HashBuild`, so it is in range for every one of `build_keys`'s equal-length columns"
+)]
+fn join_keys_match(
+    probe_columns: &[&[Value]],
+    probe_row: usize,
+    build_keys: &[Vec<Value>],
+    build_row: usize,
+) -> bool {
+    probe_columns.iter().enumerate().all(|(i, c)| {
+        let probe_value = &c[probe_row];
+        let build_value = &build_keys[i][build_row];
+        !matches!(probe_value, Value::Null)
+            && !matches!(build_value, Value::Null)
+            && probe_value == build_value
+    })
+}
+
+/// One `Opcode::HashBuild`'s table: key and payload columns stored
+/// column-major (one `Vec<Value>` allocation per column, not per row --
+/// #440), plus a flat `index` mapping each build row's hash to that row's
+/// position in `keys`/`payload`. `index`'s value is a plain row number,
+/// not an owned key -- collisions are resolved by [`join_keys_match`]
+/// against `keys`, not by the table's own `Eq`.
+struct BuildTable {
+    index: JoinHashTable<u64, usize>,
+    keys: Vec<Vec<Value>>,
+    payload: Vec<Vec<Value>>,
+}
+
+impl fmt::Debug for BuildTable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BuildTable")
+            .field("len", &self.index.len())
+            .field("capacity", &self.index.capacity())
+            .finish()
+    }
+}
+
 /// The join hash tables a [`Vm`] has built (`Opcode::HashBuild`), keyed
 /// by table id -- an opaque, cheaply clonable handle (#272). Build once,
 /// then hand a clone to every probe-side [`Vm`] via
@@ -1186,16 +1208,7 @@ fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
 /// of each rebuilding (or cloning) it. Cloning is an `Arc` bump per
 /// table, never a copy of the entries.
 #[derive(Debug, Clone, Default)]
-pub struct JoinTables(HashMap<usize, Arc<JoinHashTable<JoinKey, Vec<Value>>>>);
-
-impl fmt::Debug for JoinHashTable<JoinKey, Vec<Value>> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("JoinHashTable")
-            .field("len", &self.len())
-            .field("capacity", &self.capacity())
-            .finish()
-    }
-}
+pub struct JoinTables(HashMap<usize, Arc<BuildTable>>);
 
 /// A pending, not-yet-applied [`Opcode::Filter`] result (#265): `indices`
 /// are the surviving row positions in the space every live register
@@ -1574,7 +1587,8 @@ impl Vm {
     #[allow(
         clippy::indexing_slicing,
         clippy::arithmetic_side_effects,
-        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push"
+        clippy::needless_range_loop,
+        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push. `0..num_rows` loops that index a same-length `hashes: Vec<u64>` (#439/#440) also call `physical(row)` or otherwise use `row` beyond that one index, so `enumerate()` would not simplify them"
     )]
     fn step(&mut self, batch: &Batch, op: &Opcode) -> Result<()> {
         let opcode = op.name();
@@ -1788,25 +1802,22 @@ impl Vm {
                         .map_or(row, |sel| sel.indices[row] as usize)
                 };
 
-                // #439: probe by hash first, on a borrowed row view, and
-                // only clone+allocate a `Vec<Value>` key on a genuine new
-                // group -- the old code built and cloned that `Vec` (plus
-                // its `String`s) for every input row, even though nearly
-                // every row lands in a group that already exists.
-                // `group_index` buckets group ids by hash (collisions
-                // possible, so each bucket is checked for an exact match)
-                // rather than owning a `GroupKey` per entry.
+                // #439/#440: hash column-wise (`hash_columns_by_row`, no
+                // per-row key materialized), then probe by hash first on a
+                // borrowed row view, only clone+allocate a `Vec<Value>`
+                // key on a genuine new group -- the old code built and
+                // cloned that `Vec` (plus its `String`s) for every input
+                // row, even though nearly every row lands in a group that
+                // already exists. `group_index` buckets group ids by hash
+                // (collisions possible, so each bucket is checked for an
+                // exact match) rather than owning a `GroupKey` per entry.
+                let hashes = hash_columns_by_row(&key_columns, num_rows, physical);
                 let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
                 let mut group_keys: Vec<Vec<Value>> = Vec::new();
                 let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
                 for row in 0..num_rows {
                     let p = physical(row);
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    for c in &key_columns {
-                        hash_group_value(&c[p], &mut hasher);
-                    }
-                    let hash = hasher.finish();
-                    let bucket = group_index.entry(hash).or_default();
+                    let bucket = group_index.entry(hashes[row]).or_default();
                     let existing = bucket.iter().copied().find(|&g| {
                         key_columns
                             .iter()
@@ -1909,15 +1920,42 @@ impl Vm {
                         .map_or(row, |sel| sel.indices[row] as usize)
                 };
 
-                let mut ht: JoinHashTable<JoinKey, Vec<Value>> =
-                    JoinHashTable::with_capacity(num_rows);
+                // #440: hash the key columns column-wise (no per-row
+                // `Vec<Value>` key), then store key/payload data
+                // column-major too -- one allocation per key/payload
+                // column (reserved up front), not one per row. `index`
+                // maps each row's hash to its own row number; a later
+                // probe still has to verify a candidate row's actual
+                // values (`join_keys_match`), since two different keys
+                // can share a hash.
+                let hashes = hash_columns_by_row(&key_columns, num_rows, physical);
+                let mut keys: Vec<Vec<Value>> = key_columns
+                    .iter()
+                    .map(|_| Vec::with_capacity(num_rows))
+                    .collect();
+                let mut payload: Vec<Vec<Value>> = payload_columns
+                    .iter()
+                    .map(|_| Vec::with_capacity(num_rows))
+                    .collect();
+                let mut index: JoinHashTable<u64, usize> = JoinHashTable::with_capacity(num_rows);
                 for row in 0..num_rows {
                     let p = physical(row);
-                    let key = JoinKey(key_columns.iter().map(|c| c[p].clone()).collect());
-                    let payload = payload_columns.iter().map(|c| c[p].clone()).collect();
-                    ht.insert(key, payload);
+                    for (i, c) in key_columns.iter().enumerate() {
+                        keys[i].push(c[p].clone());
+                    }
+                    for (i, c) in payload_columns.iter().enumerate() {
+                        payload[i].push(c[p].clone());
+                    }
+                    index.insert(hashes[row], row);
                 }
-                self.join_tables.0.insert(*table, Arc::new(ht));
+                self.join_tables.0.insert(
+                    *table,
+                    Arc::new(BuildTable {
+                        index,
+                        keys,
+                        payload,
+                    }),
+                );
             }
             Opcode::HashProbe {
                 key_cols,
@@ -1941,35 +1979,40 @@ impl Vm {
                         reason: "hash probe has no key columns".to_string(),
                     }
                 })?;
-                // An `Arc` bump, so `ht` is a local the payload columns
+                // An `Arc` bump, so `bt` is a local the payload columns
                 // below can read from after the reshape has mutably
                 // borrowed `self.registers` (#272: no payload clone per
-                // matched row -- `emitted` records the table slot, and
+                // matched row -- `emitted` records the build row, and
                 // each payload cell is cloned once, straight into its
                 // destination column).
-                let ht = Arc::clone(self.join_tables.0.get(table).ok_or(
+                let bt = Arc::clone(self.join_tables.0.get(table).ok_or(
                     VmError::UnknownJoinTable {
                         opcode,
                         table: *table,
                     },
                 )?);
 
-                // #272: one reusable key buffer instead of a fresh `Vec`
-                // per probe row, and `for_each_match_slot` instead of the
-                // `Vec`-returning `get_all` -- zero per-row allocations for
-                // integer keys.
-                let mut key = JoinKey(Vec::with_capacity(key_columns.len()));
+                // #440: hash the probe rows column-wise (no per-row
+                // `Vec<Value>` key, not even a reused buffer) and probe
+                // `bt.index` by hash; `join_keys_match` resolves both
+                // genuine hash collisions and NULL-never-matches against
+                // `bt.keys` before a candidate counts as a real match.
+                let hashes = hash_columns_by_row(&key_columns, num_rows, |row| row);
                 let mut emitted: Vec<(usize, Option<usize>)> = Vec::with_capacity(num_rows);
                 for row in 0..num_rows {
-                    key.0.clear();
-                    key.0.extend(key_columns.iter().map(|c| c[row].clone()));
                     let mut matched = false;
                     let emit_payload =
                         !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
-                    ht.for_each_match_slot(&key, |slot| {
+                    bt.index.for_each_match_slot(&hashes[row], |slot| {
+                        let Some(&build_row) = bt.index.value_at(slot) else {
+                            return;
+                        };
+                        if !join_keys_match(&key_columns, row, &bt.keys, build_row) {
+                            return;
+                        }
                         matched = true;
                         if emit_payload {
-                            emitted.push((row, Some(slot)));
+                            emitted.push((row, Some(build_row)));
                         }
                     });
                     if !matched {
@@ -1998,26 +2041,25 @@ impl Vm {
                 for (i, dst) in payload_dst.iter().enumerate() {
                     let col: Vec<Value> = emitted
                         .iter()
-                        .map(|(_, slot)| match slot {
+                        .map(|(_, build_row)| match build_row {
                             // `None` is an unmatched LEFT JOIN probe row: NULL
                             // by definition. A payload narrower than its
                             // destinations is a planner bug, not NULL data;
-                            // a slot the table no longer knows is impossible
-                            // (nothing inserts between probe and here) but
-                            // is reported the same way rather than assumed.
-                            Some(slot) => {
-                                let p = ht.value_at(*slot).ok_or_else(|| VmError::MalformedProgram {
-                                    opcode,
-                                    reason: format!("join table slot {slot} vanished between probe and payload"),
-                                })?;
-                                p.get(i).cloned().ok_or_else(|| VmError::MalformedProgram {
+                            // `build_row` always indexes a real row of
+                            // `bt.payload` (it came from `bt.index` itself),
+                            // so only the column count can be wrong.
+                            Some(build_row) => bt
+                                .payload
+                                .get(i)
+                                .and_then(|column| column.get(*build_row))
+                                .cloned()
+                                .ok_or_else(|| VmError::MalformedProgram {
                                     opcode,
                                     reason: format!(
                                         "join payload has {} columns but destination {i} was requested",
-                                        p.len()
+                                        bt.payload.len()
                                     ),
-                                })
-                            }
+                                }),
                             None => Ok(Value::Null),
                         })
                         .collect::<Result<_>>()?;
