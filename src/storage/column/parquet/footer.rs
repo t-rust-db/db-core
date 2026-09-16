@@ -157,6 +157,30 @@ pub struct ColumnMetaData {
     pub total_compressed_size: i64,
     pub data_page_offset: i64,
     pub dictionary_page_offset: Option<i64>,
+    /// Row-group pruning statistics for this column chunk, if the writer
+    /// included them. `None` means "no statistics" -- callers must treat
+    /// that as "cannot prune", never as an error (writers are free to omit
+    /// them, and older files predate `min_value`/`max_value`).
+    pub statistics: Option<Statistics>,
+}
+
+/// `parquet.thrift` `Statistics` struct: min/max bounds and counts for one
+/// column chunk, as written by the file's own encoder. These are untrusted
+/// file content (ADR-0000): a hostile or buggy writer can lie, so any use
+/// of them for row-group pruning must be correctness-neutral -- a wrong
+/// statistic may cost time, never change results.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Statistics {
+    /// Minimum value, raw bytes in the column's physical-type encoding.
+    /// Prefers the newer `min_value` (field 6) over the deprecated `min`
+    /// (field 2), which used unsigned byte-comparison for signed integers.
+    pub min: Option<Vec<u8>>,
+    /// Maximum value, raw bytes in the column's physical-type encoding.
+    /// Prefers the newer `max_value` (field 5) over the deprecated `max`
+    /// (field 1).
+    pub max: Option<Vec<u8>>,
+    pub null_count: Option<i64>,
+    pub distinct_count: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -299,6 +323,7 @@ fn parse_column_meta_data(v: &Value) -> ColumnMetaData {
     let total_compressed_size = v.field(7).and_then(Value::as_i64).unwrap_or(0);
     let data_page_offset = v.field(9).and_then(Value::as_i64).unwrap_or(0);
     let dictionary_page_offset = v.field(11).and_then(Value::as_i64);
+    let statistics = v.field(12).map(parse_statistics);
     ColumnMetaData {
         physical_type,
         codec,
@@ -308,6 +333,28 @@ fn parse_column_meta_data(v: &Value) -> ColumnMetaData {
         total_compressed_size,
         data_page_offset,
         dictionary_page_offset,
+        statistics,
+    }
+}
+
+fn parse_statistics(v: &Value) -> Statistics {
+    let min = v
+        .field(6)
+        .or_else(|| v.field(2))
+        .and_then(Value::as_binary)
+        .map(<[u8]>::to_vec);
+    let max = v
+        .field(5)
+        .or_else(|| v.field(1))
+        .and_then(Value::as_binary)
+        .map(<[u8]>::to_vec);
+    let null_count = v.field(3).and_then(Value::as_i64);
+    let distinct_count = v.field(4).and_then(Value::as_i64);
+    Statistics {
+        min,
+        max,
+        null_count,
+        distinct_count,
     }
 }
 
@@ -381,6 +428,12 @@ mod tests {
             self.buf.extend_from_slice(s.as_bytes());
         }
 
+        fn binary_field(&mut self, field_id: i16, bytes: &[u8]) {
+            self.field_header(field_id, 0x08);
+            self.write_varint(bytes.len() as u64);
+            self.buf.extend_from_slice(bytes);
+        }
+
         fn struct_field(&mut self, field_id: i16, inner: Vec<u8>) {
             self.field_header(field_id, 0x0c);
             self.buf.extend_from_slice(&inner);
@@ -430,6 +483,47 @@ mod tests {
         w.buf.extend_from_slice(path.as_bytes());
         w.i64_field(5, num_values);
         w.i64_field(9, data_page_offset);
+        w.finish()
+    }
+
+    fn build_statistics(
+        min_value: Option<&[u8]>,
+        max_value: Option<&[u8]>,
+        null_count: Option<i64>,
+        distinct_count: Option<i64>,
+    ) -> Vec<u8> {
+        let mut w = StructWriter::new();
+        if let Some(nc) = null_count {
+            w.i64_field(3, nc);
+        }
+        if let Some(dc) = distinct_count {
+            w.i64_field(4, dc);
+        }
+        if let Some(max) = max_value {
+            w.binary_field(5, max);
+        }
+        if let Some(min) = min_value {
+            w.binary_field(6, min);
+        }
+        w.finish()
+    }
+
+    fn build_column_meta_data_with_stats(
+        physical_type: i32,
+        path: &str,
+        num_values: i64,
+        data_page_offset: i64,
+        statistics: Vec<u8>,
+    ) -> Vec<u8> {
+        let mut w = StructWriter::new();
+        w.i32_field(1, physical_type);
+        w.field_header(3, 0x09);
+        w.buf.push((1u8 << 4) | 0x08);
+        w.write_varint(path.len() as u64);
+        w.buf.extend_from_slice(path.as_bytes());
+        w.i64_field(5, num_values);
+        w.i64_field(9, data_page_offset);
+        w.struct_field(12, statistics);
         w.finish()
     }
 
@@ -544,5 +638,71 @@ mod tests {
             parse_footer(&file),
             Err(FooterError::FileTooShort)
         ));
+    }
+
+    #[test]
+    fn parses_statistics_from_new_style_min_max_value_fields() {
+        let root = build_schema_element("schema", 0, 0);
+        let col = build_schema_element("amount", 5 /* DOUBLE */, 1);
+
+        let stats = build_statistics(
+            Some(&0.0f64.to_le_bytes()),
+            Some(&9999.85f64.to_le_bytes()),
+            Some(0),
+            Some(42),
+        );
+        let col_meta = build_column_meta_data_with_stats(5, "amount", 100, 4, stats);
+        let chunk = build_column_chunk(4, col_meta);
+        let row_group = build_row_group(vec![chunk], 800, 100);
+        let metadata = build_file_metadata(vec![root, col], 100, vec![row_group], "column-rs");
+        let file = wrap_as_file(metadata);
+
+        let parsed = parse_footer(&file).unwrap();
+        let meta = parsed.row_groups[0].columns[0].meta_data.as_ref().unwrap();
+        let statistics = meta.statistics.as_ref().unwrap();
+        assert_eq!(statistics.min, Some(0.0f64.to_le_bytes().to_vec()));
+        assert_eq!(statistics.max, Some(9999.85f64.to_le_bytes().to_vec()));
+        assert_eq!(statistics.null_count, Some(0));
+        assert_eq!(statistics.distinct_count, Some(42));
+    }
+
+    #[test]
+    fn parses_statistics_from_deprecated_min_max_fields() {
+        let root = build_schema_element("schema", 0, 0);
+        let col = build_schema_element("region", 6 /* BYTE_ARRAY */, 1);
+
+        let mut w = StructWriter::new();
+        w.binary_field(1, b"west");
+        w.binary_field(2, b"east");
+        let stats = w.finish();
+        let col_meta = build_column_meta_data_with_stats(6, "region", 100, 4, stats);
+        let chunk = build_column_chunk(4, col_meta);
+        let row_group = build_row_group(vec![chunk], 800, 100);
+        let metadata = build_file_metadata(vec![root, col], 100, vec![row_group], "column-rs");
+        let file = wrap_as_file(metadata);
+
+        let parsed = parse_footer(&file).unwrap();
+        let meta = parsed.row_groups[0].columns[0].meta_data.as_ref().unwrap();
+        let statistics = meta.statistics.as_ref().unwrap();
+        assert_eq!(statistics.min, Some(b"east".to_vec()));
+        assert_eq!(statistics.max, Some(b"west".to_vec()));
+        assert_eq!(statistics.null_count, None);
+        assert_eq!(statistics.distinct_count, None);
+    }
+
+    #[test]
+    fn missing_statistics_field_parses_as_none() {
+        let root = build_schema_element("schema", 0, 0);
+        let col = build_schema_element("id", 2, 1);
+
+        let col_meta = build_column_meta_data(2, "id", 100, 4);
+        let chunk = build_column_chunk(4, col_meta);
+        let row_group = build_row_group(vec![chunk], 800, 100);
+        let metadata = build_file_metadata(vec![root, col], 100, vec![row_group], "column-rs");
+        let file = wrap_as_file(metadata);
+
+        let parsed = parse_footer(&file).unwrap();
+        let meta = parsed.row_groups[0].columns[0].meta_data.as_ref().unwrap();
+        assert!(meta.statistics.is_none());
     }
 }

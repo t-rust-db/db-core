@@ -2555,6 +2555,7 @@ pub db_core::storage::column::parquet::footer::ColumnMetaData::dictionary_page_o
 pub db_core::storage::column::parquet::footer::ColumnMetaData::num_values: i64
 pub db_core::storage::column::parquet::footer::ColumnMetaData::path_in_schema: alloc::vec::Vec<alloc::string::String>
 pub db_core::storage::column::parquet::footer::ColumnMetaData::physical_type: db_core::storage::column::parquet::footer::PhysicalType
+pub db_core::storage::column::parquet::footer::ColumnMetaData::statistics: core::option::Option<db_core::storage::column::parquet::footer::Statistics>
 pub db_core::storage::column::parquet::footer::ColumnMetaData::total_compressed_size: i64
 pub db_core::storage::column::parquet::footer::ColumnMetaData::total_uncompressed_size: i64
 impl core::clone::Clone for db_core::storage::column::parquet::footer::ColumnMetaData
@@ -2604,6 +2605,20 @@ pub fn db_core::storage::column::parquet::footer::SchemaElement::eq(&self, &db_c
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::SchemaElement
 pub fn db_core::storage::column::parquet::footer::SchemaElement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::SchemaElement
+pub struct db_core::storage::column::parquet::footer::Statistics
+pub db_core::storage::column::parquet::footer::Statistics::distinct_count: core::option::Option<i64>
+pub db_core::storage::column::parquet::footer::Statistics::max: core::option::Option<alloc::vec::Vec<u8>>
+pub db_core::storage::column::parquet::footer::Statistics::min: core::option::Option<alloc::vec::Vec<u8>>
+pub db_core::storage::column::parquet::footer::Statistics::null_count: core::option::Option<i64>
+impl core::clone::Clone for db_core::storage::column::parquet::footer::Statistics
+pub fn db_core::storage::column::parquet::footer::Statistics::clone(&self) -> db_core::storage::column::parquet::footer::Statistics
+impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::Statistics
+pub fn db_core::storage::column::parquet::footer::Statistics::eq(&self, &db_core::storage::column::parquet::footer::Statistics) -> bool
+impl core::default::Default for db_core::storage::column::parquet::footer::Statistics
+pub fn db_core::storage::column::parquet::footer::Statistics::default() -> db_core::storage::column::parquet::footer::Statistics
+impl core::fmt::Debug for db_core::storage::column::parquet::footer::Statistics
+pub fn db_core::storage::column::parquet::footer::Statistics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::Statistics
 pub fn db_core::storage::column::parquet::footer::parse_footer(&[u8]) -> db_core::storage::column::parquet::footer::Result<db_core::storage::column::parquet::footer::FileMetaData>
 pub type db_core::storage::column::parquet::footer::Result<T> = core::result::Result<T, db_core::storage::column::parquet::footer::FooterError>
 pub mod db_core::storage::column::parquet::nested
@@ -2768,6 +2783,7 @@ pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_gro
 pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub struct db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
 impl<'a, 'm> db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
+pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<&db_core::storage::column::parquet::footer::Statistics>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
@@ -2968,6 +2984,7 @@ pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_gro
 pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub struct db_core::storage::column::parquet::RowGroupReader<'a, 'm>
 impl<'a, 'm> db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
+pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<&db_core::storage::column::parquet::footer::Statistics>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
@@ -3093,6 +3110,7 @@ pub type db_core::storage::column::posix::PosixVfs::File = db_core::storage::col
 pub fn db_core::storage::column::posix::PosixVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub struct db_core::storage::column::RowGroupReader<'a, 'm>
 impl<'a, 'm> db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
+pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<&db_core::storage::column::parquet::footer::Statistics>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
@@ -3782,6 +3800,7 @@ pub const db_core::storage::row::vfs::fcntl::F_UNLCK: i16
 pub const db_core::storage::row::vfs::fcntl::F_WRLCK: i16
 pub const db_core::storage::row::vfs::fcntl::O_NOFOLLOW: std::os::raw::c_int
 pub fn db_core::storage::row::vfs::fcntl::fcntl_call(&std::fs::File, db_core::storage::row::vfs::fcntl::FcntlArg<'_>) -> core::io::error::Result<std::os::raw::c_int>
+pub fn db_core::storage::row::vfs::fcntl::fsync(&std::fs::File) -> core::io::error::Result<()>
 pub type db_core::storage::row::vfs::fcntl::off_t = i64
 pub mod db_core::storage::row::vfs::lock
 pub enum db_core::storage::row::vfs::lock::LockLevel
@@ -5200,6 +5219,7 @@ impl core::fmt::Debug for db_core::storage::stream::batch::Resource
 pub fn db_core::storage::stream::batch::Resource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::RowGroupReader<'a, 'm>
 impl<'a, 'm> db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
+pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<&db_core::storage::column::parquet::footer::Statistics>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
