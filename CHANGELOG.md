@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.101.2] - 2026-09-16
+
+### Fixed
+
+- **`GroupReduce` probes by hash before allocating a key** (#439): the hot loop built and cloned a `Vec<Value>` group key (with a `String` clone per `Str` key) for every input row, even though almost every row lands in a group that already exists. It now hashes the row's key columns in place and probes a hash-bucketed map with a borrowed comparison, only allocating an owned key when the row's group is genuinely new -- ~2x faster on low-cardinality `GROUP BY`s (100 groups: 189us -> 100us; 1% of rows: 177us -> 85us).
+
 ## [0.101.1] - 2026-09-16
 
 ### Fixed
