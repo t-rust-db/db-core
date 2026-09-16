@@ -236,8 +236,10 @@ jobs:
           if [ "$EVENT" = "push" ]; then
             echo "hit=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          # Also on changes to this workflow itself, so an edit to the
+          # guard is exercised by the PR that makes it.
           if git diff --name-only "$BASE" "$HEAD" | grep -qE \
-               '^src/codegen/batch/emit\.rs$|^src/codegen/batch\.rs$|^src/vm/batch\.rs$|^src/vm/engine\.rs$'; then
+               '^src/codegen/batch/emit\.rs$|^src/codegen/batch\.rs$|^src/vm/batch\.rs$|^src/vm/engine\.rs$|^\.github/workflows/ci\.yml$'; then
             echo "hit=true" >> "$GITHUB_OUTPUT"
           else
             echo "hit=false" >> "$GITHUB_OUTPUT"
@@ -248,6 +250,28 @@ jobs:
         with:
           repository: t-rust-db/column-rs
           path: column-rs
+      # column-rs's checked-in `.cargo/config.toml` patches db-core *and*
+      # db-cli to sibling paths (`../db-core`, `../db-cli`) unconditionally
+      # -- a missing patch path is a resolution error, not a fallback to
+      # the git tag (the first run of this job on main failed exactly
+      # there). db-core is this checkout; db-cli is checked out at exactly
+      # the tag column-rs's Cargo.toml pins, so the only thing under test
+      # that differs from a published column-rs build is db-core.
+      - name: Read the db-cli tag column-rs pins
+        if: steps.relevant.outputs.hit == 'true'
+        id: deps
+        working-directory: column-rs
+        run: |
+          tag="$(grep -oE 'db-cli *= *\{[^}]*\}' Cargo.toml | grep -oE 'tag *= *"[^"]+"' | grep -oE '"[^"]+"' | tr -d '"')"
+          [ -n "$tag" ] || { echo "::error::could not read db-cli's tag from column-rs/Cargo.toml"; exit 1; }
+          echo "db-cli tag: $tag"
+          echo "dbcli_tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.relevant.outputs.hit == 'true'
+        with:
+          repository: t-rust-db/db-cli
+          ref: ${{ steps.deps.outputs.dbcli_tag }}
+          path: db-cli
       - uses: dtolnay/rust-toolchain@stable
         if: steps.relevant.outputs.hit == 'true'
       - uses: Swatinem/rust-cache@v2
@@ -264,11 +288,15 @@ jobs:
         if: steps.relevant.outputs.hit == 'true'
         working-directory: column-rs
         run: |
-          resolved="$(cargo tree -i db-core --edges normal --prefix none | head -1)"
+          set -euo pipefail
+          # Fails right here, with cargo's own error, if a sibling patch
+          # path is missing -- rather than an empty $resolved below.
+          cargo tree -i db-core --edges normal --prefix none > /tmp/db-core-resolution.txt
+          resolved="$(head -1 /tmp/db-core-resolution.txt)"
           echo "db-core resolved to: $resolved"
           case "$resolved" in
             *"$GITHUB_WORKSPACE/db-core"*) ;;
-            *) echo "::error::column-rs did not pick up this db-core via its [patch]; bump column-rs's db-core version requirement" ; exit 1 ;;
+            *) echo "::error::column-rs resolved db-core to '$resolved', not this checkout: its [patch] did not apply. A db-core version bump outside column-rs's version requirement makes cargo fall back to the pinned git tag -- bump column-rs's requirement." ; exit 1 ;;
           esac
       - name: Emit, compile and run generated programs against this db-core
         if: steps.relevant.outputs.hit == 'true'
