@@ -5583,6 +5583,8 @@ pub db_core::vm::batch::VmError::MalformedProgram::reason: alloc::string::String
 pub db_core::vm::batch::VmError::MissingWindowArgument
 pub db_core::vm::batch::VmError::MissingWindowArgument::func: db_core::vm::batch::WindowFunc
 pub db_core::vm::batch::VmError::MissingWindowArgument::opcode: &'static str
+pub db_core::vm::batch::VmError::NotStreamable
+pub db_core::vm::batch::VmError::NotStreamable::reason: alloc::string::String
 pub db_core::vm::batch::VmError::RegisterLengthMismatch
 pub db_core::vm::batch::VmError::RegisterLengthMismatch::opcode: &'static str
 pub db_core::vm::batch::VmError::SegmentLoad
@@ -5779,6 +5781,7 @@ impl db_core::vm::batch::Source for db_core::storage::stream::adapter::TailSourc
 pub fn db_core::storage::stream::adapter::TailSource::next_batch(&mut self) -> core::option::Option<db_core::vm::batch::Batch>
 pub fn db_core::vm::batch::compare_for_order(&db_core::vm::batch::Value, &db_core::vm::batch::Value, bool) -> core::cmp::Ordering
 pub fn db_core::vm::batch::run_parallel<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::batch::run_parallel_streaming<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], impl core::ops::function::FnMut(db_core::vm::batch::Chunk) -> db_core::vm::batch::Result<()>) -> db_core::vm::batch::Result<()>
 pub fn db_core::vm::batch::run_parallel_top_n<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], &db_core::vm::batch::TopN) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub type db_core::vm::batch::Chunk = alloc::vec::Vec<alloc::sync::Arc<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub type db_core::vm::batch::Result<T> = core::result::Result<T, db_core::vm::batch::VmError>
@@ -5886,10 +5889,12 @@ impl<F: core::ops::function::Fn(&db_core::vm::batch::ScanSource) -> db_core::vm:
 pub fn F::resolve(&self, &db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
 pub fn db_core::vm::engine::bounded_scan_limit(&db_core::vm::batch::Program) -> core::option::Option<usize>
 pub fn db_core::vm::engine::finalize(&[db_core::vm::batch::AggPart], usize, bool, core::option::Option<(usize, bool)>, core::option::Option<usize>, alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::engine::is_streamable(&db_core::vm::batch::Program) -> bool
 pub fn db_core::vm::engine::run<S: db_core::vm::batch::Segment>(&[S], &db_core::vm::batch::Program) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::engine::run_join(&db_core::vm::batch::Batch, &db_core::vm::batch::Batch, &db_core::vm::engine::JoinProgram) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::engine::run_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, db_core::vm::batch::ScanSource, &db_core::vm::engine::JoinProgram, &R) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::engine::run_multi_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, alloc::vec::Vec<db_core::vm::batch::ScanSource>, &db_core::vm::engine::MultiJoinProgram, &R) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::engine::run_streaming<S: db_core::vm::batch::Segment>(&[S], &db_core::vm::batch::Program, impl core::ops::function::FnMut(db_core::vm::batch::Chunk) -> db_core::vm::batch::Result<()>) -> db_core::vm::batch::Result<()>
 pub fn db_core::vm::engine::semi_filter(&db_core::vm::batch::Batch, &str, &std::collections::hash::set::HashSet<alloc::string::String>) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
 pub mod db_core::vm::join
 pub enum db_core::vm::join::JoinKind
