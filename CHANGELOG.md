@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.104.0] - 2026-09-16
+
+### Added
+
+- **Dict-encoded Parquet columns reach `vm::batch` as `Column::Dict`** (#457): `RowGroupSegment::load` now tries `ParquetFile::read_string_column_dictionary_indices` before the plain string decode, so a `PLAIN_DICTIONARY`-encoded column materializes as dict + per-row `u32` code + validity bitmap instead of one owned `String` per row (a column with no dictionary page, or one that falls back to `PLAIN` mid-chunk, still decodes the plain way). `GroupReduce` gained a matching fast path for a single dict group-by column: groups by integer code through a `dict.len()`-sized array instead of hashing decoded strings, decoding only the codes that end up in the output. Row-group skip-on-literal (mirroring `OwnedColumn::dict_contains` for stream segments) is left as a follow-up.
+
 ## [0.103.0] - 2026-09-16
 
 ### Added
