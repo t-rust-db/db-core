@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.101.6] - 2026-09-16
+
+### Changed
+
+- **Reverted #436's column-major query output** (v0.101.5): it regressed the query it targeted. On `benchmark/parity/column-rs` at 10M rows, `filter_50pct` (5M rows out) went from 651 ms / 1042 MB to 813 ms / 2350 MB; pre-sizing the merge recovered only ~30 ms and ~350 MB of that. Isolating by output column count shows the cost scales with *columns* (~313 MB and +0.11 s per column, against ~124 MB and +0.06 s row-major), not with the merge transient -- `run_morsels` materializes every segment's output before merging, so peak is O(result) either way and the columnar layout makes each of those allocations large and contiguous. `scan` (1K rows out) was 14% faster and 6 MB smaller, so the premise holds; a correct implementation needs a streaming merge rather than an accumulating one. Reopened as #436.
+
 ## [0.101.4] - 2026-09-16
 
 ### Fixed
