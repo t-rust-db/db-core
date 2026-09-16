@@ -5706,9 +5706,11 @@ pub fn db_core::vm::batch::Program::fmt(&self, &mut core::fmt::Formatter<'_>) ->
 impl core::marker::StructuralPartialEq for db_core::vm::batch::Program
 pub struct db_core::vm::batch::QueryOutput
 impl db_core::vm::batch::QueryOutput
-pub fn db_core::vm::batch::QueryOutput::columns(&self) -> &[alloc::vec::Vec<db_core::vm::batch::Value>]
+pub fn db_core::vm::batch::QueryOutput::chunks(&self) -> &[db_core::vm::batch::Chunk]
 pub fn db_core::vm::batch::QueryOutput::extend(&mut self, db_core::vm::batch::QueryOutput)
+pub fn db_core::vm::batch::QueryOutput::from_chunk(db_core::vm::batch::Chunk) -> Self
 pub fn db_core::vm::batch::QueryOutput::from_rows(alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> Self
+pub fn db_core::vm::batch::QueryOutput::into_chunks(self) -> alloc::vec::Vec<db_core::vm::batch::Chunk>
 pub fn db_core::vm::batch::QueryOutput::into_columns(self) -> alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>
 pub fn db_core::vm::batch::QueryOutput::into_rows(self) -> alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>
 pub fn db_core::vm::batch::QueryOutput::is_empty(&self) -> bool
@@ -5716,6 +5718,8 @@ pub fn db_core::vm::batch::QueryOutput::len(&self) -> usize
 pub fn db_core::vm::batch::QueryOutput::new(alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> Self
 pub fn db_core::vm::batch::QueryOutput::num_columns(&self) -> usize
 pub fn db_core::vm::batch::QueryOutput::num_rows(&self) -> usize
+pub fn db_core::vm::batch::QueryOutput::push_chunk(&mut self, db_core::vm::batch::Chunk)
+pub fn db_core::vm::batch::QueryOutput::rows(&self) -> impl core::iter::traits::iterator::Iterator<Item = alloc::vec::Vec<db_core::vm::batch::Value>> + '_
 pub fn db_core::vm::batch::QueryOutput::truncate(&mut self, usize)
 impl core::clone::Clone for db_core::vm::batch::QueryOutput
 pub fn db_core::vm::batch::QueryOutput::clone(&self) -> db_core::vm::batch::QueryOutput
@@ -5776,6 +5780,7 @@ pub fn db_core::storage::stream::adapter::TailSource::next_batch(&mut self) -> c
 pub fn db_core::vm::batch::compare_for_order(&db_core::vm::batch::Value, &db_core::vm::batch::Value, bool) -> core::cmp::Ordering
 pub fn db_core::vm::batch::run_parallel<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::batch::run_parallel_top_n<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], &db_core::vm::batch::TopN) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub type db_core::vm::batch::Chunk = alloc::vec::Vec<alloc::sync::Arc<alloc::vec::Vec<db_core::vm::batch::Value>>>
 pub type db_core::vm::batch::Result<T> = core::result::Result<T, db_core::vm::batch::VmError>
 pub mod db_core::vm::column
 pub enum db_core::vm::column::Column
