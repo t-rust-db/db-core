@@ -1099,7 +1099,14 @@ mod tests {
         let select = where_clause("amount > 50");
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1117,7 +1124,14 @@ mod tests {
         let select = where_clause("amount > 50");
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1137,7 +1151,14 @@ mod tests {
         let select = where_clause("amount > 50");
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1154,7 +1175,8 @@ mod tests {
         let file = ParquetFile::open(&file_bytes).unwrap();
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, None);
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(&file, &leaves, &leaves, None, &program);
         assert_eq!(segments.len(), 2);
     }
 
@@ -1187,7 +1209,13 @@ mod tests {
         let leaves = amount_leaf();
         let columns = resolve_columns(&leaves, &program.columns_to_load()).unwrap();
 
-        let segments = row_group_segments(&file, &columns, &leaves, select.where_clause.as_ref());
+        let segments = row_group_segments(
+            &file,
+            &columns,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1225,10 +1253,12 @@ mod tests {
     fn segment_load_errors_on_an_out_of_range_row_group() {
         let file_bytes = build_file(&[(&[1.0], None)]);
         let file = ParquetFile::open(&file_bytes).unwrap();
+        let program = Program::new(Vec::new());
         let seg = RowGroupSegment {
             file: &file,
             row_group_index: 99,
             columns: amount_leaf(),
+            program: &program,
         };
         assert!(seg.load().is_err());
     }
@@ -1237,10 +1267,12 @@ mod tests {
     fn segment_load_errors_on_an_out_of_range_column() {
         let file_bytes = build_file(&[(&[1.0], None)]);
         let file = ParquetFile::open(&file_bytes).unwrap();
+        let program = Program::new(Vec::new());
         let seg = RowGroupSegment {
             file: &file,
             row_group_index: 0,
             columns: vec![("amount".to_string(), 7, PhysicalType::Double)],
+            program: &program,
         };
         assert!(seg.load().is_err());
     }
@@ -1267,7 +1299,14 @@ mod tests {
         let select = where_clause("amount > 50.5");
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1311,8 +1350,14 @@ mod tests {
             ("50 = amount", vec![]),
         ] {
             let select = where_clause(sql);
-            let segments =
-                row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+            let program = Program::new(Vec::new());
+            let segments = row_group_segments(
+                &file,
+                &leaves,
+                &leaves,
+                select.where_clause.as_ref(),
+                &program,
+            );
             assert_eq!(
                 segments
                     .iter()
@@ -1347,12 +1392,26 @@ mod tests {
 
         // AND: either side proving emptiness is enough.
         let select = where_clause("(amount > 500) AND (amount > 0)");
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert!(segments.is_empty(), "no row group can satisfy amount > 500");
 
         // OR: both sides must prove emptiness.
         let select = where_clause("(amount > 50) OR (amount < 0)");
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1447,7 +1506,14 @@ mod tests {
         let stmt = "SELECT region FROM t WHERE region = 'west'";
         let select = crate::parser::parse(stmt).expect("valid SQL");
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1482,7 +1548,14 @@ mod tests {
         let select = where_clause("amount > 500");
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments.len(),
             15,
