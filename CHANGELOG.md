@@ -12,6 +12,10 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 - **`vm::engine::run_streaming`** (#456): streams a plain scan/filter/projection's chunks to a caller-supplied sink, in segment order, as each becomes ready, instead of collecting the whole result into one `QueryOutput` first (`vm::batch::run_parallel_streaming`/`run_morsels_ordered` underneath). Peak memory is bounded by an ordering window (twice the worker pool), not the result size. Only programs `vm::engine::run`'s own identity-Combine short-circuit accepts can stream -- an aggregate, `DISTINCT`, `ORDER BY`, or `LIMIT` needs every segment's output before producing even its first row, so `run_streaming` returns the new `VmError::NotStreamable` for those; `vm::engine::is_streamable` lets a caller check this up front, before committing to a sink (e.g. printing a header), rather than discovering it mid-stream. `run` and its output are unchanged. column-rs's `-c` one-shot mode is the first consumer (t-rust-db/column-rs#34). Measured on the 10M-row parity suite: `scan` 1015 -> 970 ms / 1272 -> 524 MB, `filter_50pct` 1039 -> 990 ms / 1377 -> 592 MB; `group_by` (not streamable) flat at 217 MB.
 
+### Fixed
+
+- **`ORDER BY ... LIMIT` heaps indices, not rows** (#459): `run_parallel_top_n`/`top_n_reduce` heaped a full `Vec<Value>` row per candidate, fed by `QueryOutput::rows()` -- which materializes one row (every output column) for *every* input row regardless of whether it survives. `top_n_reduce_output` now reads chunks directly, inspecting only the `ORDER BY` column's cell per candidate, and gathers a row's other columns only once it's actually pushed onto the heap; the cross-segment merge carries already-extracted candidates instead of flattening and re-heaping materialized rows, so a winning row is gathered exactly once. Measured on the 10M-row parity suite (A/B/A against this version's own baseline): `order_by` 51.8-53.3 ms / 222-227 MB -> **31.4 ms / 219 MB** (DuckDB parity 0.98x, meeting the <=1.0x stretch goal, up from 1.64-1.80x).
+
 ## [0.102.1] - 2026-09-16
 
 ### Fixed
