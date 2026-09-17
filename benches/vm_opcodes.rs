@@ -35,9 +35,10 @@ use std::hint::black_box;
 
 use db_core::value::Value as RowValue;
 use db_core::vm::batch::{
-    compare_for_order, Batch, MapOp, Opcode as BatchOpcode, Value as BatchValue, Vm as BatchVm,
-    WindowFunc,
+    compare_for_order, AggFunc, AggPart, Batch, Instruction, MapOp, Opcode as BatchOpcode, Program,
+    Value as BatchValue, Vm as BatchVm, WindowFunc,
 };
+use db_core::vm::engine::{run, InMemorySegment};
 use db_core::vm::row::{
     execute, Cursor, EphemeralTableCursor, Instruction as RowInstruction, Opcode as RowOpcode,
     Program as RowProgram, Vm as RowVm,
@@ -498,6 +499,59 @@ fn bench_row_compare(r: &mut common::Report) {
     });
 }
 
+/// #478: `Combine`'s cross-segment merge of partial `GROUP BY` rows, the
+/// shape of the parity `GROUP BY customer_id` query (100K groups, every
+/// segment sees every group). 16 segments rather than the parity file's
+/// 82 keeps the in-memory fixture at ~1.6M partial rows; the cost scales
+/// linearly in segments so the ns/partial-row number carries over.
+/// Includes the per-segment `GroupReduce` (unavoidable through `run`),
+/// which is why the number is not the merge alone -- compare against the
+/// `GroupReduce` bench above to separate the two.
+fn bench_engine_combine(r: &mut common::Report) {
+    const GROUPS: i64 = 100_000;
+    const SEGMENTS: usize = 16;
+    let segments: Vec<InMemorySegment> = (0..SEGMENTS)
+        .map(|seg| {
+            let keys: Vec<BatchValue> = (0..GROUPS).map(BatchValue::Int).collect();
+            let amounts: Vec<BatchValue> = (0..GROUPS)
+                .map(|g| BatchValue::Int(g + seg as i64))
+                .collect();
+            InMemorySegment(
+                Batch::new(GROUPS as usize)
+                    .with_column("customer_id", keys)
+                    .with_column("amount", amounts),
+            )
+        })
+        .collect();
+    let program = Program::new(vec![
+        Instruction::new(BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "customer_id".into(),
+        }),
+        Instruction::new(BatchOpcode::LoadColumn {
+            reg: 1,
+            column: "amount".into(),
+        }),
+        Instruction::new(BatchOpcode::GroupReduce {
+            group_by: vec![0].into(),
+            aggs: vec![(AggFunc::Sum, Some(1))].into(),
+            agg_dst: vec![2].into(),
+        }),
+        Instruction::new(BatchOpcode::Emit {
+            registers: vec![0, 2].into(),
+        }),
+        Instruction::new(BatchOpcode::Combine {
+            agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
+            num_group_keys: 1,
+            distinct: false,
+        }),
+    ]);
+    r.bench(
+        "vm_opcodes/engine::run GroupReduce+Combine (16 segments x 100K groups)",
+        || run(black_box(&segments), &program),
+    );
+}
+
 fn main() {
     let mut report = common::Report::new("vm_opcodes");
     bench_batch_load_column(&mut report);
@@ -506,6 +560,7 @@ fn main() {
     bench_batch_reduce(&mut report);
     bench_batch_group_reduce(&mut report);
     bench_batch_group_reduce_typed_sum(&mut report);
+    bench_engine_combine(&mut report);
     bench_string_order_by_sort(&mut report);
     bench_window_partition_by_string(&mut report);
     bench_batch_hash_join(&mut report);

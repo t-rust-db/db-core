@@ -865,7 +865,7 @@ impl QueryOutput {
 
 /// Row count of one chunk -- its first column's length (every column of a
 /// chunk is the same length; an empty chunk has no columns).
-fn chunk_len(chunk: &Chunk) -> usize {
+pub(crate) fn chunk_len(chunk: &Chunk) -> usize {
     chunk.first().map_or(0, |column| column.len())
 }
 
@@ -1726,7 +1726,7 @@ const HASH_SEED: u64 = 0x243F_6A88_85A3_08D3;
     clippy::indexing_slicing,
     reason = "callers pass `row`/`physical(row)` drawn from that same batch's `0..num_rows`, and every key/build column here holds exactly `num_rows` values (checked by the caller via `RegisterLengthMismatch` before this runs)"
 )]
-fn hash_columns_by_row(
+pub(crate) fn hash_columns_by_row(
     columns: &[&[Value]],
     num_rows: usize,
     physical: impl Fn(usize) -> usize,
