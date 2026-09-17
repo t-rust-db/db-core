@@ -13,12 +13,16 @@
     reason = "column::* lint burn-down tracked in #15"
 )]
 
+#[cfg(feature = "vm-batch")]
+pub mod decode;
 pub mod memory;
 pub mod mmap;
 pub mod parquet;
 pub mod posix;
 pub mod vfs;
 
+#[cfg(feature = "vm-batch")]
+pub use decode::{decode_column_at, decode_column_full, Decoded};
 pub use memory::MemoryVfs;
 pub use posix::PosixVfs;
 pub use vfs::{MmapRegion, Vfs, VfsFile};

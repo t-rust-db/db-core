@@ -2356,6 +2356,11 @@ pub fn db_core::schema::ViewSchema::fmt(&self, &mut core::fmt::Formatter<'_>) ->
 impl core::marker::StructuralPartialEq for db_core::schema::ViewSchema
 pub mod db_core::storage
 pub mod db_core::storage::column
+pub mod db_core::storage::column::decode
+pub enum db_core::storage::column::decode::Decoded
+pub db_core::storage::column::decode::Decoded::Column(db_core::vm::column::Column)
+pub fn db_core::storage::column::decode::decode_column_at(&db_core::storage::column::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::column::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::column::parquet::parquet_file::FileError>
+pub fn db_core::storage::column::decode::decode_column_full(&db_core::storage::column::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::column::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::column::parquet::parquet_file::FileError>
 pub mod db_core::storage::column::memory
 pub struct db_core::storage::column::memory::MemoryFile
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::memory::MemoryFile
@@ -3056,6 +3061,8 @@ impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix:
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
+pub enum db_core::storage::column::Decoded
+pub db_core::storage::column::Decoded::Column(db_core::vm::column::Column)
 pub enum db_core::storage::column::FileError
 pub db_core::storage::column::FileError::ChunkOutOfBounds
 pub db_core::storage::column::FileError::ColumnIndexOutOfRange(usize)
@@ -3169,6 +3176,8 @@ impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix:
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
+pub fn db_core::storage::column::decode_column_at(&db_core::storage::column::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::column::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::column::parquet::parquet_file::FileError>
+pub fn db_core::storage::column::decode_column_full(&db_core::storage::column::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::column::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::column::parquet::parquet_file::FileError>
 pub type db_core::storage::column::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub mod db_core::storage::row
 pub mod db_core::storage::row::btree
