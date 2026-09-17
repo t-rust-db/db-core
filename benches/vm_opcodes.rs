@@ -252,6 +252,54 @@ fn bench_batch_group_reduce(r: &mut common::Report) {
     }
 }
 
+/// #477: `GroupReduce`'s `SUM`/`AVG`/`MIN`/`MAX` over a typed `Float`
+/// register -- the shape `filter_50pct`/`group_by` actually exercise,
+/// unlike [`bench_batch_group_reduce`]'s `COUNT(*)` (no source register,
+/// so it never touched the old `per_group: Vec<Vec<Value>>` clone path
+/// for a real aggregate input).
+fn bench_batch_group_reduce_typed_sum(r: &mut common::Report) {
+    for (label, cardinality) in [
+        ("low (100 groups)", 100),
+        ("medium (1% of rows)", ROWS / 100),
+    ] {
+        let batch = Batch::new(ROWS)
+            .with_typed_column(
+                "key",
+                db_core::vm::column::Column::from(group_key_column(ROWS, cardinality)),
+            )
+            .with_typed_column(
+                "amount",
+                db_core::vm::column::Column::from(
+                    (0..ROWS as i64)
+                        .map(|i| BatchValue::Float(i as f64))
+                        .collect::<Vec<_>>(),
+                ),
+            );
+        let program = [
+            BatchOpcode::LoadColumn {
+                reg: 0,
+                column: "key".into(),
+            },
+            BatchOpcode::LoadColumn {
+                reg: 1,
+                column: "amount".into(),
+            },
+            BatchOpcode::GroupReduce {
+                group_by: vec![0].into(),
+                aggs: vec![(db_core::vm::batch::AggFunc::Sum, Some(1))].into(),
+                agg_dst: vec![2].into(),
+            },
+        ];
+        r.bench(
+            &format!("vm_opcodes/batch::GroupReduce typed SUM ({label})"),
+            || {
+                let mut vm = BatchVm::new();
+                vm.execute(black_box(&batch), &program)
+            },
+        );
+    }
+}
+
 fn bench_batch_hash_join(r: &mut common::Report) {
     // #272: fact/dimension probe -- ROWS probe rows against a 1%-cardinality
     // build side with a `Str` payload (the parity `join` shape). The probe
@@ -457,6 +505,7 @@ fn main() {
     bench_batch_filter_many_registers(&mut report);
     bench_batch_reduce(&mut report);
     bench_batch_group_reduce(&mut report);
+    bench_batch_group_reduce_typed_sum(&mut report);
     bench_string_order_by_sort(&mut report);
     bench_window_partition_by_string(&mut report);
     bench_batch_hash_join(&mut report);

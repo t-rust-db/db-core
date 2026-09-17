@@ -1880,19 +1880,43 @@ impl RunningAgg {
     /// `None` for `COUNT(*)` (no source column -- only `row_count`
     /// matters); `Some` for every other case, `Value::Null` included.
     fn push(&mut self, value: Option<&Value>) {
-        self.row_count = self.row_count.saturating_add(1);
         let Some(value) = value else {
+            self.push_null();
             return;
         };
-        if !matches!(value, Value::Null) {
-            self.non_null_count = self.non_null_count.saturating_add(1);
+        if matches!(value, Value::Null) {
+            self.push_null();
+            return;
         }
-        if let Some(x) = value.as_f64() {
-            self.sum += x;
-            self.numeric_count = self.numeric_count.saturating_add(1);
-            self.min = Some(self.min.map_or(x, |m| m.min(x)));
-            self.max = Some(self.max.map_or(x, |m| m.max(x)));
+        match value.as_f64() {
+            Some(x) => self.push_f64(x),
+            None => {
+                self.row_count = self.row_count.saturating_add(1);
+                self.non_null_count = self.non_null_count.saturating_add(1);
+            }
         }
+    }
+
+    /// Folds one more non-`Null` numeric row, read straight from a typed
+    /// [`Column`]'s packed `data`/`valid` instead of via a boxed [`Value`]
+    /// (#477) -- equivalent to `push(Some(&Value::Float(x)))` /
+    /// `push(Some(&Value::Int(x as i64)))`, without the `f64`/`i64` first
+    /// being wrapped just to be immediately unwrapped by `as_f64`.
+    fn push_f64(&mut self, x: f64) {
+        self.row_count = self.row_count.saturating_add(1);
+        self.non_null_count = self.non_null_count.saturating_add(1);
+        self.sum += x;
+        self.numeric_count = self.numeric_count.saturating_add(1);
+        self.min = Some(self.min.map_or(x, |m| m.min(x)));
+        self.max = Some(self.max.map_or(x, |m| m.max(x)));
+    }
+
+    /// Folds one more row whose value is absent -- either no source
+    /// column at all (`COUNT(*)`) or a typed column's NULL bit (#477),
+    /// equivalent to `push(None)` / `push(Some(&Value::Null))`.
+    /// `row_count` alone advances.
+    fn push_null(&mut self) {
+        self.row_count = self.row_count.saturating_add(1);
     }
 
     /// The aggregate's final value, matching [`reduce_values`] exactly.
@@ -2769,34 +2793,74 @@ impl Vm {
                 }
 
                 for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {
-                    let mut per_group: Vec<Vec<Value>> = vec![Vec::new(); num_groups];
+                    // #477: one `RunningAgg` per group instead of
+                    // `per_group: Vec<Vec<Value>>` + a final
+                    // `reduce_values` pass -- O(1) memory per row instead
+                    // of O(matched rows), same accumulator
+                    // `Opcode::HashProbeGroupReduce` (#441) already uses.
+                    let mut accs: Vec<RunningAgg> = vec![RunningAgg::default(); num_groups];
                     match src {
-                        Some(reg) => {
-                            // #110: borrow instead of `.to_vec()` -- same
-                            // redundant-clone pattern as the old `Emit`.
-                            let values = self.reg(*reg, opcode)?;
-                            if values.len() != base_len {
-                                return Err(VmError::RegisterLengthMismatch { opcode });
+                        Some(reg) => match self.typed_registers.get(reg).map(Arc::clone) {
+                            // #477: read straight from the typed column's
+                            // packed `data`/`valid` for `Int`/`Float` --
+                            // no `Value` allocated per row at all, unlike
+                            // `Column::get`'s scalar-at-a-time path used
+                            // for every other variant below.
+                            Some(column) if column.len() == base_len => match column.as_ref() {
+                                Column::Float { data, valid } => {
+                                    for (row, group) in row_group.iter().enumerate() {
+                                        let p = physical(row);
+                                        if valid.get(p) {
+                                            accs[*group].push_f64(data[p]);
+                                        } else {
+                                            accs[*group].push_null();
+                                        }
+                                    }
+                                }
+                                Column::Int { data, valid } => {
+                                    for (row, group) in row_group.iter().enumerate() {
+                                        let p = physical(row);
+                                        if valid.get(p) {
+                                            #[allow(
+                                                clippy::cast_precision_loss,
+                                                reason = "matches Value::Int's own as_f64 widening; RunningAgg's sum/min/max are f64 for every numeric AggFunc"
+                                            )]
+                                            accs[*group].push_f64(data[p] as f64);
+                                        } else {
+                                            accs[*group].push_null();
+                                        }
+                                    }
+                                }
+                                other => {
+                                    for (row, group) in row_group.iter().enumerate() {
+                                        let value = other.get(physical(row));
+                                        accs[*group].push(Some(&value));
+                                    }
+                                }
+                            },
+                            _ => {
+                                // #110: borrow instead of `.to_vec()` --
+                                // same redundant-clone pattern as the old
+                                // `Emit`.
+                                let values = self.reg(*reg, opcode)?;
+                                if values.len() != base_len {
+                                    return Err(VmError::RegisterLengthMismatch { opcode });
+                                }
+                                for (row, group) in row_group.iter().enumerate() {
+                                    accs[*group].push(Some(&values[physical(row)]));
+                                }
                             }
-                            for (row, group) in row_group.iter().enumerate() {
-                                per_group[*group].push(values[physical(row)].clone());
-                            }
-                        }
+                        },
                         None => {
                             for group in &row_group {
-                                per_group[*group].push(Value::Null);
+                                accs[*group].push_null();
                             }
                         }
                     }
-                    let result: Vec<Value> = per_group
+                    let is_count_star = src.is_none();
+                    let result: Vec<Value> = accs
                         .iter()
-                        .map(|vals| {
-                            if src.is_none() {
-                                Value::Int(len_to_i64(vals.len()))
-                            } else {
-                                reduce_values(*func, vals)
-                            }
-                        })
+                        .map(|acc| acc.finalize(*func, is_count_star))
                         .collect();
                     self.registers.insert(*dst, Arc::new(result));
                 }
