@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.107.1] - 2026-09-17
+
+### Fixed
+
+- **Shared Parquet row-group decode boundary extracted to `storage::column::decode`** (#467): `engine::column::RowGroupSegment` and column-rs's own `RowGroupSegment` each maintained a divergent `PhysicalType` -> `Column` decode dispatch, so storage-layer work (#457, #461, #472) landed in db-core's loader but never reached column-rs's CLI or the parity benchmarks that measure it. `decode_column_full`/`decode_column_at` and their `Column`-building helpers now live in `storage::column::decode` (gated behind the `vm-batch` feature), the one place both loaders should call; `engine::column::RowGroupSegment` calls them directly with no behavior change. column-rs adopting these functions is a follow-up tracked separately.
+
 ## [0.107.0] - 2026-09-17
 
 ### Added

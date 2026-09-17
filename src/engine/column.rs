@@ -24,9 +24,9 @@ use crate::codegen::batch::{self as planner, PlanError, TableStats};
 use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, ResultColumn, Select};
 use crate::parser::ParseError;
 use crate::storage::column::parquet::footer::PhysicalType;
+use crate::storage::column::{decode_column_at, decode_column_full, Decoded};
 use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs, VfsFile};
-use crate::vm::batch::{Batch, Bitmap, Column, Program, Segment, Value, Vm, VmError};
-use crate::vm::column::build_str_column;
+use crate::vm::batch::{Batch, Program, Segment, Value, Vm, VmError};
 use crate::vm::engine;
 
 use super::{
@@ -168,13 +168,6 @@ struct RowGroupSegment<'a, 'm> {
     program: &'m Program,
 }
 
-/// One column's decoded shape out of a whole row group: every
-/// [`PhysicalType`] arm builds a typed [`Column`] directly (#461) rather
-/// than rebuilding a per-row [`Value`].
-enum Decoded {
-    Column(Column),
-}
-
 impl RowGroupSegment<'_, '_> {
     /// Opens this segment's row group reader, or a [`VmError::SegmentLoad`]
     /// if the row group index is out of range.
@@ -303,153 +296,6 @@ fn segment_error(row_group_index: usize, column_name: &str, e: &impl std::fmt::D
 fn apply_decoded(batch: Batch, name: &str, decoded: Decoded) -> Batch {
     let Decoded::Column(column) = decoded;
     batch.with_typed_column(name.to_string(), column)
-}
-
-/// Decodes one column for every row of `rg` -- the whole-row-group path
-/// shared by the eager load and the predicate phase of the two-phase load
-/// (ADR-0026). Every physical type decodes straight into a typed [`Column`]
-/// buffer -- no per-row [`Value`] rebuild pass -- mirroring #457's
-/// dictionary-string path below for the numeric/bool primitives (#461).
-fn decode_column_full(
-    rg: &RowGroupReader<'_, '_>,
-    index: usize,
-    physical_type: PhysicalType,
-) -> std::result::Result<Decoded, crate::storage::FileError> {
-    match physical_type {
-        PhysicalType::Int64 => rg
-            .read_int64_column(index)
-            .map(|col| Decoded::Column(int_column(col))),
-        PhysicalType::Int32 => rg.read_int32_column(index).map(|col| {
-            Decoded::Column(int_column(
-                col.into_iter().map(|v| v.map(i64::from)).collect(),
-            ))
-        }),
-        PhysicalType::Double => rg
-            .read_double_column(index)
-            .map(|col| Decoded::Column(float_column(col))),
-        PhysicalType::Float => rg.read_float_column(index).map(|col| {
-            Decoded::Column(float_column(
-                col.into_iter().map(|v| v.map(f64::from)).collect(),
-            ))
-        }),
-        PhysicalType::Boolean => rg
-            .read_boolean_column(index)
-            .map(|col| Decoded::Column(bool_column(col))),
-        // #457: a `PLAIN_DICTIONARY`-encoded string column materializes
-        // as `Column::Dict` (one dict entry per distinct value, one
-        // `u32` code per row) instead of decoding every row to its own
-        // owned `String` -- the dictionary case column-rs's
-        // `GroupReduce`/`Map` dict fast paths were already built to
-        // consume. A column with no dictionary page, or one that falls
-        // back to `PLAIN` partway through (`Ok(None)`), decodes into
-        // `Column::Str` directly instead (#461).
-        _ => rg.read_string_column_dictionary_indices(index).and_then(
-            |maybe_dict| match maybe_dict {
-                Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),
-                None => rg
-                    .read_string_column(index)
-                    .map(|col| Decoded::Column(str_column(col))),
-            },
-        ),
-    }
-}
-
-/// Decodes one column only at `positions` (ADR-0026, phase 2b) -- the
-/// projection-only path. Builds a typed [`Column`] directly, reusing the
-/// same `int_column`/`float_column`/`bool_column`/`str_column` conversion
-/// helpers as `decode_column_full` (#461, #472): the positional readers
-/// already return the identical `Vec<Option<T>>` shape those helpers
-/// expect, so no separate positional `Value`-rebuild path is needed.
-/// Dictionary string columns deliberately fall through to the plain
-/// positional string reader here rather than a positional
-/// dictionary-codes reader (#457's dict fast path stays eager-decode-only
-/// for v1; see ADR-0026's consequences).
-fn decode_column_at(
-    rg: &RowGroupReader<'_, '_>,
-    index: usize,
-    physical_type: PhysicalType,
-    positions: &[u32],
-) -> std::result::Result<Decoded, crate::storage::FileError> {
-    match physical_type {
-        PhysicalType::Int64 => rg
-            .read_int64_column_at(index, positions)
-            .map(|col| Decoded::Column(int_column(col))),
-        PhysicalType::Int32 => rg.read_int32_column_at(index, positions).map(|col| {
-            Decoded::Column(int_column(
-                col.into_iter().map(|v| v.map(i64::from)).collect(),
-            ))
-        }),
-        PhysicalType::Double => rg
-            .read_double_column_at(index, positions)
-            .map(|col| Decoded::Column(float_column(col))),
-        PhysicalType::Float => rg.read_float_column_at(index, positions).map(|col| {
-            Decoded::Column(float_column(
-                col.into_iter().map(|v| v.map(f64::from)).collect(),
-            ))
-        }),
-        PhysicalType::Boolean => rg
-            .read_boolean_column_at(index, positions)
-            .map(|col| Decoded::Column(bool_column(col))),
-        _ => rg
-            .read_string_column_at(index, positions)
-            .map(|col| Decoded::Column(str_column(col))),
-    }
-}
-
-/// Converts a Parquet dictionary chunk's `(dict, codes)` (`codes[i]` is
-/// `None` for a NULL row) into the VM's [`Column::Dict`] representation,
-/// which splits nullability out into a [`Bitmap`] and defaults a NULL row's
-/// index to `0` rather than carrying an `Option` per row (#457).
-fn dict_column(dict: Vec<String>, codes: Vec<Option<u32>>) -> Column {
-    let valid = Bitmap::from_bools(codes.iter().map(Option::is_some));
-    let indices = codes.iter().map(|c| c.unwrap_or(0)).collect();
-    Column::Dict {
-        dict: dict.into_iter().map(Into::into).collect(),
-        indices,
-        valid,
-    }
-}
-
-/// Converts a Parquet `INT64`/`INT32`-widened column's `Vec<Option<i64>>`
-/// (`None` for a NULL row) into [`Column::Int`], splitting nullability into
-/// a [`Bitmap`] and defaulting a NULL row's slot to `0` (#461).
-fn int_column(values: Vec<Option<i64>>) -> Column {
-    let valid = Bitmap::from_bools(values.iter().map(Option::is_some));
-    let data = values.into_iter().map(|v| v.unwrap_or(0)).collect();
-    Column::Int { data, valid }
-}
-
-/// Converts a Parquet `DOUBLE`/`FLOAT`-widened column's `Vec<Option<f64>>`
-/// into [`Column::Float`], splitting nullability into a [`Bitmap`] and
-/// defaulting a NULL row's slot to `0.0` (#461).
-fn float_column(values: Vec<Option<f64>>) -> Column {
-    let valid = Bitmap::from_bools(values.iter().map(Option::is_some));
-    let data = values.into_iter().map(|v| v.unwrap_or(0.0)).collect();
-    Column::Float { data, valid }
-}
-
-/// Converts a Parquet `BOOLEAN` column's `Vec<Option<bool>>` into
-/// [`Column::Bool`], splitting nullability into a [`Bitmap`] and defaulting
-/// a NULL row's slot to `false` (#461).
-fn bool_column(values: Vec<Option<bool>>) -> Column {
-    let valid = Bitmap::from_bools(values.iter().map(Option::is_some));
-    let data = values.into_iter().map(|v| v.unwrap_or(false)).collect();
-    Column::Bool { data, valid }
-}
-
-/// Converts a Parquet plain-encoded (non-dictionary) string column's
-/// `Vec<Option<String>>` into [`Column::Str`]'s offsets+data layout, one
-/// [`Bitmap`] bit per row rather than an `Option` wrapper per row (#461).
-fn str_column(values: Vec<Option<String>>) -> Column {
-    let valid = Bitmap::from_bools(values.iter().map(Option::is_some));
-    let (offsets, data) = build_str_column(values.len(), |i| {
-        values.get(i).and_then(Option::clone).unwrap_or_default()
-    });
-    Column::Str {
-        offsets,
-        data,
-        valid,
-    }
 }
 
 /// Builds one [`RowGroupSegment`] per row group, skipping any row group
@@ -866,13 +712,11 @@ impl Engine for BatchEngine {
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_column, decode_column_at, decode_column_full, dict_column, engine, float_column,
-        int_column, plan_err, planner, resolve_columns, row_group_segments, str_column, type_name,
-        Column, Decoded, ErrorKind, Leaf, ParquetFile, PhysicalType, PlanError, Program,
-        RowGroupSegment,
+        engine, plan_err, planner, resolve_columns, row_group_segments, type_name, ErrorKind, Leaf,
+        ParquetFile, PhysicalType, PlanError, Program, RowGroupSegment,
     };
     use crate::parser::ast::Select;
-    use crate::vm::batch::{Segment as _, Value};
+    use crate::vm::batch::Segment as _;
 
     #[test]
     fn plan_err_maps_internal_to_a_planner_invariant_execute_error() {
@@ -885,120 +729,6 @@ mod tests {
     fn plan_err_maps_every_other_variant_to_a_compile_error() {
         let e = plan_err(PlanError::UnknownColumn("missing".into()));
         assert_eq!(e.kind, ErrorKind::Compile);
-    }
-
-    #[test]
-    fn dict_column_carries_codes_through_unchanged() {
-        let dict = vec!["east".to_string(), "west".to_string()];
-        let column = dict_column(dict, vec![Some(0), Some(1), Some(0)]);
-        match column {
-            Column::Dict {
-                dict,
-                indices,
-                valid,
-            } => {
-                assert_eq!(
-                    dict.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
-                    ["east", "west"]
-                );
-                assert_eq!(indices, vec![0, 1, 0]);
-                assert!(valid.all_valid());
-            }
-            other => panic!("expected Column::Dict, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn dict_column_defaults_a_null_rows_code_to_zero_but_marks_it_invalid() {
-        // #457 acceptance criterion: NULL codes (`None` in the Parquet
-        // reader's indices vector) must not read back as a spurious
-        // dictionary entry -- the validity bitmap, not the defaulted `0`
-        // index, is what marks the row NULL.
-        let dict = vec!["east".to_string()];
-        let column = dict_column(dict, vec![Some(0), None, Some(0)]);
-        match &column {
-            Column::Dict { indices, valid, .. } => {
-                assert_eq!(*indices, vec![0, 0, 0]);
-                assert!(valid.get(0));
-                assert!(!valid.get(1));
-                assert!(valid.get(2));
-            }
-            other => panic!("expected Column::Dict, got {other:?}"),
-        }
-        assert!(column.is_null(1));
-        assert!(!column.is_null(0));
-    }
-
-    /// #461: an `INT64`/`INT32` row group decodes straight into
-    /// `Column::Int`, and reading it back agrees row-for-row with the
-    /// `Vec<Value>` fallback path (`Column::from`) over the same data --
-    /// the differential obligation the issue's acceptance criteria ask for.
-    #[test]
-    fn int_column_matches_the_value_fallback_including_nulls() {
-        let values = vec![Some(1), None, Some(-3)];
-        let typed = int_column(values.clone());
-        let fallback = Column::from(
-            values
-                .into_iter()
-                .map(|v| v.map_or(Value::Null, Value::Int))
-                .collect::<Vec<_>>(),
-        );
-        assert!(matches!(typed, Column::Int { .. }));
-        for i in 0..3 {
-            assert_eq!(typed.get(i), fallback.get(i));
-            assert_eq!(typed.is_null(i), fallback.is_null(i));
-        }
-    }
-
-    #[test]
-    fn float_column_matches_the_value_fallback_including_nulls() {
-        let values = vec![Some(1.5), None, Some(-2.25)];
-        let typed = float_column(values.clone());
-        let fallback = Column::from(
-            values
-                .into_iter()
-                .map(|v| v.map_or(Value::Null, Value::Float))
-                .collect::<Vec<_>>(),
-        );
-        assert!(matches!(typed, Column::Float { .. }));
-        for i in 0..3 {
-            assert_eq!(typed.get(i), fallback.get(i));
-            assert_eq!(typed.is_null(i), fallback.is_null(i));
-        }
-    }
-
-    #[test]
-    fn bool_column_matches_the_value_fallback_including_nulls() {
-        let values = vec![Some(true), None, Some(false)];
-        let typed = bool_column(values.clone());
-        let fallback = Column::from(
-            values
-                .into_iter()
-                .map(|v| v.map_or(Value::Null, Value::Bool))
-                .collect::<Vec<_>>(),
-        );
-        assert!(matches!(typed, Column::Bool { .. }));
-        for i in 0..3 {
-            assert_eq!(typed.get(i), fallback.get(i));
-            assert_eq!(typed.is_null(i), fallback.is_null(i));
-        }
-    }
-
-    #[test]
-    fn str_column_matches_the_value_fallback_including_nulls() {
-        let values = vec![Some("east".to_string()), None, Some("west".to_string())];
-        let typed = str_column(values.clone());
-        let fallback = Column::from(
-            values
-                .into_iter()
-                .map(|v| v.map_or(Value::Null, |s| Value::Str(s.into())))
-                .collect::<Vec<_>>(),
-        );
-        assert!(matches!(typed, Column::Str { .. }));
-        for i in 0..3 {
-            assert_eq!(typed.get(i), fallback.get(i));
-            assert_eq!(typed.is_null(i), fallback.is_null(i));
-        }
     }
 
     /// Minimal Thrift Compact Protocol struct encoder (mirrors
@@ -1684,37 +1414,5 @@ mod tests {
             "only the big-values row group should be pruned"
         );
         assert!(!segments.iter().any(|s| s.row_group_index == 0));
-    }
-
-    /// #472: `decode_column_at`'s typed positional decode must agree,
-    /// row-for-row, with gathering the same positions out of
-    /// `decode_column_full`'s whole-row-group decode -- the differential
-    /// obligation the issue's acceptance criteria ask for. Both now share
-    /// the same `float_column` conversion helper, so this pins the actual
-    /// risk surface of the change: which physical type wires to which
-    /// `read_*_column`/`read_*_column_at` pair, not the (already
-    /// differentially tested, #461) `Vec<Option<T>>` -> `Column`
-    /// conversion itself.
-    #[test]
-    fn decode_column_at_matches_decode_column_full_gathered_at_the_same_positions() {
-        let file_bytes = build_file(&[(&[10.0, 20.0, 30.0, 40.0, 50.0], None)]);
-        let file = ParquetFile::open(&file_bytes).unwrap();
-        let rg = file.row_group(0).unwrap();
-
-        let Decoded::Column(full) = decode_column_full(&rg, 0, PhysicalType::Double).unwrap();
-
-        let positions: Vec<u32> = vec![4, 1, 1, 0];
-        let Decoded::Column(positional) =
-            decode_column_at(&rg, 0, PhysicalType::Double, &positions).unwrap();
-
-        assert_eq!(positional.len(), positions.len());
-        for (i, &pos) in positions.iter().enumerate() {
-            assert_eq!(
-                positional.get(i),
-                full.get(pos as usize),
-                "position {i} (row {pos}) disagrees between decode_column_at and decode_column_full"
-            );
-            assert_eq!(positional.is_null(i), full.is_null(pos as usize));
-        }
     }
 }

@@ -11682,7 +11682,7 @@
   {
     "id": "engine_column_load_c2239b69",
     "file": "src/engine/column.rs",
-    "line": 263,
+    "line": 256,
     "decision": "let Some(values) = predicate_batch.columns.get(name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -11692,7 +11692,7 @@
   {
     "id": "engine_column_load_eae013f0",
     "file": "src/engine/column.rs",
-    "line": 269,
+    "line": 262,
     "decision": "let Some(column) = predicate_batch.typed_columns.get(name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -11700,39 +11700,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_column_decode_column_full_25e7501f",
-    "file": "src/engine/column.rs",
-    "line": 318,
-    "decision": "match physical_type {\n        PhysicalType::Int64 => rg\n            .read_int64_column(index)\n            .map(|col| Decoded::Column(int_column(col))),\n        PhysicalType::Int32 => rg.read_int32_column(index).map(|col| {\n            Decoded::Column(int_column(\n                col.into_iter().map(|v| v.map(i64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Double => rg\n            .read_double_column(index)\n            .map(|col| Decoded::Column(float_column(col))),\n        PhysicalType::Float => rg.read_float_column(index).map(|col| {\n            Decoded::Column(float_column(\n                col.into_iter().map(|v| v.map(f64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Boolean => rg\n            .read_boolean_column(index)\n            .map(|col| Decoded::Column(bool_column(col))),\n        // #457: a `PLAIN_DICTIONARY`-encoded string column materializes\n        // as `Column::Dict` (one dict entry per distinct value, one\n        // `u32` code per row) instead of decoding every row to its own\n        // owned `String` -- the dictionary case column-rs's\n        // `GroupReduce`/`Map` dict fast paths were already built to\n        // consume. A column with no dictionary page, or one that falls\n        // back to `PLAIN` partway through (`Ok(None)`), decodes into\n        // `Column::Str` directly instead (#461).\n        _ => rg.read_string_column_dictionary_indices(index).and_then(\n            |maybe_dict| match maybe_dict {\n                Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),\n                None => rg\n                    .read_string_column(index)\n                    .map(|col| Decoded::Column(str_column(col))),\n            },\n        ),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": true
-  },
-  {
-    "id": "engine_column_decode_column_full_8a479ab6",
-    "file": "src/engine/column.rs",
-    "line": 347,
-    "decision": "match maybe_dict {\n                Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),\n                None => rg\n                    .read_string_column(index)\n                    .map(|col| Decoded::Column(str_column(col))),\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "engine_column_decode_column_at_732deede",
-    "file": "src/engine/column.rs",
-    "line": 373,
-    "decision": "match physical_type {\n        PhysicalType::Int64 => rg\n            .read_int64_column_at(index, positions)\n            .map(|col| Decoded::Column(int_column(col))),\n        PhysicalType::Int32 => rg.read_int32_column_at(index, positions).map(|col| {\n            Decoded::Column(int_column(\n                col.into_iter().map(|v| v.map(i64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Double => rg\n            .read_double_column_at(index, positions)\n            .map(|col| Decoded::Column(float_column(col))),\n        PhysicalType::Float => rg.read_float_column_at(index, positions).map(|col| {\n            Decoded::Column(float_column(\n                col.into_iter().map(|v| v.map(f64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Boolean => rg\n            .read_boolean_column_at(index, positions)\n            .map(|col| Decoded::Column(bool_column(col))),\n        _ => rg\n            .read_string_column_at(index, positions)\n            .map(|col| Decoded::Column(str_column(col))),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": true
-  },
-  {
     "id": "engine_column_row_group_segments_b8f6287e",
     "file": "src/engine/column.rs",
-    "line": 475,
+    "line": 321,
     "decision": "match (where_clause, file.row_group(i)) {\n            (Some(expr), Some(rg)) => !prune::definitely_empty(expr, &rg, &leaves_by_name),\n            _ => true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11742,7 +11712,7 @@
   {
     "id": "engine_column_compare_eb9e37d0",
     "file": "src/engine/column.rs",
-    "line": 507,
+    "line": 353,
     "decision": "match (a, b) {\n            (StatValue::Int(x), StatValue::Int(y)) => Some(x.cmp(y)),\n            (StatValue::Float(x), StatValue::Float(y)) => x.partial_cmp(y),\n            (StatValue::Int(x), StatValue::Float(y)) => (*x as f64).partial_cmp(y),\n            (StatValue::Float(x), StatValue::Int(y)) => x.partial_cmp(&(*y as f64)),\n            (StatValue::Str(x), StatValue::Str(y)) => Some(x.cmp(y)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11752,7 +11722,7 @@
   {
     "id": "engine_column_decode_stat_bytes_94ae8332",
     "file": "src/engine/column.rs",
-    "line": 522,
+    "line": 368,
     "decision": "match physical_type {\n            PhysicalType::Int32 => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from(i32::from_le_bytes(arr))))\n            }\n            PhysicalType::Int64 => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from_le_bytes(arr)))\n            }\n            PhysicalType::Float => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from(f32::from_le_bytes(arr))))\n            }\n            PhysicalType::Double => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from_le_bytes(arr)))\n            }\n            PhysicalType::ByteArray => std::str::from_utf8(bytes)\n                .ok()\n                .map(str::to_string)\n                .map(StatValue::Str),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11762,7 +11732,7 @@
   {
     "id": "engine_column_literal_stat_value_46d4637c",
     "file": "src/engine/column.rs",
-    "line": 548,
+    "line": 394,
     "decision": "match (lit, physical_type) {\n            (Literal::Integer(i), PhysicalType::Int32 | PhysicalType::Int64) => {\n                Some(StatValue::Int(*i))\n            }\n            (Literal::Integer(i), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*i as f64))\n            }\n            (Literal::Float(f), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*f))\n            }\n            (Literal::Str(s), PhysicalType::ByteArray) => Some(StatValue::Str(s.clone())),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11772,7 +11742,7 @@
   {
     "id": "engine_column_as_column_and_literal_34999e3c",
     "file": "src/engine/column.rs",
-    "line": 571,
+    "line": 417,
     "decision": "match (&lhs.kind, &rhs.kind) {\n            (ExprKind::Column { name, .. }, ExprKind::Literal(lit)) => Some((name, lit, false)),\n            (ExprKind::Literal(lit), ExprKind::Column { name, .. }) => Some((name, lit, true)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11782,7 +11752,7 @@
   {
     "id": "engine_column_flip_3667ef35",
     "file": "src/engine/column.rs",
-    "line": 579,
+    "line": 425,
     "decision": "match op {\n            BinaryOp::Lt => BinaryOp::Gt,\n            BinaryOp::Le => BinaryOp::Ge,\n            BinaryOp::Gt => BinaryOp::Lt,\n            BinaryOp::Ge => BinaryOp::Le,\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11792,7 +11762,7 @@
   {
     "id": "engine_column_comparison_definitely_empty_a3ff3693",
     "file": "src/engine/column.rs",
-    "line": 596,
+    "line": 442,
     "decision": "flipped",
     "conditions": 1,
     "vectors_required": 2,
@@ -11802,7 +11772,7 @@
   {
     "id": "engine_column_comparison_definitely_empty_e54e6aca",
     "file": "src/engine/column.rs",
-    "line": 609,
+    "line": 455,
     "decision": "match op {\n            BinaryOp::Eq => {\n                let below_min = min\n                    .as_ref()\n                    .and_then(|m| compare(&literal, m))\n                    .is_some_and(|o| o == Ordering::Less);\n                let above_max = max\n                    .as_ref()\n                    .and_then(|m| compare(&literal, m))\n                    .is_some_and(|o| o == Ordering::Greater);\n                below_min || above_max\n            }\n            BinaryOp::Lt => min\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o != Ordering::Less),\n            BinaryOp::Le => min\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o == Ordering::Greater),\n            BinaryOp::Gt => max\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o != Ordering::Greater),\n            BinaryOp::Ge => max\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o == Ordering::Less),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11812,7 +11782,7 @@
   {
     "id": "engine_column_definitely_empty_f9c337cf",
     "file": "src/engine/column.rs",
-    "line": 651,
+    "line": 497,
     "decision": "match &expr.kind {\n            ExprKind::Paren(inner) => definitely_empty(inner, rg, leaves_by_name),\n            ExprKind::Binary {\n                op: BinaryOp::And,\n                lhs,\n                rhs,\n            } => {\n                definitely_empty(lhs, rg, leaves_by_name)\n                    || definitely_empty(rhs, rg, leaves_by_name)\n            }\n            ExprKind::Binary {\n                op: BinaryOp::Or,\n                lhs,\n                rhs,\n            } => {\n                definitely_empty(lhs, rg, leaves_by_name)\n                    && definitely_empty(rhs, rg, leaves_by_name)\n            }\n            ExprKind::Binary { op, lhs, rhs } => {\n                comparison_definitely_empty(*op, lhs, rhs, rg, leaves_by_name).unwrap_or(false)\n            }\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11822,7 +11792,7 @@
   {
     "id": "engine_column_in_subquery_38ffb216",
     "file": "src/engine/column.rs",
-    "line": 692,
+    "line": 538,
     "decision": "match &select.where_clause {\n        Some(Expr {\n            kind: ExprKind::InSubquery { subquery, .. },\n            ..\n        }) => Some(subquery),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11832,7 +11802,7 @@
   {
     "id": "engine_column_is_window_column_21d3bda9",
     "file": "src/engine/column.rs",
-    "line": 702,
+    "line": 548,
     "decision": "match column {\n        ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { tail, .. },\n                    ..\n                },\n            ..\n        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11842,7 +11812,7 @@
   {
     "id": "engine_column_plan_err_bbf17c28",
     "file": "src/engine/column.rs",
-    "line": 718,
+    "line": 564,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11852,28 +11822,8 @@
   {
     "id": "engine_column_type_name_16b2089b",
     "file": "src/engine/column.rs",
-    "line": 731,
+    "line": 577,
     "decision": "match pt {\n        PhysicalType::Boolean => \"BOOLEAN\",\n        PhysicalType::Int32 => \"INT32\",\n        PhysicalType::Int64 => \"INT64\",\n        PhysicalType::Int96 => \"INT96\",\n        PhysicalType::Float => \"FLOAT\",\n        PhysicalType::Double => \"DOUBLE\",\n        PhysicalType::ByteArray => \"BYTE_ARRAY\",\n        PhysicalType::FixedLenByteArray => \"FIXED_LEN_BYTE_ARRAY\",\n        PhysicalType::Unknown(_) => \"\",\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "engine_column_dict_column_carries_codes_through_unchanged_adc30411",
-    "file": "src/engine/column.rs",
-    "line": 894,
-    "decision": "match column {\n            Column::Dict {\n                dict,\n                indices,\n                valid,\n            } => {\n                assert_eq!(\n                    dict.iter().map(AsRef::as_ref).collect::<Vec<_>>(),\n                    [\"east\", \"west\"]\n                );\n                assert_eq!(indices, vec![0, 1, 0]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Dict, got {other:?}\"),\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "engine_column_dict_column_defaults_a_null_rows_code_to_zero_but_marks_it_invalid_7147f221",
-    "file": "src/engine/column.rs",
-    "line": 919,
-    "decision": "match &column {\n            Column::Dict { indices, valid, .. } => {\n                assert_eq!(*indices, vec![0, 0, 0]);\n                assert!(valid.get(0));\n                assert!(!valid.get(1));\n                assert!(valid.get(2));\n            }\n            other => panic!(\"expected Column::Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -11882,7 +11832,7 @@
   {
     "id": "engine_column_write_varint_2427714d",
     "file": "src/engine/column.rs",
-    "line": 1024,
+    "line": 754,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -11892,7 +11842,7 @@
   {
     "id": "engine_column_write_varint_a5b1bbc4",
     "file": "src/engine/column.rs",
-    "line": 1028,
+    "line": 758,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -11902,7 +11852,7 @@
   {
     "id": "engine_column_list_of_structs_field_b09c4ad2",
     "file": "src/engine/column.rs",
-    "line": 1067,
+    "line": 797,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -11912,7 +11862,7 @@
   {
     "id": "engine_column_build_double_row_group_4ca87ac2",
     "file": "src/engine/column.rs",
-    "line": 1127,
+    "line": 857,
     "decision": "let Some(stats) = stats_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -11922,7 +11872,7 @@
   {
     "id": "engine_column_a_string_literal_prunes_a_byte_array_column_3ad0fe2b",
     "file": "src/engine/column.rs",
-    "line": 1571,
+    "line": 1301,
     "decision": "let Some(s) = stats",
     "conditions": 1,
     "vectors_required": 2,
@@ -20464,6 +20414,136 @@
     "file": "src/schema.rs",
     "line": 118,
     "decision": "named",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_full_25e7501f",
+    "file": "src/storage/column/decode.rs",
+    "line": 35,
+    "decision": "match physical_type {\n        PhysicalType::Int64 => rg\n            .read_int64_column(index)\n            .map(|col| Decoded::Column(int_column(col))),\n        PhysicalType::Int32 => rg.read_int32_column(index).map(|col| {\n            Decoded::Column(int_column(\n                col.into_iter().map(|v| v.map(i64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Double => rg\n            .read_double_column(index)\n            .map(|col| Decoded::Column(float_column(col))),\n        PhysicalType::Float => rg.read_float_column(index).map(|col| {\n            Decoded::Column(float_column(\n                col.into_iter().map(|v| v.map(f64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Boolean => rg\n            .read_boolean_column(index)\n            .map(|col| Decoded::Column(bool_column(col))),\n        // #457: a `PLAIN_DICTIONARY`-encoded string column materializes\n        // as `Column::Dict` (one dict entry per distinct value, one\n        // `u32` code per row) instead of decoding every row to its own\n        // owned `String` -- the dictionary case column-rs's\n        // `GroupReduce`/`Map` dict fast paths were already built to\n        // consume. A column with no dictionary page, or one that falls\n        // back to `PLAIN` partway through (`Ok(None)`), decodes into\n        // `Column::Str` directly instead (#461).\n        _ => rg.read_string_column_dictionary_indices(index).and_then(\n            |maybe_dict| match maybe_dict {\n                Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),\n                None => rg\n                    .read_string_column(index)\n                    .map(|col| Decoded::Column(str_column(col))),\n            },\n        ),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_column_decode_decode_column_full_8a479ab6",
+    "file": "src/storage/column/decode.rs",
+    "line": 64,
+    "decision": "match maybe_dict {\n                Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),\n                None => rg\n                    .read_string_column(index)\n                    .map(|col| Decoded::Column(str_column(col))),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_at_732deede",
+    "file": "src/storage/column/decode.rs",
+    "line": 90,
+    "decision": "match physical_type {\n        PhysicalType::Int64 => rg\n            .read_int64_column_at(index, positions)\n            .map(|col| Decoded::Column(int_column(col))),\n        PhysicalType::Int32 => rg.read_int32_column_at(index, positions).map(|col| {\n            Decoded::Column(int_column(\n                col.into_iter().map(|v| v.map(i64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Double => rg\n            .read_double_column_at(index, positions)\n            .map(|col| Decoded::Column(float_column(col))),\n        PhysicalType::Float => rg.read_float_column_at(index, positions).map(|col| {\n            Decoded::Column(float_column(\n                col.into_iter().map(|v| v.map(f64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Boolean => rg\n            .read_boolean_column_at(index, positions)\n            .map(|col| Decoded::Column(bool_column(col))),\n        _ => rg\n            .read_string_column_at(index, positions)\n            .map(|col| Decoded::Column(str_column(col))),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_column_decode_dict_column_carries_codes_through_unchanged_adc30411",
+    "file": "src/storage/column/decode.rs",
+    "line": 181,
+    "decision": "match column {\n            Column::Dict {\n                dict,\n                indices,\n                valid,\n            } => {\n                assert_eq!(\n                    dict.iter().map(AsRef::as_ref).collect::<Vec<_>>(),\n                    [\"east\", \"west\"]\n                );\n                assert_eq!(indices, vec![0, 1, 0]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Dict, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_dict_column_defaults_a_null_rows_code_to_zero_but_marks_it_invalid_7147f221",
+    "file": "src/storage/column/decode.rs",
+    "line": 206,
+    "decision": "match &column {\n            Column::Dict { indices, valid, .. } => {\n                assert_eq!(*indices, vec![0, 0, 0]);\n                assert!(valid.get(0));\n                assert!(!valid.get(1));\n                assert!(valid.get(2));\n            }\n            other => panic!(\"expected Column::Dict, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_write_varint_2427714d",
+    "file": "src/storage/column/decode.rs",
+    "line": 314,
+    "decision": "v != 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_write_varint_a5b1bbc4",
+    "file": "src/storage/column/decode.rs",
+    "line": 318,
+    "decision": "v == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_list_of_structs_field_b09c4ad2",
+    "file": "src/storage/column/decode.rs",
+    "line": 352,
+    "decision": "n < 15",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_full_widens_int32_to_column_int_ef0f624c",
+    "file": "src/storage/column/decode.rs",
+    "line": 463,
+    "decision": "match column {\n            Column::Int { data, valid } => {\n                assert_eq!(data, vec![1, -2, 3]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Int, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_full_widens_float_to_column_float_ef9139a1",
+    "file": "src/storage/column/decode.rs",
+    "line": 485,
+    "decision": "match column {\n            Column::Float { data, valid } => {\n                assert_eq!(data, vec![1.5, -2.5]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Float, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_full_decodes_boolean_to_column_bool_b34c7ab6",
+    "file": "src/storage/column/decode.rs",
+    "line": 501,
+    "decision": "*v",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_full_decodes_boolean_to_column_bool_186e79d1",
+    "file": "src/storage/column/decode.rs",
+    "line": 510,
+    "decision": "match column {\n            Column::Bool { data, valid } => {\n                assert_eq!(data, values.to_vec());\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Bool, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_at_int32_and_boolean_match_the_eager_path_at_selected_positions_b34c7ab6",
+    "file": "src/storage/column/decode.rs",
+    "line": 542,
+    "decision": "*v",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
