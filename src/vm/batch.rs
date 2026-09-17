@@ -1282,11 +1282,22 @@ pub fn compare_for_order(a: &Value, b: &Value, descending: bool) -> std::cmp::Or
     }
 }
 
-/// A row plus enough context (`col`, `descending`) to order it against
-/// another for [`top_n_reduce`]'s heap.
+/// A heap candidate for [`top_n_reduce_output`]/[`top_n_merge`]: the
+/// `ORDER BY` column's cell (`key`) plus the row's other output columns,
+/// already gathered (`row`). Never holds a [`Chunk`] reference -- a chunk
+/// can span an entire row group, so keeping one alive per heap candidate
+/// just to reach one of its rows later would retain the whole chunk's
+/// columns for as long as the candidate survives (measured: 227 -> 624 MB
+/// on the 10M-row parity `order_by`, an early version of this fix). #459's
+/// actual saving is upstream of this type: [`top_n_reduce_output`] reads
+/// only the sort column's cell for a row it ends up rejecting, and builds
+/// `row` (one small `Vec<Value>`, this query's two output columns) only
+/// for a row that is actually pushed onto the heap -- the previous shape
+/// fed every row through `QueryOutput::rows` first, which built one
+/// `Vec<Value>` per row regardless of whether it survived.
 struct TopNItem {
+    key: Value,
     row: Vec<Value>,
-    col: usize,
     descending: bool,
 }
 
@@ -1302,37 +1313,26 @@ impl PartialOrd for TopNItem {
     }
 }
 impl Ord for TopNItem {
-    #[allow(
-        clippy::indexing_slicing,
-        reason = "`col` is the ORDER BY register codegen resolved against the row width; `Ord` has no error path"
-    )]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        compare_for_order(&self.row[self.col], &other.row[self.col], self.descending)
+        compare_for_order(&self.key, &other.key, self.descending)
     }
 }
 
-/// Bound `rows` down to its top `spec.limit` in `ORDER BY` order via a
-/// bounded max-heap of the current worst kept row: `O(rows.len() log
-/// spec.limit)` and `O(spec.limit)` peak memory, instead of a full sort's
-/// `O(n log n)` time and `O(n)` memory.
-fn top_n_reduce(rows: impl IntoIterator<Item = Vec<Value>>, spec: &TopN) -> Vec<Vec<Value>> {
+/// Bounds `items` down to the best `limit` by [`TopNItem`]'s order via a
+/// bounded max-heap of the current worst kept candidate: `O(items.len()
+/// log limit)` time, `O(limit)` peak items -- shared by
+/// [`top_n_reduce_output`] (segment scan) and [`run_parallel_top_n`]
+/// (cross-segment merge), neither of which need to re-derive `key`.
+fn top_n_merge(items: impl IntoIterator<Item = TopNItem>, limit: usize) -> Vec<TopNItem> {
     use std::collections::BinaryHeap;
 
-    if spec.limit == 0 {
+    if limit == 0 {
         return Vec::new();
     }
 
-    // #436: `rows` is fed lazily (`QueryOutput::rows`), so the heap is the
-    // only row-shaped state -- `O(spec.limit)`, never one `Vec` per
-    // surviving row.
-    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(spec.limit.saturating_add(1));
-    for row in rows {
-        let item = TopNItem {
-            row,
-            col: spec.col,
-            descending: spec.descending,
-        };
-        if heap.len() < spec.limit {
+    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(limit.saturating_add(1));
+    for item in items {
+        if heap.len() < limit {
             heap.push(item);
         } else if let Some(worst) = heap.peek() {
             if item.cmp(worst) == std::cmp::Ordering::Less {
@@ -1342,39 +1342,89 @@ fn top_n_reduce(rows: impl IntoIterator<Item = Vec<Value>>, spec: &TopN) -> Vec<
         }
     }
     heap.into_sorted_vec()
-        .into_iter()
-        .map(|item| item.row)
+}
+
+/// Gathers row `r`'s cells across every one of `chunk`'s (equal-length)
+/// columns -- the same per-row cost `QueryOutput::rows` pays, but called
+/// only for a row [`top_n_reduce_output`] is actually keeping.
+fn gather_row(chunk: &Chunk, r: usize) -> Vec<Value> {
+    chunk
+        .iter()
+        .map(|column| column.get(r).cloned().unwrap_or(Value::Null))
         .collect()
 }
 
+/// Scans one segment's `output` straight from its chunks and reduces it to
+/// the local top-`spec.limit` [`TopNItem`]s: reads only the `ORDER BY`
+/// column's cell for every candidate row, and only [`gather_row`]s (the
+/// rest of that row's output columns) for a row that is actually pushed
+/// onto the heap -- a rejected row's other columns are never read, and no
+/// row is materialized twice (#459).
+fn top_n_reduce_output(output: &QueryOutput, spec: &TopN) -> Vec<TopNItem> {
+    use std::collections::BinaryHeap;
+
+    if spec.limit == 0 {
+        return Vec::new();
+    }
+
+    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(spec.limit.saturating_add(1));
+    for chunk in output.chunks() {
+        let sort_column = chunk.get(spec.col);
+        for r in 0..chunk_len(chunk) {
+            let key = sort_column
+                .and_then(|column| column.get(r))
+                .cloned()
+                .unwrap_or(Value::Null);
+            if heap.len() < spec.limit {
+                heap.push(TopNItem {
+                    key,
+                    row: gather_row(chunk, r),
+                    descending: spec.descending,
+                });
+            } else if let Some(worst) = heap.peek() {
+                if compare_for_order(&key, &worst.key, spec.descending) == std::cmp::Ordering::Less
+                {
+                    heap.pop();
+                    heap.push(TopNItem {
+                        key,
+                        row: gather_row(chunk, r),
+                        descending: spec.descending,
+                    });
+                }
+            }
+        }
+    }
+    heap.into_sorted_vec()
+}
+
 /// Like [`run_parallel`], but for `ORDER BY ... LIMIT ...` queries: each
-/// segment is reduced to its own top-`spec.limit` rows before merging, and
-/// the merge itself is a final top-`spec.limit` reduction rather than a
-/// concatenation -- so peak memory is bounded by `segments.len() *
-/// spec.limit` rather than the full row count.
+/// segment is reduced to its own top-`spec.limit` candidates before
+/// merging, and the merge itself is a final top-`spec.limit` reduction
+/// rather than a concatenation -- so peak memory is bounded by
+/// `segments.len() * spec.limit` candidates (never a materialized row)
+/// rather than the full row count, and the final gather to `Vec<Value>`
+/// rows happens exactly once, only for the `spec.limit` overall winners.
 pub fn run_parallel_top_n<S: Segment>(
     segments: &[S],
     program: &[Opcode],
     spec: &TopN,
 ) -> Result<QueryOutput> {
-    // #436: `top_n_reduce`'s heap is inherently row-shaped (each candidate
-    // is compared by one `ORDER BY` column against the current worst kept
-    // row), but it only ever holds `spec.limit` rows at a time and is fed
-    // lazily from the segment's chunks -- row-major here is bounded by the
-    // query's own `LIMIT`, not by how many rows survived the scan.
-    let per_segment: Vec<Result<Vec<Vec<Value>>>> = run_morsels(segments, |segment| {
+    let per_segment: Vec<Result<Vec<TopNItem>>> = run_morsels(segments, |segment| {
         let batch = segment.load()?;
         let mut vm = Vm::new();
         vm.execute(&batch, program)?;
         let output = std::mem::take(&mut vm.output);
-        Ok(top_n_reduce(output.rows(), spec))
+        Ok(top_n_reduce_output(&output, spec))
     });
 
     let mut all = Vec::new();
-    for rows in per_segment {
-        all.extend(rows?);
+    for items in per_segment {
+        all.extend(items?);
     }
-    Ok(QueryOutput::from_rows(top_n_reduce(all, spec)))
+    let winners = top_n_merge(all, spec.limit);
+    Ok(QueryOutput::from_rows(
+        winners.into_iter().map(|item| item.row).collect(),
+    ))
 }
 
 /// A pathological/buggy compiled program can't run more `Vm::step` calls
@@ -6305,6 +6355,80 @@ mod tests {
         };
         let rows = run_parallel_top_n(&segments, &program, &spec).unwrap();
         assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+    }
+
+    #[test]
+    fn run_parallel_top_n_with_limit_zero_returns_no_rows() {
+        // #459 acceptance criterion: `limit == 0` short-circuits both the
+        // per-segment scan and the cross-segment merge, never touching the
+        // heap.
+        let segments: Vec<InMemorySegment> = vec![InMemorySegment(
+            Batch::new(2).with_column("amount", vec![Value::Int(2), Value::Int(1)]),
+        )];
+        let program = vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "amount".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
+        ];
+        let spec = TopN {
+            col: 0,
+            descending: false,
+            limit: 0,
+        };
+        let rows = run_parallel_top_n(&segments, &program, &spec).unwrap();
+        assert_eq!(rows, QueryOutput::default());
+    }
+
+    #[test]
+    fn run_parallel_top_n_gathers_every_output_column_not_just_the_sort_key() {
+        // #459: the rewrite reads only the ORDER BY column while building
+        // the heap, but a surviving candidate's *other* output columns
+        // must still come back correctly once gathered.
+        let segments: Vec<InMemorySegment> = vec![InMemorySegment(
+            Batch::new(3)
+                .with_column(
+                    "amount",
+                    vec![Value::Int(30), Value::Int(10), Value::Int(20)],
+                )
+                .with_column(
+                    "label",
+                    vec![
+                        Value::Str("c".into()),
+                        Value::Str("a".into()),
+                        Value::Str("b".into()),
+                    ],
+                ),
+        )];
+        let program = vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "amount".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "label".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0, 1].into(),
+            },
+        ];
+        let spec = TopN {
+            col: 0,
+            descending: true,
+            limit: 2,
+        };
+        let rows = run_parallel_top_n(&segments, &program, &spec).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(30), Value::Str("c".into())],
+                vec![Value::Int(20), Value::Str("b".into())],
+            ]
+        );
     }
 
     #[test]
