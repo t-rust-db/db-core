@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.106.0] - 2026-09-17
+
+### Added
+
+- **Parquet numeric/bool/string columns decode straight into `Column`** (#461): `engine::column`'s `decode_column_full` (the whole-row-group path shared by the eager load and #460's predicate phase) now builds `Column::Int`/`Float`/`Bool`/`Str` directly for `Int64`/`Int32`/`Double`/`Float`/`Boolean`/plain-string columns, extending #457's dictionary-string pattern to every physical type. The `Vec<Value>` intermediate (`Decoded::Values`) is gone from that path; `decode_column_at` (#460's positional projection-only path) is unchanged for now. Consumption by `GroupReduce`/`HashBuild`/`HashProbe` (#428/#435) and the Lance spike/Arrow-contract doc from #461's full scope remain follow-up work.
+
 ## [0.105.0] - 2026-09-17
 
 ### Added
