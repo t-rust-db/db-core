@@ -737,7 +737,7 @@ fn vm_execute_then_register_reads_back_a_loaded_column() {
 
 #[test]
 fn vm_register_reports_unknown_register() {
-    let vm = Vm::new();
+    let mut vm = Vm::new();
     assert_eq!(
         vm.register(0).unwrap_err(),
         VmError::UnknownRegister {

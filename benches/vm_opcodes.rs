@@ -214,6 +214,37 @@ fn bench_batch_reduce(r: &mut common::Report) {
     });
 }
 
+/// #482: bare `SUM(amount)` over a typed `Float` column, no `GROUP BY` --
+/// `Opcode::Reduce`'s typed fast path (`typed_reduce_values`) never calls
+/// `Vm::reg`, so this measures whether `LoadColumn` still pays to build a
+/// `Vec<Value>` copy nothing reads (the #477 finding this issue fixes).
+fn bench_batch_reduce_typed_sum(r: &mut common::Report) {
+    let batch = Batch::new(ROWS).with_typed_column(
+        "amount",
+        db_core::vm::column::Column::from(
+            (0..ROWS as i64).map(BatchValue::Int).collect::<Vec<_>>(),
+        ),
+    );
+    let program = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "amount".into(),
+        },
+        BatchOpcode::Reduce {
+            func: db_core::vm::batch::AggFunc::Sum,
+            src: Some(0),
+            dst: 1,
+        },
+        BatchOpcode::Emit {
+            registers: vec![1].into(),
+        },
+    ];
+    r.bench("vm_opcodes/batch::Reduce typed SUM (no GROUP BY)", || {
+        let mut vm = BatchVm::new();
+        vm.execute(black_box(&batch), &program)
+    });
+}
+
 /// A `GroupReduce` key column cycling through `cardinality` distinct
 /// values -- `cardinality == ROWS` is the worst case (every row its own
 /// group), `cardinality << ROWS` the common low/medium-cardinality case.
@@ -558,6 +589,7 @@ fn main() {
     bench_batch_map_and_filter(&mut report);
     bench_batch_filter_many_registers(&mut report);
     bench_batch_reduce(&mut report);
+    bench_batch_reduce_typed_sum(&mut report);
     bench_batch_group_reduce(&mut report);
     bench_batch_group_reduce_typed_sum(&mut report);
     bench_engine_combine(&mut report);
