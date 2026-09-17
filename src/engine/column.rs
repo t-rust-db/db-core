@@ -685,6 +685,7 @@ mod tests {
         Column, ErrorKind, Leaf, ParquetFile, PhysicalType, PlanError, Program, RowGroupSegment,
     };
     use crate::parser::ast::Select;
+    use crate::vm::batch::Segment as _;
 
     #[test]
     fn plan_err_maps_internal_to_a_planner_invariant_execute_error() {
@@ -932,10 +933,7 @@ mod tests {
 
     fn where_clause(sql: &str) -> Select {
         let stmt = format!("SELECT amount FROM t WHERE {sql}");
-        match crate::parser::parse(&stmt) {
-            Ok(s) => s,
-            Err(e) => panic!("parse {stmt:?}: {e}"),
-        }
+        crate::parser::parse(&stmt).expect("valid SQL")
     }
 
     fn amount_leaf() -> Vec<Leaf> {
@@ -1065,11 +1063,294 @@ mod tests {
         let amounts: Vec<f64> = output
             .into_rows()
             .into_iter()
-            .map(|row| match row.first() {
-                Some(Value::Float(f)) => *f,
-                other => panic!("expected a float amount, got {other:?}"),
-            })
+            .map(|row| row[0].as_f64().expect("amount column"))
             .collect();
         assert_eq!(amounts, vec![100.0, 150.0, 200.0]);
+    }
+
+    #[test]
+    fn type_name_covers_every_physical_type() {
+        assert_eq!(type_name(PhysicalType::Boolean), "BOOLEAN");
+        assert_eq!(type_name(PhysicalType::Int32), "INT32");
+        assert_eq!(type_name(PhysicalType::Int64), "INT64");
+        assert_eq!(type_name(PhysicalType::Int96), "INT96");
+        assert_eq!(type_name(PhysicalType::Float), "FLOAT");
+        assert_eq!(type_name(PhysicalType::Double), "DOUBLE");
+        assert_eq!(type_name(PhysicalType::ByteArray), "BYTE_ARRAY");
+        assert_eq!(
+            type_name(PhysicalType::FixedLenByteArray),
+            "FIXED_LEN_BYTE_ARRAY"
+        );
+        assert_eq!(type_name(PhysicalType::Unknown(-1)), "");
+    }
+
+    #[test]
+    fn segment_load_errors_on_an_out_of_range_row_group() {
+        let file_bytes = build_file(&[(&[1.0], None)]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let seg = RowGroupSegment {
+            file: &file,
+            row_group_index: 99,
+            columns: amount_leaf(),
+        };
+        assert!(seg.load().is_err());
+    }
+
+    #[test]
+    fn segment_load_errors_on_an_out_of_range_column() {
+        let file_bytes = build_file(&[(&[1.0], None)]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let seg = RowGroupSegment {
+            file: &file,
+            row_group_index: 0,
+            columns: vec![("amount".to_string(), 7, PhysicalType::Double)],
+        };
+        assert!(seg.load().is_err());
+    }
+
+    #[test]
+    fn prunes_using_a_float_literal_against_a_double_column() {
+        let file_bytes = build_file(&[
+            (
+                &[1.0, 2.0],
+                Some(build_statistics(
+                    &1.0f64.to_le_bytes(),
+                    &2.0f64.to_le_bytes(),
+                )),
+            ),
+            (
+                &[100.0, 150.0],
+                Some(build_statistics(
+                    &100.0f64.to_le_bytes(),
+                    &150.0f64.to_le_bytes(),
+                )),
+            ),
+        ]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let select = where_clause("amount > 50.5");
+        let leaves = amount_leaf();
+
+        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        assert_eq!(
+            segments
+                .iter()
+                .map(|s| s.row_group_index)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn prunes_when_the_literal_is_on_the_left_hand_side_for_every_comparison_operator() {
+        let file_bytes = build_file(&[
+            (
+                &[1.0, 2.0],
+                Some(build_statistics(
+                    &1.0f64.to_le_bytes(),
+                    &2.0f64.to_le_bytes(),
+                )),
+            ),
+            (
+                &[100.0, 150.0],
+                Some(build_statistics(
+                    &100.0f64.to_le_bytes(),
+                    &150.0f64.to_le_bytes(),
+                )),
+            ),
+        ]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let leaves = amount_leaf();
+
+        // Flipping which side the literal is on also flips the operator's
+        // meaning: "50 < amount" is `amount > 50` (rules out row group 0,
+        // whose max is 2), while "50 > amount" is `amount < 50` (rules out
+        // row group 1, whose min is 100). "50 = amount" matches neither
+        // group's range, so both are pruned.
+        for (sql, expected) in [
+            ("50 < amount", vec![1]),
+            ("50 <= amount", vec![1]),
+            ("50 > amount", vec![0]),
+            ("50 >= amount", vec![0]),
+            ("50 = amount", vec![]),
+        ] {
+            let select = where_clause(sql);
+            let segments =
+                row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+            assert_eq!(
+                segments
+                    .iter()
+                    .map(|s| s.row_group_index)
+                    .collect::<Vec<_>>(),
+                expected,
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn parenthesized_and_or_predicates_still_prune() {
+        let file_bytes = build_file(&[
+            (
+                &[1.0, 2.0],
+                Some(build_statistics(
+                    &1.0f64.to_le_bytes(),
+                    &2.0f64.to_le_bytes(),
+                )),
+            ),
+            (
+                &[100.0, 150.0],
+                Some(build_statistics(
+                    &100.0f64.to_le_bytes(),
+                    &150.0f64.to_le_bytes(),
+                )),
+            ),
+        ]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let leaves = amount_leaf();
+
+        // AND: either side proving emptiness is enough.
+        let select = where_clause("(amount > 500) AND (amount > 0)");
+        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        assert!(segments.is_empty(), "no row group can satisfy amount > 500");
+
+        // OR: both sides must prove emptiness.
+        let select = where_clause("(amount > 50) OR (amount < 0)");
+        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        assert_eq!(
+            segments
+                .iter()
+                .map(|s| s.row_group_index)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn a_string_literal_prunes_a_byte_array_column() {
+        let mut file = Vec::new();
+        file.extend_from_slice(b"PAR1");
+
+        let build_region_row_group = |values: &[&str], base_offset: i64, stats: Option<Vec<u8>>| {
+            let mut body = Vec::new();
+            for v in values {
+                body.extend_from_slice(&(v.len() as u32).to_le_bytes());
+                body.extend_from_slice(v.as_bytes());
+            }
+            let header = build_page_header(values.len() as i32, body.len() as i32);
+            let mut page_bytes = header;
+            page_bytes.extend_from_slice(&body);
+
+            let mut meta = StructWriter::new();
+            meta.i32_field(1, 6); // BYTE_ARRAY
+            meta.field_header(3, 0x09);
+            meta.buf.push((1u8 << 4) | 0x08);
+            meta.write_varint(6);
+            meta.buf.extend_from_slice(b"region");
+            meta.i64_field(5, values.len() as i64);
+            meta.i64_field(6, page_bytes.len() as i64);
+            meta.i64_field(7, page_bytes.len() as i64);
+            meta.i64_field(9, base_offset);
+            if let Some(s) = stats {
+                meta.struct_field(12, s);
+            }
+            (page_bytes, meta.finish())
+        };
+
+        let mut rg_thrift = Vec::new();
+        let mut total_rows = 0i64;
+        for (values, stats) in [
+            (
+                &["east", "east"][..],
+                Some(build_statistics(b"east", b"east")),
+            ),
+            (
+                &["west", "west"][..],
+                Some(build_statistics(b"west", b"west")),
+            ),
+        ] {
+            let base_offset = file.len() as i64;
+            let (page_bytes, meta_bytes) = build_region_row_group(values, base_offset, stats);
+            file.extend_from_slice(&page_bytes);
+
+            let mut chunk = StructWriter::new();
+            chunk.i64_field(2, base_offset);
+            chunk.struct_field(3, meta_bytes);
+
+            let mut rg = StructWriter::new();
+            rg.list_of_structs_field(1, vec![chunk.finish()]);
+            rg.i64_field(2, page_bytes.len() as i64);
+            rg.i64_field(3, values.len() as i64);
+            rg_thrift.push(rg.finish());
+            total_rows += values.len() as i64;
+        }
+
+        let mut root = StructWriter::new();
+        root.string_field(4, "schema");
+        root.i32_field(5, 1);
+
+        let mut col = StructWriter::new();
+        col.i32_field(1, 6); // BYTE_ARRAY
+        col.i32_field(3, 0);
+        col.string_field(4, "region");
+
+        let mut fmd = StructWriter::new();
+        fmd.i32_field(1, 1);
+        fmd.list_of_structs_field(2, vec![root.finish(), col.finish()]);
+        fmd.i64_field(3, total_rows);
+        fmd.list_of_structs_field(4, rg_thrift);
+        fmd.string_field(6, "test");
+        let metadata = fmd.finish();
+
+        file.extend_from_slice(&metadata);
+        file.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"PAR1");
+
+        let file = ParquetFile::open(&file).unwrap();
+        let leaves = vec![("region".to_string(), 0, PhysicalType::ByteArray)];
+        let stmt = "SELECT region FROM t WHERE region = 'west'";
+        let select = crate::parser::parse(stmt).expect("valid SQL");
+
+        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        assert_eq!(
+            segments
+                .iter()
+                .map(|s| s.row_group_index)
+                .collect::<Vec<_>>(),
+            vec![1],
+            "row group 0 (\"east\") cannot match region = 'west'"
+        );
+    }
+
+    /// Exercises the test-only Thrift writer's varint-continuation and
+    /// 15-or-more-items list encodings (real writers hit both routinely;
+    /// the smaller fixtures elsewhere in this module don't).
+    #[test]
+    fn many_row_groups_with_large_pages_are_all_considered_for_pruning() {
+        let big_values: Vec<f64> = (0..40).map(f64::from).collect();
+        let big_stats = build_statistics(&0.0f64.to_le_bytes(), &39.0f64.to_le_bytes());
+        let mut row_groups: Vec<(&[f64], Option<Vec<u8>>)> = vec![(&big_values, Some(big_stats))];
+        let small = [1000.0];
+        for _ in 0..15 {
+            row_groups.push((
+                &small,
+                Some(build_statistics(
+                    &1000.0f64.to_le_bytes(),
+                    &1000.0f64.to_le_bytes(),
+                )),
+            ));
+        }
+
+        let file_bytes = build_file(&row_groups);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let select = where_clause("amount > 500");
+        let leaves = amount_leaf();
+
+        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        assert_eq!(
+            segments.len(),
+            15,
+            "only the big-values row group should be pruned"
+        );
+        assert!(!segments.iter().any(|s| s.row_group_index == 0));
     }
 }

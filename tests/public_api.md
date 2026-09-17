@@ -6,9 +6,9 @@ and auto-trait impls -- otherwise every public type's `Send`/`Sync`/`Into`/
 public-api` whenever a change adds, removes, or changes the signature of a
 `pub` item; `make check-public-api-fresh` (part of `make ci`) fails the
 build if this file is stale, so a public API change without a regenerated
-snapshot is a build failure, not a silent widening. **Regenerate on
-Linux** -- `fcntl::fsync` is macOS-only (#652), so a macOS run adds it
-spuriously; CI (ubuntu-latest) is the authoritative environment.
+snapshot is a build failure, not a silent widening. Rendered for
+`x86_64-unknown-linux-gnu` (CI's target) regardless of host, so
+`fcntl::fsync` (macOS-only, #652) is consistently absent.
 
 ```text
 pub mod db_core
@@ -3800,7 +3800,6 @@ pub const db_core::storage::row::vfs::fcntl::F_UNLCK: i16
 pub const db_core::storage::row::vfs::fcntl::F_WRLCK: i16
 pub const db_core::storage::row::vfs::fcntl::O_NOFOLLOW: std::os::raw::c_int
 pub fn db_core::storage::row::vfs::fcntl::fcntl_call(&std::fs::File, db_core::storage::row::vfs::fcntl::FcntlArg<'_>) -> core::io::error::Result<std::os::raw::c_int>
-pub fn db_core::storage::row::vfs::fcntl::fsync(&std::fs::File) -> core::io::error::Result<()>
 pub type db_core::storage::row::vfs::fcntl::off_t = i64
 pub mod db_core::storage::row::vfs::lock
 pub enum db_core::storage::row::vfs::lock::LockLevel
