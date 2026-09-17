@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.107.2] - 2026-09-17
+
+### Changed
+
+- **`Combine` merges `GROUP BY` partials by a typed key, not a stringified one** (#478): `vm::engine::finalize` used to build a `Vec<String>` of each group-key column's `Display` output, join it, and hash that string per row -- at 100K groups across 82 segments (8.2M rows) this was the whole query's cost. Now uses the hash-then-verify shape already established for `GroupReduce`'s own grouping (`#439`/`#440`): a `HashMap<u64, Vec<usize>>` bucketed by a variant-tagged hash computed over a borrowed key slice, allocating an owned key only for a genuine new group. Also fixes a latent correctness bug the stringified key had: `Int(1)` and `Str("1")` both format to `"1"` and used to merge into the same group. Applied to the `DISTINCT` dedup pass too. A synthetic 82-segment x 100K-group benchmark went from 1285ms to 337ms for the merge alone; full parity with DuckDB needs a larger column-major merge rewrite tracked separately in #478.
+
 ## [0.107.1] - 2026-09-17
 
 ### Fixed
