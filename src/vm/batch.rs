@@ -1632,7 +1632,7 @@ pub type Result<T> = std::result::Result<T, VmError>;
 /// uses a variant-tagged scheme (shared with joins via
 /// [`hash_group_value`]) so `Int(1)` and `Str("1")` never collide.
 #[derive(Debug, Clone, PartialEq)]
-struct GroupKey(Vec<Value>);
+pub(crate) struct GroupKey(pub(crate) Vec<Value>);
 
 // `Value::Float` isn't `Eq` (NaN), so `Eq` can't be derived -- but the
 // `Hash` impl below never inspects a float's ordering, only its bit
@@ -1678,6 +1678,19 @@ fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
 fn hash_one_value(value: &Value) -> u64 {
     let mut hasher = DefaultHasher::new();
     hash_group_value(value, &mut hasher);
+    hasher.finish()
+}
+
+/// The same variant-tagged hash [`GroupKey`]'s `Hash` impl computes, but
+/// over a borrowed key slice -- so a caller (`vm::engine::finalize`,
+/// #478) can probe a hash-then-verify map on its hot "row belongs to a
+/// group already seen" path without first allocating an owned
+/// `GroupKey`/`Vec<Value>` just to perform the lookup.
+pub(crate) fn hash_group_key(values: &[Value]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for value in values {
+        hash_group_value(value, &mut hasher);
+    }
     hasher.finish()
 }
 
