@@ -45,6 +45,38 @@ fn finalize_merges_groups_sorts_and_limits() {
     assert!(out.contains(&vec![Value::Str("b".into()), Value::Int(5)]));
 }
 
+/// #478: `finalize`'s group merge used to key groups by a stringified,
+/// joined form of the group columns (`Value::to_string`), under which
+/// `Int(1)` and `Str("1")` both format to `"1"` -- a genuine correctness
+/// risk (not just a perf one) that the typed, variant-tagged key
+/// (`GroupKey`'s hash scheme, reused via `hash_group_key`) removes: two
+/// rows with the same *stringified* key but different `Value` variants
+/// must stay in separate groups.
+#[test]
+fn finalize_never_merges_groups_whose_keys_only_match_when_stringified() {
+    let rows = vec![
+        vec![Value::Int(1), Value::Int(10)],
+        vec![Value::Str("1".into()), Value::Int(20)],
+    ];
+    let out = finalize(
+        &[AggPart::GroupKey, AggPart::Sum],
+        1,
+        false,
+        None,
+        None,
+        rows,
+    )
+    .unwrap();
+    let out = out.into_rows();
+    assert_eq!(
+        out.len(),
+        2,
+        "Int(1) and Str(\"1\") must stay separate groups"
+    );
+    assert!(out.contains(&vec![Value::Int(1), Value::Int(10)]));
+    assert!(out.contains(&vec![Value::Str("1".into()), Value::Int(20)]));
+}
+
 #[test]
 fn finalize_applies_order_by_then_limit() {
     let rows = vec![

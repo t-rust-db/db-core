@@ -21,9 +21,9 @@
 //! it isn't. And [`semi_filter`].
 
 use super::batch::{
-    compare_for_order, run_parallel, run_parallel_streaming, run_parallel_top_n, AggPart, Batch,
-    Chunk, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource, Segment, TopN, Value, Vm,
-    VmError,
+    compare_for_order, hash_group_key, run_parallel, run_parallel_streaming, run_parallel_top_n,
+    AggPart, Batch, Chunk, GroupKey, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource,
+    Segment, TopN, Value, Vm, VmError,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -326,20 +326,30 @@ pub fn finalize(
     rows: Vec<Vec<Value>>,
 ) -> Result<QueryOutput> {
     let mut result_rows = if !agg_parts.is_empty() {
+        // #478: a typed, variant-tagged hash over the raw `Value`s
+        // (`GroupKey`'s scheme, #263/#266) instead of stringifying+joining
+        // every group-key column per row -- at 100K groups x 82 segments
+        // the per-row `Vec<String>`/`join`/SipHash-over-string cost was the
+        // entire query. Hash-then-verify (buckets of row indices sharing a
+        // hash, exact `Vec<Value>` equality on collision) rather than a
+        // plain `HashMap<GroupKey, _>`: the overwhelming majority of rows
+        // land in a group already seen (8.1M of 8.2M here), so probing
+        // with a *borrowed* key slice via `hash_group_key` -- allocating
+        // an owned `GroupKey`/`Vec<Value>` only for the rare new-group
+        // case -- avoids a heap allocation on almost every row. `Null ==
+        // Null` still matches (`GROUP BY` semantics, unlike a join key).
         let mut groups: Vec<(Vec<Value>, Vec<Value>)> = Vec::new();
-        let mut index: HashMap<String, usize> = HashMap::new();
+        let mut index: HashMap<u64, Vec<usize>> = HashMap::new();
         for row in rows {
-            let key: Vec<Value> = row[..num_group_keys].to_vec();
-            let key_str = key
-                .iter()
-                .map(Value::to_string)
-                .collect::<Vec<_>>()
-                .join("\u{0}");
-            match index.get(&key_str) {
-                Some(&i) => merge_rows(agg_parts, &mut groups[i].1, &row)?,
+            let key_slice = &row[..num_group_keys];
+            let hash = hash_group_key(key_slice);
+            let bucket = index.entry(hash).or_default();
+            let existing = bucket.iter().copied().find(|&i| groups[i].0 == *key_slice);
+            match existing {
+                Some(i) => merge_rows(agg_parts, &mut groups[i].1, &row)?,
                 None => {
-                    index.insert(key_str, groups.len());
-                    groups.push((key, row));
+                    bucket.push(groups.len());
+                    groups.push((key_slice.to_vec(), row));
                 }
             }
         }
@@ -360,15 +370,8 @@ pub fn finalize(
     // semantics of dedup applied after the hash-aggregate. Must run before
     // `ORDER BY`/`LIMIT` per standard SQL evaluation order.
     if distinct {
-        let mut seen: HashSet<String> = HashSet::new();
-        result_rows.retain(|row| {
-            let key = row
-                .iter()
-                .map(Value::to_string)
-                .collect::<Vec<_>>()
-                .join("\u{0}");
-            seen.insert(key)
-        });
+        let mut seen: HashSet<GroupKey> = HashSet::new();
+        result_rows.retain(|row| seen.insert(GroupKey(row.clone())));
     }
 
     if let Some((pos, descending)) = order_by {
