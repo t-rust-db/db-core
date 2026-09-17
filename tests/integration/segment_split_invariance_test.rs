@@ -393,6 +393,33 @@ fn batch_group_by_over_parquet_rows_is_segment_split_invariant() {
     );
 }
 
+/// ADR-0026 (late materialization): a filtered projection with
+/// projection-only columns deferred past `Filter` over a real,
+/// multi-row-group Parquet file (`production.parquet`: 3 row groups,
+/// 5000 rows) must agree with an unfiltered, order-by-id readback
+/// filtered/projected the same way by hand -- the two-phase
+/// `RowGroupSegment::load()` split must not depend on which row group a
+/// surviving row happened to land in.
+#[test]
+fn batch_filtered_projection_over_a_multi_row_group_parquet_file_matches_full_scan() {
+    let mut engine = BatchEngine::open(Path::new(PARQUET_FIXTURE)).expect("open parquet fixture");
+    let filtered = engine
+        .run_query("SELECT region, amount, id FROM production WHERE id > 4990 ORDER BY id")
+        .expect("filtered projection");
+
+    let all = engine
+        .run_query("SELECT region, amount, id FROM production ORDER BY id")
+        .expect("full scan");
+    let expected: Vec<Vec<Cell>> = all
+        .rows
+        .into_iter()
+        .filter(|r| matches!(&r[2], Cell::Int(id) if *id > 4990))
+        .collect();
+
+    assert_eq!(filtered.rows, expected);
+    assert_eq!(filtered.rows.len(), 10);
+}
+
 // ---------------------------------------------------------------------
 // vm::stream: seal-boundary variation and eviction into `SegmentSummary`
 // ---------------------------------------------------------------------

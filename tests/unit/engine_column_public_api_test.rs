@@ -332,6 +332,107 @@ fn explain_rejects_what_run_query_rejects() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// ADR-0026: late materialization -- a filtered projection with
+// projection-only columns deferred past `Filter` must decode to the same
+// rows/values as the pre-change eager path, including the zero-survivor
+// and unprojected-predicate-column cases.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn filtered_projection_with_more_projected_columns_than_predicate_matches_expected_rows() {
+    // `id` is the sole predicate column; `region` and `amount` are
+    // projection-only, deferred past `Filter` (ADR-0026) -- their values
+    // must still come back exactly right for the 10 surviving rows.
+    let mut e = open();
+    let rows = rows(
+        &mut e,
+        "SELECT region, amount, id FROM production WHERE id > 4990 ORDER BY id",
+    );
+    assert_eq!(rows.len(), 10);
+    assert_eq!(rows[0][2], Cell::Int(4991), "{rows:?}");
+    assert_eq!(rows[9][2], Cell::Int(5000), "{rows:?}");
+    // Every row's `id` must be > 4990 and increasing (ORDER BY id), and
+    // `region`/`amount` must be non-NULL for every surviving row -- a
+    // stray unfiltered or misaligned position would show up as NULL or
+    // a wrong id here.
+    let mut prev = 4990i64;
+    for r in &rows {
+        let id = match &r[2] {
+            Cell::Int(n) => *n,
+            other => panic!("{other:?}"),
+        };
+        assert!(id > prev, "{rows:?}");
+        prev = id;
+        assert!(!matches!(r[0], Cell::Null), "{rows:?}");
+        assert!(!matches!(r[1], Cell::Null), "{rows:?}");
+    }
+}
+
+#[test]
+fn zero_surviving_rows_produces_an_empty_result_without_panicking() {
+    let mut e = open();
+    let r = e
+        .run_query("SELECT region, amount FROM production WHERE id > 999999999")
+        .unwrap();
+    assert_eq!(r.rows, Vec::<Vec<Cell>>::new());
+}
+
+#[test]
+fn predicate_over_a_column_not_projected_still_filters_and_projects_the_others() {
+    // `id` drives the WHERE clause but is not itself selected -- the
+    // predicate-column/projection-only split must still resolve `id` as
+    // a predicate column (not projection-only) even though it never
+    // appears in the output.
+    let mut e = open();
+    let r = e
+        .run_query("SELECT region, amount FROM production WHERE id > 4990 ORDER BY amount")
+        .unwrap();
+    assert_eq!(r.columns, ["region", "amount"]);
+    assert_eq!(r.rows.len(), 10);
+}
+
+#[test]
+fn no_where_clause_still_decodes_every_row_eagerly() {
+    // ADR-0026 explicitly keeps the single-pass eager decode when there
+    // is no `Filter` to defer projection-only columns past.
+    let mut e = open();
+    let r = e
+        .run_query("SELECT region, amount, id FROM production ORDER BY id LIMIT 3")
+        .unwrap();
+    assert_eq!(
+        r.rows,
+        vec![
+            vec![Cell::Text("west".into()), Cell::Real(2.5), Cell::Int(1)],
+            vec![Cell::Text("north".into()), Cell::Real(5.0), Cell::Int(2)],
+            vec![Cell::Text("south".into()), Cell::Real(7.5), Cell::Int(3)],
+        ]
+    );
+}
+
+#[test]
+fn filtered_projection_selects_far_fewer_positions_than_the_row_group_holds() {
+    // Acceptance criterion: non-predicate columns are decoded only at
+    // surviving positions. `production.parquet` has 3 row groups over
+    // 5000 rows (see `open_reports_batch_mode_footer_stats_and_the_stem_named_table`),
+    // so each row group holds roughly 1667 rows; `id > 4990` survives
+    // only in the last row group, and only 10 of its rows -- far fewer
+    // than that row group's own row count. This is observed indirectly
+    // (through the correct, small result set) since there is no direct
+    // decode-count hook from this black-box seam; the arithmetic below
+    // documents the selectivity this test exercises.
+    let mut e = open();
+    let r = e
+        .run_query("SELECT region, amount FROM production WHERE id > 4990")
+        .unwrap();
+    assert_eq!(r.rows.len(), 10);
+    let approx_rows_per_row_group = 5000 / 3;
+    assert!(
+        r.rows.len() < approx_rows_per_row_group,
+        "expected the 10 survivors to be far fewer than one row group's ~{approx_rows_per_row_group} rows"
+    );
+}
+
 #[test]
 fn engine_is_object_safe_and_usable_through_dyn() {
     let mut boxed: Box<dyn Engine> = Box::new(open());

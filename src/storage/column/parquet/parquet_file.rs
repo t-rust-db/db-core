@@ -30,6 +30,9 @@ pub enum FileError {
     Read(ReadError),
     Compression(CompressionError),
     ColumnIndexOutOfRange(usize),
+    /// A positional read (`read_*_column_at`, ADR-0026) named a row
+    /// position past the column's decoded length.
+    RowPositionOutOfRange(u32),
     ChunkOutOfBounds,
     MissingColumnMetadata,
     UnexpectedDictionaryPage,
@@ -54,6 +57,7 @@ impl fmt::Display for FileError {
             FileError::Read(e) => write!(f, "{e}"),
             FileError::Compression(e) => write!(f, "{e}"),
             FileError::ColumnIndexOutOfRange(i) => write!(f, "column index {i} out of range"),
+            FileError::RowPositionOutOfRange(p) => write!(f, "row position {p} out of range"),
             FileError::ChunkOutOfBounds => write!(f, "column chunk byte range is outside the file"),
             FileError::MissingColumnMetadata => write!(f, "column chunk has no meta_data"),
             FileError::UnexpectedDictionaryPage => {
@@ -141,6 +145,20 @@ fn page_size(field: &'static str, value: i32) -> Result<usize> {
         field,
         value: i64::from(value),
     })
+}
+
+/// ADR-0026 v1 positional read: gathers `positions` out of an
+/// already-decoded whole column, in the order given. `positions` are row
+/// indices into `full`'s own numbering (0-based within the row group).
+fn gather<T: Clone>(full: &[Option<T>], positions: &[u32]) -> Result<Vec<Option<T>>> {
+    positions
+        .iter()
+        .map(|&p| {
+            full.get(p as usize)
+                .cloned()
+                .ok_or(FileError::RowPositionOutOfRange(p))
+        })
+        .collect()
 }
 
 fn is_flat_schema(schema: &[footer::SchemaElement]) -> bool {
@@ -685,6 +703,77 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             reader::decode_dictionary_float,
             reader::read_float_column_dictionary,
         )
+    }
+
+    /// Gathers `positions` (row indices into this row group's own
+    /// numbering) out of the full decoded column (ADR-0026 v1: decodes
+    /// the whole column via [`Self::read_int64_column`] first, then
+    /// selects only the wanted positions -- real savings come from the
+    /// caller only materializing `positions.len()` `Value`s/allocations
+    /// downstream, not from skipping the underlying page decode. Page-
+    /// level skip-decode is a documented follow-up, not this v1).
+    pub fn read_int64_column_at(
+        &self,
+        column_index: usize,
+        positions: &[u32],
+    ) -> Result<Vec<Option<i64>>> {
+        let full = self.read_int64_column(column_index)?;
+        gather(&full, positions)
+    }
+
+    /// See [`Self::read_int64_column_at`] -- same v1 gather-after-decode
+    /// strategy, DOUBLE physical type.
+    pub fn read_double_column_at(
+        &self,
+        column_index: usize,
+        positions: &[u32],
+    ) -> Result<Vec<Option<f64>>> {
+        let full = self.read_double_column(column_index)?;
+        gather(&full, positions)
+    }
+
+    /// See [`Self::read_int64_column_at`] -- same v1 gather-after-decode
+    /// strategy, BYTE_ARRAY (UTF-8 string) physical type.
+    pub fn read_string_column_at(
+        &self,
+        column_index: usize,
+        positions: &[u32],
+    ) -> Result<Vec<Option<String>>> {
+        let full = self.read_string_column(column_index)?;
+        gather(&full, positions)
+    }
+
+    /// See [`Self::read_int64_column_at`] -- same v1 gather-after-decode
+    /// strategy, INT32 physical type.
+    pub fn read_int32_column_at(
+        &self,
+        column_index: usize,
+        positions: &[u32],
+    ) -> Result<Vec<Option<i32>>> {
+        let full = self.read_int32_column(column_index)?;
+        gather(&full, positions)
+    }
+
+    /// See [`Self::read_int64_column_at`] -- same v1 gather-after-decode
+    /// strategy, FLOAT physical type.
+    pub fn read_float_column_at(
+        &self,
+        column_index: usize,
+        positions: &[u32],
+    ) -> Result<Vec<Option<f32>>> {
+        let full = self.read_float_column(column_index)?;
+        gather(&full, positions)
+    }
+
+    /// See [`Self::read_int64_column_at`] -- same v1 gather-after-decode
+    /// strategy, BOOLEAN physical type.
+    pub fn read_boolean_column_at(
+        &self,
+        column_index: usize,
+        positions: &[u32],
+    ) -> Result<Vec<Option<bool>>> {
+        let full = self.read_boolean_column(column_index)?;
+        gather(&full, positions)
     }
 
     pub fn read_fixed_len_byte_array_column(

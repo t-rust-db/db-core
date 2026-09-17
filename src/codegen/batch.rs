@@ -1034,6 +1034,19 @@ pub fn compile(select: &Select) -> Result<Program> {
     // loads and its `Map { MaskIf }` masking land in the same pre-filter
     // phase as everything else here and get shrunk in lockstep by `Filter`
     // below, rather than desyncing like a load placed after it would.
+    // ADR-0026: columns the WHERE clause itself references must still load
+    // pre-Filter (Filter's predicate register has to be live), but a plain
+    // projection column that ISN'T part of the predicate is left for the
+    // second pass below (after Filter is emitted) so it's loaded only once
+    // `Filter`'s `Selection` exists -- `Emit` already resolves a pending
+    // `Selection` lazily against any full-length register, pre- or
+    // post-Filter (see `Opcode::Emit`), so a `LoadColumn` emitted after
+    // `Filter` needs no special handling there.
+    let mut where_columns: Vec<String> = Vec::new();
+    if let Some(where_clause) = &select.where_clause {
+        collect_expr_columns(where_clause, &mut where_columns);
+    }
+
     let mut agg_srcs: Vec<Option<usize>> = Vec::new();
     for item in &items {
         match item {
@@ -1041,22 +1054,31 @@ pub fn compile(select: &Select) -> Result<Program> {
                 let base = arg.as_ref().map(|name| ctx.load_column(name));
                 agg_srcs.push(mask_filtered_source(&mut ctx, base, filter.as_ref()));
             }
-            // Plain projected columns are emitted (not aggregated), but they
-            // must be loaded here for the same reason as the keys above: a
-            // column first loaded below the Filter keeps its full pre-filter
-            // length while the filtered registers shrink, and Emit then
-            // indexes past the end of the short ones. `load_column` memoizes,
-            // so the projection code further down reuses these registers
-            // instead of emitting a second LoadColumn.
+            // Plain projected columns are emitted (not aggregated). A
+            // column the WHERE clause also reads must be loaded here for
+            // the same reason as the keys above: a column first loaded
+            // below the Filter keeps its full pre-filter length while the
+            // filtered registers shrink, and Emit then indexes past the end
+            // of the short ones. A projection-only column (not referenced
+            // by WHERE) is deliberately left unloaded here -- it's loaded
+            // by the second pass further down, after `Filter` is emitted
+            // (ADR-0026, late materialization). `load_column` memoizes, so
+            // either way the projection code further down reuses whichever
+            // register this loop already created instead of emitting a
+            // second LoadColumn.
             Item::Column(name) if group_by.is_empty() => {
-                ctx.load_column(name);
+                if where_columns.iter().any(|c| c == name) {
+                    ctx.load_column(name);
+                }
                 agg_srcs.push(None);
             }
             Item::Expr(expr) if group_by.is_empty() => {
                 let mut cols = Vec::new();
                 collect_expr_columns(expr, &mut cols);
                 for name in &cols {
-                    ctx.load_column(name);
+                    if where_columns.iter().any(|c| c == name) {
+                        ctx.load_column(name);
+                    }
                 }
                 agg_srcs.push(None);
             }
@@ -3727,5 +3749,158 @@ mod tests {
             classify_items(&query),
             Err(PlanError::UnsupportedSelectItem(_))
         ));
+    }
+
+    // ---------------------------------------------------------------------
+    // ADR-0026: late materialization -- a plain projection column not
+    // referenced by WHERE is deferred past `Filter` so `Program::
+    // predicate_columns`/`projection_only_columns` (and, eventually,
+    // `RowGroupSegment`) can decode it only for surviving rows.
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn projection_only_column_loads_after_filter_predicate_column_loads_before() {
+        let query =
+            sql::parse("SELECT id, region FROM t WHERE amount > 10").unwrap();
+        let program = compile(&query).unwrap();
+        // `amount` isn't projected at all but is still loaded, pre-Filter.
+        assert_eq!(program.predicate_columns(), vec!["amount".to_string()]);
+        let mut projected = program.projection_only_columns();
+        projected.sort();
+        assert_eq!(projected, vec!["id".to_string(), "region".to_string()]);
+        // Every loaded column is still accounted for by the union of the
+        // two (order-insensitive).
+        let mut all = program.columns_to_load();
+        all.sort();
+        let mut expected = vec!["amount".to_string(), "id".to_string(), "region".to_string()];
+        expected.sort();
+        assert_eq!(all, expected);
+    }
+
+    #[test]
+    fn where_referenced_projection_column_stays_pre_filter() {
+        let query = sql::parse("SELECT amount FROM t WHERE amount > 10").unwrap();
+        let program = compile(&query).unwrap();
+        assert_eq!(program.predicate_columns(), vec!["amount".to_string()]);
+        assert!(program.projection_only_columns().is_empty());
+    }
+
+    #[test]
+    fn no_where_clause_leaves_projection_only_columns_empty() {
+        let query = sql::parse("SELECT id, region FROM t").unwrap();
+        let program = compile(&query).unwrap();
+        // No `Filter` at all: the whole program counts as "pre-filter" per
+        // `predicate_columns`'s doc comment, and there is nothing to defer.
+        assert!(program.projection_only_columns().is_empty());
+        let mut predicate = program.predicate_columns();
+        predicate.sort();
+        assert_eq!(predicate, vec!["id".to_string(), "region".to_string()]);
+    }
+
+    fn null_amount_batch() -> crate::vm::batch::Batch {
+        crate::vm::batch::Batch::new(5)
+            .with_column(
+                "id",
+                vec![
+                    Value::Int(1),
+                    Value::Int(2),
+                    Value::Int(3),
+                    Value::Int(4),
+                    Value::Int(5),
+                ],
+            )
+            .with_column(
+                "region",
+                vec![
+                    Value::Str("a".into()),
+                    Value::Str("a".into()),
+                    Value::Str("b".into()),
+                    Value::Str("b".into()),
+                    Value::Str("c".into()),
+                ],
+            )
+            .with_column(
+                "amount",
+                vec![
+                    Value::Int(5),
+                    Value::Null,
+                    Value::Int(30),
+                    Value::Null,
+                    Value::Int(100),
+                ],
+            )
+    }
+
+    fn run_null_amount_program(program: &Program) -> Vec<Vec<Value>> {
+        use crate::vm::engine::{run, InMemorySegment};
+        run(&[InMemorySegment(null_amount_batch())], program)
+            .unwrap()
+            .into_rows()
+    }
+
+    #[test]
+    fn filter_over_null_predicate_column_excludes_null_rows() {
+        // NULL > 10 is NULL (not true), so both NULL-amount rows must be
+        // excluded -- only ids 3 and 5 survive.
+        let query = sql::parse("SELECT id FROM t WHERE amount > 10").unwrap();
+        let program = compile(&query).unwrap();
+        let rows = run_null_amount_program(&program);
+        assert_eq!(rows, vec![vec![Value::Int(3)], vec![Value::Int(5)]]);
+    }
+
+    #[test]
+    fn filter_over_unprojected_predicate_column_still_projects_other_columns() {
+        // `amount` is filtered on but never selected.
+        let query = sql::parse("SELECT id, region FROM t WHERE amount > 10").unwrap();
+        let program = compile(&query).unwrap();
+        assert_eq!(
+            run_null_amount_program(&program),
+            vec![
+                vec![Value::Int(3), Value::Str("b".into())],
+                vec![Value::Int(5), Value::Str("c".into())],
+            ]
+        );
+    }
+
+    #[test]
+    fn multi_column_predicate_loads_every_referenced_column_pre_filter() {
+        let query =
+            sql::parse("SELECT id FROM t WHERE amount > 10 AND region = 'c'").unwrap();
+        let program = compile(&query).unwrap();
+        let mut predicate = program.predicate_columns();
+        predicate.sort();
+        assert_eq!(predicate, vec!["amount".to_string(), "region".to_string()]);
+        assert_eq!(program.projection_only_columns(), vec!["id".to_string()]);
+        assert_eq!(run_null_amount_program(&program), vec![vec![Value::Int(5)]]);
+    }
+
+    #[test]
+    fn filter_with_zero_survivors_emits_no_rows() {
+        let query = sql::parse("SELECT id, region FROM t WHERE amount > 1000").unwrap();
+        let program = compile(&query).unwrap();
+        let rows = run_null_amount_program(&program);
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn group_by_query_still_loads_key_and_agg_columns_pre_filter() {
+        // Out of scope for the optimization itself (ADR-0026): GROUP BY/
+        // aggregate columns keep loading pre-Filter regardless of WHERE
+        // reference, and results must stay correct.
+        let query = sql::parse(
+            "SELECT region, SUM(amount) FROM t WHERE amount > 10 GROUP BY region",
+        )
+        .unwrap();
+        let program = compile(&query).unwrap();
+        assert!(program.projection_only_columns().is_empty());
+        let mut rows = run_null_amount_program(&program);
+        rows.sort_by(|a, b| format!("{:?}", a[0]).cmp(&format!("{:?}", b[0])));
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Str("b".into()), Value::Float(30.0)],
+                vec![Value::Str("c".into()), Value::Float(100.0)],
+            ]
+        );
     }
 }
