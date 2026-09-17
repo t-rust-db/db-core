@@ -25,7 +25,7 @@ use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, ResultColumn, Select
 use crate::parser::ParseError;
 use crate::storage::column::parquet::footer::PhysicalType;
 use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs, VfsFile};
-use crate::vm::batch::{Batch, Bitmap, Column, Program, Segment, Value, VmError};
+use crate::vm::batch::{Batch, Bitmap, Column, Program, Segment, Value, Vm, VmError};
 use crate::vm::engine;
 
 use super::{
@@ -158,6 +158,13 @@ struct RowGroupSegment<'a, 'm> {
     file: &'m ParquetFile<'a>,
     row_group_index: usize,
     columns: Vec<Leaf>,
+    /// The compiled program driving this scan (ADR-0026): when it has a
+    /// `WHERE` clause with projection-only columns deferred past
+    /// `Filter`, `load()` decodes the predicate columns first, runs the
+    /// filter prefix, and decodes the remaining columns only at the
+    /// surviving row positions -- instead of eagerly decoding every
+    /// column for the whole row group.
+    program: &'m Program,
 }
 
 /// One column's decoded shape out of a row group: either every row's
@@ -169,10 +176,11 @@ enum Decoded {
     Dict(Column),
 }
 
-impl Segment for RowGroupSegment<'_, '_> {
-    fn load(&self) -> Result<Arc<Batch>, VmError> {
-        let rg = self
-            .file
+impl RowGroupSegment<'_, '_> {
+    /// Opens this segment's row group reader, or a [`VmError::SegmentLoad`]
+    /// if the row group index is out of range.
+    fn row_group(&self) -> Result<RowGroupReader<'_, '_>, VmError> {
+        self.file
             .row_group(self.row_group_index)
             .ok_or_else(|| VmError::SegmentLoad {
                 reason: format!(
@@ -180,7 +188,26 @@ impl Segment for RowGroupSegment<'_, '_> {
                     self.row_group_index,
                     self.file.num_row_groups()
                 ),
-            })?;
+            })
+    }
+
+    /// Every row of `rg`, decoded eagerly: the pre-ADR-0026 behavior, used
+    /// when the program has no `Filter` to defer projection-only columns
+    /// past (GROUP BY / no-WHERE queries stay out of this ADR's scope).
+    fn load_eager(&self, rg: &RowGroupReader<'_, '_>, num_rows: usize) -> Result<Batch, VmError> {
+        let mut batch = Batch::new(num_rows);
+        for (name, index, physical_type) in &self.columns {
+            let decoded = decode_column_full(rg, *index, *physical_type)
+                .map_err(|e| segment_error(self.row_group_index, name, &e))?;
+            batch = apply_decoded(batch, name, decoded);
+        }
+        Ok(batch)
+    }
+}
+
+impl Segment for RowGroupSegment<'_, '_> {
+    fn load(&self) -> Result<Arc<Batch>, VmError> {
+        let rg = self.row_group()?;
         let num_rows = usize::try_from(rg.num_rows()).map_err(|_| VmError::SegmentLoad {
             reason: format!(
                 "row group {}: negative row count {}",
@@ -188,75 +215,178 @@ impl Segment for RowGroupSegment<'_, '_> {
                 rg.num_rows()
             ),
         })?;
-        let mut batch = Batch::new(num_rows);
-        for (name, index, physical_type) in &self.columns {
-            let decoded = match physical_type {
-                PhysicalType::Int64 => rg.read_int64_column(*index).map(|col| {
-                    Decoded::Values(
-                        col.into_iter()
-                            .map(|v| v.map_or(Value::Null, Value::Int))
-                            .collect(),
-                    )
-                }),
-                PhysicalType::Int32 => rg.read_int32_column(*index).map(|col| {
-                    Decoded::Values(
-                        col.into_iter()
-                            .map(|v| v.map_or(Value::Null, |i| Value::Int(i64::from(i))))
-                            .collect(),
-                    )
-                }),
-                PhysicalType::Double => rg.read_double_column(*index).map(|col| {
-                    Decoded::Values(
-                        col.into_iter()
-                            .map(|v| v.map_or(Value::Null, Value::Float))
-                            .collect(),
-                    )
-                }),
-                PhysicalType::Float => rg.read_float_column(*index).map(|col| {
-                    Decoded::Values(
-                        col.into_iter()
-                            .map(|v| v.map_or(Value::Null, |f| Value::Float(f64::from(f))))
-                            .collect(),
-                    )
-                }),
-                PhysicalType::Boolean => rg.read_boolean_column(*index).map(|col| {
-                    Decoded::Values(
-                        col.into_iter()
-                            .map(|v| v.map_or(Value::Null, Value::Bool))
-                            .collect(),
-                    )
-                }),
-                // #457: a `PLAIN_DICTIONARY`-encoded string column
-                // materializes as `Column::Dict` (one dict entry per
-                // distinct value, one `u32` code per row) instead of
-                // decoding every row to its own owned `String` -- the
-                // dictionary case column-rs's `GroupReduce`/`Map` dict fast
-                // paths were already built to consume. A column with no
-                // dictionary page, or one that falls back to `PLAIN`
-                // partway through (`Ok(None)`), decodes the plain way
-                // unchanged.
-                _ => rg
-                    .read_string_column_dictionary_indices(*index)
-                    .and_then(|maybe_dict| match maybe_dict {
-                        Some((dict, codes)) => Ok(Decoded::Dict(dict_column(dict, codes))),
-                        None => rg.read_string_column(*index).map(|col| {
-                            Decoded::Values(
-                                col.into_iter()
-                                    .map(|v| v.map_or(Value::Null, |s| Value::Str(s.into())))
-                                    .collect(),
-                            )
-                        }),
-                    }),
-            }
-            .map_err(|e| VmError::SegmentLoad {
-                reason: format!("row group {}: column `{name}`: {e}", self.row_group_index),
-            })?;
-            batch = match decoded {
-                Decoded::Values(values) => batch.with_column(name.clone(), values),
-                Decoded::Dict(column) => batch.with_typed_column(name.clone(), column),
-            };
+
+        let predicate_names = self.program.predicate_columns();
+        let projection_only_names = self.program.projection_only_columns();
+        let prefix_opcodes = self.program.filter_prefix_opcodes();
+
+        // No `Filter`, or no projection-only column deferred past it:
+        // nothing to split, keep the single-pass eager decode (ADR-0026,
+        // "no WHERE clause" / GROUP BY case explicitly out of scope).
+        let Some(prefix_opcodes) = prefix_opcodes.filter(|_| !projection_only_names.is_empty())
+        else {
+            return self.load_eager(&rg, num_rows).map(Arc::new);
+        };
+
+        // Phase 1: decode only the predicate columns, for the whole row
+        // group, and run the filter prefix to get the surviving positions.
+        let predicate_leaves: Vec<&Leaf> = self
+            .columns
+            .iter()
+            .filter(|(name, ..)| predicate_names.iter().any(|n| n == name))
+            .collect();
+        let mut predicate_batch = Batch::new(num_rows);
+        for (name, index, physical_type) in &predicate_leaves {
+            let decoded = decode_column_full(&rg, *index, *physical_type)
+                .map_err(|e| segment_error(self.row_group_index, name, &e))?;
+            predicate_batch = apply_decoded(predicate_batch, name, decoded);
         }
+
+        let mut vm = Vm::new();
+        vm.execute(&predicate_batch, &prefix_opcodes)
+            .map_err(|e| VmError::SegmentLoad {
+                reason: format!("row group {}: predicate phase: {e}", self.row_group_index),
+            })?;
+        // `prefix_opcodes` always ends in `Opcode::Filter`, which always
+        // sets `self.selection = Some(..)` when it runs (see its handler
+        // in `vm::batch`); treat a `None` defensively as "every row
+        // survived" rather than panicking, since that case is not
+        // actually reachable here.
+        let indices: Vec<u32> = vm.pending_selection_indices().map_or_else(
+            || (0..u32::try_from(num_rows).unwrap_or(u32::MAX)).collect(),
+            <[u32]>::to_vec,
+        );
+
+        // Phase 2a: gather the already-decoded predicate columns down to
+        // the surviving positions (ordinary in-memory indexing).
+        let mut batch = Batch::new(indices.len());
+        for (name, ..) in &predicate_leaves {
+            if let Some(values) = predicate_batch.columns.get(name.as_str()) {
+                let gathered: Vec<Value> = indices
+                    .iter()
+                    .map(|&i| values.get(i as usize).cloned().unwrap_or(Value::Null))
+                    .collect();
+                batch = batch.with_column((*name).clone(), gathered);
+            } else if let Some(column) = predicate_batch.typed_columns.get(name.as_str()) {
+                let gathered: Vec<Value> =
+                    indices.iter().map(|&i| column.get(i as usize)).collect();
+                batch = batch.with_column((*name).clone(), gathered);
+            }
+        }
+
+        // Phase 2b: decode the projection-only columns directly at the
+        // surviving positions -- never materialized for rejected rows.
+        let projection_leaves: Vec<&Leaf> = self
+            .columns
+            .iter()
+            .filter(|(name, ..)| !predicate_names.iter().any(|n| n == name))
+            .collect();
+        for (name, index, physical_type) in &projection_leaves {
+            let values = decode_column_at(&rg, *index, *physical_type, &indices)
+                .map_err(|e| segment_error(self.row_group_index, name, &e))?;
+            batch = batch.with_column((*name).clone(), values);
+        }
+
         Ok(Arc::new(batch))
+    }
+}
+
+/// One row group's error, tagged with the row group and column name --
+/// shared by the eager and two-phase decode paths.
+fn segment_error(row_group_index: usize, column_name: &str, e: &impl std::fmt::Display) -> VmError {
+    VmError::SegmentLoad {
+        reason: format!("row group {row_group_index}: column `{column_name}`: {e}"),
+    }
+}
+
+/// Applies one column's decoded shape onto `batch` under `name` -- shared
+/// `with_column`/`with_typed_column` dispatch (see [`Decoded`]).
+fn apply_decoded(batch: Batch, name: &str, decoded: Decoded) -> Batch {
+    match decoded {
+        Decoded::Values(values) => batch.with_column(name.to_string(), values),
+        Decoded::Dict(column) => batch.with_typed_column(name.to_string(), column),
+    }
+}
+
+/// Decodes one column for every row of `rg` -- the whole-row-group path
+/// shared by the eager load and the predicate phase of the two-phase load
+/// (ADR-0026).
+fn map_optional<T>(col: Vec<Option<T>>, wrap: impl Fn(T) -> Value) -> Vec<Value> {
+    col.into_iter()
+        .map(|v| v.map_or(Value::Null, &wrap))
+        .collect()
+}
+
+fn decode_column_full(
+    rg: &RowGroupReader<'_, '_>,
+    index: usize,
+    physical_type: PhysicalType,
+) -> std::result::Result<Decoded, crate::storage::FileError> {
+    match physical_type {
+        PhysicalType::Int64 => rg
+            .read_int64_column(index)
+            .map(|col| Decoded::Values(map_optional(col, Value::Int))),
+        PhysicalType::Int32 => rg
+            .read_int32_column(index)
+            .map(|col| Decoded::Values(map_optional(col, |i| Value::Int(i64::from(i))))),
+        PhysicalType::Double => rg
+            .read_double_column(index)
+            .map(|col| Decoded::Values(map_optional(col, Value::Float))),
+        PhysicalType::Float => rg
+            .read_float_column(index)
+            .map(|col| Decoded::Values(map_optional(col, |f| Value::Float(f64::from(f))))),
+        PhysicalType::Boolean => rg
+            .read_boolean_column(index)
+            .map(|col| Decoded::Values(map_optional(col, Value::Bool))),
+        // #457: a `PLAIN_DICTIONARY`-encoded string column materializes
+        // as `Column::Dict` (one dict entry per distinct value, one
+        // `u32` code per row) instead of decoding every row to its own
+        // owned `String` -- the dictionary case column-rs's
+        // `GroupReduce`/`Map` dict fast paths were already built to
+        // consume. A column with no dictionary page, or one that falls
+        // back to `PLAIN` partway through (`Ok(None)`), decodes the
+        // plain way unchanged.
+        _ => rg.read_string_column_dictionary_indices(index).and_then(
+            |maybe_dict| match maybe_dict {
+                Some((dict, codes)) => Ok(Decoded::Dict(dict_column(dict, codes))),
+                None => rg
+                    .read_string_column(index)
+                    .map(|col| Decoded::Values(map_optional(col, |s| Value::Str(s.into())))),
+            },
+        ),
+    }
+}
+
+/// Decodes one column only at `positions` (ADR-0026, phase 2b) -- the
+/// projection-only path. Dictionary string columns deliberately fall
+/// through to the plain positional string reader here rather than a
+/// positional dictionary-codes reader (#457's dict fast path stays
+/// eager-decode-only for v1; see ADR-0026's consequences).
+fn decode_column_at(
+    rg: &RowGroupReader<'_, '_>,
+    index: usize,
+    physical_type: PhysicalType,
+    positions: &[u32],
+) -> std::result::Result<Vec<Value>, crate::storage::FileError> {
+    match physical_type {
+        PhysicalType::Int64 => rg
+            .read_int64_column_at(index, positions)
+            .map(|col| map_optional(col, Value::Int)),
+        PhysicalType::Int32 => rg
+            .read_int32_column_at(index, positions)
+            .map(|col| map_optional(col, |i| Value::Int(i64::from(i)))),
+        PhysicalType::Double => rg
+            .read_double_column_at(index, positions)
+            .map(|col| map_optional(col, Value::Float)),
+        PhysicalType::Float => rg
+            .read_float_column_at(index, positions)
+            .map(|col| map_optional(col, |f| Value::Float(f64::from(f)))),
+        PhysicalType::Boolean => rg
+            .read_boolean_column_at(index, positions)
+            .map(|col| map_optional(col, Value::Bool)),
+        _ => rg
+            .read_string_column_at(index, positions)
+            .map(|col| map_optional(col, |s| Value::Str(s.into()))),
     }
 }
 
@@ -287,6 +417,7 @@ fn row_group_segments<'f>(
     columns: &[Leaf],
     all_leaves: &[Leaf],
     where_clause: Option<&Expr>,
+    program: &'f Program,
 ) -> Vec<RowGroupSegment<'f, 'f>> {
     let leaves_by_name: HashMap<&str, (usize, PhysicalType)> = all_leaves
         .iter()
@@ -301,6 +432,7 @@ fn row_group_segments<'f>(
             file,
             row_group_index: i,
             columns: columns.to_vec(),
+            program,
         })
         .collect()
 }
@@ -598,8 +730,13 @@ impl Engine for BatchEngine {
         let program: Program = planner::compile(&select).map_err(plan_err)?;
         let file = self.file()?;
         let columns = resolve_columns(&self.leaves, &program.columns_to_load())?;
-        let segments =
-            row_group_segments(&file, &columns, &self.leaves, select.where_clause.as_ref());
+        let segments = row_group_segments(
+            &file,
+            &columns,
+            &self.leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         let output = engine::run(&segments, &program)
             .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
         Ok(QueryResult {
@@ -962,7 +1099,14 @@ mod tests {
         let select = where_clause("amount > 50");
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -980,7 +1124,14 @@ mod tests {
         let select = where_clause("amount > 50");
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1000,7 +1151,14 @@ mod tests {
         let select = where_clause("amount > 50");
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1017,7 +1175,8 @@ mod tests {
         let file = ParquetFile::open(&file_bytes).unwrap();
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, None);
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(&file, &leaves, &leaves, None, &program);
         assert_eq!(segments.len(), 2);
     }
 
@@ -1050,7 +1209,13 @@ mod tests {
         let leaves = amount_leaf();
         let columns = resolve_columns(&leaves, &program.columns_to_load()).unwrap();
 
-        let segments = row_group_segments(&file, &columns, &leaves, select.where_clause.as_ref());
+        let segments = row_group_segments(
+            &file,
+            &columns,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1088,10 +1253,12 @@ mod tests {
     fn segment_load_errors_on_an_out_of_range_row_group() {
         let file_bytes = build_file(&[(&[1.0], None)]);
         let file = ParquetFile::open(&file_bytes).unwrap();
+        let program = Program::new(Vec::new());
         let seg = RowGroupSegment {
             file: &file,
             row_group_index: 99,
             columns: amount_leaf(),
+            program: &program,
         };
         assert!(seg.load().is_err());
     }
@@ -1100,10 +1267,12 @@ mod tests {
     fn segment_load_errors_on_an_out_of_range_column() {
         let file_bytes = build_file(&[(&[1.0], None)]);
         let file = ParquetFile::open(&file_bytes).unwrap();
+        let program = Program::new(Vec::new());
         let seg = RowGroupSegment {
             file: &file,
             row_group_index: 0,
             columns: vec![("amount".to_string(), 7, PhysicalType::Double)],
+            program: &program,
         };
         assert!(seg.load().is_err());
     }
@@ -1130,7 +1299,14 @@ mod tests {
         let select = where_clause("amount > 50.5");
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1174,8 +1350,14 @@ mod tests {
             ("50 = amount", vec![]),
         ] {
             let select = where_clause(sql);
-            let segments =
-                row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+            let program = Program::new(Vec::new());
+            let segments = row_group_segments(
+                &file,
+                &leaves,
+                &leaves,
+                select.where_clause.as_ref(),
+                &program,
+            );
             assert_eq!(
                 segments
                     .iter()
@@ -1210,12 +1392,26 @@ mod tests {
 
         // AND: either side proving emptiness is enough.
         let select = where_clause("(amount > 500) AND (amount > 0)");
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert!(segments.is_empty(), "no row group can satisfy amount > 500");
 
         // OR: both sides must prove emptiness.
         let select = where_clause("(amount > 50) OR (amount < 0)");
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1310,7 +1506,14 @@ mod tests {
         let stmt = "SELECT region FROM t WHERE region = 'west'";
         let select = crate::parser::parse(stmt).expect("valid SQL");
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments
                 .iter()
@@ -1345,7 +1548,14 @@ mod tests {
         let select = where_clause("amount > 500");
         let leaves = amount_leaf();
 
-        let segments = row_group_segments(&file, &leaves, &leaves, select.where_clause.as_ref());
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(
+            &file,
+            &leaves,
+            &leaves,
+            select.where_clause.as_ref(),
+            &program,
+        );
         assert_eq!(
             segments.len(),
             15,

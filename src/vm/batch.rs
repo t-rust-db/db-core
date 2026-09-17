@@ -951,6 +951,71 @@ impl Program {
         out
     }
 
+    /// Every column loaded strictly before the program's first
+    /// [`Opcode::Filter`] (ADR-0026): the WHERE predicate's own columns, plus
+    /// any `GROUP BY`/aggregate-argument columns `compile` always loads
+    /// pre-`Filter` regardless of WHERE reference. `None` first `Filter`
+    /// means the whole program is "pre-filter" -- every loaded column
+    /// returned by [`Self::columns_to_load`].
+    pub fn predicate_columns(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for op in self.opcodes() {
+            if let Opcode::LoadColumn { column, .. } = op {
+                if !out.iter().any(|c| c == column.as_ref()) {
+                    out.push(column.to_string());
+                }
+            }
+            if matches!(op, Opcode::Filter { .. }) {
+                break;
+            }
+        }
+        out
+    }
+
+    /// Every column first loaded strictly after the program's first
+    /// [`Opcode::Filter`] (ADR-0026) -- projection-only columns a
+    /// filtered-projection query defers past `Filter` so they can be
+    /// decoded only at the surviving row positions. Empty when the program
+    /// has no `Filter`, or when every loaded column is already covered by
+    /// [`Self::predicate_columns`].
+    pub fn projection_only_columns(&self) -> Vec<String> {
+        let predicate: Vec<String> = self.predicate_columns();
+        let mut out: Vec<String> = Vec::new();
+        let mut seen_filter = false;
+        for op in self.opcodes() {
+            if matches!(op, Opcode::Filter { .. }) {
+                seen_filter = true;
+                continue;
+            }
+            if !seen_filter {
+                continue;
+            }
+            if let Opcode::LoadColumn { column, .. } = op {
+                let name = column.to_string();
+                if !predicate.iter().any(|c| c == &name) && !out.iter().any(|c| c == &name) {
+                    out.push(name);
+                }
+            }
+        }
+        out
+    }
+
+    /// The program's instructions up to and including its first
+    /// [`Opcode::Filter`] (ADR-0026), cloned -- lets a caller (e.g.
+    /// `RowGroupSegment::load()`) run just the predicate phase against a
+    /// batch holding only [`Self::predicate_columns`], via
+    /// [`Vm::execute`]. `None` if the program has no `Filter` at all.
+    pub fn filter_prefix_opcodes(&self) -> Option<Vec<Opcode>> {
+        let mut out = Vec::new();
+        for op in self.opcodes() {
+            out.push(op.clone());
+            if matches!(op, Opcode::Filter { .. }) {
+                return Some(out);
+            }
+        }
+        None
+    }
+
     /// Splits off a trailing `Combine [Sort] [Limit]` sequence (db-core#48):
     /// `(body opcodes, the Combine, the Sort, the Limit)`. Tries the
     /// longest shape first (`Combine, Sort, Limit`) so a genuine 3-opcode
@@ -2048,6 +2113,15 @@ impl Vm {
     /// its own reference too. See [`Vm::with_join_tables`].
     pub fn join_tables(&self) -> JoinTables {
         self.join_tables.clone()
+    }
+
+    /// The surviving row positions of the most recently run
+    /// [`Opcode::Filter`], not yet applied to any register (ADR-0026) --
+    /// lets a caller driving a predicate-only prefix via [`Vm::execute`]
+    /// read out which rows survived without resolving a full selection
+    /// itself. `None` when no `Filter` has run yet (every row is live).
+    pub fn pending_selection_indices(&self) -> Option<&[u32]> {
+        self.selection.as_ref().map(|s| s.indices.as_slice())
     }
 
     /// The current contents of register `reg`, or

@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.105.0] - 2026-09-17
+
+### Added
+
+- **Late materialization for filtered projections** (#460): a filtered projection previously decoded every projected column for every row before evaluating the `WHERE` predicate. `codegen::batch::compile` now defers a non-predicate projected column's `LoadColumn` past `Filter` instead of before it (reusing `Emit`'s existing lazy-selection handling), and `engine::column::RowGroupSegment::load` decodes predicate columns for the whole row group, runs the filter prefix in a scratch `Vm` to get the surviving row positions, then decodes the remaining projected columns only at those positions via new `RowGroupReader::read_*_column_at` methods. `GROUP BY`/no-`WHERE` queries keep the prior eager decode, unchanged. Dictionary-encoded string columns (#457) fall back to plain decode in the projection-only path for now; page-level skip-decode and `filter_1pct`/`filter_50pct` parity validation against the 10M-row suite are follow-up work (ADR-0026).
+
 ## [0.104.0] - 2026-09-17
 
 ### Added
