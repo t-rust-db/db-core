@@ -255,12 +255,16 @@ check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the
 # reviewed diff, the same "committed evidence, regenerable on demand" split
 # `tests/mcdc/obligations.json` uses above. Needs nightly (rustdoc JSON).
 #
-# CI (`ubuntu-latest`) is the authoritative environment for this snapshot.
-# `src/storage/row/vfs/fcntl.rs::fsync` is `cfg(target_os = "macos")`-only
-# (#652), so `make public-api` run on macOS adds that one line spuriously;
-# `make check-public-api-fresh` on a non-Linux host will likewise report
-# false drift. Regenerate on Linux (or let the CI job's diff tell you
-# exactly what changed and hand-edit) if you're not on Linux.
+# CI (`ubuntu-latest`, x86_64-unknown-linux-gnu) is the authoritative
+# environment for this snapshot. `src/storage/row/vfs/fcntl.rs::fsync` is
+# `cfg(target_os = "macos")`-only (#652), so rendering for the *host*
+# target adds that one line spuriously on a macOS machine (and would drop
+# a Linux-only item the same way on Linux). Pinning `--target
+# x86_64-unknown-linux-gnu` here makes `make public-api` and `make
+# check-public-api-fresh` produce CI's exact output from any host --
+# `rustup target add x86_64-unknown-linux-gnu` once if it's missing
+# (rustdoc JSON generation only needs the target's std metadata, not a
+# linker, so this works without cross-compilation tooling).
 define RENDER_PUBLIC_API
 	echo "# db-core public API"; \
 	echo; \
@@ -270,12 +274,12 @@ define RENDER_PUBLIC_API
 	echo "public-api\` whenever a change adds, removes, or changes the signature of a"; \
 	echo "\`pub\` item; \`make check-public-api-fresh\` (part of \`make ci\`) fails the"; \
 	echo "build if this file is stale, so a public API change without a regenerated"; \
-	echo "snapshot is a build failure, not a silent widening. **Regenerate on"; \
-	echo "Linux** -- \`fcntl::fsync\` is macOS-only (#652), so a macOS run adds it"; \
-	echo "spuriously; CI (ubuntu-latest) is the authoritative environment."; \
+	echo "snapshot is a build failure, not a silent widening. Rendered for"; \
+	echo "\`x86_64-unknown-linux-gnu\` (CI's target) regardless of host, so"; \
+	echo "\`fcntl::fsync\` (macOS-only, #652) is consistently absent."; \
 	echo; \
 	echo '```text'; \
-	cargo +nightly public-api --all-features -ss 2>/dev/null; \
+	cargo +nightly public-api --target x86_64-unknown-linux-gnu --all-features -ss 2>/dev/null; \
 	echo '```'
 endef
 
@@ -284,6 +288,7 @@ public-api: ## Regenerate the committed public API snapshot (tests/public_api.md
 		echo "cargo-public-api not found — install with: cargo install cargo-public-api --locked"; \
 		exit 1; \
 	}
+	@rustup target add x86_64-unknown-linux-gnu >/dev/null 2>&1 || true
 	@{ $(RENDER_PUBLIC_API); } > tests/public_api.md
 	@echo "wrote tests/public_api.md — commit it alongside the source change that widened or narrowed the public API"
 
@@ -292,6 +297,7 @@ check-public-api-fresh: ## tests/public_api.md matches a fresh cargo-public-api 
 		echo "cargo-public-api not found — install with: cargo install cargo-public-api --locked"; \
 		exit 1; \
 	}
+	@rustup target add x86_64-unknown-linux-gnu >/dev/null 2>&1 || true
 	@mkdir -p target
 	@{ $(RENDER_PUBLIC_API); } > target/public_api.fresh.md
 	@cmp -s target/public_api.fresh.md tests/public_api.md \

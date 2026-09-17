@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.104.0] - 2026-09-17
+
+### Added
+
+- **Row-group pruning from footer statistics** (#458): `storage::column::parquet::footer` now parses per-column-chunk `Statistics` (min/max/null_count/distinct_count, preferring the newer `min_value`/`max_value` fields over the deprecated `min`/`max`), exposed via `RowGroupReader::column_statistics`. `engine::column` uses them to skip building a `RowGroupSegment` for any row group a `WHERE` clause's footer statistics prove cannot match (simple column-vs-literal comparisons combined with AND/OR); malformed or missing statistics, or an unrecognized predicate shape, always fall back to "may match" rather than an incorrect skip (ADR-0000: pruning is correctness-neutral). Wiring pruning into `run_parallel_top_n`'s live top-N heap threshold is tracked separately (#464).
+
 ## [0.103.0] - 2026-09-16
 
 ### Added

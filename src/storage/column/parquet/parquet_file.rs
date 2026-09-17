@@ -330,6 +330,14 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             .ok_or(FileError::MissingColumnMetadata)
     }
 
+    /// This row group's footer statistics for one leaf column, if the
+    /// writer included them. `None` means "no statistics" -- callers must
+    /// treat that as "cannot prune", never as an error: writers are free to
+    /// omit them.
+    pub fn column_statistics(&self, column_index: usize) -> Result<Option<&footer::Statistics>> {
+        Ok(self.column_meta(column_index)?.statistics.as_ref())
+    }
+
     /// Slice of the file covering one column chunk's page data: from its
     /// first page's offset (the dictionary page's, if present, else the
     /// first data page's) through `total_compressed_size` bytes.
