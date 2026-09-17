@@ -2176,7 +2176,9 @@ impl Vm {
 
     /// The current contents of register `reg`, or
     /// [`VmError::UnknownRegister`] if it has never been written.
-    pub fn register(&self, reg: usize) -> Result<&[Value]> {
+    /// Lazily materializes a typed-only register first (#482).
+    pub fn register(&mut self, reg: usize) -> Result<&[Value]> {
+        self.ensure_materialized(reg);
         self.reg(reg, "register")
     }
 
@@ -2198,6 +2200,7 @@ impl Vm {
     /// still shared with its batch (e.g. an untransformed `LoadColumn`)
     /// is cloned instead.
     pub fn take_register(&mut self, reg: usize) -> Result<Vec<Value>> {
+        self.ensure_materialized(reg);
         self.typed_registers.remove(&reg);
         let values = self
             .registers
@@ -2219,6 +2222,26 @@ impl Vm {
                 opcode,
                 register: reg,
             })
+    }
+
+    /// Lazily builds register `reg`'s `Vec<Value>` copy from its typed
+    /// shadow (#482) -- called right before every read that needs a
+    /// register as `&[Value]`, so [`Opcode::LoadColumn`] never has to
+    /// build one for a register nothing ends up reading that way (the
+    /// #477 bare-`SUM(amount)`-through-`Reduce`'s-typed-fast-path case,
+    /// where the `Vec<Value>` copy was built and then never touched). A
+    /// no-op once `registers` already has an entry for `reg` -- which
+    /// includes every register that was never typed in the first place,
+    /// since those are still inserted into `registers` directly by
+    /// `LoadColumn`/`LoadConst`/every opcode's `dst`.
+    fn ensure_materialized(&mut self, reg: usize) {
+        if self.registers.contains_key(&reg) {
+            return;
+        }
+        if let Some(column) = self.typed_registers.get(&reg) {
+            let materialized: Vec<Value> = (0..column.len()).map(|i| column.get(i)).collect();
+            self.registers.insert(reg, Arc::new(materialized));
+        }
     }
 
     /// Count one more executed instruction, failing once [`MAX_STEPS`] is
@@ -2272,6 +2295,15 @@ impl Vm {
             return Ok(());
         };
         self.selected_rows = Some(selection.indices.len());
+        // #482: materialize every typed-only register before compacting --
+        // otherwise a register nothing has read yet (still typed-only,
+        // hence absent from `registers`) would be silently skipped by the
+        // loop below, then lost for good once `typed_registers` is
+        // cleared at the end of this function.
+        let typed_only: Vec<usize> = self.typed_registers.keys().copied().collect();
+        for reg in typed_only {
+            self.ensure_materialized(reg);
+        }
         for (reg, values) in self.registers.iter_mut() {
             // #474: a register a preceding bare `Reduce` (`COUNT(*)`,
             // `src: None`) already wrote is a scalar, not a per-row
@@ -2317,7 +2349,7 @@ impl Vm {
     /// `None` when neither operand fits that shape, so the caller falls
     /// back to the general elementwise [`apply_map_op`] path.
     fn dict_literal_compare(
-        &self,
+        &mut self,
         op: MapOp,
         a: usize,
         b: usize,
@@ -2327,7 +2359,12 @@ impl Vm {
             return Ok(None);
         }
         for (dict_reg, other_reg) in [(a, b), (b, a)] {
-            let Some(column) = self.typed_registers.get(&dict_reg) else {
+            // #482: clones the `Arc<Column>` (a refcount bump) instead of
+            // borrowing `self.typed_registers` -- `ensure_materialized`
+            // below needs `&mut self`, which couldn't run alongside a
+            // live immutable borrow of `self` that `dict`/`indices`/
+            // `valid` are read from further down.
+            let Some(column) = self.typed_registers.get(&dict_reg).cloned() else {
                 continue;
             };
             let Column::Dict {
@@ -2338,6 +2375,7 @@ impl Vm {
             else {
                 continue;
             };
+            self.ensure_materialized(other_reg);
             let other = self.reg(other_reg, opcode)?;
             let Some(literal) = single_str_literal(other) else {
                 continue;
@@ -2498,14 +2536,20 @@ impl Vm {
         match op {
             Opcode::LoadColumn { reg, column } => {
                 if let Some(typed) = batch.typed_columns.get(column.as_ref()) {
-                    // #429: also materialize into `registers` so every
-                    // opcode not yet ported to `Column` dispatch (#130
-                    // child 4) keeps working completely unchanged --
-                    // `typed_registers` is the accelerated path `Filter`
-                    // and `Map`'s `Dict`-literal comparison consult
-                    // instead of paying this cost.
-                    let materialized: Vec<Value> = (0..typed.len()).map(|i| typed.get(i)).collect();
-                    self.registers.insert(*reg, Arc::new(materialized));
+                    // #482: no longer eagerly materializes into
+                    // `registers` -- only `typed_registers` is populated
+                    // here. `Vm::ensure_materialized` lazily builds the
+                    // `Vec<Value>` copy, only when something actually
+                    // reads this register that way (an opcode not yet
+                    // ported to `Column` dispatch, or a typed fast-path
+                    // miss) -- this is why a bare `SUM(amount)` (typed
+                    // `Reduce`'s fast path never touches `registers` at
+                    // all) no longer burns the cost of a copy nothing
+                    // reads. `registers.remove` invalidates any stale
+                    // materialization left over from a previous segment
+                    // reusing this same register number (`NextSegment`
+                    // doesn't clear `registers` between iterations).
+                    self.registers.remove(reg);
                     self.typed_registers.insert(*reg, Arc::clone(typed));
                 } else {
                     let values = batch.columns.get(column.as_ref()).ok_or_else(|| {
@@ -2540,6 +2584,8 @@ impl Vm {
                     self.registers.insert(*dst, Arc::new(materialized));
                     self.typed_registers.insert(*dst, Arc::new(column));
                 } else {
+                    self.ensure_materialized(*a);
+                    self.ensure_materialized(*b);
                     let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);
                     if a_vals.len() != b_vals.len() {
                         return Err(VmError::RegisterLengthMismatch { opcode });
@@ -2557,6 +2603,9 @@ impl Vm {
                 // Elementwise, like `Map`: resolve any pending selection
                 // first (see the comment on that arm).
                 self.resolve_selection(opcode)?;
+                for &a in args.iter() {
+                    self.ensure_materialized(a);
+                }
                 let arg_regs: Vec<&[Value]> = args
                     .iter()
                     .map(|&a| self.reg(a, opcode))
@@ -2596,11 +2645,13 @@ impl Vm {
                             .map(|i| matches!(other.get(i), Value::Bool(true)))
                             .collect(),
                     },
-                    None => self
-                        .reg(*predicate, opcode)?
-                        .iter()
-                        .map(|v| matches!(v, Value::Bool(true)))
-                        .collect(),
+                    None => {
+                        self.ensure_materialized(*predicate);
+                        self.reg(*predicate, opcode)?
+                            .iter()
+                            .map(|v| matches!(v, Value::Bool(true)))
+                            .collect()
+                    }
                 };
                 let base_len = mask.len();
                 for values in self.registers.values() {
@@ -2647,7 +2698,10 @@ impl Vm {
                             .and_then(|column| typed_reduce_values(*func, column));
                         match typed {
                             Some(result) => result,
-                            None => reduce_values(*func, self.reg(*reg, opcode)?),
+                            None => {
+                                self.ensure_materialized(*reg);
+                                reduce_values(*func, self.reg(*reg, opcode)?)
+                            }
                         }
                     }
                     // #452/#474: bare `COUNT(*)` never reads register
@@ -2702,6 +2756,22 @@ impl Vm {
                     },
                     _ => None,
                 };
+                // #482: materialize every register this opcode might read
+                // as `Vec<Value>` up front, before `key_columns` below
+                // starts borrowing `self.registers` -- the `aggs` fallback
+                // a few lines down only fires when `group_by` is empty
+                // (so `key_columns` is empty too), but it still needs its
+                // agg-source registers materialized, and by then
+                // `key_columns`'s live borrow would make a mutating
+                // `ensure_materialized` call a borrow-checker conflict.
+                for reg in group_by.iter() {
+                    self.ensure_materialized(*reg);
+                }
+                for (_, src) in aggs.iter() {
+                    if let Some(reg) = src {
+                        self.ensure_materialized(*reg);
+                    }
+                }
                 let key_columns: Vec<&[Value]> = group_by
                     .iter()
                     .map(|reg| self.reg(*reg, opcode))
@@ -2841,7 +2911,7 @@ impl Vm {
                             _ => {
                                 // #110: borrow instead of `.to_vec()` --
                                 // same redundant-clone pattern as the old
-                                // `Emit`.
+                                // `Emit`. #482: already materialized above.
                                 let values = self.reg(*reg, opcode)?;
                                 if values.len() != base_len {
                                     return Err(VmError::RegisterLengthMismatch { opcode });
@@ -2877,6 +2947,9 @@ impl Vm {
                 // front so the borrows below are of `self.registers`
                 // alone, not all of `self`.
                 let selection = self.selection.take();
+                for r in key_cols.iter().chain(payload_cols.iter()) {
+                    self.ensure_materialized(*r);
+                }
                 let key_columns: Vec<&[Value]> = key_cols
                     .iter()
                     .map(|r| self.reg(*r, opcode))
@@ -2957,6 +3030,9 @@ impl Vm {
                 // selection vector -- resolve any pending selection first
                 // so the rest of this arm is unchanged from before #265.
                 self.resolve_selection(opcode)?;
+                for r in key_cols.iter() {
+                    self.ensure_materialized(*r);
+                }
                 let key_columns: Vec<&[Value]> = key_cols
                     .iter()
                     .map(|r| self.reg(*r, opcode))
@@ -3015,6 +3091,16 @@ impl Vm {
                     }
                 }
 
+                // #482: every live register gets reshaped below by row
+                // position -- a typed-only register (never read as
+                // `Vec<Value>` yet) would otherwise be silently skipped
+                // here, then left both stale (still describing pre-probe
+                // rows) and undetected once `typed_registers` is cleared
+                // below.
+                let typed_only: Vec<usize> = self.typed_registers.keys().copied().collect();
+                for r in typed_only {
+                    self.ensure_materialized(r);
+                }
                 for values in self.registers.values_mut() {
                     if values.len() != num_rows {
                         return Err(VmError::RegisterLengthMismatch { opcode });
@@ -3025,6 +3111,12 @@ impl Vm {
                         .collect();
                     *values = Arc::new(reshaped);
                 }
+                // #482: every register above was just reshaped to the
+                // post-probe row order/count, so any `typed_registers`
+                // shadow of one is now stale -- clear them (mirrors
+                // `resolve_selection`'s same discipline) rather than let a
+                // later opcode's typed fast path read pre-probe data.
+                self.typed_registers.clear();
 
                 for (i, dst) in payload_dst.iter().enumerate() {
                     let col: Vec<Value> = emitted
@@ -3068,6 +3160,30 @@ impl Vm {
                 // registers by row index below, so any pending selection
                 // must be resolved first.
                 self.resolve_selection(opcode)?;
+                // Every distinct probe-side register `key_cols` or a
+                // `group_by`/`aggs` source reads -- materialized (#482)
+                // and resolved once up front, before `key_columns` below
+                // starts holding `&[Value]` borrows across this whole
+                // arm; a later `ensure_materialized` call (mutable)
+                // couldn't run alongside a borrow still live in
+                // `key_columns`/`probe_columns` from an earlier step.
+                let probe_regs: Vec<usize> = group_by
+                    .iter()
+                    .filter_map(|(src, _)| match src {
+                        ValueSource::Probe(reg) => Some(*reg),
+                        ValueSource::Payload(_) => None,
+                    })
+                    .chain(aggs.iter().filter_map(|(_, src)| match src {
+                        Some(ValueSource::Probe(reg)) => Some(*reg),
+                        _ => None,
+                    }))
+                    .collect();
+                for r in key_cols.iter() {
+                    self.ensure_materialized(*r);
+                }
+                for &reg in &probe_regs {
+                    self.ensure_materialized(reg);
+                }
                 let key_columns: Vec<&[Value]> = key_cols
                     .iter()
                     .map(|r| self.reg(*r, opcode))
@@ -3085,21 +3201,8 @@ impl Vm {
                     },
                 )?);
 
-                // Every distinct probe-side register a `group_by`/`aggs`
-                // source reads -- resolved once up front, like
-                // `key_columns`, rather than re-looked-up per row.
                 let mut probe_columns: Vec<(usize, &[Value])> = Vec::new();
-                for reg in group_by
-                    .iter()
-                    .filter_map(|(src, _)| match src {
-                        ValueSource::Probe(reg) => Some(*reg),
-                        ValueSource::Payload(_) => None,
-                    })
-                    .chain(aggs.iter().filter_map(|(_, src)| match src {
-                        Some(ValueSource::Probe(reg)) => Some(*reg),
-                        _ => None,
-                    }))
-                {
+                for reg in probe_regs {
                     if !probe_columns.iter().any(|(r, _)| *r == reg) {
                         probe_columns.push((reg, self.reg(reg, opcode)?));
                     }
@@ -3198,6 +3301,15 @@ impl Vm {
             } => {
                 // #265: see the comment on `Map`'s same call.
                 self.resolve_selection(opcode)?;
+                for r in partition_by.iter() {
+                    self.ensure_materialized(*r);
+                }
+                for (r, _) in order_by.iter() {
+                    self.ensure_materialized(*r);
+                }
+                if let Some(r) = arg {
+                    self.ensure_materialized(*r);
+                }
                 let partition_cols: Vec<&[Value]> = partition_by
                     .iter()
                     .map(|r| self.reg(*r, opcode))
@@ -3247,6 +3359,7 @@ impl Vm {
                 let all_scalar = registers.iter().all(|r| self.scalar_registers.contains(r));
                 let mut cols: Vec<Arc<Vec<Value>>> = Vec::with_capacity(registers.len());
                 for r in registers.iter() {
+                    self.ensure_materialized(*r);
                     let owned = if let Some(existing) = self.registers.remove(r) {
                         existing
                     } else {
@@ -5706,7 +5819,7 @@ mod tests {
         let right = Batch::new(2)
             .with_column("rkey", vec![Value::Int(2), Value::Int(3)])
             .with_column("rval", vec![Value::Str("b".into()), Value::Str("c".into())]);
-        let vm = build_and_probe(JoinKind::Inner, left, right);
+        let mut vm = build_and_probe(JoinKind::Inner, left, right);
         assert_eq!(vm.register(0).unwrap(), &[Value::Int(2), Value::Int(3)]);
         assert_eq!(
             vm.register(1).unwrap(),
@@ -5720,7 +5833,7 @@ mod tests {
         let right = Batch::new(2)
             .with_column("rkey", vec![Value::Int(1), Value::Int(1)])
             .with_column("rval", vec![Value::Str("a".into()), Value::Str("b".into())]);
-        let vm = build_and_probe(JoinKind::Inner, left, right);
+        let mut vm = build_and_probe(JoinKind::Inner, left, right);
         assert_eq!(vm.register(0).unwrap(), &[Value::Int(1), Value::Int(1)]);
         assert_eq!(
             vm.register(1).unwrap(),
@@ -5735,7 +5848,7 @@ mod tests {
         let right = Batch::new(1)
             .with_column("rkey", vec![Value::Int(2)])
             .with_column("rval", vec![Value::Str("b".into())]);
-        let vm = build_and_probe(JoinKind::Left, left, right);
+        let mut vm = build_and_probe(JoinKind::Left, left, right);
         assert_eq!(
             vm.register(0).unwrap(),
             &[Value::Int(1), Value::Int(2), Value::Int(3)]
@@ -5752,7 +5865,7 @@ mod tests {
         let right = Batch::new(1)
             .with_column("rkey", vec![Value::Null])
             .with_column("rval", vec![Value::Str("x".into())]);
-        let vm = build_and_probe(JoinKind::Inner, left, right);
+        let mut vm = build_and_probe(JoinKind::Inner, left, right);
         assert!(vm.register(0).unwrap().is_empty());
     }
 
@@ -5762,7 +5875,7 @@ mod tests {
         let right = Batch::new(2)
             .with_column("rkey", vec![Value::Int(1), Value::Int(1)])
             .with_column("rval", vec![Value::Str("a".into()), Value::Str("b".into())]);
-        let vm = build_and_probe(JoinKind::Semi, left, right);
+        let mut vm = build_and_probe(JoinKind::Semi, left, right);
         assert_eq!(vm.register(0).unwrap(), &[Value::Int(1)]);
         assert_eq!(vm.register(1).unwrap(), &[Value::Null]);
     }
@@ -5774,7 +5887,7 @@ mod tests {
         let right = Batch::new(1)
             .with_column("rkey", vec![Value::Int(2)])
             .with_column("rval", vec![Value::Str("b".into())]);
-        let vm = build_and_probe(JoinKind::Anti, left, right);
+        let mut vm = build_and_probe(JoinKind::Anti, left, right);
         assert_eq!(vm.register(0).unwrap(), &[Value::Int(1), Value::Int(3)]);
     }
 

@@ -5813,7 +5813,7 @@ pub fn db_core::vm::batch::Vm::execute(&mut self, &db_core::vm::batch::Batch, &[
 pub fn db_core::vm::batch::Vm::join_tables(&self) -> db_core::vm::batch::JoinTables
 pub fn db_core::vm::batch::Vm::new() -> Self
 pub fn db_core::vm::batch::Vm::pending_selection_indices(&self) -> core::option::Option<&[u32]>
-pub fn db_core::vm::batch::Vm::register(&self, usize) -> db_core::vm::batch::Result<&[db_core::vm::batch::Value]>
+pub fn db_core::vm::batch::Vm::register(&mut self, usize) -> db_core::vm::batch::Result<&[db_core::vm::batch::Value]>
 pub fn db_core::vm::batch::Vm::run<T: db_core::vm::batch::Source>(&mut self, &mut T, &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::batch::Vm::take_output(&mut self) -> db_core::vm::batch::QueryOutput
 pub fn db_core::vm::batch::Vm::take_register(&mut self, usize) -> db_core::vm::batch::Result<alloc::vec::Vec<db_core::vm::batch::Value>>
