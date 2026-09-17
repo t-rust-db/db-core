@@ -31380,9 +31380,209 @@
     "wildcard_risk": true
   },
   {
+    "id": "vm_combine_slot_ops_d839bef8",
+    "file": "src/vm/combine.rs",
+    "line": 72,
+    "decision": "match part {\n            AggPart::Avg(sum_i, count_i) => {\n                for (i, op) in [(*sum_i, SlotOp::AvgSum), (*count_i, SlotOp::AvgCount)] {\n                    let slot = ops.get_mut(i).ok_or_else(|| VmError::MalformedProgram {\n                        opcode: \"Combine\",\n                        reason: format!(\n                            \"AVG slot {i} is outside the {num_slots}-column emitted row\"\n                        ),\n                    })?;\n                    *slot = op;\n                }\n                cursor = count_i.saturating_add(1);\n            }\n            other => {\n                if let Some(slot) = ops.get_mut(cursor) {\n                    *slot = match other {\n                        AggPart::GroupKey => SlotOp::Key,\n                        AggPart::Sum => SlotOp::Sum,\n                        AggPart::Count => SlotOp::Count,\n                        AggPart::Min => SlotOp::Min,\n                        AggPart::Max => SlotOp::Max,\n                        AggPart::Avg(..) => SlotOp::Key,\n                    };\n                }\n                cursor = cursor.saturating_add(1);\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_slot_ops_6e98290f",
+    "file": "src/vm/combine.rs",
+    "line": 86,
+    "decision": "let Some(slot) = ops.get_mut(cursor)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_slot_ops_2fb70c3c",
+    "file": "src/vm/combine.rs",
+    "line": 87,
+    "decision": "match other {\n                        AggPart::GroupKey => SlotOp::Key,\n                        AggPart::Sum => SlotOp::Sum,\n                        AggPart::Count => SlotOp::Count,\n                        AggPart::Min => SlotOp::Min,\n                        AggPart::Max => SlotOp::Max,\n                        AggPart::Avg(..) => SlotOp::Key,\n                    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_merge_slot_afd6c6c6",
+    "file": "src/vm/combine.rs",
+    "line": 106,
+    "decision": "match op {\n        SlotOp::Key => {}\n        SlotOp::Sum | SlotOp::AvgSum => *into = merge_sum_partials(into, from)?,\n        // A merged COUNT stays an integer, as a single segment's does\n        // (#272): before, it came back as `Float`, so the *type* of\n        // `COUNT(*)` depended on how many segments the scan had.\n        SlotOp::Count => {\n            let total = partial_i64(into)?\n                .checked_add(partial_i64(from)?)\n                .ok_or_else(|| VmError::MalformedProgram {\n                    opcode: \"Combine\",\n                    reason: \"partial COUNT overflowed i64\".to_string(),\n                })?;\n            *into = Value::Int(total);\n        }\n        SlotOp::Min => {\n            if let (Some(a), Some(b)) = (into.as_f64(), from.as_f64()) {\n                *into = Value::Float(a.min(b));\n            } else if matches!(into, Value::Null) {\n                *into = from.clone();\n            }\n        }\n        SlotOp::Max => {\n            if let (Some(a), Some(b)) = (into.as_f64(), from.as_f64()) {\n                *into = Value::Float(a.max(b));\n            } else if matches!(into, Value::Null) {\n                *into = from.clone();\n            }\n        }\n        // Previously a no-op (db-core#404): with more than one segment,\n        // `AVG` silently returned the first segment's local average. The\n        // per-segment count is a `Value::Int` in real execution but is\n        // only ever divided into by the finalizer, so it is not routed\n        // through `Count`'s overflow-checked path.\n        SlotOp::AvgCount => *into = Value::Float(partial_f64(into)? + partial_f64(from)?),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_merge_slot_58eb76ed",
+    "file": "src/vm/combine.rs",
+    "line": 122,
+    "decision": "let (Some(a), Some(b)) = (into.as_f64(), from.as_f64())",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_merge_slot_6029037b",
+    "file": "src/vm/combine.rs",
+    "line": 124,
+    "decision": "matches!(into, Value::Null)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_merge_slot_58eb76ed_2",
+    "file": "src/vm/combine.rs",
+    "line": 129,
+    "decision": "let (Some(a), Some(b)) = (into.as_f64(), from.as_f64())",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_merge_slot_6029037b_2",
+    "file": "src/vm/combine.rs",
+    "line": 131,
+    "decision": "matches!(into, Value::Null)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_partial_i64_3d91dd60",
+    "file": "src/vm/combine.rs",
+    "line": 148,
+    "decision": "match v {\n        Value::Null => Ok(0),\n        Value::Int(n) => Ok(*n),\n        other => Err(VmError::MalformedProgram {\n            opcode: \"Combine\",\n            reason: format!(\"partial COUNT slot holds {other:?}, not an integer\"),\n        }),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_partial_f64_63645a29",
+    "file": "src/vm/combine.rs",
+    "line": 163,
+    "decision": "match v {\n        Value::Null => Ok(0.0),\n        other => other.as_f64().ok_or_else(|| VmError::MalformedProgram {\n            opcode: \"Combine\",\n            reason: format!(\"partial aggregate slot holds {other:?}, not a number\"),\n        }),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_merge_sum_partials_0b1ba900",
+    "file": "src/vm/combine.rs",
+    "line": 178,
+    "decision": "match (into, from) {\n        (Value::Null, Value::Null) => Ok(Value::Null),\n        _ => Ok(Value::Float(partial_f64(into)? + partial_f64(from)?)),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_combine_finish_avg_816b515b",
+    "file": "src/vm/combine.rs",
+    "line": 188,
+    "decision": "count == 0.0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_combine_chunks_467c5f42",
+    "file": "src/vm/combine.rs",
+    "line": 221,
+    "decision": "num_group_keys > num_slots",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_combine_chunks_87be4278",
+    "file": "src/vm/combine.rs",
+    "line": 244,
+    "decision": "chunk.len() != num_slots",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_combine_chunks_ed2a2a96",
+    "file": "src/vm/combine.rs",
+    "line": 251,
+    "decision": "let Some(ragged) = chunk.iter().find(|column| column.len() != n)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_combine_chunks_9208b462",
+    "file": "src/vm/combine.rs",
+    "line": 277,
+    "decision": "match existing {\n                Some(g) => row_group.push(g),\n                None => {\n                    let g = acc[0].len();\n                    for (c, column) in chunk.iter().enumerate() {\n                        acc[c].push(column[r].clone());\n                    }\n                    bucket.push(g);\n                    row_group.push(NEW_GROUP);\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_combine_chunks_254f0b07",
+    "file": "src/vm/combine.rs",
+    "line": 293,
+    "decision": "*op == SlotOp::Key",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_combine_chunks_6f6cf8d0",
+    "file": "src/vm/combine.rs",
+    "line": 299,
+    "decision": "g != NEW_GROUP",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_output_columns_952ad18c",
+    "file": "src/vm/combine.rs",
+    "line": 320,
+    "decision": "match part {\n            AggPart::Avg(sum_i, count_i) => {\n                let column = acc[*sum_i]\n                    .iter()\n                    .zip(acc[*count_i].iter())\n                    .map(|(sum, count)| finish_avg(sum, count))\n                    .collect::<Result<Vec<_>>>()?;\n                out.push(column);\n                cursor = count_i.saturating_add(1);\n            }\n            _ => {\n                if let Some(column) = acc.get_mut(cursor) {\n                    out.push(std::mem::take(column));\n                }\n                cursor = cursor.saturating_add(1);\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_combine_output_columns_14250ea4",
+    "file": "src/vm/combine.rs",
+    "line": 331,
+    "decision": "let Some(column) = acc.get_mut(cursor)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "vm_engine_resolve_scan_source_23b8c749",
     "file": "src/vm/engine.rs",
-    "line": 75,
+    "line": 76,
     "decision": "match source {\n        ScanSource::InMemory(batch) => Ok(batch),\n        other => resolver.resolve(&other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31392,7 +31592,7 @@
   {
     "id": "vm_engine_run_626b932f",
     "file": "src/vm/engine.rs",
-    "line": 119,
+    "line": 120,
     "decision": "match sort {\n        Some(Opcode::Sort { col, descending }) => Some((*col, *descending)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31402,7 +31602,7 @@
   {
     "id": "vm_engine_run_18f8970b",
     "file": "src/vm/engine.rs",
-    "line": 123,
+    "line": 124,
     "decision": "match limit_op {\n        Some(Opcode::Limit { n }) => Some(*n),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31412,7 +31612,7 @@
   {
     "id": "vm_engine_run_fd227952",
     "file": "src/vm/engine.rs",
-    "line": 128,
+    "line": 129,
     "decision": "let Some(limit) = bounded_scan_limit(program)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31422,7 +31622,7 @@
   {
     "id": "vm_engine_run_bf41d7f2",
     "file": "src/vm/engine.rs",
-    "line": 136,
+    "line": 137,
     "decision": "is_identity_finalize(agg_parts, *distinct, &order_by, limit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31432,7 +31632,7 @@
   {
     "id": "vm_engine_run_309c9c47",
     "file": "src/vm/engine.rs",
-    "line": 139,
+    "line": 140,
     "decision": "match (agg_parts.is_empty() && !distinct, order_by, limit) {\n        (true, Some((col, descending)), Some(limit)) => run_parallel_top_n(\n            segments,\n            &body,\n            &TopN {\n                col,\n                descending,\n                limit,\n            },\n        )?,\n        _ => run_parallel(segments, &body)?,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31440,9 +31640,29 @@
     "wildcard_risk": true
   },
   {
+    "id": "vm_engine_run_534e66b2",
+    "file": "src/vm/engine.rs",
+    "line": 156,
+    "decision": "!agg_parts.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_engine_run_930fb66a",
+    "file": "src/vm/engine.rs",
+    "line": 158,
+    "decision": "!*distinct && order_by.is_none() && limit.is_none()",
+    "conditions": 3,
+    "vectors_required": 4,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "vm_engine_is_streamable_626b932f",
     "file": "src/vm/engine.rs",
-    "line": 193,
+    "line": 205,
     "decision": "match sort {\n        Some(Opcode::Sort { col, descending }) => Some((*col, *descending)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31452,7 +31672,7 @@
   {
     "id": "vm_engine_is_streamable_18f8970b",
     "file": "src/vm/engine.rs",
-    "line": 197,
+    "line": 209,
     "decision": "match limit_op {\n        Some(Opcode::Limit { n }) => Some(*n),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31462,7 +31682,7 @@
   {
     "id": "vm_engine_run_streaming_626b932f",
     "file": "src/vm/engine.rs",
-    "line": 232,
+    "line": 244,
     "decision": "match sort {\n        Some(Opcode::Sort { col, descending }) => Some((*col, *descending)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31472,7 +31692,7 @@
   {
     "id": "vm_engine_run_streaming_18f8970b",
     "file": "src/vm/engine.rs",
-    "line": 236,
+    "line": 248,
     "decision": "match limit_op {\n        Some(Opcode::Limit { n }) => Some(*n),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31482,7 +31702,7 @@
   {
     "id": "vm_engine_run_streaming_a80ed512",
     "file": "src/vm/engine.rs",
-    "line": 240,
+    "line": 252,
     "decision": "!is_identity_finalize(agg_parts, *distinct, &order_by, limit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31492,7 +31712,7 @@
   {
     "id": "vm_engine_run_streaming_534e66b2",
     "file": "src/vm/engine.rs",
-    "line": 241,
+    "line": 253,
     "decision": "!agg_parts.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31502,7 +31722,7 @@
   {
     "id": "vm_engine_run_streaming_3a6ee6e5",
     "file": "src/vm/engine.rs",
-    "line": 243,
+    "line": 255,
     "decision": "*distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -31512,7 +31732,7 @@
   {
     "id": "vm_engine_run_streaming_43e6b455",
     "file": "src/vm/engine.rs",
-    "line": 246,
+    "line": 258,
     "decision": "match (order_by, limit) {\n                (Some(_), Some(_)) => \"query has ORDER BY ... LIMIT\".to_string(),\n                (Some(_), None) => \"query has ORDER BY\".to_string(),\n                (None, Some(_)) => \"query has LIMIT\".to_string(),\n                // `is_identity_finalize` already rejected `(None, None)`\n                // under `agg_parts.is_empty() && !distinct` -- this arm is\n                // unreachable but still typed, not a panic (db-core#232's\n                // `MalformedProgram` convention).\n                (None, None) => {\n                    \"unreachable: no aggregate, DISTINCT, ORDER BY, or LIMIT\".to_string()\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31522,7 +31742,7 @@
   {
     "id": "vm_engine_bounded_scan_limit_084b8c51",
     "file": "src/vm/engine.rs",
-    "line": 278,
+    "line": 290,
     "decision": "sort.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31532,7 +31752,7 @@
   {
     "id": "vm_engine_bounded_scan_limit_88675f4d",
     "file": "src/vm/engine.rs",
-    "line": 284,
+    "line": 296,
     "decision": "*distinct\n        || !agg_parts.is_empty()\n        || body.iter().any(|op| matches!(op, Opcode::Filter { .. }))",
     "conditions": 3,
     "vectors_required": 4,
@@ -31542,7 +31762,7 @@
   {
     "id": "vm_engine_bounded_scan_c3749a12",
     "file": "src/vm/engine.rs",
-    "line": 300,
+    "line": 312,
     "decision": "output.num_rows() >= limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -31552,7 +31772,7 @@
   {
     "id": "vm_engine_finalize_534e66b2",
     "file": "src/vm/engine.rs",
-    "line": 328,
+    "line": 340,
     "decision": "!agg_parts.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31560,10 +31780,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_engine_finalize_16b82de7",
+    "id": "vm_engine_finalize_8118da6f",
     "file": "src/vm/engine.rs",
-    "line": 348,
-    "decision": "match existing {\n                Some(i) => merge_rows(agg_parts, &mut groups[i].1, &row)?,\n                None => {\n                    bucket.push(groups.len());\n                    groups.push((key_slice.to_vec(), row));\n                }\n            }",
+    "line": 361,
+    "decision": "match existing {\n                Some(i) => merge_rows(&ops, &mut groups[i].1, &row)?,\n                None => {\n                    bucket.push(groups.len());\n                    groups.push((key_slice.to_vec(), row));\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -31572,7 +31792,7 @@
   {
     "id": "vm_engine_finalize_56b6a17b",
     "file": "src/vm/engine.rs",
-    "line": 372,
+    "line": 385,
     "decision": "distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -31582,7 +31802,7 @@
   {
     "id": "vm_engine_finalize_7600a62d",
     "file": "src/vm/engine.rs",
-    "line": 377,
+    "line": 390,
     "decision": "let Some((pos, descending)) = order_by",
     "conditions": 1,
     "vectors_required": 2,
@@ -31592,7 +31812,7 @@
   {
     "id": "vm_engine_finalize_de1ce4a5",
     "file": "src/vm/engine.rs",
-    "line": 381,
+    "line": 394,
     "decision": "let Some(limit) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -31600,109 +31820,19 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_engine_merge_rows_4c12622f",
+    "id": "vm_engine_finalize_row_2cb6bc63",
     "file": "src/vm/engine.rs",
-    "line": 408,
-    "decision": "match part {\n            AggPart::GroupKey => {\n                row_idx = row_idx.saturating_add(1);\n            }\n            AggPart::Sum => {\n                into[row_idx] = merge_sum_partials(&into[row_idx], &from[row_idx])?;\n                row_idx = row_idx.saturating_add(1);\n            }\n            // A merged COUNT stays an integer, as a single segment's does\n            // (#272): before, it came back as `Float`, so the *type* of\n            // `COUNT(*)` depended on how many segments the scan had.\n            AggPart::Count => {\n                let total = partial_i64(&into[row_idx])?\n                    .checked_add(partial_i64(&from[row_idx])?)\n                    .ok_or_else(|| VmError::MalformedProgram {\n                        opcode: \"Combine\",\n                        reason: \"partial COUNT overflowed i64\".to_string(),\n                    })?;\n                into[row_idx] = Value::Int(total);\n                row_idx = row_idx.saturating_add(1);\n            }\n            AggPart::Min => {\n                if let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64()) {\n                    into[row_idx] = Value::Float(a.min(b));\n                } else if matches!(into[row_idx], Value::Null) {\n                    into[row_idx] = from[row_idx].clone();\n                }\n                row_idx = row_idx.saturating_add(1);\n            }\n            AggPart::Max => {\n                if let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64()) {\n                    into[row_idx] = Value::Float(a.max(b));\n                } else if matches!(into[row_idx], Value::Null) {\n                    into[row_idx] = from[row_idx].clone();\n                }\n                row_idx = row_idx.saturating_add(1);\n            }\n            // Previously a no-op (db-core#404): with more than one\n            // segment, `AVG` silently returned the first segment's local\n            // average instead of the true merged mean. Both registers are\n            // read via `partial_f64`, matching `finalize_row`'s own read\n            // of them below -- the per-segment count register is a\n            // `Value::Int` in real execution, but it is never surfaced on\n            // its own (only ever divided into by `finalize_row`), so\n            // there is no reason to route it through the\n            // integer-overflow-checked `AggPart::Count` path as well.\n            AggPart::Avg(sum_i, count_i) => {\n                into[*sum_i] = merge_sum_partials(&into[*sum_i], &from[*sum_i])?;\n                into[*count_i] =\n                    Value::Float(partial_f64(&into[*count_i])? + partial_f64(&from[*count_i])?);\n                row_idx = count_i.saturating_add(1);\n            }\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_engine_merge_rows_9e14e28d",
-    "file": "src/vm/engine.rs",
-    "line": 430,
-    "decision": "let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64())",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_engine_merge_rows_b9fe8222",
-    "file": "src/vm/engine.rs",
-    "line": 432,
-    "decision": "matches!(into[row_idx], Value::Null)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_engine_merge_rows_9e14e28d_2",
-    "file": "src/vm/engine.rs",
-    "line": 438,
-    "decision": "let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64())",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_engine_merge_rows_b9fe8222_2",
-    "file": "src/vm/engine.rs",
-    "line": 440,
-    "decision": "matches!(into[row_idx], Value::Null)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_engine_partial_i64_3d91dd60",
-    "file": "src/vm/engine.rs",
-    "line": 468,
-    "decision": "match v {\n        Value::Null => Ok(0),\n        Value::Int(n) => Ok(*n),\n        other => Err(VmError::MalformedProgram {\n            opcode: \"Combine\",\n            reason: format!(\"partial COUNT slot holds {other:?}, not an integer\"),\n        }),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_engine_merge_sum_partials_0b1ba900",
-    "file": "src/vm/engine.rs",
-    "line": 488,
-    "decision": "match (into, from) {\n        (Value::Null, Value::Null) => Ok(Value::Null),\n        _ => Ok(Value::Float(partial_f64(into)? + partial_f64(from)?)),\n    }",
+    "line": 424,
+    "decision": "match part {\n            // `Avg`'s two registers (sum, count) occupy one `parts` entry\n            // but two `row` slots; every part after it is offset in `row`\n            // by however many extra registers came before -- comparing\n            // `count_i` against the *parts* enumeration index (as this\n            // used to) confuses the two spaces and, once another\n            // aggregate follows an `AVG` in the same query, silently\n            // corrupts or drops it (db-core#404).\n            AggPart::Avg(sum_i, count_i) => {\n                out.push(finish_avg(&row[*sum_i], &row[*count_i])?);\n                row_idx = count_i.saturating_add(1);\n            }\n            _ => {\n                out.push(row[row_idx].clone());\n                row_idx = row_idx.saturating_add(1);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
-  },
-  {
-    "id": "vm_engine_partial_f64_63645a29",
-    "file": "src/vm/engine.rs",
-    "line": 495,
-    "decision": "match v {\n        Value::Null => Ok(0.0),\n        other => other.as_f64().ok_or_else(|| VmError::MalformedProgram {\n            opcode: \"Combine\",\n            reason: format!(\"partial aggregate slot holds {other:?}, not a number\"),\n        }),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_engine_finalize_row_2c22f99c",
-    "file": "src/vm/engine.rs",
-    "line": 514,
-    "decision": "match part {\n            // `Avg`'s two registers (sum, count) occupy one `parts` entry\n            // but two `row` slots; every part after it is offset in `row`\n            // by however many extra registers came before -- comparing\n            // `count_i` against the *parts* enumeration index (as this\n            // used to) confuses the two spaces and, once another\n            // aggregate follows an `AVG` in the same query, silently\n            // corrupts or drops it (db-core#404).\n            AggPart::Avg(sum_i, count_i) => {\n                let (sum, count) = (partial_f64(&row[*sum_i])?, partial_f64(&row[*count_i])?);\n                out.push(if count == 0.0 {\n                    Value::Null\n                } else {\n                    Value::Float(sum / count)\n                });\n                row_idx = count_i.saturating_add(1);\n            }\n            _ => {\n                out.push(row[row_idx].clone());\n                row_idx = row_idx.saturating_add(1);\n            }\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": true
-  },
-  {
-    "id": "vm_engine_finalize_row_816b515b",
-    "file": "src/vm/engine.rs",
-    "line": 524,
-    "decision": "count == 0.0",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
   },
   {
     "id": "vm_engine_load_cba4f5f5",
     "file": "src/vm/engine.rs",
-    "line": 665,
+    "line": 570,
     "decision": "let Some(fused) = &self.shape.fused_group_by",
     "conditions": 1,
     "vectors_required": 2,
@@ -31712,7 +31842,7 @@
   {
     "id": "vm_engine_load_78760142",
     "file": "src/vm/engine.rs",
-    "line": 666,
+    "line": 571,
     "decision": "match fused.first() {\n                Some((reg, _)) => vm.register(*reg)?.len(),\n                None => 0,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31722,7 +31852,7 @@
   {
     "id": "vm_engine_run_multi_join_segments_e916149e",
     "file": "src/vm/engine.rs",
-    "line": 751,
+    "line": 656,
     "decision": "rights.len() != plan.builds.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31732,7 +31862,7 @@
   {
     "id": "vm_engine_run_multi_join_segments_3366051e",
     "file": "src/vm/engine.rs",
-    "line": 764,
+    "line": 669,
     "decision": "i > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31742,7 +31872,7 @@
   {
     "id": "vm_engine_scan_program_f8be12f4",
     "file": "src/vm/engine.rs",
-    "line": 942,
+    "line": 847,
     "decision": "with_filter",
     "conditions": 1,
     "vectors_required": 2,

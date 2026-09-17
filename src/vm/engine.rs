@@ -25,6 +25,7 @@ use super::batch::{
     AggPart, Batch, Chunk, GroupKey, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource,
     Segment, TopN, Value, Vm, VmError,
 };
+use super::combine::{combine_chunks, finish_avg, merge_slot, slot_ops, SlotOp};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -148,6 +149,17 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
         )?,
         _ => run_parallel(segments, &body)?,
     };
+    // #478: aggregates merge column-major straight off the per-segment
+    // chunks (`vm::combine`) -- never transposed to rows. Only the
+    // DISTINCT/ORDER BY/LIMIT tail, whose input is bounded by the number
+    // of surviving groups, still goes through the row-based `finalize`.
+    if !agg_parts.is_empty() {
+        let combined = combine_chunks(agg_parts, *num_group_keys, output.chunks())?;
+        if !*distinct && order_by.is_none() && limit.is_none() {
+            return Ok(combined);
+        }
+        return finalize(&[], 0, *distinct, order_by, limit, combined.into_rows());
+    }
     finalize(
         agg_parts,
         *num_group_keys,
@@ -340,13 +352,14 @@ pub fn finalize(
         // Null` still matches (`GROUP BY` semantics, unlike a join key).
         let mut groups: Vec<(Vec<Value>, Vec<Value>)> = Vec::new();
         let mut index: HashMap<u64, Vec<usize>> = HashMap::new();
+        let ops = slot_ops(agg_parts, rows.first().map_or(0, Vec::len))?;
         for row in rows {
             let key_slice = &row[..num_group_keys];
             let hash = hash_group_key(key_slice);
             let bucket = index.entry(hash).or_default();
             let existing = bucket.iter().copied().find(|&i| groups[i].0 == *key_slice);
             match existing {
-                Some(i) => merge_rows(agg_parts, &mut groups[i].1, &row)?,
+                Some(i) => merge_rows(&ops, &mut groups[i].1, &row)?,
                 None => {
                     bucket.push(groups.len());
                     groups.push((key_slice.to_vec(), row));
@@ -385,120 +398,17 @@ pub fn finalize(
     Ok(QueryOutput::from_rows(result_rows))
 }
 
-/// Combine two emitted rows for the same group key, applying the
-/// associative merge appropriate to each [`AggPart`].
-///
-/// `row_idx` tracks the row cursor directly rather than `parts`'
-/// enumeration index: an `AVG` occupies two `row` registers (sum, count)
-/// but only one `AggPart` entry, so every part after it is offset in
-/// `row` by however many extra registers came before it. Indexing by the
-/// enumeration position instead (as this used to) silently merges the
-/// wrong registers into each other once an `AVG` precedes another
-/// aggregate in the same query -- confirmed live by db-core#404's
-/// segment-split invariance harness, which is also why `finalize_row`
-/// (below) uses the identical cursor.
-#[allow(
-    clippy::indexing_slicing,
-    reason = "`row_idx` (and `Avg`'s own `sum_i`/`count_i`) always stay in `row`'s \
-              range by construction (db-core#404)"
-)]
-fn merge_rows(parts: &[AggPart], into: &mut [Value], from: &[Value]) -> Result<()> {
-    let mut row_idx = 0usize;
-    for part in parts {
-        match part {
-            AggPart::GroupKey => {
-                row_idx = row_idx.saturating_add(1);
-            }
-            AggPart::Sum => {
-                into[row_idx] = merge_sum_partials(&into[row_idx], &from[row_idx])?;
-                row_idx = row_idx.saturating_add(1);
-            }
-            // A merged COUNT stays an integer, as a single segment's does
-            // (#272): before, it came back as `Float`, so the *type* of
-            // `COUNT(*)` depended on how many segments the scan had.
-            AggPart::Count => {
-                let total = partial_i64(&into[row_idx])?
-                    .checked_add(partial_i64(&from[row_idx])?)
-                    .ok_or_else(|| VmError::MalformedProgram {
-                        opcode: "Combine",
-                        reason: "partial COUNT overflowed i64".to_string(),
-                    })?;
-                into[row_idx] = Value::Int(total);
-                row_idx = row_idx.saturating_add(1);
-            }
-            AggPart::Min => {
-                if let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64()) {
-                    into[row_idx] = Value::Float(a.min(b));
-                } else if matches!(into[row_idx], Value::Null) {
-                    into[row_idx] = from[row_idx].clone();
-                }
-                row_idx = row_idx.saturating_add(1);
-            }
-            AggPart::Max => {
-                if let (Some(a), Some(b)) = (into[row_idx].as_f64(), from[row_idx].as_f64()) {
-                    into[row_idx] = Value::Float(a.max(b));
-                } else if matches!(into[row_idx], Value::Null) {
-                    into[row_idx] = from[row_idx].clone();
-                }
-                row_idx = row_idx.saturating_add(1);
-            }
-            // Previously a no-op (db-core#404): with more than one
-            // segment, `AVG` silently returned the first segment's local
-            // average instead of the true merged mean. Both registers are
-            // read via `partial_f64`, matching `finalize_row`'s own read
-            // of them below -- the per-segment count register is a
-            // `Value::Int` in real execution, but it is never surfaced on
-            // its own (only ever divided into by `finalize_row`), so
-            // there is no reason to route it through the
-            // integer-overflow-checked `AggPart::Count` path as well.
-            AggPart::Avg(sum_i, count_i) => {
-                into[*sum_i] = merge_sum_partials(&into[*sum_i], &from[*sum_i])?;
-                into[*count_i] =
-                    Value::Float(partial_f64(&into[*count_i])? + partial_f64(&from[*count_i])?);
-                row_idx = count_i.saturating_add(1);
-            }
-        }
+/// Combine two emitted rows for the same group key: one [`SlotOp`] per
+/// slot, resolved once by `slot_ops` (#404: an `AVG` is one part but two
+/// slots, so every part after it is offset -- resolving by slot position
+/// rather than part index is what keeps the right registers merging into
+/// each other). The merge semantics themselves live in `vm::combine`,
+/// shared with the column-major path.
+fn merge_rows(ops: &[SlotOp], into: &mut [Value], from: &[Value]) -> Result<()> {
+    for ((op, into), from) in ops.iter().zip(into.iter_mut()).zip(from) {
+        merge_slot(*op, into, from)?;
     }
     Ok(())
-}
-
-/// A partial COUNT slot as an integer. NULL is the additive identity (a
-/// segment that saw no rows); anything else non-integer is a planner bug.
-fn partial_i64(v: &Value) -> Result<i64> {
-    match v {
-        Value::Null => Ok(0),
-        Value::Int(n) => Ok(*n),
-        other => Err(VmError::MalformedProgram {
-            opcode: "Combine",
-            reason: format!("partial COUNT slot holds {other:?}, not an integer"),
-        }),
-    }
-}
-
-/// A partial SUM/COUNT/AVG slot as a number. NULL is the additive identity
-/// (a segment that saw no rows); anything else non-numeric is a planner
-/// bug -- before, it silently merged as `0.0` into a plausible wrong total
-/// (db-core#232).
-/// Merges two partial `SUM`s (also `AVG`'s sum slot). A segment with no
-/// surviving rows emits `Null` (#452: `Reduce` always emits one row), and
-/// `Null` must be the identity here -- `Null` with `Null` stays `Null`, so
-/// a `SUM` over zero rows across every segment is `NULL` as SQL requires,
-/// not `0.0`; `Null` with a number is that number.
-fn merge_sum_partials(into: &Value, from: &Value) -> Result<Value> {
-    match (into, from) {
-        (Value::Null, Value::Null) => Ok(Value::Null),
-        _ => Ok(Value::Float(partial_f64(into)? + partial_f64(from)?)),
-    }
-}
-
-fn partial_f64(v: &Value) -> Result<f64> {
-    match v {
-        Value::Null => Ok(0.0),
-        other => other.as_f64().ok_or_else(|| VmError::MalformedProgram {
-            opcode: "Combine",
-            reason: format!("partial aggregate slot holds {other:?}, not a number"),
-        }),
-    }
 }
 
 #[allow(
@@ -520,12 +430,7 @@ fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Result<Vec<Value>> {
             // aggregate follows an `AVG` in the same query, silently
             // corrupts or drops it (db-core#404).
             AggPart::Avg(sum_i, count_i) => {
-                let (sum, count) = (partial_f64(&row[*sum_i])?, partial_f64(&row[*count_i])?);
-                out.push(if count == 0.0 {
-                    Value::Null
-                } else {
-                    Value::Float(sum / count)
-                });
+                out.push(finish_avg(&row[*sum_i], &row[*count_i])?);
                 row_idx = count_i.saturating_add(1);
             }
             _ => {

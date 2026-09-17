@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.108.0] - 2026-09-17
+
+### Changed
+
+- **`Combine` merges partial `GROUP BY` aggregates column-major, straight off the per-segment chunks** (#478 phase 1): `vm::engine::run` no longer transposes every partial row to `Vec<Vec<Value>>` before merging. The new `vm::combine` module hashes the key columns column-wise (#440), maps rows to groups through the same hash-then-verify table `GroupReduce` uses (#439), and merges each aggregate column into its accumulator with one dispatch per column-chunk instead of per row. The merge semantics (`Null` identity, checked-`i64` `COUNT`, `f64` `MIN`/`MAX`, `AVG`'s `(sum, count)` pair, #404) are now defined once in `slot_ops`/`merge_slot`, with `finalize` built on the same functions and a differential test pinning the two. Group output order is unchanged. Measured on 82 segments x 100K groups: merge tail 431 ms -> 184 ms; new tracked bench `engine::run GroupReduce+Combine` (16 x 100K) 119.0 ms -> 70.9 ms A/B/A against main. Phases 2-3 (typed single-`Int` key, partitioned parallel merge) and #488 (per-thread pre-aggregation) follow.
+
 ## [0.107.2] - 2026-09-17
 
 ### Changed
