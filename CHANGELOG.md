@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.109.0] - 2026-09-17
+
+### Changed
+
+- **`Combine` merges a single-integer `GROUP BY` key through an open-addressing table** (#478 phase 2): `vm::combine::combine_chunks` decides the key specialization from the first chunk (as ClickHouse's `chooseMethod` and DataFusion's `GroupValuesPrimitive` do from the schema). A single `Int`/`Null` key now goes through `IntKeyTable` -- linear probing over a power-of-two `u32` slot array into a dense `(key, group id)` vector, load factor <= 1/2, presized from the first chunk, keys hashed with MurmurHash3's 64-bit finalizer so high-bit entropy (timestamps, shifted ids) reaches the slot index -- instead of two SipHash rounds and a `Value` comparison per partial row. Composite, string and float keys keep the generic hash-then-verify path; both share `merge_columns`. Tracked bench `engine::run GroupReduce+Combine` (16 segments x 100K groups), A/B/A against main: 62.2 ms -> 37.6 ms, the merge tail alone ~36 ms -> ~12 ms (~7 ns per partial row, from ~52 ns before 0.108.0). Phase 3 (partitioned parallel merge) and #488 (per-thread pre-aggregation) follow.
+
 ## [0.108.0] - 2026-09-17
 
 ### Changed

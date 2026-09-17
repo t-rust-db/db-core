@@ -205,10 +205,13 @@ const NEW_GROUP: usize = usize::MAX;
 /// and every column of a chunk the same length -- a ragged chunk or a
 /// `num_group_keys` wider than the row is a planner bug, reported as
 /// [`VmError::MalformedProgram`] rather than indexed.
-#[allow(
-    clippy::indexing_slicing,
-    reason = "every `chunk[c]`/`acc[c]` index is `< num_slots` and every `[r]` is `< n`, both checked up front per chunk; every group id `g` was pushed into `acc` before it was recorded in `index`/`row_group`"
-)]
+///
+/// A single integer group key (the parity `GROUP BY customer_id` shape)
+/// takes [`combine_int_key`]'s open-addressing table -- no SipHash, no
+/// per-row allocation, no `Value` comparison on the probe; every other
+/// key shape (composite, string, float) takes [`combine_generic`]'s
+/// column-wise hash-then-verify. Both share [`merge_columns`], so they
+/// cannot disagree on merge semantics.
 pub(crate) fn combine_chunks(
     parts: &[AggPart],
     num_group_keys: usize,
@@ -227,38 +230,118 @@ pub(crate) fn combine_chunks(
         });
     }
     let ops = slot_ops(parts, num_slots)?;
+    validate_chunk(first, num_slots)?;
 
-    // Column-major accumulators, one entry per group, in first-seen order.
+    // #478 phase 2: the key type is decided from the first chunk, the way
+    // ClickHouse's `chooseMethod` and DataFusion's `GroupValuesPrimitive`
+    // pick a specialization from the schema -- a column is one type. A
+    // later chunk that contradicts that (only possible with hand-built
+    // in-memory batches) makes the fast path hand back `None`, and the
+    // generic path redoes the merge from scratch.
+    if num_group_keys == 1 && first.first().is_some_and(|keys| is_int_key_column(keys)) {
+        if let Some(out) = combine_int_key(parts, &ops, chunks)? {
+            return Ok(out);
+        }
+    }
+    combine_generic(parts, &ops, num_group_keys, chunks)
+}
+
+/// Every chunk must have `num_slots` columns of one common length.
+fn validate_chunk(chunk: &Chunk, num_slots: usize) -> Result<usize> {
+    if chunk.len() != num_slots {
+        return Err(VmError::MalformedProgram {
+            opcode: "Combine",
+            reason: format!("chunk has {} columns, expected {num_slots}", chunk.len()),
+        });
+    }
+    let n = chunk_len(chunk);
+    if let Some(ragged) = chunk.iter().find(|column| column.len() != n) {
+        return Err(VmError::MalformedProgram {
+            opcode: "Combine",
+            reason: format!(
+                "ragged chunk: a column has {} rows, expected {n}",
+                ragged.len()
+            ),
+        });
+    }
+    Ok(n)
+}
+
+/// Whether a key column is all `Int` (a `Null` key is fine: it is its own
+/// group, [`IntKeyTable::null_group`]), so the integer table applies.
+fn is_int_key_column(column: &[Value]) -> bool {
+    column
+        .iter()
+        .all(|v| matches!(v, Value::Int(_) | Value::Null))
+}
+
+/// Phase B of a chunk, shared by both key paths: merge each aggregate
+/// column into its accumulator, one op dispatch per column-chunk. Rows
+/// marked [`NEW_GROUP`] were copied in as their group's initial state.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`chunk[c]`/`acc[c]` index `< num_slots` (validated), `column[r]` indexes a column of exactly `row_group.len()` rows, and every non-sentinel `g` was pushed into `acc` before being recorded"
+)]
+fn merge_columns(
+    ops: &[SlotOp],
+    chunk: &Chunk,
+    acc: &mut [Vec<Value>],
+    row_group: &[usize],
+) -> Result<()> {
+    for (c, op) in ops.iter().enumerate() {
+        if *op == SlotOp::Key {
+            continue;
+        }
+        let column = &chunk[c];
+        let acc_column = &mut acc[c];
+        for (r, &g) in row_group.iter().enumerate() {
+            if g != NEW_GROUP {
+                merge_slot(*op, &mut acc_column[g], &column[r])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Copies row `r` of `chunk` in as a new group's initial state.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`column[r]`: `r < chunk_len(chunk)` and every column has that many rows (validated)"
+)]
+fn push_new_group(acc: &mut [Vec<Value>], chunk: &Chunk, r: usize) {
+    for (slot, column) in acc.iter_mut().zip(chunk) {
+        slot.push(column[r].clone());
+    }
+}
+
+/// The general merge: keys hashed column-wise ([`hash_columns_by_row`],
+/// #440) into a hash-then-verify table (the shape `GroupReduce` uses,
+/// #439), exact `Value` equality against the key columns on a hash hit.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`acc[c][g]`: `c < num_group_keys <= num_slots` and `g` was pushed before being recorded; `column[r]`: `r < n`, every column has `n` rows (validated)"
+)]
+fn combine_generic(
+    parts: &[AggPart],
+    ops: &[SlotOp],
+    num_group_keys: usize,
+    chunks: &[Chunk],
+) -> Result<QueryOutput> {
+    let Some(first) = chunks.first() else {
+        return Ok(QueryOutput::default());
+    };
+    let num_slots = first.len();
     // Pre-sized from the first chunk: with one partial row per group per
     // segment, the first chunk's row count is the group count (or close).
     let expected_groups = chunk_len(first);
     let mut acc: Vec<Vec<Value>> = (0..num_slots)
         .map(|_| Vec::with_capacity(expected_groups))
         .collect();
-    // Hash-then-verify: buckets of group ids sharing a key hash, exact
-    // key equality against `acc`'s key columns on collision.
     let mut index: HashMap<u64, Vec<usize>> = HashMap::with_capacity(expected_groups);
     let mut row_group: Vec<usize> = Vec::new();
 
     for chunk in chunks {
-        if chunk.len() != num_slots {
-            return Err(VmError::MalformedProgram {
-                opcode: "Combine",
-                reason: format!("chunk has {} columns, expected {num_slots}", chunk.len()),
-            });
-        }
-        let n = chunk_len(chunk);
-        if let Some(ragged) = chunk.iter().find(|column| column.len() != n) {
-            return Err(VmError::MalformedProgram {
-                opcode: "Combine",
-                reason: format!(
-                    "ragged chunk: a column has {} rows, expected {n}",
-                    ragged.len()
-                ),
-            });
-        }
-
-        // Phase A: row -> group id, hashing the key columns column-wise.
+        let n = validate_chunk(chunk, num_slots)?;
         let key_columns: Vec<&[Value]> = chunk[..num_group_keys]
             .iter()
             .map(|column| column.as_slice())
@@ -277,33 +360,189 @@ pub(crate) fn combine_chunks(
             match existing {
                 Some(g) => row_group.push(g),
                 None => {
-                    let g = acc[0].len();
-                    for (c, column) in chunk.iter().enumerate() {
-                        acc[c].push(column[r].clone());
-                    }
-                    bucket.push(g);
+                    bucket.push(acc[0].len());
+                    push_new_group(&mut acc, chunk, r);
                     row_group.push(NEW_GROUP);
                 }
             }
         }
+        merge_columns(ops, chunk, &mut acc, &row_group)?;
+    }
+    Ok(QueryOutput::new(output_columns(parts, acc)?))
+}
 
-        // Phase B: merge each aggregate column into its accumulator, one
-        // op dispatch per column-chunk.
-        for (c, op) in ops.iter().enumerate() {
-            if *op == SlotOp::Key {
-                continue;
-            }
-            let column = &chunk[c];
-            let acc_column = &mut acc[c];
-            for (r, &g) in row_group.iter().enumerate() {
-                if g != NEW_GROUP {
-                    merge_slot(*op, &mut acc_column[g], &column[r])?;
-                }
-            }
+/// MurmurHash3's 64-bit finalizer -- what DuckDB and ClickHouse hash
+/// integer keys with. Not a bare multiplicative hash: real ids carry
+/// their entropy in the high bits (timestamps, shifted keys), which a
+/// multiply alone never brings down to the low bits an open-addressing
+/// table indexes by; the xor-shifts do.
+const fn murmur_finalize(mut x: u64) -> u64 {
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xC4CE_B9FE_1A85_EC53);
+    x ^ (x >> 33)
+}
+
+/// An empty slot in [`IntKeyTable::slots`].
+const EMPTY: u32 = u32::MAX;
+
+/// Open-addressing table from an `i64` group key to its group id -- the
+/// `GROUP BY <int column>` specialization every engine has (ClickHouse
+/// `key64`, DataFusion `GroupValuesPrimitive`, Velox's array mode).
+/// Linear probing over a power-of-two `slots` array of group ids (4 bytes
+/// each, so 100K groups at load <= 1/2 is ~800 KB: L2-resident); the key
+/// and its group id live in the dense `keys` vector the slots index into,
+/// and the probe compares that `i64` directly -- no cached hash needed
+/// when the key is 8 bytes. `Null` keys form one group of their own,
+/// outside the table (`GROUP BY` semantics: `Null` groups with `Null`) --
+/// which is why a key's position in `keys` and its group id differ.
+struct IntKeyTable {
+    /// Index into `keys`, or [`EMPTY`].
+    slots: Vec<u32>,
+    mask: usize,
+    /// `(key, group id)` in insertion order.
+    keys: Vec<(i64, u32)>,
+    null_group: Option<usize>,
+}
+
+impl IntKeyTable {
+    /// Sized for `expected_groups` at load factor <= 1/2 (all engines
+    /// pay for the resize; the first chunk's row count is a good guess
+    /// at the group count when every segment sees every group).
+    fn with_capacity(expected_groups: usize) -> Self {
+        let capacity = expected_groups
+            .saturating_mul(2)
+            .max(16)
+            .next_power_of_two();
+        IntKeyTable {
+            slots: vec![EMPTY; capacity],
+            mask: capacity.wrapping_sub(1),
+            keys: Vec::with_capacity(expected_groups),
+            null_group: None,
         }
     }
 
-    Ok(QueryOutput::new(output_columns(parts, acc)?))
+    fn num_groups(&self) -> usize {
+        self.keys
+            .len()
+            .saturating_add(usize::from(self.null_group.is_some()))
+    }
+
+    /// The home slot of `key`: its bit pattern (not a sign-converted
+    /// magnitude) through the finalizer, masked into `slots`.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "masked to `< slots.len()`, which is a `usize`, before use"
+    )]
+    fn slot_of(&self, key: i64) -> usize {
+        (murmur_finalize(u64::from_ne_bytes(key.to_ne_bytes())) as usize) & self.mask
+    }
+
+    /// The group id for `key`, inserting it as group `next_id` when unseen
+    /// -- `(id, inserted)`.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "`slots[i]`: `i` is masked into `0..slots.len()`; `keys[k]`: every non-EMPTY slot holds a `k < keys.len()` by construction"
+    )]
+    fn get_or_insert(&mut self, key: i64, next_id: usize) -> Result<(usize, bool)> {
+        if self.keys.len().saturating_mul(2) >= self.slots.len() {
+            self.grow();
+        }
+        let mut i = self.slot_of(key);
+        loop {
+            let slot = self.slots[i];
+            if slot == EMPTY {
+                let too_many = || VmError::MalformedProgram {
+                    opcode: "Combine",
+                    reason: format!("more than {} groups", u32::MAX),
+                };
+                let id = u32::try_from(next_id).map_err(|_| too_many())?;
+                let k = u32::try_from(self.keys.len()).map_err(|_| too_many())?;
+                self.slots[i] = k;
+                self.keys.push((key, id));
+                return Ok((next_id, true));
+            }
+            let (candidate, id) = self.keys[slot as usize];
+            if candidate == key {
+                return Ok((id as usize, false));
+            }
+            i = i.wrapping_add(1) & self.mask;
+        }
+    }
+
+    /// Doubles `slots` and re-places every group by its key's hash.
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::cast_possible_truncation,
+        reason = "`slots[i]`: `i` is masked into `0..slots.len()`; `k as u32`: `k < keys.len() <= u32::MAX`, every entry was admitted by `get_or_insert`'s `u32::try_from`"
+    )]
+    fn grow(&mut self) {
+        let capacity = self.slots.len().saturating_mul(2);
+        self.slots = vec![EMPTY; capacity];
+        self.mask = capacity.wrapping_sub(1);
+        for k in 0..self.keys.len() {
+            let mut i = self.slot_of(self.keys[k].0);
+            while self.slots[i] != EMPTY {
+                i = i.wrapping_add(1) & self.mask;
+            }
+            self.slots[i] = k as u32;
+        }
+    }
+}
+
+/// [`combine_chunks`] for a single `Int` (or `Null`) group key. Returns
+/// `None` -- having done no output -- if a later chunk's key column is
+/// not all `Int`/`Null` after all, so the caller falls back to
+/// [`combine_generic`].
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`chunk[0]`: `num_slots >= 1` since `num_group_keys == 1 <= num_slots`; `column[r]`: `r < n` (validated)"
+)]
+fn combine_int_key(
+    parts: &[AggPart],
+    ops: &[SlotOp],
+    chunks: &[Chunk],
+) -> Result<Option<QueryOutput>> {
+    let Some(first) = chunks.first() else {
+        return Ok(Some(QueryOutput::default()));
+    };
+    let num_slots = first.len();
+    let expected_groups = chunk_len(first);
+    let mut acc: Vec<Vec<Value>> = (0..num_slots)
+        .map(|_| Vec::with_capacity(expected_groups))
+        .collect();
+    let mut table = IntKeyTable::with_capacity(expected_groups);
+    let mut row_group: Vec<usize> = Vec::new();
+
+    for chunk in chunks {
+        let n = validate_chunk(chunk, num_slots)?;
+        let keys = &chunk[0];
+        row_group.clear();
+        row_group.reserve(n);
+        for r in 0..n {
+            let (g, inserted) = match &keys[r] {
+                Value::Int(key) => table.get_or_insert(*key, table.num_groups())?,
+                Value::Null => match table.null_group {
+                    Some(g) => (g, false),
+                    None => {
+                        let g = table.num_groups();
+                        table.null_group = Some(g);
+                        (g, true)
+                    }
+                },
+                _ => return Ok(None),
+            };
+            if inserted {
+                push_new_group(&mut acc, chunk, r);
+                row_group.push(NEW_GROUP);
+            } else {
+                row_group.push(g);
+            }
+        }
+        merge_columns(ops, chunk, &mut acc, &row_group)?;
+    }
+    Ok(Some(QueryOutput::new(output_columns(parts, acc)?)))
 }
 
 /// Lays `acc`'s merged slots out as the final output columns, following
@@ -592,5 +831,114 @@ mod tests {
         let mut max = Value::Int(3);
         merge_slot(SlotOp::Max, &mut max, &Value::Float(9.5)).unwrap();
         assert_eq!(max, Value::Float(9.5));
+    }
+
+    fn int_chunk(keys: &[Option<i64>], vals: &[i64]) -> Chunk {
+        chunk(vec![
+            keys.iter()
+                .map(|k| k.map_or(Value::Null, Value::Int))
+                .collect(),
+            vals.iter().copied().map(Value::Int).collect(),
+        ])
+    }
+
+    /// #478 phase 2: the integer-key table must agree exactly with the
+    /// generic path and with `finalize` -- same groups, order, values and
+    /// value types -- over negative keys, keys whose entropy is in the high
+    /// bits (the case a bare multiplicative hash mishandles), a `Null`
+    /// key group, and enough new groups in later chunks to force the table
+    /// to grow past its first-chunk sizing several times.
+    #[test]
+    fn int_key_path_matches_generic_and_finalize_including_null_keys_and_growth() {
+        let parts = [AggPart::GroupKey, AggPart::Sum];
+        let ops = slot_ops(&parts, 2).unwrap();
+        let mut chunks = vec![int_chunk(
+            &[Some(7), None, Some(-3), Some(1 << 40)],
+            &[1, 2, 3, 4],
+        )];
+        for seg in 0..3i64 {
+            let keys: Vec<Option<i64>> = (0..5_000i64)
+                .map(|g| Some((g - 2_500) << 32 | seg))
+                .chain([None, Some(7), Some(-3)])
+                .collect();
+            let vals: Vec<i64> = (0..keys.len() as i64).collect();
+            chunks.push(int_chunk(&keys, &vals));
+        }
+        let fast = combine_int_key(&parts, &ops, &chunks).unwrap().unwrap();
+        let generic = combine_generic(&parts, &ops, 1, &chunks).unwrap();
+        let reference = finalize(&parts, 1, false, None, None, rows_of(&chunks)).unwrap();
+        assert_eq!(fast, generic);
+        assert_eq!(fast, reference);
+        assert_eq!(combine_chunks(&parts, 1, &chunks).unwrap(), reference);
+        // 4 first-chunk groups + 3 x 5000 distinct, minus the one later key
+        // that recurs: `(2756 - 2500) << 32 | 0 == 1 << 40`. The repeated
+        // 7 / -3 / Null rows add nothing.
+        assert_eq!(fast.num_rows(), 4 + 3 * 5_000 - 1);
+        let rows = fast.into_rows();
+        // Group 7: 1 from the first chunk, then value 5001 (its row index)
+        // in each of the three later chunks.
+        assert_eq!(
+            rows[0],
+            vec![Value::Int(7), Value::Float(1.0 + 3.0 * 5_001.0)]
+        );
+        assert_eq!(rows[1][0], Value::Null, "Null keys are one group");
+        assert_eq!(rows[1][1], Value::Float(2.0 + 3.0 * 5_000.0));
+    }
+
+    #[test]
+    fn int_key_path_hands_back_none_on_a_non_int_key_and_the_dispatcher_falls_back() {
+        let parts = [AggPart::GroupKey, AggPart::Count];
+        let ops = slot_ops(&parts, 2).unwrap();
+        let chunks = vec![
+            int_chunk(&[Some(1), Some(2)], &[1, 1]),
+            chunk(vec![
+                vec![Value::Int(1), s("x")],
+                vec![Value::Int(1), Value::Int(1)],
+            ]),
+        ];
+        assert!(combine_int_key(&parts, &ops, &chunks).unwrap().is_none());
+        let out = combine_chunks(&parts, 1, &chunks).unwrap();
+        assert_eq!(
+            out,
+            finalize(&parts, 1, false, None, None, rows_of(&chunks)).unwrap()
+        );
+        assert_eq!(out.num_rows(), 3);
+    }
+
+    #[test]
+    fn int_key_table_grows_and_keeps_every_key_findable() {
+        let mut table = IntKeyTable::with_capacity(1);
+        assert_eq!(table.slots.len(), 16);
+        for k in 0..1_000i64 {
+            let (g, inserted) = table
+                .get_or_insert(k * 1_000_003, table.num_groups())
+                .unwrap();
+            assert!(inserted);
+            assert_eq!(g, k as usize);
+        }
+        assert!(table.slots.len() >= 2_000, "load factor stays <= 1/2");
+        for k in 0..1_000i64 {
+            let (g, inserted) = table
+                .get_or_insert(k * 1_000_003, table.num_groups())
+                .unwrap();
+            assert!(!inserted);
+            assert_eq!(g, k as usize);
+        }
+    }
+
+    #[test]
+    fn murmur_finalizer_spreads_high_bit_entropy_into_the_low_bits() {
+        // Keys differing only above bit 32 must not all land in one slot
+        // of a small table -- the failure mode of a bare multiply.
+        let mask = 1023usize;
+        let mut slots = std::collections::HashSet::new();
+        for k in 0..1_000u64 {
+            slots.insert((murmur_finalize(k << 40) as usize) & mask);
+        }
+        assert!(
+            slots.len() > 600,
+            "only {} distinct low-10-bit slots",
+            slots.len()
+        );
     }
 }

@@ -31502,7 +31502,7 @@
   {
     "id": "vm_combine_combine_chunks_467c5f42",
     "file": "src/vm/combine.rs",
-    "line": 221,
+    "line": 224,
     "decision": "num_group_keys > num_slots",
     "conditions": 1,
     "vectors_required": 2,
@@ -31510,9 +31510,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_combine_combine_chunks_87be4278",
+    "id": "vm_combine_combine_chunks_ab68250e",
     "file": "src/vm/combine.rs",
-    "line": 244,
+    "line": 241,
+    "decision": "num_group_keys == 1 && first.first().is_some_and(|keys| is_int_key_column(keys))",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_combine_chunks_daaf5549",
+    "file": "src/vm/combine.rs",
+    "line": 242,
+    "decision": "let Some(out) = combine_int_key(parts, &ops, chunks)?",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_validate_chunk_87be4278",
+    "file": "src/vm/combine.rs",
+    "line": 251,
     "decision": "chunk.len() != num_slots",
     "conditions": 1,
     "vectors_required": 2,
@@ -31520,9 +31540,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_combine_combine_chunks_ed2a2a96",
+    "id": "vm_combine_validate_chunk_ed2a2a96",
     "file": "src/vm/combine.rs",
-    "line": 251,
+    "line": 258,
     "decision": "let Some(ragged) = chunk.iter().find(|column| column.len() != n)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31530,19 +31550,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_combine_combine_chunks_9208b462",
+    "id": "vm_combine_merge_columns_254f0b07",
     "file": "src/vm/combine.rs",
-    "line": 277,
-    "decision": "match existing {\n                Some(g) => row_group.push(g),\n                None => {\n                    let g = acc[0].len();\n                    for (c, column) in chunk.iter().enumerate() {\n                        acc[c].push(column[r].clone());\n                    }\n                    bucket.push(g);\n                    row_group.push(NEW_GROUP);\n                }\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_combine_combine_chunks_254f0b07",
-    "file": "src/vm/combine.rs",
-    "line": 293,
+    "line": 292,
     "decision": "*op == SlotOp::Key",
     "conditions": 1,
     "vectors_required": 2,
@@ -31550,10 +31560,90 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_combine_combine_chunks_6f6cf8d0",
+    "id": "vm_combine_merge_columns_6f6cf8d0",
     "file": "src/vm/combine.rs",
-    "line": 299,
+    "line": 298,
     "decision": "g != NEW_GROUP",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_combine_generic_c6ceed2c",
+    "file": "src/vm/combine.rs",
+    "line": 360,
+    "decision": "match existing {\n                Some(g) => row_group.push(g),\n                None => {\n                    bucket.push(acc[0].len());\n                    push_new_group(&mut acc, chunk, r);\n                    row_group.push(NEW_GROUP);\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_get_or_insert_0180e427",
+    "file": "src/vm/combine.rs",
+    "line": 449,
+    "decision": "self.keys.len().saturating_mul(2) >= self.slots.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_get_or_insert_30f955f5",
+    "file": "src/vm/combine.rs",
+    "line": 455,
+    "decision": "slot == EMPTY",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_get_or_insert_2f32544e",
+    "file": "src/vm/combine.rs",
+    "line": 467,
+    "decision": "candidate == key",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_grow_064084dc",
+    "file": "src/vm/combine.rs",
+    "line": 486,
+    "decision": "self.slots[i] != EMPTY",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_combine_int_key_47244d48",
+    "file": "src/vm/combine.rs",
+    "line": 524,
+    "decision": "match &keys[r] {\n                Value::Int(key) => table.get_or_insert(*key, table.num_groups())?,\n                Value::Null => match table.null_group {\n                    Some(g) => (g, false),\n                    None => {\n                        let g = table.num_groups();\n                        table.null_group = Some(g);\n                        (g, true)\n                    }\n                },\n                _ => return Ok(None),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_combine_combine_int_key_9758384b",
+    "file": "src/vm/combine.rs",
+    "line": 526,
+    "decision": "match table.null_group {\n                    Some(g) => (g, false),\n                    None => {\n                        let g = table.num_groups();\n                        table.null_group = Some(g);\n                        (g, true)\n                    }\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_combine_combine_int_key_df6fc515",
+    "file": "src/vm/combine.rs",
+    "line": 536,
+    "decision": "inserted",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -31562,7 +31652,7 @@
   {
     "id": "vm_combine_output_columns_952ad18c",
     "file": "src/vm/combine.rs",
-    "line": 320,
+    "line": 559,
     "decision": "match part {\n            AggPart::Avg(sum_i, count_i) => {\n                let column = acc[*sum_i]\n                    .iter()\n                    .zip(acc[*count_i].iter())\n                    .map(|(sum, count)| finish_avg(sum, count))\n                    .collect::<Result<Vec<_>>>()?;\n                out.push(column);\n                cursor = count_i.saturating_add(1);\n            }\n            _ => {\n                if let Some(column) = acc.get_mut(cursor) {\n                    out.push(std::mem::take(column));\n                }\n                cursor = cursor.saturating_add(1);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31572,7 +31662,7 @@
   {
     "id": "vm_combine_output_columns_14250ea4",
     "file": "src/vm/combine.rs",
-    "line": 331,
+    "line": 570,
     "decision": "let Some(column) = acc.get_mut(cursor)",
     "conditions": 1,
     "vectors_required": 2,
