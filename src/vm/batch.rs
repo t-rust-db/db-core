@@ -20,6 +20,7 @@ use crate::vm::join::{should_emit, JoinHashTable};
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -2073,6 +2074,18 @@ pub struct Vm {
     /// selection has been applied (every live register still has
     /// `batch.num_rows` rows); reset wherever `selection` is.
     selected_rows: Option<usize>,
+    /// Registers holding a bare [`Opcode::Reduce`]'s single-value `dst`
+    /// (#474) -- a scalar that applies to the whole result, not one row
+    /// per survivor. A `COUNT(*)` (`src: None`) in the same SELECT list as
+    /// a `SUM`/`AVG`/etc. peeks the pending [`Selection`] instead of
+    /// resolving it (to let the other aggregate's `Reduce` still compact
+    /// its *own* source register), so a scalar `dst` can end up live
+    /// alongside a still-pending selection whose `base_len` may
+    /// coincidentally equal 1 (a one-row batch). Tracking scalar
+    /// registers by id -- not by length -- lets [`Vm::resolve_selection`]
+    /// and `Emit` tell them apart from a genuine one-row *column*
+    /// unambiguously. Reset wherever `registers` is.
+    scalar_registers: HashSet<usize>,
     /// Instructions executed so far, checked against [`MAX_STEPS`] by
     /// [`Vm::execute`]/[`Vm::run`].
     steps: usize,
@@ -2208,6 +2221,7 @@ impl Vm {
         self.registers.clear();
         self.selection = None;
         self.selected_rows = None;
+        self.scalar_registers.clear();
     }
 
     /// Eagerly compacts every live register down to the pending
@@ -2221,7 +2235,18 @@ impl Vm {
             return Ok(());
         };
         self.selected_rows = Some(selection.indices.len());
-        for values in self.registers.values_mut() {
+        for (reg, values) in self.registers.iter_mut() {
+            // #474: a register a preceding bare `Reduce` (`COUNT(*)`,
+            // `src: None`) already wrote is a scalar, not a per-row
+            // column -- it applies uniformly to every row and was never
+            // indexed by `selection.indices`, so leave it alone instead
+            // of compacting (or erroring on) it. Tracked by id, not by
+            // `values.len() == 1`, since a genuine one-row column is
+            // indistinguishable from a scalar by length alone once the
+            // batch itself has exactly one row.
+            if self.scalar_registers.contains(reg) {
+                continue;
+            }
             if values.len() != selection.base_len {
                 return Err(VmError::RegisterLengthMismatch { opcode });
             }
@@ -2397,6 +2422,7 @@ impl Vm {
         };
         self.selection = None;
         self.selected_rows = None;
+        self.scalar_registers.clear();
         let mut pc = 0usize;
         while let Some(op) = program.get(pc) {
             self.check_step_limit(op.name())?;
@@ -2569,14 +2595,15 @@ impl Vm {
                 self.selection = Some(Selection { base_len, indices });
             }
             Opcode::Reduce { func, src, dst } => {
-                // #265: see the comment on `Map`'s same call. Also
-                // clears `typed_registers` when it actually resolves a
-                // selection, so the typed fast path below only ever
-                // fires over an unfiltered (or already-compacted) typed
-                // column -- never a stale, wrong-length shadow.
-                self.resolve_selection(opcode)?;
                 let result = match src {
                     Some(reg) => {
+                        // #265: see the comment on `Map`'s same call. Also
+                        // clears `typed_registers` when it actually
+                        // resolves a selection, so the typed fast path
+                        // below only ever fires over an unfiltered (or
+                        // already-compacted) typed column -- never a
+                        // stale, wrong-length shadow.
+                        self.resolve_selection(opcode)?;
                         let typed = self
                             .typed_registers
                             .get(reg)
@@ -2586,13 +2613,27 @@ impl Vm {
                             None => reduce_values(*func, self.reg(*reg, opcode)?),
                         }
                     }
-                    // #452: after a `Filter`, the row count is the applied
-                    // selection's, not the batch's -- `resolve_selection`
-                    // above just recorded it.
-                    None => reduce_count_star(*func, self.selected_rows.unwrap_or(batch.num_rows)),
+                    // #452/#474: bare `COUNT(*)` never reads register
+                    // contents, only the survivor count -- so unlike
+                    // every other `src`, it must NOT force
+                    // `resolve_selection`'s per-register compaction
+                    // (O(live registers x survivors), the dominant cost
+                    // at high selectivity per #474). Peek (don't take)
+                    // the pending selection's index count: another
+                    // `Reduce`/`Map` in the same SELECT list (e.g.
+                    // `count(*), sum(amt)`) still needs the selection
+                    // itself to compact its own source register.
+                    None => {
+                        let count = match &self.selection {
+                            Some(selection) => selection.indices.len(),
+                            None => self.selected_rows.unwrap_or(batch.num_rows),
+                        };
+                        reduce_count_star(*func, count)
+                    }
                 };
                 self.registers.insert(*dst, Arc::new(vec![result]));
                 self.typed_registers.remove(dst);
+                self.scalar_registers.insert(*dst);
             }
             Opcode::GroupReduce {
                 group_by,
@@ -3120,6 +3161,13 @@ impl Vm {
                 // listed more than once in `registers` (e.g. `SELECT a,
                 // a`) is removed on its first occurrence and `Arc::clone`d
                 // (a refcount bump, not a cell copy) for the repeats.
+                // #474: every emitted register already scalar (a bare
+                // `Reduce`'s single-value `dst`) means this is a bare
+                // aggregate SELECT list -- any selection still pending
+                // (peeked but never resolved by a `COUNT(*)`-only run of
+                // `Reduce`s) is stale, not something to index these
+                // columns by. See the comment below where it's used.
+                let all_scalar = registers.iter().all(|r| self.scalar_registers.contains(r));
                 let mut cols: Vec<Arc<Vec<Value>>> = Vec::with_capacity(registers.len());
                 for r in registers.iter() {
                     let owned = if let Some(existing) = self.registers.remove(r) {
@@ -3152,7 +3200,17 @@ impl Vm {
                 // straight into the (still uncompacted) emitted columns
                 // instead of `Filter` having eagerly compacted every live
                 // register up front.
-                let selection = self.selection.take();
+                // #474: a pending selection is stale, not malformed, once
+                // every emitted column is already scalar -- nothing here
+                // ever needed the row-level data it pointed to. Drop it
+                // instead of indexing into already-scalar columns (or
+                // erroring on their length).
+                let selection = if all_scalar {
+                    self.selection.take();
+                    None
+                } else {
+                    self.selection.take()
+                };
                 if let Some(sel) = &selection {
                     if sel.base_len != base_len {
                         return Err(VmError::RegisterLengthMismatch { opcode });

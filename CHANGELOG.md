@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.106.1] - 2026-09-17
+
+### Fixed
+
+- **`count(*)` over a filter is now selectivity-independent** (#474): `Opcode::Reduce` unconditionally called `resolve_selection`, which eagerly compacted every live register down to the surviving rows -- O(live registers x survivors). A bare `COUNT(*)` (`src: None`) never reads register contents, only the survivor count, so it paid that cost for nothing (a 10M-row scan cost ~9x more at 50% selectivity than at 1%). It now peeks the pending selection's index count instead of resolving it, leaving the selection intact for any other aggregate in the same `SELECT` list that still needs its own source register compacted; a new `scalar_registers` set lets `resolve_selection`/`Emit` tell a `Reduce`'s scalar result apart from a genuine one-row column.
+
 ## [0.106.0] - 2026-09-17
 
 ### Added
