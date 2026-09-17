@@ -1138,6 +1138,71 @@ fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec
     results.into_iter().map(|(_, result)| result).collect()
 }
 
+/// [`run_morsels`] where each worker carries state across every item it
+/// claims and returns one value at the end (#488): `init` makes a worker's
+/// state, `fold` merges one item into it, `finish` turns it into the
+/// worker's result. Same claim-a-counter pool and rebalancing as
+/// `run_morsels` -- a worker that finishes early keeps pulling -- so how
+/// many items each worker folds, and which, is not deterministic; only
+/// that every item is folded exactly once. Results come back in worker
+/// order; the first `fold`/`finish` error (in worker order) is returned
+/// and stops the remaining workers from claiming more.
+pub(crate) fn run_morsels_fold<I: Sync, S, T: Send>(
+    items: &[I],
+    init: impl Fn() -> S + Sync,
+    fold: impl Fn(&mut S, &I) -> Result<()> + Sync,
+    finish: impl Fn(S) -> Result<T> + Sync,
+) -> Result<Vec<T>> {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    let len = items.len();
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let num_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(len);
+    let next = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let results: Mutex<Vec<(usize, Result<T>)>> = Mutex::new(Vec::with_capacity(num_threads));
+
+    let (init, fold, finish, next, failed, collected) =
+        (&init, &fold, &finish, &next, &failed, &results);
+    std::thread::scope(|scope| {
+        for worker in 0..num_threads {
+            scope.spawn(move || {
+                let mut state = init();
+                let outcome = loop {
+                    if failed.load(Ordering::Relaxed) {
+                        break finish(state);
+                    }
+                    let idx = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(item) = items.get(idx) else {
+                        break finish(state);
+                    };
+                    if let Err(e) = fold(&mut state, item) {
+                        failed.store(true, Ordering::Relaxed);
+                        break Err(e);
+                    }
+                };
+                // Poison recovery is unreachable in practice (see `run_morsels`).
+                collected
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((worker, outcome));
+            });
+        }
+    });
+
+    let mut results = results
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    results.sort_unstable_by_key(|(worker, _)| *worker);
+    results.into_iter().map(|(_, outcome)| outcome).collect()
+}
+
 /// [`run_morsels`] that hands each result to `sink` **in item order, as it
 /// becomes deliverable**, instead of collecting them all first (#456).
 ///

@@ -581,6 +581,27 @@ fn bench_engine_combine(r: &mut common::Report) {
         "vm_opcodes/engine::run GroupReduce+Combine (16 segments x 100K groups)",
         || run(black_box(&segments), &program),
     );
+    // #488: many more segments than threads, so per-worker pre-aggregation
+    // has room to collapse partials (64 segments -> ~threads partials).
+    const SMALL_GROUPS: i64 = 20_000;
+    const MANY_SEGMENTS: usize = 64;
+    let many: Vec<InMemorySegment> = (0..MANY_SEGMENTS)
+        .map(|seg| {
+            let keys: Vec<BatchValue> = (0..SMALL_GROUPS).map(BatchValue::Int).collect();
+            let amounts: Vec<BatchValue> = (0..SMALL_GROUPS)
+                .map(|g| BatchValue::Int(g + seg as i64))
+                .collect();
+            InMemorySegment(
+                Batch::new(SMALL_GROUPS as usize)
+                    .with_column("customer_id", keys)
+                    .with_column("amount", amounts),
+            )
+        })
+        .collect();
+    r.bench(
+        "vm_opcodes/engine::run GroupReduce+Combine (64 segments x 20K groups)",
+        || run(black_box(&many), &program),
+    );
 }
 
 fn main() {
