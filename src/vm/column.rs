@@ -263,7 +263,7 @@ impl Column {
 /// forbid a silent truncating `as u32`); a single in-memory column
 /// exceeding 4 GiB of string data is not a case this migration path (test
 /// data / small `Batch`es) needs to handle exactly.
-fn build_str_column(
+pub(crate) fn build_str_column(
     count: usize,
     mut row_bytes: impl FnMut(usize) -> String,
 ) -> (Vec<u32>, String) {
