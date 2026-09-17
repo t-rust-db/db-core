@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.107.0] - 2026-09-17
+
+### Added
+
+- **`decode_column_at` builds typed `Column`s directly** (#472): the positional/projection-only decode path (ADR-0026's phase-2b, used after a `WHERE` filter to decode only surviving row positions) now reuses `decode_column_full`'s `int_column`/`float_column`/`bool_column`/`str_column` conversion helpers instead of rebuilding a `Vec<Value>` per row, closing #461's remaining positional-path gap. Documents the shared `Vec<Option<T>>` -> `Column` conversion contract in `vm::column`'s module doc. Dictionary-encoded string columns remain eager-decode-only for now.
+
 ## [0.106.1] - 2026-09-17
 
 ### Fixed

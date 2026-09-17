@@ -281,9 +281,9 @@ impl Segment for RowGroupSegment<'_, '_> {
             .filter(|(name, ..)| !predicate_names.iter().any(|n| n == name))
             .collect();
         for (name, index, physical_type) in &projection_leaves {
-            let values = decode_column_at(&rg, *index, *physical_type, &indices)
+            let decoded = decode_column_at(&rg, *index, *physical_type, &indices)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
-            batch = batch.with_column((*name).clone(), values);
+            batch = apply_decoded(batch, name, decoded);
         }
 
         Ok(Arc::new(batch))
@@ -354,46 +354,45 @@ fn decode_column_full(
     }
 }
 
-/// Decodes one column for every position in `col` -- shared by
-/// `decode_column_at`'s positional readers, which still return
-/// `Vec<Option<T>>` per column (the typed `Column` decode path is
-/// `decode_column_full`-only for now, #461).
-fn map_optional<T>(col: Vec<Option<T>>, wrap: impl Fn(T) -> Value) -> Vec<Value> {
-    col.into_iter()
-        .map(|v| v.map_or(Value::Null, &wrap))
-        .collect()
-}
-
 /// Decodes one column only at `positions` (ADR-0026, phase 2b) -- the
-/// projection-only path. Dictionary string columns deliberately fall
-/// through to the plain positional string reader here rather than a
-/// positional dictionary-codes reader (#457's dict fast path stays
-/// eager-decode-only for v1; see ADR-0026's consequences).
+/// projection-only path. Builds a typed [`Column`] directly, reusing the
+/// same `int_column`/`float_column`/`bool_column`/`str_column` conversion
+/// helpers as `decode_column_full` (#461, #472): the positional readers
+/// already return the identical `Vec<Option<T>>` shape those helpers
+/// expect, so no separate positional `Value`-rebuild path is needed.
+/// Dictionary string columns deliberately fall through to the plain
+/// positional string reader here rather than a positional
+/// dictionary-codes reader (#457's dict fast path stays eager-decode-only
+/// for v1; see ADR-0026's consequences).
 fn decode_column_at(
     rg: &RowGroupReader<'_, '_>,
     index: usize,
     physical_type: PhysicalType,
     positions: &[u32],
-) -> std::result::Result<Vec<Value>, crate::storage::FileError> {
+) -> std::result::Result<Decoded, crate::storage::FileError> {
     match physical_type {
         PhysicalType::Int64 => rg
             .read_int64_column_at(index, positions)
-            .map(|col| map_optional(col, Value::Int)),
-        PhysicalType::Int32 => rg
-            .read_int32_column_at(index, positions)
-            .map(|col| map_optional(col, |i| Value::Int(i64::from(i)))),
+            .map(|col| Decoded::Column(int_column(col))),
+        PhysicalType::Int32 => rg.read_int32_column_at(index, positions).map(|col| {
+            Decoded::Column(int_column(
+                col.into_iter().map(|v| v.map(i64::from)).collect(),
+            ))
+        }),
         PhysicalType::Double => rg
             .read_double_column_at(index, positions)
-            .map(|col| map_optional(col, Value::Float)),
-        PhysicalType::Float => rg
-            .read_float_column_at(index, positions)
-            .map(|col| map_optional(col, |f| Value::Float(f64::from(f)))),
+            .map(|col| Decoded::Column(float_column(col))),
+        PhysicalType::Float => rg.read_float_column_at(index, positions).map(|col| {
+            Decoded::Column(float_column(
+                col.into_iter().map(|v| v.map(f64::from)).collect(),
+            ))
+        }),
         PhysicalType::Boolean => rg
             .read_boolean_column_at(index, positions)
-            .map(|col| map_optional(col, Value::Bool)),
+            .map(|col| Decoded::Column(bool_column(col))),
         _ => rg
             .read_string_column_at(index, positions)
-            .map(|col| map_optional(col, |s| Value::Str(s.into()))),
+            .map(|col| Decoded::Column(str_column(col))),
     }
 }
 
@@ -867,9 +866,10 @@ impl Engine for BatchEngine {
 #[cfg(test)]
 mod tests {
     use super::{
-        bool_column, dict_column, engine, float_column, int_column, plan_err, planner,
-        resolve_columns, row_group_segments, str_column, type_name, Column, ErrorKind, Leaf,
-        ParquetFile, PhysicalType, PlanError, Program, RowGroupSegment,
+        bool_column, decode_column_at, decode_column_full, dict_column, engine, float_column,
+        int_column, plan_err, planner, resolve_columns, row_group_segments, str_column, type_name,
+        Column, Decoded, ErrorKind, Leaf, ParquetFile, PhysicalType, PlanError, Program,
+        RowGroupSegment,
     };
     use crate::parser::ast::Select;
     use crate::vm::batch::{Segment as _, Value};
@@ -1684,5 +1684,37 @@ mod tests {
             "only the big-values row group should be pruned"
         );
         assert!(!segments.iter().any(|s| s.row_group_index == 0));
+    }
+
+    /// #472: `decode_column_at`'s typed positional decode must agree,
+    /// row-for-row, with gathering the same positions out of
+    /// `decode_column_full`'s whole-row-group decode -- the differential
+    /// obligation the issue's acceptance criteria ask for. Both now share
+    /// the same `float_column` conversion helper, so this pins the actual
+    /// risk surface of the change: which physical type wires to which
+    /// `read_*_column`/`read_*_column_at` pair, not the (already
+    /// differentially tested, #461) `Vec<Option<T>>` -> `Column`
+    /// conversion itself.
+    #[test]
+    fn decode_column_at_matches_decode_column_full_gathered_at_the_same_positions() {
+        let file_bytes = build_file(&[(&[10.0, 20.0, 30.0, 40.0, 50.0], None)]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+
+        let Decoded::Column(full) = decode_column_full(&rg, 0, PhysicalType::Double).unwrap();
+
+        let positions: Vec<u32> = vec![4, 1, 1, 0];
+        let Decoded::Column(positional) =
+            decode_column_at(&rg, 0, PhysicalType::Double, &positions).unwrap();
+
+        assert_eq!(positional.len(), positions.len());
+        for (i, &pos) in positions.iter().enumerate() {
+            assert_eq!(
+                positional.get(i),
+                full.get(pos as usize),
+                "position {i} (row {pos}) disagrees between decode_column_at and decode_column_full"
+            );
+            assert_eq!(positional.is_null(i), full.is_null(pos as usize));
+        }
     }
 }

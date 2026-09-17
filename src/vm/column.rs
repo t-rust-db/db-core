@@ -26,6 +26,36 @@
 //! one `Column`-shaped batch and `Str` in the next (e.g. a JSONL field that
 //! seals differently across stream segments) — nothing here assumes a
 //! static, source-level schema.
+//!
+//! ## Arrow-shape conversion contract (#461, #472)
+//!
+//! Every source that decodes straight into a `Column` (`storage::column`'s
+//! Parquet reader, both its whole-row-group and positional paths) follows
+//! the same conversion from that source's native `Vec<Option<T>>` (one
+//! nullable value per row) to a `Column` variant:
+//!
+//! - **Nullability moves out of the per-row `Option` and into one
+//!   [`Bitmap`] bit per row** (`true` = not NULL), rather than staying an
+//!   `Option<T>` per element.
+//! - **A NULL row's data slot still gets a real, cheap default** for its
+//!   type (`Int`/`Float`/`Bool`: the type's zero value; `Str`: an empty
+//!   string) instead of leaving a hole -- the [`Bitmap`], not the
+//!   defaulted value, is what a reader must consult to tell a NULL row
+//!   from a genuine zero/empty value.
+//! - **`Dict` is the one variant built from two parallel inputs** instead
+//!   of one: the source's dictionary strings and its per-row `Option<u32>`
+//!   codes split the same way -- `None` becomes a defaulted `0` code plus
+//!   an invalid bitmap bit, `Some(code)` passes the code through
+//!   unchanged.
+//!
+//! This is a *decode-time* contract only: it says nothing about how a
+//! `Column` is produced (a Parquet page, a sealed stream segment, or a
+//! `Vec<Value>` fallback via [`Column::from`]) or consumed (VM opcode
+//! dispatch) -- only how a source's raw nullable values become one of
+//! this module's variants. Any new decode path that builds a `Column`
+//! directly (rather than through the `Vec<Value>` fallback) should follow
+//! it, so every source's NULL handling reads back identically regardless
+//! of which one produced the batch.
 
 use crate::vm::batch::Value;
 use std::sync::Arc;
