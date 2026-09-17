@@ -3760,8 +3760,7 @@ mod tests {
 
     #[test]
     fn projection_only_column_loads_after_filter_predicate_column_loads_before() {
-        let query =
-            sql::parse("SELECT id, region FROM t WHERE amount > 10").unwrap();
+        let query = sql::parse("SELECT id, region FROM t WHERE amount > 10").unwrap();
         let program = compile(&query).unwrap();
         // `amount` isn't projected at all but is still loaded, pre-Filter.
         assert_eq!(program.predicate_columns(), vec!["amount".to_string()]);
@@ -3864,8 +3863,7 @@ mod tests {
 
     #[test]
     fn multi_column_predicate_loads_every_referenced_column_pre_filter() {
-        let query =
-            sql::parse("SELECT id FROM t WHERE amount > 10 AND region = 'c'").unwrap();
+        let query = sql::parse("SELECT id FROM t WHERE amount > 10 AND region = 'c'").unwrap();
         let program = compile(&query).unwrap();
         let mut predicate = program.predicate_columns();
         predicate.sort();
@@ -3887,10 +3885,9 @@ mod tests {
         // Out of scope for the optimization itself (ADR-0026): GROUP BY/
         // aggregate columns keep loading pre-Filter regardless of WHERE
         // reference, and results must stay correct.
-        let query = sql::parse(
-            "SELECT region, SUM(amount) FROM t WHERE amount > 10 GROUP BY region",
-        )
-        .unwrap();
+        let query =
+            sql::parse("SELECT region, SUM(amount) FROM t WHERE amount > 10 GROUP BY region")
+                .unwrap();
         let program = compile(&query).unwrap();
         assert!(program.projection_only_columns().is_empty());
         let mut rows = run_null_amount_program(&program);

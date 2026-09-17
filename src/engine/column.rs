@@ -245,10 +245,7 @@ impl Segment for RowGroupSegment<'_, '_> {
         let mut vm = Vm::new();
         vm.execute(&predicate_batch, &prefix_opcodes)
             .map_err(|e| VmError::SegmentLoad {
-                reason: format!(
-                    "row group {}: predicate phase: {e}",
-                    self.row_group_index
-                ),
+                reason: format!("row group {}: predicate phase: {e}", self.row_group_index),
             })?;
         // `prefix_opcodes` always ends in `Opcode::Filter`, which always
         // sets `self.selection = Some(..)` when it runs (see its handler
@@ -271,7 +268,8 @@ impl Segment for RowGroupSegment<'_, '_> {
                     .collect();
                 batch = batch.with_column((*name).clone(), gathered);
             } else if let Some(column) = predicate_batch.typed_columns.get(name.as_str()) {
-                let gathered: Vec<Value> = indices.iter().map(|&i| column.get(i as usize)).collect();
+                let gathered: Vec<Value> =
+                    indices.iter().map(|&i| column.get(i as usize)).collect();
                 batch = batch.with_column((*name).clone(), gathered);
             }
         }
@@ -313,47 +311,33 @@ fn apply_decoded(batch: Batch, name: &str, decoded: Decoded) -> Batch {
 /// Decodes one column for every row of `rg` -- the whole-row-group path
 /// shared by the eager load and the predicate phase of the two-phase load
 /// (ADR-0026).
+fn map_optional<T>(col: Vec<Option<T>>, wrap: impl Fn(T) -> Value) -> Vec<Value> {
+    col.into_iter()
+        .map(|v| v.map_or(Value::Null, &wrap))
+        .collect()
+}
+
 fn decode_column_full(
     rg: &RowGroupReader<'_, '_>,
     index: usize,
     physical_type: PhysicalType,
 ) -> std::result::Result<Decoded, crate::storage::FileError> {
     match physical_type {
-        PhysicalType::Int64 => rg.read_int64_column(index).map(|col| {
-            Decoded::Values(
-                col.into_iter()
-                    .map(|v| v.map_or(Value::Null, Value::Int))
-                    .collect(),
-            )
-        }),
-        PhysicalType::Int32 => rg.read_int32_column(index).map(|col| {
-            Decoded::Values(
-                col.into_iter()
-                    .map(|v| v.map_or(Value::Null, |i| Value::Int(i64::from(i))))
-                    .collect(),
-            )
-        }),
-        PhysicalType::Double => rg.read_double_column(index).map(|col| {
-            Decoded::Values(
-                col.into_iter()
-                    .map(|v| v.map_or(Value::Null, Value::Float))
-                    .collect(),
-            )
-        }),
-        PhysicalType::Float => rg.read_float_column(index).map(|col| {
-            Decoded::Values(
-                col.into_iter()
-                    .map(|v| v.map_or(Value::Null, |f| Value::Float(f64::from(f))))
-                    .collect(),
-            )
-        }),
-        PhysicalType::Boolean => rg.read_boolean_column(index).map(|col| {
-            Decoded::Values(
-                col.into_iter()
-                    .map(|v| v.map_or(Value::Null, Value::Bool))
-                    .collect(),
-            )
-        }),
+        PhysicalType::Int64 => rg
+            .read_int64_column(index)
+            .map(|col| Decoded::Values(map_optional(col, Value::Int))),
+        PhysicalType::Int32 => rg
+            .read_int32_column(index)
+            .map(|col| Decoded::Values(map_optional(col, |i| Value::Int(i64::from(i))))),
+        PhysicalType::Double => rg
+            .read_double_column(index)
+            .map(|col| Decoded::Values(map_optional(col, Value::Float))),
+        PhysicalType::Float => rg
+            .read_float_column(index)
+            .map(|col| Decoded::Values(map_optional(col, |f| Value::Float(f64::from(f))))),
+        PhysicalType::Boolean => rg
+            .read_boolean_column(index)
+            .map(|col| Decoded::Values(map_optional(col, Value::Bool))),
         // #457: a `PLAIN_DICTIONARY`-encoded string column materializes
         // as `Column::Dict` (one dict entry per distinct value, one
         // `u32` code per row) instead of decoding every row to its own
@@ -362,18 +346,14 @@ fn decode_column_full(
         // consume. A column with no dictionary page, or one that falls
         // back to `PLAIN` partway through (`Ok(None)`), decodes the
         // plain way unchanged.
-        _ => rg
-            .read_string_column_dictionary_indices(index)
-            .and_then(|maybe_dict| match maybe_dict {
+        _ => rg.read_string_column_dictionary_indices(index).and_then(
+            |maybe_dict| match maybe_dict {
                 Some((dict, codes)) => Ok(Decoded::Dict(dict_column(dict, codes))),
-                None => rg.read_string_column(index).map(|col| {
-                    Decoded::Values(
-                        col.into_iter()
-                            .map(|v| v.map_or(Value::Null, |s| Value::Str(s.into())))
-                            .collect(),
-                    )
-                }),
-            }),
+                None => rg
+                    .read_string_column(index)
+                    .map(|col| Decoded::Values(map_optional(col, |s| Value::Str(s.into())))),
+            },
+        ),
     }
 }
 
@@ -389,36 +369,24 @@ fn decode_column_at(
     positions: &[u32],
 ) -> std::result::Result<Vec<Value>, crate::storage::FileError> {
     match physical_type {
-        PhysicalType::Int64 => rg.read_int64_column_at(index, positions).map(|col| {
-            col.into_iter()
-                .map(|v| v.map_or(Value::Null, Value::Int))
-                .collect()
-        }),
-        PhysicalType::Int32 => rg.read_int32_column_at(index, positions).map(|col| {
-            col.into_iter()
-                .map(|v| v.map_or(Value::Null, |i| Value::Int(i64::from(i))))
-                .collect()
-        }),
-        PhysicalType::Double => rg.read_double_column_at(index, positions).map(|col| {
-            col.into_iter()
-                .map(|v| v.map_or(Value::Null, Value::Float))
-                .collect()
-        }),
-        PhysicalType::Float => rg.read_float_column_at(index, positions).map(|col| {
-            col.into_iter()
-                .map(|v| v.map_or(Value::Null, |f| Value::Float(f64::from(f))))
-                .collect()
-        }),
-        PhysicalType::Boolean => rg.read_boolean_column_at(index, positions).map(|col| {
-            col.into_iter()
-                .map(|v| v.map_or(Value::Null, Value::Bool))
-                .collect()
-        }),
-        _ => rg.read_string_column_at(index, positions).map(|col| {
-            col.into_iter()
-                .map(|v| v.map_or(Value::Null, |s| Value::Str(s.into())))
-                .collect()
-        }),
+        PhysicalType::Int64 => rg
+            .read_int64_column_at(index, positions)
+            .map(|col| map_optional(col, Value::Int)),
+        PhysicalType::Int32 => rg
+            .read_int32_column_at(index, positions)
+            .map(|col| map_optional(col, |i| Value::Int(i64::from(i)))),
+        PhysicalType::Double => rg
+            .read_double_column_at(index, positions)
+            .map(|col| map_optional(col, Value::Float)),
+        PhysicalType::Float => rg
+            .read_float_column_at(index, positions)
+            .map(|col| map_optional(col, |f| Value::Float(f64::from(f)))),
+        PhysicalType::Boolean => rg
+            .read_boolean_column_at(index, positions)
+            .map(|col| map_optional(col, Value::Bool)),
+        _ => rg
+            .read_string_column_at(index, positions)
+            .map(|col| map_optional(col, |s| Value::Str(s.into()))),
     }
 }
 

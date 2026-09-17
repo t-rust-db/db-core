@@ -434,6 +434,36 @@ fn filtered_projection_selects_far_fewer_positions_than_the_row_group_holds() {
 }
 
 #[test]
+fn predicate_over_a_dictionary_encoded_string_column_gathers_correctly() {
+    // `region` is the predicate column here (rather than the usual `id`),
+    // exercising whichever of `Batch::columns`/`Batch::typed_columns`
+    // (#457's `Column::Dict` path) it actually decoded to in the
+    // gather-to-survivors step (ADR-0026 phase 2a).
+    let mut e = open();
+    let r = rows(
+        &mut e,
+        "SELECT id, amount FROM production WHERE region = 'west' ORDER BY id LIMIT 3",
+    );
+    assert!(!r.is_empty());
+    for row in &r {
+        assert!(!matches!(row[0], Cell::Null), "{r:?}");
+        assert!(!matches!(row[1], Cell::Null), "{r:?}");
+    }
+}
+
+#[test]
+fn id_as_a_projection_only_column_decodes_correctly_at_survivor_positions() {
+    // `id` (INT64) is usually the predicate column in these tests; here
+    // it's projection-only, exercising `decode_column_at`'s INT64 arm.
+    let mut e = open();
+    let r = rows(
+        &mut e,
+        "SELECT id, amount FROM production WHERE region = 'west' ORDER BY id LIMIT 1",
+    );
+    assert_eq!(r, vec![vec![Cell::Int(1), Cell::Real(2.5)]]);
+}
+
+#[test]
 fn engine_is_object_safe_and_usable_through_dyn() {
     let mut boxed: Box<dyn Engine> = Box::new(open());
     assert_eq!(boxed.mode(), Mode::Batch);
