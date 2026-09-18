@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.113.2] - 2026-09-18
+
+### Changed
+
+- **`primary_expr`'s `Identifier` arm double-cloned a column reference's identifier `String`** (#486): once via the tokenizer/`identifier()`, again via `parts.as_slice()`'s slice pattern forcing a clone to build `ExprKind::Column`. Moved out of `parts` by value instead. ~7% faster parse for a 5-column projection; most of #486's `prepare_only` 6.3x gap against sqlite3 is elsewhere (`primary_expr`'s own whole-token clone, not fixed here).
+
 ## [0.113.1] - 2026-09-18
 
 ### Fixed
