@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.110.0"
+version = "0.111.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -132,7 +132,7 @@ required-features = ["engine-row", "vm-batch", "codegen-batch"]
 [[test]]
 name = "unit_engine_resolve_public_api"
 path = "tests/unit/engine_resolve_public_api_test.rs"
-required-features = ["engine-row", "engine-stream", "vm-batch"]
+required-features = ["engine-row", "engine-stream", "vm-batch", "storage-test-support"]
 
 [[test]]
 name = "unit_vm_row_public_api"

@@ -420,6 +420,23 @@ where
     for &r in &snapshot_regs {
         em.emit(Instruction::new(Opcode::Null, 0, r, 0));
     }
+    // #484: only the columns the select list/`HAVING` actually reads
+    // get snapshotted off the first matching row (#506's analysis,
+    // shared with `compile_grouped_scan`) — `count(*)` reads none, so
+    // its loop body is a bare `AggStep`. The registers stay full-width
+    // (NULL for a pruned column) so `flush_group`'s original-index
+    // addressing is untouched.
+    let needed = columns_needed_for_projection(select, schema);
+    // #484: when the range seek below fires and every needed column is
+    // a key column of the index it walks, the index entry alone answers
+    // the query — the per-row body reads off the index cursor and the
+    // `IdxRowid` + `SeekRowid` table lookup is dropped entirely
+    // (sqlite3's `SEARCH ... USING COVERING INDEX` shape).
+    let covering = select
+        .where_clause
+        .as_ref()
+        .and_then(|where_expr| covering_range_index(where_expr, schema, &needed, catalog));
+    let identity_positions: Vec<Option<usize>> = (0..schema.columns.len()).map(Some).collect();
 
     let agg_slots: Vec<AggSlot> = aggs
         .into_iter()
@@ -439,51 +456,104 @@ where
     // reached via a full `Rewind`/`Next` scan or an index range seek —
     // only how a matching row is *found* differs, so both paths below
     // share this per-row body.
-    let accumulate_row = |em: &mut Emitter, reg: &mut RegAlloc| -> Result<(), CodegenError> {
-        let boundary_label = em.new_label();
-        let not_boundary_label = em.new_label();
-        let first_row_check = em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
-        em.patch_p2(first_row_check, boundary_label);
-        let goto_not_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-        em.patch_p2(goto_not_boundary, not_boundary_label);
+    //
+    // `(row_scope, row_schema, row_cursor, positions)` describe where a
+    // matched row's columns are read from: the live table cursor and
+    // `schema` itself (identity positions), or — on the #484 covering
+    // path — the index cursor and a `compact_schema` over its key
+    // columns, with `positions[orig]` the key position of each table
+    // column (`None` if the index lacks it, which `covering_range_index`
+    // already ruled out for every needed column).
+    let accumulate_row =
+        |em: &mut Emitter,
+         reg: &mut RegAlloc,
+         row_scope: &Scope,
+         row_schema: &TableSchema,
+         row_cursor: i32,
+         positions: &[Option<usize>]|
+         -> Result<(), CodegenError> {
+            let boundary_label = em.new_label();
+            let not_boundary_label = em.new_label();
+            let first_row_check =
+                em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
+            em.patch_p2(first_row_check, boundary_label);
+            let goto_not_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+            em.patch_p2(goto_not_boundary, not_boundary_label);
 
-        em.place(boundary_label);
-        em.emit(Instruction::new(Opcode::Integer, 1, have_group_reg, 0));
-        // This table's first matching row: fold with `reset: true` so a
-        // freshly-numbered slot starts a fresh accumulator — see
-        // `compile_grouped_scan`'s identical comment.
-        for agg in &agg_slots {
-            emit_agg_step(em, reg, &table_scope, agg, true)?;
-        }
-        // The single implicit group's "arbitrary row" for any plain
-        // (non-aggregate) result/`HAVING` column is its first matching
-        // row, matching `compile_grouped_scan`'s choice — snapshotted
-        // straight off the real table cursor (not `read_row_columns_into`,
-        // which is only safe against the pass-2 pseudo cursor's
-        // already-materialized record; a rowid-alias column here still
-        // needs `Opcode::Rowid` against the live table cursor).
-        for (idx, &r) in snapshot_regs.iter().enumerate() {
-            emit_column_read(em, schema, cursors.table, idx, r)?;
-        }
-        let after_accumulate = em.new_label();
-        let goto_after_accumulate = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-        em.patch_p2(goto_after_accumulate, after_accumulate);
+            em.place(boundary_label);
+            em.emit(Instruction::new(Opcode::Integer, 1, have_group_reg, 0));
+            // This table's first matching row: fold with `reset: true` so a
+            // freshly-numbered slot starts a fresh accumulator — see
+            // `compile_grouped_scan`'s identical comment.
+            for agg in &agg_slots {
+                emit_agg_step(em, reg, row_scope, agg, true)?;
+            }
+            // The single implicit group's "arbitrary row" for any plain
+            // (non-aggregate) result/`HAVING` column is its first matching
+            // row, matching `compile_grouped_scan`'s choice — snapshotted
+            // straight off the live cursor (not `read_row_columns_into`,
+            // which is only safe against the pass-2 pseudo cursor's
+            // already-materialized record; a rowid-alias column here still
+            // needs `Opcode::Rowid` against the live table cursor).
+            for (idx, &r) in snapshot_regs.iter().enumerate() {
+                if !needed.contains(&idx) {
+                    continue;
+                }
+                let pos = positions.get(idx).copied().flatten().ok_or_else(|| {
+                    CodegenError::Internal {
+                        reason: format!(
+                            "covering index walk lacks needed column {idx} of {}",
+                            schema.name
+                        ),
+                    }
+                })?;
+                emit_column_read(em, row_schema, row_cursor, pos, r)?;
+            }
+            let after_accumulate = em.new_label();
+            let goto_after_accumulate = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+            em.patch_p2(goto_after_accumulate, after_accumulate);
 
-        em.place(not_boundary_label);
-        for agg in &agg_slots {
-            emit_agg_step(em, reg, &table_scope, agg, false)?;
-        }
+            em.place(not_boundary_label);
+            for agg in &agg_slots {
+                emit_agg_step(em, reg, row_scope, agg, false)?;
+            }
 
-        em.place(after_accumulate);
-        Ok(())
-    };
+            em.place(after_accumulate);
+            Ok(())
+        };
 
     // #279: no `Sorter` runs on this branch, so — matching
     // `try_compile_index_ordered_group_by`'s own convention — reuse the
     // sort cursor number for the range seek's index cursor.
     let range_index_cursor = cursors.sort;
-    let used_range_seek = match &select.where_clause {
-        Some(where_expr) => try_compile_range_row_seek(
+    let used_range_seek = match (&select.where_clause, covering) {
+        (Some(where_expr), Some(key_order)) => {
+            let index_schema = Rc::new(compact_schema(schema, &key_order)?);
+            let index_scope = Scope::single_shared(&index_schema, range_index_cursor)
+                .with_catalog(catalog)
+                .with_hoisted(Rc::clone(&table_scope.hoisted));
+            let positions = compact_index_map(&key_order, schema.columns.len());
+            try_compile_range_row_seek(
+                em,
+                reg,
+                where_expr,
+                schema,
+                &table_scope,
+                range_index_cursor,
+                tail_label,
+                &mut |em, reg, index_cursor, _row_skip| {
+                    accumulate_row(
+                        em,
+                        reg,
+                        &index_scope,
+                        &index_schema,
+                        index_cursor,
+                        &positions,
+                    )
+                },
+            )?
+        }
+        (Some(where_expr), None) => try_compile_range_row_seek(
             em,
             reg,
             where_expr,
@@ -506,10 +576,17 @@ where
                     rowid_reg,
                 ));
                 em.patch_p2(seek_addr, row_skip);
-                accumulate_row(em, reg)
+                accumulate_row(
+                    em,
+                    reg,
+                    &table_scope,
+                    schema,
+                    cursors.table,
+                    &identity_positions,
+                )
             },
         )?,
-        None => false,
+        (None, _) => false,
     };
 
     if !used_range_seek {
@@ -528,7 +605,14 @@ where
                 CondTargets::null_is_false(Target::Fallthrough, Target::Jump(scan_skip)),
             )?;
         }
-        accumulate_row(em, reg)?;
+        accumulate_row(
+            em,
+            reg,
+            &table_scope,
+            schema,
+            cursors.table,
+            &identity_positions,
+        )?;
 
         em.place(scan_skip);
         let scan_next = em.emit(Instruction::new(Opcode::Next, cursors.table, 0, 0));
@@ -553,6 +637,67 @@ where
         sink,
     )?;
     Ok(true)
+}
+
+/// #484: the index [`try_compile_direct_agg_scan`]'s range seek walks
+/// for `where_expr`, as the ordered list of `schema` column indices
+/// making up its key, when that walk is *covering* — every column in
+/// `needed` (the select list/`HAVING`'s reads, per
+/// [`columns_needed_for_projection`]) is one of the index's key columns.
+/// The `WHERE` itself is fully consumed by the seek, so nothing else
+/// ever reads the table row, and the per-entry `IdxRowid` +
+/// `SeekRowid` can go. `None` when the seek doesn't fire at all
+/// (`range_row_seek_index_position`), when a needed column is outside
+/// the key, when the table's rowid alias is needed (an index key
+/// column is never itself the rowid alias, and the rowid lives in the
+/// entry's trailing position, which this path doesn't read), or when
+/// a key column is an expression rather than a table column.
+fn covering_range_index(
+    where_expr: &Expr,
+    schema: &TableSchema,
+    needed: &std::collections::HashSet<usize>,
+    catalog: &[TableSchema],
+) -> Option<Vec<usize>> {
+    let index_position =
+        super::range_scan::range_row_seek_index_position(where_expr, schema, catalog)?;
+    let index = schema.indexes.get(index_position)?;
+    let key_order: Vec<usize> = index
+        .columns
+        .iter()
+        .map(|key| {
+            schema
+                .columns
+                .iter()
+                .position(|c| c.eq_ignore_ascii_case(&key.name))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let covered = needed
+        .iter()
+        .all(|idx| schema.rowid_alias != Some(*idx) && key_order.contains(idx));
+    covered.then_some(key_order)
+}
+
+/// #484: whether [`try_compile_direct_agg_scan`] walks `select`'s range
+/// seek as a covering index (no table lookup) — the eligibility half of
+/// that path, for `eqp.rs`'s `USING COVERING INDEX` wording (#282).
+pub(super) fn direct_agg_range_seek_is_covering(
+    select: &Select,
+    schema: &TableSchema,
+    catalog: &[TableSchema],
+) -> bool {
+    let Some(where_expr) = &select.where_clause else {
+        return false;
+    };
+    // A `DISTINCT` aggregate sends the query to `compile_grouped_scan`
+    // instead (see `try_compile_direct_agg_scan`'s first bail), whose
+    // range seek always fetches the table row.
+    let has_distinct_agg = collect_aggregates(select)
+        .is_ok_and(|aggs| aggs.iter().any(|(_, _, _, distinct)| *distinct));
+    if has_distinct_agg {
+        return false;
+    }
+    let needed = columns_needed_for_projection(select, schema);
+    covering_range_index(where_expr, schema, &needed, catalog).is_some()
 }
 
 /// #506: which of `schema`'s columns [`compile_grouped_scan`]'s pass 1
@@ -1815,6 +1960,108 @@ mod mcdc_vectors {
         let p = ok("SELECT count(*) FROM t WHERE a > (5 + 1)", &[t_indexed_a()]);
         assert!(has(&p, Opcode::SeekIndexGE));
         assert!(!has(&p, Opcode::Rewind));
+    }
+
+    // ---------------------------------------------------------------------
+    // #484 -- `try_compile_direct_agg_scan` snapshots only the columns the
+    // select list reads, and walks the range seek's index as a covering
+    // index (no `IdxRowid`/`SeekRowid`, no table-cursor reads) when that
+    // key holds every column read.
+    // ---------------------------------------------------------------------
+    /// `Column`/`Rowid` reads against the table cursor (0).
+    fn table_reads(program: &Program) -> usize {
+        program
+            .instructions
+            .iter()
+            .filter(|i| matches!(i.opcode, Opcode::Column | Opcode::Rowid) && i.p1 == 0)
+            .count()
+    }
+
+    #[test]
+    fn covering_484_count_star_over_range_never_touches_the_table() {
+        let p = ok("SELECT count(*) FROM t WHERE a > 5", &[t_indexed_a()]);
+        assert!(has(&p, Opcode::SeekIndexGE));
+        assert!(!has(&p, Opcode::SeekRowid), "{p:?}");
+        assert!(!has(&p, Opcode::IdxRowid), "{p:?}");
+        assert_eq!(table_reads(&p), 0, "{p:?}");
+    }
+
+    #[test]
+    fn covering_484_aggregate_of_the_key_column_reads_the_index_entry() {
+        let p = ok(
+            "SELECT sum(a), max(a) FROM t WHERE a BETWEEN 1 AND 10",
+            &[t_indexed_a()],
+        );
+        assert!(has(&p, Opcode::SeekIndexGE));
+        assert!(!has(&p, Opcode::SeekRowid), "{p:?}");
+        assert_eq!(table_reads(&p), 0, "{p:?}");
+        // `a` is key position 0 of `ia`, read off the index cursor (1).
+        assert!(
+            p.instructions
+                .iter()
+                .any(|i| i.opcode == Opcode::Column && i.p1 == 1 && i.p2 == 0),
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn covering_484_bare_key_column_is_snapshotted_off_the_index() {
+        let p = ok("SELECT count(*), a FROM t WHERE a > 5", &[t_indexed_a()]);
+        assert!(!has(&p, Opcode::SeekRowid), "{p:?}");
+        assert_eq!(table_reads(&p), 0, "{p:?}");
+        assert!(
+            p.instructions
+                .iter()
+                .any(|i| i.opcode == Opcode::Column && i.p1 == 1 && i.p2 == 0),
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn covering_484_non_key_column_still_seeks_the_table_row_but_only_for_needed_columns() {
+        let p = ok("SELECT sum(b) FROM t WHERE a > 5", &[t_indexed_a()]);
+        assert!(has(&p, Opcode::SeekIndexGE));
+        assert!(has(&p, Opcode::SeekRowid), "{p:?}");
+        // `sum(b)` reads `b` (column 1) twice (reset + fold arms); the
+        // snapshot no longer reads `a` or `b` since neither is a bare
+        // result column.
+        assert!(
+            p.instructions
+                .iter()
+                .filter(|i| i.opcode == Opcode::Column && i.p1 == 0)
+                .all(|i| i.p2 == 1),
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn covering_484_rowid_alias_read_keeps_the_table_lookup() {
+        let mut schema = t_indexed_a();
+        schema.rowid_alias = Some(1);
+        let p = ok("SELECT count(*), b FROM t WHERE a > 5", &[schema]);
+        assert!(has(&p, Opcode::SeekRowid), "{p:?}");
+        assert!(has(&p, Opcode::Rowid), "{p:?}");
+    }
+
+    #[test]
+    fn covering_484_star_result_reads_every_column_off_the_table() {
+        let p = ok("SELECT count(*), * FROM t WHERE a > 5", &[t_indexed_a()]);
+        assert!(has(&p, Opcode::SeekRowid), "{p:?}");
+        assert_eq!(table_reads(&p), 2, "{p:?}");
+    }
+
+    #[test]
+    fn covering_484_full_scan_fallback_prunes_dead_snapshot_columns() {
+        let p = ok("SELECT count(*) FROM t WHERE b > 5", &[t_indexed_a()]);
+        assert!(has(&p, Opcode::Rewind));
+        // Only the WHERE's own `b` read remains on the table cursor.
+        assert!(
+            p.instructions
+                .iter()
+                .filter(|i| matches!(i.opcode, Opcode::Column | Opcode::Rowid) && i.p1 == 0)
+                .all(|i| i.opcode == Opcode::Column && i.p2 == 1),
+            "{p:?}"
+        );
     }
 
     // ---------------------------------------------------------------------

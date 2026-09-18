@@ -549,12 +549,22 @@ fn aggregate_index_walk_detail(
                         "SCAN {table_display} USING COVERING INDEX {}",
                         index_name(index_position)?
                     ))),
-                    None => Ok(aggregate_range_seek_detail(
-                        select,
-                        schema,
-                        table_display,
-                        catalog,
-                    )),
+                    None => Ok(
+                        aggregate_range_seek_detail(select, schema, table_display, catalog).map(
+                            |detail| {
+                                // #484: `try_compile_direct_agg_scan` drops the
+                                // per-entry table lookup when the index key
+                                // covers every column the query reads.
+                                if super::aggregate::direct_agg_range_seek_is_covering(
+                                    select, schema, catalog,
+                                ) {
+                                    detail.replacen("USING INDEX", "USING COVERING INDEX", 1)
+                                } else {
+                                    detail
+                                }
+                            },
+                        ),
+                    ),
                 },
             }
         }
@@ -1115,10 +1125,19 @@ mod mcdc_vectors {
     /// recognize stays a scan.
     #[test]
     fn aggregate_over_range_predicate_reports_the_compiled_seek() {
+        // #484: `count(*)` reads no table column, so the seek is a
+        // covering index walk; `sum(a)` still needs `a` off the table row.
         let d = eqp_details("SELECT count(*) FROM t WHERE b > 5");
-        assert_eq!(d[0], "SEARCH t USING INDEX ib (b>?)", "{d:?}");
+        assert_eq!(d[0], "SEARCH t USING COVERING INDEX ib (b>?)", "{d:?}");
         let d = eqp_details("SELECT sum(a) FROM t WHERE b BETWEEN 1 AND 5");
         assert_eq!(d[0], "SEARCH t USING INDEX ib (b>? AND b<?)", "{d:?}");
+        let d = eqp_details("SELECT sum(b) FROM t WHERE b BETWEEN 1 AND 5");
+        assert_eq!(
+            d[0], "SEARCH t USING COVERING INDEX ib (b>? AND b<?)",
+            "{d:?}"
+        );
+        let d = eqp_details("SELECT count(DISTINCT a) FROM t WHERE b > 5");
+        assert_eq!(d[0], "SEARCH t USING INDEX ib (b>?)", "{d:?}");
         let d = eqp_details("SELECT a, count(*) FROM t WHERE b > 5 GROUP BY a");
         assert_eq!(d[0], "SEARCH t USING INDEX ib (b>?)", "{d:?}");
         let d = eqp_details("SELECT count(*) FROM t WHERE b IN (1, 2)");
@@ -1161,7 +1180,7 @@ mod mcdc_vectors {
         assert_eq!(
             details,
             [
-                "SEARCH t USING INDEX ib (b>?)",
+                "SEARCH t USING COVERING INDEX ib (b>?)",
                 "SCALAR SUBQUERY 1",
                 "SCAN t USING COVERING INDEX ib"
             ],
