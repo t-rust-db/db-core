@@ -4,12 +4,19 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.113.0] - 2026-09-18
+
+### Added
+
+- **`sqlite_stat4` histograms decide seek versus scan for a range predicate, exactly as sqlite3 does** (#498, item 3 of #484 re-scoped): `engine::row::stats::load_stats` now also reads `sqlite_stat4` (per-index samples with their `neq`/`nlt`/`ndlt` counts), and `codegen::row::planner` carries a port of sqlite3's cost model in its own `LogEst` units -- `whereKeyStats`/`whereRangeScanEst` (sample bisection with the 1/3 and 2/3 gap rounding, the same-gap quarter rule, the fixed 1/4 and 1/64 defaults for a bound the histogram cannot see), `estimateTableWidth`/`estimateIndexWidth` from declared types (`sz=` hints honoured), and the `whereLoopAddBtree`/`whereLoopAddBtreeIndex` costs with sqlite3's tie rule. `range_seek_beats_scan` gates every `BETWEEN`/forward-comparison range seek in `range_scan.rs` -- direct scan, aggregate and EXPLAIN QUERY PLAN in lockstep -- so on a file real sqlite3 has analyzed, a wide closed range now plans as `SCAN` where the oracle does (`sum(f) WHERE x BETWEEN 1000 AND 60000` on the 50 MB bench fixture: 727 ms as an index seek, 325 ms as the scan sqlite3 also picks) and a narrow or single-sided one still seeks. Reproduces all 14 plan choices probed against sqlite3 3.53.4 on two analyzed files, including the one-unit tie on `x > 50000`. Without `stat4` (never analyzed, or analyzed by our own `stat1`-only `ANALYZE`) nothing changes, which is also sqlite3's behaviour. New fixture `tests/fixtures/btrees/stat4_range.db` (sqlite3-analyzed). UPDATE's row seek and equality probes are not gated; the sqlite-rs CLI still uses its own `stat1`-only loader and does not yet see this (follow-up there).
+
 ## [0.112.0] - 2026-09-18
 
 ### Changed
 
 - **Aggregate expressions** (#496): `SUM(amount * 2)` (an expression inside an aggregate's argument) and `SUM(x) * 2` / `SUM(x) + SUM(y)` / `SUM(x) / COUNT(*)` (an aggregate composed with arithmetic, including alongside `GROUP BY`) now compile, where both were previously rejected. `vm::batch::AggPart` gains `Hidden` (a merged aggregate that isn't itself an output column) and `Expr` (a post-`Combine` scalar op over two `AggOperand`s), generalizing the `Avg` finalize hook to arbitrary aggregate arithmetic; both stay `Copy` so the AOT-emitted `const PROGRAM` path is unaffected. Nested aggregates and aggregates in `WHERE` are still rejected, each with its own dedicated error message.
 
+||||||| parent of 9bbc801 (feat(codegen-row): sqlite_stat4 range estimates decide seek versus scan like sqlite3 (#498))
 ## [0.111.1] - 2026-09-18
 
 ### Fixed

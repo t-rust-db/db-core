@@ -280,7 +280,7 @@ where
         // (#407); its `vm::row` HashAgg* opcodes remain, now with no
         // emitter.
         return compile_grouped_scan(
-            em, reg, select, schema, cursors, end_label, catalog, false, None, sink,
+            em, reg, select, schema, cursors, end_label, catalog, false, None, stats, sink,
         );
     }
     // #287: no explicit GROUP BY, but the SELECT list/HAVING has an
@@ -312,12 +312,12 @@ where
             return Ok(());
         }
         if super::aggregate::try_compile_direct_agg_scan(
-            em, reg, select, schema, cursors, end_label, catalog, sink,
+            em, reg, select, schema, cursors, end_label, catalog, stats, sink,
         )? {
             return Ok(());
         }
         return compile_grouped_scan(
-            em, reg, select, schema, cursors, end_label, catalog, true, None, sink,
+            em, reg, select, schema, cursors, end_label, catalog, true, None, stats, sink,
         );
     }
     if select.having.is_some() {

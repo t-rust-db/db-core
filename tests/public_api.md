@@ -242,6 +242,14 @@ pub mod db_core::codegen::row::expr
 pub mod db_core::codegen::row::insert
 pub fn db_core::codegen::row::insert::compile_insert(&db_core::parser::ast::Insert, &db_core::schema::TableSchema, core::option::Option<&[db_core::schema::TableSchema]>) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub mod db_core::codegen::row::planner
+pub struct db_core::codegen::row::planner::IndexSamples
+impl core::clone::Clone for db_core::codegen::row::planner::IndexSamples
+pub fn db_core::codegen::row::planner::IndexSamples::clone(&self) -> db_core::codegen::row::planner::IndexSamples
+impl core::cmp::PartialEq for db_core::codegen::row::planner::IndexSamples
+pub fn db_core::codegen::row::planner::IndexSamples::eq(&self, &db_core::codegen::row::planner::IndexSamples) -> bool
+impl core::fmt::Debug for db_core::codegen::row::planner::IndexSamples
+pub fn db_core::codegen::row::planner::IndexSamples::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::IndexSamples
 pub struct db_core::codegen::row::planner::PlanCost
 pub db_core::codegen::row::planner::PlanCost::estimated_io: u64
 pub db_core::codegen::row::planner::PlanCost::estimated_rows: u64
@@ -254,14 +262,38 @@ impl core::fmt::Debug for db_core::codegen::row::planner::PlanCost
 pub fn db_core::codegen::row::planner::PlanCost::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::codegen::row::planner::PlanCost
 impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::PlanCost
+pub struct db_core::codegen::row::planner::RangeBound
+pub db_core::codegen::row::planner::RangeBound::inclusive: bool
+pub db_core::codegen::row::planner::RangeBound::value: core::option::Option<db_core::value::Value>
+impl core::clone::Clone for db_core::codegen::row::planner::RangeBound
+pub fn db_core::codegen::row::planner::RangeBound::clone(&self) -> db_core::codegen::row::planner::RangeBound
+impl core::cmp::PartialEq for db_core::codegen::row::planner::RangeBound
+pub fn db_core::codegen::row::planner::RangeBound::eq(&self, &db_core::codegen::row::planner::RangeBound) -> bool
+impl core::fmt::Debug for db_core::codegen::row::planner::RangeBound
+pub fn db_core::codegen::row::planner::RangeBound::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::RangeBound
+pub struct db_core::codegen::row::planner::Stat4Sample
+pub db_core::codegen::row::planner::Stat4Sample::key: alloc::vec::Vec<db_core::value::Value>
+pub db_core::codegen::row::planner::Stat4Sample::n_dlt: alloc::vec::Vec<u64>
+pub db_core::codegen::row::planner::Stat4Sample::n_eq: alloc::vec::Vec<u64>
+pub db_core::codegen::row::planner::Stat4Sample::n_lt: alloc::vec::Vec<u64>
+impl core::clone::Clone for db_core::codegen::row::planner::Stat4Sample
+pub fn db_core::codegen::row::planner::Stat4Sample::clone(&self) -> db_core::codegen::row::planner::Stat4Sample
+impl core::cmp::PartialEq for db_core::codegen::row::planner::Stat4Sample
+pub fn db_core::codegen::row::planner::Stat4Sample::eq(&self, &db_core::codegen::row::planner::Stat4Sample) -> bool
+impl core::fmt::Debug for db_core::codegen::row::planner::Stat4Sample
+pub fn db_core::codegen::row::planner::Stat4Sample::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::Stat4Sample
 pub struct db_core::codegen::row::planner::Stats
 impl db_core::codegen::row::planner::Stats
 pub fn db_core::codegen::row::planner::Stats::from_stat1_rows(impl core::iter::traits::collect::IntoIterator<Item = (core::option::Option<alloc::string::String>, alloc::string::String)>) -> Self
+pub fn db_core::codegen::row::planner::Stats::has_stat4(&self) -> bool
+pub fn db_core::codegen::row::planner::Stats::index_samples(&self, &str) -> core::option::Option<&db_core::codegen::row::planner::IndexSamples>
 pub fn db_core::codegen::row::planner::Stats::index_stats(&self, &str) -> core::option::Option<(u64, u64)>
 pub fn db_core::codegen::row::planner::Stats::table_rows(&self) -> core::option::Option<u64>
+pub fn db_core::codegen::row::planner::Stats::with_stat4_samples(self, &str, alloc::vec::Vec<db_core::codegen::row::planner::Stat4Sample>) -> Self
 impl core::clone::Clone for db_core::codegen::row::planner::Stats
 pub fn db_core::codegen::row::planner::Stats::clone(&self) -> db_core::codegen::row::planner::Stats
-impl core::cmp::Eq for db_core::codegen::row::planner::Stats
 impl core::cmp::PartialEq for db_core::codegen::row::planner::Stats
 pub fn db_core::codegen::row::planner::Stats::eq(&self, &db_core::codegen::row::planner::Stats) -> bool
 impl core::default::Default for db_core::codegen::row::planner::Stats
@@ -273,6 +305,10 @@ pub fn db_core::codegen::row::planner::estimate_index_cost(&str, &db_core::codeg
 pub fn db_core::codegen::row::planner::estimate_scan_cost(&db_core::codegen::row::planner::Stats) -> db_core::codegen::row::planner::PlanCost
 pub fn db_core::codegen::row::planner::is_automatic_index_worthwhile(&db_core::codegen::row::planner::Stats) -> bool
 pub fn db_core::codegen::row::planner::is_skip_scan_worthwhile(&str, &db_core::codegen::row::planner::Stats) -> bool
+pub fn db_core::codegen::row::planner::log_est(u64) -> db_core::codegen::row::planner::LogEst
+pub fn db_core::codegen::row::planner::log_est_add(db_core::codegen::row::planner::LogEst, db_core::codegen::row::planner::LogEst) -> db_core::codegen::row::planner::LogEst
+pub fn db_core::codegen::row::planner::range_seek_beats_scan(&db_core::schema::TableSchema, &db_core::schema::IndexSchema, core::option::Option<db_core::codegen::row::planner::RangeBound>, core::option::Option<db_core::codegen::row::planner::RangeBound>, bool, &db_core::codegen::row::planner::Stats) -> bool
+pub type db_core::codegen::row::planner::LogEst = i16
 pub mod db_core::codegen::row::pragma
 pub fn db_core::codegen::row::pragma::compile_pragma(&db_core::parser::ast::Pragma) -> db_core::vm::row::program::Program
 pub mod db_core::codegen::row::select
@@ -745,14 +781,28 @@ impl core::fmt::Debug for db_core::codegen::row::planner::PlanCost
 pub fn db_core::codegen::row::planner::PlanCost::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::codegen::row::planner::PlanCost
 impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::PlanCost
+pub struct db_core::engine::row::stats::Stat4Sample
+pub db_core::engine::row::stats::Stat4Sample::key: alloc::vec::Vec<db_core::value::Value>
+pub db_core::engine::row::stats::Stat4Sample::n_dlt: alloc::vec::Vec<u64>
+pub db_core::engine::row::stats::Stat4Sample::n_eq: alloc::vec::Vec<u64>
+pub db_core::engine::row::stats::Stat4Sample::n_lt: alloc::vec::Vec<u64>
+impl core::clone::Clone for db_core::codegen::row::planner::Stat4Sample
+pub fn db_core::codegen::row::planner::Stat4Sample::clone(&self) -> db_core::codegen::row::planner::Stat4Sample
+impl core::cmp::PartialEq for db_core::codegen::row::planner::Stat4Sample
+pub fn db_core::codegen::row::planner::Stat4Sample::eq(&self, &db_core::codegen::row::planner::Stat4Sample) -> bool
+impl core::fmt::Debug for db_core::codegen::row::planner::Stat4Sample
+pub fn db_core::codegen::row::planner::Stat4Sample::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::Stat4Sample
 pub struct db_core::engine::row::stats::Stats
 impl db_core::codegen::row::planner::Stats
 pub fn db_core::codegen::row::planner::Stats::from_stat1_rows(impl core::iter::traits::collect::IntoIterator<Item = (core::option::Option<alloc::string::String>, alloc::string::String)>) -> Self
+pub fn db_core::codegen::row::planner::Stats::has_stat4(&self) -> bool
+pub fn db_core::codegen::row::planner::Stats::index_samples(&self, &str) -> core::option::Option<&db_core::codegen::row::planner::IndexSamples>
 pub fn db_core::codegen::row::planner::Stats::index_stats(&self, &str) -> core::option::Option<(u64, u64)>
 pub fn db_core::codegen::row::planner::Stats::table_rows(&self) -> core::option::Option<u64>
+pub fn db_core::codegen::row::planner::Stats::with_stat4_samples(self, &str, alloc::vec::Vec<db_core::codegen::row::planner::Stat4Sample>) -> Self
 impl core::clone::Clone for db_core::codegen::row::planner::Stats
 pub fn db_core::codegen::row::planner::Stats::clone(&self) -> db_core::codegen::row::planner::Stats
-impl core::cmp::Eq for db_core::codegen::row::planner::Stats
 impl core::cmp::PartialEq for db_core::codegen::row::planner::Stats
 pub fn db_core::codegen::row::planner::Stats::eq(&self, &db_core::codegen::row::planner::Stats) -> bool
 impl core::default::Default for db_core::codegen::row::planner::Stats
@@ -764,7 +814,7 @@ pub fn db_core::engine::row::stats::estimate_index_cost(&str, &db_core::codegen:
 pub fn db_core::engine::row::stats::estimate_scan_cost(&db_core::codegen::row::planner::Stats) -> db_core::codegen::row::planner::PlanCost
 pub fn db_core::engine::row::stats::is_automatic_index_worthwhile(&db_core::codegen::row::planner::Stats) -> bool
 pub fn db_core::engine::row::stats::is_skip_scan_worthwhile(&str, &db_core::codegen::row::planner::Stats) -> bool
-pub fn db_core::engine::row::stats::load_stats<P: db_core::storage::row::vfs::PageSource>(P, &db_core::storage::row::header::DatabaseHeader, &[db_core::schema::TableSchema]) -> std::collections::hash::map::HashMap<alloc::string::String, db_core::codegen::row::planner::Stats>
+pub fn db_core::engine::row::stats::load_stats<P: db_core::storage::row::vfs::PageSource + core::marker::Copy>(P, &db_core::storage::row::header::DatabaseHeader, &[db_core::schema::TableSchema]) -> std::collections::hash::map::HashMap<alloc::string::String, db_core::codegen::row::planner::Stats>
 pub struct db_core::engine::row::RowEngine
 impl db_core::engine::row::RowEngine
 pub fn db_core::engine::row::RowEngine::header(&self) -> &db_core::storage::row::header::DatabaseHeader

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 pub use crate::codegen::row::planner::{
     estimate_index_cost, estimate_scan_cost, is_automatic_index_worthwhile,
-    is_skip_scan_worthwhile, PlanCost, Stats,
+    is_skip_scan_worthwhile, PlanCost, Stat4Sample, Stats,
 };
 
 /// Reads every table's `sqlite_stat1` rows in one pass and returns a
@@ -27,7 +27,7 @@ pub use crate::codegen::row::planner::{
 /// Malformed rows are skipped the same way [`Stats::from_stat1_rows`]
 /// skips malformed `stat` text — a corrupt `sqlite_stat1` degrades to
 /// "no stats for that entry", never a hard error.
-pub fn load_stats<P: PageSource>(
+pub fn load_stats<P: PageSource + Copy>(
     source: P,
     header: &DatabaseHeader,
     schemas: &[TableSchema],
@@ -38,6 +38,9 @@ pub fn load_stats<P: PageSource>(
     else {
         return HashMap::new();
     };
+    let stat4 = schemas
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case("sqlite_stat4"));
 
     let mut rows_by_table: HashMap<String, Vec<(Option<String>, String)>> = HashMap::new();
     let mut cursor = TableCursor::new(source, header, stat1.root_page);
@@ -68,10 +71,73 @@ pub fn load_stats<P: PageSource>(
         };
     }
 
-    rows_by_table
+    let mut stats: HashMap<String, Stats> = rows_by_table
         .into_iter()
         .map(|(tbl, rows)| (tbl, Stats::from_stat1_rows(rows)))
-        .collect()
+        .collect();
+
+    // #498: `sqlite_stat4` (`tbl, idx, neq, nlt, ndlt, sample`), written
+    // by a `SQLITE_ENABLE_STAT4` sqlite3's ANALYZE. Samples are grouped
+    // per index in stored order; a row we cannot decode is skipped, the
+    // same degrade-to-no-stats stance `from_stat1_rows` takes.
+    if let Some(stat4) = stat4 {
+        let mut samples: Vec<((String, String), Vec<Stat4Sample>)> = Vec::new();
+        let mut cursor = TableCursor::new(source, header, stat4.root_page);
+        let mut row = cursor.first_row().ok().flatten();
+        while let Some(r) = row {
+            if let Some((key, sample)) = decode_stat4_row(&r.payload, header.text_encoding) {
+                match samples.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, list)) => list.push(sample),
+                    None => samples.push((key, vec![sample])),
+                }
+            }
+            row = cursor.next_row().ok().flatten();
+        }
+        for ((tbl, idx), list) in samples {
+            let entry = stats.remove(&tbl).unwrap_or_default();
+            stats.insert(tbl, entry.with_stat4_samples(&idx, list));
+        }
+    }
+    stats
+}
+
+/// One `sqlite_stat4` row -> `((tbl, idx), sample)`. The three count
+/// columns are space-separated integers, one per key column; `sample`
+/// is an index record (key columns then the rowid), decoded here so the
+/// planner can compare a probe against it.
+fn decode_stat4_row(
+    payload: &[u8],
+    encoding: crate::value::TextEncoding,
+) -> Option<((String, String), Stat4Sample)> {
+    let values = decode_record(payload, encoding).ok()?;
+    let text = |i: usize| match values.get(i) {
+        Some(Value::Text(s)) => Some(s.to_string()),
+        _ => None,
+    };
+    let counts = |i: usize| -> Option<Vec<u64>> {
+        text(i)?
+            .split_whitespace()
+            .map(|w| w.parse::<u64>().ok())
+            .collect()
+    };
+    let tbl = text(0)?;
+    let idx = text(1)?;
+    let n_eq = counts(2)?;
+    let n_lt = counts(3)?;
+    let n_dlt = counts(4)?;
+    let key = match values.get(5) {
+        Some(Value::Blob(b)) => decode_record(b, encoding).ok()?,
+        _ => return None,
+    };
+    Some((
+        (tbl, idx),
+        Stat4Sample {
+            key,
+            n_eq,
+            n_lt,
+            n_dlt,
+        },
+    ))
 }
 
 #[cfg(test)]

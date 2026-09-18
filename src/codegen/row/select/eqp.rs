@@ -293,6 +293,8 @@ pub fn explain_query_plan(
                 select,
                 &eqp_display_name(table_ref),
                 catalog,
+                &binding.stats,
+                false,
             )
         } else {
             None
@@ -304,6 +306,7 @@ pub fn explain_query_plan(
                 dispatch,
                 &eqp_display_name(table_ref),
                 catalog,
+                &binding.stats,
             )?
         } else {
             None
@@ -513,6 +516,7 @@ fn aggregate_index_walk_detail(
     dispatch: ScanDispatch,
     table_display: &str,
     catalog: &[TableSchema],
+    stats: &super::super::planner::Stats,
 ) -> Result<Option<String>, CodegenError> {
     let index_name = |position: usize| {
         schema
@@ -549,22 +553,31 @@ fn aggregate_index_walk_detail(
                         "SCAN {table_display} USING COVERING INDEX {}",
                         index_name(index_position)?
                     ))),
-                    None => Ok(
-                        aggregate_range_seek_detail(select, schema, table_display, catalog).map(
-                            |detail| {
-                                // #484: `try_compile_direct_agg_scan` drops the
-                                // per-entry table lookup when the index key
-                                // covers every column the query reads.
-                                if super::aggregate::direct_agg_range_seek_is_covering(
-                                    select, schema, catalog,
-                                ) {
-                                    detail.replacen("USING INDEX", "USING COVERING INDEX", 1)
-                                } else {
-                                    detail
-                                }
-                            },
-                        ),
-                    ),
+                    None => {
+                        // #484: `try_compile_direct_agg_scan` drops the
+                        // per-entry table lookup when the index key
+                        // covers every column the query reads; #498's
+                        // seek-versus-scan gate is evaluated for that
+                        // same walk.
+                        let covering = super::aggregate::direct_agg_range_seek_is_covering(
+                            select, schema, catalog, stats,
+                        );
+                        Ok(aggregate_range_seek_detail(
+                            select,
+                            schema,
+                            table_display,
+                            catalog,
+                            stats,
+                            covering,
+                        )
+                        .map(|detail| {
+                            if covering {
+                                detail.replacen("USING INDEX", "USING COVERING INDEX", 1)
+                            } else {
+                                detail
+                            }
+                        }))
+                    }
                 },
             }
         }
@@ -579,6 +592,8 @@ fn aggregate_index_walk_detail(
                     schema,
                     table_display,
                     catalog,
+                    stats,
+                    false,
                 )),
             }
         }
@@ -596,10 +611,19 @@ fn aggregate_range_seek_detail(
     schema: &TableSchema,
     table_display: &str,
     catalog: &[TableSchema],
+    stats: &super::super::planner::Stats,
+    covering: bool,
 ) -> Option<String> {
     let where_expr = select.where_clause.as_ref()?;
-    super::range_scan::range_row_seek_index_position(where_expr, schema, catalog)?;
-    super::range_scan::find_range_seek_detail(schema, select, table_display, catalog)
+    super::range_scan::range_row_seek_index_position(where_expr, schema, catalog, stats, covering)?;
+    super::range_scan::find_range_seek_detail(
+        schema,
+        select,
+        table_display,
+        catalog,
+        stats,
+        covering,
+    )
 }
 
 /// Appends a `SCALAR SUBQUERY n` node (#282) for `inner` -- a scalar

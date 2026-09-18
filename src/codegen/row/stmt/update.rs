@@ -43,6 +43,7 @@ use crate::codegen::row::first_reg;
 use crate::codegen::row::index_maintenance::{
     emit_index_key_ops, emit_index_key_ops_from_regs, open_index_cursors, valid_table_root_page,
 };
+use crate::codegen::row::planner::Stats;
 use crate::codegen::row::select::{
     is_rowid_reference, range_seek_index_position, top_level_equality_operands,
     try_compile_range_row_seek, CodegenError,
@@ -228,7 +229,11 @@ pub fn compile_update_with_catalog(
     let range_seek_touches_scanned_index = update
         .where_clause
         .as_ref()
-        .and_then(|where_expr| range_seek_index_position(where_expr, schema, catalog))
+        // #498: UPDATE's row seek is not stats-gated (no stats reach
+        // `compile_update`), so the ungated eligibility is the right one.
+        .and_then(|where_expr| {
+            range_seek_index_position(where_expr, schema, catalog, &Stats::default())
+        })
         .and_then(|position| schema.indexes.get(position))
         .is_some_and(|index| {
             index.columns.iter().any(|c| {
@@ -257,6 +262,8 @@ pub fn compile_update_with_catalog(
                 &scope,
                 range_index_cursor,
                 pass1_done,
+                &Stats::default(),
+                false,
                 &mut |em, reg, index_cursor, _row_skip| {
                     let rowid_reg = reg.alloc();
                     em.emit(Instruction::new(
@@ -308,6 +315,8 @@ pub fn compile_update_with_catalog(
                 &scope,
                 range_index_cursor,
                 end_label,
+                &Stats::default(),
+                false,
                 &mut |em, reg, index_cursor, row_skip| {
                     let rowid_reg = reg.alloc();
                     em.emit(Instruction::new(
