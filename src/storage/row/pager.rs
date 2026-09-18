@@ -284,6 +284,20 @@ pub struct Pager {
     /// cache never needs to be "perfectly" invalidated — only cheaply
     /// invalidated at the points where staleness is certain.
     wal_resume: Option<wal::WalResumeHint>,
+    /// The [`wal::WalWriter`] -- and with it the open `-wal` file handle --
+    /// kept from one WAL commit to the next (#487). Reopening the `-wal`
+    /// per commit was not a syscall-count problem but an APFS one: an
+    /// `open`/`close` of a file around its `fsync`, even read-only, makes
+    /// that fsync ~20x slower (1.8 ms vs 0.08 ms measured, with a tail to
+    /// 20 ms) -- the entire WAL-vs-journal gap the issue reports, and why
+    /// sqlite3 keeps its WAL handle open for the connection's lifetime.
+    /// Trusted on the next commit only if one `stat` of the path agrees
+    /// with it ([`wal::WalWriter::is_current`]: same file identity, size
+    /// equal to the writer's offset), so a `-wal` deleted, recreated,
+    /// reset or extended by another process is always noticed and the
+    /// writer reopened the slow way; reset to `None` at the same three
+    /// sites `wal_shm`/`wal_resume` are, and dropped on any failed commit.
+    wal_writer: Option<wal::WalWriter>,
     source: WritablePageSource,
     /// Committed WAL overlay pages, shared as `Rc<[u8]>` so a read hit
     /// hands out a refcount bump instead of copying `page_size` bytes
@@ -444,6 +458,7 @@ impl Pager {
             wal_lock,
             wal_shm: None,
             wal_resume: None,
+            wal_writer: None,
             source,
             wal_pages,
             dirty: HashMap::new(),
@@ -697,7 +712,7 @@ impl Pager {
             shm.claim_write_lock()?;
         }
 
-        let outcome = (|| -> Result<(), PagerError> {
+        let outcome = (|| -> Result<wal::WalWriter, PagerError> {
             // The post-transaction page count: layered through
             // `self.dirty` (this transaction's own edit to page 1, if
             // any) then `self.wal_pages` (a prior WAL commit's value)
@@ -708,21 +723,36 @@ impl Pager {
             // checkpoint backfills them.
             let post_page_count = read_be_u32(&self.read_page(1)?, PAGE_COUNT_OFFSET)?;
 
-            let mut writer = match wal::WalWriter::open_existing(
-                &self.vfs,
-                &wal_path,
-                self.page_size,
-                self.wal_resume.as_ref(),
-            ) {
-                Ok(writer) => writer,
-                // The `-wal` this `Pager` believed was live has vanished —
-                // e.g. a concurrent `sqlite3` connection auto-checkpointed
-                // and deleted `-wal`/`-shm` on close (#422). `journal_mode`
-                // still says `Wal` (this closure only ever runs from that
-                // branch), so recover exactly as `switch_journal_to_wal`
-                // creates one from scratch, rather than failing the commit.
-                Err(wal::WalError::Vfs(VfsError::NotFound { .. })) => self.recreate_wal_locked()?,
-                Err(source) => return Err(to_pager_error(source)),
+            // #487: reuse last commit's writer (and its open fd) when one
+            // `stat` says the path still names that very file at exactly
+            // the length the writer left it; otherwise fall back to
+            // reopening -- the resume hint (ADR-0027) then still skips the
+            // rescan when only the handle, not the file, is stale.
+            let stat = self.vfs.stat(&wal_path)?;
+            let cached = self
+                .wal_writer
+                .take()
+                .filter(|writer| stat.as_ref().is_some_and(|stat| writer.is_current(stat)));
+            let mut writer = match cached {
+                Some(writer) => writer,
+                None => match wal::WalWriter::open_existing(
+                    &self.vfs,
+                    &wal_path,
+                    self.page_size,
+                    self.wal_resume.as_ref(),
+                ) {
+                    Ok(writer) => writer,
+                    // The `-wal` this `Pager` believed was live has vanished —
+                    // e.g. a concurrent `sqlite3` connection auto-checkpointed
+                    // and deleted `-wal`/`-shm` on close (#422). `journal_mode`
+                    // still says `Wal` (this closure only ever runs from that
+                    // branch), so recover exactly as `switch_journal_to_wal`
+                    // creates one from scratch, rather than failing the commit.
+                    Err(wal::WalError::Vfs(VfsError::NotFound { .. })) => {
+                        self.recreate_wal_locked()?
+                    }
+                    Err(source) => return Err(to_pager_error(source)),
+                },
             };
 
             let last_index = page_nums.len().saturating_sub(1);
@@ -738,10 +768,14 @@ impl Pager {
                         .map_err(to_pager_error)?;
                 }
             }
-            // `PRAGMA synchronous` (#645): `Full` fsyncs the WAL on every
-            // commit; `Normal`/`Off` don't — matching stock SQLite's
+            // The frames always reach the file; `PRAGMA synchronous`
+            // (#645) only decides whether this commit also fsyncs them:
+            // `Full` does, `Normal`/`Off` don't — matching stock SQLite's
             // documented WAL+NORMAL behavior of only syncing at
-            // checkpoint boundaries (ADR-0036).
+            // checkpoint boundaries (ADR-0036). (Before #487, `Normal`
+            // skipped the write as well and published `mxFrame` for
+            // frames that were never on disk.)
+            writer.write_pending().map_err(to_pager_error)?;
             if self.synchronous == SynchronousMode::Full {
                 writer.sync().map_err(to_pager_error)?;
             }
@@ -752,7 +786,7 @@ impl Pager {
                 Some(shm) => shm.publish_mx_frame(new_mx_frame)?,
                 None => self.vfs.publish_wal_mx_frame(&self.db_path, new_mx_frame)?,
             }
-            Ok(())
+            Ok(writer)
         })();
 
         // Always release the write lock, success or failure, before
@@ -763,7 +797,9 @@ impl Pager {
             shm.release_write_lock().ok();
         }
         drop(fallback_guard);
-        outcome?;
+        // A failed commit leaves `wal_writer` as `None` (taken above): the
+        // next commit reopens and re-derives its position from the file.
+        self.wal_writer = Some(outcome?);
 
         for page_num in page_nums {
             if let Some(bytes) = self.dirty.remove(&page_num) {
@@ -880,6 +916,7 @@ impl Pager {
         shm_file.sync()?;
 
         self.wal_shm = self.vfs.open_wal_shm(&self.db_path)?;
+        self.wal_writer = None;
         // The resume hint (ADR-0027), if any, described the now-deleted
         // generation of `-wal`; `flush_wal_locked` overwrites this with
         // the fresh writer's own hint once its commit succeeds, but
@@ -909,7 +946,8 @@ impl Pager {
         let salt1 = random_nonce();
         let salt2 = random_nonce() ^ 0x5A5A_5A5A;
         let header = wal::WalHeader::new(true, self.page_size, salt1, salt2, 1);
-        wal::WalWriter::create(&self.vfs, &wal_path, header).map_err(to_pager_error)?;
+        let writer =
+            wal::WalWriter::create(&self.vfs, &wal_path, header).map_err(to_pager_error)?;
 
         // Written through the abstract `Vfs` trait, not the raw
         // `std::fs` helpers `src/vfs/shm.rs`'s locking functions use —
@@ -928,6 +966,10 @@ impl Pager {
         // exists.
         self.wal_shm = None;
         self.wal_resume = None;
+        // The writer that just created the file is the first commit's
+        // writer (#487): its fd stays open, so even the first WAL commit
+        // skips the reopen.
+        self.wal_writer = Some(writer);
         Ok(())
     }
 
@@ -972,6 +1014,9 @@ impl Pager {
             return Err(PagerError::CheckpointIncomplete);
         }
 
+        // Drop the cached writer's handle before deleting the file it is
+        // open on (#487).
+        self.wal_writer = None;
         self.vfs.delete(&wal_path)?;
         self.vfs.delete(&shm_path)?;
         self.wal_pages.clear();
@@ -2384,5 +2429,117 @@ mod tests {
         let pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
         assert_eq!(pager.read_page(1).unwrap(), Rc::from(vec![1u8; 512]));
         assert_eq!(pager.read_page(2).unwrap(), Rc::from(vec![2u8; 512]));
+    }
+
+    /// #487: after the first WAL commit, further commits reuse the cached
+    /// `WalWriter` -- no file is opened at all, and `synchronous=FULL`
+    /// fsyncs exactly once per commit -- while every frame still lands in
+    /// the `-wal` where a reader finds it.
+    #[test]
+    fn wal_commits_after_the_first_open_no_file_and_fsync_once() {
+        let mut vfs = MemoryVfs::new();
+        let mut contents = vec![1u8; 512];
+        write_be_u32(&mut contents, PAGE_COUNT_OFFSET, 4).unwrap();
+        contents.extend(vec![2u8; 512 * 3]);
+        vfs.insert("/test.db", contents);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        pager.set_journal_mode(JournalMode::Wal).unwrap();
+        pager.get_page_mut(2).unwrap().fill(9u8);
+        pager.flush().unwrap();
+
+        let (opens, syncs) = (vfs.open_calls(), vfs.sync_calls());
+        pager.get_page_mut(3).unwrap().fill(8u8);
+        pager.flush().unwrap();
+        pager.get_page_mut(4).unwrap().fill(7u8);
+        pager.flush().unwrap();
+        assert_eq!(vfs.open_calls() - opens, 0, "no open per commit");
+        assert_eq!(vfs.sync_calls() - syncs, 2, "one fsync per commit");
+
+        let wal_file = vfs.open_read(Path::new("/test.db-wal")).unwrap();
+        let mut wal_bytes = vec![0u8; wal_file.size().unwrap() as usize];
+        wal_file.read_at(&mut wal_bytes, 0).unwrap();
+        let header = wal::WalHeader::parse(&wal_bytes).unwrap();
+        let (pages, _) = wal::committed_pages(&header, &wal_bytes);
+        assert_eq!(pages.get(&2), Some(&vec![9u8; 512]));
+        assert_eq!(pages.get(&3), Some(&vec![8u8; 512]));
+        assert_eq!(pages.get(&4), Some(&vec![7u8; 512]));
+        assert_eq!(pager.read_page(4).unwrap(), Rc::from(vec![7u8; 512]));
+    }
+
+    /// #487: a `-wal` deleted and recreated by another process between two
+    /// of our commits has the same name and can have the same size -- but
+    /// a different identity. The cached writer must not append into the
+    /// orphaned old file; the next commit reopens and lands in the new one.
+    #[test]
+    fn wal_writer_cache_is_dropped_when_another_process_replaces_the_wal() {
+        let mut vfs = MemoryVfs::new();
+        let mut contents = vec![1u8; 512];
+        write_be_u32(&mut contents, PAGE_COUNT_OFFSET, 3).unwrap();
+        contents.extend(vec![2u8; 512 * 2]);
+        vfs.insert("/test.db", contents);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        pager.set_journal_mode(JournalMode::Wal).unwrap();
+        pager.get_page_mut(2).unwrap().fill(9u8);
+        pager.flush().unwrap();
+
+        // "Another process" recreates the file with identical bytes: same
+        // path, same size, same header -- a new file object nonetheless.
+        let wal_file = vfs.open_read(Path::new("/test.db-wal")).unwrap();
+        let mut wal_bytes = vec![0u8; wal_file.size().unwrap() as usize];
+        wal_file.read_at(&mut wal_bytes, 0).unwrap();
+        drop(wal_file);
+        vfs.insert("/test.db-wal", wal_bytes);
+
+        let opens = vfs.open_calls();
+        pager.get_page_mut(3).unwrap().fill(8u8);
+        pager.flush().unwrap();
+        assert!(
+            vfs.open_calls() > opens,
+            "the replaced file forced a reopen"
+        );
+
+        let wal_file = vfs.open_read(Path::new("/test.db-wal")).unwrap();
+        let mut wal_bytes = vec![0u8; wal_file.size().unwrap() as usize];
+        wal_file.read_at(&mut wal_bytes, 0).unwrap();
+        let header = wal::WalHeader::parse(&wal_bytes).unwrap();
+        let (pages, _) = wal::committed_pages(&header, &wal_bytes);
+        assert_eq!(
+            pages.get(&3),
+            Some(&vec![8u8; 512]),
+            "commit landed in the new file"
+        );
+    }
+
+    /// #645 + #487: `Normal` skips the fsync, not the write -- the frames
+    /// must be in the `-wal` after the commit. (Before #487 they were only
+    /// written by `sync()`, so a `Normal` commit published `mxFrame` for
+    /// frames that never reached the file.)
+    #[test]
+    fn synchronous_normal_still_writes_the_frames_to_the_wal() {
+        let mut vfs = MemoryVfs::new();
+        let mut contents = vec![1u8; 512];
+        write_be_u32(&mut contents, PAGE_COUNT_OFFSET, 2).unwrap();
+        contents.extend(vec![2u8; 512]);
+        vfs.insert("/test.db", contents);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        pager.set_journal_mode(JournalMode::Wal).unwrap();
+        pager.set_synchronous(SynchronousMode::Normal);
+
+        pager.get_page_mut(2).unwrap().fill(9u8);
+        let before = vfs.sync_calls();
+        pager.flush().unwrap();
+        assert_eq!(vfs.sync_calls() - before, 0);
+
+        let wal_file = vfs.open_read(Path::new("/test.db-wal")).unwrap();
+        let mut wal_bytes = vec![0u8; wal_file.size().unwrap() as usize];
+        wal_file.read_at(&mut wal_bytes, 0).unwrap();
+        let header = wal::WalHeader::parse(&wal_bytes).unwrap();
+        let (pages, db_size) = wal::committed_pages(&header, &wal_bytes);
+        assert_eq!(db_size, 2);
+        assert_eq!(
+            pages.get(&2),
+            Some(&vec![9u8; 512]),
+            "frame written without fsync"
+        );
     }
 }

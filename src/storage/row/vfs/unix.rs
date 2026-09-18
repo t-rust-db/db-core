@@ -8,7 +8,9 @@ use std::rc::Rc;
 
 use super::fcntl::{EACCES, EAGAIN};
 
-use super::{companion_path, lock, shm, FileLock, Result, SharedLockGuard, Vfs, VfsError, VfsFile};
+use super::{
+    companion_path, lock, shm, FileLock, FileStat, Result, SharedLockGuard, Vfs, VfsError, VfsFile,
+};
 
 /// Reads database files directly from the local filesystem via `std::fs`.
 #[derive(Debug, Default, Clone, Copy)]
@@ -32,6 +34,18 @@ impl Vfs for UnixVfs {
     fn exists(&self, path: &Path) -> Result<bool> {
         path.try_exists()
             .map_err(|source| to_vfs_error(path, source))
+    }
+
+    fn stat(&self, path: &Path) -> Result<Option<FileStat>> {
+        use std::os::unix::fs::MetadataExt;
+        match std::fs::metadata(path) {
+            Ok(meta) => Ok(Some(FileStat {
+                identity: meta.ino(),
+                size: meta.len(),
+            })),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(to_vfs_error(path, source)),
+        }
     }
 
     fn create_or_open_write(&self, path: &Path) -> Result<Box<dyn VfsFile>> {

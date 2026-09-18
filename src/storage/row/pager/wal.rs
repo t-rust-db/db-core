@@ -34,7 +34,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::storage::row::vfs::{AnyVfs, AnyVfsFile, VfsError};
+use crate::storage::row::vfs::{AnyVfs, AnyVfsFile, FileStat, VfsError};
 
 /// Fixed size, in bytes, of the WAL header (see the module doc's byte
 /// layout).
@@ -449,6 +449,12 @@ fn last_valid_frame_state(header: &WalHeader, wal_bytes: &[u8]) -> (u64, (u32, u
 /// does not end a transaction, matching the read path's convention.
 pub struct WalWriter {
     file: AnyVfsFile,
+    /// [`FileStat::identity`] of the `-wal` this writer's `file` was
+    /// opened on (#487), so a `Pager` keeping the writer across commits
+    /// can tell -- from one `stat`, without opening the path -- whether
+    /// the path still names this file. `0` when the backend reported no
+    /// stat, which just means the cache is never trusted.
+    identity: u64,
     header: WalHeader,
     running: (u32, u32),
     offset: u64,
@@ -484,13 +490,21 @@ pub struct WalResumeHint {
     expected_size: u64,
 }
 
+/// The identity of the file currently at `path`, or `0` if the backend
+/// reports none -- `0` disables [`WalWriter::is_current`]'s cache.
+fn file_identity(vfs: &AnyVfs, path: &Path) -> Result<u64, WalError> {
+    Ok(vfs.stat(path)?.map_or(0, |stat| stat.identity))
+}
+
 impl WalWriter {
     /// Creates (or reopens) the `-wal` file at `path` and writes `header`.
     pub fn create(vfs: &AnyVfs, path: &Path, header: WalHeader) -> Result<Self, WalError> {
         let file = vfs.create_or_open_write(path)?;
         file.write_at(&header.serialize(), 0)?;
+        let identity = file_identity(vfs, path)?;
         Ok(WalWriter {
             file,
+            identity,
             running: header.header_checksum,
             offset: HEADER_LEN as u64,
             header,
@@ -544,16 +558,41 @@ impl WalWriter {
     }
 
     /// Writes every frame accumulated since the last call, in one
-    /// `write_at` covering the whole run, then flushes to durable storage.
-    /// A no-op `write_at`-wise (fsync still runs) when nothing is pending,
-    /// e.g. a second `sync()` call or a writer that appended no frames.
-    pub fn sync(&mut self) -> Result<(), WalError> {
+    /// `write_at` covering the whole run -- without an fsync. This is the
+    /// half of a commit `PRAGMA synchronous=NORMAL`/`OFF` must still do:
+    /// the frames have to reach the file (readers and the next
+    /// checkpoint find them there), only the durability barrier is
+    /// skipped. Before #487 split this out, a `Normal` commit skipped
+    /// [`WalWriter::sync`] entirely and its buffered frames (#635) were
+    /// never written at all, while `mxFrame` was published as if they had.
+    pub fn write_pending(&mut self) -> Result<(), WalError> {
         if let Some(pending_offset) = self.pending_offset.take() {
             self.file.write_at(&self.pending, pending_offset)?;
             self.pending.clear();
         }
+        Ok(())
+    }
+
+    /// [`WalWriter::write_pending`], then flushes to durable storage. A
+    /// no-op `write_at`-wise (fsync still runs) when nothing is pending,
+    /// e.g. a second `sync()` call or a writer that appended no frames.
+    pub fn sync(&mut self) -> Result<(), WalError> {
+        self.write_pending()?;
         self.file.sync()?;
         Ok(())
+    }
+
+    /// Whether this writer's open `file` is still the file at its path
+    /// and exactly as long as this writer left it (#487) -- i.e. whether a
+    /// `Pager` may keep appending through it instead of reopening: same
+    /// identity (not deleted and recreated by another process), size equal
+    /// to this writer's append offset (nothing appended, truncated or
+    /// reset externally), and nothing buffered but unwritten.
+    pub fn is_current(&self, stat: &FileStat) -> bool {
+        self.pending_offset.is_none()
+            && self.identity != 0
+            && stat.identity == self.identity
+            && stat.size == self.offset
     }
 
     /// Reopens the existing `-wal` file at `path` to append further frames
@@ -584,6 +623,7 @@ impl WalWriter {
     ) -> Result<Self, WalError> {
         let file = vfs.open_write(path)?;
         let size = file.size()?;
+        let identity = file_identity(vfs, path)?;
 
         if let Some(hint) = resume_hint {
             // Two checks, not just the size: a same-size coincidence is
@@ -604,6 +644,7 @@ impl WalWriter {
             if hint.expected_size == size && read_header == Some(hint.header) {
                 return Ok(WalWriter {
                     file,
+                    identity,
                     header: hint.header,
                     running: hint.running,
                     offset: hint.offset,
@@ -629,6 +670,7 @@ impl WalWriter {
 
         Ok(WalWriter {
             file,
+            identity,
             header,
             running,
             offset,
@@ -1078,5 +1120,45 @@ mod tests {
                 "rescan still finds the real frame"
             );
         }
+    }
+
+    /// #487: the cache check trusts a writer only while the path still
+    /// names its file at exactly its append offset with nothing buffered.
+    #[test]
+    fn is_current_tracks_identity_size_and_pending_frames() {
+        let mut mem = crate::storage::row::vfs::MemoryVfs::new();
+        let vfs = crate::storage::row::vfs::AnyVfs::new(mem.clone());
+        let path = std::path::Path::new("/t.db-wal");
+        let header = WalHeader::new(true, 512, 1, 2, 1);
+        let mut writer = WalWriter::create(&vfs, path, header).unwrap();
+        let stat = vfs.stat(path).unwrap().unwrap();
+        assert!(writer.is_current(&stat), "fresh writer, header written");
+
+        writer.append_frame(2, &[9u8; 512], 2).unwrap();
+        let stat = vfs.stat(path).unwrap().unwrap();
+        assert!(!writer.is_current(&stat), "buffered frame not yet written");
+        writer.write_pending().unwrap();
+        let stat = vfs.stat(path).unwrap().unwrap();
+        assert!(writer.is_current(&stat), "written: size == offset again");
+
+        // Someone else appends: size no longer matches.
+        let f = vfs.open_write(path).unwrap();
+        f.write_at(&[0u8; 8], stat.size).unwrap();
+        assert!(!writer.is_current(&vfs.stat(path).unwrap().unwrap()));
+
+        // Same bytes under the same name but a new file object.
+        let f = vfs.open_read(path).unwrap();
+        let mut bytes = vec![0u8; f.size().unwrap() as usize];
+        f.read_at(&mut bytes, 0).unwrap();
+        let mut trimmed = bytes;
+        trimmed.truncate(stat.size as usize);
+        mem.insert(path, trimmed);
+        let replaced = vfs.stat(path).unwrap().unwrap();
+        assert_eq!(replaced.size, stat.size);
+        assert!(!writer.is_current(&replaced), "identity changed");
+        assert!(vfs
+            .stat(std::path::Path::new("/missing"))
+            .unwrap()
+            .is_none());
     }
 }

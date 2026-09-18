@@ -251,6 +251,11 @@ required-features = ["engine-stream"]
 name = "cross_mode_lookup"
 harness = false
 
+[[bench]]
+name = "wal_commit"
+harness = false
+required-features = ["storage-row"]
+
 [features]
 # Every feature on by default (db-core#111): `cargo-mvl-mcdc harvest`
 # (the MC/DC discharge tool -- see `make test-mcdc`) hardcodes a
