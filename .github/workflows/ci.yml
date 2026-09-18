@@ -287,24 +287,39 @@ jobs:
         with:
           shared-key: emit-compile-guard
           workspaces: column-rs
-      # A patch only applies when the path crate satisfies column-rs's
-      # version requirement on db-core. If a db-core version bump falls
-      # outside it, cargo silently falls back to the pinned git tag and
-      # this guard would test the *old* db-core -- so fail loudly instead
-      # and point at column-rs's requirement.
+      # Two things stop the sibling patch from applying, and either one
+      # makes cargo silently fall back to the pinned git tag -- so this
+      # guard would test the *old* db-core (db-core#481: every run from
+      # v0.107.0 to v0.110.0 tested v0.106.1 and nobody could tell):
+      #   1. column-rs's `version = "0.106.1"` requirement is `^0.106.1`,
+      #      which pre-1.0 excludes every later minor; and
+      #   2. column-rs's committed Cargo.lock locks db-core to the tag's
+      #      git rev, which cargo keeps until that package is re-resolved.
+      # This guard's question is "does column-rs compile and run against
+      # *this* db-core", so neither belongs in its inputs: widen the
+      # requirement in the ephemeral checkout and re-resolve db-core, then
+      # still assert the result is this checkout (a missing sibling patch
+      # path would fail here with cargo's own error).
+      - name: Point column-rs's db-core requirement at this checkout
+        if: steps.relevant.outputs.hit == 'true'
+        working-directory: column-rs
+        run: |
+          set -euo pipefail
+          before="$(grep -oE 'db-core *= *\{[^}]*\}' Cargo.toml | grep -oE 'version *= *"[^"]+"' || true)"
+          sed -i -E 's/(db-core *= *\{[^}]*version *= *")[^"]+"/\1>=0.0.0"/' Cargo.toml
+          echo "column-rs pins db-core ${before:-<no version>} -> widened to >=0.0.0 for this run"
+          cargo update -p db-core
       - name: Assert column-rs resolved db-core to this checkout
         if: steps.relevant.outputs.hit == 'true'
         working-directory: column-rs
         run: |
           set -euo pipefail
-          # Fails right here, with cargo's own error, if a sibling patch
-          # path is missing -- rather than an empty $resolved below.
           cargo tree -i db-core --edges normal --prefix none > /tmp/db-core-resolution.txt
           resolved="$(head -1 /tmp/db-core-resolution.txt)"
           echo "db-core resolved to: $resolved"
           case "$resolved" in
             *"$GITHUB_WORKSPACE/db-core"*) ;;
-            *) echo "::error::column-rs resolved db-core to '$resolved', not this checkout: its [patch] did not apply. A db-core version bump outside column-rs's version requirement makes cargo fall back to the pinned git tag -- bump column-rs's requirement." ; exit 1 ;;
+            *) echo "::error::column-rs resolved db-core to '$resolved', not this checkout even after widening its requirement and re-resolving -- check column-rs's .cargo/config.toml sibling patch path." ; exit 1 ;;
           esac
       - name: Emit, compile and run generated programs against this db-core
         if: steps.relevant.outputs.hit == 'true'
