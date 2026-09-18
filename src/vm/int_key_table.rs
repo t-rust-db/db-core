@@ -1,5 +1,10 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
+//! Open-addressing group tables shared by the two places a `GROUP BY` is
+//! grouped: [`IntKeyTable`], `i64 -> group id` for a single integer key, and
+//! [`HashGroupTable`], `key hash -> group id` for every other key shape
+//! (#479), where the caller compares the keys themselves.
+//!
 //! An open-addressing `i64 -> group id` table shared by the two places a
 //! `GROUP BY <int column>` is grouped: per segment in
 //! [`super::batch`]'s `GroupReduce` (#479) and across segments in
@@ -145,6 +150,112 @@ impl IntKeyTable {
     }
 }
 
+/// Open-addressing table from a 64-bit key hash to a group id, for keys
+/// the caller compares itself -- composite, string, float keys (#479).
+/// `u32` slots into a dense `(hash, group id)` vector, linear probing,
+/// load factor <= 1/2. A probe compares the stored hash first and only
+/// asks the caller's `same_key(group)` for the exact comparison on a
+/// hash match, so with a well-mixed hash almost every miss costs one
+/// `u64` compare and no key access at all. Replaces `HashMap<u64,
+/// Vec<usize>>`: no SipHash of the already-hashed `u64`, no heap `Vec`
+/// per group.
+pub(crate) struct HashGroupTable {
+    /// Index into `entries`, or [`EMPTY`].
+    slots: Vec<u32>,
+    mask: usize,
+    /// `(key hash, group id)` in insertion order.
+    entries: Vec<(u64, u32)>,
+}
+
+impl HashGroupTable {
+    /// Sized for `expected_groups` at load factor <= 1/2; doubles as
+    /// groups appear.
+    pub(crate) fn with_capacity(expected_groups: usize) -> Self {
+        let capacity = expected_groups
+            .saturating_mul(2)
+            .max(16)
+            .next_power_of_two();
+        HashGroupTable {
+            slots: vec![EMPTY; capacity],
+            mask: capacity.wrapping_sub(1),
+            entries: Vec::with_capacity(expected_groups),
+        }
+    }
+
+    /// Slots currently allocated (a power of two).
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// The home slot of `hash`: re-finalized so a caller's fold (whose low
+    /// bits may be weak) still spreads over the slot index.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "masked to `< slots.len()`, which is a `usize`, before use"
+    )]
+    fn slot_of(&self, hash: u64) -> usize {
+        (murmur_finalize(hash) as usize) & self.mask
+    }
+
+    /// The group whose key hashes to `hash` and for which `same_key` holds,
+    /// inserting a new group `next_id` when there is none --
+    /// `(id, inserted)`.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "`slots[i]`: `i` is masked into `0..slots.len()`; `entries[k]`: every non-EMPTY slot holds a `k < entries.len()` by construction"
+    )]
+    pub(crate) fn find_or_insert(
+        &mut self,
+        hash: u64,
+        next_id: usize,
+        same_key: impl Fn(usize) -> bool,
+    ) -> Result<(usize, bool)> {
+        if self.entries.len().saturating_mul(2) >= self.slots.len() {
+            self.grow();
+        }
+        let mut i = self.slot_of(hash);
+        loop {
+            let slot = self.slots[i];
+            if slot == EMPTY {
+                let too_many = || VmError::MalformedProgram {
+                    opcode: "GroupReduce",
+                    reason: format!("more than {} groups", u32::MAX),
+                };
+                let id = u32::try_from(next_id).map_err(|_| too_many())?;
+                let k = u32::try_from(self.entries.len()).map_err(|_| too_many())?;
+                self.slots[i] = k;
+                self.entries.push((hash, id));
+                return Ok((next_id, true));
+            }
+            let (candidate, id) = self.entries[slot as usize];
+            if candidate == hash && same_key(id as usize) {
+                return Ok((id as usize, false));
+            }
+            i = i.wrapping_add(1) & self.mask;
+        }
+    }
+
+    /// Doubles `slots` and re-places every entry by its stored hash.
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::cast_possible_truncation,
+        reason = "`slots[i]`: `i` is masked into `0..slots.len()`; `k as u32`: `k < entries.len() <= u32::MAX`, every entry was admitted by `find_or_insert`'s `u32::try_from`"
+    )]
+    fn grow(&mut self) {
+        let capacity = self.slots.len().saturating_mul(2);
+        self.slots = vec![EMPTY; capacity];
+        self.mask = capacity.wrapping_sub(1);
+        for k in 0..self.entries.len() {
+            let mut i = self.slot_of(self.entries[k].0);
+            while self.slots[i] != EMPTY {
+                i = i.wrapping_add(1) & self.mask;
+            }
+            self.slots[i] = k as u32;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +306,33 @@ mod tests {
             "only {} distinct low-10-bit slots",
             slots.len()
         );
+    }
+
+    #[test]
+    fn hash_group_table_distinguishes_colliding_hashes_by_the_callers_key_compare() {
+        let mut table = HashGroupTable::with_capacity(1);
+        assert_eq!(table.capacity(), 16);
+        // Keys 0..999 all hash to the same value: the table must still
+        // keep them apart through `same_key`, and find each again.
+        let keys: Vec<usize> = (0..1_000).collect();
+        for &k in &keys {
+            let (g, inserted) = table
+                .find_or_insert(0xDEAD_BEEF, k, |g| keys[g] == k)
+                .unwrap();
+            assert!(inserted);
+            assert_eq!(g, k);
+        }
+        assert!(table.capacity() >= 2_000);
+        for &k in &keys {
+            let (g, inserted) = table
+                .find_or_insert(0xDEAD_BEEF, usize::MAX, |g| keys[g] == k)
+                .unwrap();
+            assert!(!inserted);
+            assert_eq!(g, k);
+        }
+        // A different hash never matches even when `same_key` would.
+        let (g, inserted) = table.find_or_insert(1, 1_000, |_| true).unwrap();
+        assert!(inserted);
+        assert_eq!(g, 1_000);
     }
 }

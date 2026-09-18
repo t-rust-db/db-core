@@ -13,7 +13,7 @@
 //! (`Vec<Value>`, one entry per row). Opcodes operate on whole registers at
 //! once rather than row-by-row.
 
-use super::int_key_table::IntKeyTable;
+use super::int_key_table::{murmur_finalize, HashGroupTable, IntKeyTable};
 use crate::value::len_to_i64;
 pub use crate::vm::column::{Bitmap, Column};
 pub use crate::vm::join::JoinKind;
@@ -1786,10 +1786,50 @@ fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
 
 /// One-shot variant-tagged hash of a single [`Value`] (the
 /// [`hash_group_value`] scheme, so `Int(1)` and `Str("1")` never collide).
+/// Variant tags folded into the per-value hashes so `Int(1)`, `Float(1.0)`,
+/// `Str("1")`, `Bool(true)` and `Null` never share a hash by construction
+/// -- the same guarantee [`hash_group_value`] gives through its tag bytes.
+const TAG_INT: u64 = 0x0000_0000_0000_0000;
+const TAG_FLOAT: u64 = 0x9E37_79B9_7F4A_7C15;
+const TAG_BOOL: u64 = 0xC2B2_AE3D_27D4_EB4F;
+const TAG_STR: u64 = 0x1656_67B1_9E37_79F9;
+const TAG_NULL: u64 = 0x2545_F491_4F6C_DD1D;
+/// Dictionary codes are hashed within one segment only (the code -> string
+/// map is per column chunk), so their tag just has to stay clear of the
+/// scalar tags above.
+const TAG_DICT: u64 = 0x94D0_49BB_1331_11EB;
+
+/// One-shot variant-tagged hash of a single [`Value`] -- inline, no
+/// `Hasher` object (#479): a `DefaultHasher` per cell (SipHash-1-3 setup
+/// plus finish) was ~20 ns per value, most of the generic `GROUP BY` and
+/// join-key cost. Scalars go straight through MurmurHash3's finalizer;
+/// strings fold 8-byte words. Only self-consistency matters here (a probe
+/// must hash like the insert did), and every caller -- `GroupReduce`,
+/// `HashBuild`/`HashProbe`, `Combine`'s fallback -- uses this same
+/// function on both sides.
 fn hash_one_value(value: &Value) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    hash_group_value(value, &mut hasher);
-    hasher.finish()
+    match value {
+        Value::Int(v) => murmur_finalize(u64::from_ne_bytes(v.to_ne_bytes()) ^ TAG_INT),
+        Value::Float(v) => murmur_finalize(v.to_bits() ^ TAG_FLOAT),
+        Value::Bool(v) => murmur_finalize(u64::from(*v) ^ TAG_BOOL),
+        Value::Str(s) => hash_str_bytes(s.as_bytes()),
+        Value::Null => murmur_finalize(TAG_NULL),
+    }
+}
+
+/// Hash of a string key's bytes: 8-byte little-endian words folded with
+/// [`mix_hash`], length in the seed so `"a\0"` and `"a"` differ, then the
+/// finalizer.
+fn hash_str_bytes(bytes: &[u8]) -> u64 {
+    let mut acc = TAG_STR ^ u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    for chunk in bytes.chunks(8) {
+        let mut word = [0u8; 8];
+        if let Some(target) = word.get_mut(..chunk.len()) {
+            target.copy_from_slice(chunk);
+        }
+        acc = mix_hash(acc, u64::from_le_bytes(word));
+    }
+    murmur_finalize(acc)
 }
 
 /// The same variant-tagged hash [`GroupKey`]'s `Hash` impl computes, but
@@ -1798,11 +1838,9 @@ fn hash_one_value(value: &Value) -> u64 {
 /// group already seen" path without first allocating an owned
 /// `GroupKey`/`Vec<Value>` just to perform the lookup.
 pub(crate) fn hash_group_key(values: &[Value]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    for value in values {
-        hash_group_value(value, &mut hasher);
-    }
-    hasher.finish()
+    values
+        .iter()
+        .fold(HASH_SEED, |acc, value| mix_hash(acc, hash_one_value(value)))
 }
 
 /// Folds one more column's per-value hash into a row's accumulated hash
@@ -1849,6 +1887,169 @@ pub(crate) fn hash_columns_by_row(
         }
     }
     hashes
+}
+
+/// One `GROUP BY` key register as `GroupReduce`'s generic path reads it
+/// (#479): the typed [`Column`] when the register has one, else its
+/// `Vec<Value>`. Holds an `Arc` clone rather than a borrow (the qualified
+/// subset, `make check-mvl-limit`, admits no explicit lifetime), so
+/// building a view is a refcount bump. Hashing and equality go straight
+/// to the typed buffers -- a string key compares its byte slices, a
+/// dictionary key its codes (exact within one segment, where the code ->
+/// string map is fixed) -- and a `Value` is only ever built once per
+/// *group*, for the emitted key column.
+enum KeyView {
+    Typed(Arc<Column>),
+    Values(Arc<Vec<Value>>),
+}
+
+impl KeyView {
+    fn len(&self) -> usize {
+        match self {
+            KeyView::Typed(column) => column.len(),
+            KeyView::Values(values) => values.len(),
+        }
+    }
+
+    /// Byte range of row `p` in a `Column::Str`'s `data`; empty on a
+    /// malformed offsets vector rather than a panic.
+    fn str_range(offsets: &[u32], p: usize) -> std::ops::Range<usize> {
+        let start = offsets
+            .get(p)
+            .and_then(|&o| usize::try_from(o).ok())
+            .unwrap_or(0);
+        let end = p
+            .checked_add(1)
+            .and_then(|q| offsets.get(q))
+            .and_then(|&o| usize::try_from(o).ok())
+            .unwrap_or(start);
+        start..end.max(start)
+    }
+
+    /// Variant-tagged hash of row `p`, consistent with [`hash_one_value`]
+    /// for the scalar and string variants (a dictionary code hashes by
+    /// code, which only ever meets other codes of the same dictionary).
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "`p < len()`: callers pass `physical(row)`, drawn from the selection over `0..base_len`, and every key column has `base_len` rows (checked by the caller via `RegisterLengthMismatch`)"
+    )]
+    fn hash_cell(&self, p: usize) -> u64 {
+        match self {
+            KeyView::Values(values) => hash_one_value(&values[p]),
+            KeyView::Typed(column) => match column.as_ref() {
+                Column::Int { data, valid } if valid.get(p) => {
+                    murmur_finalize(u64::from_ne_bytes(data[p].to_ne_bytes()) ^ TAG_INT)
+                }
+                Column::Float { data, valid } if valid.get(p) => {
+                    murmur_finalize(data[p].to_bits() ^ TAG_FLOAT)
+                }
+                Column::Bool { data, valid } if valid.get(p) => {
+                    murmur_finalize(u64::from(data[p]) ^ TAG_BOOL)
+                }
+                Column::Str {
+                    offsets,
+                    data,
+                    valid,
+                } if valid.get(p) => hash_str_bytes(
+                    data.as_bytes()
+                        .get(Self::str_range(offsets, p))
+                        .unwrap_or(&[]),
+                ),
+                Column::Dict { indices, valid, .. } if valid.get(p) => {
+                    murmur_finalize(u64::from(indices[p]) ^ TAG_DICT)
+                }
+                _ => murmur_finalize(TAG_NULL),
+            },
+        }
+    }
+
+    /// Whether rows `p` and `q` hold the same key -- `GROUP BY` semantics,
+    /// so two `Null`s are equal; floats compare as `f64 ==` (a `NaN` is
+    /// its own group), exactly as the `Value == Value` path did.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "`p`/`q` are `physical(row)` values `< base_len == len()` (see `hash_cell`)"
+    )]
+    fn cells_equal(&self, p: usize, q: usize) -> bool {
+        match self {
+            KeyView::Values(values) => values[p] == values[q],
+            KeyView::Typed(column) => match column.as_ref() {
+                Column::Int { data, valid } => {
+                    valid.get(p) == valid.get(q) && (!valid.get(p) || data[p] == data[q])
+                }
+                Column::Float { data, valid } => {
+                    valid.get(p) == valid.get(q) && (!valid.get(p) || data[p] == data[q])
+                }
+                Column::Bool { data, valid } => {
+                    valid.get(p) == valid.get(q) && (!valid.get(p) || data[p] == data[q])
+                }
+                Column::Str {
+                    offsets,
+                    data,
+                    valid,
+                } => {
+                    valid.get(p) == valid.get(q)
+                        && (!valid.get(p)
+                            || data.as_bytes().get(Self::str_range(offsets, p))
+                                == data.as_bytes().get(Self::str_range(offsets, q)))
+                }
+                Column::Dict { indices, valid, .. } => {
+                    valid.get(p) == valid.get(q) && (!valid.get(p) || indices[p] == indices[q])
+                }
+            },
+        }
+    }
+
+    /// Row `p` as a [`Value`], for the emitted per-group key column.
+    #[allow(clippy::indexing_slicing, reason = "`p < len()` (see `hash_cell`)")]
+    fn value(&self, p: usize) -> Value {
+        match self {
+            KeyView::Values(values) => values[p].clone(),
+            KeyView::Typed(column) => column.get(p),
+        }
+    }
+}
+
+/// `GroupReduce`'s generic grouping (#479): composite, string, float and
+/// mixed keys. Hashes column-wise through the [`KeyView`]s (no per-row
+/// key materialized, #440's shape), groups through a [`HashGroupTable`]
+/// that compares the stored hash before ever touching a key, and resolves
+/// a hash match by comparing the probe row against the group's *first*
+/// row through the same views -- typed, no `Value`. The emitted keys are
+/// built once per group at the end. Groups come out in first-seen order.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`hashes[row]`: `row < num_rows == hashes.len()`; `first_rows[g]`: every group id handed back by the table was pushed first"
+)]
+fn group_by_key_views(
+    views: &[KeyView],
+    num_rows: usize,
+    physical: impl Fn(usize) -> usize,
+) -> Result<(Vec<usize>, Vec<Vec<Value>>)> {
+    let mut hashes = vec![HASH_SEED; num_rows];
+    for view in views {
+        for (row, acc) in hashes.iter_mut().enumerate() {
+            *acc = mix_hash(*acc, view.hash_cell(physical(row)));
+        }
+    }
+    let mut table = HashGroupTable::with_capacity(1 << 10);
+    let mut first_rows: Vec<usize> = Vec::new();
+    let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
+    for (row, &hash) in hashes.iter().enumerate() {
+        let p = physical(row);
+        let (group, inserted) = table.find_or_insert(hash, first_rows.len(), |g| {
+            views.iter().all(|view| view.cells_equal(p, first_rows[g]))
+        })?;
+        if inserted {
+            first_rows.push(p);
+        }
+        row_group.push(group);
+    }
+    let group_keys: Vec<Vec<Value>> = first_rows
+        .iter()
+        .map(|&p| views.iter().map(|view| view.value(p)).collect())
+        .collect();
+    Ok((row_group, group_keys))
 }
 
 /// `GroupReduce` fast path for `GROUP BY <typed Int column>` (#479): maps
@@ -2385,6 +2586,22 @@ impl Vm {
     /// includes every register that was never typed in the first place,
     /// since those are still inserted into `registers` directly by
     /// `LoadColumn`/`LoadConst`/every opcode's `dst`.
+    /// Register `reg` as a [`KeyView`] (#479): the typed column when there
+    /// is one, else its `Vec<Value>`; an `UnknownRegister` error when
+    /// neither exists.
+    fn key_view(&self, reg: usize, opcode: &'static str) -> Result<KeyView> {
+        if let Some(column) = self.typed_registers.get(&reg) {
+            return Ok(KeyView::Typed(Arc::clone(column)));
+        }
+        self.registers
+            .get(&reg)
+            .map(|values| KeyView::Values(Arc::clone(values)))
+            .ok_or(VmError::UnknownRegister {
+                opcode,
+                register: reg,
+            })
+    }
+
     fn ensure_materialized(&mut self, reg: usize) {
         if self.registers.contains_key(&reg) {
             return;
@@ -2931,30 +3148,32 @@ impl Vm {
                         .map(Arc::clone),
                     _ => None,
                 };
-                if int_group_by.is_none() {
-                    for reg in group_by.iter() {
-                        self.ensure_materialized(*reg);
-                    }
-                }
                 for (_, src) in aggs.iter() {
                     if let Some(reg) = src {
                         self.ensure_materialized(*reg);
                     }
                 }
-                let key_columns: Vec<&[Value]> = if int_group_by.is_some() {
+                // #479: the generic path reads each key register through a
+                // `KeyView` -- the typed column when there is one, the
+                // `Vec<Value>` otherwise -- so a typed key is hashed and
+                // compared in place and never materialized to `Vec<Value>`
+                // (which would hand back, for the key column, the copy #482
+                // stopped `LoadColumn` from making).
+                let key_views: Vec<KeyView> = if int_group_by.is_some() || dict_group_by.is_some() {
                     Vec::new()
                 } else {
                     group_by
                         .iter()
-                        .map(|reg| self.reg(*reg, opcode))
+                        .map(|reg| self.key_view(*reg, opcode))
                         .collect::<Result<_>>()?
                 };
                 let base_len = match &selection {
                     Some(sel) => sel.base_len,
-                    None => match key_columns
+                    None => match key_views
                         .first()
-                        .map(|c| c.len())
+                        .map(KeyView::len)
                         .or(int_group_by.as_ref().map(|c| c.len()))
+                        .or(dict_group_by.as_ref().map(|(_, _, valid)| valid.len()))
                     {
                         Some(len) => len,
                         None => match aggs.iter().find_map(|(_, src)| {
@@ -2976,8 +3195,8 @@ impl Vm {
                         },
                     },
                 };
-                for c in &key_columns {
-                    if c.len() != base_len {
+                for view in &key_views {
+                    if view.len() != base_len {
                         return Err(VmError::RegisterLengthMismatch { opcode });
                     }
                 }
@@ -3013,35 +3232,7 @@ impl Vm {
                         Some((data, valid)) => {
                             int_group_by_single_column(data, valid, num_rows, physical)?
                         }
-                        None => {
-                            let hashes = hash_columns_by_row(&key_columns, num_rows, physical);
-                            let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
-                            let mut group_keys: Vec<Vec<Value>> = Vec::new();
-                            let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
-                            for row in 0..num_rows {
-                                let p = physical(row);
-                                let bucket = group_index.entry(hashes[row]).or_default();
-                                let existing = bucket.iter().copied().find(|&g| {
-                                    key_columns
-                                        .iter()
-                                        .enumerate()
-                                        .all(|(i, c)| c[p] == group_keys[g][i])
-                                });
-                                let group = match existing {
-                                    Some(g) => g,
-                                    None => {
-                                        let key: Vec<Value> =
-                                            key_columns.iter().map(|c| c[p].clone()).collect();
-                                        let g = group_keys.len();
-                                        group_keys.push(key);
-                                        bucket.push(g);
-                                        g
-                                    }
-                                };
-                                row_group.push(group);
-                            }
-                            (row_group, group_keys)
-                        }
+                        None => group_by_key_views(&key_views, num_rows, physical)?,
                     },
                 };
                 let num_groups = group_keys.len();
@@ -7328,5 +7519,282 @@ mod tests {
             matches!(err, VmError::RegisterLengthMismatch { .. }),
             "{err:?}"
         );
+    }
+
+    /// #479: the generic path reads typed keys through `KeyView`s -- Int,
+    /// Str, Float and Bool columns with `Null`s, grouped together -- and
+    /// must produce exactly what grouping the same data as `Vec<Value>`
+    /// columns does: same groups, same first-seen order, same aggregates.
+    #[test]
+    fn group_reduce_typed_composite_keys_match_the_value_key_path() {
+        let n = 2_000i64;
+        let k_int: Vec<Value> = (0..n)
+            .map(|i| {
+                if i % 11 == 0 {
+                    Value::Null
+                } else {
+                    Value::Int((i % 7) - 3)
+                }
+            })
+            .collect();
+        let k_str: Vec<Value> = (0..n)
+            .map(|i| match i % 5 {
+                0 => Value::Null,
+                r => Value::Str(format!("s{r}").into()),
+            })
+            .collect();
+        let k_float: Vec<Value> = (0..n)
+            .map(|i| {
+                if i % 13 == 0 {
+                    Value::Null
+                } else {
+                    Value::Float(((i % 3) as f64) * 0.5)
+                }
+            })
+            .collect();
+        let k_bool: Vec<Value> = (0..n).map(|i| Value::Bool(i % 2 == 0)).collect();
+        let v: Vec<Value> = (0..n).map(|i| Value::Int(i % 100)).collect();
+        let program = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "ki".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "ks".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 2,
+                column: "kf".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 3,
+                column: "kb".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 4,
+                column: "v".into(),
+            },
+            Opcode::GroupReduce {
+                group_by: vec![0, 1, 2, 3].into(),
+                aggs: vec![(AggFunc::Sum, Some(4)), (AggFunc::Count, None)].into(),
+                agg_dst: vec![5, 6].into(),
+            },
+        ];
+        let typed = Batch::new(n as usize)
+            .with_typed_column("ki", Column::from(k_int.clone()))
+            .with_typed_column("ks", Column::from(k_str.clone()))
+            .with_typed_column("kf", Column::from(k_float.clone()))
+            .with_typed_column("kb", Column::from(k_bool.clone()))
+            .with_column("v", v.clone());
+        let untyped = Batch::new(n as usize)
+            .with_column("ki", k_int)
+            .with_column("ks", k_str)
+            .with_column("kf", k_float)
+            .with_column("kb", k_bool)
+            .with_column("v", v);
+        let mut typed_vm = Vm::new();
+        typed_vm.execute(&typed, &program).unwrap();
+        let mut value_vm = Vm::new();
+        value_vm.execute(&untyped, &program).unwrap();
+        for reg in 0..=6 {
+            assert_eq!(
+                typed_vm.register(reg).unwrap(),
+                value_vm.register(reg).unwrap(),
+                "register {reg}"
+            );
+        }
+        assert!(
+            typed_vm.register(0).unwrap().len() > 50,
+            "many composite groups"
+        );
+        // Row 0's key is (Null, Null, Null, true): first-seen.
+        assert_eq!(typed_vm.register(0).unwrap()[0], Value::Null);
+        assert_eq!(typed_vm.register(3).unwrap()[0], Value::Bool(true));
+    }
+
+    /// #479: a dictionary key in a composite key hashes and compares by
+    /// code (exact within one segment) and still yields the same groups,
+    /// in the same order, as the string values do.
+    #[test]
+    fn group_reduce_dict_plus_int_composite_key_matches_the_value_key_path() {
+        let dict: Vec<std::sync::Arc<str>> = vec!["east".into(), "west".into(), "north".into()];
+        let codes: Vec<u32> = (0..600u32).map(|i| (i * 7) % 3).collect();
+        let valid: Vec<bool> = (0..600).map(|i| i % 17 != 0).collect();
+        let region = Column::Dict {
+            dict: dict.clone(),
+            indices: codes.clone(),
+            valid: Bitmap::from_bools(valid.iter().copied()),
+        };
+        let region_values: Vec<Value> = codes
+            .iter()
+            .zip(&valid)
+            .map(|(&c, &ok)| {
+                if ok {
+                    Value::Str(dict[c as usize].to_string().into())
+                } else {
+                    Value::Null
+                }
+            })
+            .collect();
+        let tier: Vec<Value> = (0..600i64).map(|i| Value::Int(i % 4)).collect();
+        let program = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "region".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "tier".into(),
+            },
+            Opcode::GroupReduce {
+                group_by: vec![0, 1].into(),
+                aggs: vec![(AggFunc::Count, None)].into(),
+                agg_dst: vec![2].into(),
+            },
+        ];
+        let mut typed_vm = Vm::new();
+        typed_vm
+            .execute(
+                &Batch::new(600)
+                    .with_typed_column("region", region)
+                    .with_column("tier", tier.clone()),
+                &program,
+            )
+            .unwrap();
+        let mut value_vm = Vm::new();
+        value_vm
+            .execute(
+                &Batch::new(600)
+                    .with_column("region", region_values)
+                    .with_column("tier", tier),
+                &program,
+            )
+            .unwrap();
+        for reg in 0..=2 {
+            assert_eq!(
+                typed_vm.register(reg).unwrap(),
+                value_vm.register(reg).unwrap(),
+                "register {reg}"
+            );
+        }
+        // 3 regions + Null, x 4 tiers.
+        assert_eq!(typed_vm.register(0).unwrap().len(), 16);
+    }
+
+    /// #479: the generic typed-view path respects a pending `Filter`
+    /// selection like the dict (#457) and Int (#504) paths.
+    #[test]
+    fn filter_then_group_reduce_on_typed_composite_keys_resolves_the_pending_selection() {
+        let batch = Batch::new(4)
+            .with_typed_column(
+                "a",
+                Column::from(vec![
+                    Value::Int(1),
+                    Value::Int(2),
+                    Value::Int(1),
+                    Value::Int(2),
+                ]),
+            )
+            .with_typed_column(
+                "b",
+                Column::from(vec![
+                    Value::Str("x".into()),
+                    Value::Str("x".into()),
+                    Value::Str("x".into()),
+                    Value::Str("y".into()),
+                ]),
+            )
+            .with_column(
+                "amount",
+                vec![
+                    Value::Int(10),
+                    Value::Int(5),
+                    Value::Int(20),
+                    Value::Int(15),
+                ],
+            )
+            .with_column(
+                "keep",
+                vec![
+                    Value::Bool(true),
+                    Value::Bool(false),
+                    Value::Bool(true),
+                    Value::Bool(true),
+                ],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "a".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "b".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 2,
+                    column: "amount".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 3,
+                    column: "keep".into(),
+                },
+                Opcode::Filter { predicate: 3 },
+                Opcode::GroupReduce {
+                    group_by: vec![0, 1].into(),
+                    aggs: vec![(AggFunc::Sum, Some(2))].into(),
+                    agg_dst: vec![4].into(),
+                },
+            ],
+        )
+        .unwrap();
+        // Row 1 (2, "x", 5) is filtered out; groups (1,"x") and (2,"y") remain.
+        assert_eq!(vm.register(0).unwrap(), &[Value::Int(1), Value::Int(2)]);
+        assert_eq!(
+            vm.register(1).unwrap(),
+            &[Value::Str("x".into()), Value::Str("y".into())]
+        );
+        assert_eq!(
+            vm.register(4).unwrap(),
+            &[Value::Float(30.0), Value::Float(15.0)]
+        );
+    }
+
+    /// #479: the inline per-value hash keeps the variant separation the
+    /// SipHash version had, and a typed `KeyView` hashes a scalar or string
+    /// cell exactly like `hash_one_value` hashes the same `Value`.
+    #[test]
+    fn hash_one_value_tags_variants_and_key_views_hash_like_values() {
+        let one = [
+            Value::Int(1),
+            Value::Float(1.0),
+            Value::Str("1".into()),
+            Value::Bool(true),
+            Value::Null,
+        ];
+        let hashes: std::collections::HashSet<u64> = one.iter().map(hash_one_value).collect();
+        assert_eq!(hashes.len(), one.len(), "every variant of `1` hashes apart");
+        assert_ne!(
+            hash_one_value(&Value::Str("ab".into())),
+            hash_one_value(&Value::Str("ab\0".into()))
+        );
+        for value in [
+            Value::Int(-7),
+            Value::Float(2.5),
+            Value::Str("hello, world -- more than eight bytes".into()),
+            Value::Bool(false),
+        ] {
+            let view = KeyView::Typed(std::sync::Arc::new(Column::from(vec![
+                value.clone(),
+                Value::Null,
+            ])));
+            assert_eq!(view.hash_cell(0), hash_one_value(&value), "{value:?}");
+            assert_eq!(view.hash_cell(1), hash_one_value(&Value::Null));
+            assert!(view.cells_equal(0, 0) && !view.cells_equal(0, 1) && view.cells_equal(1, 1));
+        }
     }
 }
