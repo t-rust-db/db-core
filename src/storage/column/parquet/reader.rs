@@ -496,6 +496,62 @@ pub fn read_plain_fixed<T: Copy + Default, const N: usize>(
     Ok(())
 }
 
+/// Reads only the given rows of one `PLAIN` data page of a fixed-width
+/// primitive (#513): each `(row within the page, output slot)` pair
+/// writes that row's value to `values[slot]` (a NULL row leaves
+/// `T::default()`) and its presence to `present[slot]`. Rows may come in
+/// any order and repeat. The page's definition levels are read once; when
+/// they say every row is present (or the column is `REQUIRED`) a row's
+/// value sits at `row * N`, otherwise a one-pass prefix count maps rows to
+/// value slots. Nothing else in the page is decoded.
+pub fn read_plain_fixed_at<T: Copy + Default, const N: usize>(
+    page_body: &[u8],
+    header: &DataPageHeader,
+    max_def_level: u32,
+    decode: impl Fn([u8; N]) -> T,
+    rows: &[(u32, usize)],
+    values: &mut [T],
+    present: &mut [bool],
+) -> Result<()> {
+    let num_values = value_count(header.num_values)?;
+    let (levels, bytes) = split_definition_levels(page_body, header, max_def_level)?;
+    let all_present = levels.is_empty() || levels.iter().all(|&level| level == max_def_level);
+    let value_slot: Option<Vec<usize>> = if all_present {
+        None
+    } else {
+        let mut slots = Vec::with_capacity(levels.len());
+        let mut next = 0usize;
+        for &level in &levels {
+            slots.push(next);
+            if level == max_def_level {
+                next = next.saturating_add(1);
+            }
+        }
+        Some(slots)
+    };
+    for &(row, out) in rows {
+        let r = usize::try_from(row).map_err(|_| ReadError::UnexpectedEof)?;
+        if r >= num_values {
+            return Err(ReadError::UnexpectedEof);
+        }
+        let is_present = all_present || levels.get(r).is_some_and(|&level| level == max_def_level);
+        *present.get_mut(out).ok_or(ReadError::UnexpectedEof)? = is_present;
+        if !is_present {
+            continue;
+        }
+        let slot = value_slot
+            .as_ref()
+            .map_or(Some(r), |slots| slots.get(r).copied())
+            .ok_or(ReadError::UnexpectedEof)?;
+        let start = slot.checked_mul(N).ok_or(ReadError::UnexpectedEof)?;
+        let end = start.checked_add(N).ok_or(ReadError::UnexpectedEof)?;
+        let chunk = bytes.get(start..end).ok_or(ReadError::UnexpectedEof)?;
+        *values.get_mut(out).ok_or(ReadError::UnexpectedEof)? =
+            decode(chunk.try_into().map_err(|_| ReadError::UnexpectedEof)?);
+    }
+    Ok(())
+}
+
 /// Appends `num_values` consecutive `PLAIN` values of `N` bytes from
 /// `bytes` to `values`; a short buffer is [`ReadError::UnexpectedEof`].
 fn push_plain<T, const N: usize>(
@@ -970,6 +1026,88 @@ mod tests {
         .unwrap();
         assert_eq!(values, vec![3, 4]);
         assert!(present.is_empty());
+    }
+
+    #[test]
+    fn read_plain_fixed_at_reads_only_the_asked_rows_in_any_order_with_nulls() {
+        // rows: 0 -> 1.5, 1 -> NULL, 2 -> 2.5, 3 -> NULL, 4 -> 3.5
+        let h = header(5);
+        let mut page = encode_def_levels(&[1, 0, 1, 0, 1]);
+        for v in [1.5f64, 2.5, 3.5] {
+            page.extend_from_slice(&v.to_le_bytes());
+        }
+        let rows = [(4u32, 0usize), (1, 1), (0, 2), (4, 3)];
+        let mut values = vec![0.0f64; 4];
+        let mut present = vec![true; 4];
+        read_plain_fixed_at(
+            &page,
+            &h,
+            1,
+            f64::from_le_bytes,
+            &rows,
+            &mut values,
+            &mut present,
+        )
+        .unwrap();
+        assert_eq!(values, vec![3.5, 0.0, 1.5, 3.5]);
+        assert_eq!(present, vec![true, false, true, true]);
+    }
+
+    #[test]
+    fn read_plain_fixed_at_required_page_indexes_values_directly() {
+        let h = header(3);
+        let mut page = Vec::new();
+        for v in [10i64, 20, 30] {
+            page.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut values = vec![0i64; 2];
+        let mut present = vec![false; 2];
+        read_plain_fixed_at(
+            &page,
+            &h,
+            0,
+            i64::from_le_bytes,
+            &[(2, 0), (0, 1)],
+            &mut values,
+            &mut present,
+        )
+        .unwrap();
+        assert_eq!(values, vec![30, 10]);
+        assert_eq!(present, vec![true, true]);
+    }
+
+    #[test]
+    fn read_plain_fixed_at_rejects_a_row_past_the_page_or_a_short_page() {
+        let h = header(2);
+        let mut page = Vec::new();
+        page.extend_from_slice(&1i64.to_le_bytes());
+        page.extend_from_slice(&2i64.to_le_bytes());
+        let mut values = vec![0i64; 1];
+        let mut present = vec![false; 1];
+        let err = read_plain_fixed_at(
+            &page,
+            &h,
+            0,
+            i64::from_le_bytes,
+            &[(2, 0)],
+            &mut values,
+            &mut present,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ReadError::UnexpectedEof));
+        // Declared 2 values, only 1 in the page: row 1 has no bytes.
+        let short = 1i64.to_le_bytes();
+        let err = read_plain_fixed_at(
+            &short,
+            &h,
+            0,
+            i64::from_le_bytes,
+            &[(1, 0)],
+            &mut values,
+            &mut present,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ReadError::UnexpectedEof));
     }
 
     #[test]

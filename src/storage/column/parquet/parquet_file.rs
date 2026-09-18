@@ -516,6 +516,102 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         Ok(Some((values, present)))
     }
 
+    /// The named positions of a fixed-width primitive column chunk,
+    /// decoded positionally (#513): only the pages holding a wanted row
+    /// are decompressed, and within a page only the wanted rows are read
+    /// (see [`reader::read_plain_fixed_at`]); pages past the last wanted
+    /// row are never touched. Output is in `positions` order, any order
+    /// and duplicates allowed, as `(values, present)` in
+    /// [`Self::read_plain_fixed_column`]'s shape (`present` empty for a
+    /// `REQUIRED` column). `Ok(None)` at the first non-`PLAIN` page, for
+    /// the caller to fall back to the `Vec<Option<T>>` `read_*_column_at`
+    /// readers; a position past the chunk's rows is
+    /// [`FileError::RowPositionOutOfRange`].
+    pub fn read_plain_fixed_column_at<T: Copy + Default, const N: usize>(
+        &self,
+        column_index: usize,
+        decode: impl Fn([u8; N]) -> T,
+        positions: &[u32],
+    ) -> Result<Option<(Vec<T>, Vec<bool>)>> {
+        let codec = self.column_meta(column_index)?.codec;
+        let chunk_bytes = self.column_chunk_bytes(column_index)?;
+        let max_def_level = self.file.max_definition_level(column_index);
+
+        let mut wanted: Vec<(u32, usize)> = positions
+            .iter()
+            .enumerate()
+            .map(|(slot, &position)| (position, slot))
+            .collect();
+        wanted.sort_unstable();
+        let mut values = vec![T::default(); positions.len()];
+        let mut present = vec![false; positions.len()];
+
+        let mut pos = 0usize;
+        let mut row_base = 0u32;
+        let mut next = 0usize;
+        while pos < chunk_bytes.len() && next < wanted.len() {
+            let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
+            let page_start = pos + consumed;
+            let page_end = page_start
+                .checked_add(page_size(
+                    "compressed_page_size",
+                    header.compressed_page_size,
+                )?)
+                .ok_or(FileError::ChunkOutOfBounds)?;
+            let compressed = chunk_bytes
+                .get(page_start..page_end)
+                .ok_or(FileError::ChunkOutOfBounds)?;
+            let PageType::Data(data_page_header) = header.page_type else {
+                return Ok(None);
+            };
+            if data_page_header.encoding != page::Encoding::Plain {
+                return Ok(None);
+            }
+            let page_rows = u32::try_from(data_page_header.num_values).map_err(|_| {
+                FileError::InvalidMetadata {
+                    field: "data_page.num_values",
+                    value: i64::from(data_page_header.num_values),
+                }
+            })?;
+            let page_end_row = row_base
+                .checked_add(page_rows)
+                .ok_or(FileError::ChunkOutOfBounds)?;
+            let mut rows: Vec<(u32, usize)> = Vec::new();
+            while let Some(&(position, slot)) = wanted.get(next) {
+                if position >= page_end_row {
+                    break;
+                }
+                rows.push((position - row_base, slot));
+                next += 1;
+            }
+            if !rows.is_empty() {
+                let page_body = compression::decompress(
+                    codec,
+                    compressed,
+                    page_size("uncompressed_page_size", header.uncompressed_page_size)?,
+                )?;
+                reader::read_plain_fixed_at(
+                    &page_body,
+                    &data_page_header,
+                    max_def_level,
+                    &decode,
+                    &rows,
+                    &mut values,
+                    &mut present,
+                )?;
+            }
+            row_base = page_end_row;
+            pos = page_end;
+        }
+        if let Some(&(position, _)) = wanted.get(next) {
+            return Err(FileError::RowPositionOutOfRange(position));
+        }
+        if max_def_level == 0 {
+            present.clear();
+        }
+        Ok(Some((values, present)))
+    }
+
     /// Read a column chunk's raw dictionary indices plus its dictionary,
     /// *without* resolving each row's value — for callers that only need to
     /// compare/group rows (e.g. `GROUP BY`), where comparing a `u32` index
@@ -1485,6 +1581,95 @@ mod tests {
             values.iter().copied().map(Some).collect::<Vec<_>>(),
             rg.read_int64_column(0).unwrap()
         );
+    }
+
+    /// One REQUIRED INT64 column in three PLAIN pages: rows 0..9 hold 1..=9.
+    fn three_page_int64_file() -> Vec<u8> {
+        let (page_bytes, meta_bytes) =
+            build_int64_chunk_multi_page(&[&[1, 2, 3], &[4, 5], &[6, 7, 8, 9]], 4);
+        let mut file = Vec::new();
+        file.extend_from_slice(b"PAR1");
+        file.extend_from_slice(&page_bytes);
+        let column_chunk = build_column_chunk(4, meta_bytes);
+        let row_group = build_row_group(vec![column_chunk], page_bytes.len() as i64, 9);
+        let root = build_root_schema_element(1);
+        let col = build_schema_element("v", 2, 0);
+        let metadata = build_file_metadata(vec![root, col], 9, vec![row_group]);
+        file.extend_from_slice(&metadata);
+        file.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"PAR1");
+        file
+    }
+
+    // storage_column_parquet_parquet_file_read_plain_fixed_column_at_f95568f1: `pos < chunk_bytes.len() && next < wanted.len()`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_column_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v1_pages_and_wanted_rows_remain_reads_across_pages_in_positions_order(
+    ) {
+        let file = three_page_int64_file();
+        let parsed = ParquetFile::open(&file).unwrap();
+        let rg = parsed.row_group(0).unwrap();
+        // Unsorted, a duplicate, rows from every page.
+        let positions = [8u32, 0, 8, 2, 5];
+        let (values, present) = rg
+            .read_plain_fixed_column_at(0, i64::from_le_bytes, &positions)
+            .unwrap()
+            .expect("PLAIN chunk");
+        assert_eq!(values, vec![9, 1, 9, 3, 6]);
+        assert!(present.is_empty(), "REQUIRED column");
+        assert_eq!(
+            values.iter().copied().map(Some).collect::<Vec<_>>(),
+            rg.read_int64_column_at(0, &positions).unwrap()
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_column_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v2_pages_run_out_with_a_row_still_wanted_is_out_of_range(
+    ) {
+        let file = three_page_int64_file();
+        let parsed = ParquetFile::open(&file).unwrap();
+        let rg = parsed.row_group(0).unwrap();
+        let err = rg
+            .read_plain_fixed_column_at(0, i64::from_le_bytes, &[3, 9])
+            .unwrap_err();
+        assert!(
+            matches!(err, FileError::RowPositionOutOfRange(9)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_column_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v3_wanted_rows_run_out_first_stops_before_the_remaining_pages(
+    ) {
+        let file = three_page_int64_file();
+        let parsed = ParquetFile::open(&file).unwrap();
+        let rg = parsed.row_group(0).unwrap();
+        // Only first-page rows: the second and third pages are never
+        // reached (and an empty request reads nothing at all).
+        let (values, _) = rg
+            .read_plain_fixed_column_at(0, i64::from_le_bytes, &[2, 0])
+            .unwrap()
+            .unwrap();
+        assert_eq!(values, vec![3, 1]);
+        let (empty, _) = rg
+            .read_plain_fixed_column_at(0, i64::from_le_bytes, &[])
+            .unwrap()
+            .unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn read_plain_fixed_column_at_declines_a_dictionary_encoded_chunk() {
+        let (page_bytes, meta_bytes) = build_int64_dictionary_chunk(&[10, 20], &[1, 0, 1], 4);
+        let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        assert!(rg
+            .read_plain_fixed_column_at(0, i64::from_le_bytes, &[2])
+            .unwrap()
+            .is_none());
     }
 
     #[test]

@@ -21410,19 +21410,59 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_column_decode_decode_column_at_732deede",
+    "id": "storage_column_decode_decode_column_at_21fbbbc5",
     "file": "src/storage/column/decode.rs",
-    "line": 111,
-    "decision": "match physical_type {\n        PhysicalType::Int64 => rg\n            .read_int64_column_at(index, positions)\n            .map(|col| Decoded::Column(int_column(col))),\n        PhysicalType::Int32 => rg.read_int32_column_at(index, positions).map(|col| {\n            Decoded::Column(int_column(\n                col.into_iter().map(|v| v.map(i64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Double => rg\n            .read_double_column_at(index, positions)\n            .map(|col| Decoded::Column(float_column(col))),\n        PhysicalType::Float => rg.read_float_column_at(index, positions).map(|col| {\n            Decoded::Column(float_column(\n                col.into_iter().map(|v| v.map(f64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Boolean => rg\n            .read_boolean_column_at(index, positions)\n            .map(|col| Decoded::Column(bool_column(col))),\n        _ => rg\n            .read_string_column_at(index, positions)\n            .map(|col| Decoded::Column(str_column(col))),\n    }",
+    "line": 114,
+    "decision": "match physical_type {\n        PhysicalType::Int64 => {\n            match rg.read_plain_fixed_column_at(index, i64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n                None => rg\n                    .read_int64_column_at(index, positions)\n                    .map(|col| Decoded::Column(int_column(col))),\n            }\n        }\n        PhysicalType::Int32 => match rg.read_plain_fixed_column_at(\n            index,\n            |b| i64::from(i32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n            None => rg.read_int32_column_at(index, positions).map(|col| {\n                Decoded::Column(int_column(\n                    col.into_iter().map(|v| v.map(i64::from)).collect(),\n                ))\n            }),\n        },\n        PhysicalType::Double => {\n            match rg.read_plain_fixed_column_at(index, f64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n                None => rg\n                    .read_double_column_at(index, positions)\n                    .map(|col| Decoded::Column(float_column(col))),\n            }\n        }\n        PhysicalType::Float => match rg.read_plain_fixed_column_at(\n            index,\n            |b| f64::from(f32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n            None => rg.read_float_column_at(index, positions).map(|col| {\n                Decoded::Column(float_column(\n                    col.into_iter().map(|v| v.map(f64::from)).collect(),\n                ))\n            }),\n        },\n        PhysicalType::Boolean => rg\n            .read_boolean_column_at(index, positions)\n            .map(|col| Decoded::Column(bool_column(col))),\n        _ => rg\n            .read_string_column_at(index, positions)\n            .map(|col| Decoded::Column(str_column(col))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
+    "id": "storage_column_decode_decode_column_at_65161c71",
+    "file": "src/storage/column/decode.rs",
+    "line": 116,
+    "decision": "match rg.read_plain_fixed_column_at(index, i64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n                None => rg\n                    .read_int64_column_at(index, positions)\n                    .map(|col| Decoded::Column(int_column(col))),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_at_3cbbc943",
+    "file": "src/storage/column/decode.rs",
+    "line": 123,
+    "decision": "match rg.read_plain_fixed_column_at(\n            index,\n            |b| i64::from(i32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n            None => rg.read_int32_column_at(index, positions).map(|col| {\n                Decoded::Column(int_column(\n                    col.into_iter().map(|v| v.map(i64::from)).collect(),\n                ))\n            }),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_at_3a678b08",
+    "file": "src/storage/column/decode.rs",
+    "line": 136,
+    "decision": "match rg.read_plain_fixed_column_at(index, f64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n                None => rg\n                    .read_double_column_at(index, positions)\n                    .map(|col| Decoded::Column(float_column(col))),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_at_fdc76108",
+    "file": "src/storage/column/decode.rs",
+    "line": 143,
+    "decision": "match rg.read_plain_fixed_column_at(\n            index,\n            |b| f64::from(f32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n            None => rg.read_float_column_at(index, positions).map(|col| {\n                Decoded::Column(float_column(\n                    col.into_iter().map(|v| v.map(f64::from)).collect(),\n                ))\n            }),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_column_decode_validity_9c9d171f",
     "file": "src/storage/column/decode.rs",
-    "line": 157,
+    "line": 184,
     "decision": "present.is_empty() || present.iter().all(|&p| p)",
     "conditions": 2,
     "vectors_required": 3,
@@ -21432,7 +21472,7 @@
   {
     "id": "storage_column_decode_dict_column_carries_codes_through_unchanged_adc30411",
     "file": "src/storage/column/decode.rs",
-    "line": 227,
+    "line": 254,
     "decision": "match column {\n            Column::Dict {\n                dict,\n                indices,\n                valid,\n            } => {\n                assert_eq!(\n                    dict.iter().map(AsRef::as_ref).collect::<Vec<_>>(),\n                    [\"east\", \"west\"]\n                );\n                assert_eq!(indices, vec![0, 1, 0]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21442,7 +21482,7 @@
   {
     "id": "storage_column_decode_dict_column_defaults_a_null_rows_code_to_zero_but_marks_it_invalid_7147f221",
     "file": "src/storage/column/decode.rs",
-    "line": 252,
+    "line": 279,
     "decision": "match &column {\n            Column::Dict { indices, valid, .. } => {\n                assert_eq!(*indices, vec![0, 0, 0]);\n                assert!(valid.get(0));\n                assert!(!valid.get(1));\n                assert!(valid.get(2));\n            }\n            other => panic!(\"expected Column::Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21452,7 +21492,7 @@
   {
     "id": "storage_column_decode_write_varint_2427714d",
     "file": "src/storage/column/decode.rs",
-    "line": 402,
+    "line": 429,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -21462,7 +21502,7 @@
   {
     "id": "storage_column_decode_write_varint_a5b1bbc4",
     "file": "src/storage/column/decode.rs",
-    "line": 406,
+    "line": 433,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -21472,7 +21512,7 @@
   {
     "id": "storage_column_decode_list_of_structs_field_b09c4ad2",
     "file": "src/storage/column/decode.rs",
-    "line": 440,
+    "line": 467,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -21482,7 +21522,7 @@
   {
     "id": "storage_column_decode_decode_column_full_widens_int32_to_column_int_ef0f624c",
     "file": "src/storage/column/decode.rs",
-    "line": 551,
+    "line": 578,
     "decision": "match column {\n            Column::Int { data, valid } => {\n                assert_eq!(data, vec![1, -2, 3]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Int, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21492,7 +21532,7 @@
   {
     "id": "storage_column_decode_decode_column_full_widens_float_to_column_float_ef9139a1",
     "file": "src/storage/column/decode.rs",
-    "line": 573,
+    "line": 600,
     "decision": "match column {\n            Column::Float { data, valid } => {\n                assert_eq!(data, vec![1.5, -2.5]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Float, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21502,7 +21542,7 @@
   {
     "id": "storage_column_decode_decode_column_full_decodes_boolean_to_column_bool_b34c7ab6",
     "file": "src/storage/column/decode.rs",
-    "line": 589,
+    "line": 616,
     "decision": "*v",
     "conditions": 1,
     "vectors_required": 2,
@@ -21512,7 +21552,7 @@
   {
     "id": "storage_column_decode_decode_column_full_decodes_boolean_to_column_bool_186e79d1",
     "file": "src/storage/column/decode.rs",
-    "line": 598,
+    "line": 625,
     "decision": "match column {\n            Column::Bool { data, valid } => {\n                assert_eq!(data, values.to_vec());\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Bool, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21522,7 +21562,7 @@
   {
     "id": "storage_column_decode_decode_column_at_int32_and_boolean_match_the_eager_path_at_selected_positions_b34c7ab6",
     "file": "src/storage/column/decode.rs",
-    "line": 630,
+    "line": 657,
     "decision": "*v",
     "conditions": 1,
     "vectors_required": 2,
@@ -22340,9 +22380,79 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_f95568f1",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 552,
+    "decision": "pos < chunk_bytes.len() && next < wanted.len()",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_53dde488",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 567,
+    "decision": "data_page_header.encoding != page::Encoding::Plain",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_09289e59",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 580,
+    "decision": "let Some(&(position, slot)) = wanted.get(next)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_020b6d33",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 581,
+    "decision": "position >= page_end_row",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_1c99f19c",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 587,
+    "decision": "!rows.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_27b449af",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 606,
+    "decision": "let Some(&(position, _)) = wanted.get(next)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_4c7ae637",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 609,
+    "decision": "max_def_level == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_column_parquet_parquet_file_read_column_dictionary_indices_7d4f73a5",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 543,
+    "line": 639,
     "decision": "pos < chunk_bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22352,7 +22462,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_column_dictionary_indices_3a94da7c",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 556,
+    "line": 652,
     "decision": "match header.page_type {\n                PageType::Data(data_page_header) => {\n                    if dictionary.is_none()\n                        || !matches!(\n                            data_page_header.encoding,\n                            page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                        )\n                    {\n                        return Ok(None);\n                    }\n                    let page_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    indices.extend(reader::read_dictionary_index_column(\n                        &page_body,\n                        &data_page_header,\n                        max_def_level,\n                    )?);\n                }\n                PageType::Dictionary(dictionary_page_header) => {\n                    if dictionary.is_some() {\n                        return Err(FileError::UnexpectedDictionaryPage);\n                    }\n                    let dictionary_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    dictionary = Some(decode_dictionary(\n                        &dictionary_body,\n                        dictionary_page_header.num_values,\n                    )?);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22362,7 +22472,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_column_dictionary_indices_1b5585c0",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 558,
+    "line": 654,
     "decision": "dictionary.is_none()\n                        || !matches!(\n                            data_page_header.encoding,\n                            page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                        )",
     "conditions": 2,
     "vectors_required": 3,
@@ -22372,7 +22482,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_column_dictionary_indices_d31770f8",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 578,
+    "line": 674,
     "decision": "dictionary.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22382,7 +22492,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_7d4f73a5",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 612,
+    "line": 708,
     "decision": "pos < chunk_bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22392,7 +22502,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_4d4fe138",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 625,
+    "line": 721,
     "decision": "match header.page_type {\n                PageType::Dictionary(_) => return Err(FileError::UnsupportedNestedDictionary),\n                PageType::Data(data_page_header) => {\n                    if data_page_header.encoding != Encoding::Plain {\n                        return Err(FileError::UnsupportedNestedEncoding(\n                            data_page_header.encoding,\n                        ));\n                    }\n                    let page_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    let (rep_levels, def_levels, mut value_bytes) = reader::split_rep_def_levels(\n                        &page_body,\n                        &data_page_header,\n                        leaf.max_rep_level,\n                        leaf.max_def_level,\n                    )?;\n\n                    let num_values =\n                        usize::try_from(data_page_header.num_values).map_err(|_| {\n                            FileError::InvalidMetadata {\n                                field: \"data_page.num_values\",\n                                value: i64::from(data_page_header.num_values),\n                            }\n                        })?;\n                    let mut bit_pos = 0usize;\n                    for i in 0..num_values {\n                        let def = def_levels.get(i).copied().unwrap_or(leaf.max_def_level);\n                        if def == leaf.max_def_level {\n                            let scalar = reader::read_plain_scalar(\n                                &mut value_bytes,\n                                physical_type,\n                                &mut bit_pos,\n                            )?;\n                            out.values.push(Some(scalar));\n                        } else {\n                            out.values.push(None);\n                        }\n                    }\n                    if rep_levels.is_empty() {\n                        out.rep_levels.extend(std::iter::repeat_n(0, num_values));\n                    } else {\n                        out.rep_levels.extend(rep_levels);\n                    }\n                    if def_levels.is_empty() {\n                        out.def_levels\n                            .extend(std::iter::repeat_n(leaf.max_def_level, num_values));\n                    } else {\n                        out.def_levels.extend(def_levels);\n                    }\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22402,7 +22512,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_012840c2",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 628,
+    "line": 724,
     "decision": "data_page_header.encoding != Encoding::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -22412,7 +22522,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_4235326a",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 655,
+    "line": 751,
     "decision": "def == leaf.max_def_level",
     "conditions": 1,
     "vectors_required": 2,
@@ -22422,7 +22532,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_7959e6f3",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 666,
+    "line": 762,
     "decision": "rep_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22432,7 +22542,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_f3e67ac5",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 671,
+    "line": 767,
     "decision": "def_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22442,7 +22552,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_timestamp_column_c91e7f9e",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 871,
+    "line": 967,
     "decision": "match self.column_meta(column_index)?.physical_type {\n            footer::PhysicalType::Int64 => {\n                let is_millis = matches!(\n                    self.file.converted_type(column_index),\n                    Some(footer::ConvertedType::TimestampMillis)\n                );\n                let raw = self.read_int64_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| v.map(|v| if is_millis { v * 1000 } else { v }))\n                    .collect())\n            }\n            footer::PhysicalType::Int96 => {\n                let raw = self.read_int96_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| v.map(int96_to_epoch_micros))\n                    .collect())\n            }\n            other => Err(FileError::UnsupportedTimestampPhysicalType(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22452,7 +22562,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_timestamp_column_8829ff3d",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 880,
+    "line": 976,
     "decision": "is_millis",
     "conditions": 1,
     "vectors_required": 2,
@@ -22462,7 +22572,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_decimal_column_6a591949",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 902,
+    "line": 998,
     "decision": "match self.column_meta(column_index)?.physical_type {\n            footer::PhysicalType::Int32 => {\n                let raw = self.read_int32_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|v| crate::storage::column::parquet::decimal::Decimal {\n                            unscaled: v as i128,\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            footer::PhysicalType::Int64 => {\n                let raw = self.read_int64_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|v| crate::storage::column::parquet::decimal::Decimal {\n                            unscaled: v as i128,\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            footer::PhysicalType::FixedLenByteArray => {\n                let raw = self.read_fixed_len_byte_array_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|bytes| crate::storage::column::parquet::decimal::Decimal {\n                            unscaled: crate::storage::column::parquet::decimal::from_be_bytes(\n                                &bytes,\n                            ),\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            other => Err(FileError::UnsupportedDecimalPhysicalType(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22472,7 +22582,7 @@
   {
     "id": "storage_column_parquet_parquet_file_write_varint_2427714d",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 982,
+    "line": 1078,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22482,7 +22592,7 @@
   {
     "id": "storage_column_parquet_parquet_file_write_varint_a5b1bbc4",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 986,
+    "line": 1082,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22492,7 +22602,7 @@
   {
     "id": "storage_column_parquet_parquet_file_list_of_structs_field_b09c4ad2",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1020,
+    "line": 1116,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -22502,7 +22612,7 @@
   {
     "id": "storage_column_parquet_parquet_file_build_file_from_chunk_typed_642303d1",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1177,
+    "line": 1273,
     "decision": "let Some(len) = type_length",
     "conditions": 1,
     "vectors_required": 2,
@@ -22512,7 +22622,7 @@
   {
     "id": "storage_column_parquet_parquet_file_build_file_from_chunk_annotated_642303d1",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1210,
+    "line": 1306,
     "decision": "let Some(len) = type_length",
     "conditions": 1,
     "vectors_required": 2,
@@ -22522,7 +22632,7 @@
   {
     "id": "storage_column_parquet_parquet_file_build_file_from_chunk_annotated_aafe5a53",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1216,
+    "line": 1312,
     "decision": "let Some(s) = scale",
     "conditions": 1,
     "vectors_required": 2,
@@ -22532,7 +22642,7 @@
   {
     "id": "storage_column_parquet_parquet_file_encode_dictionary_indices_9466a82b",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1245,
+    "line": 1341,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -22542,7 +22652,7 @@
   {
     "id": "storage_column_parquet_parquet_file_negative_page_size_is_invalid_metadata_not_a_huge_allocation_a5ccf881",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1838,
+    "line": 2023,
     "decision": "match page_size(\"compressed_page_size\", -1) {\n            Err(FileError::InvalidMetadata { field, value }) => {\n                assert_eq!(field, \"compressed_page_size\");\n                assert_eq!(value, -1);\n            }\n            other => panic!(\"expected InvalidMetadata, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22800,9 +22910,49 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_column_parquet_reader_read_plain_fixed_at_242a8da5",
+    "file": "src/storage/column/parquet/reader.rs",
+    "line": 519,
+    "decision": "all_present",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_reader_read_plain_fixed_at_66766719",
+    "file": "src/storage/column/parquet/reader.rs",
+    "line": 526,
+    "decision": "level == max_def_level",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_reader_read_plain_fixed_at_084cc378",
+    "file": "src/storage/column/parquet/reader.rs",
+    "line": 534,
+    "decision": "r >= num_values",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_reader_read_plain_fixed_at_e3b5d9f1",
+    "file": "src/storage/column/parquet/reader.rs",
+    "line": 539,
+    "decision": "!is_present",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_column_parquet_reader_read_double_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 524,
+    "line": 580,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22812,7 +22962,7 @@
   {
     "id": "storage_column_parquet_reader_read_boolean_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 540,
+    "line": 596,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22822,7 +22972,7 @@
   {
     "id": "storage_column_parquet_reader_read_boolean_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 563,
+    "line": 619,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22832,7 +22982,7 @@
   {
     "id": "storage_column_parquet_reader_read_string_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 579,
+    "line": 635,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22842,7 +22992,7 @@
   {
     "id": "storage_column_parquet_reader_read_string_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 594,
+    "line": 650,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22852,7 +23002,7 @@
   {
     "id": "storage_column_parquet_reader_read_int32_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 609,
+    "line": 665,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22862,7 +23012,7 @@
   {
     "id": "storage_column_parquet_reader_read_int32_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 624,
+    "line": 680,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22872,7 +23022,7 @@
   {
     "id": "storage_column_parquet_reader_read_float_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 639,
+    "line": 695,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22882,7 +23032,7 @@
   {
     "id": "storage_column_parquet_reader_read_float_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 654,
+    "line": 710,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22892,7 +23042,7 @@
   {
     "id": "storage_column_parquet_reader_read_fixed_len_byte_array_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 671,
+    "line": 727,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22902,7 +23052,7 @@
   {
     "id": "storage_column_parquet_reader_read_fixed_len_byte_array_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 688,
+    "line": 744,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22912,7 +23062,7 @@
   {
     "id": "storage_column_parquet_reader_read_int96_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 703,
+    "line": 759,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22922,7 +23072,7 @@
   {
     "id": "storage_column_parquet_reader_read_int96_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 726,
+    "line": 782,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22932,7 +23082,7 @@
   {
     "id": "storage_column_parquet_reader_encode_def_levels_62d37561",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 821,
+    "line": 877,
     "decision": "idx < n && levels[idx] == 1",
     "conditions": 2,
     "vectors_required": 3,
@@ -22942,7 +23092,7 @@
   {
     "id": "storage_column_parquet_reader_encode_dictionary_indices_9466a82b",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 1140,
+    "line": 1278,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
