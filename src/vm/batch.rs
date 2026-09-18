@@ -23,7 +23,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::Arc;
 
 /// Rows per batch that opcodes operate on at once.
@@ -2564,9 +2564,67 @@ fn join_keys_match(
 /// not an owned key -- collisions are resolved by [`join_keys_match`]
 /// against `keys`, not by the table's own `Eq`.
 struct BuildTable {
-    index: JoinHashTable<u64, usize>,
+    index: JoinHashTable<u64, usize, SlotState>,
     keys: Vec<Vec<Value>>,
     payload: Vec<Vec<Value>>,
+    /// #514: for a single-column key whose every build value is an
+    /// `Int`, the keys again as packed `i64`s, so a probe candidate is
+    /// verified by one `i64 == i64` against an 8-byte array instead of a
+    /// `Value == Value` through `keys` (24-byte enums, a second random
+    /// access per probe row). `None` for composite keys, non-`Int` keys,
+    /// or a `Null` among the build keys (which must never match).
+    int_keys: Option<Vec<i64>>,
+}
+
+impl BuildTable {
+    /// Whether probe row `probe_row` of `probe_columns` has the same key
+    /// as build row `build_row` -- [`join_keys_match`]'s NULL-never-matches
+    /// rule, through the typed path when there is one.
+    fn keys_match(&self, probe_columns: &[&[Value]], probe_row: usize, build_row: usize) -> bool {
+        if let (Some(ints), [column]) = (&self.int_keys, probe_columns) {
+            return matches!(column.get(probe_row), Some(Value::Int(v)) if ints.get(build_row) == Some(v));
+        }
+        join_keys_match(probe_columns, probe_row, &self.keys, build_row)
+    }
+}
+
+/// The hasher behind [`BuildTable::index`] (#514). Its keys are already
+/// the `u64`s [`hash_columns_by_row`] produced, so the slot is the Murmur
+/// finalizer of that word -- the same mixer [`IntKeyTable`] and
+/// [`HashGroupTable`] use -- rather than a SipHash of a hash, which the
+/// default `RandomState` cost every probe row (~20 ns of the 34 ns a
+/// match took).
+#[derive(Clone, Copy, Default)]
+struct SlotState;
+
+struct SlotHasher(u64);
+
+impl Hasher for SlotHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+            if let Some(dst) = word.get_mut(..chunk.len()) {
+                dst.copy_from_slice(chunk);
+            }
+            self.0 = murmur_finalize(self.0 ^ u64::from_le_bytes(word));
+        }
+    }
+
+    fn write_u64(&mut self, v: u64) {
+        self.0 = murmur_finalize(self.0 ^ v);
+    }
+}
+
+impl BuildHasher for SlotState {
+    type Hasher = SlotHasher;
+
+    fn build_hasher(&self) -> SlotHasher {
+        SlotHasher(0)
+    }
 }
 
 impl fmt::Debug for BuildTable {
@@ -3766,7 +3824,8 @@ impl Vm {
                     .iter()
                     .map(|_| Vec::with_capacity(num_rows))
                     .collect();
-                let mut index: JoinHashTable<u64, usize> = JoinHashTable::with_capacity(num_rows);
+                let mut index: JoinHashTable<u64, usize, SlotState> =
+                    JoinHashTable::with_capacity_and_hasher(num_rows, SlotState);
                 for row in 0..num_rows {
                     let p = physical(row);
                     for (i, c) in key_columns.iter().enumerate() {
@@ -3777,12 +3836,23 @@ impl Vm {
                     }
                     index.insert(hashes[row], row);
                 }
+                let int_keys: Option<Vec<i64>> = match keys.as_slice() {
+                    [column] => column
+                        .iter()
+                        .map(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => None,
+                };
                 self.join_tables.0.insert(
                     *table,
                     Arc::new(BuildTable {
                         index,
                         keys,
                         payload,
+                        int_keys,
                     }),
                 );
             }
@@ -3839,7 +3909,7 @@ impl Vm {
                         let Some(&build_row) = bt.index.value_at(slot) else {
                             return;
                         };
-                        if !join_keys_match(&key_columns, row, &bt.keys, build_row) {
+                        if !bt.keys_match(&key_columns, row, build_row) {
                             return;
                         }
                         matched = true;
@@ -3995,7 +4065,7 @@ impl Vm {
                         let Some(&build_row) = bt.index.value_at(slot) else {
                             return;
                         };
-                        if !join_keys_match(&key_columns, row, &bt.keys, build_row) {
+                        if !bt.keys_match(&key_columns, row, build_row) {
                             return;
                         }
                         matched = true;
