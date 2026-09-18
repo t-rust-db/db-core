@@ -19,7 +19,7 @@
     reason = "test code fails fast (db-core#230); clippy.toml's allow-*-in-tests does not reach helper fns outside #[test]"
 )]
 
-use db_core::codegen::batch::{compile_join, BuildSourceKind};
+use db_core::codegen::batch::{compile, compile_join, BuildSourceKind};
 use db_core::parser::column::parse;
 use db_core::vm::batch::{
     compare_for_order, AggFunc, Batch, Instruction, JoinKind, MapOp, Opcode, Program, ScanSource,
@@ -1008,4 +1008,96 @@ fn finalize_rejects_a_non_numeric_partial_aggregate() {
             ..
         })
     ));
+}
+
+/// #514: the fused `HashProbeGroupReduce`'s payload-group fast path (an
+/// inner join grouped only by build-side columns) against an oracle that
+/// never sees a join: a hand nested-loop join fed to a plain `GROUP BY`.
+/// The fixture has duplicate build keys (fan-out), NULL payload values
+/// (a NULL group), keys that match nothing, and every aggregate kind the
+/// fold supports over both probe and payload sources.
+#[test]
+fn fused_inner_join_group_by_payload_matches_a_nested_loop_oracle() {
+    // Dimension: 40 rows, customer_id = row % 25 (so 15 keys appear twice),
+    // tier = one of 4 strings or NULL, rank = Int payload.
+    let dim_n = 40i64;
+    let dim_key: Vec<Value> = (0..dim_n).map(|r| Value::Int(r % 25)).collect();
+    let dim_tier: Vec<Value> = (0..dim_n)
+        .map(|r| match r % 5 {
+            4 => Value::Null,
+            t => Value::Str(format!("tier-{t}").into()),
+        })
+        .collect();
+    let dim_rank: Vec<Value> = (0..dim_n).map(|r| Value::Int((r * 7) % 11)).collect();
+    let customers = Batch::new(dim_n as usize)
+        .with_column("bench_customers.customer_id", dim_key.clone())
+        .with_column("bench_customers.tier", dim_tier.clone())
+        .with_column("bench_customers.rank", dim_rank.clone());
+
+    // Facts: 3 segments x 300 rows, customer_id in 0..30 (25..30 match nothing).
+    let mut facts = Vec::new();
+    let mut all_keys = Vec::new();
+    let mut all_amounts = Vec::new();
+    for s in 0..3i64 {
+        let keys: Vec<Value> = (0..300i64).map(|r| Value::Int((r * 13 + s) % 30)).collect();
+        let amounts: Vec<Value> = (0..300i64)
+            .map(|r| {
+                if r % 17 == 0 {
+                    Value::Null
+                } else {
+                    Value::Float(((r * 31 + s) % 97) as f64)
+                }
+            })
+            .collect();
+        all_keys.extend(keys.iter().cloned());
+        all_amounts.extend(amounts.iter().cloned());
+        facts.push(
+            Batch::new(300)
+                .with_column("bench.customer_id", keys)
+                .with_column("bench.amount", amounts),
+        );
+    }
+
+    let sql = "SELECT bench_customers.tier, SUM(bench.amount), COUNT(*), COUNT(bench.amount), \
+               MIN(bench_customers.rank), MAX(bench.amount), AVG(bench_customers.rank) \
+               FROM bench JOIN bench_customers ON bench.customer_id = bench_customers.customer_id \
+               GROUP BY bench_customers.tier";
+    let plan = compile_join(&parse(sql).unwrap(), BuildSourceKind::InMemory).unwrap();
+    assert!(plan.fused_group_by.is_some(), "fusion should engage");
+    let fused = run_join_segments(
+        facts.into_iter().map(InMemorySegment).collect(),
+        ScanSource::InMemory(customers),
+        &plan,
+        &NoResolver,
+    )
+    .unwrap();
+
+    // Oracle: nested-loop join into a flat batch, then a join-free GROUP BY.
+    let (mut tier, mut amount, mut rank) = (Vec::new(), Vec::new(), Vec::new());
+    for (k, a) in all_keys.iter().zip(&all_amounts) {
+        for (d, dk) in dim_key.iter().enumerate() {
+            if k == dk {
+                tier.push(dim_tier[d].clone());
+                amount.push(a.clone());
+                rank.push(dim_rank[d].clone());
+            }
+        }
+    }
+    let joined = Batch::new(tier.len())
+        .with_column("tier", tier)
+        .with_column("amount", amount)
+        .with_column("rank", rank);
+    let oracle_program = compile(
+        &parse(
+            "SELECT tier, SUM(amount), COUNT(*), COUNT(amount), MIN(rank), MAX(amount), AVG(rank) \
+             FROM t GROUP BY tier",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let oracle = run(&[InMemorySegment(joined)], &oracle_program).unwrap();
+
+    let expected = sorted(oracle);
+    assert_eq!(expected.len(), 5, "4 tiers plus the NULL-tier group");
+    assert_eq!(sorted(fused), expected);
 }

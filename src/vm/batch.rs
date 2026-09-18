@@ -23,7 +23,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::Arc;
 
 /// Rows per batch that opcodes operate on at once.
@@ -2564,9 +2564,130 @@ fn join_keys_match(
 /// not an owned key -- collisions are resolved by [`join_keys_match`]
 /// against `keys`, not by the table's own `Eq`.
 struct BuildTable {
-    index: JoinHashTable<u64, usize>,
+    index: JoinHashTable<u64, usize, SlotState>,
     keys: Vec<Vec<Value>>,
     payload: Vec<Vec<Value>>,
+    /// #514: for a single-column key whose every build value is an
+    /// `Int`, the keys again as packed `i64`s, so a probe candidate is
+    /// verified by one `i64 == i64` against an 8-byte array instead of a
+    /// `Value == Value` through `keys` (24-byte enums, a second random
+    /// access per probe row). `None` for composite keys, non-`Int` keys,
+    /// or a `Null` among the build keys (which must never match).
+    int_keys: Option<Vec<i64>>,
+    /// #514: each build row's group id under a `GROUP BY` of payload
+    /// columns, computed once per table on first use (see
+    /// [`BuildTable::payload_groups`]) and shared by every probe worker.
+    payload_groups: std::sync::OnceLock<PayloadGroups>,
+}
+
+/// Every build row classified by its values in `columns` (payload column
+/// indices): `group_of[build_row]` is the group id, `keys[group]` the
+/// group's key values -- so a probe row that matched `build_row` knows its
+/// group with one array read instead of hashing and comparing the payload
+/// values again (#514: `fold_group_row`'s SipHash over the string payload
+/// plus a string compare was ~19 ns of every matched row).
+struct PayloadGroups {
+    columns: Vec<usize>,
+    group_of: Vec<u32>,
+    keys: Vec<Vec<Value>>,
+}
+
+impl BuildTable {
+    /// The build rows' groups under `columns`, or `None` when this table
+    /// has already been classified under a different column set (one
+    /// table serves one fused opcode in practice; a second shape takes
+    /// the general fold) or has more groups than `u32` can number.
+    fn payload_groups(&self, columns: &[usize]) -> Option<&PayloadGroups> {
+        let groups = self.payload_groups.get_or_init(|| {
+            let mut index: HashMap<u64, Vec<usize>> = HashMap::new();
+            let mut keys: Vec<Vec<Value>> = Vec::new();
+            let mut group_of: Vec<u32> = Vec::with_capacity(self.index.len());
+            let num_rows = self.payload.first().map_or(0, Vec::len);
+            for row in 0..num_rows {
+                let values: Vec<&Value> = columns
+                    .iter()
+                    .map(|&c| self.payload.get(c).and_then(|col| col.get(row)))
+                    .map(|v| v.unwrap_or(&Value::Null))
+                    .collect();
+                let mut hasher = DefaultHasher::new();
+                for v in &values {
+                    hash_group_value(v, &mut hasher);
+                }
+                let bucket = index.entry(hasher.finish()).or_default();
+                let group = bucket
+                    .iter()
+                    .copied()
+                    .find(|&g| {
+                        keys.get(g)
+                            .is_some_and(|key| key.iter().zip(&values).all(|(k, v)| k == *v))
+                    })
+                    .unwrap_or_else(|| {
+                        let g = keys.len();
+                        keys.push(values.iter().map(|v| (*v).clone()).collect());
+                        bucket.push(g);
+                        g
+                    });
+                group_of.push(u32::try_from(group).unwrap_or(u32::MAX));
+            }
+            PayloadGroups {
+                columns: columns.to_vec(),
+                group_of,
+                keys,
+            }
+        });
+        (groups.columns == columns
+            && groups.keys.len() < usize::try_from(u32::MAX).unwrap_or(usize::MAX))
+        .then_some(groups)
+    }
+
+    /// Whether probe row `probe_row` of `probe_columns` has the same key
+    /// as build row `build_row` -- [`join_keys_match`]'s NULL-never-matches
+    /// rule, through the typed path when there is one.
+    fn keys_match(&self, probe_columns: &[&[Value]], probe_row: usize, build_row: usize) -> bool {
+        if let (Some(ints), [column]) = (&self.int_keys, probe_columns) {
+            return matches!(column.get(probe_row), Some(Value::Int(v)) if ints.get(build_row) == Some(v));
+        }
+        join_keys_match(probe_columns, probe_row, &self.keys, build_row)
+    }
+}
+
+/// The hasher behind [`BuildTable::index`] (#514). Its keys are already
+/// the `u64`s [`hash_columns_by_row`] produced, so the slot is the Murmur
+/// finalizer of that word -- the same mixer [`IntKeyTable`] and
+/// [`HashGroupTable`] use -- rather than a SipHash of a hash, which the
+/// default `RandomState` cost every probe row (~20 ns of the 34 ns a
+/// match took).
+#[derive(Clone, Copy, Default)]
+struct SlotState;
+
+struct SlotHasher(u64);
+
+impl Hasher for SlotHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+            if let Some(dst) = word.get_mut(..chunk.len()) {
+                dst.copy_from_slice(chunk);
+            }
+            self.0 = murmur_finalize(self.0 ^ u64::from_le_bytes(word));
+        }
+    }
+
+    fn write_u64(&mut self, v: u64) {
+        self.0 = murmur_finalize(self.0 ^ v);
+    }
+}
+
+impl BuildHasher for SlotState {
+    type Hasher = SlotHasher;
+
+    fn build_hasher(&self) -> SlotHasher {
+        SlotHasher(0)
+    }
 }
 
 impl fmt::Debug for BuildTable {
@@ -2727,6 +2848,16 @@ fn with_value_source<R>(
             None => f(&Value::Null),
         },
     }
+}
+
+/// An aggregate's input for the fused payload-group fast path (#514):
+/// the probe register's values, resolved to a slice once per batch, or a
+/// payload column index.
+enum AggSource {
+    /// Index into the handler's resolved `probe_columns`.
+    Probe(usize),
+    /// Payload column index.
+    Payload(usize),
 }
 
 /// Folds one joined (or, for an unmatched `Left` probe row, NULL-payload)
@@ -3766,7 +3897,8 @@ impl Vm {
                     .iter()
                     .map(|_| Vec::with_capacity(num_rows))
                     .collect();
-                let mut index: JoinHashTable<u64, usize> = JoinHashTable::with_capacity(num_rows);
+                let mut index: JoinHashTable<u64, usize, SlotState> =
+                    JoinHashTable::with_capacity_and_hasher(num_rows, SlotState);
                 for row in 0..num_rows {
                     let p = physical(row);
                     for (i, c) in key_columns.iter().enumerate() {
@@ -3777,12 +3909,24 @@ impl Vm {
                     }
                     index.insert(hashes[row], row);
                 }
+                let int_keys: Option<Vec<i64>> = match keys.as_slice() {
+                    [column] => column
+                        .iter()
+                        .map(|v| match v {
+                            Value::Int(i) => Some(*i),
+                            _ => None,
+                        })
+                        .collect(),
+                    _ => None,
+                };
                 self.join_tables.0.insert(
                     *table,
                     Arc::new(BuildTable {
                         index,
                         keys,
                         payload,
+                        int_keys,
+                        payload_groups: std::sync::OnceLock::new(),
                     }),
                 );
             }
@@ -3839,7 +3983,7 @@ impl Vm {
                         let Some(&build_row) = bt.index.value_at(slot) else {
                             return;
                         };
-                        if !join_keys_match(&key_columns, row, &bt.keys, build_row) {
+                        if !bt.keys_match(&key_columns, row, build_row) {
                             return;
                         }
                         matched = true;
@@ -3987,34 +4131,139 @@ impl Vm {
                 let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
                 let mut group_keys: Vec<Vec<Value>> = Vec::new();
                 let mut accumulators: Vec<Vec<RunningAgg>> = vec![Vec::new(); aggs.len()];
-                for row in 0..num_rows {
-                    let mut matched = false;
-                    let emit_payload =
-                        !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
-                    bt.index.for_each_match_slot(&hashes[row], |slot| {
-                        let Some(&build_row) = bt.index.value_at(slot) else {
-                            return;
-                        };
-                        if !join_keys_match(&key_columns, row, &bt.keys, build_row) {
-                            return;
-                        }
-                        matched = true;
-                        if emit_payload {
-                            fold_group_row(
-                                group_by,
-                                aggs,
-                                &probe_columns,
-                                &bt,
-                                row,
-                                Some(build_row),
-                                &mut group_index,
-                                &mut group_keys,
-                                &mut accumulators,
-                            );
-                        }
-                    });
-                    if !matched {
-                        if should_emit(*kind, false, false) {
+
+                // #514: an inner join grouped only by build-side payload
+                // columns knows each matched row's group from the build
+                // row it matched -- classified once per table -- so the
+                // per-row fold is an array read and the aggregate pushes,
+                // with no hashing or comparing of the payload values.
+                let payload_group_cols: Option<Vec<usize>> = group_by
+                    .iter()
+                    .map(|(src, _)| match src {
+                        ValueSource::Payload(i) => Some(*i),
+                        ValueSource::Probe(_) => None,
+                    })
+                    .collect();
+                let fast = match (kind, payload_group_cols) {
+                    (JoinKind::Inner, Some(cols)) if !cols.is_empty() => bt.payload_groups(&cols),
+                    _ => None,
+                };
+                if let Some(groups) = fast {
+                    let agg_sources: Vec<Option<AggSource>> = aggs
+                        .iter()
+                        .map(|(_, src)| match src {
+                            None => None,
+                            Some(ValueSource::Payload(i)) => Some(AggSource::Payload(*i)),
+                            Some(ValueSource::Probe(reg)) => Some(AggSource::Probe(
+                                probe_columns
+                                    .iter()
+                                    .position(|(r, _)| r == reg)
+                                    .unwrap_or(usize::MAX),
+                            )),
+                        })
+                        .collect();
+                    // Output groups in first-seen probe order, exactly as
+                    // the general fold numbers them.
+                    let mut seen: Vec<u32> = vec![u32::MAX; groups.keys.len()];
+                    for row in 0..num_rows {
+                        bt.index.for_each_match_slot(&hashes[row], |slot| {
+                            let Some(&build_row) = bt.index.value_at(slot) else {
+                                return;
+                            };
+                            if !bt.keys_match(&key_columns, row, build_row) {
+                                return;
+                            }
+                            let Some(&bg) = groups.group_of.get(build_row) else {
+                                return;
+                            };
+                            let Some(slot_seen) =
+                                seen.get_mut(usize::try_from(bg).unwrap_or(usize::MAX))
+                            else {
+                                return;
+                            };
+                            if *slot_seen == u32::MAX {
+                                *slot_seen = u32::try_from(group_keys.len()).unwrap_or(u32::MAX);
+                                group_keys.push(
+                                    groups
+                                        .keys
+                                        .get(usize::try_from(bg).unwrap_or(usize::MAX))
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                );
+                                for accs in accumulators.iter_mut() {
+                                    accs.push(RunningAgg::default());
+                                }
+                            }
+                            let g = usize::try_from(*slot_seen).unwrap_or(usize::MAX);
+                            for (i, src) in agg_sources.iter().enumerate() {
+                                let Some(acc) = accumulators.get_mut(i).and_then(|a| a.get_mut(g))
+                                else {
+                                    continue;
+                                };
+                                match src {
+                                    None => acc.push(None),
+                                    Some(AggSource::Probe(c)) => acc.push(Some(
+                                        probe_columns
+                                            .get(*c)
+                                            .and_then(|(_, col)| col.get(row))
+                                            .unwrap_or(&Value::Null),
+                                    )),
+                                    Some(AggSource::Payload(i)) => acc.push(Some(
+                                        bt.payload
+                                            .get(*i)
+                                            .and_then(|c| c.get(build_row))
+                                            .unwrap_or(&Value::Null),
+                                    )),
+                                }
+                            }
+                        });
+                    }
+                } else {
+                    for row in 0..num_rows {
+                        let mut matched = false;
+                        let emit_payload =
+                            !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
+                        bt.index.for_each_match_slot(&hashes[row], |slot| {
+                            let Some(&build_row) = bt.index.value_at(slot) else {
+                                return;
+                            };
+                            if !bt.keys_match(&key_columns, row, build_row) {
+                                return;
+                            }
+                            matched = true;
+                            if emit_payload {
+                                fold_group_row(
+                                    group_by,
+                                    aggs,
+                                    &probe_columns,
+                                    &bt,
+                                    row,
+                                    Some(build_row),
+                                    &mut group_index,
+                                    &mut group_keys,
+                                    &mut accumulators,
+                                );
+                            }
+                        });
+                        if !matched {
+                            if should_emit(*kind, false, false) {
+                                fold_group_row(
+                                    group_by,
+                                    aggs,
+                                    &probe_columns,
+                                    &bt,
+                                    row,
+                                    None,
+                                    &mut group_index,
+                                    &mut group_keys,
+                                    &mut accumulators,
+                                );
+                            }
+                        } else if matches!(kind, JoinKind::Semi) {
+                            // Mirrors `Opcode::HashProbe`'s own `Semi` handling:
+                            // at most one contribution per probe row, with every
+                            // `Payload` source NULL (semi-joins never surface
+                            // the build side's columns).
                             fold_group_row(
                                 group_by,
                                 aggs,
@@ -4027,22 +4276,6 @@ impl Vm {
                                 &mut accumulators,
                             );
                         }
-                    } else if matches!(kind, JoinKind::Semi) {
-                        // Mirrors `Opcode::HashProbe`'s own `Semi` handling:
-                        // at most one contribution per probe row, with every
-                        // `Payload` source NULL (semi-joins never surface
-                        // the build side's columns).
-                        fold_group_row(
-                            group_by,
-                            aggs,
-                            &probe_columns,
-                            &bt,
-                            row,
-                            None,
-                            &mut group_index,
-                            &mut group_keys,
-                            &mut accumulators,
-                        );
                     }
                 }
 
@@ -7884,6 +8117,106 @@ mod tests {
                 .unwrap()
                 .into_rows();
             assert_eq!(rows, eager_rows(&batches, &program, &spec), "limit={limit}");
+        }
+    }
+
+    /// #514: a build table classifies its rows by payload columns once;
+    /// asking for a different column set afterwards gets `None` (the
+    /// caller then takes the general fold), never a wrong classification.
+    #[test]
+    fn build_table_payload_groups_are_cached_for_one_column_set_only() {
+        let batch = Batch::new(4)
+            .with_column(
+                "k",
+                vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+            )
+            .with_column(
+                "a",
+                vec![
+                    Value::Str("x".into()),
+                    Value::Str("y".into()),
+                    Value::Str("x".into()),
+                    Value::Null,
+                ],
+            )
+            .with_column(
+                "b",
+                vec![Value::Int(7), Value::Int(7), Value::Int(8), Value::Int(7)],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "k".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "a".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 2,
+                    column: "b".into(),
+                },
+                Opcode::HashBuild {
+                    key_cols: vec![0].into(),
+                    payload_cols: vec![1, 2].into(),
+                    table: 0,
+                },
+            ],
+        )
+        .unwrap();
+        let tables = vm.join_tables();
+        let bt = tables.0.get(&0).unwrap();
+        assert_eq!(bt.int_keys.as_deref(), Some(&[1i64, 2, 3, 4][..]));
+        let groups = bt.payload_groups(&[0]).expect("first classification");
+        assert_eq!(groups.group_of, vec![0, 1, 0, 2]);
+        assert_eq!(
+            groups.keys,
+            vec![
+                vec![Value::Str("x".into())],
+                vec![Value::Str("y".into())],
+                vec![Value::Null]
+            ]
+        );
+        assert!(
+            bt.payload_groups(&[1]).is_none(),
+            "a second column set is not served"
+        );
+        assert!(bt.payload_groups(&[0]).is_some(), "the cached one still is");
+    }
+
+    #[test]
+    fn build_table_with_a_null_or_composite_key_has_no_int_key_fast_path() {
+        let cases: [Vec<Vec<Value>>; 3] = [
+            vec![vec![Value::Int(1), Value::Null]],
+            vec![
+                vec![Value::Int(1), Value::Int(2)],
+                vec![Value::Int(3), Value::Int(4)],
+            ],
+            vec![vec![Value::Str("a".into()), Value::Str("b".into())]],
+        ];
+        for keys in cases {
+            let payload_cols: Vec<usize> = Vec::new();
+            let mut batch = Batch::new(2);
+            let mut program = Vec::new();
+            for (i, col) in keys.iter().enumerate() {
+                batch = batch.with_column(format!("k{i}"), col.clone());
+                program.push(Opcode::LoadColumn {
+                    reg: i,
+                    column: format!("k{i}").into(),
+                });
+            }
+            program.push(Opcode::HashBuild {
+                key_cols: (0..keys.len()).collect::<Vec<_>>().into(),
+                payload_cols: payload_cols.into(),
+                table: 0,
+            });
+            let mut vm = Vm::new();
+            vm.execute(&batch, &program).unwrap();
+            let tables = vm.join_tables();
+            assert!(tables.0.get(&0).unwrap().int_keys.is_none(), "{keys:?}");
         }
     }
 
