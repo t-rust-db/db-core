@@ -3540,10 +3540,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_planner_from_stat1_rows_4050ff3c",
+    "id": "codegen_row_planner_from_stat1_rows_f491b87a",
     "file": "src/codegen/row/planner.rs",
-    "line": 47,
-    "decision": "match idx {\n                None => table_rows = parts.next().and_then(|s| s.parse().ok()),\n                Some(name) => {\n                    let rows = parts.next().and_then(|s| s.parse().ok());\n                    let avg_eq = parts.next().and_then(|s| s.parse().ok());\n                    if let (Some(rows), Some(avg_eq)) = (rows, avg_eq) {\n                        index_stats.insert(name, (rows, avg_eq));\n                    }\n                }\n            }",
+    "line": 69,
+    "decision": "match idx {\n                None => {\n                    table_rows = parts.next().and_then(|s| s.parse().ok());\n                    table_row_size = sz;\n                }\n                Some(name) => {\n                    let rows = parts.next().and_then(|s| s.parse().ok());\n                    let avg_eq = parts.next().and_then(|s| s.parse().ok());\n                    if let (Some(rows), Some(avg_eq)) = (rows, avg_eq) {\n                        index_stats.insert(name.clone(), (rows, avg_eq));\n                    }\n                    if let Some(sz) = sz {\n                        index_row_sizes.insert(name, sz);\n                    }\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -3552,8 +3552,28 @@
   {
     "id": "codegen_row_planner_from_stat1_rows_a49ed7e0",
     "file": "src/codegen/row/planner.rs",
-    "line": 52,
+    "line": 77,
     "decision": "let (Some(rows), Some(avg_eq)) = (rows, avg_eq)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_from_stat1_rows_a36c924c",
+    "file": "src/codegen/row/planner.rs",
+    "line": 80,
+    "decision": "let Some(sz) = sz",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_with_stat4_samples_bd141fed",
+    "file": "src/codegen/row/planner.rs",
+    "line": 102,
+    "decision": "samples.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -3562,7 +3582,7 @@
   {
     "id": "codegen_row_planner_estimate_scan_cost_7e93fae1",
     "file": "src/codegen/row/planner.rs",
-    "line": 104,
+    "line": 162,
     "decision": "match stats.table_rows() {\n        Some(rows) => PlanCost {\n            estimated_rows: rows,\n            estimated_io: rows,\n        },\n        None => PlanCost::UNKNOWN,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3572,11 +3592,411 @@
   {
     "id": "codegen_row_planner_estimate_index_cost_2b35570c",
     "file": "src/codegen/row/planner.rs",
-    "line": 141,
+    "line": 199,
     "decision": "match stats.index_stats(index_name) {\n        Some((_rows, avg_eq)) => {\n            let estimated_rows = avg_eq.max(1);\n            PlanCost {\n                estimated_rows,\n                estimated_io: estimated_rows,\n            }\n        }\n        None => PlanCost::UNKNOWN,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_new_c661c3a5",
+    "file": "src/codegen/row/planner.rs",
+    "line": 284,
+    "decision": "match stat1 {\n            Some((rows, avg)) if avg != 0 => (\n                rows,\n                rows.saturating_mul(100).checked_div(avg).unwrap_or(0),\n                count,\n            ),\n            _ => (\n                last.map_or(0, Stat4Sample::lt0),\n                last.map_or(0, Stat4Sample::dlt0).saturating_mul(100),\n                count.saturating_sub(1),\n            ),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_row_planner_new_211e1646",
+    "file": "src/codegen/row/planner.rs",
+    "line": 285,
+    "decision": "avg != 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_new_2cd7c98f",
+    "file": "src/codegen/row/planner.rs",
+    "line": 302,
+    "decision": "is_last || dlt_changes",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_new_83cc800c",
+    "file": "src/codegen/row/planner.rs",
+    "line": 308,
+    "decision": "n_dist100 > n_sum100 && sum_eq < n_row",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_key_stats_0ebcba6d",
+    "file": "src/codegen/row/planner.rs",
+    "line": 338,
+    "decision": "res == Ordering::Less",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_key_stats_123c5b02",
+    "file": "src/codegen/row/planner.rs",
+    "line": 344,
+    "decision": "res == Ordering::Equal || i_min >= i_sample",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_key_stats_8c2608a2",
+    "file": "src/codegen/row/planner.rs",
+    "line": 349,
+    "decision": "res == Ordering::Equal",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_key_stats_2bdb1fc5",
+    "file": "src/codegen/row/planner.rs",
+    "line": 350,
+    "decision": "let Some(sample) = self.samples.get(i)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_key_stats_b0a83b81",
+    "file": "src/codegen/row/planner.rs",
+    "line": 359,
+    "decision": "round_up",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_rank_2881d442",
+    "file": "src/codegen/row/planner.rs",
+    "line": 376,
+    "decision": "match v {\n            Value::Null => 0,\n            Value::Integer(_) | Value::Real(_) => 1,\n            Value::Text(_) => 2,\n            Value::Blob(_) => 3,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_compare_binary_6d9499df",
+    "file": "src/codegen/row/planner.rs",
+    "line": 384,
+    "decision": "ra != rb",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_compare_binary_650d554e",
+    "file": "src/codegen/row/planner.rs",
+    "line": 391,
+    "decision": "#[allow(\n        clippy::cast_precision_loss,\n        reason = \"SQLite compares INTEGER against REAL as f64 (sqlite3IntFloatCompare)\"\n    )]\n    match (a, b) {\n        (Value::Integer(x), Value::Integer(y)) => x.cmp(y),\n        (Value::Real(x), Value::Real(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),\n        (Value::Integer(x), Value::Real(y)) => {\n            (*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal)\n        }\n        (Value::Real(x), Value::Integer(y)) => {\n            x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)\n        }\n        (Value::Text(x), Value::Text(y)) => x.as_bytes().cmp(y.as_bytes()),\n        (Value::Blob(x), Value::Blob(y)) => x.cmp(y),\n        _ => Ordering::Equal,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_row_planner_log_est_3992362b",
+    "file": "src/codegen/row/planner.rs",
+    "line": 425,
+    "decision": "x < 8",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_log_est_399245d9",
+    "file": "src/codegen/row/planner.rs",
+    "line": 426,
+    "decision": "x < 2",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_log_est_3992362b_2",
+    "file": "src/codegen/row/planner.rs",
+    "line": 429,
+    "decision": "x < 8",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_log_est_8f543270",
+    "file": "src/codegen/row/planner.rs",
+    "line": 434,
+    "decision": "x > 255",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_log_est_2e054fd9",
+    "file": "src/codegen/row/planner.rs",
+    "line": 438,
+    "decision": "x > 15",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_log_est_add_aab9bd5c",
+    "file": "src/codegen/row/planner.rs",
+    "line": 457,
+    "decision": "a >= b",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_log_est_add_bc7e015c",
+    "file": "src/codegen/row/planner.rs",
+    "line": 458,
+    "decision": "big > small + 49",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_log_est_add_bc62928b",
+    "file": "src/codegen/row/planner.rs",
+    "line": 461,
+    "decision": "big > small + 31",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_est_log_01e8983b",
+    "file": "src/codegen/row/planner.rs",
+    "line": 471,
+    "decision": "n <= 10",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_column_size_est_3f309f7e",
+    "file": "src/codegen/row/planner.rs",
+    "line": 483,
+    "decision": "let Some((_, after_paren)) = t.split_once('(')",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_column_size_est_d515a7a2",
+    "file": "src/codegen/row/planner.rs",
+    "line": 488,
+    "decision": "let Ok(n) = digits.parse::<u64>()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_column_size_est_c843518e",
+    "file": "src/codegen/row/planner.rs",
+    "line": 492,
+    "decision": "t.eq_ignore_ascii_case(\"TEXT\")\n        || t.eq_ignore_ascii_case(\"BLOB\")\n        || t.eq_ignore_ascii_case(\"ANY\")",
+    "conditions": 3,
+    "vectors_required": 4,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_table_row_width_1a8c646d",
+    "file": "src/codegen/row/planner.rs",
+    "line": 504,
+    "decision": "let Some(sz) = stats.table_row_size",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_table_row_width_be123a6f",
+    "file": "src/codegen/row/planner.rs",
+    "line": 512,
+    "decision": "schema.rowid_alias.is_none()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_index_row_width_fe5d8bc7",
+    "file": "src/codegen/row/planner.rs",
+    "line": 521,
+    "decision": "let Some(sz) = stats.index_row_sizes.get(&index.name)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_677559f8",
+    "file": "src/codegen/row/planner.rs",
+    "line": 567,
+    "decision": "let Some(samples) = samples",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_4a4a7363",
+    "file": "src/codegen/row/planner.rs",
+    "line": 572,
+    "decision": "let Some(RangeBound {\n            value: Some(v),\n            inclusive,\n        }) = &lower",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_ce768183",
+    "file": "src/codegen/row/planner.rs",
+    "line": 579,
+    "decision": "*inclusive",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_03eec07f",
+    "file": "src/codegen/row/planner.rs",
+    "line": 589,
+    "decision": "let Some(RangeBound {\n            value: Some(v),\n            inclusive,\n        }) = &upper",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_ce768183_2",
+    "file": "src/codegen/row/planner.rs",
+    "line": 596,
+    "decision": "*inclusive",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_4eb45b36",
+    "file": "src/codegen/row/planner.rs",
+    "line": 606,
+    "decision": "lower_left.is_none() || upper_left.is_none()",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_860b65f1",
+    "file": "src/codegen/row/planner.rs",
+    "line": 607,
+    "decision": "i_upper > i_lower",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_04823cf0",
+    "file": "src/codegen/row/planner.rs",
+    "line": 611,
+    "decision": "lwr_idx.is_some() && lwr_idx == upr_idx",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_638cbcc9",
+    "file": "src/codegen/row/planner.rs",
+    "line": 625,
+    "decision": "lower_left.is_some()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_5184d94c",
+    "file": "src/codegen/row/planner.rs",
+    "line": 628,
+    "decision": "upper_left.is_some()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_estimate_range_rows_cccf006f",
+    "file": "src/codegen/row/planner.rs",
+    "line": 631,
+    "decision": "lower_left.is_some() && upper_left.is_some()",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_range_seek_beats_scan_2fd0f5a1",
+    "file": "src/codegen/row/planner.rs",
+    "line": 683,
+    "decision": "covering",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_planner_range_seek_beats_scan_3044874d",
+    "file": "src/codegen/row/planner.rs",
+    "line": 689,
+    "decision": "stats.has_stat4()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
     "wildcard_risk": false
   },
   {
@@ -3702,7 +4122,7 @@
   {
     "id": "codegen_row_select_aggregate_find_index_only_count_09980e36",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 45,
+    "line": 46,
     "decision": "select.having.is_some() || select.limit.is_some() || !select.order_by.is_empty()",
     "conditions": 3,
     "vectors_required": 4,
@@ -3712,7 +4132,7 @@
   {
     "id": "codegen_row_select_aggregate_find_index_only_count_6f016c2b",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 60,
+    "line": 61,
     "decision": "*distinct || !name.eq_ignore_ascii_case(\"count\") || !matches!(args, FunctionArgs::Star)",
     "conditions": 3,
     "vectors_required": 4,
@@ -3722,7 +4142,7 @@
   {
     "id": "codegen_row_select_aggregate_where_col_80463050",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 85,
+    "line": 86,
     "decision": "match &expr.kind {\n            ExprKind::Column { name, .. } => Some(name.as_str()),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3732,7 +4152,7 @@
   {
     "id": "codegen_row_select_aggregate_index_only_count_probe_6a154f8c",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 90,
+    "line": 91,
     "decision": "match (where_col(lhs), where_col(rhs)) {\n        (Some(name), _) => (name, rhs),\n        (_, Some(name)) => (name, lhs),\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3742,7 +4162,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_index_only_count_75daa53d",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 137,
+    "line": 138,
     "decision": "match (plan, &select.where_clause) {\n        (IndexOnlyCount::TableCount, _) => {\n            let root_page = valid_table_root_page(schema)?;\n            em.emit(Instruction::new(Opcode::Count, root_page, count_reg, 0));\n        }\n        (IndexOnlyCount::IndexProbe { index_position }, Some(where_expr)) => {\n            let (Some(index), Some((_, operand))) = (\n                schema.indexes.get(index_position),\n                index_only_count_probe(where_expr),\n            ) else {\n                return Err(CodegenError::Internal {\n                    reason: \"find_index_only_count matched a probe its WHERE clause lacks\"\n                        .to_string(),\n                });\n            };\n            let root_page = valid_index_root_page(index)?;\n            let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);\n            open_instr.p5 = 1;\n            em.emit(open_instr);\n\n            let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);\n            let value_reg = compile_value(em, reg, &scope, operand)?;\n            let leading_collation = index\n                .columns\n                .first()\n                .map_or(Collation::Binary, |c| c.collation);\n            let miss_label = em.new_label();\n            let seek_addr = em.emit(Instruction::with_p4(\n                Opcode::SeekIndexEq,\n                index_cursor,\n                0,\n                value_reg,\n                P4::SeekKey(vec![leading_collation]),\n            ));\n            em.patch_p2(seek_addr, miss_label);\n\n            let loop_start = em.new_label();\n            em.place(loop_start);\n            let one_reg = reg.alloc();\n            em.emit(Instruction::new(Opcode::Integer, 1, one_reg, 0));\n            em.emit(Instruction::new(Opcode::Add, one_reg, count_reg, count_reg));\n\n            // A `UNIQUE` index's single match falls straight through\n            // here on the very first `IdxNext` (nothing shares its\n            // key); a non-`UNIQUE` index's duplicate-key siblings loop\n            // back to `loop_start`, incrementing once per match.\n            let next_addr = em.emit(Instruction::new(Opcode::IdxNext, index_cursor, 0, 0));\n            let recheck = em.new_label();\n            em.patch_p2(next_addr, recheck);\n            let exhausted = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));\n            em.patch_p2(exhausted, miss_label);\n\n            em.place(recheck);\n            let leading = reg.alloc();\n            em.emit(Instruction::new(Opcode::Column, index_cursor, 0, leading));\n            // The leading index column's declared `COLLATE` (#500),\n            // matching `SeekIndexEq`'s own probe comparison just above.\n            let eq_addr = em.emit(Instruction::with_p4(\n                Opcode::Eq,\n                leading,\n                0,\n                value_reg,\n                p4_coll_seq(leading_collation, Affinity::Blob),\n            ));\n            em.patch_p2(eq_addr, loop_start);\n\n            em.place(miss_label);\n        }\n        (IndexOnlyCount::IndexProbe { .. }, None) => {\n            return Err(CodegenError::Internal {\n                reason: \"find_index_only_count probed an index without a WHERE clause\".to_string(),\n            });\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3752,7 +4172,7 @@
   {
     "id": "codegen_row_select_aggregate_find_index_only_sum_183395db",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 236,
+    "line": 237,
     "decision": "select.where_clause.is_some()\n        || select.having.is_some()\n        || select.limit.is_some()\n        || !select.order_by.is_empty()\n        || !select.group_by.is_empty()",
     "conditions": 5,
     "vectors_required": 6,
@@ -3762,7 +4182,7 @@
   {
     "id": "codegen_row_select_aggregate_find_index_only_sum_dba1570c",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 246,
+    "line": 247,
     "decision": "!(name.eq_ignore_ascii_case(\"sum\") || name.eq_ignore_ascii_case(\"avg\"))",
     "conditions": 1,
     "vectors_required": 2,
@@ -3772,7 +4192,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_5cf5246b",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 391,
+    "line": 393,
     "decision": "aggs.iter().any(|(_, _, _, distinct)| *distinct)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3782,7 +4202,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_fba90692",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 398,
+    "line": 400,
     "decision": "match &select.where_clause {\n        Some(where_expr) => crate::codegen::row::subquery::hoist_uncorrelated_where_subqueries(\n            em,\n            reg,\n            &table_scope,\n            where_expr,\n        )?,\n        None => std::collections::HashMap::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3792,7 +4212,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_a9ca7739",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 499,
+    "line": 501,
     "decision": "!needed.contains(&idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3800,10 +4220,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_6117ca90",
+    "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_48c38f44",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 529,
-    "decision": "match (&select.where_clause, covering) {\n        (Some(where_expr), Some(key_order)) => {\n            let index_schema = Rc::new(compact_schema(schema, &key_order)?);\n            let index_scope = Scope::single_shared(&index_schema, range_index_cursor)\n                .with_catalog(catalog)\n                .with_hoisted(Rc::clone(&table_scope.hoisted));\n            let positions = compact_index_map(&key_order, schema.columns.len());\n            try_compile_range_row_seek(\n                em,\n                reg,\n                where_expr,\n                schema,\n                &table_scope,\n                range_index_cursor,\n                tail_label,\n                &mut |em, reg, index_cursor, _row_skip| {\n                    accumulate_row(\n                        em,\n                        reg,\n                        &index_scope,\n                        &index_schema,\n                        index_cursor,\n                        &positions,\n                    )\n                },\n            )?\n        }\n        (Some(where_expr), None) => try_compile_range_row_seek(\n            em,\n            reg,\n            where_expr,\n            schema,\n            &table_scope,\n            range_index_cursor,\n            tail_label,\n            &mut |em, reg, index_cursor, row_skip| {\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::IdxRowid,\n                    index_cursor,\n                    rowid_reg,\n                    0,\n                ));\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    cursors.table,\n                    0,\n                    rowid_reg,\n                ));\n                em.patch_p2(seek_addr, row_skip);\n                accumulate_row(\n                    em,\n                    reg,\n                    &table_scope,\n                    schema,\n                    cursors.table,\n                    &identity_positions,\n                )\n            },\n        )?,\n        (None, _) => false,\n    }",
+    "line": 531,
+    "decision": "match (&select.where_clause, covering) {\n        (Some(where_expr), Some(key_order)) => {\n            let index_schema = Rc::new(compact_schema(schema, &key_order)?);\n            let index_scope = Scope::single_shared(&index_schema, range_index_cursor)\n                .with_catalog(catalog)\n                .with_hoisted(Rc::clone(&table_scope.hoisted));\n            let positions = compact_index_map(&key_order, schema.columns.len());\n            try_compile_range_row_seek(\n                em,\n                reg,\n                where_expr,\n                schema,\n                &table_scope,\n                range_index_cursor,\n                tail_label,\n                stats,\n                true,\n                &mut |em, reg, index_cursor, _row_skip| {\n                    accumulate_row(\n                        em,\n                        reg,\n                        &index_scope,\n                        &index_schema,\n                        index_cursor,\n                        &positions,\n                    )\n                },\n            )?\n        }\n        (Some(where_expr), None) => try_compile_range_row_seek(\n            em,\n            reg,\n            where_expr,\n            schema,\n            &table_scope,\n            range_index_cursor,\n            tail_label,\n            stats,\n            false,\n            &mut |em, reg, index_cursor, row_skip| {\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::IdxRowid,\n                    index_cursor,\n                    rowid_reg,\n                    0,\n                ));\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    cursors.table,\n                    0,\n                    rowid_reg,\n                ));\n                em.patch_p2(seek_addr, row_skip);\n                accumulate_row(\n                    em,\n                    reg,\n                    &table_scope,\n                    schema,\n                    cursors.table,\n                    &identity_positions,\n                )\n            },\n        )?,\n        (None, _) => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -3812,7 +4232,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_1128723f",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 592,
+    "line": 598,
     "decision": "!used_range_seek",
     "conditions": 1,
     "vectors_required": 2,
@@ -3822,8 +4242,18 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_0d86c16d",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 599,
+    "line": 605,
     "decision": "let Some(where_expr) = &select.where_clause",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_aggregate_covering_range_index_6e1d9672",
+    "file": "src/codegen/row/select/aggregate.rs",
+    "line": 683,
+    "decision": "!covered",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -3832,7 +4262,7 @@
   {
     "id": "codegen_row_select_aggregate_direct_agg_range_seek_is_covering_e31d1018",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 696,
+    "line": 710,
     "decision": "has_distinct_agg",
     "conditions": 1,
     "vectors_required": 2,
@@ -3842,7 +4272,7 @@
   {
     "id": "codegen_row_select_aggregate_columns_needed_for_projection_66344390",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 732,
+    "line": 746,
     "decision": "match col {\n            ResultColumn::Expr { expr, .. } => {\n                walk_expr_for_column_refs(expr, &mut names, &mut bail)\n            }\n            ResultColumn::Star | ResultColumn::TableStar { .. } => bail = true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3852,7 +4282,7 @@
   {
     "id": "codegen_row_select_aggregate_columns_needed_for_projection_75087af1",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 739,
+    "line": 753,
     "decision": "let Some(having) = &select.having",
     "conditions": 1,
     "vectors_required": 2,
@@ -3862,7 +4292,7 @@
   {
     "id": "codegen_row_select_aggregate_columns_needed_for_projection_302e8372",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 742,
+    "line": 756,
     "decision": "bail",
     "conditions": 1,
     "vectors_required": 2,
@@ -3872,7 +4302,7 @@
   {
     "id": "codegen_row_select_aggregate_columns_needed_for_projection_8bff95f7",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 748,
+    "line": 762,
     "decision": "match schema\n            .columns\n            .iter()\n            .position(|c| c.eq_ignore_ascii_case(name))\n        {\n            Some(idx) => {\n                indices.insert(idx);\n            }\n            // Should always resolve at this point in codegen — an\n            // unknown column would already have failed earlier\n            // validation. Fall back to \"every column\" rather than\n            // silently dropping one we can't place, on the off chance\n            // this is reached some other way.\n            None => return all_columns(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3882,7 +4312,7 @@
   {
     "id": "codegen_row_select_aggregate_compact_index_map_9bdf8b2a",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 787,
+    "line": 801,
     "decision": "let Some(slot) = map.get_mut(orig)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3892,7 +4322,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_4d912e62",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 886,
+    "line": 900,
     "decision": "*bail",
     "conditions": 1,
     "vectors_required": 2,
@@ -3902,7 +4332,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_cc6478e3",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 889,
+    "line": 903,
     "decision": "match &expr.kind {\n        ExprKind::Column { name, .. } => {\n            names.insert(name.to_ascii_lowercase());\n        }\n        ExprKind::Literal(_) | ExprKind::Param(_) => {}\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(list) = args {\n                for a in list {\n                    walk_expr_for_column_refs(a, names, bail);\n                }\n            }\n        }\n        ExprKind::Unary { expr: e, .. }\n        | ExprKind::IsNull { expr: e, .. }\n        | ExprKind::Cast { expr: e, .. }\n        | ExprKind::Collate { expr: e, .. }\n        | ExprKind::Paren(e) => walk_expr_for_column_refs(e, names, bail),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            walk_expr_for_column_refs(lhs, names, bail);\n            walk_expr_for_column_refs(rhs, names, bail);\n        }\n        ExprKind::Between {\n            expr: e, lo, hi, ..\n        } => {\n            walk_expr_for_column_refs(e, names, bail);\n            walk_expr_for_column_refs(lo, names, bail);\n            walk_expr_for_column_refs(hi, names, bail);\n        }\n        ExprKind::In { expr: e, list, .. } => {\n            walk_expr_for_column_refs(e, names, bail);\n            for item in list {\n                walk_expr_for_column_refs(item, names, bail);\n            }\n        }\n        ExprKind::Like {\n            expr: e,\n            pattern,\n            escape,\n            ..\n        } => {\n            walk_expr_for_column_refs(e, names, bail);\n            walk_expr_for_column_refs(pattern, names, bail);\n            if let Some(esc) = escape {\n                walk_expr_for_column_refs(esc, names, bail);\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(o) = operand {\n                walk_expr_for_column_refs(o, names, bail);\n            }\n            for (w, t) in whens {\n                walk_expr_for_column_refs(w, names, bail);\n                walk_expr_for_column_refs(t, names, bail);\n            }\n            if let Some(e) = else_ {\n                walk_expr_for_column_refs(e, names, bail);\n            }\n        }\n        ExprKind::Subquery(_)\n        | ExprKind::Exists { .. }\n        | ExprKind::InSubquery { .. }\n        | ExprKind::InSubqueryMulti { .. } => {\n            *bail = true;\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3912,7 +4342,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_a77e706f",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 895,
+    "line": 909,
     "decision": "let FunctionArgs::List(list) = args",
     "conditions": 1,
     "vectors_required": 2,
@@ -3922,7 +4352,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_e05c35b7",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 931,
+    "line": 945,
     "decision": "let Some(esc) = escape",
     "conditions": 1,
     "vectors_required": 2,
@@ -3932,7 +4362,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_1bf37598",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 940,
+    "line": 954,
     "decision": "let Some(o) = operand",
     "conditions": 1,
     "vectors_required": 2,
@@ -3942,7 +4372,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_56705ec3",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 947,
+    "line": 961,
     "decision": "let Some(e) = else_",
     "conditions": 1,
     "vectors_required": 2,
@@ -3952,7 +4382,7 @@
   {
     "id": "codegen_row_select_aggregate_emit_reset_subroutine_6ed41c5c",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1085,
+    "line": 1099,
     "decision": "let Some(eph_cursor) = agg.eph_cursor",
     "conditions": 1,
     "vectors_required": 2,
@@ -3962,7 +4392,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_ac0766bf",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1110,
+    "line": 1125,
     "decision": "let Some(outer) = outer_scope",
     "conditions": 1,
     "vectors_required": 2,
@@ -3972,7 +4402,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_fba90692",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1122,
+    "line": 1137,
     "decision": "match &select.where_clause {\n        Some(where_expr) => crate::codegen::row::subquery::hoist_uncorrelated_where_subqueries(\n            em,\n            reg,\n            &table_scope,\n            where_expr,\n        )?,\n        None => std::collections::HashMap::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3982,7 +4412,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_ac0766bf_2",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1148,
+    "line": 1163,
     "decision": "let Some(outer) = outer_scope",
     "conditions": 1,
     "vectors_required": 2,
@@ -3992,7 +4422,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_9a23357d",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1179,
+    "line": 1194,
     "decision": "match target {\n                // Always resolves: `needed_columns` includes every column\n                // `select.group_by` references (`columns_needed_for_projection`),\n                // so `idx` always has a compacted position.\n                OrderByTarget::Column(idx) => {\n                    compact_of.get(*idx).copied().flatten().ok_or_else(|| {\n                        CodegenError::Internal {\n                            reason: format!(\"GROUP BY column {idx} has no compacted position\"),\n                        }\n                    })?\n                }\n                OrderByTarget::Expr(e) => {\n                    let r = compile_value(em, reg, &table_scope, e)?;\n                    key_index(r, first)?\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4000,10 +4430,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_compile_grouped_scan_021b3860",
+    "id": "codegen_row_select_aggregate_compile_grouped_scan_32915b9c",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1231,
-    "decision": "match &select.where_clause {\n        Some(where_expr) => try_compile_range_row_seek(\n            em,\n            reg,\n            where_expr,\n            schema,\n            &table_scope,\n            range_index_cursor,\n            sort_step,\n            &mut |em, reg, index_cursor, row_skip| {\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::IdxRowid,\n                    index_cursor,\n                    rowid_reg,\n                    0,\n                ));\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    cursors.table,\n                    0,\n                    rowid_reg,\n                ));\n                em.patch_p2(seek_addr, row_skip);\n                emit_pass1_row(em, reg)\n            },\n        )?,\n        None => false,\n    }",
+    "line": 1246,
+    "decision": "match &select.where_clause {\n        Some(where_expr) => try_compile_range_row_seek(\n            em,\n            reg,\n            where_expr,\n            schema,\n            &table_scope,\n            range_index_cursor,\n            sort_step,\n            stats,\n            false,\n            &mut |em, reg, index_cursor, row_skip| {\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::IdxRowid,\n                    index_cursor,\n                    rowid_reg,\n                    0,\n                ));\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    cursors.table,\n                    0,\n                    rowid_reg,\n                ));\n                em.patch_p2(seek_addr, row_skip);\n                emit_pass1_row(em, reg)\n            },\n        )?,\n        None => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -4012,7 +4442,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_1128723f",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1261,
+    "line": 1278,
     "decision": "!used_range_seek",
     "conditions": 1,
     "vectors_required": 2,
@@ -4022,7 +4452,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_0d86c16d",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1268,
+    "line": 1285,
     "decision": "let Some(where_expr) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -4032,7 +4462,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_3342071b",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1295,
+    "line": 1312,
     "decision": "implicit_group",
     "conditions": 1,
     "vectors_required": 2,
@@ -4042,7 +4472,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_519a9db9",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1376,
+    "line": 1393,
     "decision": "match target {\n            OrderByTarget::Column(idx) => {\n                let r = reg.alloc();\n                // Always resolves — see the identical comment on\n                // pass 1's `sort_keys` loop above.\n                let compact_idx = compact_of.get(*idx).copied().flatten().ok_or_else(|| {\n                    CodegenError::Internal {\n                        reason: format!(\"GROUP BY column {idx} has no compacted position\"),\n                    }\n                })?;\n                read_pseudo_column(em, &pseudo_schema, cursors.pseudo, compact_idx, r)?;\n                Ok(r)\n            }\n            OrderByTarget::Expr(_) => compile_value(em, reg, &pseudo_scope, expr),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4052,7 +4482,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_60f9d020",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1468,
+    "line": 1485,
     "decision": "let Some(compact_idx) = compact_of.get(orig_idx).copied().flatten()",
     "conditions": 1,
     "vectors_required": 2,
@@ -4062,7 +4492,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_3342071b_2",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1493,
+    "line": 1510,
     "decision": "implicit_group",
     "conditions": 1,
     "vectors_required": 2,
@@ -4072,7 +4502,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_0b9ce1f2",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1497,
+    "line": 1514,
     "decision": "!implicit_group",
     "conditions": 1,
     "vectors_required": 2,
@@ -4082,7 +4512,7 @@
   {
     "id": "codegen_row_select_aggregate_group_by_index_ordering_d63afa68",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1556,
+    "line": 1573,
     "decision": "implicit_group || select.group_by.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -4092,7 +4522,7 @@
   {
     "id": "codegen_row_select_aggregate_group_by_index_ordering_ae83a762",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1562,
+    "line": 1579,
     "decision": "select.where_clause.is_some() || schema.without_rowid",
     "conditions": 2,
     "vectors_required": 3,
@@ -4102,7 +4532,7 @@
   {
     "id": "codegen_row_select_aggregate_group_by_index_ordering_ca556ce9",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1579,
+    "line": 1596,
     "decision": "match t {\n            OrderByTarget::Column(idx) => Some(*idx),\n            OrderByTarget::Expr(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4112,7 +4542,7 @@
   {
     "id": "codegen_row_select_aggregate_group_by_index_ordering_b90d0567",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1594,
+    "line": 1611,
     "decision": "match target {\n                OrderByTarget::Column(idx) => schema\n                    .column_collations\n                    .get(*idx)\n                    .copied()\n                    .unwrap_or(Collation::Binary),\n                OrderByTarget::Expr(_) => Collation::Binary,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4122,7 +4552,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_index_ordered_group_by_ca556ce9",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1637,
+    "line": 1654,
     "decision": "match t {\n            OrderByTarget::Column(idx) => Some(*idx),\n            OrderByTarget::Expr(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4132,7 +4562,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_index_ordered_group_by_0d4adb54",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1695,
+    "line": 1712,
     "decision": "forward",
     "conditions": 1,
     "vectors_required": 2,
@@ -4142,7 +4572,7 @@
   {
     "id": "codegen_row_select_aggregate_ok_e61d3dd7",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1877,
+    "line": 1894,
     "decision": "match compile(sql, schemas) {\n            Ok(p) => p,\n            Err(e) => panic!(\"{sql}: expected Ok, got {e:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4152,7 +4582,7 @@
   {
     "id": "codegen_row_select_aggregate_err_text_60f80ce7",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1884,
+    "line": 1901,
     "decision": "match compile(sql, schemas) {\n            Ok(p) => panic!(\"{sql}: expected Err, got program {p:?}\"),\n            Err(e) => format!(\"{e:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4900,10 +5330,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_entry_compile_select_scan_9e743d08",
+    "id": "codegen_row_select_entry_compile_select_scan_0b496d30",
     "file": "src/codegen/row/select/entry.rs",
     "line": 314,
-    "decision": "super::aggregate::try_compile_direct_agg_scan(\n            em, reg, select, schema, cursors, end_label, catalog, sink,\n        )?",
+    "decision": "super::aggregate::try_compile_direct_agg_scan(\n            em, reg, select, schema, cursors, end_label, catalog, stats, sink,\n        )?",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -5342,7 +5772,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_7278742d",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 300,
+    "line": 302,
     "decision": "level == 0 && from.joins.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -5352,7 +5782,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_ff49d1f0",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 311,
+    "line": 314,
     "decision": "let Some(index_walk_detail) = index_walk",
     "conditions": 1,
     "vectors_required": 2,
@@ -5362,7 +5792,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_3eec7f76",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 313,
+    "line": 316,
     "decision": "let Some(range_detail) = range_seek",
     "conditions": 1,
     "vectors_required": 2,
@@ -5372,7 +5802,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_b21cb18f",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 316,
+    "line": 319,
     "decision": "match (\n                access,\n                covering\n                    .as_ref()\n                    .and_then(|m| binding.schema.indexes.get(m.index_position)),\n                skip_scan\n                    .as_ref()\n                    .and_then(|m| binding.schema.indexes.get(m.index_position))\n                    .zip(skip_scan.as_ref().map(|m| m.column_position)),\n            ) {\n                (_, Some(index), _) => format!(\n                    \"SEARCH {} USING COVERING INDEX {} ({}=?)\",\n                    eqp_display_name(table_ref),\n                    index.name,\n                    index\n                        .columns\n                        .first()\n                        .map_or_else(String::new, |c| c.name.clone())\n                ),\n                (None, None, Some((index, column_position))) => {\n                    // Oracle sqlite3's own skip-scan EQP text, confirmed\n                    // empirically (sqlite3 3.51.0): `SEARCH t USING INDEX\n                    // idx (ANY(category) AND price=?)` -- one `ANY(col)`\n                    // per unconstrained leading column, then `col=?` for\n                    // the actually-probed column.\n                    let parts: Vec<String> = index\n                        .columns\n                        .get(..column_position)\n                        .unwrap_or_default()\n                        .iter()\n                        .map(|c| format!(\"ANY({})\", c.name))\n                        .chain(std::iter::once(format!(\n                            \"{}=?\",\n                            index\n                                .columns\n                                .get(column_position)\n                                .map_or_else(String::new, |c| c.name.clone())\n                        )))\n                        .collect();\n                    format!(\n                        \"SEARCH {} USING INDEX {} ({})\",\n                        eqp_display_name(table_ref),\n                        index.name,\n                        parts.join(\" AND \")\n                    )\n                }\n                // #545/#547: this level builds a transient automatic index\n                // rather than falling back to a plain scan -- real sqlite3's\n                // own wording for the equivalent case (confirmed empirically,\n                // sqlite3 3.51.0): `SEARCH t USING AUTOMATIC COVERING INDEX\n                // (col=?)`, no index name (it has none).\n                (None, None, None) => match &auto_index_probe {\n                    Some(AutoIndexProbe { key_column, .. }) => format!(\n                        \"SEARCH {} USING AUTOMATIC COVERING INDEX ({}=?)\",\n                        eqp_display_name(table_ref),\n                        binding\n                            .schema\n                            .columns\n                            .get(*key_column)\n                            .map_or_else(String::new, |c| c.clone())\n                    ),\n                    None => format!(\"SCAN {}\", eqp_display_name(table_ref)),\n                },\n                (Some(JoinAccess::Rowid(_)), None, _) => format!(\n                    \"SEARCH {} USING INTEGER PRIMARY KEY (rowid=?)\",\n                    eqp_display_name(table_ref)\n                ),\n                (Some(JoinAccess::UniqueIndex { index, .. }), None, _) => format!(\n                    \"SEARCH {} USING INDEX {} ({}=?)\",\n                    eqp_display_name(table_ref),\n                    index.name,\n                    index\n                        .columns\n                        .first()\n                        .map_or_else(String::new, |c| c.name.clone())\n                ),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5382,7 +5812,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_d289d0e0",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 367,
+    "line": 370,
     "decision": "match &auto_index_probe {\n                    Some(AutoIndexProbe { key_column, .. }) => format!(\n                        \"SEARCH {} USING AUTOMATIC COVERING INDEX ({}=?)\",\n                        eqp_display_name(table_ref),\n                        binding\n                            .schema\n                            .columns\n                            .get(*key_column)\n                            .map_or_else(String::new, |c| c.clone())\n                    ),\n                    None => format!(\"SCAN {}\", eqp_display_name(table_ref)),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5392,7 +5822,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_edc395f6",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 413,
+    "line": 416,
     "decision": "let TableRefKind::Subquery(inner) = &table_ref.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -5402,7 +5832,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_f2576932",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 414,
+    "line": 417,
     "decision": "let Some(inner_from) = &inner.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -5412,7 +5842,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_c89c715e",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 422,
+    "line": 425,
     "decision": "let Ok(inner_schemas) = inner_schemas",
     "conditions": 1,
     "vectors_required": 2,
@@ -5422,7 +5852,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_7412d0f0",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 423,
+    "line": 426,
     "decision": "let Ok(child_rows) =\n                        explain_query_plan(inner, &inner_schemas, stats_by_table, catalog)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5432,7 +5862,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_97235188",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 430,
+    "line": 433,
     "decision": "was_top_level",
     "conditions": 1,
     "vectors_required": 2,
@@ -5442,7 +5872,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_0d86c16d",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 449,
+    "line": 452,
     "decision": "let Some(where_expr) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -5452,7 +5882,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_7d7d3711",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 455,
+    "line": 458,
     "decision": "!is_comparison_op(*op)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5462,7 +5892,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_5836fc83",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 485,
+    "line": 488,
     "decision": "from.joins.is_empty() && !select.group_by.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -5472,7 +5902,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_e3c201a8",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 486,
+    "line": 489,
     "decision": "let Some(binding) = bindings.first()",
     "conditions": 1,
     "vectors_required": 2,
@@ -5482,7 +5912,7 @@
   {
     "id": "codegen_row_select_eqp_explain_query_plan_c430d23b",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 490,
+    "line": 493,
     "decision": "!index_ordered",
     "conditions": 1,
     "vectors_required": 2,
@@ -5490,50 +5920,50 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_eqp_aggregate_index_walk_detail_544ccf1a",
+    "id": "codegen_row_select_eqp_aggregate_index_walk_detail_c4b15d33",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 526,
-    "decision": "match dispatch {\n        ScanDispatch::Aggregate => {\n            match find_index_only_count(select, schema) {\n                Some(IndexOnlyCount::TableCount) => Ok(None),\n                Some(IndexOnlyCount::IndexProbe { index_position }) => {\n                    let index = schema.indexes.get(index_position).ok_or_else(|| {\n                        CodegenError::Internal {\n                            reason: format!(\n                                \"EQP count(*) probe names index #{index_position} the schema lacks\"\n                            ),\n                        }\n                    })?;\n                    Ok(Some(format!(\n                        \"SEARCH {table_display} USING COVERING INDEX {} ({}=?)\",\n                        index.name,\n                        index\n                            .columns\n                            .first()\n                            .map_or_else(String::new, |c| c.name.clone())\n                    )))\n                }\n                None => match find_index_only_sum(select, schema) {\n                    Some(index_position) => Ok(Some(format!(\n                        \"SCAN {table_display} USING COVERING INDEX {}\",\n                        index_name(index_position)?\n                    ))),\n                    None => Ok(\n                        aggregate_range_seek_detail(select, schema, table_display, catalog).map(\n                            |detail| {\n                                // #484: `try_compile_direct_agg_scan` drops the\n                                // per-entry table lookup when the index key\n                                // covers every column the query reads.\n                                if super::aggregate::direct_agg_range_seek_is_covering(\n                                    select, schema, catalog,\n                                ) {\n                                    detail.replacen(\"USING INDEX\", \"USING COVERING INDEX\", 1)\n                                } else {\n                                    detail\n                                }\n                            },\n                        ),\n                    ),\n                },\n            }\n        }\n        ScanDispatch::GroupBy => {\n            match super::aggregate::group_by_index_ordering(select, schema, false)? {\n                Some((index_position, _forward)) => Ok(Some(format!(\n                    \"SCAN {table_display} USING INDEX {}\",\n                    index_name(index_position)?\n                ))),\n                None => Ok(aggregate_range_seek_detail(\n                    select,\n                    schema,\n                    table_display,\n                    catalog,\n                )),\n            }\n        }\n        ScanDispatch::Direct | ScanDispatch::Sorted => Ok(None),\n    }",
+    "line": 530,
+    "decision": "match dispatch {\n        ScanDispatch::Aggregate => {\n            match find_index_only_count(select, schema) {\n                Some(IndexOnlyCount::TableCount) => Ok(None),\n                Some(IndexOnlyCount::IndexProbe { index_position }) => {\n                    let index = schema.indexes.get(index_position).ok_or_else(|| {\n                        CodegenError::Internal {\n                            reason: format!(\n                                \"EQP count(*) probe names index #{index_position} the schema lacks\"\n                            ),\n                        }\n                    })?;\n                    Ok(Some(format!(\n                        \"SEARCH {table_display} USING COVERING INDEX {} ({}=?)\",\n                        index.name,\n                        index\n                            .columns\n                            .first()\n                            .map_or_else(String::new, |c| c.name.clone())\n                    )))\n                }\n                None => match find_index_only_sum(select, schema) {\n                    Some(index_position) => Ok(Some(format!(\n                        \"SCAN {table_display} USING COVERING INDEX {}\",\n                        index_name(index_position)?\n                    ))),\n                    None => {\n                        // #484: `try_compile_direct_agg_scan` drops the\n                        // per-entry table lookup when the index key\n                        // covers every column the query reads; #498's\n                        // seek-versus-scan gate is evaluated for that\n                        // same walk.\n                        let covering = super::aggregate::direct_agg_range_seek_is_covering(\n                            select, schema, catalog, stats,\n                        );\n                        Ok(aggregate_range_seek_detail(\n                            select,\n                            schema,\n                            table_display,\n                            catalog,\n                            stats,\n                            covering,\n                        )\n                        .map(|detail| {\n                            if covering {\n                                detail.replacen(\"USING INDEX\", \"USING COVERING INDEX\", 1)\n                            } else {\n                                detail\n                            }\n                        }))\n                    }\n                },\n            }\n        }\n        ScanDispatch::GroupBy => {\n            match super::aggregate::group_by_index_ordering(select, schema, false)? {\n                Some((index_position, _forward)) => Ok(Some(format!(\n                    \"SCAN {table_display} USING INDEX {}\",\n                    index_name(index_position)?\n                ))),\n                None => Ok(aggregate_range_seek_detail(\n                    select,\n                    schema,\n                    table_display,\n                    catalog,\n                    stats,\n                    false,\n                )),\n            }\n        }\n        ScanDispatch::Direct | ScanDispatch::Sorted => Ok(None),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_eqp_aggregate_index_walk_detail_ee2127f3",
+    "id": "codegen_row_select_eqp_aggregate_index_walk_detail_dcd2d460",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 528,
-    "decision": "match find_index_only_count(select, schema) {\n                Some(IndexOnlyCount::TableCount) => Ok(None),\n                Some(IndexOnlyCount::IndexProbe { index_position }) => {\n                    let index = schema.indexes.get(index_position).ok_or_else(|| {\n                        CodegenError::Internal {\n                            reason: format!(\n                                \"EQP count(*) probe names index #{index_position} the schema lacks\"\n                            ),\n                        }\n                    })?;\n                    Ok(Some(format!(\n                        \"SEARCH {table_display} USING COVERING INDEX {} ({}=?)\",\n                        index.name,\n                        index\n                            .columns\n                            .first()\n                            .map_or_else(String::new, |c| c.name.clone())\n                    )))\n                }\n                None => match find_index_only_sum(select, schema) {\n                    Some(index_position) => Ok(Some(format!(\n                        \"SCAN {table_display} USING COVERING INDEX {}\",\n                        index_name(index_position)?\n                    ))),\n                    None => Ok(\n                        aggregate_range_seek_detail(select, schema, table_display, catalog).map(\n                            |detail| {\n                                // #484: `try_compile_direct_agg_scan` drops the\n                                // per-entry table lookup when the index key\n                                // covers every column the query reads.\n                                if super::aggregate::direct_agg_range_seek_is_covering(\n                                    select, schema, catalog,\n                                ) {\n                                    detail.replacen(\"USING INDEX\", \"USING COVERING INDEX\", 1)\n                                } else {\n                                    detail\n                                }\n                            },\n                        ),\n                    ),\n                },\n            }",
+    "line": 532,
+    "decision": "match find_index_only_count(select, schema) {\n                Some(IndexOnlyCount::TableCount) => Ok(None),\n                Some(IndexOnlyCount::IndexProbe { index_position }) => {\n                    let index = schema.indexes.get(index_position).ok_or_else(|| {\n                        CodegenError::Internal {\n                            reason: format!(\n                                \"EQP count(*) probe names index #{index_position} the schema lacks\"\n                            ),\n                        }\n                    })?;\n                    Ok(Some(format!(\n                        \"SEARCH {table_display} USING COVERING INDEX {} ({}=?)\",\n                        index.name,\n                        index\n                            .columns\n                            .first()\n                            .map_or_else(String::new, |c| c.name.clone())\n                    )))\n                }\n                None => match find_index_only_sum(select, schema) {\n                    Some(index_position) => Ok(Some(format!(\n                        \"SCAN {table_display} USING COVERING INDEX {}\",\n                        index_name(index_position)?\n                    ))),\n                    None => {\n                        // #484: `try_compile_direct_agg_scan` drops the\n                        // per-entry table lookup when the index key\n                        // covers every column the query reads; #498's\n                        // seek-versus-scan gate is evaluated for that\n                        // same walk.\n                        let covering = super::aggregate::direct_agg_range_seek_is_covering(\n                            select, schema, catalog, stats,\n                        );\n                        Ok(aggregate_range_seek_detail(\n                            select,\n                            schema,\n                            table_display,\n                            catalog,\n                            stats,\n                            covering,\n                        )\n                        .map(|detail| {\n                            if covering {\n                                detail.replacen(\"USING INDEX\", \"USING COVERING INDEX\", 1)\n                            } else {\n                                detail\n                            }\n                        }))\n                    }\n                },\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_eqp_aggregate_index_walk_detail_18bfbc78",
+    "id": "codegen_row_select_eqp_aggregate_index_walk_detail_7b1113a4",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 547,
-    "decision": "match find_index_only_sum(select, schema) {\n                    Some(index_position) => Ok(Some(format!(\n                        \"SCAN {table_display} USING COVERING INDEX {}\",\n                        index_name(index_position)?\n                    ))),\n                    None => Ok(\n                        aggregate_range_seek_detail(select, schema, table_display, catalog).map(\n                            |detail| {\n                                // #484: `try_compile_direct_agg_scan` drops the\n                                // per-entry table lookup when the index key\n                                // covers every column the query reads.\n                                if super::aggregate::direct_agg_range_seek_is_covering(\n                                    select, schema, catalog,\n                                ) {\n                                    detail.replacen(\"USING INDEX\", \"USING COVERING INDEX\", 1)\n                                } else {\n                                    detail\n                                }\n                            },\n                        ),\n                    ),\n                }",
+    "line": 551,
+    "decision": "match find_index_only_sum(select, schema) {\n                    Some(index_position) => Ok(Some(format!(\n                        \"SCAN {table_display} USING COVERING INDEX {}\",\n                        index_name(index_position)?\n                    ))),\n                    None => {\n                        // #484: `try_compile_direct_agg_scan` drops the\n                        // per-entry table lookup when the index key\n                        // covers every column the query reads; #498's\n                        // seek-versus-scan gate is evaluated for that\n                        // same walk.\n                        let covering = super::aggregate::direct_agg_range_seek_is_covering(\n                            select, schema, catalog, stats,\n                        );\n                        Ok(aggregate_range_seek_detail(\n                            select,\n                            schema,\n                            table_display,\n                            catalog,\n                            stats,\n                            covering,\n                        )\n                        .map(|detail| {\n                            if covering {\n                                detail.replacen(\"USING INDEX\", \"USING COVERING INDEX\", 1)\n                            } else {\n                                detail\n                            }\n                        }))\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_eqp_aggregate_index_walk_detail_be07dd49",
+    "id": "codegen_row_select_eqp_aggregate_index_walk_detail_2fd0f5a1",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 558,
-    "decision": "super::aggregate::direct_agg_range_seek_is_covering(\n                                    select, schema, catalog,\n                                )",
+    "line": 574,
+    "decision": "covering",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_eqp_aggregate_index_walk_detail_f7d6bc28",
+    "id": "codegen_row_select_eqp_aggregate_index_walk_detail_4fadfd51",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 572,
-    "decision": "match super::aggregate::group_by_index_ordering(select, schema, false)? {\n                Some((index_position, _forward)) => Ok(Some(format!(\n                    \"SCAN {table_display} USING INDEX {}\",\n                    index_name(index_position)?\n                ))),\n                None => Ok(aggregate_range_seek_detail(\n                    select,\n                    schema,\n                    table_display,\n                    catalog,\n                )),\n            }",
+    "line": 585,
+    "decision": "match super::aggregate::group_by_index_ordering(select, schema, false)? {\n                Some((index_position, _forward)) => Ok(Some(format!(\n                    \"SCAN {table_display} USING INDEX {}\",\n                    index_name(index_position)?\n                ))),\n                None => Ok(aggregate_range_seek_detail(\n                    select,\n                    schema,\n                    table_display,\n                    catalog,\n                    stats,\n                    false,\n                )),\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -5542,7 +5972,7 @@
   {
     "id": "codegen_row_select_eqp_explain_scalar_subquery_d21e9143",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 622,
+    "line": 646,
     "decision": "match resolve_subquery_schema(inner, catalog) {\n        Ok(Some(schema)) => !subquery_is_correlated(inner, Some(&schema)),\n        Ok(None) | Err(_) => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5552,7 +5982,7 @@
   {
     "id": "codegen_row_select_eqp_explain_scalar_subquery_8f9ac53d",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 632,
+    "line": 656,
     "decision": "hoisted",
     "conditions": 1,
     "vectors_required": 2,
@@ -5562,7 +5992,7 @@
   {
     "id": "codegen_row_select_eqp_explain_scalar_subquery_c89c715e",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 645,
+    "line": 669,
     "decision": "let Ok(inner_schemas) = inner_schemas",
     "conditions": 1,
     "vectors_required": 2,
@@ -5572,7 +6002,7 @@
   {
     "id": "codegen_row_select_eqp_explain_scalar_subquery_7412d0f0",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 646,
+    "line": 670,
     "decision": "let Ok(child_rows) = explain_query_plan(inner, &inner_schemas, stats_by_table, catalog)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5582,7 +6012,7 @@
   {
     "id": "codegen_row_select_eqp_compound_op_label_4da9c901",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 679,
+    "line": 703,
     "decision": "match op {\n        CompoundOp::Union => \"UNION USING TEMP B-TREE\",\n        CompoundOp::UnionAll => \"UNION ALL\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5592,7 +6022,7 @@
   {
     "id": "codegen_row_select_eqp_explain_compound_query_plan_f3432b22",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 735,
+    "line": 759,
     "decision": "match &arm.from {\n            Some(arm_from) => std::iter::once(&arm_from.first)\n                .chain(arm_from.joins.iter().map(|j| &j.table))\n                .map(|table_ref| resolve_from_table_schema(table_ref, catalog))\n                .collect::<Result<Vec<_>, CodegenError>>()?,\n            None => Vec::new(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5602,7 +6032,7 @@
   {
     "id": "codegen_row_select_eqp_graft_child_plan_97235188",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 763,
+    "line": 787,
     "decision": "was_top_level",
     "conditions": 1,
     "vectors_required": 2,
@@ -5612,7 +6042,7 @@
   {
     "id": "codegen_row_select_eqp_sel_2e123bd1",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 816,
+    "line": 840,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5622,7 +6052,7 @@
   {
     "id": "codegen_row_select_eqp_eqp_details_810fe752",
     "file": "src/codegen/row/select/eqp.rs",
-    "line": 838,
+    "line": 862,
     "decision": "select.from.as_ref().is_some_and(|f| !f.joins.is_empty())",
     "conditions": 1,
     "vectors_required": 2,
@@ -7470,10 +7900,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_limit_scan_compile_direct_scan_918d559a",
+    "id": "codegen_row_select_limit_scan_compile_direct_scan_fb60b5b5",
     "file": "src/codegen/row/select/limit_scan.rs",
     "line": 854,
-    "decision": "super::range_scan::try_compile_between_seek(\n        em, reg, select, schema, cursors, end_label, catalog, sink,\n    )?",
+    "decision": "super::range_scan::try_compile_between_seek(\n        em, reg, select, schema, cursors, end_label, catalog, stats, sink,\n    )?",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -7500,10 +7930,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_limit_scan_compile_direct_scan_0c93c6c0",
+    "id": "codegen_row_select_limit_scan_compile_direct_scan_22462bf6",
     "file": "src/codegen/row/select/limit_scan.rs",
     "line": 869,
-    "decision": "super::range_scan::try_compile_forward_comparison_seek(\n        em, reg, select, schema, cursors, end_label, catalog, sink,\n    )?",
+    "decision": "super::range_scan::try_compile_forward_comparison_seek(\n        em, reg, select, schema, cursors, end_label, catalog, stats, sink,\n    )?",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -7922,7 +8352,7 @@
   {
     "id": "codegen_row_select_range_scan_where_col_80463050",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 61,
+    "line": 63,
     "decision": "match &expr.kind {\n        ExprKind::Column { name, .. } => Some(name.as_str()),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7932,7 +8362,7 @@
   {
     "id": "codegen_row_select_range_scan_is_constant_operand_9ea14b30",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 106,
+    "line": 108,
     "decision": "match &expr.kind {\n        ExprKind::Subquery(subquery) => {\n            crate::codegen::row::subquery::subquery_hoistable(subquery, scope)\n        }\n        ExprKind::Unary { expr: e, .. }\n        | ExprKind::Cast { expr: e, .. }\n        | ExprKind::Collate { expr: e, .. }\n        | ExprKind::Paren(e) => is_constant_operand(e, scope),\n        ExprKind::Binary { lhs, rhs, .. } => {\n            is_constant_operand(lhs, scope) && is_constant_operand(rhs, scope)\n        }\n        _ => is_supported_operand(expr),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7942,7 +8372,7 @@
   {
     "id": "codegen_row_select_range_scan_operand_matches_column_affinity_27654ed2",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 130,
+    "line": 132,
     "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Integer(_) | Literal::Float(_)) => matches!(\n            column_affinity,\n            Affinity::Integer | Affinity::Real | Affinity::Numeric\n        ),\n        ExprKind::Literal(Literal::Str(_)) => matches!(column_affinity, Affinity::Text),\n        // #280: a bind parameter's storage class is genuinely unknowable\n        // here, so it's passed through uncheckable, same accepted risk\n        // as `Param` above. A subquery/arithmetic-composed constant\n        // operand (only reachable via `is_constant_operand`, never\n        // `is_supported_operand` alone) is the same kind of unknowable\n        // at compile time -- its runtime value's storage class isn't\n        // fixed by its shape the way a literal's is -- so it gets the\n        // same pass-through rather than a coercion this file doesn't\n        // implement yet (no VM opcode applies column affinity to an\n        // already-computed register; see #280's follow-up).\n        ExprKind::Param(_)\n        | ExprKind::Subquery(_)\n        | ExprKind::Unary { .. }\n        | ExprKind::Cast { .. }\n        | ExprKind::Collate { .. }\n        | ExprKind::Paren(_)\n        | ExprKind::Binary { .. } => true,\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7952,7 +8382,7 @@
   {
     "id": "codegen_row_select_range_scan_bare_column_names_7bd0afdd",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 230,
+    "line": 232,
     "decision": "match col {\n            ResultColumn::Expr {\n                expr:\n                    Expr {\n                        kind:\n                            ExprKind::Column {\n                                table: None,\n                                catalog: None,\n                                name,\n                            },\n                        ..\n                    },\n                ..\n            } => Some(name.as_str()),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7962,7 +8392,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_indexed_column_read_e5de0570",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 270,
+    "line": 272,
     "decision": "schema\n        .column_types\n        .get(idx)\n        .is_some_and(|t| affinity_of(t) == Affinity::Real)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7972,7 +8402,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_matched_row_de1ce4a5",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 323,
+    "line": 325,
     "decision": "let Some(limit) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -7982,7 +8412,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_matched_row_de1ce4a5_2",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 326,
+    "line": 328,
     "decision": "let Some(limit) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -7992,7 +8422,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_matched_row_8779ff93",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 330,
+    "line": 332,
     "decision": "let Some(names) = bare_column_names(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8002,7 +8432,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_matched_row_79427c66",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 337,
+    "line": 339,
     "decision": "name.eq_ignore_ascii_case(indexed_col_name) && schema.rowid_alias != Some(idx)",
     "conditions": 2,
     "vectors_required": 3,
@@ -8012,7 +8442,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_between_seek_4a09e420",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 373,
+    "line": 376,
     "decision": "matches!(select.distinct, Some(Distinctness::Distinct))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8022,7 +8452,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_between_seek_3f07d1cf",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 386,
+    "line": 389,
     "decision": "!is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope)",
     "conditions": 2,
     "vectors_required": 3,
@@ -8032,8 +8462,18 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_between_seek_3962915e",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 396,
+    "line": 399,
     "decision": "!operand_matches_column_affinity(lo, affinity)\n        || !operand_matches_column_affinity(hi, affinity)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_range_scan_try_compile_between_seek_666267a3",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 406,
+    "decision": "!equality\n        && !range_seek_wins(\n            schema,\n            index_position,\n            Some((lo, true)),\n            Some((hi, true)),\n            false,\n            stats,\n        )",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false,
@@ -8042,7 +8482,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_between_seek_07832949",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 412,
+    "line": 429,
     "decision": "std::ptr::eq(lo, hi)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8052,7 +8492,7 @@
   {
     "id": "codegen_row_select_range_scan_range_row_seek_index_position_6639c4c3",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 469,
+    "line": 488,
     "decision": "recognized",
     "conditions": 1,
     "vectors_required": 2,
@@ -8060,10 +8500,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_try_compile_range_row_seek_5a3ff86d",
+    "id": "codegen_row_select_range_scan_try_compile_range_row_seek_a79ea5f6",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 490,
-    "decision": "let Some((col, lo, hi, _)) = as_bounds(where_expr)",
+    "line": 524,
+    "decision": "let Some((col, lo, hi, equality)) = as_bounds(where_expr)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -8072,7 +8512,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_range_row_seek_ab031ffa",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 494,
+    "line": 528,
     "decision": "!is_constant_operand(lo, scope) || !is_constant_operand(hi, scope)",
     "conditions": 2,
     "vectors_required": 3,
@@ -8082,8 +8522,18 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_range_row_seek_3962915e",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 504,
+    "line": 538,
     "decision": "!operand_matches_column_affinity(lo, affinity)\n            || !operand_matches_column_affinity(hi, affinity)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_range_scan_try_compile_range_row_seek_d0f7f7a2",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 543,
+    "decision": "!equality\n            && !range_seek_wins(\n                schema,\n                index_position,\n                Some((lo, true)),\n                Some((hi, true)),\n                covering,\n                stats,\n            )",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false,
@@ -8092,7 +8542,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_range_row_seek_07832949",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 515,
+    "line": 561,
     "decision": "std::ptr::eq(lo, hi)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8102,7 +8552,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_range_row_seek_874206e9",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 535,
+    "line": 581,
     "decision": "!is_constant_operand(operand, scope)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8112,8 +8562,18 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_range_row_seek_3397c143",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 545,
+    "line": 591,
     "decision": "!operand_matches_column_affinity(operand, affinity)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_range_scan_try_compile_range_row_seek_7fb6bb8f",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 594,
+    "decision": "!forward_seek_wins(\n        schema,\n        index_position,\n        operand,\n        inclusive,\n        is_lower,\n        covering,\n        stats,\n    )",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -8122,7 +8582,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_range_row_seek_c9e331ab",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 569,
+    "line": 626,
     "decision": "!inclusive",
     "conditions": 1,
     "vectors_required": 2,
@@ -8132,7 +8592,7 @@
   {
     "id": "codegen_row_select_range_scan_like_literal_prefix_b61ba001",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 613,
+    "line": 670,
     "decision": "glob",
     "conditions": 1,
     "vectors_required": 2,
@@ -8142,7 +8602,7 @@
   {
     "id": "codegen_row_select_range_scan_like_literal_prefix_b61ba001_2",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 614,
+    "line": 671,
     "decision": "glob",
     "conditions": 1,
     "vectors_required": 2,
@@ -8152,7 +8612,7 @@
   {
     "id": "codegen_row_select_range_scan_like_literal_prefix_5d2d5dbf",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 615,
+    "line": 672,
     "decision": "pattern.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8162,7 +8622,7 @@
   {
     "id": "codegen_row_select_range_scan_like_literal_prefix_f9e3201b",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 619,
+    "line": 676,
     "decision": "prefix.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8172,7 +8632,7 @@
   {
     "id": "codegen_row_select_range_scan_like_literal_prefix_e3457195",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 624,
+    "line": 681,
     "decision": "prefix.contains(wildcard) || prefix.contains(single)",
     "conditions": 2,
     "vectors_required": 3,
@@ -8182,7 +8642,7 @@
   {
     "id": "codegen_row_select_range_scan_like_literal_prefix_492d32fb",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 627,
+    "line": 684,
     "decision": "!glob && prefix.contains('\\\\')",
     "conditions": 2,
     "vectors_required": 3,
@@ -8192,7 +8652,7 @@
   {
     "id": "codegen_row_select_range_scan_like_literal_prefix_9025f2d0",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 633,
+    "line": 690,
     "decision": "prefix.ends_with('\\u{10FFFF}')",
     "conditions": 1,
     "vectors_required": 2,
@@ -8202,7 +8662,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_like_prefix_seek_4a09e420",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 667,
+    "line": 724,
     "decision": "matches!(select.distinct, Some(Distinctness::Distinct))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8212,7 +8672,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_like_prefix_seek_55511583",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 703,
+    "line": 760,
     "decision": "column_affinity(schema, col_name) != Affinity::Text",
     "conditions": 1,
     "vectors_required": 2,
@@ -8222,7 +8682,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_in_list_seek_4a09e420",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 795,
+    "line": 852,
     "decision": "matches!(select.distinct, Some(Distinctness::Distinct))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8232,7 +8692,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_in_list_seek_6b7539d1",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 809,
+    "line": 866,
     "decision": "list.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8242,7 +8702,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_in_list_seek_669a1cb8",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 815,
+    "line": 872,
     "decision": "!list.iter().all(is_supported_operand)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8252,7 +8712,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_in_list_seek_80a09dec",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 825,
+    "line": 882,
     "decision": "!list\n        .iter()\n        .all(|v| operand_matches_column_affinity(v, affinity))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8262,7 +8722,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_in_list_seek_b799a485",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 843,
+    "line": 900,
     "decision": "let ExprKind::Literal(lit) = &value.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -8272,7 +8732,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_in_list_seek_96e378b9",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 844,
+    "line": 901,
     "decision": "seen_literals.contains(&lit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8280,19 +8740,49 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_as_forward_comparison_f29c8900",
+    "id": "codegen_row_select_range_scan_as_forward_comparison_b3a28f3b",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 910,
-    "decision": "match op {\n        BinaryOp::Gt => Some((where_col(lhs)?, rhs.as_ref(), false)),\n        BinaryOp::Ge => Some((where_col(lhs)?, rhs.as_ref(), true)),\n        BinaryOp::Lt => Some((where_col(rhs)?, lhs.as_ref(), false)),\n        BinaryOp::Le => Some((where_col(rhs)?, lhs.as_ref(), true)),\n        _ => None,\n    }",
+    "line": 970,
+    "decision": "match op {\n        BinaryOp::Gt => Some((where_col(lhs)?, rhs.as_ref(), false, true)),\n        BinaryOp::Ge => Some((where_col(lhs)?, rhs.as_ref(), true, true)),\n        BinaryOp::Lt => Some((where_col(rhs)?, lhs.as_ref(), false, false)),\n        BinaryOp::Le => Some((where_col(rhs)?, lhs.as_ref(), true, false)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
+    "id": "codegen_row_select_range_scan_bound_value_58f366e5",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 986,
+    "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Integer(i)) => Value::Integer(*i),\n        ExprKind::Literal(Literal::Float(f)) => Value::Real(*f),\n        ExprKind::Literal(Literal::Str(s)) => Value::Text(s.as_str().into()),\n        ExprKind::Literal(Literal::Blob(b)) => Value::Blob(b.as_slice().into()),\n        ExprKind::Paren(inner) => return bound_value(inner, affinity),\n        ExprKind::Unary {\n            op: UnaryOp::Minus,\n            expr: inner,\n        } => match &inner.kind {\n            ExprKind::Literal(Literal::Integer(i)) => Value::Integer(i.checked_neg()?),\n            ExprKind::Literal(Literal::Float(f)) => Value::Real(-f),\n            _ => return None,\n        },\n        _ => return None,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_row_select_range_scan_bound_value_37f4be6a",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 995,
+    "decision": "match &inner.kind {\n            ExprKind::Literal(Literal::Integer(i)) => Value::Integer(i.checked_neg()?),\n            ExprKind::Literal(Literal::Float(f)) => Value::Real(-f),\n            _ => return None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_row_select_range_scan_forward_seek_wins_22c74790",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 1052,
+    "decision": "is_lower",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_select_range_scan_try_compile_forward_comparison_seek_4a09e420",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 946,
+    "line": 1087,
     "decision": "matches!(select.distinct, Some(Distinctness::Distinct))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8302,7 +8792,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_forward_comparison_seek_84af7805",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 956,
+    "line": 1097,
     "decision": "!is_constant_operand(operand, &scope)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8312,8 +8802,18 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_forward_comparison_seek_3397c143",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 966,
+    "line": 1107,
     "decision": "!operand_matches_column_affinity(operand, affinity)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_range_scan_try_compile_forward_comparison_seek_a0e70137",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 1110,
+    "decision": "!forward_seek_wins(\n        schema,\n        index_position,\n        operand,\n        inclusive,\n        is_lower,\n        false,\n        stats,\n    )",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -8322,7 +8822,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_forward_comparison_seek_c9e331ab",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 993,
+    "line": 1145,
     "decision": "!inclusive",
     "conditions": 1,
     "vectors_required": 2,
@@ -8330,19 +8830,19 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_range_seek_index_position_5a3ff86d",
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_a79ea5f6",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1057,
-    "decision": "let Some((col, lo, hi, _)) = as_bounds(where_expr)",
+    "line": 1223,
+    "decision": "let Some((col, lo, hi, equality)) = as_bounds(where_expr)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_range_seek_index_position_3f07d1cf",
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_3f07d1cf",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1059,
+    "line": 1225,
     "decision": "!is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope)",
     "conditions": 2,
     "vectors_required": 3,
@@ -8350,9 +8850,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_range_seek_index_position_3962915e",
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_3962915e",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1064,
+    "line": 1230,
     "decision": "!operand_matches_column_affinity(lo, affinity)\n            || !operand_matches_column_affinity(hi, affinity)",
     "conditions": 2,
     "vectors_required": 3,
@@ -8360,19 +8860,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_range_seek_index_position_e4813267",
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_d0f7f7a2",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1071,
-    "decision": "match &where_expr.kind {\n        ExprKind::Like {\n            expr,\n            pattern,\n            glob,\n            negated: false,\n            escape: None,\n        } => {\n            let col_name = where_col(expr)?;\n            let ExprKind::Literal(Literal::Str(pattern_str)) = &pattern.kind else {\n                return None;\n            };\n            like_literal_prefix(pattern_str, *glob)?;\n            let index_position = find_leading_index(schema, col_name)?;\n            if column_affinity(schema, col_name) != Affinity::Text {\n                return None;\n            }\n            Some(index_position)\n        }\n        ExprKind::In {\n            expr,\n            list,\n            negated: false,\n        } => {\n            if list.is_empty() || !list.iter().all(is_supported_operand) {\n                return None;\n            }\n            let col_name = where_col(expr)?;\n            let index_position = find_leading_index(schema, col_name)?;\n            let affinity = column_affinity(schema, col_name);\n            if !list\n                .iter()\n                .all(|v| operand_matches_column_affinity(v, affinity))\n            {\n                return None;\n            }\n            Some(index_position)\n        }\n        _ => as_forward_comparison(where_expr).and_then(|(col_name, operand, _inclusive)| {\n            if !is_constant_operand(operand, &scope) {\n                return None;\n            }\n            let index_position = find_leading_index(schema, col_name)?;\n            let affinity = column_affinity(schema, col_name);\n            if !operand_matches_column_affinity(operand, affinity) {\n                return None;\n            }\n            Some(index_position)\n        }),\n    }",
+    "line": 1235,
+    "decision": "!equality\n            && !range_seek_wins(\n                schema,\n                index_position,\n                Some((lo, true)),\n                Some((hi, true)),\n                covering,\n                stats,\n            )",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_17f8de63",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 1249,
+    "decision": "match &where_expr.kind {\n        ExprKind::Like {\n            expr,\n            pattern,\n            glob,\n            negated: false,\n            escape: None,\n        } => {\n            let col_name = where_col(expr)?;\n            let ExprKind::Literal(Literal::Str(pattern_str)) = &pattern.kind else {\n                return None;\n            };\n            like_literal_prefix(pattern_str, *glob)?;\n            let index_position = find_leading_index(schema, col_name)?;\n            if column_affinity(schema, col_name) != Affinity::Text {\n                return None;\n            }\n            Some(index_position)\n        }\n        ExprKind::In {\n            expr,\n            list,\n            negated: false,\n        } => {\n            if list.is_empty() || !list.iter().all(is_supported_operand) {\n                return None;\n            }\n            let col_name = where_col(expr)?;\n            let index_position = find_leading_index(schema, col_name)?;\n            let affinity = column_affinity(schema, col_name);\n            if !list\n                .iter()\n                .all(|v| operand_matches_column_affinity(v, affinity))\n            {\n                return None;\n            }\n            Some(index_position)\n        }\n        _ => as_forward_comparison(where_expr).and_then(\n            |(col_name, operand, inclusive, is_lower)| {\n                if !is_constant_operand(operand, &scope) {\n                    return None;\n                }\n                let index_position = find_leading_index(schema, col_name)?;\n                let affinity = column_affinity(schema, col_name);\n                if !operand_matches_column_affinity(operand, affinity) {\n                    return None;\n                }\n                if !forward_seek_wins(\n                    schema,\n                    index_position,\n                    operand,\n                    inclusive,\n                    is_lower,\n                    covering,\n                    stats,\n                ) {\n                    return None;\n                }\n                Some(index_position)\n            },\n        ),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "codegen_row_select_range_scan_range_seek_index_position_55511583",
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_55511583",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1085,
+    "line": 1263,
     "decision": "column_affinity(schema, col_name) != Affinity::Text",
     "conditions": 1,
     "vectors_required": 2,
@@ -8380,9 +8890,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_range_seek_index_position_02599d5e",
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_02599d5e",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1095,
+    "line": 1273,
     "decision": "list.is_empty() || !list.iter().all(is_supported_operand)",
     "conditions": 2,
     "vectors_required": 3,
@@ -8390,9 +8900,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_range_seek_index_position_80a09dec",
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_80a09dec",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1101,
+    "line": 1279,
     "decision": "!list\n                .iter()\n                .all(|v| operand_matches_column_affinity(v, affinity))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8400,9 +8910,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_range_seek_index_position_84af7805",
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_84af7805",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1110,
+    "line": 1289,
     "decision": "!is_constant_operand(operand, &scope)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8410,10 +8920,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_range_seek_index_position_3397c143",
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_3397c143",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1115,
+    "line": 1294,
     "decision": "!operand_matches_column_affinity(operand, affinity)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_range_scan_range_seek_index_position_with_7fb6bb8f",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 1297,
+    "decision": "!forward_seek_wins(\n                    schema,\n                    index_position,\n                    operand,\n                    inclusive,\n                    is_lower,\n                    covering,\n                    stats,\n                )",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -8422,7 +8942,7 @@
   {
     "id": "codegen_row_select_range_scan_find_range_seek_detail_a79ea5f6",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1142,
+    "line": 1335,
     "decision": "let Some((col, lo, hi, equality)) = as_bounds(where_expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8432,7 +8952,7 @@
   {
     "id": "codegen_row_select_range_scan_find_range_seek_detail_3f07d1cf",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1144,
+    "line": 1337,
     "decision": "!is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope)",
     "conditions": 2,
     "vectors_required": 3,
@@ -8442,8 +8962,18 @@
   {
     "id": "codegen_row_select_range_scan_find_range_seek_detail_3962915e",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1150,
+    "line": 1343,
     "decision": "!operand_matches_column_affinity(lo, affinity)\n            || !operand_matches_column_affinity(hi, affinity)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_range_scan_find_range_seek_detail_d0f7f7a2",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 1348,
+    "decision": "!equality\n            && !range_seek_wins(\n                schema,\n                index_position,\n                Some((lo, true)),\n                Some((hi, true)),\n                covering,\n                stats,\n            )",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false,
@@ -8452,7 +8982,7 @@
   {
     "id": "codegen_row_select_range_scan_find_range_seek_detail_ecde407e",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1158,
+    "line": 1363,
     "decision": "equality",
     "conditions": 1,
     "vectors_required": 2,
@@ -8460,10 +8990,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_range_scan_find_range_seek_detail_d892c2a2",
+    "id": "codegen_row_select_range_scan_find_range_seek_detail_05da0d2a",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1170,
-    "decision": "match &where_expr.kind {\n        ExprKind::Like {\n            expr,\n            pattern,\n            glob,\n            negated: false,\n            escape: None,\n        } => {\n            let col_name = where_col(expr)?;\n            let ExprKind::Literal(Literal::Str(pattern_str)) = &pattern.kind else {\n                return None;\n            };\n            like_literal_prefix(pattern_str, *glob)?;\n            let index_position = find_leading_index(schema, col_name)?;\n            let index = schema.indexes.get(index_position)?;\n            if column_affinity(schema, col_name) != Affinity::Text {\n                return None;\n            }\n            Some(format!(\n                \"SEARCH {table_display} USING INDEX {} ({col_name}>? AND {col_name}<?)\",\n                index.name\n            ))\n        }\n        ExprKind::In {\n            expr,\n            list,\n            negated: false,\n        } => {\n            if list.is_empty() || !list.iter().all(is_supported_operand) {\n                return None;\n            }\n            let col_name = where_col(expr)?;\n            let index_position = find_leading_index(schema, col_name)?;\n            let index = schema.indexes.get(index_position)?;\n            let affinity = column_affinity(schema, col_name);\n            if !list\n                .iter()\n                .all(|v| operand_matches_column_affinity(v, affinity))\n            {\n                return None;\n            }\n            Some(format!(\n                \"SEARCH {table_display} USING INDEX {} ({col_name}=?)\",\n                index.name\n            ))\n        }\n        _ => as_forward_comparison(where_expr).and_then(|(col_name, operand, _inclusive)| {\n            if !is_constant_operand(operand, &scope) {\n                return None;\n            }\n            let index_position = find_leading_index(schema, col_name)?;\n            let index = schema.indexes.get(index_position)?;\n            let affinity = column_affinity(schema, col_name);\n            if !operand_matches_column_affinity(operand, affinity) {\n                return None;\n            }\n            // Real sqlite3 collapses inclusive and exclusive into the\n            // same `(col>?)` wording (see `try_compile_forward_comparison_seek`'s\n            // doc) -- `_inclusive` only matters to the compiled seek's\n            // dup-skip, not to this report.\n            Some(format!(\n                \"SEARCH {table_display} USING INDEX {} ({col_name}>?)\",\n                index.name\n            ))\n        }),\n    }",
+    "line": 1375,
+    "decision": "match &where_expr.kind {\n        ExprKind::Like {\n            expr,\n            pattern,\n            glob,\n            negated: false,\n            escape: None,\n        } => {\n            let col_name = where_col(expr)?;\n            let ExprKind::Literal(Literal::Str(pattern_str)) = &pattern.kind else {\n                return None;\n            };\n            like_literal_prefix(pattern_str, *glob)?;\n            let index_position = find_leading_index(schema, col_name)?;\n            let index = schema.indexes.get(index_position)?;\n            if column_affinity(schema, col_name) != Affinity::Text {\n                return None;\n            }\n            Some(format!(\n                \"SEARCH {table_display} USING INDEX {} ({col_name}>? AND {col_name}<?)\",\n                index.name\n            ))\n        }\n        ExprKind::In {\n            expr,\n            list,\n            negated: false,\n        } => {\n            if list.is_empty() || !list.iter().all(is_supported_operand) {\n                return None;\n            }\n            let col_name = where_col(expr)?;\n            let index_position = find_leading_index(schema, col_name)?;\n            let index = schema.indexes.get(index_position)?;\n            let affinity = column_affinity(schema, col_name);\n            if !list\n                .iter()\n                .all(|v| operand_matches_column_affinity(v, affinity))\n            {\n                return None;\n            }\n            Some(format!(\n                \"SEARCH {table_display} USING INDEX {} ({col_name}=?)\",\n                index.name\n            ))\n        }\n        _ => as_forward_comparison(where_expr).and_then(\n            |(col_name, operand, inclusive, is_lower)| {\n                if !is_constant_operand(operand, &scope) {\n                    return None;\n                }\n                let index_position = find_leading_index(schema, col_name)?;\n                let index = schema.indexes.get(index_position)?;\n                let affinity = column_affinity(schema, col_name);\n                if !operand_matches_column_affinity(operand, affinity) {\n                    return None;\n                }\n                if !forward_seek_wins(\n                    schema,\n                    index_position,\n                    operand,\n                    inclusive,\n                    is_lower,\n                    covering,\n                    stats,\n                ) {\n                    return None;\n                }\n                // Real sqlite3 collapses inclusive and exclusive into the\n                // same `(col>?)` wording (see `try_compile_forward_comparison_seek`'s\n                // doc) -- `_inclusive` only matters to the compiled seek's\n                // dup-skip, not to this report.\n                Some(format!(\n                    \"SEARCH {table_display} USING INDEX {} ({col_name}>?)\",\n                    index.name\n                ))\n            },\n        ),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -8472,7 +9002,7 @@
   {
     "id": "codegen_row_select_range_scan_find_range_seek_detail_55511583",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1185,
+    "line": 1390,
     "decision": "column_affinity(schema, col_name) != Affinity::Text",
     "conditions": 1,
     "vectors_required": 2,
@@ -8482,7 +9012,7 @@
   {
     "id": "codegen_row_select_range_scan_find_range_seek_detail_02599d5e",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1198,
+    "line": 1403,
     "decision": "list.is_empty() || !list.iter().all(is_supported_operand)",
     "conditions": 2,
     "vectors_required": 3,
@@ -8492,7 +9022,7 @@
   {
     "id": "codegen_row_select_range_scan_find_range_seek_detail_80a09dec",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1205,
+    "line": 1410,
     "decision": "!list\n                .iter()\n                .all(|v| operand_matches_column_affinity(v, affinity))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8502,7 +9032,7 @@
   {
     "id": "codegen_row_select_range_scan_find_range_seek_detail_84af7805",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1217,
+    "line": 1423,
     "decision": "!is_constant_operand(operand, &scope)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8512,8 +9042,18 @@
   {
     "id": "codegen_row_select_range_scan_find_range_seek_detail_3397c143",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1223,
+    "line": 1429,
     "decision": "!operand_matches_column_affinity(operand, affinity)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_range_scan_find_range_seek_detail_7fb6bb8f",
+    "file": "src/codegen/row/select/range_scan.rs",
+    "line": 1432,
+    "decision": "!forward_seek_wins(\n                    schema,\n                    index_position,\n                    operand,\n                    inclusive,\n                    is_lower,\n                    covering,\n                    stats,\n                )",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -8522,7 +9062,7 @@
   {
     "id": "codegen_row_select_range_scan_as_bounds_e35934a7",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1246,
+    "line": 1464,
     "decision": "match &where_expr.kind {\n        ExprKind::Between {\n            expr,\n            lo,\n            hi,\n            negated: false,\n        } => Some((expr, lo, hi, false)),\n        ExprKind::Binary {\n            op: BinaryOp::Eq,\n            lhs,\n            rhs,\n        } => {\n            let (col, lit) = if where_col(lhs).is_some() {\n                (lhs.as_ref(), rhs.as_ref())\n            } else if where_col(rhs).is_some() {\n                (rhs.as_ref(), lhs.as_ref())\n            } else {\n                return None;\n            };\n            Some((col, lit, lit, true))\n        }\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8532,7 +9072,7 @@
   {
     "id": "codegen_row_select_range_scan_as_bounds_6aba98b1",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1258,
+    "line": 1476,
     "decision": "where_col(lhs).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8542,7 +9082,7 @@
   {
     "id": "codegen_row_select_range_scan_as_bounds_477b9891",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1260,
+    "line": 1478,
     "decision": "where_col(rhs).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8552,7 +9092,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_bounded_index_walk_a6f6ca28",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1294,
+    "line": 1512,
     "decision": "hi_reg != lo_reg",
     "conditions": 1,
     "vectors_required": 2,
@@ -8562,7 +9102,7 @@
   {
     "id": "codegen_row_select_range_scan_select_96ddc009",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1346,
+    "line": 1567,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"expected {sql:?} to parse as a SELECT, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8572,7 +9112,7 @@
   {
     "id": "codegen_row_select_range_scan_update_9195b174",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1353,
+    "line": 1574,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(u) => *u,\n            other => panic!(\"expected {sql:?} to parse as an UPDATE, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8582,7 +9122,7 @@
   {
     "id": "codegen_row_select_range_scan_schema_cfa672e9",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1383,
+    "line": 1604,
     "decision": "indexed",
     "conditions": 1,
     "vectors_required": 2,
@@ -8592,7 +9132,7 @@
   {
     "id": "codegen_row_select_range_scan_schema_3534660c",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1405,
+    "line": 1626,
     "decision": "alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -9002,7 +9542,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_3633baaa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 82,
+    "line": 83,
     "decision": "schema.without_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -9012,7 +9552,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_1da4e802",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 95,
+    "line": 96,
     "decision": "match c {\n            TableConstraint::Check(expr) => Some(expr.clone()),\n            TableConstraint::PrimaryKey(_) | TableConstraint::Unique(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9022,7 +9562,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_b410d928",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 119,
+    "line": 120,
     "decision": "let Some(slot) = assigned.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9032,7 +9572,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_b5ba86aa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 150,
+    "line": 151,
     "decision": "is_rowid_reference(schema, lhs)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9042,7 +9582,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_4ccc9dd6",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 152,
+    "line": 153,
     "decision": "is_rowid_reference(schema, rhs)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9052,7 +9592,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_87d7bd20",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 171,
+    "line": 172,
     "decision": "let Some(operand) = rowid_seek_operand",
     "conditions": 1,
     "vectors_required": 2,
@@ -9062,7 +9602,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_10a1f5f2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 240,
+    "line": 245,
     "decision": "let Some(where_expr) = &update.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -9072,7 +9612,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_4baed9e2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 241,
+    "line": 246,
     "decision": "range_seek_touches_scanned_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -9082,7 +9622,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_8d819a73",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 346,
+    "line": 355,
     "decision": "used_range_seek && range_seek_touches_scanned_index",
     "conditions": 2,
     "vectors_required": 3,
@@ -9092,7 +9632,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_1128723f",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 380,
+    "line": 389,
     "decision": "!used_range_seek",
     "conditions": 1,
     "vectors_required": 2,
@@ -9102,7 +9642,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_10a1f5f2_2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 387,
+    "line": 396,
     "decision": "let Some(where_expr) = &update.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -9112,7 +9652,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_c1433547",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 448,
+    "line": 457,
     "decision": "match rowid_alias.and_then(|idx| assigned.get(idx).copied().flatten()) {\n        Some(expr) => compile_value(em, reg, scope, expr)?,\n        None => {\n            let r = reg.alloc();\n            em.emit(Instruction::new(Opcode::Rowid, TABLE_CURSOR, r, 0));\n            r\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9122,7 +9662,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_c861879c",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 459,
+    "line": 468,
     "decision": "Some(idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -9132,7 +9672,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_1812a01d",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 465,
+    "line": 474,
     "decision": "match expr {\n            Some(expr) => compile_value(em, reg, scope, expr)?,\n            None => {\n                let r = reg.alloc();\n                emit_column_read(em, schema, TABLE_CURSOR, idx, r)?;\n                r\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9142,7 +9682,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_3c6999fa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 499,
+    "line": 508,
     "decision": "!plan.not_null",
     "conditions": 1,
     "vectors_required": 2,
@@ -9152,7 +9692,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_d93931f7",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 533,
+    "line": 542,
     "decision": "has_checks",
     "conditions": 1,
     "vectors_required": 2,
@@ -9162,7 +9702,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_1af88378",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 613,
+    "line": 622,
     "decision": "!schema.indexes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -9172,7 +9712,7 @@
   {
     "id": "codegen_row_stmt_update_update_program_36cf9018",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 673,
+    "line": 682,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10522,7 +11062,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_0aa11878",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 200,
+    "line": 203,
     "decision": "let Some(access) = seek_access",
     "conditions": 1,
     "vectors_required": 2,
@@ -10532,7 +11072,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_0d59820f",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 201,
+    "line": 204,
     "decision": "match &access {\n            JoinAccess::Rowid(operand) | JoinAccess::UniqueIndex { operand, .. } => {\n                compile_value(em, reg, outer_scope, operand)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10542,7 +11082,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_96b7ce24",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 212,
+    "line": 215,
     "decision": "match access {\n            JoinAccess::Rowid(_) => {\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    sub_cursor,\n                    0,\n                    value_reg,\n                ));\n                em.patch_p2(seek_addr, end_label);\n            }\n            JoinAccess::UniqueIndex { index, .. } => {\n                let index_cursor = reg.alloc_cursor();\n                let root_page = valid_index_root_page(&index)?;\n                let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);\n                open_instr.p5 = 1;\n                em.emit(open_instr);\n                let leading_collation = index\n                    .columns\n                    .first()\n                    .map_or(Collation::Binary, |c| c.collation);\n                let seek_instr = Instruction::with_p4(\n                    Opcode::SeekIndexEq,\n                    index_cursor,\n                    0,\n                    value_reg,\n                    P4::SeekKey(vec![leading_collation]),\n                );\n                let seek_addr = em.emit(seek_instr);\n                em.patch_p2(seek_addr, end_label);\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::IdxRowid,\n                    index_cursor,\n                    rowid_reg,\n                    0,\n                ));\n                let table_seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    sub_cursor,\n                    0,\n                    rowid_reg,\n                ));\n                em.patch_p2(table_seek_addr, end_label);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10552,7 +11092,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_bdd98ba4",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 270,
+    "line": 273,
     "decision": "let Some(where_expr) = &subselect.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -10562,7 +11102,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_5f337291",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 324,
+    "line": 327,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -10572,7 +11112,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_0aa11878",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 336,
+    "line": 339,
     "decision": "let Some(access) = seek_access",
     "conditions": 1,
     "vectors_required": 2,
@@ -10582,7 +11122,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_0d59820f",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 338,
+    "line": 341,
     "decision": "match &access {\n            JoinAccess::Rowid(operand) | JoinAccess::UniqueIndex { operand, .. } => {\n                compile_value(em, reg, outer_scope, operand)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10592,7 +11132,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_fbca1e37",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 351,
+    "line": 354,
     "decision": "match access {\n            JoinAccess::Rowid(_) => {\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    sub_cursor,\n                    0,\n                    value_reg,\n                ));\n                em.patch_p2(seek_addr, not_found);\n            }\n            JoinAccess::UniqueIndex { index, .. } => {\n                let index_cursor = reg.alloc_cursor();\n                let root_page = valid_index_root_page(&index)?;\n                let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);\n                open_instr.p5 = 1;\n                em.emit(open_instr);\n                let leading_collation = index\n                    .columns\n                    .first()\n                    .map_or(Collation::Binary, |c| c.collation);\n                let seek_instr = Instruction::with_p4(\n                    Opcode::SeekIndexEq,\n                    index_cursor,\n                    0,\n                    value_reg,\n                    P4::SeekKey(vec![leading_collation]),\n                );\n                let seek_addr = em.emit(seek_instr);\n                em.patch_p2(seek_addr, not_found);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10602,7 +11142,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_f26d549d",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 384,
+    "line": 387,
     "decision": "let Target::Jump(fl) = exists_false",
     "conditions": 1,
     "vectors_required": 2,
@@ -10612,7 +11152,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_ebd65e7f",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 387,
+    "line": 390,
     "decision": "t_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -10622,7 +11162,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_bdd98ba4",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 402,
+    "line": 405,
     "decision": "let Some(where_expr) = &subselect.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -10632,7 +11172,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_f26d549d_2",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 417,
+    "line": 420,
     "decision": "let Target::Jump(fl) = exists_false",
     "conditions": 1,
     "vectors_required": 2,
@@ -10642,7 +11182,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_ebd65e7f_2",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 420,
+    "line": 423,
     "decision": "t_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -10652,7 +11192,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_5f337291",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 473,
+    "line": 476,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -10662,7 +11202,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_ce924704",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 478,
+    "line": 481,
     "decision": "match targets.on_null {\n        NullTarget::True => true_label,\n        NullTarget::False => false_label,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10672,7 +11212,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_5456fdc6",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 495,
+    "line": 498,
     "decision": "false_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -10682,7 +11222,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_7d177ee8",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 498,
+    "line": 501,
     "decision": "true_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -10692,7 +11232,7 @@
   {
     "id": "codegen_row_subquery_scalar_materialize_in_subquery_index_bdd98ba4",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 541,
+    "line": 544,
     "decision": "let Some(where_expr) = &subselect.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -10702,7 +11242,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_7fce4a44",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 593,
+    "line": 596,
     "decision": "col_exprs.len() != lhs_exprs.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -10712,7 +11252,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_bdd98ba4",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 627,
+    "line": 630,
     "decision": "let Some(where_expr) = &subselect.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -10722,7 +11262,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_5f337291",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 657,
+    "line": 660,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -10732,7 +11272,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_ce924704",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 662,
+    "line": 665,
     "decision": "match targets.on_null {\n        NullTarget::True => true_label,\n        NullTarget::False => false_label,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10742,7 +11282,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_5456fdc6",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 682,
+    "line": 685,
     "decision": "false_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -10752,7 +11292,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_7d177ee8",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 685,
+    "line": 688,
     "decision": "true_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -10762,7 +11302,7 @@
   {
     "id": "codegen_row_subquery_scalar_select_61e1dc48",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 716,
+    "line": 719,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"failed to parse {sql:?}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10772,7 +11312,7 @@
   {
     "id": "codegen_row_subquery_scalar_scalar_subquery_star_projection_is_unsupported_3350393b",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 855,
+    "line": 858,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"exactly one expression column\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10782,7 +11322,7 @@
   {
     "id": "codegen_row_subquery_scalar_exists_from_less_is_unsupported_352430e3",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 912,
+    "line": 915,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"EXISTS (SELECT ...) requires a FROM clause\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10792,7 +11332,7 @@
   {
     "id": "codegen_row_subquery_scalar_multi_column_in_subquery_arity_mismatch_is_unsupported_a2b5b755",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 963,
+    "line": 966,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"left-hand tuple has 2 column(s)\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10802,7 +11342,7 @@
   {
     "id": "codegen_row_subquery_scalar_multi_column_in_subquery_star_is_unsupported_a51adcd2",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 979,
+    "line": 982,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"no * / table.*\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10812,7 +11352,7 @@
   {
     "id": "codegen_row_subquery_scalar_sel_2e123bd1",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 1012,
+    "line": 1015,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12762,7 +13302,7 @@
   {
     "id": "engine_row_stats_load_stats_c6c2d2df",
     "file": "src/engine/row/stats.rs",
-    "line": 47,
+    "line": 50,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -12772,7 +13312,7 @@
   {
     "id": "engine_row_stats_load_stats_e2a3ef4c",
     "file": "src/engine/row/stats.rs",
-    "line": 48,
+    "line": 51,
     "decision": "let Ok(values) = decode_record(&r.payload, header.text_encoding)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12782,7 +13322,7 @@
   {
     "id": "engine_row_stats_load_stats_942da362",
     "file": "src/engine/row/stats.rs",
-    "line": 49,
+    "line": 52,
     "decision": "match values.first() {\n                Some(Value::Text(s)) => Some(s.to_string()),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12792,7 +13332,7 @@
   {
     "id": "engine_row_stats_load_stats_88456df4",
     "file": "src/engine/row/stats.rs",
-    "line": 53,
+    "line": 56,
     "decision": "let Some(tbl) = tbl",
     "conditions": 1,
     "vectors_required": 2,
@@ -12802,7 +13342,7 @@
   {
     "id": "engine_row_stats_load_stats_3afe0a7b",
     "file": "src/engine/row/stats.rs",
-    "line": 54,
+    "line": 57,
     "decision": "match values.get(1) {\n                    Some(Value::Text(s)) => Some(s.to_string()),\n                    _ => None,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12812,7 +13352,7 @@
   {
     "id": "engine_row_stats_load_stats_a255999b",
     "file": "src/engine/row/stats.rs",
-    "line": 58,
+    "line": 61,
     "decision": "match values.get(2) {\n                    Some(Value::Text(s)) => s.to_string(),\n                    _ => String::new(),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12822,12 +13362,72 @@
   {
     "id": "engine_row_stats_load_stats_10c6b96f",
     "file": "src/engine/row/stats.rs",
-    "line": 65,
+    "line": 68,
     "decision": "match cursor.next_row() {\n            Ok(r) => r,\n            Err(_) => break,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_stats_load_stats_4003cf74",
+    "file": "src/engine/row/stats.rs",
+    "line": 83,
+    "decision": "let Some(stat4) = stat4",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_stats_load_stats_c6c2d2df_2",
+    "file": "src/engine/row/stats.rs",
+    "line": 87,
+    "decision": "let Some(r) = row",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_stats_load_stats_f956c2dc",
+    "file": "src/engine/row/stats.rs",
+    "line": 88,
+    "decision": "let Some((key, sample)) = decode_stat4_row(&r.payload, header.text_encoding)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_stats_load_stats_ec4e52de",
+    "file": "src/engine/row/stats.rs",
+    "line": 89,
+    "decision": "match samples.iter_mut().find(|(k, _)| *k == key) {\n                    Some((_, list)) => list.push(sample),\n                    None => samples.push((key, vec![sample])),\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_stats_decode_stat4_row_b22ed238",
+    "file": "src/engine/row/stats.rs",
+    "line": 113,
+    "decision": "match values.get(i) {\n        Some(Value::Text(s)) => Some(s.to_string()),\n        _ => None,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "engine_row_stats_decode_stat4_row_027c2df2",
+    "file": "src/engine/row/stats.rs",
+    "line": 128,
+    "decision": "match values.get(5) {\n        Some(Value::Blob(b)) => decode_record(b, encoding).ok()?,\n        _ => return None,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
   },
   {
     "id": "engine_stream_refresh_d6265af0",

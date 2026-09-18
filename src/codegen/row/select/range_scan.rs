@@ -36,9 +36,11 @@
 use super::limit_scan::{compile_limit_setup, emit_limit_guard, emit_offset_guard};
 use super::projection::emit_row_via_sink;
 use super::*;
-use crate::parser::ast::BinaryOp;
+use crate::codegen::row::planner::{range_seek_beats_scan, RangeBound, Stats};
+use crate::parser::ast::{BinaryOp, UnaryOp};
 use crate::parser::Span;
-use crate::vm::row::{affinity_of, Affinity};
+use crate::value::Value;
+use crate::vm::row::{affinity_of, apply_affinity, Affinity};
 use std::rc::Rc;
 
 fn dummy_span() -> Span {
@@ -365,6 +367,7 @@ pub(super) fn try_compile_between_seek<F>(
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
+    stats: &Stats,
     sink: &mut F,
 ) -> Result<bool, CodegenError>
 where
@@ -376,7 +379,7 @@ where
     let Some(where_expr) = &select.where_clause else {
         return Ok(false);
     };
-    let Some((col, lo, hi, _)) = as_bounds(where_expr) else {
+    let Some((col, lo, hi, equality)) = as_bounds(where_expr) else {
         return Ok(false);
     };
     let Some(col_name) = where_col(col) else {
@@ -395,6 +398,20 @@ where
     let affinity = column_affinity(schema, col_name);
     if !operand_matches_column_affinity(lo, affinity)
         || !operand_matches_column_affinity(hi, affinity)
+    {
+        return Ok(false);
+    }
+    // #498: an equality probe is never demoted; a closed range is, when
+    // the histogram says it covers most of the table.
+    if !equality
+        && !range_seek_wins(
+            schema,
+            index_position,
+            Some((lo, true)),
+            Some((hi, true)),
+            false,
+            stats,
+        )
     {
         return Ok(false);
     }
@@ -464,13 +481,28 @@ pub(super) fn range_row_seek_index_position(
     where_expr: &Expr,
     schema: &TableSchema,
     catalog: &[TableSchema],
+    stats: &Stats,
+    covering: bool,
 ) -> Option<usize> {
     let recognized = as_bounds(where_expr).is_some() || as_forward_comparison(where_expr).is_some();
     if recognized {
-        range_seek_index_position(where_expr, schema, catalog)
+        range_seek_index_position_with(where_expr, schema, catalog, stats, covering)
     } else {
         None
     }
+}
+
+/// [`range_row_seek_index_position`] before #498's seek-versus-scan
+/// gate: the index the row seek *would* walk if it walks one. The
+/// aggregate path needs this first to decide whether that walk is
+/// covering (`aggregate::covering_range_index`), which in turn feeds the
+/// gate.
+pub(super) fn range_row_seek_candidate(
+    where_expr: &Expr,
+    schema: &TableSchema,
+    catalog: &[TableSchema],
+) -> Option<usize> {
+    range_row_seek_index_position(where_expr, schema, catalog, &Stats::default(), false)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -482,12 +514,14 @@ pub(crate) fn try_compile_range_row_seek<F>(
     scope: &Scope,
     index_cursor: i32,
     end_label: Label,
+    stats: &Stats,
+    covering: bool,
     sink: &mut F,
 ) -> Result<bool, CodegenError>
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, Label) -> Result<(), CodegenError>,
 {
-    if let Some((col, lo, hi, _)) = as_bounds(where_expr) {
+    if let Some((col, lo, hi, equality)) = as_bounds(where_expr) {
         let Some(col_name) = where_col(col) else {
             return Ok(false);
         };
@@ -503,6 +537,18 @@ where
         let affinity = column_affinity(schema, col_name);
         if !operand_matches_column_affinity(lo, affinity)
             || !operand_matches_column_affinity(hi, affinity)
+        {
+            return Ok(false);
+        }
+        if !equality
+            && !range_seek_wins(
+                schema,
+                index_position,
+                Some((lo, true)),
+                Some((hi, true)),
+                covering,
+                stats,
+            )
         {
             return Ok(false);
         }
@@ -529,7 +575,7 @@ where
         return Ok(true);
     }
 
-    let Some((col_name, operand, inclusive)) = as_forward_comparison(where_expr) else {
+    let Some((col_name, operand, inclusive, is_lower)) = as_forward_comparison(where_expr) else {
         return Ok(false);
     };
     if !is_constant_operand(operand, scope) {
@@ -543,6 +589,17 @@ where
     };
     let affinity = column_affinity(schema, col_name);
     if !operand_matches_column_affinity(operand, affinity) {
+        return Ok(false);
+    }
+    if !forward_seek_wins(
+        schema,
+        index_position,
+        operand,
+        inclusive,
+        is_lower,
+        covering,
+        stats,
+    ) {
         return Ok(false);
     }
     let leading_collation = index
@@ -903,16 +960,99 @@ where
 /// needs an `IdxLast`/`IdxPrev` stop-check opcode this codegen doesn't
 /// have yet (#654) — those shapes keep falling back to the ordinary
 /// scan, unchanged from before this function existed.
-fn as_forward_comparison(expr: &Expr) -> Option<(&str, &Expr, bool)> {
+fn as_forward_comparison(expr: &Expr) -> Option<(&str, &Expr, bool, bool)> {
     let ExprKind::Binary { op, lhs, rhs } = &expr.kind else {
         return None;
     };
+    // `(column, operand, inclusive, operand is a lower bound)` -- the
+    // last flag feeds #498's selectivity estimate, which needs to know
+    // which side of the column the operand sits on.
     match op {
-        BinaryOp::Gt => Some((where_col(lhs)?, rhs.as_ref(), false)),
-        BinaryOp::Ge => Some((where_col(lhs)?, rhs.as_ref(), true)),
-        BinaryOp::Lt => Some((where_col(rhs)?, lhs.as_ref(), false)),
-        BinaryOp::Le => Some((where_col(rhs)?, lhs.as_ref(), true)),
+        BinaryOp::Gt => Some((where_col(lhs)?, rhs.as_ref(), false, true)),
+        BinaryOp::Ge => Some((where_col(lhs)?, rhs.as_ref(), true, true)),
+        BinaryOp::Lt => Some((where_col(rhs)?, lhs.as_ref(), false, false)),
+        BinaryOp::Le => Some((where_col(rhs)?, lhs.as_ref(), true, false)),
         _ => None,
+    }
+}
+
+/// A range bound's literal value coerced to the indexed column's
+/// affinity, as sqlite3's `sqlite3Stat4ProbeSetValue` does before
+/// probing the `stat4` histogram (#498). `None` for anything the planner
+/// cannot evaluate at compile time (a parameter, a subquery, arithmetic)
+/// -- sqlite3 falls back to its fixed range default for those too -- and
+/// for a `NULL` literal, whose range is empty whatever the estimate says.
+fn bound_value(expr: &Expr, affinity: Affinity) -> Option<Value> {
+    let mut value = match &expr.kind {
+        ExprKind::Literal(Literal::Integer(i)) => Value::Integer(*i),
+        ExprKind::Literal(Literal::Float(f)) => Value::Real(*f),
+        ExprKind::Literal(Literal::Str(s)) => Value::Text(s.as_str().into()),
+        ExprKind::Literal(Literal::Blob(b)) => Value::Blob(b.as_slice().into()),
+        ExprKind::Paren(inner) => return bound_value(inner, affinity),
+        ExprKind::Unary {
+            op: UnaryOp::Minus,
+            expr: inner,
+        } => match &inner.kind {
+            ExprKind::Literal(Literal::Integer(i)) => Value::Integer(i.checked_neg()?),
+            ExprKind::Literal(Literal::Float(f)) => Value::Real(-f),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    apply_affinity(&mut value, affinity);
+    Some(value)
+}
+
+/// #498: whether the range seek every fast path in this file would
+/// compile for `schema.indexes[index_position]` is also the plan sqlite3
+/// picks over a table scan, given `stats`. Wraps
+/// [`range_seek_beats_scan`] with this module's bound shapes: each side
+/// is `(operand, inclusive)`. `true` when there are no statistics (the
+/// pre-#498 behaviour).
+fn range_seek_wins(
+    schema: &TableSchema,
+    index_position: usize,
+    lower: Option<(&Expr, bool)>,
+    upper: Option<(&Expr, bool)>,
+    covering: bool,
+    stats: &Stats,
+) -> bool {
+    let Some(index) = schema.indexes.get(index_position) else {
+        return true;
+    };
+    let affinity = index
+        .columns
+        .first()
+        .map_or(Affinity::Blob, |c| column_affinity(schema, &c.name));
+    let lo_val = lower.and_then(|(e, _)| bound_value(e, affinity));
+    let hi_val = upper.and_then(|(e, _)| bound_value(e, affinity));
+    let lo = lower.map(|(_, inclusive)| RangeBound {
+        value: lo_val,
+        inclusive,
+    });
+    let hi = upper.map(|(_, inclusive)| RangeBound {
+        value: hi_val,
+        inclusive,
+    });
+    range_seek_beats_scan(schema, index, lo, hi, covering, stats)
+}
+
+/// [`range_seek_wins`] for a single forward comparison: `operand` is
+/// the lower bound when `is_lower`, the upper bound otherwise.
+fn forward_seek_wins(
+    schema: &TableSchema,
+    index_position: usize,
+    operand: &Expr,
+    inclusive: bool,
+    is_lower: bool,
+    covering: bool,
+    stats: &Stats,
+) -> bool {
+    let bound = Some((operand, inclusive));
+    if is_lower {
+        range_seek_wins(schema, index_position, bound, None, covering, stats)
+    } else {
+        range_seek_wins(schema, index_position, None, bound, covering, stats)
     }
 }
 
@@ -938,6 +1078,7 @@ pub(super) fn try_compile_forward_comparison_seek<F>(
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
+    stats: &Stats,
     sink: &mut F,
 ) -> Result<bool, CodegenError>
 where
@@ -949,7 +1090,7 @@ where
     let Some(where_expr) = &select.where_clause else {
         return Ok(false);
     };
-    let Some((col_name, operand, inclusive)) = as_forward_comparison(where_expr) else {
+    let Some((col_name, operand, inclusive, is_lower)) = as_forward_comparison(where_expr) else {
         return Ok(false);
     };
     let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
@@ -964,6 +1105,17 @@ where
     };
     let affinity = column_affinity(schema, col_name);
     if !operand_matches_column_affinity(operand, affinity) {
+        return Ok(false);
+    }
+    if !forward_seek_wins(
+        schema,
+        index_position,
+        operand,
+        inclusive,
+        is_lower,
+        false,
+        stats,
+    ) {
         return Ok(false);
     }
     let leading_collation = index
@@ -1048,13 +1200,27 @@ pub(crate) fn range_seek_index_position(
     where_expr: &Expr,
     schema: &TableSchema,
     catalog: &[TableSchema],
+    stats: &Stats,
+) -> Option<usize> {
+    range_seek_index_position_with(where_expr, schema, catalog, stats, false)
+}
+
+/// [`range_seek_index_position`] with #498's seek-versus-scan gate
+/// evaluated for a `covering` walk (one that never fetches the table
+/// row, so its cost has no per-row lookup term).
+fn range_seek_index_position_with(
+    where_expr: &Expr,
+    schema: &TableSchema,
+    catalog: &[TableSchema],
+    stats: &Stats,
+    covering: bool,
 ) -> Option<usize> {
     // #280: only the cursor id matters for `is_constant_operand`'s own
     // purposes not at all -- it never emits anything, only resolves a
     // `Subquery` operand's own `FROM` against `catalog` -- so `0` here
     // is a placeholder, never an actual cursor this function opens.
     let scope = Scope::single(schema, 0).with_catalog(catalog);
-    if let Some((col, lo, hi, _)) = as_bounds(where_expr) {
+    if let Some((col, lo, hi, equality)) = as_bounds(where_expr) {
         let col_name = where_col(col)?;
         if !is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope) {
             return None;
@@ -1063,6 +1229,18 @@ pub(crate) fn range_seek_index_position(
         let affinity = column_affinity(schema, col_name);
         if !operand_matches_column_affinity(lo, affinity)
             || !operand_matches_column_affinity(hi, affinity)
+        {
+            return None;
+        }
+        if !equality
+            && !range_seek_wins(
+                schema,
+                index_position,
+                Some((lo, true)),
+                Some((hi, true)),
+                covering,
+                stats,
+            )
         {
             return None;
         }
@@ -1106,17 +1284,30 @@ pub(crate) fn range_seek_index_position(
             }
             Some(index_position)
         }
-        _ => as_forward_comparison(where_expr).and_then(|(col_name, operand, _inclusive)| {
-            if !is_constant_operand(operand, &scope) {
-                return None;
-            }
-            let index_position = find_leading_index(schema, col_name)?;
-            let affinity = column_affinity(schema, col_name);
-            if !operand_matches_column_affinity(operand, affinity) {
-                return None;
-            }
-            Some(index_position)
-        }),
+        _ => as_forward_comparison(where_expr).and_then(
+            |(col_name, operand, inclusive, is_lower)| {
+                if !is_constant_operand(operand, &scope) {
+                    return None;
+                }
+                let index_position = find_leading_index(schema, col_name)?;
+                let affinity = column_affinity(schema, col_name);
+                if !operand_matches_column_affinity(operand, affinity) {
+                    return None;
+                }
+                if !forward_seek_wins(
+                    schema,
+                    index_position,
+                    operand,
+                    inclusive,
+                    is_lower,
+                    covering,
+                    stats,
+                ) {
+                    return None;
+                }
+                Some(index_position)
+            },
+        ),
     }
 }
 
@@ -1134,6 +1325,8 @@ pub(super) fn find_range_seek_detail(
     select: &Select,
     table_display: &str,
     catalog: &[TableSchema],
+    stats: &Stats,
+    covering: bool,
 ) -> Option<String> {
     // #280: see `range_seek_index_position`'s identical comment -- `0`
     // is a placeholder cursor id, never opened.
@@ -1149,6 +1342,18 @@ pub(super) fn find_range_seek_detail(
         let affinity = column_affinity(schema, col_name);
         if !operand_matches_column_affinity(lo, affinity)
             || !operand_matches_column_affinity(hi, affinity)
+        {
+            return None;
+        }
+        if !equality
+            && !range_seek_wins(
+                schema,
+                index_position,
+                Some((lo, true)),
+                Some((hi, true)),
+                covering,
+                stats,
+            )
         {
             return None;
         }
@@ -1213,25 +1418,38 @@ pub(super) fn find_range_seek_detail(
                 index.name
             ))
         }
-        _ => as_forward_comparison(where_expr).and_then(|(col_name, operand, _inclusive)| {
-            if !is_constant_operand(operand, &scope) {
-                return None;
-            }
-            let index_position = find_leading_index(schema, col_name)?;
-            let index = schema.indexes.get(index_position)?;
-            let affinity = column_affinity(schema, col_name);
-            if !operand_matches_column_affinity(operand, affinity) {
-                return None;
-            }
-            // Real sqlite3 collapses inclusive and exclusive into the
-            // same `(col>?)` wording (see `try_compile_forward_comparison_seek`'s
-            // doc) -- `_inclusive` only matters to the compiled seek's
-            // dup-skip, not to this report.
-            Some(format!(
-                "SEARCH {table_display} USING INDEX {} ({col_name}>?)",
-                index.name
-            ))
-        }),
+        _ => as_forward_comparison(where_expr).and_then(
+            |(col_name, operand, inclusive, is_lower)| {
+                if !is_constant_operand(operand, &scope) {
+                    return None;
+                }
+                let index_position = find_leading_index(schema, col_name)?;
+                let index = schema.indexes.get(index_position)?;
+                let affinity = column_affinity(schema, col_name);
+                if !operand_matches_column_affinity(operand, affinity) {
+                    return None;
+                }
+                if !forward_seek_wins(
+                    schema,
+                    index_position,
+                    operand,
+                    inclusive,
+                    is_lower,
+                    covering,
+                    stats,
+                ) {
+                    return None;
+                }
+                // Real sqlite3 collapses inclusive and exclusive into the
+                // same `(col>?)` wording (see `try_compile_forward_comparison_seek`'s
+                // doc) -- `_inclusive` only matters to the compiled seek's
+                // dup-skip, not to this report.
+                Some(format!(
+                    "SEARCH {table_display} USING INDEX {} ({col_name}>?)",
+                    index.name
+                ))
+            },
+        ),
     }
 }
 
@@ -1328,7 +1546,9 @@ mod mcdc_vectors {
     //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
+    use crate::codegen::row::compile_select_with_catalog_and_stats;
     use crate::codegen::row::explain_query_plan;
+    use crate::codegen::row::planner::Stats;
     use crate::codegen::row::select::range_seek_index_position;
     use crate::codegen::row::{
         compile_select_with_catalog, compile_update, IndexSchema, IndexedColumn, TableSchema,
@@ -1337,6 +1557,7 @@ mod mcdc_vectors {
     use crate::parser::row::error::{parse_select, parse_update, ParseOutcome};
     use crate::parser::Span;
     use crate::value::Collation;
+    use crate::value::Value;
     use crate::vm::row::{Opcode, Program};
     use std::collections::HashMap;
 
@@ -1727,87 +1948,87 @@ mod mcdc_vectors {
 
     // --- range_scan_1109: range_seek_index_position BETWEEN operands ------
     #[test]
-    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_3f07d1cf__v1_literal_bounds_pick_the_index(
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_3f07d1cf__v1_literal_bounds_pick_the_index(
     ) {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 5");
         assert_eq!(
-            range_seek_index_position(&w, &s, std::slice::from_ref(&s)),
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &Stats::default()),
             Some(0)
         );
     }
 
     #[test]
-    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_3f07d1cf__v2_computed_lower_bound_picks_the_index(
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_3f07d1cf__v2_computed_lower_bound_picks_the_index(
     ) {
         // #280: a constant-arithmetic bound is loop-constant.
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 + 1 AND 5");
         assert_eq!(
-            range_seek_index_position(&w, &s, std::slice::from_ref(&s)),
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &Stats::default()),
             Some(0)
         );
     }
 
     #[test]
-    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_3f07d1cf__v3_computed_upper_bound_picks_the_index(
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_3f07d1cf__v3_computed_upper_bound_picks_the_index(
     ) {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 5 + 1");
         assert_eq!(
-            range_seek_index_position(&w, &s, std::slice::from_ref(&s)),
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &Stats::default()),
             Some(0)
         );
     }
 
     // --- range_scan_1114: range_seek_index_position BETWEEN affinity ------
     #[test]
-    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_3962915e__v1_matching_affinity_picks_the_index(
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_3962915e__v1_matching_affinity_picks_the_index(
     ) {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 5");
         assert_eq!(
-            range_seek_index_position(&w, &s, std::slice::from_ref(&s)),
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &Stats::default()),
             Some(0)
         );
     }
 
     #[test]
-    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_3962915e__v2_text_lower_bound_picks_no_index(
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_3962915e__v2_text_lower_bound_picks_no_index(
     ) {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 'x' AND 5");
         assert_eq!(
-            range_seek_index_position(&w, &s, std::slice::from_ref(&s)),
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &Stats::default()),
             None
         );
     }
 
     #[test]
-    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_3962915e__v3_text_upper_bound_picks_no_index(
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_3962915e__v3_text_upper_bound_picks_no_index(
     ) {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a BETWEEN 1 AND 'x'");
         assert_eq!(
-            range_seek_index_position(&w, &s, std::slice::from_ref(&s)),
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &Stats::default()),
             None
         );
     }
 
     // --- codegen_row_select_range_scan_find_range_seek_detail_3f07d1cf: range_seek_index_position IN list ---------------
     #[test]
-    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_02599d5e__v1_non_empty_literal_list_picks_the_index(
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_02599d5e__v1_non_empty_literal_list_picks_the_index(
     ) {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a IN (1, 2)");
         assert_eq!(
-            range_seek_index_position(&w, &s, std::slice::from_ref(&s)),
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &Stats::default()),
             Some(0)
         );
     }
 
     #[test]
-    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_02599d5e__v2_empty_list_picks_no_index(
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_02599d5e__v2_empty_list_picks_no_index(
     ) {
         let s = schema("INTEGER", true, false);
         let w = Expr {
@@ -1819,18 +2040,18 @@ mod mcdc_vectors {
             span: column_expr("a").span,
         };
         assert_eq!(
-            range_seek_index_position(&w, &s, std::slice::from_ref(&s)),
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &Stats::default()),
             None
         );
     }
 
     #[test]
-    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_02599d5e__v3_computed_list_member_picks_no_index(
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_02599d5e__v3_computed_list_member_picks_no_index(
     ) {
         let s = schema("INTEGER", true, false);
         let w = where_of("SELECT b FROM t WHERE a IN (1, 1 + 1)");
         assert_eq!(
-            range_seek_index_position(&w, &s, std::slice::from_ref(&s)),
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &Stats::default()),
             None
         );
     }
@@ -1941,5 +2162,186 @@ mod mcdc_vectors {
             &schema("INTEGER", true, false),
         );
         assert!(!d.contains("USING INDEX"), "{d}");
+    }
+
+    // -----------------------------------------------------------------
+    // #498: `!equality && !range_seek_wins(..)` -- the seek-versus-scan
+    // gate, in each of the four functions that carry it. `stat4_stats()`
+    // mirrors `tests/fixtures/btrees/stat4_range.db`'s histogram (4096
+    // rows, 24 samples) on this module's `t(a, b)` / `idx(a)` schema:
+    // `a BETWEEN 10 AND 3900` is a scan, `a BETWEEN 10 AND 20` a seek,
+    // `a = 5` an equality probe that is never gated.
+    // -----------------------------------------------------------------
+
+    fn stat4_stats() -> Stats {
+        use crate::codegen::row::planner::Stat4Sample;
+        let samples = [
+            132, 398, 455, 652, 911, 936, 1367, 1823, 1931, 2068, 2114, 2279, 2425, 2427, 2483,
+            2735, 3191, 3194, 3390, 3647, 3737, 3759, 3956, 4047,
+        ]
+        .iter()
+        .map(|&below| Stat4Sample {
+            // The sample's key is the row with `below` rows before it.
+            key: vec![Value::Integer(below + 1), Value::Integer(below + 1)],
+            n_eq: vec![1, 1],
+            n_lt: vec![below as u64, below as u64],
+            n_dlt: vec![below as u64, below as u64],
+        })
+        .collect();
+        Stats::from_stat1_rows(vec![(Some("idx".to_string()), "4096 1".to_string())])
+            .with_stat4_samples("idx", samples)
+    }
+
+    fn compile_with_stats(sql: &str, schema: &TableSchema, stats: &Stats) -> Program {
+        compile_select_with_catalog_and_stats(
+            &select(sql),
+            schema,
+            std::slice::from_ref(schema),
+            stats,
+        )
+        .unwrap_or_else(|e| panic!("{sql}: {e:?}"))
+    }
+
+    fn eqp_detail_with_stats(sql: &str, schema: &TableSchema, stats: &Stats) -> String {
+        let mut by_table = HashMap::new();
+        by_table.insert(schema.name.clone(), stats.clone());
+        let rows = explain_query_plan(
+            &select(sql),
+            std::slice::from_ref(schema),
+            &by_table,
+            std::slice::from_ref(schema),
+        )
+        .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        rows.first().map(|r| r.detail.clone()).unwrap_or_default()
+    }
+
+    // try_compile_between_seek_666267a3
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_try_compile_between_seek_666267a3__v1_equality_is_never_gated(
+    ) {
+        let p = compile_with_stats(
+            "SELECT a, b FROM t WHERE a = 5",
+            &schema("INTEGER", true, false),
+            &stat4_stats(),
+        );
+        assert!(seeks(&p));
+    }
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_try_compile_between_seek_666267a3__v2_a_narrow_range_seeks(
+    ) {
+        let p = compile_with_stats(
+            "SELECT a, b FROM t WHERE a BETWEEN 10 AND 20",
+            &schema("INTEGER", true, false),
+            &stat4_stats(),
+        );
+        assert!(seeks(&p));
+    }
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_try_compile_between_seek_666267a3__v3_a_wide_range_falls_back_to_the_scan(
+    ) {
+        let p = compile_with_stats(
+            "SELECT a, b FROM t WHERE a BETWEEN 10 AND 3900",
+            &schema("INTEGER", true, false),
+            &stat4_stats(),
+        );
+        assert!(!seeks(&p), "{p:?}");
+        assert!(has(&p, Opcode::Rewind), "{p:?}");
+    }
+
+    // try_compile_range_row_seek_d0f7f7a2 (the aggregate path's row seek)
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_try_compile_range_row_seek_d0f7f7a2__v1_equality_is_never_gated(
+    ) {
+        let p = compile_with_stats(
+            "SELECT count(b) FROM t WHERE a = 5",
+            &schema("INTEGER", true, false),
+            &stat4_stats(),
+        );
+        assert!(seeks(&p));
+    }
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_try_compile_range_row_seek_d0f7f7a2__v2_a_narrow_range_seeks(
+    ) {
+        let p = compile_with_stats(
+            "SELECT count(b) FROM t WHERE a BETWEEN 10 AND 20",
+            &schema("INTEGER", true, false),
+            &stat4_stats(),
+        );
+        assert!(seeks(&p));
+    }
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_try_compile_range_row_seek_d0f7f7a2__v3_a_wide_range_falls_back_to_the_scan(
+    ) {
+        let p = compile_with_stats(
+            "SELECT count(b) FROM t WHERE a BETWEEN 10 AND 3900",
+            &schema("INTEGER", true, false),
+            &stat4_stats(),
+        );
+        assert!(!seeks(&p), "{p:?}");
+        assert!(has(&p, Opcode::Rewind), "{p:?}");
+    }
+
+    // range_seek_index_position_with_d0f7f7a2 (the shared eligibility)
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_d0f7f7a2__v1_equality_is_never_gated(
+    ) {
+        let s = schema("INTEGER", true, false);
+        let w = where_of("SELECT * FROM t WHERE a = 5");
+        assert_eq!(
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &stat4_stats()),
+            Some(0)
+        );
+    }
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_d0f7f7a2__v2_a_narrow_range_is_eligible(
+    ) {
+        let s = schema("INTEGER", true, false);
+        let w = where_of("SELECT * FROM t WHERE a BETWEEN 10 AND 20");
+        assert_eq!(
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &stat4_stats()),
+            Some(0)
+        );
+    }
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_range_seek_index_position_with_d0f7f7a2__v3_a_wide_range_is_not(
+    ) {
+        let s = schema("INTEGER", true, false);
+        let w = where_of("SELECT * FROM t WHERE a BETWEEN 10 AND 3900");
+        assert_eq!(
+            range_seek_index_position(&w, &s, std::slice::from_ref(&s), &stat4_stats()),
+            None
+        );
+    }
+
+    // find_range_seek_detail_d0f7f7a2 (EXPLAIN QUERY PLAN mirror)
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_find_range_seek_detail_d0f7f7a2__v1_equality_reports_the_probe(
+    ) {
+        let d = eqp_detail_with_stats(
+            "SELECT a, b FROM t WHERE a = 5",
+            &schema("INTEGER", true, false),
+            &stat4_stats(),
+        );
+        assert_eq!(d, "SEARCH t USING INDEX idx (a=?)");
+    }
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_find_range_seek_detail_d0f7f7a2__v2_a_narrow_range_reports_the_seek(
+    ) {
+        let d = eqp_detail_with_stats(
+            "SELECT a, b FROM t WHERE a BETWEEN 10 AND 20",
+            &schema("INTEGER", true, false),
+            &stat4_stats(),
+        );
+        assert_eq!(d, "SEARCH t USING INDEX idx (a>? AND a<?)");
+    }
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_find_range_seek_detail_d0f7f7a2__v3_a_wide_range_reports_the_scan(
+    ) {
+        let d = eqp_detail_with_stats(
+            "SELECT a, b FROM t WHERE a BETWEEN 10 AND 3900",
+            &schema("INTEGER", true, false),
+            &stat4_stats(),
+        );
+        assert_eq!(d, "SCAN t");
     }
 }

@@ -8,6 +8,7 @@ use super::order_by::{order_by_target_for_expr, OrderByPlan, OrderByTarget};
 use super::range_scan::try_compile_range_row_seek;
 use super::*;
 use crate::codegen::row::index_maintenance::{valid_index_root_page, valid_table_root_page};
+use crate::codegen::row::planner::Stats;
 use crate::codegen::row::{key_index, record_width};
 use std::rc::Rc;
 
@@ -382,6 +383,7 @@ pub(super) fn try_compile_direct_agg_scan<F>(
     cursors: ScanCursors,
     end_label: Label,
     catalog: &[TableSchema],
+    stats: &Stats,
     sink: &mut F,
 ) -> Result<bool, CodegenError>
 where
@@ -435,7 +437,7 @@ where
     let covering = select
         .where_clause
         .as_ref()
-        .and_then(|where_expr| covering_range_index(where_expr, schema, &needed, catalog));
+        .and_then(|where_expr| covering_range_index(where_expr, schema, &needed, catalog, stats));
     let identity_positions: Vec<Option<usize>> = (0..schema.columns.len()).map(Some).collect();
 
     let agg_slots: Vec<AggSlot> = aggs
@@ -541,6 +543,8 @@ where
                 &table_scope,
                 range_index_cursor,
                 tail_label,
+                stats,
+                true,
                 &mut |em, reg, index_cursor, _row_skip| {
                     accumulate_row(
                         em,
@@ -561,6 +565,8 @@ where
             &table_scope,
             range_index_cursor,
             tail_label,
+            stats,
+            false,
             &mut |em, reg, index_cursor, row_skip| {
                 let rowid_reg = reg.alloc();
                 em.emit(Instruction::new(
@@ -657,9 +663,9 @@ fn covering_range_index(
     schema: &TableSchema,
     needed: &std::collections::HashSet<usize>,
     catalog: &[TableSchema],
+    stats: &Stats,
 ) -> Option<Vec<usize>> {
-    let index_position =
-        super::range_scan::range_row_seek_index_position(where_expr, schema, catalog)?;
+    let index_position = super::range_scan::range_row_seek_candidate(where_expr, schema, catalog)?;
     let index = schema.indexes.get(index_position)?;
     let key_order: Vec<usize> = index
         .columns
@@ -674,7 +680,14 @@ fn covering_range_index(
     let covered = needed
         .iter()
         .all(|idx| schema.rowid_alias != Some(*idx) && key_order.contains(idx));
-    covered.then_some(key_order)
+    if !covered {
+        return None;
+    }
+    // #498: a covering walk still has to beat the table scan under the
+    // planner's cost model (it always does with stat1 alone; kept for
+    // lockstep with `range_row_seek_index_position`'s gate).
+    super::range_scan::range_row_seek_index_position(where_expr, schema, catalog, stats, true)?;
+    Some(key_order)
 }
 
 /// #484: whether [`try_compile_direct_agg_scan`] walks `select`'s range
@@ -684,6 +697,7 @@ pub(super) fn direct_agg_range_seek_is_covering(
     select: &Select,
     schema: &TableSchema,
     catalog: &[TableSchema],
+    stats: &Stats,
 ) -> bool {
     let Some(where_expr) = &select.where_clause else {
         return false;
@@ -697,7 +711,7 @@ pub(super) fn direct_agg_range_seek_is_covering(
         return false;
     }
     let needed = columns_needed_for_projection(select, schema);
-    covering_range_index(where_expr, schema, &needed, catalog).is_some()
+    covering_range_index(where_expr, schema, &needed, catalog, stats).is_some()
 }
 
 /// #506: which of `schema`'s columns [`compile_grouped_scan`]'s pass 1
@@ -1101,6 +1115,7 @@ pub(crate) fn compile_grouped_scan<F>(
     catalog: &[TableSchema],
     implicit_group: bool,
     outer_scope: Option<&Scope>,
+    stats: &Stats,
     sink: &mut F,
 ) -> Result<(), CodegenError>
 where
@@ -1237,6 +1252,8 @@ where
             &table_scope,
             range_index_cursor,
             sort_step,
+            stats,
+            false,
             &mut |em, reg, index_cursor, row_skip| {
                 let rowid_reg = reg.alloc();
                 em.emit(Instruction::new(

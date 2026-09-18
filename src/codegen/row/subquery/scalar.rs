@@ -166,6 +166,9 @@ pub(crate) fn compile_scalar_subquery(
             &catalog,
             true,
             Some(outer_scope),
+            // A scalar subquery's own scan carries no stats (#498): it
+            // behaves as before the seek-versus-scan gate existed.
+            &crate::codegen::row::planner::Stats::default(),
             &mut sink,
         )?;
         em.place(end_label);

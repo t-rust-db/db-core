@@ -30,6 +30,10 @@ struct TempDb(PathBuf);
 
 impl TempDb {
     fn new(label: &str) -> Self {
+        Self::from_fixture(FIXTURE, label)
+    }
+
+    fn from_fixture(fixture: &str, label: &str) -> Self {
         let mut path = std::env::temp_dir();
         path.push(format!(
             "db-core-eqp-{label}-{}-{}.db",
@@ -39,7 +43,7 @@ impl TempDb {
                 .unwrap()
                 .subsec_nanos()
         ));
-        std::fs::copy(FIXTURE, &path).expect("copy fixture");
+        std::fs::copy(fixture, &path).expect("copy fixture");
         TempDb(path)
     }
     fn path(&self) -> &Path {
@@ -204,5 +208,89 @@ fn join_on_a_large_unindexed_table_reports_the_automatic_covering_index() {
             "SCAN ai_a",
             "SEARCH ai_b USING AUTOMATIC COVERING INDEX (k=?)"
         ]
+    );
+}
+
+// ---------------------------------------------------------------------
+// #498: `sqlite_stat4` histograms decide seek versus scan for a range
+// predicate exactly as sqlite3 3.53.4 does. `stat4_range.db` is
+// `t(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER, s TEXT)` with `ia(a)`,
+// 4096 rows (`a = id`), analyzed by sqlite3 itself (24 stat4 samples).
+// Every expectation below is the oracle's own EXPLAIN QUERY PLAN line.
+// ---------------------------------------------------------------------
+
+const STAT4_FIXTURE: &str = "tests/fixtures/btrees/stat4_range.db";
+
+fn stat4_engine(label: &str) -> (TempDb, RowEngine) {
+    let db = TempDb::from_fixture(STAT4_FIXTURE, label);
+    let e = open(&db);
+    (db, e)
+}
+
+#[test]
+fn stat4_wide_range_over_a_non_covering_index_scans_like_sqlite3() {
+    let (_db, e) = stat4_engine("stat4-wide");
+    assert_eq!(
+        plan(&e, "SELECT sum(b) FROM t WHERE a BETWEEN 10 AND 3900"),
+        ["SCAN t"]
+    );
+    assert_eq!(plan(&e, "SELECT sum(b) FROM t WHERE a > 100"), ["SCAN t"]);
+    assert_eq!(
+        plan(&e, "SELECT b FROM t WHERE a BETWEEN 10 AND 3900"),
+        ["SCAN t"]
+    );
+}
+
+#[test]
+fn stat4_narrow_range_still_seeks_like_sqlite3() {
+    let (_db, e) = stat4_engine("stat4-narrow");
+    assert_eq!(
+        plan(&e, "SELECT sum(b) FROM t WHERE a BETWEEN 10 AND 20"),
+        ["SEARCH t USING INDEX ia (a>? AND a<?)"]
+    );
+    assert_eq!(
+        plan(&e, "SELECT sum(b) FROM t WHERE a > 4000"),
+        ["SEARCH t USING INDEX ia (a>?)"]
+    );
+    // 1000..3000 keeps about half the rows and still seeks: the oracle's
+    // cost model puts it at 132 against a scan at 134.
+    assert_eq!(
+        plan(&e, "SELECT sum(b) FROM t WHERE a BETWEEN 1000 AND 3000"),
+        ["SEARCH t USING INDEX ia (a>? AND a<?)"]
+    );
+    assert_eq!(
+        plan(&e, "SELECT b FROM t WHERE a > 4000"),
+        ["SEARCH t USING INDEX ia (a>?)"]
+    );
+}
+
+#[test]
+fn stat4_cannot_see_through_a_subquery_bound_so_the_seek_stays() {
+    let (_db, e) = stat4_engine("stat4-subquery");
+    let d = plan(
+        &e,
+        "SELECT sum(b) FROM t WHERE a BETWEEN 10 AND (SELECT max(a) FROM t)",
+    );
+    assert_eq!(d[0], "SEARCH t USING INDEX ia (a>? AND a<?)", "{d:?}");
+}
+
+#[test]
+fn stat4_covering_walk_is_never_demoted() {
+    let (_db, e) = stat4_engine("stat4-covering");
+    assert_eq!(
+        plan(&e, "SELECT count(*) FROM t WHERE a BETWEEN 10 AND 3900"),
+        ["SEARCH t USING COVERING INDEX ia (a>? AND a<?)"]
+    );
+}
+
+#[test]
+fn stat4_removed_restores_the_stats_free_seek() {
+    let (_db, mut e) = stat4_engine("stat4-removed");
+    e.run_query("DELETE FROM sqlite_stat4").unwrap();
+    // `stat1` alone never demotes a range seek (sqlite3's fixed 1/64
+    // default for a closed range), so this is the pre-#498 plan again.
+    assert_eq!(
+        plan(&e, "SELECT sum(b) FROM t WHERE a BETWEEN 10 AND 3900"),
+        ["SEARCH t USING INDEX ia (a>? AND a<?)"]
     );
 }
