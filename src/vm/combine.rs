@@ -33,7 +33,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::batch::{
-    chunk_len, hash_columns_by_row, AggPart, Chunk, QueryOutput, Result, Value, VmError,
+    apply_map_op, chunk_len, hash_columns_by_row, AggOperand, AggPart, Chunk, HiddenPart, MapOp,
+    QueryOutput, Result, Value, VmError,
 };
 
 /// What `Combine` does to one emitted slot (column) when two partial rows
@@ -83,15 +84,18 @@ pub(crate) fn slot_ops(parts: &[AggPart], num_slots: usize) -> Result<Vec<SlotOp
                 }
                 cursor = count_i.saturating_add(1);
             }
+            // No slot of its own (#496): both operands name slots another
+            // part already claimed, so the cursor doesn't move.
+            AggPart::Expr(..) => {}
             other => {
                 if let Some(slot) = ops.get_mut(cursor) {
                     *slot = match other {
                         AggPart::GroupKey => SlotOp::Key,
-                        AggPart::Sum => SlotOp::Sum,
-                        AggPart::Count => SlotOp::Count,
-                        AggPart::Min => SlotOp::Min,
-                        AggPart::Max => SlotOp::Max,
-                        AggPart::Avg(..) => SlotOp::Key,
+                        AggPart::Sum | AggPart::Hidden(HiddenPart::Sum) => SlotOp::Sum,
+                        AggPart::Count | AggPart::Hidden(HiddenPart::Count) => SlotOp::Count,
+                        AggPart::Min | AggPart::Hidden(HiddenPart::Min) => SlotOp::Min,
+                        AggPart::Max | AggPart::Hidden(HiddenPart::Max) => SlotOp::Max,
+                        AggPart::Avg(..) | AggPart::Expr(..) => SlotOp::Key,
                     };
                 }
                 cursor = cursor.saturating_add(1);
@@ -99,6 +103,35 @@ pub(crate) fn slot_ops(parts: &[AggPart], num_slots: usize) -> Result<Vec<SlotOp
         }
     }
     Ok(ops)
+}
+
+/// Resolves one [`AggOperand`] against a slot accessor -- shared by
+/// [`output_columns`] (`slot` indexes a merged accumulator column) and
+/// `engine::finalize_row` (`slot` indexes a merged row) so the two
+/// `AggPart::Expr` evaluations (#496) cannot drift, the same discipline
+/// [`merge_slot`] already keeps for the rest of `Combine`.
+pub(crate) fn eval_agg_operand(
+    op: &AggOperand,
+    slot: impl Fn(usize) -> Result<Value>,
+) -> Result<Value> {
+    Ok(match op {
+        AggOperand::Slot(i) => slot(*i)?,
+        AggOperand::Avg(sum_i, count_i) => finish_avg(&slot(*sum_i)?, &slot(*count_i)?)?,
+        AggOperand::Literal(f) => Value::Float(*f),
+    })
+}
+
+/// Resolves one [`AggPart::Expr`] against a slot accessor, per
+/// [`eval_agg_operand`].
+pub(crate) fn eval_agg_expr(
+    map_op: MapOp,
+    lhs: &AggOperand,
+    rhs: &AggOperand,
+    slot: impl Fn(usize) -> Result<Value>,
+) -> Result<Value> {
+    let a = eval_agg_operand(lhs, &slot)?;
+    let b = eval_agg_operand(rhs, &slot)?;
+    Ok(apply_map_op(map_op, &a, &b))
 }
 
 /// Merges one partial slot `from` into the accumulated slot `into` per
@@ -735,6 +768,33 @@ fn output_columns(parts: &[AggPart], mut acc: Vec<Vec<Value>>) -> Result<Vec<Vec
                     .collect::<Result<Vec<_>>>()?;
                 out.push(column);
                 cursor = count_i.saturating_add(1);
+            }
+            // Merged, but not itself an output column (#496) -- its acc
+            // column is consumed (the cursor still advances past it) but
+            // never pushed to `out`; only an `Expr` part reads it.
+            AggPart::Hidden(_) => {
+                cursor = cursor.saturating_add(1);
+            }
+            // No acc column of its own -- both operands name a slot
+            // another part already claimed above, so the cursor doesn't
+            // move (#496).
+            AggPart::Expr(map_op, lhs, rhs) => {
+                let len = acc.first().map_or(0, Vec::len);
+                let column = (0..len)
+                    .map(|r| {
+                        eval_agg_expr(*map_op, lhs, rhs, |i| {
+                            acc.get(i).and_then(|c| c.get(r)).cloned().ok_or_else(|| {
+                                VmError::MalformedProgram {
+                                    opcode: "Combine",
+                                    reason: format!(
+                                        "Expr operand slot {i} is outside the emitted row"
+                                    ),
+                                }
+                            })
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                out.push(column);
             }
             _ => {
                 if let Some(column) = acc.get_mut(cursor) {

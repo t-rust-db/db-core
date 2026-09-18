@@ -26,7 +26,8 @@ use super::batch::{
     Result, ScanSource, Segment, TopN, Value, Vm, VmError,
 };
 use super::combine::{
-    combine_chunks, combine_partials, finish_avg, merge_slot, order_key, slot_ops, Combiner, SlotOp,
+    combine_chunks, combine_partials, eval_agg_expr, finish_avg, merge_slot, order_key, slot_ops,
+    Combiner, SlotOp,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -492,6 +493,24 @@ fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Result<Vec<Value>> {
             AggPart::Avg(sum_i, count_i) => {
                 out.push(finish_avg(&row[*sum_i], &row[*count_i])?);
                 row_idx = count_i.saturating_add(1);
+            }
+            // Merged into `row[row_idx]` like its plain counterpart, but
+            // not itself an output value (#496) -- the cursor still
+            // advances past its slot; only an `Expr` part reads it.
+            AggPart::Hidden(_) => {
+                row_idx = row_idx.saturating_add(1);
+            }
+            // No row slot of its own -- both operands name a slot another
+            // part already claimed, so the cursor doesn't move (#496).
+            AggPart::Expr(map_op, lhs, rhs) => {
+                out.push(eval_agg_expr(*map_op, lhs, rhs, |i| {
+                    row.get(i)
+                        .cloned()
+                        .ok_or_else(|| VmError::MalformedProgram {
+                            opcode: "Combine",
+                            reason: format!("Expr operand slot {i} is outside the emitted row"),
+                        })
+                })?);
             }
             _ => {
                 out.push(row[row_idx].clone());

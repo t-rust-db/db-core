@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.112.0] - 2026-09-18
+
+### Changed
+
+- **Aggregate expressions** (#496): `SUM(amount * 2)` (an expression inside an aggregate's argument) and `SUM(x) * 2` / `SUM(x) + SUM(y)` / `SUM(x) / COUNT(*)` (an aggregate composed with arithmetic, including alongside `GROUP BY`) now compile, where both were previously rejected. `vm::batch::AggPart` gains `Hidden` (a merged aggregate that isn't itself an output column) and `Expr` (a post-`Combine` scalar op over two `AggOperand`s), generalizing the `Avg` finalize hook to arbitrary aggregate arithmetic; both stay `Copy` so the AOT-emitted `const PROGRAM` path is unaffected. Nested aggregates and aggregates in `WHERE` are still rejected, each with its own dedicated error message.
+
 ## [0.111.1] - 2026-09-18
 
 ### Fixed

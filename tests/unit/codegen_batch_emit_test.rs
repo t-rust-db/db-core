@@ -55,6 +55,66 @@ fn render_flat_embeds_the_program_and_column_names() {
 }
 
 #[test]
+fn render_flat_embeds_hidden_and_expr_agg_parts_for_aggregate_arithmetic() {
+    // #496: `SUM(x) + COUNT(*)` compiles to a `Hidden` `Sum`, a `Hidden`
+    // `Count`, and an `Expr(Add, ..)` combining them -- exercises
+    // `render_agg_part`'s new arms (and `render_hidden_part`/
+    // `render_agg_operand`) for the AOT emitter, not just the
+    // already-covered `Avg` case.
+    let select = parse("SELECT SUM(amount) + COUNT(*) FROM t").unwrap();
+    let program = compile(&select).unwrap();
+    let columns = output_column_names(&select);
+    let src = render_flat(
+        "column_rs",
+        "SELECT SUM(amount) + COUNT(*) FROM t",
+        "t",
+        &program,
+        &columns,
+    );
+    assert!(src.contains("AggPart::Hidden(HiddenPart::Sum)"), "{src}");
+    assert!(src.contains("AggPart::Hidden(HiddenPart::Count)"), "{src}");
+    assert!(src.contains("AggPart::Expr(MapOp::Add"), "{src}");
+    assert!(src.contains("AggOperand::Slot("), "{src}");
+}
+
+#[test]
+fn render_flat_embeds_avg_and_literal_agg_operands() {
+    // #496: `AVG(x) * 2` exercises `AggOperand::Avg` and
+    // `AggOperand::Literal` (the two `render_agg_operand` arms the
+    // previous test's `Sum`/`Count` `Slot` operands don't reach).
+    let select = parse("SELECT AVG(amount) * 2 FROM t").unwrap();
+    let program = compile(&select).unwrap();
+    let columns = output_column_names(&select);
+    let src = render_flat(
+        "column_rs",
+        "SELECT AVG(amount) * 2 FROM t",
+        "t",
+        &program,
+        &columns,
+    );
+    assert!(src.contains("AggOperand::Avg("), "{src}");
+    assert!(src.contains("AggOperand::Literal(2"), "{src}");
+}
+
+#[test]
+fn render_flat_embeds_hidden_min_and_max() {
+    // #496: `MIN`/`MAX` as `Hidden` parts -- the previous tests only
+    // exercise `Hidden(Sum)`/`Hidden(Count)`.
+    let select = parse("SELECT MIN(amount) + MAX(amount) FROM t").unwrap();
+    let program = compile(&select).unwrap();
+    let columns = output_column_names(&select);
+    let src = render_flat(
+        "column_rs",
+        "SELECT MIN(amount) + MAX(amount) FROM t",
+        "t",
+        &program,
+        &columns,
+    );
+    assert!(src.contains("AggPart::Hidden(HiddenPart::Min)"), "{src}");
+    assert!(src.contains("AggPart::Hidden(HiddenPart::Max)"), "{src}");
+}
+
+#[test]
 fn render_joined_embeds_a_reconstructed_select_and_execute_joined_call() {
     let select = parse("SELECT a.x, b.y FROM a JOIN b ON a.id = b.fk").unwrap();
     let src = render_joined(
