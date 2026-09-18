@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.111.1] - 2026-09-18
+
+### Fixed
+
+- **`INSERT ... VALUES` stored the wrong value for any non-first column whose expression needed a temporary register** (#497): `VALUES (3, -1)` stored `3|1`, `VALUES (-7, -8)` stored `-7|8`. `compile_insert` handed `MakeRecord` the first column's register and assumed the rest followed contiguously, but `compile_value` leaves a unary minus (`0 - 1`), arithmetic or function-call result past the temporaries it allocated, so the record read a temporary instead. When the collected registers are not one contiguous run they are now `Copy`-staged into a fresh block first (the `SELECT` path already did this before `ResultRow`); an all-literal row emits exactly what it did before. Present since at least 0.101.0; a `CHECK (b > 0)` on such a column was silently bypassed because the corrupted value satisfied it. Verified against the sqlite3 3.53.4 oracle.
+
 ## [0.111.0] - 2026-09-18
 
 ### Changed
