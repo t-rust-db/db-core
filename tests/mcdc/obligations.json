@@ -18930,10 +18930,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_row_grammar_primary_expr_9a80a3f3",
+    "id": "parser_row_grammar_primary_expr_5b6da293",
     "file": "src/parser/row/grammar.rs",
     "line": 2303,
-    "decision": "match tok.kind {\n            TokenKind::Integer(v) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Integer(v)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Float(v) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Float(v)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::String(s) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Str(s)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Blob(b) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Blob(*b)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Null => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Null),\n                    span: tok.span,\n                })\n            }\n            TokenKind::True => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::True),\n                    span: tok.span,\n                })\n            }\n            TokenKind::False => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::False),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Param(p) => {\n                self.advance();\n                let kind = match *p {\n                    Param::Anonymous => ParamKind::Anonymous,\n                    Param::Numbered(n) => ParamKind::Numbered(n),\n                    Param::Colon(s) => ParamKind::Colon(s),\n                    Param::At(s) => ParamKind::At(s),\n                    Param::Dollar(s) => ParamKind::Dollar(s),\n                };\n                Ok(Expr {\n                    kind: ExprKind::Param(kind),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Keyword(Keyword::CURRENT_TIME)\n            | TokenKind::Keyword(Keyword::CURRENT_DATE)\n            | TokenKind::Keyword(Keyword::CURRENT_TIMESTAMP) => {\n                self.unsupported(\"CURRENT_TIME/CURRENT_DATE/CURRENT_TIMESTAMP not yet supported\")\n            }\n            TokenKind::Keyword(Keyword::CASE) => self.case_expr(),\n            TokenKind::Keyword(Keyword::CAST) => self.cast_expr(),\n            TokenKind::Keyword(Keyword::EXISTS) => {\n                let start = tok.span;\n                self.advance();\n                self.exists_tail(start, false)\n            }\n            TokenKind::Identifier(name) => {\n                self.advance();\n                if matches!(self.peek().kind, TokenKind::LParen) {\n                    return self.function_call(name, tok.span);\n                }\n                let mut parts = vec![name];\n                while matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3 {\n                    self.advance();\n                    let (part, _) = self.identifier()?;\n                    parts.push(part);\n                }\n                let end = self\n                    .tokens\n                    .get(self.pos.saturating_sub(1))\n                    .map_or(tok.span, |t| t.span);\n                let span = join_span(tok.span, end);\n                // Exactly one, two or three parts (db-core#232): the old\n                // wildcard arm also matched `a.b.c.d`, silently dropping\n                // the trailing parts, and `unwrap_or_default()` could\n                // mint an empty identifier.\n                let kind = match parts.as_slice() {\n                    [name] => ExprKind::Column {\n                        table: None,\n                        catalog: None,\n                        name: name.clone(),\n                    },\n                    [table, name] => ExprKind::Column {\n                        catalog: None,\n                        table: Some(table.clone()),\n                        name: name.clone(),\n                    },\n                    [catalog, table, name] => ExprKind::Column {\n                        catalog: Some(catalog.clone()),\n                        table: Some(table.clone()),\n                        name: name.clone(),\n                    },\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                };\n                Ok(Expr { kind, span })\n            }\n            // SQLite treats most keywords as usable function names when\n            // followed by `(` (e.g. `replace(...)`, `glob(...)`) — only\n            // the handful matched above (CASE/CAST/EXISTS/CURRENT_*)\n            // are true reserved words in expression position.\n            TokenKind::Keyword(kw) if matches!(self.peek_at(1).kind, TokenKind::LParen) => {\n                self.advance();\n                self.function_call(format!(\"{kw:?}\"), tok.span)\n            }\n            TokenKind::LParen => {\n                self.advance();\n                if self.at_kw(Keyword::SELECT) {\n                    let subquery = self.parse_select_stmt()?;\n                    if matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    ) {\n                        return self.unsupported(\n                            \"compound SELECT (UNION/INTERSECT/EXCEPT) not yet supported\",\n                        );\n                    }\n                    let end = self.expect_punct(TokenKind::RParen, \"')' to close subquery\")?;\n                    let span = join_span(tok.span, end);\n                    return Ok(Expr {\n                        kind: ExprKind::Subquery(Box::new(subquery)),\n                        span,\n                    });\n                }\n                let inner = self.expr()?;\n                let end = self.expect_punct(TokenKind::RParen, \"')' to close expression\")?;\n                let span = join_span(tok.span, end);\n                Ok(Expr {\n                    kind: ExprKind::Paren(Box::new(inner)),\n                    span,\n                })\n            }\n            other => Err(ParseFail::Invalid {\n                message: format!(\"expected column or expression, found {other:?}\"),\n                span: tok.span,\n            }),\n        }",
+    "decision": "match tok.kind {\n            TokenKind::Integer(v) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Integer(v)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Float(v) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Float(v)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::String(s) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Str(s)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Blob(b) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Blob(*b)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Null => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Null),\n                    span: tok.span,\n                })\n            }\n            TokenKind::True => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::True),\n                    span: tok.span,\n                })\n            }\n            TokenKind::False => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::False),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Param(p) => {\n                self.advance();\n                let kind = match *p {\n                    Param::Anonymous => ParamKind::Anonymous,\n                    Param::Numbered(n) => ParamKind::Numbered(n),\n                    Param::Colon(s) => ParamKind::Colon(s),\n                    Param::At(s) => ParamKind::At(s),\n                    Param::Dollar(s) => ParamKind::Dollar(s),\n                };\n                Ok(Expr {\n                    kind: ExprKind::Param(kind),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Keyword(Keyword::CURRENT_TIME)\n            | TokenKind::Keyword(Keyword::CURRENT_DATE)\n            | TokenKind::Keyword(Keyword::CURRENT_TIMESTAMP) => {\n                self.unsupported(\"CURRENT_TIME/CURRENT_DATE/CURRENT_TIMESTAMP not yet supported\")\n            }\n            TokenKind::Keyword(Keyword::CASE) => self.case_expr(),\n            TokenKind::Keyword(Keyword::CAST) => self.cast_expr(),\n            TokenKind::Keyword(Keyword::EXISTS) => {\n                let start = tok.span;\n                self.advance();\n                self.exists_tail(start, false)\n            }\n            TokenKind::Identifier(name) => {\n                self.advance();\n                if matches!(self.peek().kind, TokenKind::LParen) {\n                    return self.function_call(name, tok.span);\n                }\n                let mut parts = vec![name];\n                while matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3 {\n                    self.advance();\n                    let (part, _) = self.identifier()?;\n                    parts.push(part);\n                }\n                let end = self\n                    .tokens\n                    .get(self.pos.saturating_sub(1))\n                    .map_or(tok.span, |t| t.span);\n                let span = join_span(tok.span, end);\n                // Exactly one, two or three parts (db-core#232): the old\n                // wildcard arm also matched `a.b.c.d`, silently dropping\n                // the trailing parts, and `unwrap_or_default()` could\n                // mint an empty identifier. Moved out of `parts` by\n                // value (db-core#486: `parts.as_slice()` forced a\n                // `.clone()` of every identifier `String` here -- a\n                // second heap copy on top of the one `self.identifier()`/\n                // the `Identifier(name)` match already produced --\n                // instead of just moving the `String`s `parts` already\n                // owns.\n                let len = parts.len();\n                let mut parts = parts.into_iter();\n                let kind = match len {\n                    1..=3 => {\n                        let catalog = if len == 3 { parts.next() } else { None };\n                        let table = if len >= 2 { parts.next() } else { None };\n                        let Some(name) = parts.next() else {\n                            return self\n                                .invalid(\"a column reference has at most three dotted parts\");\n                        };\n                        ExprKind::Column {\n                            catalog,\n                            table,\n                            name,\n                        }\n                    }\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                };\n                Ok(Expr { kind, span })\n            }\n            // SQLite treats most keywords as usable function names when\n            // followed by `(` (e.g. `replace(...)`, `glob(...)`) — only\n            // the handful matched above (CASE/CAST/EXISTS/CURRENT_*)\n            // are true reserved words in expression position.\n            TokenKind::Keyword(kw) if matches!(self.peek_at(1).kind, TokenKind::LParen) => {\n                self.advance();\n                self.function_call(format!(\"{kw:?}\"), tok.span)\n            }\n            TokenKind::LParen => {\n                self.advance();\n                if self.at_kw(Keyword::SELECT) {\n                    let subquery = self.parse_select_stmt()?;\n                    if matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    ) {\n                        return self.unsupported(\n                            \"compound SELECT (UNION/INTERSECT/EXCEPT) not yet supported\",\n                        );\n                    }\n                    let end = self.expect_punct(TokenKind::RParen, \"')' to close subquery\")?;\n                    let span = join_span(tok.span, end);\n                    return Ok(Expr {\n                        kind: ExprKind::Subquery(Box::new(subquery)),\n                        span,\n                    });\n                }\n                let inner = self.expr()?;\n                let end = self.expect_punct(TokenKind::RParen, \"')' to close expression\")?;\n                let span = join_span(tok.span, end);\n                Ok(Expr {\n                    kind: ExprKind::Paren(Box::new(inner)),\n                    span,\n                })\n            }\n            other => Err(ParseFail::Invalid {\n                message: format!(\"expected column or expression, found {other:?}\"),\n                span: tok.span,\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -18942,7 +18942,7 @@
   {
     "id": "parser_row_grammar_primary_expr_d95902fa",
     "file": "src/parser/row/grammar.rs",
-    "line": 2423,
+    "line": 2429,
     "decision": "matches!(self.peek_at(1).kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18980,19 +18980,39 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_row_grammar_primary_expr_1e05bfe1",
+    "id": "parser_row_grammar_primary_expr_cca4606b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2399,
-    "decision": "match parts.as_slice() {\n                    [name] => ExprKind::Column {\n                        table: None,\n                        catalog: None,\n                        name: name.clone(),\n                    },\n                    [table, name] => ExprKind::Column {\n                        catalog: None,\n                        table: Some(table.clone()),\n                        name: name.clone(),\n                    },\n                    [catalog, table, name] => ExprKind::Column {\n                        catalog: Some(catalog.clone()),\n                        table: Some(table.clone()),\n                        name: name.clone(),\n                    },\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                }",
+    "line": 2407,
+    "decision": "match len {\n                    1..=3 => {\n                        let catalog = if len == 3 { parts.next() } else { None };\n                        let table = if len >= 2 { parts.next() } else { None };\n                        let Some(name) = parts.next() else {\n                            return self\n                                .invalid(\"a column reference has at most three dotted parts\");\n                        };\n                        ExprKind::Column {\n                            catalog,\n                            table,\n                            name,\n                        }\n                    }\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
+    "id": "parser_row_grammar_primary_expr_c2cb254b",
+    "file": "src/parser/row/grammar.rs",
+    "line": 2409,
+    "decision": "len == 3",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_row_grammar_primary_expr_1511b2a6",
+    "file": "src/parser/row/grammar.rs",
+    "line": 2410,
+    "decision": "len >= 2",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "parser_row_grammar_primary_expr_2a50be6e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2429,
+    "line": 2435,
     "decision": "self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19002,7 +19022,7 @@
   {
     "id": "parser_row_grammar_primary_expr_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2431,
+    "line": 2437,
     "decision": "matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    )",
     "conditions": 1,
     "vectors_required": 2,
@@ -19012,7 +19032,7 @@
   {
     "id": "parser_row_grammar_function_call_9105415c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2466,
+    "line": 2472,
     "decision": "self.eat_punct(&TokenKind::Star)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19022,7 +19042,7 @@
   {
     "id": "parser_row_grammar_function_call_2629d5b7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2468,
+    "line": 2474,
     "decision": "matches!(self.peek().kind, TokenKind::RParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19032,7 +19052,7 @@
   {
     "id": "parser_row_grammar_function_tail_3403c85a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2511,
+    "line": 2517,
     "decision": "self.eat_kw(Keyword::RANGE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19042,7 +19062,7 @@
   {
     "id": "parser_row_grammar_function_tail_f75851c6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2516,
+    "line": 2522,
     "decision": "let Some(r) = &range",
     "conditions": 1,
     "vectors_required": 2,
@@ -19052,7 +19072,7 @@
   {
     "id": "parser_row_grammar_function_tail_2258eb7c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2519,
+    "line": 2525,
     "decision": "self.eat_kw(Keyword::FILTER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19062,7 +19082,7 @@
   {
     "id": "parser_row_grammar_function_tail_87133733",
     "file": "src/parser/row/grammar.rs",
-    "line": 2528,
+    "line": 2534,
     "decision": "self.eat_kw(Keyword::OVER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19072,7 +19092,7 @@
   {
     "id": "parser_row_grammar_function_tail_b001c5a8",
     "file": "src/parser/row/grammar.rs",
-    "line": 2535,
+    "line": 2541,
     "decision": "filter.is_none() && over.is_none() && range.is_none()",
     "conditions": 3,
     "vectors_required": 4,
@@ -19082,7 +19102,7 @@
   {
     "id": "parser_row_grammar_window_def_849b6473",
     "file": "src/parser/row/grammar.rs",
-    "line": 2552,
+    "line": 2558,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19092,7 +19112,7 @@
   {
     "id": "parser_row_grammar_window_def_c4d1976d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2560,
+    "line": 2566,
     "decision": "self.eat_kw(Keyword::PARTITION)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19102,7 +19122,7 @@
   {
     "id": "parser_row_grammar_window_def_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2563,
+    "line": 2569,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19112,7 +19132,7 @@
   {
     "id": "parser_row_grammar_window_def_980f2400",
     "file": "src/parser/row/grammar.rs",
-    "line": 2569,
+    "line": 2575,
     "decision": "self.eat_kw(Keyword::ORDER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19122,7 +19142,7 @@
   {
     "id": "parser_row_grammar_window_def_e9025c84_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 2572,
+    "line": 2578,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19132,7 +19152,7 @@
   {
     "id": "parser_row_grammar_window_def_6907c266",
     "file": "src/parser/row/grammar.rs",
-    "line": 2577,
+    "line": 2583,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::ROWS)\n                | TokenKind::Keyword(Keyword::RANGE)\n                | TokenKind::Keyword(Keyword::GROUPS)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -19142,7 +19162,7 @@
   {
     "id": "parser_row_grammar_case_expr_d359b45c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2598,
+    "line": 2604,
     "decision": "self.at_kw(Keyword::WHEN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19152,7 +19172,7 @@
   {
     "id": "parser_row_grammar_case_expr_47ae9dae",
     "file": "src/parser/row/grammar.rs",
-    "line": 2604,
+    "line": 2610,
     "decision": "self.eat_kw(Keyword::WHEN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19162,7 +19182,7 @@
   {
     "id": "parser_row_grammar_case_expr_2c73542b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2610,
+    "line": 2616,
     "decision": "whens.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -19172,7 +19192,7 @@
   {
     "id": "parser_row_grammar_case_expr_9ca297d5",
     "file": "src/parser/row/grammar.rs",
-    "line": 2613,
+    "line": 2619,
     "decision": "self.eat_kw(Keyword::ELSE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19182,7 +19202,7 @@
   {
     "id": "parser_row_grammar_type_name_ac37c31a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2649,
+    "line": 2655,
     "decision": "let TokenKind::Identifier(_) = self.peek().kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -19192,7 +19212,7 @@
   {
     "id": "parser_row_grammar_type_name_bffb0a0b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2654,
+    "line": 2660,
     "decision": "self.eat_punct(&TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19202,7 +19222,7 @@
   {
     "id": "parser_row_grammar_type_name_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2658,
+    "line": 2664,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19212,7 +19232,7 @@
   {
     "id": "parser_row_grammar_number_literal_84884d30",
     "file": "src/parser/row/grammar.rs",
-    "line": 2670,
+    "line": 2676,
     "decision": "match self.peek().kind.clone() {\n            TokenKind::Integer(v) => {\n                self.advance();\n                Ok(v.to_string())\n            }\n            other => {\n                let span = self.peek().span;\n                Err(ParseFail::Invalid {\n                    message: format!(\"expected number, found {other:?}\"),\n                    span,\n                })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19222,7 +19242,7 @@
   {
     "id": "parser_row_grammar_expr_list_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2687,
+    "line": 2693,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19232,7 +19252,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_e4a5bc85",
     "file": "src/parser/row/grammar.rs",
-    "line": 3378,
+    "line": 3384,
     "decision": "match crate::parser::row::parse_select(sql) {\n            crate::parser::row::ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19242,7 +19262,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_20abd9ee",
     "file": "src/parser/row/grammar.rs",
-    "line": 3382,
+    "line": 3388,
     "decision": "match &select.columns[0] {\n            ResultColumn::Expr { expr, .. } => match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            },\n            other => panic!(\"expected an expression column, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19252,7 +19272,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_0bdb902e",
     "file": "src/parser/row/grammar.rs",
-    "line": 3383,
+    "line": 3389,
     "decision": "match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19262,7 +19282,7 @@
   {
     "id": "parser_row_grammar_parse_select_stmt_aa58f6cd",
     "file": "src/parser/row/grammar.rs",
-    "line": 3447,
+    "line": 3453,
     "decision": "self.depth > MAX_EXPR_DEPTH",
     "conditions": 1,
     "vectors_required": 2,
