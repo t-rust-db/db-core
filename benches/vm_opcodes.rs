@@ -604,6 +604,43 @@ fn bench_engine_combine(r: &mut common::Report) {
     );
 }
 
+/// #479: `GROUP BY <typed Int column>` -- the `GROUP BY customer_id` shape
+/// -- at the two cardinalities that matter: the parity file's 4-group
+/// case (must not regress) and the 100K-group case the ticket targets
+/// (<10 ns/row per segment). `COUNT(*)` only, so the number is the
+/// grouping itself; `bench_batch_group_reduce_typed_sum` covers the
+/// aggregate fold.
+fn bench_batch_group_reduce_typed_int_key(r: &mut common::Report) {
+    // Its own 1M-row fixture: the shared 4096-row one cannot hold 100K
+    // distinct keys, and per-row cost is what the ticket measures.
+    const INT_KEY_ROWS: usize = 1_000_000;
+    for (label, cardinality) in [("4 groups", 4usize), ("100K groups", 100_000usize)] {
+        let keys: Vec<BatchValue> = (0..INT_KEY_ROWS as i64)
+            .map(|i| BatchValue::Int(i % cardinality as i64))
+            .collect();
+        let batch = Batch::new(INT_KEY_ROWS)
+            .with_typed_column("key", db_core::vm::column::Column::from(keys));
+        let program = [
+            BatchOpcode::LoadColumn {
+                reg: 0,
+                column: "key".into(),
+            },
+            BatchOpcode::GroupReduce {
+                group_by: vec![0].into(),
+                aggs: vec![(db_core::vm::batch::AggFunc::Count, None)].into(),
+                agg_dst: vec![1].into(),
+            },
+        ];
+        r.bench(
+            &format!("vm_opcodes/batch::GroupReduce typed Int key ({label})"),
+            || {
+                let mut vm = BatchVm::new();
+                vm.execute(black_box(&batch), &program)
+            },
+        );
+    }
+}
+
 fn main() {
     let mut report = common::Report::new("vm_opcodes");
     bench_batch_load_column(&mut report);
@@ -613,6 +650,7 @@ fn main() {
     bench_batch_reduce_typed_sum(&mut report);
     bench_batch_group_reduce(&mut report);
     bench_batch_group_reduce_typed_sum(&mut report);
+    bench_batch_group_reduce_typed_int_key(&mut report);
     bench_engine_combine(&mut report);
     bench_string_order_by_sort(&mut report);
     bench_window_partition_by_string(&mut report);

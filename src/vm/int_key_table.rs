@@ -1,0 +1,199 @@
+// Copyright 2026 Schuberg Philis
+// SPDX-License-Identifier: Apache-2.0
+//! An open-addressing `i64 -> group id` table shared by the two places a
+//! `GROUP BY <int column>` is grouped: per segment in
+//! [`super::batch`]'s `GroupReduce` (#479) and across segments in
+//! [`super::combine`]'s merge (#478). Linear probing over a power-of-two
+//! `u32` slot array into a dense `(key, group id)` vector, load factor
+//! <= 1/2, MurmurHash3's 64-bit finalizer for the slot index -- the
+//! `key64` specialization ClickHouse and DataFusion (`GroupValuesPrimitive`)
+//! both have; not a bare multiplicative hash, which never brings a key's
+//! high-bit entropy (timestamps, shifted ids) down to the index bits.
+
+use super::batch::{Result, VmError};
+
+/// MurmurHash3's 64-bit finalizer -- what DuckDB and ClickHouse hash
+/// integer keys with. Not a bare multiplicative hash: real ids carry
+/// their entropy in the high bits (timestamps, shifted keys), which a
+/// multiply alone never brings down to the low bits an open-addressing
+/// table indexes by; the xor-shifts do.
+pub(crate) const fn murmur_finalize(mut x: u64) -> u64 {
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xC4CE_B9FE_1A85_EC53);
+    x ^ (x >> 33)
+}
+
+/// An empty slot in [`IntKeyTable::slots`].
+const EMPTY: u32 = u32::MAX;
+
+/// Open-addressing table from an `i64` group key to its group id -- the
+/// `GROUP BY <int column>` specialization every engine has (ClickHouse
+/// `key64`, DataFusion `GroupValuesPrimitive`, Velox's array mode).
+/// Linear probing over a power-of-two `slots` array of indices (4 bytes
+/// each, so 100K groups at load <= 1/2 is ~800 KB: L2-resident); the key
+/// and its group id live in the dense `keys` vector the slots index into,
+/// and the probe compares that `i64` directly -- no cached hash needed
+/// when the key is 8 bytes. `Null` keys form one group of their own,
+/// outside the table (`GROUP BY` semantics: `Null` groups with `Null`) --
+/// which is why a key's position in `keys` and its group id differ.
+pub(crate) struct IntKeyTable {
+    /// Index into `keys`, or [`EMPTY`].
+    slots: Vec<u32>,
+    mask: usize,
+    /// `(key, group id)` in insertion order.
+    keys: Vec<(i64, u32)>,
+    null_group: Option<usize>,
+}
+
+impl IntKeyTable {
+    /// Sized for `expected_groups` at load factor <= 1/2 (all engines
+    /// pay for the resize; the first chunk's row count is a good guess
+    /// at the group count when every segment sees every group).
+    pub(crate) fn with_capacity(expected_groups: usize) -> Self {
+        let capacity = expected_groups
+            .saturating_mul(2)
+            .max(16)
+            .next_power_of_two();
+        IntKeyTable {
+            slots: vec![EMPTY; capacity],
+            mask: capacity.wrapping_sub(1),
+            keys: Vec::with_capacity(expected_groups),
+            null_group: None,
+        }
+    }
+
+    /// The `Null` key's group -- one group outside the table (`GROUP BY`
+    /// semantics: `Null` groups with `Null`), created as `next_id` on first
+    /// sight -- `(id, inserted)`, like [`IntKeyTable::get_or_insert`].
+    pub(crate) fn null_group_or_insert(&mut self, next_id: usize) -> (usize, bool) {
+        match self.null_group {
+            Some(g) => (g, false),
+            None => {
+                self.null_group = Some(next_id);
+                (next_id, true)
+            }
+        }
+    }
+
+    /// Slots currently allocated (a power of two).
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// The home slot of `key`: its bit pattern (not a sign-converted
+    /// magnitude) through the finalizer, masked into `slots`.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "masked to `< slots.len()`, which is a `usize`, before use"
+    )]
+    fn slot_of(&self, key: i64) -> usize {
+        (murmur_finalize(u64::from_ne_bytes(key.to_ne_bytes())) as usize) & self.mask
+    }
+
+    /// The group id for `key`, inserting it as group `next_id` when unseen
+    /// -- `(id, inserted)`.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "`slots[i]`: `i` is masked into `0..slots.len()`; `keys[k]`: every non-EMPTY slot holds a `k < keys.len()` by construction"
+    )]
+    pub(crate) fn get_or_insert(&mut self, key: i64, next_id: usize) -> Result<(usize, bool)> {
+        if self.keys.len().saturating_mul(2) >= self.slots.len() {
+            self.grow();
+        }
+        let mut i = self.slot_of(key);
+        loop {
+            let slot = self.slots[i];
+            if slot == EMPTY {
+                let too_many = || VmError::MalformedProgram {
+                    opcode: "Combine",
+                    reason: format!("more than {} groups", u32::MAX),
+                };
+                let id = u32::try_from(next_id).map_err(|_| too_many())?;
+                let k = u32::try_from(self.keys.len()).map_err(|_| too_many())?;
+                self.slots[i] = k;
+                self.keys.push((key, id));
+                return Ok((next_id, true));
+            }
+            let (candidate, id) = self.keys[slot as usize];
+            if candidate == key {
+                return Ok((id as usize, false));
+            }
+            i = i.wrapping_add(1) & self.mask;
+        }
+    }
+
+    /// Doubles `slots` and re-places every group by its key's hash.
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::cast_possible_truncation,
+        reason = "`slots[i]`: `i` is masked into `0..slots.len()`; `k as u32`: `k < keys.len() <= u32::MAX`, every entry was admitted by `get_or_insert`'s `u32::try_from`"
+    )]
+    fn grow(&mut self) {
+        let capacity = self.slots.len().saturating_mul(2);
+        self.slots = vec![EMPTY; capacity];
+        self.mask = capacity.wrapping_sub(1);
+        for k in 0..self.keys.len() {
+            let mut i = self.slot_of(self.keys[k].0);
+            while self.slots[i] != EMPTY {
+                i = i.wrapping_add(1) & self.mask;
+            }
+            self.slots[i] = k as u32;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn int_key_table_grows_and_keeps_every_key_findable() {
+        let mut table = IntKeyTable::with_capacity(1);
+        assert_eq!(table.capacity(), 16);
+        for k in 0..1_000i64 {
+            let (g, inserted) = table.get_or_insert(k * 1_000_003, k as usize).unwrap();
+            assert!(inserted);
+            assert_eq!(g, k as usize);
+        }
+        assert!(table.capacity() >= 2_000, "load factor stays <= 1/2");
+        for k in 0..1_000i64 {
+            // `next_id` is ignored for a key already present.
+            let (g, inserted) = table.get_or_insert(k * 1_000_003, usize::MAX).unwrap();
+            assert!(!inserted);
+            assert_eq!(g, k as usize);
+        }
+    }
+
+    #[test]
+    fn null_group_is_created_once_and_lives_outside_the_table() {
+        let mut table = IntKeyTable::with_capacity(4);
+        let (g0, ins0) = table.get_or_insert(7, 0).unwrap();
+        let (n1, ins1) = table.null_group_or_insert(1);
+        let (n2, ins2) = table.null_group_or_insert(usize::MAX);
+        let (g3, ins3) = table.get_or_insert(-7, 2).unwrap();
+        assert_eq!((g0, ins0), (0, true));
+        assert_eq!((n1, ins1), (1, true));
+        assert_eq!((n2, ins2), (1, false));
+        assert_eq!((g3, ins3), (2, true));
+        assert_eq!(table.get_or_insert(7, 99).unwrap(), (0, false));
+    }
+
+    #[test]
+    fn murmur_finalizer_spreads_high_bit_entropy_into_the_low_bits() {
+        // Keys differing only above bit 32 must not all land in one slot
+        // of a small table -- the failure mode of a bare multiply.
+        let mask = 1023usize;
+        let mut slots = std::collections::HashSet::new();
+        for k in 0..1_000u64 {
+            slots.insert((murmur_finalize(k << 40) as usize) & mask);
+        }
+        assert!(
+            slots.len() > 600,
+            "only {} distinct low-10-bit slots",
+            slots.len()
+        );
+    }
+}
