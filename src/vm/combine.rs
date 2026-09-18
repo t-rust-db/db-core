@@ -1195,4 +1195,50 @@ mod tests {
         assert!(order_key(3, 1) < order_key(3, 2));
         assert_eq!(order_key(2, 7), (2 << 32) | 7);
     }
+
+    // vm_combine_combine_partials_4f421cb8 (`combine_partials`):
+    // `chunk.is_empty() || chunk_len(chunk) == 0`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_combine_partials_4f421cb8__v1_column_less_partial_is_skipped() {
+        let parts = [AggPart::GroupKey, AggPart::Sum];
+        let real = (int_chunk(&[Some(1)], &[5]), vec![0u64]);
+        // A worker that claimed nothing: no columns at all (first leaf
+        // true), and its empty first-seen list must not trip the
+        // length check.
+        let empty: Chunk = Vec::new();
+        let merged = combine_partials(&parts, 1, &[(empty, Vec::new()), real]).unwrap();
+        assert_eq!(merged.into_rows(), vec![vec![Value::Int(1), Value::Int(5)]]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_combine_partials_4f421cb8__v2_zero_row_partial_is_skipped() {
+        let parts = [AggPart::GroupKey, AggPart::Sum];
+        let real = (int_chunk(&[Some(1)], &[5]), vec![0u64]);
+        // Columns present (first leaf false) but no rows (second leaf
+        // true) -- again the length check must not fire.
+        let zero_rows = (int_chunk(&[], &[]), Vec::new());
+        let merged = combine_partials(&parts, 1, &[zero_rows, real]).unwrap();
+        assert_eq!(merged.into_rows(), vec![vec![Value::Int(1), Value::Int(5)]]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_combine_partials_4f421cb8__v3_populated_partials_are_merged() {
+        let parts = [AggPart::GroupKey, AggPart::Sum];
+        let a = (int_chunk(&[Some(1), Some(2)], &[5, 7]), vec![0u64, 1]);
+        let b = (int_chunk(&[Some(1)], &[3]), vec![2u64]);
+        let merged = combine_partials(&parts, 1, &[a, b]).unwrap();
+        assert_eq!(
+            merged.into_rows(),
+            vec![
+                // A `SUM` merged across partials is finalized as a Float,
+                // like `finalize`'s own cross-segment merge; a group seen
+                // by one partial keeps its integer slot.
+                vec![Value::Int(1), Value::Float(8.0)],
+                vec![Value::Int(2), Value::Int(7)],
+            ]
+        );
+    }
 }

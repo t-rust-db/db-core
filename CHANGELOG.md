@@ -12,7 +12,7 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 ### Fixed
 
-- **`make test-mcdc` discharged nothing** : the harvest tool runs a bare `cargo test`, which failed to compile `unit_engine_resolve_public_api` (it uses `FakeClock`, gated behind the non-default `storage-test-support` feature), so no tagged test ever ran and every obligation reported 0 vectors. The target now declares that feature in `required-features` like its sibling stream tests; `make test` (`--all-features`) still runs it. The gate is back to 148/155, the 7 outstanding being untagged decisions in `engine::resolve`, `engine::stream`, `vm::batch`, `vm::combine` and `vm::engine` that landed while it was dark.
+- **`make test-mcdc` discharged nothing** : the harvest tool runs a bare `cargo test`, which failed to compile `unit_engine_resolve_public_api` (it uses `FakeClock`, gated behind the non-default `storage-test-support` feature), so no tagged test ever ran and every obligation reported 0 vectors. Rather than gating that target off (which would hide its three tagged tests from the harvest), a test-only self-dependency in `[dev-dependencies]` enables the feature for test builds. The gate is back to 155/155: the 19 vectors for the six decisions that landed untagged while it was dark (`engine::stream::requests`, `vm::batch::{projection_only_columns, run_morsels_ordered, typed_arithmetic}`, `vm::combine::combine_partials`, `vm::engine::run`) are tagged in this release.
 
 ## [0.110.0] - 2026-09-18
 

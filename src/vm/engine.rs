@@ -1221,6 +1221,74 @@ mod tests {
         );
         assert!(semi_filter(&batch, "nope", &allowed).is_err());
     }
+
+    fn combine(distinct: bool) -> Opcode {
+        Opcode::Combine {
+            agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
+            num_group_keys: 1,
+            distinct,
+        }
+    }
+
+    // vm_engine_run_930fb66a (`run`, aggregate branch):
+    // `!*distinct && order_by.is_none() && limit.is_none()`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_930fb66a__v1_plain_aggregate_returns_the_merge_directly() {
+        let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
+        let rows = run(&segments, &group_sum_program(vec![combine(false)])).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(1), Value::Float(13.0)],
+                vec![Value::Int(2), Value::Float(5.0)],
+            ]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_930fb66a__v2_distinct_goes_through_finalize() {
+        let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
+        let rows = run(&segments, &group_sum_program(vec![combine(true)])).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_930fb66a__v3_order_by_goes_through_finalize() {
+        let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
+        let rows = run(
+            &segments,
+            &group_sum_program(vec![
+                combine(false),
+                Opcode::Sort {
+                    col: 0,
+                    descending: true,
+                },
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(2), Value::Float(5.0)],
+                vec![Value::Int(1), Value::Float(13.0)],
+            ]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_930fb66a__v4_limit_goes_through_finalize() {
+        let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
+        let rows = run(
+            &segments,
+            &group_sum_program(vec![combine(false), Opcode::Limit { n: 1 }]),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+    }
 }
 
 #[cfg(test)]
