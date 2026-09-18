@@ -458,6 +458,64 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         Ok(out)
     }
 
+    /// Decodes a fixed-width primitive column chunk straight into typed
+    /// storage (#495): `Ok(Some((values, present)))` holds one value per
+    /// row and, for a nullable column, one `present` flag per row
+    /// (`present` is empty for a `REQUIRED` column: every row is present).
+    /// Only for chunks whose every data page is `PLAIN`-encoded -- a
+    /// dictionary page or any other encoding returns `Ok(None)` at the
+    /// first such page, and the caller falls back to the `Vec<Option<T>>`
+    /// readers ([`Self::read_int64_column`] and friends), which handle
+    /// every encoding. Page layout and decompression are exactly
+    /// [`Self::read_column`]'s.
+    pub fn read_plain_fixed_column<T: Copy + Default, const N: usize>(
+        &self,
+        column_index: usize,
+        decode: impl Fn([u8; N]) -> T,
+    ) -> Result<Option<(Vec<T>, Vec<bool>)>> {
+        let codec = self.column_meta(column_index)?.codec;
+        let chunk_bytes = self.column_chunk_bytes(column_index)?;
+        let max_def_level = self.file.max_definition_level(column_index);
+
+        let mut pos = 0usize;
+        let mut values = Vec::new();
+        let mut present = Vec::new();
+        while pos < chunk_bytes.len() {
+            let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
+            let page_start = pos + consumed;
+            let page_end = page_start
+                .checked_add(page_size(
+                    "compressed_page_size",
+                    header.compressed_page_size,
+                )?)
+                .ok_or(FileError::ChunkOutOfBounds)?;
+            let compressed = chunk_bytes
+                .get(page_start..page_end)
+                .ok_or(FileError::ChunkOutOfBounds)?;
+            let PageType::Data(data_page_header) = header.page_type else {
+                return Ok(None);
+            };
+            if data_page_header.encoding != page::Encoding::Plain {
+                return Ok(None);
+            }
+            let page_body = compression::decompress(
+                codec,
+                compressed,
+                page_size("uncompressed_page_size", header.uncompressed_page_size)?,
+            )?;
+            reader::read_plain_fixed(
+                &page_body,
+                &data_page_header,
+                max_def_level,
+                &decode,
+                &mut values,
+                &mut present,
+            )?;
+            pos = page_end;
+        }
+        Ok(Some((values, present)))
+    }
+
     /// Read a column chunk's raw dictionary indices plus its dictionary,
     /// *without* resolving each row's value — for callers that only need to
     /// compare/group rows (e.g. `GROUP BY`), where comparing a `u32` index
@@ -1396,6 +1454,53 @@ mod tests {
                 Some(8),
                 Some(9)
             ]
+        );
+    }
+
+    #[test]
+    fn read_plain_fixed_column_concatenates_pages_like_the_option_reader() {
+        let (page_bytes, meta_bytes) =
+            build_int64_chunk_multi_page(&[&[1, 2, 3], &[4, 5], &[6, 7, 8, 9]], 4);
+        let mut file = Vec::new();
+        file.extend_from_slice(b"PAR1");
+        file.extend_from_slice(&page_bytes);
+        let column_chunk = build_column_chunk(4, meta_bytes);
+        let row_group = build_row_group(vec![column_chunk], page_bytes.len() as i64, 9);
+        let root = build_root_schema_element(1);
+        let col = build_schema_element("v", 2, 0);
+        let metadata = build_file_metadata(vec![root, col], 9, vec![row_group]);
+        file.extend_from_slice(&metadata);
+        file.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"PAR1");
+
+        let parsed = ParquetFile::open(&file).unwrap();
+        let rg = parsed.row_group(0).unwrap();
+        let (values, present) = rg
+            .read_plain_fixed_column(0, i64::from_le_bytes)
+            .unwrap()
+            .expect("all pages are PLAIN");
+        assert_eq!(values, (1..=9).collect::<Vec<i64>>());
+        assert!(present.is_empty(), "REQUIRED column: no per-row flags");
+        assert_eq!(
+            values.iter().copied().map(Some).collect::<Vec<_>>(),
+            rg.read_int64_column(0).unwrap()
+        );
+    }
+
+    #[test]
+    fn read_plain_fixed_column_declines_a_dictionary_encoded_chunk() {
+        let (page_bytes, meta_bytes) = build_int64_dictionary_chunk(&[10, 20], &[1, 0, 1], 4);
+        let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        assert!(rg
+            .read_plain_fixed_column(0, i64::from_le_bytes)
+            .unwrap()
+            .is_none());
+        // The fallback the caller then takes still reads the chunk.
+        assert_eq!(
+            rg.read_int64_column(0).unwrap(),
+            vec![Some(20), Some(10), Some(20)]
         );
     }
 

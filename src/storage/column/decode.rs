@@ -32,23 +32,44 @@ pub fn decode_column_full(
     index: usize,
     physical_type: PhysicalType,
 ) -> Result<Decoded, FileError> {
+    // #495: the fixed-width primitives try the typed `PLAIN` chunk reader
+    // first -- values land in the `Column`'s own `Vec<T>` and the
+    // definition levels become its `Bitmap` with no `Vec<Option<T>>` in
+    // between. `None` means the chunk has a dictionary or other encoding,
+    // and the `Vec<Option<T>>` readers below handle it as before.
     match physical_type {
-        PhysicalType::Int64 => rg
-            .read_int64_column(index)
-            .map(|col| Decoded::Column(int_column(col))),
-        PhysicalType::Int32 => rg.read_int32_column(index).map(|col| {
-            Decoded::Column(int_column(
-                col.into_iter().map(|v| v.map(i64::from)).collect(),
-            ))
-        }),
-        PhysicalType::Double => rg
-            .read_double_column(index)
-            .map(|col| Decoded::Column(float_column(col))),
-        PhysicalType::Float => rg.read_float_column(index).map(|col| {
-            Decoded::Column(float_column(
-                col.into_iter().map(|v| v.map(f64::from)).collect(),
-            ))
-        }),
+        PhysicalType::Int64 => match rg.read_plain_fixed_column(index, i64::from_le_bytes)? {
+            Some(typed) => Ok(Decoded::Column(typed_int(typed))),
+            None => rg
+                .read_int64_column(index)
+                .map(|col| Decoded::Column(int_column(col))),
+        },
+        PhysicalType::Int32 => {
+            match rg.read_plain_fixed_column(index, |b| i64::from(i32::from_le_bytes(b)))? {
+                Some(typed) => Ok(Decoded::Column(typed_int(typed))),
+                None => rg.read_int32_column(index).map(|col| {
+                    Decoded::Column(int_column(
+                        col.into_iter().map(|v| v.map(i64::from)).collect(),
+                    ))
+                }),
+            }
+        }
+        PhysicalType::Double => match rg.read_plain_fixed_column(index, f64::from_le_bytes)? {
+            Some(typed) => Ok(Decoded::Column(typed_float(typed))),
+            None => rg
+                .read_double_column(index)
+                .map(|col| Decoded::Column(float_column(col))),
+        },
+        PhysicalType::Float => {
+            match rg.read_plain_fixed_column(index, |b| f64::from(f32::from_le_bytes(b)))? {
+                Some(typed) => Ok(Decoded::Column(typed_float(typed))),
+                None => rg.read_float_column(index).map(|col| {
+                    Decoded::Column(float_column(
+                        col.into_iter().map(|v| v.map(f64::from)).collect(),
+                    ))
+                }),
+            }
+        }
         PhysicalType::Boolean => rg
             .read_boolean_column(index)
             .map(|col| Decoded::Column(bool_column(col))),
@@ -125,6 +146,31 @@ fn dict_column(dict: Vec<String>, codes: Vec<Option<u32>>) -> Column {
         indices,
         valid,
     }
+}
+
+/// The validity [`Bitmap`] for a typed `PLAIN` decode's per-row `present`
+/// flags (#495): no flags means a `REQUIRED` column, and a nullable column
+/// whose rows are all present gets the same all-valid bitmap -- neither
+/// pays a per-row `set`. Only a column with an actual NULL builds its
+/// bitmap row by row.
+fn validity(present: &[bool], len: usize) -> Bitmap {
+    if present.is_empty() || present.iter().all(|&p| p) {
+        Bitmap::new(len, true)
+    } else {
+        Bitmap::from_bools(present.iter().copied())
+    }
+}
+
+/// [`Column::Int`] from the typed `PLAIN` reader's `(values, present)`.
+fn typed_int((data, present): (Vec<i64>, Vec<bool>)) -> Column {
+    let valid = validity(&present, data.len());
+    Column::Int { data, valid }
+}
+
+/// [`Column::Float`] from the typed `PLAIN` reader's `(values, present)`.
+fn typed_float((data, present): (Vec<f64>, Vec<bool>)) -> Column {
+    let valid = validity(&present, data.len());
+    Column::Float { data, valid }
 }
 
 /// Converts a Parquet `INT64`/`INT32`-widened column's `Vec<Option<i64>>`
@@ -214,6 +260,48 @@ mod tests {
         }
         assert!(column.is_null(1));
         assert!(!column.is_null(0));
+    }
+
+    #[test]
+    fn typed_columns_match_the_option_path_including_nulls() {
+        let ints = vec![Some(1), None, Some(-3)];
+        let typed = typed_int((vec![1, 0, -3], vec![true, false, true]));
+        let via_option = int_column(ints);
+        for i in 0..3 {
+            assert_eq!(typed.get(i), via_option.get(i));
+            assert_eq!(typed.is_null(i), via_option.is_null(i));
+        }
+        let typed = typed_float((vec![1.5, -2.25], vec![true, true]));
+        let via_option = float_column(vec![Some(1.5), Some(-2.25)]);
+        for i in 0..2 {
+            assert_eq!(typed.get(i), via_option.get(i));
+        }
+    }
+
+    // storage_column_decode_validity_9c9d171f: `present.is_empty() || present.iter().all(|&p| p)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_column_decode_validity_9c9d171f__v1_no_flags_is_a_required_column_all_valid() {
+        let valid = validity(&[], 3);
+        assert!(valid.all_valid());
+        assert_eq!(valid.len(), 3);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_column_decode_validity_9c9d171f__v2_all_flags_set_is_all_valid_without_per_row_sets(
+    ) {
+        assert!(validity(&[true, true], 2).all_valid());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_column_decode_validity_9c9d171f__v3_a_clear_flag_marks_exactly_that_row_null()
+    {
+        let with_null = validity(&[true, false], 2);
+        assert!(with_null.get(0));
+        assert!(!with_null.get(1));
+        assert!(!with_null.all_valid());
     }
 
     /// #461: an `INT64`/`INT32` row group decodes straight into
