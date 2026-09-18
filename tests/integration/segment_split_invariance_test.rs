@@ -156,6 +156,80 @@ fn synthetic_dataset() -> (Vec<Value>, Vec<Value>) {
     (grp, amt)
 }
 
+/// #464: an in-memory segment that advertises a *truthful* `ORDER BY`
+/// bound on `amt` (its max for DESC, min for ASC), so `run_parallel_top_n`
+/// may skip it -- the rows that come out must not depend on that.
+struct BoundedSegment {
+    batch: db_core::vm::batch::Batch,
+    max: Option<Value>,
+    min: Option<Value>,
+}
+
+impl db_core::vm::batch::Segment for BoundedSegment {
+    fn load(
+        &self,
+    ) -> Result<std::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError> {
+        Ok(std::sync::Arc::new(self.batch.clone()))
+    }
+
+    fn order_key_bound(&self, descending: bool) -> Option<Value> {
+        if descending {
+            self.max.clone()
+        } else {
+            self.min.clone()
+        }
+    }
+}
+
+fn bounded_segments_for(sizes: &[usize], grp: &[Value], amt: &[Value]) -> Vec<BoundedSegment> {
+    let mut offset = 0;
+    sizes
+        .iter()
+        .map(|&size| {
+            let keys = &amt[offset..offset + size];
+            let ints = keys.iter().map(|v| match v {
+                Value::Int(i) => *i,
+                other => panic!("amt is Int, got {other:?}"),
+            });
+            let batch = db_core::vm::batch::Batch::new(size)
+                .with_column("grp", grp[offset..offset + size].to_vec())
+                .with_column("amt", keys.to_vec());
+            offset += size;
+            BoundedSegment {
+                batch,
+                max: ints.clone().max().map(Value::Int),
+                min: ints.min().map(Value::Int),
+            }
+        })
+        .collect()
+}
+
+/// Obligation 1 for #464's threshold pruning: `ORDER BY ... LIMIT` over
+/// segments that advertise truthful bounds gives bit-identical rows for
+/// every segmentation, and the same rows as unbounded segments.
+#[test]
+fn batch_top_n_with_segment_bounds_is_segment_split_invariant() {
+    let (grp, amt) = synthetic_dataset();
+    for sql in [
+        "SELECT grp, amt FROM t ORDER BY amt DESC LIMIT 5",
+        "SELECT grp, amt FROM t ORDER BY amt LIMIT 5",
+        "SELECT grp, amt FROM t ORDER BY amt DESC LIMIT 1",
+        "SELECT grp, amt FROM t WHERE amt > 30 ORDER BY amt DESC LIMIT 4",
+    ] {
+        let program = compile(&parse(sql).unwrap()).unwrap();
+        let sizings = segmentations(grp.len());
+        let unbounded = run_batch(sql, &sizings[0], ("grp", &grp), ("amt", &amt));
+        for sizes in &sizings {
+            let segments = bounded_segments_for(sizes, &grp, &amt);
+            let got = run(&segments, &program).unwrap().into_rows();
+            assert_eq!(
+                got, unbounded,
+                "{sql}: bounded segmentation {sizes:?} disagrees"
+            );
+        }
+    }
+}
+
 #[test]
 fn batch_count_star_is_segment_split_invariant() {
     let (grp, amt) = synthetic_dataset();

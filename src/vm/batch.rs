@@ -1133,6 +1133,21 @@ pub trait Segment: Send + Sync {
     /// implementor backed by an already-materialized `Batch` can hand it
     /// out with a refcount bump instead of a deep copy.
     fn load(&self) -> Result<Arc<Batch>>;
+
+    /// The best `ORDER BY` key any row of this segment could produce
+    /// (its maximum for `descending`, minimum otherwise), from whatever
+    /// summary the segment has without loading it -- Parquet footer
+    /// statistics for a row group (#464). `None` means "unknown", and an
+    /// unknown segment is always loaded. [`run_parallel_top_n`] skips a
+    /// segment only when this bound is strictly worse than the worst
+    /// candidate a full heap already holds; a bound equal to it, or a
+    /// `Null`, never prunes. The bound is trusted the way #458's WHERE
+    /// pruning trusts the same statistics: a malformed or missing one must
+    /// come back as `None` (cost: one load), never as an error.
+    fn order_key_bound(&self, descending: bool) -> Option<Value> {
+        let _ = descending;
+        None
+    }
 }
 
 /// Dynamically hands out segment indices to a fixed pool of worker threads:
@@ -1509,14 +1524,7 @@ fn top_n_merge(items: impl IntoIterator<Item = TopNItem>, limit: usize) -> Vec<T
 
     let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(limit.saturating_add(1));
     for item in items {
-        if heap.len() < limit {
-            heap.push(item);
-        } else if let Some(worst) = heap.peek() {
-            if item.cmp(worst) == std::cmp::Ordering::Less {
-                heap.pop();
-                heap.push(item);
-            }
-        }
+        push_bounded(&mut heap, item, limit);
     }
     heap.into_sorted_vec()
 }
@@ -1581,26 +1589,131 @@ fn top_n_reduce_output(output: &QueryOutput, spec: &TopN) -> Vec<TopNItem> {
 /// `segments.len() * spec.limit` candidates (never a materialized row)
 /// rather than the full row count, and the final gather to `Vec<Value>`
 /// rows happens exactly once, only for the `spec.limit` overall winners.
+///
+/// #464: segments that advertise an [`Segment::order_key_bound`] are
+/// claimed best-bound-first (unknown bounds first, so they are never
+/// starved), and every finished segment's candidates also feed one shared
+/// bounded heap whose worst kept key is the live threshold: a segment
+/// whose bound is strictly worse than that threshold, once the heap holds
+/// `spec.limit` candidates, is skipped without being loaded. The shared
+/// heap is advisory only -- the result is still merged from the
+/// per-segment candidates in segment order, exactly as without bounds, so
+/// which segments were skipped (a matter of thread timing) can never
+/// change the rows that come out.
 pub fn run_parallel_top_n<S: Segment>(
     segments: &[S],
     program: &[Opcode],
     spec: &TopN,
 ) -> Result<QueryOutput> {
-    let per_segment: Vec<Result<Vec<TopNItem>>> = run_morsels(segments, |segment| {
+    let (winners, _skipped) = top_n_over_segments(segments, program, spec)?;
+    Ok(QueryOutput::from_rows(
+        winners.into_iter().map(|item| item.row).collect(),
+    ))
+}
+
+/// Pushes `item` onto a heap bounded to `limit` candidates, dropping the
+/// worst kept one when `item` beats it. The shared step of
+/// [`top_n_merge`] and the live threshold in [`top_n_over_segments`].
+fn push_bounded(heap: &mut std::collections::BinaryHeap<TopNItem>, item: TopNItem, limit: usize) {
+    if heap.len() < limit {
+        heap.push(item);
+    } else if let Some(worst) = heap.peek() {
+        if item.cmp(worst) == std::cmp::Ordering::Less {
+            heap.pop();
+            heap.push(item);
+        }
+    }
+}
+
+/// [`run_parallel_top_n`]'s body, also reporting how many segments were
+/// skipped on their bound (the number the acceptance criterion of #464
+/// asks for; tests assert on it).
+fn top_n_over_segments<S: Segment>(
+    segments: &[S],
+    program: &[Opcode],
+    spec: &TopN,
+) -> Result<(Vec<TopNItem>, usize)> {
+    use std::cmp::Ordering;
+    use std::collections::BinaryHeap;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use std::sync::Mutex;
+
+    if spec.limit == 0 {
+        return Ok((Vec::new(), 0));
+    }
+
+    let bounds: Vec<Option<Value>> = segments
+        .iter()
+        .map(|segment| segment.order_key_bound(spec.descending))
+        .collect();
+    let bound_of = |idx: usize| bounds.get(idx).and_then(Option::as_ref);
+    // Best-bound-first claim order; a stable sort keeps segment order
+    // among equals and among the unknowns, which go first.
+    let mut order: Vec<usize> = (0..segments.len()).collect();
+    order.sort_by(|&a, &b| match (bound_of(a), bound_of(b)) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Less,
+        (Some(_), None) => Ordering::Greater,
+        (Some(x), Some(y)) => compare_for_order(x, y, spec.descending),
+    });
+
+    let threshold: Mutex<BinaryHeap<TopNItem>> =
+        Mutex::new(BinaryHeap::with_capacity(spec.limit.saturating_add(1)));
+    let skipped = AtomicUsize::new(0);
+
+    let per_segment: Vec<Result<(usize, Vec<TopNItem>)>> = run_morsels(&order, |&idx| {
+        let Some(segment) = segments.get(idx) else {
+            return Ok((idx, Vec::new()));
+        };
+        if let Some(bound) = bound_of(idx) {
+            // Poison recovery mirrors `run_morsels`: a worker panic is
+            // re-raised by the scope, so a poisoned heap never yields a
+            // silently short result.
+            let heap = threshold
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let beaten = heap.len() >= spec.limit
+                && heap.peek().is_some_and(|worst| {
+                    compare_for_order(bound, &worst.key, spec.descending) == Ordering::Greater
+                });
+            drop(heap);
+            if beaten {
+                skipped.fetch_add(1, AtomicOrdering::Relaxed);
+                return Ok((idx, Vec::new()));
+            }
+        }
         let batch = segment.load()?;
         let mut vm = Vm::new();
         vm.execute(&batch, program)?;
         let output = std::mem::take(&mut vm.output);
-        Ok(top_n_reduce_output(&output, spec))
+        let local = top_n_reduce_output(&output, spec);
+        let mut heap = threshold
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for item in &local {
+            push_bounded(
+                &mut heap,
+                TopNItem {
+                    key: item.key.clone(),
+                    row: Vec::new(),
+                    descending: item.descending,
+                },
+                spec.limit,
+            );
+        }
+        drop(heap);
+        Ok((idx, local))
     });
 
-    let mut all = Vec::new();
+    let mut by_segment: Vec<(usize, Vec<TopNItem>)> = Vec::with_capacity(per_segment.len());
     for items in per_segment {
-        all.extend(items?);
+        by_segment.push(items?);
     }
-    let winners = top_n_merge(all, spec.limit);
-    Ok(QueryOutput::from_rows(
-        winners.into_iter().map(|item| item.row).collect(),
+    by_segment.sort_by_key(|(idx, _)| *idx);
+    let all = by_segment.into_iter().flat_map(|(_, items)| items);
+    Ok((
+        top_n_merge(all, spec.limit),
+        skipped.load(AtomicOrdering::Relaxed),
     ))
 }
 
@@ -6966,6 +7079,177 @@ mod tests {
         ];
         let rows = run_parallel(&segments, &program).unwrap();
         assert_eq!(rows, vec![vec![Value::Int(15)], vec![Value::Int(25)]]);
+    }
+
+    /// #464: an in-memory segment that advertises an `ORDER BY` bound,
+    /// counts its loads, and can hold a load for a moment so a test can
+    /// make the best segment finish first without depending on luck.
+    struct BoundedSegment {
+        batch: Batch,
+        bound: Option<Value>,
+        loads: std::sync::atomic::AtomicUsize,
+        delay: std::time::Duration,
+    }
+
+    impl Segment for BoundedSegment {
+        fn load(&self) -> Result<Arc<Batch>> {
+            self.loads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if !self.delay.is_zero() {
+                std::thread::sleep(self.delay);
+            }
+            Ok(Arc::new(self.batch.clone()))
+        }
+
+        fn order_key_bound(&self, _descending: bool) -> Option<Value> {
+            self.bound.clone()
+        }
+    }
+
+    fn amount_segment(values: &[i64], bound: Option<i64>, delay_ms: u64) -> BoundedSegment {
+        BoundedSegment {
+            batch: Batch::new(values.len())
+                .with_column("amount", values.iter().copied().map(Value::Int).collect()),
+            bound: bound.map(Value::Int),
+            loads: std::sync::atomic::AtomicUsize::new(0),
+            delay: std::time::Duration::from_millis(delay_ms),
+        }
+    }
+
+    fn amount_program() -> Vec<Opcode> {
+        vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "amount".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
+        ]
+    }
+
+    fn loads(segment: &BoundedSegment) -> usize {
+        segment.loads.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[test]
+    fn top_n_bounds_skip_segments_that_cannot_beat_the_threshold_and_keep_the_result() {
+        // One segment holds the two winners and is claimed first (best
+        // bound); 400 segments with worse bounds each hold their load for
+        // 1 ms, so the winners are in the shared heap long before most of
+        // them are claimed -- those must be skipped, and the result must be
+        // exactly what an unbounded run gives.
+        let mut segments = vec![amount_segment(&[100, 99], Some(100), 0)];
+        for i in 0..400i64 {
+            segments.push(amount_segment(&[i % 50], Some(i % 50), 1));
+        }
+        let spec = TopN {
+            col: 0,
+            descending: true,
+            limit: 2,
+        };
+        let (winners, skipped) = top_n_over_segments(&segments, &amount_program(), &spec).unwrap();
+        assert_eq!(
+            winners.into_iter().map(|w| w.row).collect::<Vec<_>>(),
+            vec![vec![Value::Int(100)], vec![Value::Int(99)]]
+        );
+        assert_eq!(loads(&segments[0]), 1);
+        assert!(
+            skipped >= 350,
+            "skipped only {skipped} of 400 prunable segments"
+        );
+        let loaded: usize = segments.iter().map(loads).sum();
+        assert_eq!(
+            loaded + skipped,
+            401,
+            "every segment is loaded or skipped, never both"
+        );
+    }
+
+    #[test]
+    fn top_n_ascending_prunes_on_minimum_bounds() {
+        let mut segments = vec![amount_segment(&[1, 2], Some(1), 0)];
+        for i in 0..400i64 {
+            segments.push(amount_segment(&[50 + i], Some(50 + i), 1));
+        }
+        let spec = TopN {
+            col: 0,
+            descending: false,
+            limit: 2,
+        };
+        let (winners, skipped) = top_n_over_segments(&segments, &amount_program(), &spec).unwrap();
+        assert_eq!(
+            winners.into_iter().map(|w| w.row).collect::<Vec<_>>(),
+            vec![vec![Value::Int(1)], vec![Value::Int(2)]]
+        );
+        assert!(
+            skipped >= 350,
+            "skipped only {skipped} of 400 prunable segments"
+        );
+    }
+
+    #[test]
+    fn top_n_never_skips_a_segment_whose_bound_ties_the_threshold() {
+        // Both segments' best key equals the worst kept key of a full heap:
+        // `Equal` is not `Greater`, so the second one is loaded whatever
+        // the thread timing, and both tied rows survive.
+        let segments = vec![
+            amount_segment(&[10, 10], Some(10), 0),
+            amount_segment(&[10, 3], Some(10), 0),
+        ];
+        let spec = TopN {
+            col: 0,
+            descending: true,
+            limit: 3,
+        };
+        let (winners, skipped) = top_n_over_segments(&segments, &amount_program(), &spec).unwrap();
+        assert_eq!(skipped, 0);
+        assert!(segments.iter().all(|s| loads(s) == 1));
+        assert_eq!(
+            winners.into_iter().map(|w| w.row).collect::<Vec<_>>(),
+            vec![
+                vec![Value::Int(10)],
+                vec![Value::Int(10)],
+                vec![Value::Int(10)]
+            ]
+        );
+    }
+
+    #[test]
+    fn top_n_unknown_bounds_are_always_loaded() {
+        // Unknown-bound segments are never pruned, and a known bound that
+        // can still win is loaded too -- nothing here may be skipped.
+        let segments = vec![
+            amount_segment(&[1], None, 0),
+            amount_segment(&[50], Some(50), 0),
+            amount_segment(&[2], None, 0),
+        ];
+        let spec = TopN {
+            col: 0,
+            descending: true,
+            limit: 1,
+        };
+        let (winners, skipped) = top_n_over_segments(&segments, &amount_program(), &spec).unwrap();
+        assert_eq!(skipped, 0);
+        assert!(segments.iter().all(|s| loads(s) == 1));
+        assert_eq!(
+            winners.into_iter().map(|w| w.row).collect::<Vec<_>>(),
+            vec![vec![Value::Int(50)]]
+        );
+    }
+
+    #[test]
+    fn top_n_limit_zero_loads_no_segment() {
+        let segments = vec![amount_segment(&[1], Some(1), 0)];
+        let spec = TopN {
+            col: 0,
+            descending: true,
+            limit: 0,
+        };
+        let (winners, skipped) = top_n_over_segments(&segments, &amount_program(), &spec).unwrap();
+        assert!(winners.is_empty());
+        assert_eq!(skipped, 0);
+        assert_eq!(loads(&segments[0]), 0);
     }
 
     #[test]

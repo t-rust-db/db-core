@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::codegen::batch::{self as planner, PlanError, TableStats};
-use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, ResultColumn, Select};
+use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, OrderingTerm, ResultColumn, Select};
 use crate::parser::ParseError;
 use crate::storage::column::parquet::footer::PhysicalType;
 use crate::storage::column::{decode_column_at, decode_column_full, Decoded};
@@ -166,6 +166,27 @@ struct RowGroupSegment<'a, 'm> {
     /// surviving row positions -- instead of eagerly decoding every
     /// column for the whole row group.
     program: &'m Program,
+    /// The single bare-column `ORDER BY` leaf, when the query has one
+    /// (#464): lets [`Segment::order_key_bound`] answer from this row
+    /// group's footer statistics for that column. `None` = unbounded.
+    order_leaf: Option<(usize, PhysicalType)>,
+}
+
+/// #464: resolves a single bare-column `ORDER BY` term to its leaf so each
+/// segment can bound its rows' order keys from footer statistics. Anything
+/// else -- an expression, several terms, an unknown column -- leaves the
+/// segments unbounded, i.e. always loaded.
+fn order_leaf(order_by: &[OrderingTerm], all_leaves: &[Leaf]) -> Option<(usize, PhysicalType)> {
+    let [term] = order_by else {
+        return None;
+    };
+    let ExprKind::Column { name, .. } = &term.expr.kind else {
+        return None;
+    };
+    all_leaves
+        .iter()
+        .find(|(leaf, _, _)| leaf == name)
+        .map(|(_, index, physical_type)| (*index, *physical_type))
 }
 
 impl RowGroupSegment<'_, '_> {
@@ -198,6 +219,22 @@ impl RowGroupSegment<'_, '_> {
 }
 
 impl Segment for RowGroupSegment<'_, '_> {
+    /// The `ORDER BY` column's footer `max` (descending) or `min`
+    /// (ascending) for this row group, decoded like #458's WHERE pruning
+    /// decodes the same bytes. Missing, unparseable or unsupported-type
+    /// statistics are `None`: the segment is then simply loaded.
+    fn order_key_bound(&self, descending: bool) -> Option<Value> {
+        let (index, physical_type) = self.order_leaf?;
+        let rg = self.file.row_group(self.row_group_index)?;
+        let stats = rg.column_statistics(index).ok()??;
+        let bytes = if descending {
+            stats.max.as_deref()
+        } else {
+            stats.min.as_deref()
+        }?;
+        prune::decode_stat_bytes(bytes, physical_type).map(prune::into_value)
+    }
+
     fn load(&self) -> Result<Arc<Batch>, VmError> {
         let rg = self.row_group()?;
         let num_rows = usize::try_from(rg.num_rows()).map_err(|_| VmError::SegmentLoad {
@@ -327,6 +364,7 @@ fn row_group_segments<'f>(
             row_group_index: i,
             columns: columns.to_vec(),
             program,
+            order_leaf: None,
         })
         .collect()
 }
@@ -336,17 +374,28 @@ fn row_group_segments<'f>(
 /// row group without reading its data pages.
 mod prune {
     use super::{
-        BinaryOp, Expr, ExprKind, HashMap, Literal, Ordering, PhysicalType, RowGroupReader,
+        BinaryOp, Expr, ExprKind, HashMap, Literal, Ordering, PhysicalType, RowGroupReader, Value,
     };
 
     /// A value decoded from footer statistics or a `WHERE`-clause literal,
     /// typed so cross-type comparisons (e.g. an integer literal against a
     /// DOUBLE column) still work.
     #[derive(Debug, Clone, PartialEq)]
-    enum StatValue {
+    pub(super) enum StatValue {
         Int(i64),
         Float(f64),
         Str(String),
+    }
+
+    /// The VM-side [`Value`] of a decoded statistic, so a top-N bound
+    /// (#464) compares through the same `compare_for_order` as the heap
+    /// keys it is held against.
+    pub(super) fn into_value(stat: StatValue) -> Value {
+        match stat {
+            StatValue::Int(i) => Value::Int(i),
+            StatValue::Float(f) => Value::Float(f),
+            StatValue::Str(s) => Value::Str(s.into()),
+        }
     }
 
     fn compare(a: &StatValue, b: &StatValue) -> Option<Ordering> {
@@ -364,7 +413,10 @@ mod prune {
     /// the column's physical type. `None` for a physical type this pruner
     /// doesn't interpret (e.g. INT96, FIXED_LEN_BYTE_ARRAY) or malformed
     /// bytes -- always falls back to "cannot prune", never misreads them.
-    fn decode_stat_bytes(bytes: &[u8], physical_type: PhysicalType) -> Option<StatValue> {
+    pub(super) fn decode_stat_bytes(
+        bytes: &[u8],
+        physical_type: PhysicalType,
+    ) -> Option<StatValue> {
         match physical_type {
             PhysicalType::Int32 => {
                 let arr: [u8; 4] = bytes.try_into().ok()?;
@@ -624,13 +676,17 @@ impl Engine for BatchEngine {
         let program: Program = planner::compile(&select).map_err(plan_err)?;
         let file = self.file()?;
         let columns = resolve_columns(&self.leaves, &program.columns_to_load())?;
-        let segments = row_group_segments(
+        let mut segments = row_group_segments(
             &file,
             &columns,
             &self.leaves,
             select.where_clause.as_ref(),
             &program,
         );
+        let bound_leaf = order_leaf(&select.order_by, &self.leaves);
+        for segment in &mut segments {
+            segment.order_leaf = bound_leaf;
+        }
         let output = engine::run(&segments, &program)
             .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
         Ok(QueryResult {
@@ -712,8 +768,9 @@ impl Engine for BatchEngine {
 #[cfg(test)]
 mod tests {
     use super::{
-        engine, plan_err, planner, resolve_columns, row_group_segments, type_name, ErrorKind, Leaf,
-        ParquetFile, PhysicalType, PlanError, Program, RowGroupSegment,
+        engine, order_leaf, plan_err, planner, resolve_columns, row_group_segments, type_name,
+        BatchEngine, Engine as _, ErrorKind, Leaf, ParquetFile, Path, PhysicalType, PlanError,
+        Program, RowGroupSegment, Value,
     };
     use crate::parser::ast::Select;
     use crate::vm::batch::Segment as _;
@@ -929,6 +986,101 @@ mod tests {
         vec![("amount".to_string(), 0, PhysicalType::Double)]
     }
 
+    fn order_by_select(sql: &str) -> Select {
+        crate::parser::parse(sql).expect("valid SQL")
+    }
+
+    #[test]
+    fn order_leaf_resolves_only_a_single_bare_column_term() {
+        let leaves = amount_leaf();
+        let one = order_by_select("SELECT amount FROM t ORDER BY amount DESC LIMIT 1");
+        assert_eq!(
+            order_leaf(&one.order_by, &leaves),
+            Some((0, PhysicalType::Double))
+        );
+        // The parser admits exactly one bare column reference here, so the
+        // remaining "no leaf" cases are a column the file doesn't have and
+        // no ORDER BY at all.
+        let unknown = order_by_select("SELECT amount FROM t ORDER BY other LIMIT 1");
+        assert_eq!(order_leaf(&unknown.order_by, &leaves), None);
+        let none = order_by_select("SELECT amount FROM t LIMIT 1");
+        assert_eq!(order_leaf(&none.order_by, &leaves), None);
+    }
+
+    #[test]
+    fn order_key_bound_is_the_footer_max_descending_and_min_ascending() {
+        let stats = build_statistics(&1.0f64.to_le_bytes(), &5.0f64.to_le_bytes());
+        let bogus = build_statistics(&[0, 0, 0], &[0, 0, 0]);
+        let file_bytes = build_file(&[
+            (&[1.0, 5.0], Some(stats)),
+            (&[7.0], None),
+            (&[2.0], Some(bogus)),
+        ]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let leaves = amount_leaf();
+        let program = Program::new(Vec::new());
+        let mut segments = row_group_segments(&file, &leaves, &leaves, None, &program);
+        assert_eq!(segments.len(), 3);
+        // Unbounded until the ORDER BY leaf is known.
+        assert_eq!(segments[0].order_key_bound(true), None);
+        for segment in &mut segments {
+            segment.order_leaf = Some((0, PhysicalType::Double));
+        }
+        assert_eq!(segments[0].order_key_bound(true), Some(Value::Float(5.0)));
+        assert_eq!(segments[0].order_key_bound(false), Some(Value::Float(1.0)));
+        assert_eq!(
+            segments[1].order_key_bound(true),
+            None,
+            "no statistics: unknown"
+        );
+        assert_eq!(
+            segments[2].order_key_bound(true),
+            None,
+            "malformed statistics: unknown"
+        );
+    }
+
+    /// End to end over the 3-row-group fixture whose `id`/`amount` are
+    /// monotone across row groups -- the layout #464's pruning is for.
+    /// Asserts results only: which groups were skipped is thread timing.
+    #[test]
+    fn top_n_over_a_clustered_parquet_file_returns_the_same_rows_as_a_full_sort() {
+        let path = Path::new("tests/fixtures/parquet/production.parquet");
+        let mut engine = BatchEngine::open(path).unwrap();
+        let mut rows = |sql: &str| -> Vec<String> {
+            engine
+                .run_query(sql)
+                .unwrap()
+                .rows
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .collect()
+        };
+        assert_eq!(
+            rows("SELECT id FROM production ORDER BY id DESC LIMIT 2"),
+            vec!["5000", "4999"]
+        );
+        assert_eq!(
+            rows("SELECT amount FROM production ORDER BY amount LIMIT 2"),
+            vec!["2.5", "5.0"]
+        );
+        // A WHERE clause only removes rows, so the row group with the
+        // best bound (ids up to 5000) is loaded and filtered, not trusted.
+        assert_eq!(
+            rows("SELECT id FROM production WHERE id < 3000 ORDER BY id DESC LIMIT 2"),
+            vec!["2999", "2998"]
+        );
+        assert_eq!(
+            rows("SELECT id, amount FROM production ORDER BY amount DESC LIMIT 1"),
+            vec!["5000,12500.0"]
+        );
+    }
+
     #[test]
     fn prunes_a_row_group_whose_max_statistic_cannot_satisfy_the_filter() {
         let file_bytes = build_file(&[
@@ -1111,6 +1263,7 @@ mod tests {
             row_group_index: 99,
             columns: amount_leaf(),
             program: &program,
+            order_leaf: None,
         };
         assert!(seg.load().is_err());
     }
@@ -1125,6 +1278,7 @@ mod tests {
             row_group_index: 0,
             columns: vec![("amount".to_string(), 7, PhysicalType::Double)],
             program: &program,
+            order_leaf: None,
         };
         assert!(seg.load().is_err());
     }

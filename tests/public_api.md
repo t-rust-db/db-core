@@ -620,6 +620,7 @@ impl core::fmt::Debug for db_core::engine::cross_mode::RowTableSegment
 pub fn db_core::engine::cross_mode::RowTableSegment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::vm::batch::Segment for db_core::engine::cross_mode::RowTableSegment
 pub fn db_core::engine::cross_mode::RowTableSegment::load(&self) -> core::result::Result<alloc::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::engine::cross_mode::RowTableSegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub struct db_core::engine::cross_mode::RowTableSource
 impl db_core::engine::cross_mode::RowTableSource
 pub fn db_core::engine::cross_mode::RowTableSource::new(db_core::vm::batch::Batch) -> Self
@@ -4221,6 +4222,7 @@ impl core::fmt::Debug for db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::vm::batch::Segment for db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::load(&self) -> core::result::Result<alloc::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::storage::stream::adapter::StreamSegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub struct db_core::storage::stream::adapter::TailSource
 impl db_core::storage::stream::adapter::TailSource
 pub const fn db_core::storage::stream::adapter::TailSource::file(&self) -> &db_core::storage::stream::file::LogFile
@@ -5082,6 +5084,7 @@ impl core::fmt::Debug for db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::vm::batch::Segment for db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::load(&self) -> core::result::Result<alloc::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::storage::stream::adapter::StreamSegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub struct db_core::storage::stream::SyslogParser
 impl db_core::storage::stream::syslog::SyslogParser
 pub fn db_core::storage::stream::syslog::SyslogParser::new() -> Self
@@ -5936,12 +5939,16 @@ pub const db_core::vm::batch::BATCH_SIZE: usize
 pub const db_core::vm::batch::MAX_STEPS: usize
 pub trait db_core::vm::batch::Segment: core::marker::Send + core::marker::Sync
 pub fn db_core::vm::batch::Segment::load(&self) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
+pub fn db_core::vm::batch::Segment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 impl db_core::vm::batch::Segment for db_core::engine::cross_mode::RowTableSegment
 pub fn db_core::engine::cross_mode::RowTableSegment::load(&self) -> core::result::Result<alloc::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::engine::cross_mode::RowTableSegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 impl db_core::vm::batch::Segment for db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::load(&self) -> core::result::Result<alloc::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::storage::stream::adapter::StreamSegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 impl db_core::vm::batch::Segment for db_core::vm::engine::InMemorySegment
 pub fn db_core::vm::engine::InMemorySegment::load(&self) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
+pub fn db_core::vm::engine::InMemorySegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub trait db_core::vm::batch::Source
 pub fn db_core::vm::batch::Source::next_batch(&mut self) -> core::option::Option<db_core::vm::batch::Batch>
 impl db_core::vm::batch::Source for db_core::engine::cross_mode::RowTableSource
@@ -6008,6 +6015,7 @@ pub mod db_core::vm::engine
 pub struct db_core::vm::engine::InMemorySegment(pub db_core::vm::batch::Batch)
 impl db_core::vm::batch::Segment for db_core::vm::engine::InMemorySegment
 pub fn db_core::vm::engine::InMemorySegment::load(&self) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
+pub fn db_core::vm::engine::InMemorySegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub struct db_core::vm::engine::JoinBuildSide
 pub db_core::vm::engine::JoinBuildSide::build: db_core::vm::batch::Program
 pub db_core::vm::engine::JoinBuildSide::payload_dst: alloc::vec::Vec<usize>
