@@ -641,6 +641,74 @@ fn bench_batch_group_reduce_typed_int_key(r: &mut common::Report) {
     }
 }
 
+/// #479: the generic `GroupReduce` path -- composite and string keys --
+/// on a 1M-row fixture: typed `(Int, Int)` with 100K groups, a typed `Str`
+/// key with 1K groups, and the same `(Int, Int)` as untyped `Vec<Value>`
+/// columns (the path every hand-built batch takes; it only gets the
+/// hash-function change).
+fn bench_batch_group_reduce_generic_keys(r: &mut common::Report) {
+    const N: usize = 1_000_000;
+    let a: Vec<BatchValue> = (0..N as i64).map(|i| BatchValue::Int(i % 1_000)).collect();
+    let b: Vec<BatchValue> = (0..N as i64)
+        .map(|i| BatchValue::Int((i / 1_000) % 100))
+        .collect();
+    let strs: Vec<BatchValue> = (0..N as i64)
+        .map(|i| BatchValue::Str(format!("key-{:04}", i % 1_000).into()))
+        .collect();
+    let two_key_program = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "a".into(),
+        },
+        BatchOpcode::LoadColumn {
+            reg: 1,
+            column: "b".into(),
+        },
+        BatchOpcode::GroupReduce {
+            group_by: vec![0, 1].into(),
+            aggs: vec![(db_core::vm::batch::AggFunc::Count, None)].into(),
+            agg_dst: vec![2].into(),
+        },
+    ];
+    let one_key_program = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "s".into(),
+        },
+        BatchOpcode::GroupReduce {
+            group_by: vec![0].into(),
+            aggs: vec![(db_core::vm::batch::AggFunc::Count, None)].into(),
+            agg_dst: vec![1].into(),
+        },
+    ];
+    let typed_pair = Batch::new(N)
+        .with_typed_column("a", db_core::vm::column::Column::from(a.clone()))
+        .with_typed_column("b", db_core::vm::column::Column::from(b.clone()));
+    r.bench(
+        "vm_opcodes/batch::GroupReduce typed (Int, Int) key (100K groups)",
+        || {
+            let mut vm = BatchVm::new();
+            vm.execute(black_box(&typed_pair), &two_key_program)
+        },
+    );
+    let untyped_pair = Batch::new(N).with_column("a", a).with_column("b", b);
+    r.bench(
+        "vm_opcodes/batch::GroupReduce untyped (Int, Int) key (100K groups)",
+        || {
+            let mut vm = BatchVm::new();
+            vm.execute(black_box(&untyped_pair), &two_key_program)
+        },
+    );
+    let typed_str = Batch::new(N).with_typed_column("s", db_core::vm::column::Column::from(strs));
+    r.bench(
+        "vm_opcodes/batch::GroupReduce typed Str key (1K groups)",
+        || {
+            let mut vm = BatchVm::new();
+            vm.execute(black_box(&typed_str), &one_key_program)
+        },
+    );
+}
+
 fn main() {
     let mut report = common::Report::new("vm_opcodes");
     bench_batch_load_column(&mut report);
@@ -651,6 +719,7 @@ fn main() {
     bench_batch_group_reduce(&mut report);
     bench_batch_group_reduce_typed_sum(&mut report);
     bench_batch_group_reduce_typed_int_key(&mut report);
+    bench_batch_group_reduce_generic_keys(&mut report);
     bench_engine_combine(&mut report);
     bench_string_order_by_sort(&mut report);
     bench_window_partition_by_string(&mut report);
