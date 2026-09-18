@@ -7797,4 +7797,105 @@ mod tests {
             assert!(view.cells_equal(0, 0) && !view.cells_equal(0, 1) && view.cells_equal(1, 1));
         }
     }
+
+    /// `SUM(amount)`/`COUNT(*)` grouped by register 0 over `batch`,
+    /// returning `(keys, sums, counts)`.
+    fn group_sum_count(
+        batch: &Batch,
+        key_column: &'static str,
+    ) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
+        let mut vm = Vm::new();
+        vm.execute(
+            batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: key_column.into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "amount".into(),
+                },
+                Opcode::GroupReduce {
+                    group_by: vec![0].into(),
+                    aggs: vec![(AggFunc::Sum, Some(1)), (AggFunc::Count, None)].into(),
+                    agg_dst: vec![2, 3].into(),
+                },
+            ],
+        )
+        .unwrap();
+        (
+            vm.register(0).unwrap().to_vec(),
+            vm.register(2).unwrap().to_vec(),
+            vm.register(3).unwrap().to_vec(),
+        )
+    }
+
+    // vm_batch_step_e967929c (`GroupReduce`): `int_group_by.is_some() || dict_group_by.is_some()`
+    // -- a typed key skips the generic `KeyView` path (#479/#457).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_step_e967929c__v1_a_typed_int_key_groups_through_the_int_key_table() {
+        let key = Column::Int {
+            data: vec![7, 3, 7, 3, 7],
+            valid: Bitmap::from_bools([true, true, true, true, true].into_iter()),
+        };
+        let batch = Batch::new(5).with_typed_column("k", key).with_column(
+            "amount",
+            vec![
+                Value::Int(1),
+                Value::Int(10),
+                Value::Int(2),
+                Value::Int(20),
+                Value::Int(3),
+            ],
+        );
+        let (keys, sums, counts) = group_sum_count(&batch, "k");
+        assert_eq!(keys, vec![Value::Int(7), Value::Int(3)]);
+        assert_eq!(sums, vec![Value::Float(6.0), Value::Float(30.0)]);
+        assert_eq!(counts, vec![Value::Int(3), Value::Int(2)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_step_e967929c__v2_a_dict_key_groups_by_code() {
+        let dict: Vec<std::sync::Arc<str>> = vec!["east".into(), "west".into()];
+        let key = Column::Dict {
+            dict,
+            indices: vec![1, 0, 1],
+            valid: Bitmap::from_bools([true, true, true].into_iter()),
+        };
+        let batch = Batch::new(3)
+            .with_typed_column("region", key)
+            .with_column("amount", vec![Value::Int(1), Value::Int(2), Value::Int(4)]);
+        let (keys, sums, counts) = group_sum_count(&batch, "region");
+        assert_eq!(
+            keys,
+            vec![Value::Str("west".into()), Value::Str("east".into())]
+        );
+        assert_eq!(sums, vec![Value::Float(5.0), Value::Float(2.0)]);
+        assert_eq!(counts, vec![Value::Int(2), Value::Int(1)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_step_e967929c__v3_a_plain_str_key_takes_the_generic_hash_path() {
+        let batch = Batch::new(3)
+            .with_column(
+                "region",
+                vec![
+                    Value::Str("west".into()),
+                    Value::Str("east".into()),
+                    Value::Str("west".into()),
+                ],
+            )
+            .with_column("amount", vec![Value::Int(1), Value::Int(2), Value::Int(4)]);
+        let (keys, sums, counts) = group_sum_count(&batch, "region");
+        assert_eq!(
+            keys,
+            vec![Value::Str("west".into()), Value::Str("east".into())]
+        );
+        assert_eq!(sums, vec![Value::Float(5.0), Value::Float(2.0)]);
+        assert_eq!(counts, vec![Value::Int(2), Value::Int(1)]);
+    }
 }

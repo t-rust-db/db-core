@@ -335,4 +335,62 @@ mod tests {
         assert!(inserted);
         assert_eq!(g, 1_000);
     }
+
+    // vm_int_key_table_find_or_insert_aee09802 (`HashGroupTable::find_or_insert`):
+    // `candidate == hash && same_key(id as usize)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_int_key_table_find_or_insert_aee09802__v1_matching_hash_and_key_finds_the_group() {
+        let mut table = HashGroupTable::with_capacity(4);
+        let keys = [10usize, 20];
+        assert_eq!(
+            table.find_or_insert(0xA, 0, |g| keys[g] == 10).unwrap(),
+            (0, true)
+        );
+        // Same hash, and the caller's compare agrees: the existing group.
+        assert_eq!(
+            table
+                .find_or_insert(0xA, usize::MAX, |g| keys[g] == 10)
+                .unwrap(),
+            (0, false)
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_int_key_table_find_or_insert_aee09802__v2_matching_hash_but_a_different_key_inserts(
+    ) {
+        let mut table = HashGroupTable::with_capacity(4);
+        let keys = [10usize, 20];
+        assert_eq!(
+            table.find_or_insert(0xA, 0, |g| keys[g] == 10).unwrap(),
+            (0, true)
+        );
+        // A hash collision: same hash, the compare says a different key.
+        assert_eq!(
+            table.find_or_insert(0xA, 1, |g| keys[g] == 20).unwrap(),
+            (1, true)
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_int_key_table_find_or_insert_aee09802__v3_a_different_hash_probes_past_the_slot() {
+        let mut table = HashGroupTable::with_capacity(4);
+        let keys = [10usize, 20];
+        assert_eq!(
+            table.find_or_insert(0xA, 0, |g| keys[g] == 10).unwrap(),
+            (0, true)
+        );
+        // A different hash that lands on the same slot must not match
+        // even though the compare would have said yes.
+        let colliding = (0..u64::MAX)
+            .skip(1)
+            .find(|h| *h != 0xA && table.slot_of(*h) == table.slot_of(0xA))
+            .unwrap();
+        assert_eq!(
+            table.find_or_insert(colliding, 1, |_| true).unwrap(),
+            (1, true)
+        );
+    }
 }
