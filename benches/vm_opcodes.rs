@@ -142,6 +142,92 @@ fn bench_batch_filter_many_registers(r: &mut common::Report) {
     );
 }
 
+/// #464: an in-memory segment with an optional truthful `ORDER BY` bound.
+struct TopNSegment {
+    batch: Batch,
+    bound: Option<BatchValue>,
+}
+
+impl db_core::vm::batch::Segment for TopNSegment {
+    fn load(&self) -> Result<std::sync::Arc<Batch>, db_core::vm::batch::VmError> {
+        Ok(std::sync::Arc::new(self.batch.clone()))
+    }
+
+    fn order_key_bound(&self, _descending: bool) -> Option<BatchValue> {
+        self.bound.clone()
+    }
+}
+
+/// 64 segments x 16K rows of (amount, id); `clustered` gives segment `s`
+/// the amounts `s*16K .. (s+1)*16K` (a time-series-like layout, where a
+/// DESC top-N can skip every segment but the last few), otherwise the
+/// amounts are spread uniformly across segments (every segment's max is
+/// near the global max: nothing to skip). `with_bounds` advertises each
+/// segment's true max.
+fn top_n_segments(clustered: bool, with_bounds: bool) -> Vec<TopNSegment> {
+    const SEGMENTS: usize = 64;
+    const ROWS_PER: usize = 16_384;
+    (0..SEGMENTS)
+        .map(|s| {
+            let amounts: Vec<i64> = (0..ROWS_PER)
+                .map(|r| {
+                    if clustered {
+                        (s * ROWS_PER + r) as i64
+                    } else {
+                        // Interleaved: every segment's max is within 64 of
+                        // the global max, so no bound can beat the
+                        // threshold -- the pure cost of having bounds.
+                        (r * SEGMENTS + s) as i64
+                    }
+                })
+                .collect();
+            let bound =
+                with_bounds.then(|| BatchValue::Int(amounts.iter().copied().max().unwrap()));
+            let batch = Batch::new(ROWS_PER)
+                .with_column("amount", amounts.into_iter().map(BatchValue::Int).collect())
+                .with_column(
+                    "id",
+                    (0..ROWS_PER)
+                        .map(|r| BatchValue::Int((s * ROWS_PER + r) as i64))
+                        .collect(),
+                );
+            TopNSegment { batch, bound }
+        })
+        .collect()
+}
+
+fn bench_run_parallel_top_n(r: &mut common::Report) {
+    let program = [
+        BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "amount".into(),
+        },
+        BatchOpcode::LoadColumn {
+            reg: 1,
+            column: "id".into(),
+        },
+        BatchOpcode::Emit {
+            registers: vec![0, 1].into(),
+        },
+    ];
+    let spec = db_core::vm::batch::TopN {
+        col: 0,
+        descending: true,
+        limit: 100,
+    };
+    for (name, clustered, with_bounds) in [
+        ("clustered, no bounds", true, false),
+        ("clustered, bounds", true, true),
+        ("interleaved, bounds", false, true),
+    ] {
+        let segments = top_n_segments(clustered, with_bounds);
+        r.bench(
+            &format!("vm_opcodes/run_parallel_top_n DESC LIMIT 100 (64 x 16K rows, {name})"),
+            || db_core::vm::batch::run_parallel_top_n(black_box(&segments), &program, &spec),
+        );
+    }
+}
+
 fn bench_string_order_by_sort(r: &mut common::Report) {
     // #266: isolates compare_for_order's Str/Str case -- pre-#266 every
     // comparison allocated two Strings via to_string(); now it's a direct
@@ -722,6 +808,7 @@ fn main() {
     bench_batch_group_reduce_generic_keys(&mut report);
     bench_engine_combine(&mut report);
     bench_string_order_by_sort(&mut report);
+    bench_run_parallel_top_n(&mut report);
     bench_window_partition_by_string(&mut report);
     bench_batch_hash_join(&mut report);
     bench_batch_emit(&mut report);
