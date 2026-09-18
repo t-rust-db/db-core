@@ -21492,7 +21492,7 @@
   {
     "id": "storage_column_parquet_compression_snappy_decompress_e9e7694b",
     "file": "src/storage/column/parquet/compression/snappy.rs",
-    "line": 75,
+    "line": 96,
     "decision": "pos < data.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -21500,10 +21500,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_column_parquet_compression_snappy_decompress_54c77d3b",
+    "id": "storage_column_parquet_compression_snappy_decompress_880a9bd7",
     "file": "src/storage/column/parquet/compression/snappy.rs",
-    "line": 78,
-    "decision": "match tag & 0x03 {\n            0 => {\n                // Literal: length encoded in the tag's upper 6 bits, or\n                // in 1-4 following little-endian bytes when that field\n                // is >= 60 (tag value 60+n means \"length follows in the\n                // next n+1 bytes\").\n                let len_tag = (tag >> 2) as usize;\n                let len = if len_tag < 60 {\n                    len_tag + 1\n                } else {\n                    let extra_bytes = len_tag - 59;\n                    let mut len = 0usize;\n                    for i in 0..extra_bytes {\n                        let b = *data.get(pos + i).ok_or(SnappyError::UnexpectedEof)?;\n                        len |= (b as usize) << (8 * i);\n                    }\n                    pos += extra_bytes;\n                    len + 1\n                };\n                let bytes = data.get(pos..pos + len).ok_or(SnappyError::UnexpectedEof)?;\n                out.extend_from_slice(bytes);\n                pos += len;\n            }\n            1 => {\n                // Copy with 1-byte offset: length in bits 2-4 (+4), offset\n                // is 3 bits from the tag (top) plus 1 following byte.\n                let len = ((tag >> 2) & 0x07) as usize + 4;\n                let offset_hi = ((tag >> 5) & 0x07) as usize;\n                let offset_lo = *data.get(pos).ok_or(SnappyError::UnexpectedEof)? as usize;\n                pos += 1;\n                let offset = (offset_hi << 8) | offset_lo;\n                copy_from_offset(&mut out, offset, len)?;\n            }\n            2 => {\n                // Copy with 2-byte little-endian offset, length in the\n                // tag's upper 6 bits (+1).\n                let len = (tag >> 2) as usize + 1;\n                let lo = *data.get(pos).ok_or(SnappyError::UnexpectedEof)? as usize;\n                let hi = *data.get(pos + 1).ok_or(SnappyError::UnexpectedEof)? as usize;\n                pos += 2;\n                let offset = lo | (hi << 8);\n                copy_from_offset(&mut out, offset, len)?;\n            }\n            _ => {\n                // Copy with 4-byte little-endian offset (tag & 0x03 == 3).\n                let len = (tag >> 2) as usize + 1;\n                let bytes: [u8; 4] = data\n                    .get(pos..pos + 4)\n                    .and_then(|b| b.try_into().ok())\n                    .ok_or(SnappyError::UnexpectedEof)?;\n                let offset = u32::from_le_bytes(bytes) as usize;\n                pos += 4;\n                copy_from_offset(&mut out, offset, len)?;\n            }\n        }",
+    "line": 99,
+    "decision": "match tag & 0x03 {\n            0 => {\n                // Literal: length encoded in the tag's upper 6 bits, or\n                // in 1-4 following little-endian bytes when that field\n                // is >= 60 (tag value 60+n means \"length follows in the\n                // next n+1 bytes\").\n                let len_tag = (tag >> 2) as usize;\n                let len = if len_tag < 60 {\n                    len_tag + 1\n                } else {\n                    let extra_bytes = len_tag - 59;\n                    let mut len = 0usize;\n                    for i in 0..extra_bytes {\n                        let b = *data.get(pos + i).ok_or(SnappyError::UnexpectedEof)?;\n                        len |= (b as usize) << (8 * i);\n                    }\n                    pos += extra_bytes;\n                    len + 1\n                };\n                if len <= WIDE && pos + WIDE <= data.len() && dst + WIDE <= out.len() {\n                    let wide: [u8; WIDE] = data[pos..pos + WIDE]\n                        .try_into()\n                        .map_err(|_| SnappyError::UnexpectedEof)?;\n                    out[dst..dst + WIDE].copy_from_slice(&wide);\n                } else {\n                    let bytes = data.get(pos..pos + len).ok_or(SnappyError::UnexpectedEof)?;\n                    out.get_mut(dst..dst + len)\n                        .ok_or(SnappyError::SizeMismatch {\n                            expected: declared_len,\n                            actual: dst + len,\n                        })?\n                        .copy_from_slice(bytes);\n                }\n                dst += len;\n                pos += len;\n                continue;\n            }\n            1 => {\n                // Copy with 1-byte offset: length in bits 2-4 (+4), offset\n                // is 3 bits from the tag (top) plus 1 following byte.\n                let len = ((tag >> 2) & 0x07) as usize + 4;\n                let offset_hi = ((tag >> 5) & 0x07) as usize;\n                let offset_lo = *data.get(pos).ok_or(SnappyError::UnexpectedEof)? as usize;\n                pos += 1;\n                (len, (offset_hi << 8) | offset_lo)\n            }\n            2 => {\n                // Copy with 2-byte little-endian offset, length in the\n                // tag's upper 6 bits (+1).\n                let len = (tag >> 2) as usize + 1;\n                let lo = *data.get(pos).ok_or(SnappyError::UnexpectedEof)? as usize;\n                let hi = *data.get(pos + 1).ok_or(SnappyError::UnexpectedEof)? as usize;\n                pos += 2;\n                (len, lo | (hi << 8))\n            }\n            _ => {\n                // Copy with 4-byte little-endian offset (tag & 0x03 == 3).\n                let len = (tag >> 2) as usize + 1;\n                let bytes: [u8; 4] = data\n                    .get(pos..pos + 4)\n                    .and_then(|b| b.try_into().ok())\n                    .ok_or(SnappyError::UnexpectedEof)?;\n                pos += 4;\n                (len, u32::from_le_bytes(bytes) as usize)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -21512,7 +21512,7 @@
   {
     "id": "storage_column_parquet_compression_snappy_decompress_ec09ad8a",
     "file": "src/storage/column/parquet/compression/snappy.rs",
-    "line": 85,
+    "line": 106,
     "decision": "len_tag < 60",
     "conditions": 1,
     "vectors_required": 2,
@@ -21520,22 +21520,82 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_column_parquet_compression_snappy_decompress_1760f62a",
+    "id": "storage_column_parquet_compression_snappy_decompress_116ba85b",
     "file": "src/storage/column/parquet/compression/snappy.rs",
-    "line": 135,
-    "decision": "out.len() != declared_len",
+    "line": 118,
+    "decision": "len <= WIDE && pos + WIDE <= data.len() && dst + WIDE <= out.len()",
+    "conditions": 3,
+    "vectors_required": 4,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_compression_snappy_decompress_d541d5eb",
+    "file": "src/storage/column/parquet/compression/snappy.rs",
+    "line": 165,
+    "decision": "offset == 0 || offset > dst",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_compression_snappy_decompress_8a5f3137",
+    "file": "src/storage/column/parquet/compression/snappy.rs",
+    "line": 169,
+    "decision": "len <= WIDE && offset >= len && dst + WIDE <= out.len()",
+    "conditions": 3,
+    "vectors_required": 4,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_compression_snappy_decompress_9292eb07",
+    "file": "src/storage/column/parquet/compression/snappy.rs",
+    "line": 183,
+    "decision": "dst != declared_len",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_column_parquet_compression_snappy_copy_from_offset_a2c1bb1d",
+    "id": "storage_column_parquet_compression_snappy_copy_from_offset_d541d5eb",
     "file": "src/storage/column/parquet/compression/snappy.rs",
-    "line": 149,
-    "decision": "offset == 0 || offset > out.len()",
+    "line": 203,
+    "decision": "offset == 0 || offset > dst",
     "conditions": 2,
     "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_compression_snappy_copy_from_offset_be9ec9a7",
+    "file": "src/storage/column/parquet/compression/snappy.rs",
+    "line": 207,
+    "decision": "end > out.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_compression_snappy_copy_from_offset_e8a3b1ad",
+    "file": "src/storage/column/parquet/compression/snappy.rs",
+    "line": 214,
+    "decision": "offset >= len",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_compression_snappy_copy_from_offset_9eca99f6",
+    "file": "src/storage/column/parquet/compression/snappy.rs",
+    "line": 219,
+    "decision": "done < len",
+    "conditions": 1,
+    "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },

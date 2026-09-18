@@ -62,20 +62,41 @@ fn read_varint(data: &[u8], pos: &mut usize) -> Result<u64> {
     Ok(result)
 }
 
-/// Decompress a raw Snappy block. `uncompressed_size` is only used to
-/// pre-size the output buffer; the actual length comes from the
-/// preamble and is validated against it.
+/// Width of the fixed-size copy the hot paths use for any literal or copy
+/// of at most this many bytes: one 16-byte load and store instead of a
+/// length-dependent `memcpy` call. Real Parquet pages are dominated by
+/// such short ops (#495: `PLAIN` doubles decode as ~10M literals of ~2
+/// bytes and ~10M copies of 5-7 bytes per 80 MB), so the per-op cost is
+/// what decides throughput, not bytes moved.
+const WIDE: usize = 16;
+
+/// Decompress a raw Snappy block. `uncompressed_size` is the page
+/// header's declared size, used to pre-size the output; the block's own
+/// length preamble is what the output is validated against.
+///
+/// The output is allocated once at its final length plus [`WIDE`] bytes
+/// of slack and written through `&mut [u8]`, so no op pays a capacity
+/// check, and short ops copy a fixed `WIDE` bytes: the bytes past the
+/// op's own length land in slack or in positions a later op overwrites
+/// (a copy only ever reads below its write point, so it never observes
+/// them). A block that would write past its declared length fails at that
+/// op instead of after the whole block.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "every fixed-width slice is guarded by the `<= len()` comparison on the line above it"
+)]
 pub fn decompress(data: &[u8], uncompressed_size: usize) -> Result<Vec<u8>> {
     let mut pos = 0usize;
     let declared = read_varint(data, &mut pos)?;
     let declared_len =
         usize::try_from(declared).map_err(|_| SnappyError::InvalidLength(declared))?;
-    let mut out = Vec::with_capacity(declared_len.max(uncompressed_size));
+    let mut out = vec![0u8; declared_len.max(uncompressed_size).saturating_add(WIDE)];
+    let mut dst = 0usize;
 
     while pos < data.len() {
         let tag = *data.get(pos).ok_or(SnappyError::UnexpectedEof)?;
         pos += 1;
-        match tag & 0x03 {
+        let (len, offset) = match tag & 0x03 {
             0 => {
                 // Literal: length encoded in the tag's upper 6 bits, or
                 // in 1-4 following little-endian bytes when that field
@@ -94,9 +115,23 @@ pub fn decompress(data: &[u8], uncompressed_size: usize) -> Result<Vec<u8>> {
                     pos += extra_bytes;
                     len + 1
                 };
-                let bytes = data.get(pos..pos + len).ok_or(SnappyError::UnexpectedEof)?;
-                out.extend_from_slice(bytes);
+                if len <= WIDE && pos + WIDE <= data.len() && dst + WIDE <= out.len() {
+                    let wide: [u8; WIDE] = data[pos..pos + WIDE]
+                        .try_into()
+                        .map_err(|_| SnappyError::UnexpectedEof)?;
+                    out[dst..dst + WIDE].copy_from_slice(&wide);
+                } else {
+                    let bytes = data.get(pos..pos + len).ok_or(SnappyError::UnexpectedEof)?;
+                    out.get_mut(dst..dst + len)
+                        .ok_or(SnappyError::SizeMismatch {
+                            expected: declared_len,
+                            actual: dst + len,
+                        })?
+                        .copy_from_slice(bytes);
+                }
+                dst += len;
                 pos += len;
+                continue;
             }
             1 => {
                 // Copy with 1-byte offset: length in bits 2-4 (+4), offset
@@ -105,8 +140,7 @@ pub fn decompress(data: &[u8], uncompressed_size: usize) -> Result<Vec<u8>> {
                 let offset_hi = ((tag >> 5) & 0x07) as usize;
                 let offset_lo = *data.get(pos).ok_or(SnappyError::UnexpectedEof)? as usize;
                 pos += 1;
-                let offset = (offset_hi << 8) | offset_lo;
-                copy_from_offset(&mut out, offset, len)?;
+                (len, (offset_hi << 8) | offset_lo)
             }
             2 => {
                 // Copy with 2-byte little-endian offset, length in the
@@ -115,8 +149,7 @@ pub fn decompress(data: &[u8], uncompressed_size: usize) -> Result<Vec<u8>> {
                 let lo = *data.get(pos).ok_or(SnappyError::UnexpectedEof)? as usize;
                 let hi = *data.get(pos + 1).ok_or(SnappyError::UnexpectedEof)? as usize;
                 pos += 2;
-                let offset = lo | (hi << 8);
-                copy_from_offset(&mut out, offset, len)?;
+                (len, lo | (hi << 8))
             }
             _ => {
                 // Copy with 4-byte little-endian offset (tag & 0x03 == 3).
@@ -125,34 +158,68 @@ pub fn decompress(data: &[u8], uncompressed_size: usize) -> Result<Vec<u8>> {
                     .get(pos..pos + 4)
                     .and_then(|b| b.try_into().ok())
                     .ok_or(SnappyError::UnexpectedEof)?;
-                let offset = u32::from_le_bytes(bytes) as usize;
                 pos += 4;
-                copy_from_offset(&mut out, offset, len)?;
+                (len, u32::from_le_bytes(bytes) as usize)
             }
+        };
+        if offset == 0 || offset > dst {
+            return Err(SnappyError::InvalidCopyOffset);
         }
+        let src = dst - offset;
+        if len <= WIDE && offset >= len && dst + WIDE <= out.len() {
+            // `src < dst`, so `src + WIDE <= out.len()` follows from the
+            // `dst` check; `offset >= len` means the `len` bytes that
+            // matter were all written before this op.
+            let wide: [u8; WIDE] = out[src..src + WIDE]
+                .try_into()
+                .map_err(|_| SnappyError::UnexpectedEof)?;
+            out[dst..dst + WIDE].copy_from_slice(&wide);
+        } else {
+            copy_from_offset(&mut out, dst, offset, len)?;
+        }
+        dst += len;
     }
 
-    if out.len() != declared_len {
+    if dst != declared_len {
         return Err(SnappyError::SizeMismatch {
             expected: declared_len,
-            actual: out.len(),
+            actual: dst,
         });
     }
+    out.truncate(declared_len);
     Ok(out)
 }
 
-/// Append `len` bytes to `out`, copied from `offset` bytes before the
-/// current end — self-overlapping copies (offset < len) are valid and
-/// must be copied byte-by-byte (a `memcpy` would read past the source
-/// before it's written).
-fn copy_from_offset(out: &mut Vec<u8>, offset: usize, len: usize) -> Result<()> {
-    if offset == 0 || offset > out.len() {
+/// Write `len` bytes at `out[dst..]`, copied from `offset` bytes before
+/// `dst` -- the exact-length path for copies the fixed-width fast path in
+/// [`decompress`] can't take: longer than [`WIDE`], too close to the end
+/// of the buffer, or self-overlapping (`offset < len`, valid Snappy: it
+/// repeats the last `offset` bytes as a pattern). An overlapping copy is
+/// done in runs that never read past what has already been written; each
+/// run may take at most the bytes between the source start and the
+/// current write point, which grows with every run, so the pattern
+/// doubles per iteration.
+fn copy_from_offset(out: &mut [u8], dst: usize, offset: usize, len: usize) -> Result<()> {
+    if offset == 0 || offset > dst {
         return Err(SnappyError::InvalidCopyOffset);
     }
-    let start = out.len() - offset;
-    for i in 0..len {
-        let byte = out[start + i];
-        out.push(byte);
+    let end = dst + len;
+    if end > out.len() {
+        return Err(SnappyError::SizeMismatch {
+            expected: out.len(),
+            actual: end,
+        });
+    }
+    let src = dst - offset;
+    if offset >= len {
+        out.copy_within(src..src + len, dst);
+        return Ok(());
+    }
+    let mut done = 0usize;
+    while done < len {
+        let run = (offset + done).min(len - done);
+        out.copy_within(src..src + run, dst + done);
+        done += run;
     }
     Ok(())
 }
@@ -191,6 +258,34 @@ mod tests {
         compressed.push((offset & 0xff) as u8);
         let out = decompress(&compressed, 8).unwrap();
         assert_eq!(out, b"abcaabca");
+    }
+
+    #[test]
+    fn an_overlapping_copy_repeats_the_pattern_across_doubling_runs() {
+        // literal "abc", then a 1-byte-offset copy of length 11 at offset
+        // 3: the source is only 3 bytes long when the copy starts, so the
+        // output must be the pattern repeated (runs of 3, 6, then 2).
+        let mut compressed = vec![14u8];
+        compressed.push(2u8 << 2);
+        compressed.extend_from_slice(b"abc");
+        let len_field = 11u8 - 4;
+        compressed.push((len_field << 2) | 0x01);
+        compressed.push(3u8);
+        let out = decompress(&compressed, 14).unwrap();
+        assert_eq!(out, b"abcabcabcabcab");
+    }
+
+    #[test]
+    fn a_non_overlapping_copy_reaches_back_past_the_copied_length() {
+        // literal "0123456789", then copy length 4 from offset 10: bytes
+        // "0123" -- the memcpy branch, source fully behind the copy.
+        let mut compressed = vec![14u8];
+        compressed.push(9u8 << 2);
+        compressed.extend_from_slice(b"0123456789");
+        compressed.push((3u8 << 2) | 0x02);
+        compressed.extend_from_slice(&10u16.to_le_bytes());
+        let out = decompress(&compressed, 14).unwrap();
+        assert_eq!(out, b"01234567890123");
     }
 
     #[test]
@@ -288,25 +383,175 @@ mod mcdc_vectors {
 
     use super::copy_from_offset;
 
-    // storage_column_parquet_compression_snappy_copy_from_offset_a2c1bb1d: `offset == 0 || offset > out.len()`
+    use super::{decompress, SnappyError, WIDE};
+
+    /// A raw block: declared length, then the given ops verbatim.
+    fn block(declared: u8, ops: &[&[u8]]) -> Vec<u8> {
+        let mut out = vec![declared];
+        for op in ops {
+            out.extend_from_slice(op);
+        }
+        out
+    }
+
+    fn literal(bytes: &[u8]) -> Vec<u8> {
+        let mut op = vec![((bytes.len() - 1) as u8) << 2];
+        op.extend_from_slice(bytes);
+        op
+    }
+
+    /// A copy with a 2-byte offset (tag & 0x03 == 2): `len` in 1..=64.
+    fn copy2(len: usize, offset: u16) -> Vec<u8> {
+        let mut op = vec![(((len - 1) as u8) << 2) | 0x02];
+        op.extend_from_slice(&offset.to_le_bytes());
+        op
+    }
+
+    // storage_column_parquet_compression_snappy_decompress_116ba85b: `len <= WIDE && pos + WIDE <= data.len() && dst + WIDE <= out.len()`
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_copy_from_offset_a2c1bb1d__v1_offset_zero() {
-        let mut out = vec![b'a', b'b'];
-        assert!(copy_from_offset(&mut out, 0, 1).is_err());
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_116ba85b__v1_short_literal_with_input_and_output_slack_takes_the_wide_path(
+    ) {
+        // "abc" is followed by a 20-byte literal, so 16 input bytes exist
+        // past it and the output has its WIDE slack: the fixed-width copy
+        // must still yield exactly the 3 literal bytes.
+        let tail: Vec<u8> = (100..120u8).collect();
+        let data = block(23, &[&literal(b"abc"), &literal(&tail)]);
+        let out = decompress(&data, 0).unwrap();
+        assert_eq!(&out[..3], b"abc");
+        assert_eq!(&out[3..], &tail[..]);
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_copy_from_offset_a2c1bb1d__v2_offset_beyond_out_len(
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_116ba85b__v2_literal_longer_than_wide_takes_the_exact_path(
     ) {
-        let mut out = vec![b'a', b'b'];
-        assert!(copy_from_offset(&mut out, 3, 1).is_err());
+        let bytes: Vec<u8> = (0..(WIDE as u8 + 4)).collect();
+        let data = block(WIDE as u8 + 4, &[&literal(&bytes)]);
+        assert_eq!(decompress(&data, 0).unwrap(), bytes);
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_copy_from_offset_a2c1bb1d__v3_offset_within_range_succeeds(
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_116ba85b__v3_short_literal_at_the_end_of_input_takes_the_exact_path(
     ) {
-        let mut out = vec![b'a', b'b'];
-        assert!(copy_from_offset(&mut out, 2, 1).is_ok());
+        // Fewer than WIDE input bytes remain after the tag: the wide load
+        // would run off `data`, so the exact copy is used.
+        let data = block(5, &[&literal(b"hello")]);
+        assert_eq!(decompress(&data, 5).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_116ba85b__v4_short_literal_past_the_output_slack_takes_the_exact_path_and_the_block_is_rejected(
+    ) {
+        // Only an over-long block can push `dst` past `declared + WIDE`:
+        // 18 declared, then 18 + 4 + 2 + 17 bytes of literals. The 2-byte
+        // literal at dst 22 has 16 input bytes after it but no output
+        // slack left (22 + 16 > 34), so it goes the exact way, and the
+        // block fails on the 17-byte literal that follows.
+        let a: Vec<u8> = (0..18u8).collect();
+        let pad: Vec<u8> = (0..17u8).collect();
+        let data = block(
+            18,
+            &[
+                &literal(&a),
+                &literal(b"wxyz"),
+                &literal(b"pq"),
+                &literal(&pad),
+            ],
+        );
+        let err = decompress(&data, 0).unwrap_err();
+        assert!(matches!(
+            err,
+            SnappyError::SizeMismatch { expected: 18, .. }
+        ));
+    }
+
+    // storage_column_parquet_compression_snappy_decompress_d541d5eb: `offset == 0 || offset > dst`
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_d541d5eb__v1_offset_zero() {
+        let data = block(6, &[&literal(b"ab"), &copy2(4, 0)]);
+        assert!(matches!(
+            decompress(&data, 6).unwrap_err(),
+            SnappyError::InvalidCopyOffset
+        ));
+    }
+
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_d541d5eb__v2_offset_before_the_start(
+    ) {
+        let data = block(6, &[&literal(b"ab"), &copy2(4, 3)]);
+        assert!(matches!(
+            decompress(&data, 6).unwrap_err(),
+            SnappyError::InvalidCopyOffset
+        ));
+    }
+
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_d541d5eb__v3_offset_within_the_output(
+    ) {
+        let data = block(4, &[&literal(b"ab"), &copy2(2, 2)]);
+        assert_eq!(decompress(&data, 4).unwrap(), b"abab");
+    }
+
+    // storage_column_parquet_compression_snappy_decompress_8a5f3137: `len <= WIDE && offset >= len && dst + WIDE <= out.len()`
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_8a5f3137__v1_short_non_overlapping_copy_with_slack_takes_the_wide_path(
+    ) {
+        let data = block(8, &[&literal(b"abcd"), &copy2(4, 4)]);
+        assert_eq!(decompress(&data, 8).unwrap(), b"abcdabcd");
+    }
+
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_8a5f3137__v2_copy_longer_than_wide_takes_copy_within(
+    ) {
+        let bytes: Vec<u8> = (0..20u8).collect();
+        let data = block(40, &[&literal(&bytes), &copy2(20, 20)]);
+        let out = decompress(&data, 40).unwrap();
+        assert_eq!(&out[..20], &bytes[..]);
+        assert_eq!(&out[20..], &bytes[..]);
+    }
+
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_8a5f3137__v3_overlapping_copy_takes_the_pattern_path(
+    ) {
+        let data = block(9, &[&literal(b"xyz"), &copy2(6, 3)]);
+        assert_eq!(decompress(&data, 9).unwrap(), b"xyzxyzxyz");
+    }
+
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_decompress_8a5f3137__v4_short_copy_past_the_output_slack_takes_the_exact_path_and_the_block_is_rejected(
+    ) {
+        // 8 declared (out = 24): an 8-byte literal, a 4-byte copy at dst 8
+        // (8 + 16 <= 24, wide), then a 4-byte copy at dst 12 (12 + 16 >
+        // 24, exact). Both copies are correct; the block is over-long.
+        let data = block(8, &[&literal(b"01234567"), &copy2(4, 4), &copy2(4, 4)]);
+        let err = decompress(&data, 0).unwrap_err();
+        assert!(matches!(
+            err,
+            SnappyError::SizeMismatch {
+                expected: 8,
+                actual: 16
+            }
+        ));
+    }
+
+    // storage_column_parquet_compression_snappy_copy_from_offset_d541d5eb: `offset == 0 || offset > dst`
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_copy_from_offset_d541d5eb__v1_offset_zero() {
+        let mut out = vec![b'a', b'b', 0];
+        assert!(copy_from_offset(&mut out, 2, 0, 1).is_err());
+    }
+
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_copy_from_offset_d541d5eb__v2_offset_beyond_out_len(
+    ) {
+        let mut out = vec![b'a', b'b', 0];
+        assert!(copy_from_offset(&mut out, 2, 3, 1).is_err());
+    }
+
+    #[test]
+    fn mcdc__storage_column_parquet_compression_snappy_copy_from_offset_d541d5eb__v3_offset_within_range_succeeds(
+    ) {
+        let mut out = vec![b'a', b'b', 0];
+        assert!(copy_from_offset(&mut out, 2, 2, 1).is_ok());
         assert_eq!(out, vec![b'a', b'b', b'a']);
     }
 }
