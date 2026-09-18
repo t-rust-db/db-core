@@ -49,14 +49,12 @@ use crate::codegen::row::select::{
     try_compile_range_row_seek, CodegenError,
 };
 use crate::codegen::row::stmt::insert::{
-    cached_create_table, column_plans, emit_constraint_violation, ColumnPlan,
-    SQLITE_CONSTRAINT_CHECK, SQLITE_CONSTRAINT_NOTNULL,
+    cached_create_table, column_plans, emit_constraint_violation, table_check_constraints,
+    ColumnPlan, SQLITE_CONSTRAINT_CHECK, SQLITE_CONSTRAINT_NOTNULL,
 };
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{CondTargets, Emitter, Label, NullTarget, RegAlloc, Scope, Target};
-use crate::parser::ast::{
-    ConflictAction, Expr, ExprKind, Literal, ParamKind, TableConstraint, Update,
-};
+use crate::parser::ast::{ConflictAction, Expr, ExprKind, Literal, ParamKind, Update};
 use crate::vm::row::{affinity_of, Instruction, Opcode, Program, P4};
 
 const TABLE_CURSOR: i32 = 0;
@@ -90,14 +88,7 @@ pub fn compile_update_with_catalog(
 
     let rowid_alias = schema.rowid_alias;
     let plans = column_plans(schema, &create, rowid_alias);
-    let table_checks: Vec<Expr> = create
-        .constraints
-        .iter()
-        .filter_map(|c| match c {
-            TableConstraint::Check(expr) => Some(expr.clone()),
-            TableConstraint::PrimaryKey(_) | TableConstraint::Unique(_) => None,
-        })
-        .collect();
+    let table_checks: Vec<(Expr, String)> = table_check_constraints(schema, &create);
     let action = update.or_action.unwrap_or(ConflictAction::Abort);
 
     // Same rationale as `insert.rs`'s `check_schema`: `CHECK` column
@@ -444,7 +435,7 @@ fn emit_update_row_body(
     schema: &TableSchema,
     scope: &Scope,
     plans: &[ColumnPlan],
-    table_checks: &[Expr],
+    table_checks: &[(Expr, String)],
     check_schema: &TableSchema,
     action: ConflictAction,
     rowid_alias: Option<usize>,
@@ -556,9 +547,10 @@ fn emit_update_row_body(
             0,
         ));
 
-        let mut check_exprs: Vec<&Expr> = plans.iter().flat_map(|p| p.checks.iter()).collect();
+        let mut check_exprs: Vec<&(Expr, String)> =
+            plans.iter().flat_map(|p| p.checks.iter()).collect();
         check_exprs.extend(table_checks.iter());
-        for expr in check_exprs {
+        for (expr, label) in check_exprs {
             let violation = em.new_label();
             let ok = em.new_label();
             compile_cond(
@@ -578,7 +570,7 @@ fn emit_update_row_body(
                 em,
                 action,
                 SQLITE_CONSTRAINT_CHECK,
-                format!("CHECK constraint failed: {}", schema.name),
+                format!("CHECK constraint failed: {label}"),
                 row_skip,
             );
             em.place(ok);

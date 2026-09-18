@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.113.1] - 2026-09-18
+
+### Fixed
+
+- **A failed `CHECK` is reported by its constraint, not by the table** (#503): `INSERT`/`UPDATE` said `CHECK constraint failed: t`; sqlite3 3.53.4 names the declared `CONSTRAINT name`, or, for an unnamed check, the verbatim source text between the parentheses -- `CHECK( a  >  0 )` reports `a  >  0`. The grammar now keeps the `CONSTRAINT` identifier for `CHECK` and records the span of the parenthesized body (`ColumnConstraint::Check`/`TableConstraint::Check` gained `name` and `body`); `codegen::row::stmt::insert::check_label` slices that span out of the table's stored DDL at compile time, shared by the INSERT and UPDATE emitters. Six shapes (named/unnamed, column/table level, inner whitespace, nested parentheses, UPDATE) verified identical to the oracle.
+
 ## [0.113.0] - 2026-09-18
 
 ### Added

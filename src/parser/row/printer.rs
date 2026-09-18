@@ -612,7 +612,7 @@ impl fmt::Display for ColumnConstraint {
             }
             ColumnConstraint::Unique => write!(f, "UNIQUE"),
             ColumnConstraint::Default(value) => write!(f, "DEFAULT {value}"),
-            ColumnConstraint::Check(expr) => write!(f, "CHECK ({expr})"),
+            ColumnConstraint::Check { expr, .. } => write!(f, "CHECK ({expr})"),
             ColumnConstraint::Collate(name) => write!(f, "COLLATE {name}"),
         }
     }
@@ -640,7 +640,7 @@ impl fmt::Display for TableConstraint {
                 write_indexed_columns(f, cols)?;
                 write!(f, ")")
             }
-            TableConstraint::Check(expr) => write!(f, "CHECK ({expr})"),
+            TableConstraint::Check { expr, .. } => write!(f, "CHECK ({expr})"),
         }
     }
 }

@@ -1186,7 +1186,10 @@ pub fn db_core::parser::ast::BinaryOp::fmt(&self, &mut core::fmt::Formatter<'_>)
 impl core::marker::Copy for db_core::parser::ast::BinaryOp
 impl core::marker::StructuralPartialEq for db_core::parser::ast::BinaryOp
 pub enum db_core::parser::ast::ColumnConstraint
-pub db_core::parser::ast::ColumnConstraint::Check(db_core::parser::ast::Expr)
+pub db_core::parser::ast::ColumnConstraint::Check
+pub db_core::parser::ast::ColumnConstraint::Check::body: db_core::parser::Span
+pub db_core::parser::ast::ColumnConstraint::Check::expr: db_core::parser::ast::Expr
+pub db_core::parser::ast::ColumnConstraint::Check::name: core::option::Option<alloc::string::String>
 pub db_core::parser::ast::ColumnConstraint::Collate(alloc::string::String)
 pub db_core::parser::ast::ColumnConstraint::Default(db_core::parser::ast::DefaultValue)
 pub db_core::parser::ast::ColumnConstraint::NotNull
@@ -1482,7 +1485,10 @@ pub fn db_core::parser::ast::ScopeUnit::fmt(&self, &mut core::fmt::Formatter<'_>
 impl core::marker::Copy for db_core::parser::ast::ScopeUnit
 impl core::marker::StructuralPartialEq for db_core::parser::ast::ScopeUnit
 pub enum db_core::parser::ast::TableConstraint
-pub db_core::parser::ast::TableConstraint::Check(db_core::parser::ast::Expr)
+pub db_core::parser::ast::TableConstraint::Check
+pub db_core::parser::ast::TableConstraint::Check::body: db_core::parser::Span
+pub db_core::parser::ast::TableConstraint::Check::expr: db_core::parser::ast::Expr
+pub db_core::parser::ast::TableConstraint::Check::name: core::option::Option<alloc::string::String>
 pub db_core::parser::ast::TableConstraint::PrimaryKey(alloc::vec::Vec<db_core::parser::ast::IndexedColumn>)
 pub db_core::parser::ast::TableConstraint::Unique(alloc::vec::Vec<db_core::parser::ast::IndexedColumn>)
 impl core::clone::Clone for db_core::parser::ast::TableConstraint

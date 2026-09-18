@@ -595,10 +595,14 @@ impl Parser {
     }
 
     fn opt_column_constraint(&mut self) -> PResult<Option<ColumnConstraint>> {
-        let named = self.eat_kw(Keyword::CONSTRAINT);
-        if named {
-            self.identifier()?;
-        }
+        // #503: the constraint name is kept for `CHECK` (it is what the
+        // violation message names); the other constraint kinds still
+        // discard it.
+        let name = if self.eat_kw(Keyword::CONSTRAINT) {
+            Some(self.identifier()?.0)
+        } else {
+            None
+        };
         if self.eat_kw(Keyword::NOT) {
             self.expect_punct(TokenKind::Null, "NULL")?;
             self.check_no_conflict_clause()?;
@@ -628,10 +632,8 @@ impl Parser {
             return Ok(Some(ColumnConstraint::Unique));
         }
         if self.eat_kw(Keyword::CHECK) {
-            self.expect_punct(TokenKind::LParen, "'(' after CHECK")?;
-            let expr = self.expr()?;
-            self.expect_punct(TokenKind::RParen, "')' to close CHECK")?;
-            return Ok(Some(ColumnConstraint::Check(expr)));
+            let (expr, body) = self.check_body()?;
+            return Ok(Some(ColumnConstraint::Check { expr, name, body }));
         }
         if self.eat_kw(Keyword::DEFAULT) {
             return Ok(Some(ColumnConstraint::Default(self.default_value()?)));
@@ -649,7 +651,7 @@ impl Parser {
         {
             return self.unsupported("GENERATED ALWAYS AS not yet supported");
         }
-        if named {
+        if name.is_some() {
             return self.invalid("expected column constraint after CONSTRAINT name");
         }
         Ok(None)
@@ -744,10 +746,31 @@ impl Parser {
         }
     }
 
+    /// `( expr )` after `CHECK`: the expression plus the span of the raw
+    /// source between the two parentheses (#503). sqlite3 reports an
+    /// unnamed CHECK by exactly that text, whitespace included, so the
+    /// span is kept rather than a re-rendering of the expression; the
+    /// DDL it indexes is `TableSchema::sql`.
+    fn check_body(&mut self) -> PResult<(Expr, Span)> {
+        let open = self.expect_punct(TokenKind::LParen, "'(' after CHECK")?;
+        let expr = self.expr()?;
+        let close = self.expect_punct(TokenKind::RParen, "')' to close CHECK")?;
+        let start = open.offset.saturating_add(open.len);
+        let body = Span {
+            line: open.line,
+            column: open.column.saturating_add(open.len),
+            offset: start,
+            len: close.offset.saturating_sub(start),
+        };
+        Ok((expr, body))
+    }
+
     fn table_constraint(&mut self) -> PResult<TableConstraint> {
-        if self.eat_kw(Keyword::CONSTRAINT) {
-            self.identifier()?;
-        }
+        let name = if self.eat_kw(Keyword::CONSTRAINT) {
+            Some(self.identifier()?.0)
+        } else {
+            None
+        };
         if self.eat_kw(Keyword::PRIMARY) {
             self.expect_bareword_ci("KEY")?;
             let cols = self.indexed_column_list()?;
@@ -760,10 +783,8 @@ impl Parser {
             return Ok(TableConstraint::Unique(cols));
         }
         if self.eat_kw(Keyword::CHECK) {
-            self.expect_punct(TokenKind::LParen, "'(' after CHECK")?;
-            let expr = self.expr()?;
-            self.expect_punct(TokenKind::RParen, "')' to close CHECK")?;
-            return Ok(TableConstraint::Check(expr));
+            let (expr, body) = self.check_body()?;
+            return Ok(TableConstraint::Check { expr, name, body });
         }
         if self.at_kw(Keyword::FOREIGN) {
             return self.unsupported("FOREIGN KEY table constraint not yet supported");
