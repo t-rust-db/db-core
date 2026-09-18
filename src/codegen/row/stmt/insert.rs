@@ -207,6 +207,24 @@ fn compile_column_source(
     }
 }
 
+/// Returns `regs` unchanged when it is already one ascending contiguous
+/// run, else `Copy`s every value into a freshly allocated block of the
+/// same length and returns that block (#497). See the call in
+/// [`compile_insert`] for why the run can be broken.
+fn stage_contiguous(em: &mut Emitter, reg: &mut RegAlloc, regs: Vec<i32>) -> Vec<i32> {
+    let contiguous = regs
+        .windows(2)
+        .all(|w| w.get(1).copied() == w.first().and_then(|r| r.checked_add(1)));
+    if contiguous {
+        return regs;
+    }
+    let block: Vec<i32> = regs.iter().map(|_| reg.alloc()).collect();
+    for (&src, &dest) in regs.iter().zip(&block) {
+        em.emit(Instruction::new(Opcode::Copy, src, dest, 0));
+    }
+    block
+}
+
 /// Emits `NewRowid` for `schema`'s table cursor into register `dest`.
 /// When `is_autoincrement`, sets `P5`/`P4` so the opcode also
 /// consults/bumps `sqlite_sequence` (see `NewRowid`'s own doc in
@@ -698,6 +716,15 @@ fn compile_row(
         }
     }
 
+    // #497: `compile_value` does *not* guarantee one register per
+    // expression -- a unary minus, an arithmetic expression or a function
+    // call leaves its result past the temporaries it allocated, so a
+    // column after it no longer sits at `prev + 1`. `MakeRecord` reads a
+    // contiguous run, so when the values ended up scattered, stage them
+    // into a fresh block (as `projection.rs` does before `ResultRow`).
+    // The all-literal/all-`Reg` row stays as it was: no extra opcodes.
+    let col_regs = stage_contiguous(em, reg, col_regs);
+
     let unique_indexes: Vec<(i32, &crate::codegen::row::IndexSchema)> = schema
         .indexes
         .iter()
@@ -1003,6 +1030,48 @@ mod mcdc_vectors {
             sql: format!("CREATE TABLE {name} ({})", columns.join(", ")),
             ..Default::default()
         }
+    }
+
+    /// #497: a negative literal (compiled as `0 - 1` through a temporary)
+    /// in a non-first column must still land inside the run `MakeRecord`
+    /// reads. Before the fix `MakeRecord 1 2` read `(3, 1)`: the literal
+    /// `1` temporary, not the `-1` two registers further on.
+    #[test]
+    fn insert_497_make_record_reads_the_computed_value_not_its_temporary() {
+        use crate::vm::row::Opcode;
+        for (sql, producer) in [
+            ("INSERT INTO t VALUES (3, -1)", Opcode::Subtract),
+            ("INSERT INTO t VALUES (-7, -8)", Opcode::Subtract),
+            ("INSERT INTO t VALUES (1, 2 * 3)", Opcode::Multiply),
+        ] {
+            let p = insert_result(sql).unwrap();
+            let ops = &p.instructions;
+            let mr = ops
+                .iter()
+                .rposition(|i| i.opcode == Opcode::MakeRecord)
+                .unwrap();
+            let (base, count) = (ops[mr].p1, ops[mr].p2);
+            let in_record = |r: i32| r >= base && r < base + count;
+            // The last arithmetic result before MakeRecord is the second
+            // column's value: it must be read by MakeRecord directly, or
+            // copied into a register MakeRecord reads.
+            let value_reg = ops[..mr]
+                .iter()
+                .rev()
+                .find(|i| i.opcode == producer)
+                .map(|i| i.p3)
+                .unwrap_or_else(|| panic!("{sql}: no {producer:?}"));
+            let staged = ops[..mr]
+                .iter()
+                .any(|i| i.opcode == Opcode::Copy && i.p1 == value_reg && in_record(i.p2));
+            assert!(in_record(value_reg) || staged, "{sql}: {p:?}");
+        }
+        // The all-literal row needs no staging at all: no `Copy` emitted.
+        let p = insert_result("INSERT INTO t VALUES (1, 2)").unwrap();
+        assert!(
+            !p.instructions.iter().any(|i| i.opcode == Opcode::Copy),
+            "{p:?}"
+        );
     }
 
     // insert_304: `!row.is_empty() && row.len() != target_columns.len()`

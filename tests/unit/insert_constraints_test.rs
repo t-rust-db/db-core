@@ -92,6 +92,53 @@ fn check_constraint_violation_is_reported() {
     assert_eq!(ints(&rows), vec![1]);
 }
 
+/// #497: a value expression that needs a temporary register (a negative
+/// literal compiles as `0 - 1`) in any column after the first used to be
+/// recorded as the temporary, so `VALUES (3, -1)` stored `3|1`.
+#[test]
+fn negative_literal_in_a_non_first_column_is_stored_with_its_sign() {
+    let db = TempDb::new("neg-literal");
+    let mut e = open(&db);
+    e.run_query("CREATE TABLE ng(a INTEGER, b INTEGER, c INTEGER)")
+        .unwrap();
+    e.run_query("INSERT INTO ng VALUES (3, -1, 2 * 3), (-7, -8, abs(-9)), (1, 2, 3)")
+        .unwrap();
+    let rows = e
+        .run_query("SELECT a, b, c FROM ng ORDER BY a")
+        .unwrap()
+        .rows;
+    let got: Vec<Vec<i64>> = rows
+        .iter()
+        .map(|r| {
+            r.iter()
+                .map(|c| match c {
+                    Cell::Int(n) => *n,
+                    other => panic!("expected Int, got {other:?}"),
+                })
+                .collect()
+        })
+        .collect();
+    assert_eq!(got, vec![vec![-7, -8, 9], vec![1, 2, 3], vec![3, -1, 6]]);
+}
+
+/// #497's symptom as first observed: the corrupted value slipped past a
+/// CHECK that the intended value would have failed.
+#[test]
+fn check_constraint_sees_the_real_value_of_a_non_first_column() {
+    let db = TempDb::new("check-non-first");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE ck2(id INTEGER PRIMARY KEY, a INTEGER UNIQUE, b INTEGER CHECK (b > 0))",
+    )
+    .unwrap();
+    let err = e
+        .run_query("INSERT INTO ck2 VALUES (3, 3, -1)")
+        .unwrap_err();
+    assert!(err.message.contains("CHECK"), "{}", err.message);
+    let rows = e.run_query("SELECT count(*) FROM ck2").unwrap().rows;
+    assert_eq!(ints(&rows), vec![0]);
+}
+
 #[test]
 fn table_level_check_constraint_sees_every_column() {
     let db = TempDb::new("table-check");

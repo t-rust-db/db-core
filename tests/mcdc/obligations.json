@@ -8520,9 +8520,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_stmt_insert_stage_contiguous_726ff23e",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 218,
+    "decision": "contiguous",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_stmt_insert_emit_new_rowid_03a06396",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 217,
+    "line": 235,
     "decision": "is_autoincrement",
     "conditions": 1,
     "vectors_required": 2,
@@ -8532,7 +8542,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_3633baaa",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 245,
+    "line": 263,
     "decision": "schema.without_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -8542,7 +8552,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_1da4e802",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 284,
+    "line": 302,
     "decision": "match c {\n            TableConstraint::Check(expr) => Some(expr.clone()),\n            TableConstraint::PrimaryKey(_) | TableConstraint::Unique(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8552,7 +8562,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_fba11f37",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 290,
+    "line": 308,
     "decision": "match &insert.columns {\n        Some(names) => {\n            let mut out = Vec::with_capacity(names.len());\n            for name in names {\n                let idx = column_index(schema, name)\n                    .ok_or_else(|| CodegenError::UnknownColumn { name: name.clone() })?;\n                out.push(idx);\n            }\n            out\n        }\n        None => (0..schema.columns.len()).collect(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8562,7 +8572,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_18bda6d0",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 303,
+    "line": 321,
     "decision": "let InsertSource::Values(rows) = &insert.source",
     "conditions": 1,
     "vectors_required": 2,
@@ -8572,7 +8582,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_e9674d7a",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 305,
+    "line": 323,
     "decision": "!row.is_empty() && row.len() != target_columns.len()",
     "conditions": 2,
     "vectors_required": 3,
@@ -8582,7 +8592,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_26e6c6f9",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 318,
+    "line": 336,
     "decision": "let InsertSource::Select(select) = &insert.source",
     "conditions": 1,
     "vectors_required": 2,
@@ -8592,7 +8602,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_13fa7590",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 326,
+    "line": 344,
     "decision": "!select.compound.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8602,7 +8612,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_93a86832",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 333,
+    "line": 351,
     "decision": "match select_schemas {\n            Some([single]) => select_result_column_count(select, single),\n            Some(joined) if joined.len() > 1 => {\n                let Some(from) = &select.from else {\n                    return Err(CodegenError::NoFromClause);\n                };\n                let table_refs: Vec<&TableRef> = std::iter::once(&from.first)\n                    .chain(from.joins.iter().map(|j| &j.table))\n                    .collect();\n                select_result_column_count_joined(select, joined, &table_refs)?\n            }\n            Some(_) | None => {\n                return Err(CodegenError::Unsupported {\n                    reason: \"INSERT ... SELECT: the SELECT's FROM table schema(s) were not \\\n                             resolved\"\n                        .to_string(),\n                })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8612,7 +8622,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_d15ccd91",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 335,
+    "line": 353,
     "decision": "joined.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -8622,7 +8632,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_3f3535a2",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 352,
+    "line": 370,
     "decision": "found != target_columns.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8632,7 +8642,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_087c60c4",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 393,
+    "line": 411,
     "decision": "match &insert.source {\n        InsertSource::Values(rows) => {\n            for values in rows {\n                compile_row(\n                    &mut em,\n                    &mut reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| values.get(pos).cloned().map(ColumnSource::Expr),\n                    rowid_alias,\n                    action,\n                    is_autoincrement,\n                )?;\n            }\n        }\n        InsertSource::DefaultValues => {\n            compile_row(\n                &mut em,\n                &mut reg,\n                schema,\n                &check_schema,\n                &plans,\n                &table_checks,\n                &target_columns,\n                |_pos| None,\n                rowid_alias,\n                action,\n                is_autoincrement,\n            )?;\n        }\n        InsertSource::Select(select) => {\n            // Re-checked (rather than trusted from the validation above)\n            // so this arm never needs an infallible unwrap.\n            let Some(select_schemas) = select_schemas else {\n                return Err(CodegenError::Unsupported {\n                    reason: \"INSERT ... SELECT: the SELECT's FROM table schema(s) were not \\\n                             resolved\"\n                        .to_string(),\n                });\n            };\n            // The select's source-table scan needs cursor numbers of its\n            // own, distinct from this INSERT's target-table/index\n            // cursors above — offset above the last index cursor\n            // (`open_index_cursors` uses `FIRST_INDEX_CURSOR..\n            // FIRST_INDEX_CURSOR+schema.indexes.len()`).\n            let select_table_cursor =\n                FIRST_INDEX_CURSOR.saturating_add(i32::try_from(schema.indexes.len()).unwrap_or(0));\n            let end_label = em.new_label();\n            let mut sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {\n                let count = usize::try_from(count).map_err(|_| CodegenError::Internal {\n                    reason: format!(\"INSERT ... SELECT produced a negative column count {count}\"),\n                })?;\n                compile_row(\n                    em,\n                    reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| {\n                        (pos < count)\n                            .then(|| first.saturating_add(i32::try_from(pos).unwrap_or(i32::MAX)))\n                            .map(ColumnSource::Reg)\n                    },\n                    rowid_alias,\n                    action,\n                    is_autoincrement,\n                )\n            };\n            if select_schemas.len() > 1 {\n                // #250: the SELECT's FROM clause has a JOIN — drive the\n                // same nested-loop join scan `compile_select_joined`\n                // uses, with cursor numbers offset above this INSERT's\n                // own cursors (`compile_select_joined_scan` opens every\n                // source-table cursor itself, unlike the single-table\n                // `compile_select_scan` path below, which expects its\n                // one cursor already open).\n                // `select_schemas` doubles as the full catalog for a\n                // subquery-in-FROM to resolve its own inner FROM table(s)\n                // against (#257) — narrower than `compile_select_joined`'s\n                // own full-database catalog, so `INSERT ... SELECT` with\n                // both a JOIN and a FROM-subquery whose own table isn't\n                // among the SELECT's joined tables isn't supported yet.\n                compile_select_joined_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    select_schemas,\n                    select_schemas,\n                    select_table_cursor,\n                    end_label,\n                    &std::collections::HashMap::new(),\n                    &mut sink,\n                )?;\n            } else {\n                let Some(select_schema) = select_schemas.first() else {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"INSERT ... SELECT: the SELECT's FROM table schema was not \\\n                                 resolved\"\n                            .to_string(),\n                    });\n                };\n                let select_cursors = ScanCursors {\n                    table: select_table_cursor,\n                    sort: select_table_cursor.saturating_add(1),\n                    pseudo: select_table_cursor.saturating_add(2),\n                    distinct: select_table_cursor.saturating_add(3),\n                };\n                let select_root_page = valid_table_root_page(select_schema)?;\n                em.emit(Instruction::new(\n                    Opcode::OpenRead,\n                    select_cursors.table,\n                    select_root_page,\n                    0,\n                ));\n                compile_select_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    &std::rc::Rc::new(select_schema.clone()),\n                    select_cursors,\n                    end_label,\n                    std::slice::from_ref(select_schema),\n                    &crate::codegen::row::planner::Stats::default(),\n                    &mut sink,\n                )?;\n            }\n            em.place(end_label);\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8642,7 +8652,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_297a1cc6",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 466,
+    "line": 484,
     "decision": "select_schemas.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -8652,7 +8662,7 @@
   {
     "id": "codegen_row_stmt_insert_column_plans_f5a46199",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 557,
+    "line": 575,
     "decision": "match constraint {\n                ColumnConstraint::NotNull => plan.not_null = true,\n                // NULL on the rowid-alias column means \"assign a fresh\n                // rowid\", not a constraint violation, so its implicit\n                // NOT NULL is deliberately not enforced.\n                ColumnConstraint::PrimaryKey { .. } => {\n                    if rowid_alias != Some(idx) {\n                        plan.not_null = true;\n                    }\n                }\n                ColumnConstraint::Default(\n                    DefaultValue::Literal(expr) | DefaultValue::Paren(expr),\n                ) => {\n                    plan.default = Some(expr.clone());\n                }\n                ColumnConstraint::Check(expr) => plan.checks.push(expr.clone()),\n                ColumnConstraint::Unique | ColumnConstraint::Collate(_) => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8662,7 +8672,7 @@
   {
     "id": "codegen_row_stmt_insert_column_plans_6503ca7d",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 563,
+    "line": 581,
     "decision": "rowid_alias != Some(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -8672,7 +8682,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_4b71b0ef",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 602,
+    "line": 620,
     "decision": "let (Some(source), Some(slot)) = (column_at(pos), value_sources.get_mut(col_idx))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8682,7 +8692,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_fcbd603f",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 614,
+    "line": 632,
     "decision": "match rowid_alias {\n        Some(idx) => {\n            let explicit = value_source_at(idx)\n                .filter(|source| !matches!(source, ColumnSource::Expr(e) if is_null_literal(e)));\n            match explicit {\n                Some(source) => {\n                    let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;\n                    let no_conflict = em.new_label();\n                    let seek_addr =\n                        em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));\n                    em.patch_p2(seek_addr, no_conflict);\n                    emit_pk_conflict(em, reg, action, row_skip, schema, idx)?;\n                    em.place(no_conflict);\n                    r\n                }\n                None => {\n                    let r = reg.alloc();\n                    emit_new_rowid(em, r, schema, is_autoincrement);\n                    r\n                }\n            }\n        }\n        None => {\n            let r = reg.alloc();\n            emit_new_rowid(em, r, schema, is_autoincrement);\n            r\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8692,7 +8702,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_8d060817",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 618,
+    "line": 636,
     "decision": "match explicit {\n                Some(source) => {\n                    let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;\n                    let no_conflict = em.new_label();\n                    let seek_addr =\n                        em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));\n                    em.patch_p2(seek_addr, no_conflict);\n                    emit_pk_conflict(em, reg, action, row_skip, schema, idx)?;\n                    em.place(no_conflict);\n                    r\n                }\n                None => {\n                    let r = reg.alloc();\n                    emit_new_rowid(em, r, schema, is_autoincrement);\n                    r\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8702,7 +8712,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_c861879c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 647,
+    "line": 665,
     "decision": "Some(idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -8712,7 +8722,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_7150f6bf",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 663,
+    "line": 681,
     "decision": "use_default",
     "conditions": 1,
     "vectors_required": 2,
@@ -8722,7 +8732,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_d0939512",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 669,
+    "line": 687,
     "decision": "match &chosen {\n            Some(source) => compile_column_source(em, reg, schema, TABLE_CURSOR, source)?,\n            None => {\n                let r = reg.alloc();\n                em.emit(Instruction::new(Opcode::Null, 0, r, 0));\n                r\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8732,7 +8742,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_f476b28e",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 679,
+    "line": 697,
     "decision": "plan.not_null",
     "conditions": 1,
     "vectors_required": 2,
@@ -8742,7 +8752,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_66f20021",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 716,
+    "line": 743,
     "decision": "needs_row_pseudo",
     "conditions": 1,
     "vectors_required": 2,
@@ -8752,7 +8762,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_d93931f7",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 734,
+    "line": 761,
     "decision": "has_checks",
     "conditions": 1,
     "vectors_required": 2,
@@ -8762,7 +8772,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_1af88378",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 799,
+    "line": 826,
     "decision": "!schema.indexes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8772,7 +8782,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_constraint_violation_f9999294",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 817,
+    "line": 844,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Abort\n        | ConflictAction::Fail\n        | ConflictAction::Rollback\n        | ConflictAction::Replace => {\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                code,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8782,7 +8792,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_pk_conflict_15820c67",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 843,
+    "line": 870,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // `SeekRowid` above landed the cursor on the row this\n            // INSERT is about to displace — its secondary-index\n            // entries must be removed before it's deleted, exactly\n            // like `delete.rs`'s ordinary `DELETE` path, or they go\n            // stale (`#196` follow-up: this conflict path predates\n            // index maintenance and wasn't updated when it landed).\n            emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\n                \"UNIQUE constraint failed: {}.{} (PRIMARY KEY)\",\n                schema.name,\n                schema.columns.get(idx).map_or(\"?\", String::as_str)\n            );\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_PRIMARYKEY,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8792,7 +8802,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_check_b7b491d5",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 901,
+    "line": 928,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -8802,7 +8812,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_check_0b949c87",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 917,
+    "line": 944,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8812,7 +8822,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_check_2dd119e2",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 943,
+    "line": 970,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // The conflicting row's rowid was written into\n            // `conflict_rowid_reg` by `NoConflict` itself — seek the\n            // table cursor onto it, remove its index entries, then\n            // delete it, exactly like `emit_pk_conflict`'s `Replace`\n            // branch (which instead already had the cursor positioned\n            // via `SeekRowid`).\n            let seek_ok = em.new_label();\n            let seek_addr = em.emit(Instruction::new(\n                Opcode::SeekRowid,\n                TABLE_CURSOR,\n                0,\n                conflict_rowid_reg,\n            ));\n            em.patch_p2(seek_addr, seek_ok);\n            crate::codegen::row::index_maintenance::emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n            em.place(seek_ok);\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\"UNIQUE constraint failed: {}.{}\", schema.name, index.name);\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_UNIQUE,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8822,7 +8832,7 @@
   {
     "id": "codegen_row_stmt_insert_insert_result_e7f78d1c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1010,
+    "line": 1079,
     "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(insert) => *insert,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
