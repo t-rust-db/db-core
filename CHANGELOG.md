@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.110.0] - 2026-09-18
+
+### Changed
+
+- **`GROUP BY` partials are pre-aggregated per pool worker before the final `Combine`** (#488): `run_parallel` emitted one partial row per group *per segment*, so the final merge saw `segments x groups` rows (8.2M on the parity `GROUP BY customer_id`). Each morsel-pool worker now folds every segment it claims into its own incremental `vm::combine::Combiner` (new `run_morsels_fold`, same dynamic rebalancing) and hands back one still-mergeable partial, so the final merge sees at most `threads x groups` rows -- the thread-local aggregation DuckDB and Velox rely on, applied at the merge boundary without touching the VM. Output order is unchanged and deterministic: groups carry their smallest `(segment, row)` first-seen key through the partials and the final merge sorts by it. Gated at 4 segments per thread (`PREAGGREGATE_MIN_SEGMENTS_PER_THREAD`); below that the direct merge is kept, since pre-aggregation measured 14% slower with ~1 segment per worker. Interleaved A/B/A on the tracked bench, 12 threads: 64 segments x 20K groups 24.1 ms -> 17.4 ms; 16 x 100K unchanged. A non-`Int` key in a later chunk now demotes the integer table in place rather than redoing the merge.
+
 ## [0.109.0] - 2026-09-17
 
 ### Changed
