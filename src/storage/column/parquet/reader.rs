@@ -449,6 +449,70 @@ pub fn read_double_column(
     assemble(header, &levels, max_def_level, values, read_plain_f64)
 }
 
+/// Decodes one `PLAIN` data page of a fixed-width primitive (`N`
+/// little-endian bytes per value) straight into typed storage (#495):
+/// `values` gets one slot per row (a NULL row's slot holds
+/// `T::default()`) and, for a nullable column (`max_def_level > 0`),
+/// `present` gets one flag per row, `true` for a non-NULL row. A
+/// `REQUIRED` column appends nothing to `present`, so a caller reads
+/// `present.is_empty()` as "every row present". Unlike [`assemble`] there
+/// is no `Option<T>` per value and no `Vec<bool>` null mask in between:
+/// the definition levels are read once, and when they say every value is
+/// present -- the common case for a nullable column that happens to hold
+/// no NULLs -- the values are copied in a single pass.
+pub fn read_plain_fixed<T: Copy + Default, const N: usize>(
+    page_body: &[u8],
+    header: &DataPageHeader,
+    max_def_level: u32,
+    decode: impl Fn([u8; N]) -> T,
+    values: &mut Vec<T>,
+    present: &mut Vec<bool>,
+) -> Result<()> {
+    let num_values = value_count(header.num_values)?;
+    if num_values == 0 {
+        return Ok(());
+    }
+    let (levels, bytes) = split_definition_levels(page_body, header, max_def_level)?;
+    if levels.is_empty() || levels.iter().all(|&level| level == max_def_level) {
+        push_plain(bytes, num_values, &decode, values)?;
+        if !levels.is_empty() {
+            present.resize(present.len().saturating_add(num_values), true);
+        }
+        return Ok(());
+    }
+    values.reserve(levels.len());
+    present.reserve(levels.len());
+    let mut chunks = bytes.as_chunks::<N>().0.iter();
+    for &level in &levels {
+        if level == max_def_level {
+            let chunk = chunks.next().ok_or(ReadError::UnexpectedEof)?;
+            values.push(decode(*chunk));
+            present.push(true);
+        } else {
+            values.push(T::default());
+            present.push(false);
+        }
+    }
+    Ok(())
+}
+
+/// Appends `num_values` consecutive `PLAIN` values of `N` bytes from
+/// `bytes` to `values`; a short buffer is [`ReadError::UnexpectedEof`].
+fn push_plain<T, const N: usize>(
+    bytes: &[u8],
+    num_values: usize,
+    decode: impl Fn([u8; N]) -> T,
+    values: &mut Vec<T>,
+) -> Result<()> {
+    let needed = num_values.checked_mul(N).ok_or(ReadError::UnexpectedEof)?;
+    let bytes = bytes.get(..needed).ok_or(ReadError::UnexpectedEof)?;
+    values.reserve(num_values);
+    for chunk in bytes.as_chunks::<N>().0 {
+        values.push(decode(*chunk));
+    }
+    Ok(())
+}
+
 /// Read a PLAIN_DICTIONARY/RLE_DICTIONARY-encoded DOUBLE column from a single
 /// data page, given its already-decoded dictionary.
 pub fn read_double_column_dictionary(
@@ -855,6 +919,101 @@ mod tests {
         page.extend_from_slice(&2.5f64.to_le_bytes());
         let result = read_double_column(&page, &h, 1).unwrap();
         assert_eq!(result, vec![Some(1.5), None, Some(2.5)]);
+    }
+
+    // storage_column_parquet_reader_read_plain_fixed_944bcff7: `levels.is_empty() || levels.iter().all(|&level| level == max_def_level)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_column_parquet_reader_read_plain_fixed_944bcff7__v3_nullable_page_with_a_null_takes_the_row_loop(
+    ) {
+        let h = header(3);
+        let mut page = encode_def_levels(&[1, 0, 1]);
+        page.extend_from_slice(&1.5f64.to_le_bytes());
+        page.extend_from_slice(&2.5f64.to_le_bytes());
+        let (mut values, mut present) = (Vec::new(), Vec::new());
+        read_plain_fixed(&page, &h, 1, f64::from_le_bytes, &mut values, &mut present).unwrap();
+        assert_eq!(values, vec![1.5, 0.0, 2.5]);
+        assert_eq!(present, vec![true, false, true]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_column_parquet_reader_read_plain_fixed_944bcff7__v2_nullable_page_without_nulls_copies_in_one_pass(
+    ) {
+        let h = header(2);
+        let mut page = encode_def_levels(&[1, 1]);
+        page.extend_from_slice(&7i64.to_le_bytes());
+        page.extend_from_slice(&(-8i64).to_le_bytes());
+        let (mut values, mut present) = (vec![1i64], vec![true]);
+        read_plain_fixed(&page, &h, 1, i64::from_le_bytes, &mut values, &mut present).unwrap();
+        assert_eq!(values, vec![1, 7, -8]);
+        assert_eq!(present, vec![true, true, true]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_column_parquet_reader_read_plain_fixed_944bcff7__v1_required_page_has_no_levels_and_appends_no_flags(
+    ) {
+        let h = header(2);
+        let mut page = Vec::new();
+        page.extend_from_slice(&3i32.to_le_bytes());
+        page.extend_from_slice(&4i32.to_le_bytes());
+        let (mut values, mut present) = (Vec::new(), Vec::new());
+        read_plain_fixed(
+            &page,
+            &h,
+            0,
+            |b| i64::from(i32::from_le_bytes(b)),
+            &mut values,
+            &mut present,
+        )
+        .unwrap();
+        assert_eq!(values, vec![3, 4]);
+        assert!(present.is_empty());
+    }
+
+    #[test]
+    fn read_plain_fixed_empty_page_is_a_no_op() {
+        let (mut values, mut present) = (Vec::<f64>::new(), Vec::new());
+        read_plain_fixed(
+            &[],
+            &header(0),
+            1,
+            f64::from_le_bytes,
+            &mut values,
+            &mut present,
+        )
+        .unwrap();
+        assert!(values.is_empty() && present.is_empty());
+    }
+
+    #[test]
+    fn read_plain_fixed_short_pages_are_unexpected_eof() {
+        // Required: 2 values declared, 1 present.
+        let (mut values, mut present) = (Vec::<f64>::new(), Vec::new());
+        let err = read_plain_fixed(
+            &1.5f64.to_le_bytes(),
+            &header(2),
+            0,
+            f64::from_le_bytes,
+            &mut values,
+            &mut present,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ReadError::UnexpectedEof));
+        // Nullable with a NULL: 2 present values declared, 1 in the page.
+        let mut page = encode_def_levels(&[1, 0, 1]);
+        page.extend_from_slice(&1.5f64.to_le_bytes());
+        let err = read_plain_fixed(
+            &page,
+            &header(3),
+            1,
+            f64::from_le_bytes,
+            &mut values,
+            &mut present,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ReadError::UnexpectedEof));
     }
 
     #[test]
