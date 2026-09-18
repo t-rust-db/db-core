@@ -139,6 +139,77 @@ fn check_constraint_sees_the_real_value_of_a_non_first_column() {
     assert_eq!(ints(&rows), vec![0]);
 }
 
+/// #503: sqlite3 names a failed CHECK by its `CONSTRAINT` name, or by the
+/// verbatim source text between the parentheses (whitespace included) when
+/// it has none -- never by the table. Every expectation here is sqlite3
+/// 3.53.4's own message.
+#[test]
+fn check_violation_message_names_the_constraint_like_sqlite3() {
+    let db = TempDb::new("check-message");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE c1(a INTEGER CHECK(a>0)); \
+         CREATE TABLE c2(a INTEGER CONSTRAINT pos CHECK(a>0)); \
+         CREATE TABLE c3(a INTEGER, b INTEGER, CHECK(a < b)); \
+         CREATE TABLE c4(a INTEGER, b INTEGER, CONSTRAINT ordered CHECK(a < b)); \
+         CREATE TABLE c5(a INTEGER CHECK( a  >  0 )); \
+         CREATE TABLE c6(a INTEGER CHECK((a) > 0))",
+    )
+    .unwrap();
+    for (sql, expected) in [
+        ("INSERT INTO c1 VALUES(-1)", "CHECK constraint failed: a>0"),
+        ("INSERT INTO c2 VALUES(-1)", "CHECK constraint failed: pos"),
+        (
+            "INSERT INTO c3 VALUES(5,1)",
+            "CHECK constraint failed: a < b",
+        ),
+        (
+            "INSERT INTO c4 VALUES(5,1)",
+            "CHECK constraint failed: ordered",
+        ),
+        (
+            "INSERT INTO c5 VALUES(-1)",
+            "CHECK constraint failed: a  >  0",
+        ),
+        (
+            "INSERT INTO c6 VALUES(-1)",
+            "CHECK constraint failed: (a) > 0",
+        ),
+    ] {
+        let err = e.run_query(sql).unwrap_err();
+        assert!(
+            err.message.ends_with(expected),
+            "{sql}: expected message ending in {expected:?}, got {:?}",
+            err.message
+        );
+    }
+}
+
+/// #503: the UPDATE path builds the same message.
+#[test]
+fn update_check_violation_message_names_the_constraint_like_sqlite3() {
+    let db = TempDb::new("check-message-update");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE u1(a INTEGER CHECK(a>0)); INSERT INTO u1 VALUES(1); \
+         CREATE TABLE u2(a INTEGER, b INTEGER, CONSTRAINT ordered CHECK(a < b)); \
+         INSERT INTO u2 VALUES(1, 5)",
+    )
+    .unwrap();
+    let err = e.run_query("UPDATE u1 SET a = -1").unwrap_err();
+    assert!(
+        err.message.ends_with("CHECK constraint failed: a>0"),
+        "{}",
+        err.message
+    );
+    let err = e.run_query("UPDATE u2 SET a = 9").unwrap_err();
+    assert!(
+        err.message.ends_with("CHECK constraint failed: ordered"),
+        "{}",
+        err.message
+    );
+}
+
 #[test]
 fn table_level_check_constraint_sees_every_column() {
     let db = TempDb::new("table-check");

@@ -152,7 +152,35 @@ const SQLITE_CONSTRAINT_UNIQUE: i32 = 2067;
 pub(crate) struct ColumnPlan {
     pub(crate) not_null: bool,
     pub(crate) default: Option<Expr>,
-    pub(crate) checks: Vec<Expr>,
+    /// Each `CHECK` on this column with the label sqlite3 names it by in
+    /// `CHECK constraint failed: <label>` (#503) -- see [`check_label`].
+    pub(crate) checks: Vec<(Expr, String)>,
+}
+
+/// The name sqlite3 gives a `CHECK` constraint in its violation message
+/// (#503): the declared `CONSTRAINT name` when there is one, otherwise
+/// the source text between the parentheses, trimmed -- sliced from the
+/// table's stored DDL (`schema.sql`, the text `cached_create_table`
+/// parsed, so `body`'s offsets index it directly). Falls back to the
+/// table name if the span does not fit the DDL, which cannot happen for
+/// a schema read from the file but keeps a hand-built `TableSchema`
+/// from panicking.
+pub(crate) fn check_label(
+    schema: &TableSchema,
+    name: Option<&str>,
+    body: crate::parser::Span,
+) -> String {
+    if let Some(name) = name {
+        return name.to_string();
+    }
+    let start = body.offset as usize;
+    let end = start.saturating_add(body.len as usize);
+    schema
+        .sql
+        .get(start..end)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map_or_else(|| schema.name.clone(), str::to_string)
 }
 
 fn is_null_literal(expr: &Expr) -> bool {
@@ -296,14 +324,7 @@ pub fn compile_insert(
                 })
             })
     });
-    let table_checks: Vec<Expr> = create
-        .constraints
-        .iter()
-        .filter_map(|c| match c {
-            TableConstraint::Check(expr) => Some(expr.clone()),
-            TableConstraint::PrimaryKey(_) | TableConstraint::Unique(_) => None,
-        })
-        .collect();
+    let table_checks: Vec<(Expr, String)> = table_check_constraints(schema, &create);
 
     let target_columns: Vec<usize> = match &insert.columns {
         Some(names) => {
@@ -587,7 +608,9 @@ pub(crate) fn column_plans(
                 ) => {
                     plan.default = Some(expr.clone());
                 }
-                ColumnConstraint::Check(expr) => plan.checks.push(expr.clone()),
+                ColumnConstraint::Check { expr, name, body } => plan
+                    .checks
+                    .push((expr.clone(), check_label(schema, name.as_deref(), *body))),
                 ColumnConstraint::Unique | ColumnConstraint::Collate(_) => {}
             }
         }
@@ -608,7 +631,7 @@ fn compile_row(
     schema: &TableSchema,
     check_schema: &TableSchema,
     plans: &[ColumnPlan],
-    table_checks: &[Expr],
+    table_checks: &[(Expr, String)],
     target_columns: &[usize],
     mut column_at: impl FnMut(usize) -> Option<ColumnSource>,
     rowid_alias: Option<usize>,
@@ -759,9 +782,10 @@ fn compile_row(
     }
 
     if has_checks {
-        let mut check_exprs: Vec<&Expr> = plans.iter().flat_map(|p| p.checks.iter()).collect();
+        let mut check_exprs: Vec<&(Expr, String)> =
+            plans.iter().flat_map(|p| p.checks.iter()).collect();
         check_exprs.extend(table_checks.iter());
-        for expr in check_exprs {
+        for (expr, label) in check_exprs {
             let violation = em.new_label();
             let ok = em.new_label();
             compile_cond(
@@ -781,7 +805,7 @@ fn compile_row(
                 em,
                 action,
                 SQLITE_CONSTRAINT_CHECK,
-                format!("CHECK constraint failed: {}", schema.name),
+                format!("CHECK constraint failed: {label}"),
                 row_skip,
             );
             em.place(ok);
@@ -832,6 +856,23 @@ fn compile_row(
 
     em.place(row_skip);
     Ok(())
+}
+
+/// Every table-level `CHECK` of `create` with its message label (#503).
+pub(crate) fn table_check_constraints(
+    schema: &TableSchema,
+    create: &CreateTable,
+) -> Vec<(Expr, String)> {
+    create
+        .constraints
+        .iter()
+        .filter_map(|c| match c {
+            TableConstraint::Check { expr, name, body } => {
+                Some((expr.clone(), check_label(schema, name.as_deref(), *body)))
+            }
+            TableConstraint::PrimaryKey(_) | TableConstraint::Unique(_) => None,
+        })
+        .collect()
 }
 
 pub(crate) fn emit_constraint_violation(

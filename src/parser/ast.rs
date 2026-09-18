@@ -735,8 +735,18 @@ pub enum ColumnConstraint {
     Unique,
     /// `DEFAULT value`.
     Default(DefaultValue),
-    /// `CHECK (expr)`.
-    Check(Expr),
+    /// `[CONSTRAINT name] CHECK (expr)`. `name` is the declared constraint
+    /// name; `body` spans the source text between the parentheses, which
+    /// is what sqlite3 names an unnamed constraint by in its
+    /// `CHECK constraint failed: ...` message (#503).
+    Check {
+        /// The check expression.
+        expr: Expr,
+        /// `CONSTRAINT <name>`, if declared.
+        name: Option<String>,
+        /// Source span of the text between `(` and `)`.
+        body: Span,
+    },
     /// `COLLATE collation`.
     Collate(String),
 }
@@ -759,8 +769,16 @@ pub enum TableConstraint {
     PrimaryKey(Vec<IndexedColumn>),
     /// `UNIQUE (col, ...)`.
     Unique(Vec<IndexedColumn>),
-    /// `CHECK (expr)`.
-    Check(Expr),
+    /// `[CONSTRAINT name] CHECK (expr)` -- see
+    /// [`ColumnConstraint::Check`] for `name`/`body`.
+    Check {
+        /// The check expression.
+        expr: Expr,
+        /// `CONSTRAINT <name>`, if declared.
+        name: Option<String>,
+        /// Source span of the text between `(` and `)`.
+        body: Span,
+    },
 }
 
 /// An indexed-column: an expression (bare column ref, `COLLATE`-qualified,
