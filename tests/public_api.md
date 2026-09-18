@@ -5434,16 +5434,29 @@ impl core::fmt::Debug for db_core::vm::batch::AggFunc
 pub fn db_core::vm::batch::AggFunc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::AggFunc
 impl core::marker::StructuralPartialEq for db_core::vm::batch::AggFunc
+pub enum db_core::vm::batch::AggOperand
+pub db_core::vm::batch::AggOperand::Avg(usize, usize)
+pub db_core::vm::batch::AggOperand::Literal(f64)
+pub db_core::vm::batch::AggOperand::Slot(usize)
+impl core::clone::Clone for db_core::vm::batch::AggOperand
+pub fn db_core::vm::batch::AggOperand::clone(&self) -> db_core::vm::batch::AggOperand
+impl core::cmp::PartialEq for db_core::vm::batch::AggOperand
+pub fn db_core::vm::batch::AggOperand::eq(&self, &db_core::vm::batch::AggOperand) -> bool
+impl core::fmt::Debug for db_core::vm::batch::AggOperand
+pub fn db_core::vm::batch::AggOperand::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::vm::batch::AggOperand
+impl core::marker::StructuralPartialEq for db_core::vm::batch::AggOperand
 pub enum db_core::vm::batch::AggPart
 pub db_core::vm::batch::AggPart::Avg(usize, usize)
 pub db_core::vm::batch::AggPart::Count
+pub db_core::vm::batch::AggPart::Expr(db_core::vm::batch::MapOp, db_core::vm::batch::AggOperand, db_core::vm::batch::AggOperand)
 pub db_core::vm::batch::AggPart::GroupKey
+pub db_core::vm::batch::AggPart::Hidden(db_core::vm::batch::HiddenPart)
 pub db_core::vm::batch::AggPart::Max
 pub db_core::vm::batch::AggPart::Min
 pub db_core::vm::batch::AggPart::Sum
 impl core::clone::Clone for db_core::vm::batch::AggPart
 pub fn db_core::vm::batch::AggPart::clone(&self) -> db_core::vm::batch::AggPart
-impl core::cmp::Eq for db_core::vm::batch::AggPart
 impl core::cmp::PartialEq for db_core::vm::batch::AggPart
 pub fn db_core::vm::batch::AggPart::eq(&self, &db_core::vm::batch::AggPart) -> bool
 impl core::fmt::Debug for db_core::vm::batch::AggPart
@@ -5482,6 +5495,20 @@ pub fn db_core::vm::column::Column::from(alloc::vec::Vec<db_core::vm::batch::Val
 impl core::fmt::Debug for db_core::vm::column::Column
 pub fn db_core::vm::column::Column::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::column::Column
+pub enum db_core::vm::batch::HiddenPart
+pub db_core::vm::batch::HiddenPart::Count
+pub db_core::vm::batch::HiddenPart::Max
+pub db_core::vm::batch::HiddenPart::Min
+pub db_core::vm::batch::HiddenPart::Sum
+impl core::clone::Clone for db_core::vm::batch::HiddenPart
+pub fn db_core::vm::batch::HiddenPart::clone(&self) -> db_core::vm::batch::HiddenPart
+impl core::cmp::Eq for db_core::vm::batch::HiddenPart
+impl core::cmp::PartialEq for db_core::vm::batch::HiddenPart
+pub fn db_core::vm::batch::HiddenPart::eq(&self, &db_core::vm::batch::HiddenPart) -> bool
+impl core::fmt::Debug for db_core::vm::batch::HiddenPart
+pub fn db_core::vm::batch::HiddenPart::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::vm::batch::HiddenPart
+impl core::marker::StructuralPartialEq for db_core::vm::batch::HiddenPart
 pub enum db_core::vm::batch::JoinKind
 pub db_core::vm::batch::JoinKind::Anti
 pub db_core::vm::batch::JoinKind::Full
