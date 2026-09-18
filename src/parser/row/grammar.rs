@@ -2395,23 +2395,29 @@ impl Parser {
                 // Exactly one, two or three parts (db-core#232): the old
                 // wildcard arm also matched `a.b.c.d`, silently dropping
                 // the trailing parts, and `unwrap_or_default()` could
-                // mint an empty identifier.
-                let kind = match parts.as_slice() {
-                    [name] => ExprKind::Column {
-                        table: None,
-                        catalog: None,
-                        name: name.clone(),
-                    },
-                    [table, name] => ExprKind::Column {
-                        catalog: None,
-                        table: Some(table.clone()),
-                        name: name.clone(),
-                    },
-                    [catalog, table, name] => ExprKind::Column {
-                        catalog: Some(catalog.clone()),
-                        table: Some(table.clone()),
-                        name: name.clone(),
-                    },
+                // mint an empty identifier. Moved out of `parts` by
+                // value (db-core#486: `parts.as_slice()` forced a
+                // `.clone()` of every identifier `String` here -- a
+                // second heap copy on top of the one `self.identifier()`/
+                // the `Identifier(name)` match already produced --
+                // instead of just moving the `String`s `parts` already
+                // owns.
+                let len = parts.len();
+                let mut parts = parts.into_iter();
+                let kind = match len {
+                    1..=3 => {
+                        let catalog = if len == 3 { parts.next() } else { None };
+                        let table = if len >= 2 { parts.next() } else { None };
+                        let Some(name) = parts.next() else {
+                            return self
+                                .invalid("a column reference has at most three dotted parts");
+                        };
+                        ExprKind::Column {
+                            catalog,
+                            table,
+                            name,
+                        }
+                    }
                     _ => return self.invalid("a column reference has at most three dotted parts"),
                 };
                 Ok(Expr { kind, span })
