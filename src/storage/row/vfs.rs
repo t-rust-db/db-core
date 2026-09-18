@@ -76,6 +76,19 @@ impl std::error::Error for VfsError {
 /// Shorthand for a [`VfsError`]-producing result.
 pub type Result<T> = std::result::Result<T, VfsError>;
 
+/// What [`Vfs::stat`] reports about a path: enough to tell whether an
+/// already-open handle still refers to the file at that path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStat {
+    /// Identifies the file object, not the name: a real filesystem's inode
+    /// number, an in-memory backend's buffer identity. Changes when the
+    /// path is deleted and recreated (or replaced) even if the new file
+    /// has the same name and size.
+    pub identity: u64,
+    /// Current length in bytes.
+    pub size: u64,
+}
+
 /// A source of database files, opened by path.
 pub trait Vfs {
     /// Opens `path` for reading.
@@ -92,6 +105,14 @@ pub trait Vfs {
     /// Whether `path` exists — used to detect sibling `-wal` / `-journal`
     /// files.
     fn exists(&self, path: &Path) -> Result<bool>;
+    /// The file's identity and size from a single `stat` of `path` --
+    /// `None` when it does not exist (#487). Lets a caller holding a
+    /// long-lived handle check that the path still names *that* file
+    /// (same inode, expected length) without opening it: on APFS an
+    /// `open`/`close` of a file around its `fsync` -- even read-only --
+    /// makes the fsync ~20x slower (measured 1.8 ms vs 0.08 ms), while a
+    /// bare `stat` costs nothing. See [`FileStat`].
+    fn stat(&self, path: &Path) -> Result<Option<FileStat>>;
 
     /// Opens `path` for reading and writing, creating it (empty) first if
     /// it doesn't already exist — used to create the `-journal` companion
@@ -302,6 +323,11 @@ impl AnyVfs {
     /// Whether `path` exists — see [`Vfs::exists`].
     pub fn exists(&self, path: &Path) -> Result<bool> {
         self.0.exists(path)
+    }
+
+    /// Forwards [`Vfs::stat`].
+    pub fn stat(&self, path: &Path) -> Result<Option<FileStat>> {
+        self.0.stat(path)
     }
 
     /// Opens `path` for reading — see [`Vfs::open_read`].

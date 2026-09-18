@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::{FileLock, Result, SharedLockGuard, Vfs, VfsError, VfsFile};
+use super::{FileLock, FileStat, Result, SharedLockGuard, Vfs, VfsError, VfsFile};
 
 type FileTable = Arc<Mutex<HashMap<PathBuf, Arc<Mutex<Vec<u8>>>>>>;
 
@@ -28,6 +28,10 @@ pub struct MemoryVfs {
     /// can assert *whether* a commit fsynced, since an in-memory
     /// backend has no real fsync effect to observe otherwise.
     sync_calls: Arc<AtomicUsize>,
+    /// Total `open_read`/`open_write`/`create_or_open_write` calls, for
+    /// the same reason as `sync_calls`: #487's tests assert that a WAL
+    /// commit after the first opens *no* file at all.
+    open_calls: Arc<AtomicUsize>,
 }
 
 impl MemoryVfs {
@@ -53,6 +57,13 @@ impl MemoryVfs {
         self.sync_calls.load(Ordering::SeqCst)
     }
 
+    /// Total file opens (`open_read`, `open_write`, `create_or_open_write`)
+    /// across every clone of this `Vfs` so far -- never reset; snapshot
+    /// and compare deltas, like [`MemoryVfs::sync_calls`] (#487).
+    pub fn open_calls(&self) -> usize {
+        self.open_calls.load(Ordering::SeqCst)
+    }
+
     fn handle(&self, path: &Path) -> Result<Arc<Mutex<Vec<u8>>>> {
         let files = self.files.lock().map_err(|_| poisoned(path))?;
         files.get(path).cloned().ok_or_else(|| VfsError::NotFound {
@@ -63,6 +74,7 @@ impl MemoryVfs {
 
 impl Vfs for MemoryVfs {
     fn open_read(&self, path: &Path) -> Result<Box<dyn VfsFile>> {
+        self.open_calls.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(MemoryVfsFile(
             self.handle(path)?,
             self.sync_calls.clone(),
@@ -70,6 +82,7 @@ impl Vfs for MemoryVfs {
     }
 
     fn open_write(&self, path: &Path) -> Result<Box<dyn VfsFile>> {
+        self.open_calls.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(MemoryVfsFile(
             self.handle(path)?,
             self.sync_calls.clone(),
@@ -81,7 +94,21 @@ impl Vfs for MemoryVfs {
         Ok(files.contains_key(path))
     }
 
+    fn stat(&self, path: &Path) -> Result<Option<FileStat>> {
+        let files = self.files.lock().map_err(|_| poisoned(path))?;
+        let Some(handle) = files.get(path) else {
+            return Ok(None);
+        };
+        // The buffer's allocation identifies the file object: `insert`
+        // replacing a path installs a new `Arc`, exactly like a real
+        // delete-and-recreate installs a new inode.
+        let identity = u64::try_from(Arc::as_ptr(handle).addr()).unwrap_or(u64::MAX);
+        let size = handle.lock().map_err(|_| poisoned(path))?.len() as u64;
+        Ok(Some(FileStat { identity, size }))
+    }
+
     fn create_or_open_write(&self, path: &Path) -> Result<Box<dyn VfsFile>> {
+        self.open_calls.fetch_add(1, Ordering::SeqCst);
         let handle = {
             let mut files = self.files.lock().map_err(|_| poisoned(path))?;
             files

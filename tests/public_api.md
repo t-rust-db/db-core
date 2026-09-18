@@ -3575,9 +3575,11 @@ impl db_core::storage::row::pager::wal::WalWriter
 pub fn db_core::storage::row::pager::wal::WalWriter::append_frame(&mut self, u32, &[u8], u32) -> core::result::Result<(), db_core::storage::row::pager::wal::WalError>
 pub fn db_core::storage::row::pager::wal::WalWriter::create(&db_core::storage::row::vfs::AnyVfs, &std::path::Path, db_core::storage::row::pager::wal::WalHeader) -> core::result::Result<Self, db_core::storage::row::pager::wal::WalError>
 pub fn db_core::storage::row::pager::wal::WalWriter::frame_count(&self) -> u32
+pub fn db_core::storage::row::pager::wal::WalWriter::is_current(&self, &db_core::storage::row::vfs::FileStat) -> bool
 pub fn db_core::storage::row::pager::wal::WalWriter::open_existing(&db_core::storage::row::vfs::AnyVfs, &std::path::Path, u32, core::option::Option<&db_core::storage::row::pager::wal::WalResumeHint>) -> core::result::Result<Self, db_core::storage::row::pager::wal::WalError>
 pub fn db_core::storage::row::pager::wal::WalWriter::resume_hint(&self) -> db_core::storage::row::pager::wal::WalResumeHint
 pub fn db_core::storage::row::pager::wal::WalWriter::sync(&mut self) -> core::result::Result<(), db_core::storage::row::pager::wal::WalError>
+pub fn db_core::storage::row::pager::wal::WalWriter::write_pending(&mut self) -> core::result::Result<(), db_core::storage::row::pager::wal::WalError>
 pub const db_core::storage::row::pager::wal::HEADER_LEN: usize
 pub fn db_core::storage::row::pager::wal::committed_pages(&db_core::storage::row::pager::wal::WalHeader, &[u8]) -> (std::collections::hash::map::HashMap<u32, alloc::vec::Vec<u8>>, u32)
 pub enum db_core::storage::row::pager::PagerError
@@ -3955,6 +3957,7 @@ pub fn db_core::storage::row::vfs::AnyVfs::open_write(&self, &std::path::Path) -
 pub fn db_core::storage::row::vfs::AnyVfs::publish_wal_backfill(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::AnyVfs::publish_wal_mx_frame(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::AnyVfs::read_wal_backfill(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<u32>
+pub fn db_core::storage::row::vfs::AnyVfs::stat(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileStat>>
 pub struct db_core::storage::row::vfs::AnyVfsFile(_)
 impl db_core::storage::row::vfs::AnyVfsFile
 pub fn db_core::storage::row::vfs::AnyVfsFile::lock_shared(&self) -> db_core::storage::row::vfs::Result<db_core::storage::row::vfs::FileLock>
@@ -3991,10 +3994,23 @@ pub fn db_core::storage::row::vfs::lock::FileLockState::new(std::fs::File) -> Se
 pub fn db_core::storage::row::vfs::lock::FileLockState::set_level(&mut self, db_core::storage::row::vfs::lock::LockLevel) -> core::io::error::Result<()>
 impl core::ops::drop::Drop for db_core::storage::row::vfs::lock::FileLockState
 pub fn db_core::storage::row::vfs::lock::FileLockState::drop(&mut self)
+pub struct db_core::storage::row::vfs::FileStat
+pub db_core::storage::row::vfs::FileStat::identity: u64
+pub db_core::storage::row::vfs::FileStat::size: u64
+impl core::clone::Clone for db_core::storage::row::vfs::FileStat
+pub fn db_core::storage::row::vfs::FileStat::clone(&self) -> db_core::storage::row::vfs::FileStat
+impl core::cmp::Eq for db_core::storage::row::vfs::FileStat
+impl core::cmp::PartialEq for db_core::storage::row::vfs::FileStat
+pub fn db_core::storage::row::vfs::FileStat::eq(&self, &db_core::storage::row::vfs::FileStat) -> bool
+impl core::fmt::Debug for db_core::storage::row::vfs::FileStat
+pub fn db_core::storage::row::vfs::FileStat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::row::vfs::FileStat
+impl core::marker::StructuralPartialEq for db_core::storage::row::vfs::FileStat
 pub struct db_core::storage::row::vfs::MemoryVfs
 impl db_core::storage::row::vfs::MemoryVfs
 pub fn db_core::storage::row::vfs::MemoryVfs::insert(&mut self, impl core::convert::Into<std::path::PathBuf>, alloc::vec::Vec<u8>)
 pub fn db_core::storage::row::vfs::MemoryVfs::new() -> Self
+pub fn db_core::storage::row::vfs::MemoryVfs::open_calls(&self) -> usize
 pub fn db_core::storage::row::vfs::MemoryVfs::sync_calls(&self) -> usize
 impl core::clone::Clone for db_core::storage::row::vfs::MemoryVfs
 pub fn db_core::storage::row::vfs::MemoryVfs::clone(&self) -> db_core::storage::row::vfs::MemoryVfs
@@ -4016,6 +4032,7 @@ pub fn db_core::storage::row::vfs::MemoryVfs::open_write(&self, &std::path::Path
 pub fn db_core::storage::row::vfs::MemoryVfs::publish_wal_backfill(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::MemoryVfs::publish_wal_mx_frame(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::MemoryVfs::read_wal_backfill(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<u32>
+pub fn db_core::storage::row::vfs::MemoryVfs::stat(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileStat>>
 pub struct db_core::storage::row::vfs::UnixVfs
 impl core::clone::Clone for db_core::storage::row::vfs::UnixVfs
 pub fn db_core::storage::row::vfs::UnixVfs::clone(&self) -> db_core::storage::row::vfs::UnixVfs
@@ -4038,6 +4055,7 @@ pub fn db_core::storage::row::vfs::UnixVfs::open_write(&self, &std::path::Path) 
 pub fn db_core::storage::row::vfs::UnixVfs::publish_wal_backfill(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::UnixVfs::publish_wal_mx_frame(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::UnixVfs::read_wal_backfill(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<u32>
+pub fn db_core::storage::row::vfs::UnixVfs::stat(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileStat>>
 pub struct db_core::storage::row::vfs::VfsPageSource
 impl db_core::storage::row::vfs::VfsPageSource
 pub fn db_core::storage::row::vfs::VfsPageSource::lock_shared(&self) -> core::result::Result<db_core::storage::row::vfs::FileLock, db_core::storage::row::vfs::VfsError>
@@ -4082,6 +4100,7 @@ pub fn db_core::storage::row::vfs::Vfs::open_write(&self, &std::path::Path) -> d
 pub fn db_core::storage::row::vfs::Vfs::publish_wal_backfill(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::Vfs::publish_wal_mx_frame(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::Vfs::read_wal_backfill(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<u32>
+pub fn db_core::storage::row::vfs::Vfs::stat(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileStat>>
 impl db_core::storage::row::vfs::Vfs for db_core::storage::row::vfs::MemoryVfs
 pub fn db_core::storage::row::vfs::MemoryVfs::active_wal_reader_marks(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<alloc::vec::Vec<u32>>
 pub fn db_core::storage::row::vfs::MemoryVfs::claim_wal_checkpoint_lock(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileLock>>
@@ -4096,6 +4115,7 @@ pub fn db_core::storage::row::vfs::MemoryVfs::open_write(&self, &std::path::Path
 pub fn db_core::storage::row::vfs::MemoryVfs::publish_wal_backfill(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::MemoryVfs::publish_wal_mx_frame(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::MemoryVfs::read_wal_backfill(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<u32>
+pub fn db_core::storage::row::vfs::MemoryVfs::stat(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileStat>>
 impl db_core::storage::row::vfs::Vfs for db_core::storage::row::vfs::UnixVfs
 pub fn db_core::storage::row::vfs::UnixVfs::active_wal_reader_marks(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<alloc::vec::Vec<u32>>
 pub fn db_core::storage::row::vfs::UnixVfs::claim_wal_checkpoint_lock(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileLock>>
@@ -4110,6 +4130,7 @@ pub fn db_core::storage::row::vfs::UnixVfs::open_write(&self, &std::path::Path) 
 pub fn db_core::storage::row::vfs::UnixVfs::publish_wal_backfill(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::UnixVfs::publish_wal_mx_frame(&self, &std::path::Path, u32) -> db_core::storage::row::vfs::Result<()>
 pub fn db_core::storage::row::vfs::UnixVfs::read_wal_backfill(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<u32>
+pub fn db_core::storage::row::vfs::UnixVfs::stat(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileStat>>
 pub trait db_core::storage::row::vfs::VfsFile
 pub fn db_core::storage::row::vfs::VfsFile::lock_shared(&self) -> db_core::storage::row::vfs::Result<db_core::storage::row::vfs::FileLock>
 pub fn db_core::storage::row::vfs::VfsFile::read_at(&self, &mut [u8], u64) -> db_core::storage::row::vfs::Result<usize>

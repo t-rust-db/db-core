@@ -328,6 +328,7 @@ perf: ## Run the parser/codegen/vm_opcodes benchmarks (report only, not a CI gat
 	cargo bench --bench vm_opcodes
 	cargo bench --bench stream_materialize
 	cargo bench --bench cross_mode_lookup
+	cargo bench --bench wal_commit
 
 BENCH ?= codegen
 
