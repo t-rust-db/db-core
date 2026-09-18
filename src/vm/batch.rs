@@ -1148,6 +1148,29 @@ pub trait Segment: Send + Sync {
         let _ = descending;
         None
     }
+
+    /// Loads only the named `columns` (a subset of what [`Self::load`]
+    /// would produce, same row count and row order) -- the first phase of
+    /// a late-materializing top-N (#513), which needs the `ORDER BY` key
+    /// and the WHERE predicate's columns for every row but the other
+    /// output columns for almost none. The default is the full `load()`,
+    /// which is always correct: extra columns are simply ignored.
+    fn load_columns(&self, columns: &[String]) -> Result<Arc<Batch>> {
+        let _ = columns;
+        self.load()
+    }
+
+    /// The named `columns` at exactly `positions` (row indices into the
+    /// batch [`Self::load`] would produce, any order, duplicates allowed),
+    /// as a batch of `positions.len()` rows -- the second phase of a
+    /// late-materializing top-N (#513), run for the handful of rows that
+    /// won. `None` means this segment has no cheaper way than loading
+    /// everything, and the caller falls back to that; the default is
+    /// `None`.
+    fn gather_at(&self, columns: &[String], positions: &[u32]) -> Option<Result<Batch>> {
+        let _ = (columns, positions);
+        None
+    }
 }
 
 /// Dynamically hands out segment indices to a fixed pool of worker threads:
@@ -1491,6 +1514,10 @@ struct TopNItem {
     key: Value,
     row: Vec<Value>,
     descending: bool,
+    /// The row's physical position in its segment (#513): where a
+    /// late-materializing scan gathers the rest of `row` from. `0` when
+    /// `row` was gathered eagerly and the position is not needed.
+    position: u32,
 }
 
 impl PartialEq for TopNItem {
@@ -1565,6 +1592,7 @@ fn top_n_reduce_output(output: &QueryOutput, spec: &TopN) -> Vec<TopNItem> {
                     key,
                     row: gather_row(chunk, r),
                     descending: spec.descending,
+                    position: 0,
                 });
             } else if let Some(worst) = heap.peek() {
                 if compare_for_order(&key, &worst.key, spec.descending) == std::cmp::Ordering::Less
@@ -1574,6 +1602,7 @@ fn top_n_reduce_output(output: &QueryOutput, spec: &TopN) -> Vec<TopNItem> {
                         key,
                         row: gather_row(chunk, r),
                         descending: spec.descending,
+                        position: 0,
                     });
                 }
             }
@@ -1625,6 +1654,225 @@ fn push_bounded(heap: &mut std::collections::BinaryHeap<TopNItem>, item: TopNIte
     }
 }
 
+/// How a top-N body splits for late materialization (#513): which
+/// columns every row needs (`key_columns`: the WHERE predicate's plus the
+/// `ORDER BY` key), which are only needed for the winners (`deferred`),
+/// and the body rewritten to load and emit just the key -- `prefix` up to
+/// and including the first `Filter` (empty without one), then `rest`.
+/// `output_columns` names the source column behind each emitted output
+/// position, so a winner's row can be rebuilt from its key plus the
+/// gathered deferred columns.
+struct LatePlan {
+    key_columns: Vec<String>,
+    deferred: Vec<String>,
+    prefix: Vec<Opcode>,
+    rest: Vec<Opcode>,
+    output_columns: Vec<String>,
+}
+
+/// Derives the [`LatePlan`] for `program`, or `None` when the body is not
+/// the plain shape this handles -- then every segment runs the eager path.
+/// The shape: `LoadColumn`s and an optional filter prefix, then only
+/// `LoadColumn`s, then one final `Emit` whose every register is a loaded
+/// column (so nothing computed from a deferred column is ever emitted),
+/// with at least one output column that is neither the key nor a
+/// predicate column (otherwise there is nothing to defer).
+fn late_plan(program: &[Opcode], spec: &TopN) -> Option<LatePlan> {
+    let (last, body) = program.split_last()?;
+    let Opcode::Emit { registers } = last else {
+        return None;
+    };
+    let column_of = |reg: usize| -> Option<String> {
+        body.iter().find_map(|op| match op {
+            Opcode::LoadColumn { reg: r, column } if *r == reg => Some(column.to_string()),
+            _ => None,
+        })
+    };
+    let output_columns: Vec<String> = registers
+        .iter()
+        .map(|&reg| column_of(reg))
+        .collect::<Option<_>>()?;
+    let key_reg = *registers.get(spec.col)?;
+    let key_column = output_columns.get(spec.col)?.clone();
+
+    let filter_at = body
+        .iter()
+        .position(|op| matches!(op, Opcode::Filter { .. }));
+    let (prefix, tail) = body.split_at(filter_at.map_or(0, |i| i.saturating_add(1)));
+    if !tail
+        .iter()
+        .all(|op| matches!(op, Opcode::LoadColumn { .. }))
+    {
+        return None;
+    }
+    let mut key_columns: Vec<String> = prefix
+        .iter()
+        .filter_map(|op| match op {
+            Opcode::LoadColumn { column, .. } => Some(column.to_string()),
+            _ => None,
+        })
+        .collect();
+    if !key_columns.contains(&key_column) {
+        key_columns.push(key_column);
+    }
+    let mut deferred: Vec<String> = Vec::new();
+    for name in &output_columns {
+        if !key_columns.contains(name) && !deferred.contains(name) {
+            deferred.push(name.clone());
+        }
+    }
+    if deferred.is_empty() {
+        return None;
+    }
+    let mut rest: Vec<Opcode> = tail
+        .iter()
+        .filter(|op| match op {
+            Opcode::LoadColumn { column, .. } => key_columns.iter().any(|k| k == column.as_ref()),
+            _ => false,
+        })
+        .cloned()
+        .collect();
+    rest.push(Opcode::Emit {
+        registers: vec![key_reg].into(),
+    });
+    Some(LatePlan {
+        key_columns,
+        deferred,
+        prefix: prefix.to_vec(),
+        rest,
+        output_columns,
+    })
+}
+
+/// One cell of `batch` by column name and row, from whichever map holds
+/// the column; a missing column or row reads as `Null`, which only a
+/// segment returning a malformed gather could produce.
+fn batch_cell(batch: &Batch, name: &str, row: usize) -> Value {
+    if let Some(column) = batch.typed_columns.get(name) {
+        return column.get(row);
+    }
+    batch
+        .columns
+        .get(name)
+        .and_then(|values| values.get(row))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+/// The eager per-segment scan: load everything, run the whole body,
+/// reduce the emitted rows to the local top-`spec.limit` with their rows
+/// already gathered.
+fn scan_segment_eager<S: Segment>(
+    segment: &S,
+    program: &[Opcode],
+    spec: &TopN,
+) -> Result<Vec<TopNItem>> {
+    let batch = segment.load()?;
+    let mut vm = Vm::new();
+    vm.execute(&batch, program)?;
+    let output = std::mem::take(&mut vm.output);
+    Ok(top_n_reduce_output(&output, spec))
+}
+
+/// The late-materializing per-segment scan (#513): load only the key
+/// columns, run the filter prefix to learn which physical rows survive,
+/// run the rest to emit just the key, keep the local top-`spec.limit`
+/// `(key, position)`s, then gather the deferred columns at those few
+/// positions and rebuild each winner's full output row. A segment that
+/// cannot gather (`gather_at` -> `None`) falls back to the eager scan.
+fn scan_segment_late<S: Segment>(
+    segment: &S,
+    program: &[Opcode],
+    plan: &LatePlan,
+    spec: &TopN,
+) -> Result<Vec<TopNItem>> {
+    let batch = segment.load_columns(&plan.key_columns)?;
+    let mut vm = Vm::new();
+    vm.execute(&batch, &plan.prefix)?;
+    let survivors: Option<Vec<u32>> = vm.pending_selection_indices().map(<[u32]>::to_vec);
+    vm.execute(&batch, &plan.rest)?;
+    let output = std::mem::take(&mut vm.output);
+
+    let key_only = TopN {
+        col: 0,
+        descending: spec.descending,
+        limit: spec.limit,
+    };
+    let mut local = top_n_reduce_positions(&output, &key_only, survivors.as_deref())?;
+    if local.is_empty() {
+        return Ok(local);
+    }
+    let positions: Vec<u32> = local.iter().map(|item| item.position).collect();
+    let Some(gathered) = segment.gather_at(&plan.deferred, &positions) else {
+        return scan_segment_eager(segment, program, spec);
+    };
+    let gathered = gathered?;
+    for (k, item) in local.iter_mut().enumerate() {
+        item.row = plan
+            .output_columns
+            .iter()
+            .enumerate()
+            .map(|(j, name)| {
+                if j == spec.col {
+                    item.key.clone()
+                } else {
+                    batch_cell(&gathered, name, k)
+                }
+            })
+            .collect();
+    }
+    Ok(local)
+}
+
+/// [`top_n_reduce_output`] over a key-only output, keeping each kept
+/// row's physical position instead of gathering its row: emitted row
+/// ordinal `r` maps through `survivors` (the filter prefix's surviving
+/// positions, ascending) when there is one, else it is the position.
+fn top_n_reduce_positions(
+    output: &QueryOutput,
+    spec: &TopN,
+    survivors: Option<&[u32]>,
+) -> Result<Vec<TopNItem>> {
+    use std::collections::BinaryHeap;
+
+    let position_of = |ordinal: usize| -> Result<u32> {
+        let physical = match survivors {
+            Some(s) => s.get(ordinal).copied(),
+            None => u32::try_from(ordinal).ok(),
+        };
+        physical.ok_or(VmError::MalformedProgram {
+            opcode: "Emit",
+            reason: format!("top-N key row {ordinal} has no source position"),
+        })
+    };
+    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(spec.limit.saturating_add(1));
+    let mut ordinal = 0usize;
+    for chunk in output.chunks() {
+        let sort_column = chunk.get(spec.col);
+        for r in 0..chunk_len(chunk) {
+            let key = sort_column
+                .and_then(|column| column.get(r))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let keep = heap.len() < spec.limit
+                || heap.peek().is_some_and(|worst| {
+                    compare_for_order(&key, &worst.key, spec.descending) == std::cmp::Ordering::Less
+                });
+            if keep {
+                let item = TopNItem {
+                    key,
+                    row: Vec::new(),
+                    descending: spec.descending,
+                    position: position_of(ordinal)?,
+                };
+                push_bounded(&mut heap, item, spec.limit);
+            }
+            ordinal = ordinal.saturating_add(1);
+        }
+    }
+    Ok(heap.into_sorted_vec())
+}
+
 /// [`run_parallel_top_n`]'s body, also reporting how many segments were
 /// skipped on their bound (the number the acceptance criterion of #464
 /// asks for; tests assert on it).
@@ -1660,6 +1908,7 @@ fn top_n_over_segments<S: Segment>(
     let threshold: Mutex<BinaryHeap<TopNItem>> =
         Mutex::new(BinaryHeap::with_capacity(spec.limit.saturating_add(1)));
     let skipped = AtomicUsize::new(0);
+    let plan = late_plan(program, spec);
 
     let per_segment: Vec<Result<(usize, Vec<TopNItem>)>> = run_morsels(&order, |&idx| {
         let Some(segment) = segments.get(idx) else {
@@ -1682,11 +1931,10 @@ fn top_n_over_segments<S: Segment>(
                 return Ok((idx, Vec::new()));
             }
         }
-        let batch = segment.load()?;
-        let mut vm = Vm::new();
-        vm.execute(&batch, program)?;
-        let output = std::mem::take(&mut vm.output);
-        let local = top_n_reduce_output(&output, spec);
+        let local = match &plan {
+            Some(plan) => scan_segment_late(segment, program, plan, spec)?,
+            None => scan_segment_eager(segment, program, spec)?,
+        };
         let mut heap = threshold
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1697,6 +1945,7 @@ fn top_n_over_segments<S: Segment>(
                     key: item.key.clone(),
                     row: Vec::new(),
                     descending: item.descending,
+                    position: 0,
                 },
                 spec.limit,
             );
@@ -7130,6 +7379,444 @@ mod tests {
 
     fn loads(segment: &BoundedSegment) -> usize {
         segment.loads.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// #513: an in-memory segment that serves column subsets and positional
+    /// gathers itself, recording what it was asked for.
+    struct LateSegment {
+        batch: Batch,
+        loads: std::sync::Mutex<Vec<Vec<String>>>,
+        gathers: std::sync::Mutex<Vec<(Vec<String>, Vec<u32>)>>,
+        can_gather: bool,
+    }
+
+    impl LateSegment {
+        fn new(batch: Batch, can_gather: bool) -> Self {
+            LateSegment {
+                batch,
+                loads: std::sync::Mutex::new(Vec::new()),
+                gathers: std::sync::Mutex::new(Vec::new()),
+                can_gather,
+            }
+        }
+
+        fn subset(&self, columns: &[String], positions: Option<&[u32]>) -> Batch {
+            let n = positions.map_or(self.batch.num_rows, <[u32]>::len);
+            let mut out = Batch::new(n);
+            for name in columns {
+                let values: Vec<Value> = match positions {
+                    Some(p) => p
+                        .iter()
+                        .map(|&i| batch_cell(&self.batch, name, i as usize))
+                        .collect(),
+                    None => (0..n).map(|i| batch_cell(&self.batch, name, i)).collect(),
+                };
+                out = out.with_column(name.clone(), values);
+            }
+            out
+        }
+    }
+
+    impl Segment for LateSegment {
+        fn load(&self) -> Result<Arc<Batch>> {
+            self.loads.lock().unwrap().push(vec!["*".into()]);
+            Ok(Arc::new(self.batch.clone()))
+        }
+
+        fn load_columns(&self, columns: &[String]) -> Result<Arc<Batch>> {
+            self.loads.lock().unwrap().push(columns.to_vec());
+            Ok(Arc::new(self.subset(columns, None)))
+        }
+
+        fn gather_at(&self, columns: &[String], positions: &[u32]) -> Option<Result<Batch>> {
+            if !self.can_gather {
+                return None;
+            }
+            self.gathers
+                .lock()
+                .unwrap()
+                .push((columns.to_vec(), positions.to_vec()));
+            Some(Ok(self.subset(columns, Some(positions))))
+        }
+    }
+
+    /// `n` rows of (`key`, `payload`, `flag`): key is a shuffled 0..n with
+    /// a NULL every 7th row and a duplicate every 11th, payload = key * 10
+    /// (so a row's payload proves which row it is), flag = key % 3 == 0.
+    fn late_fixture(n: i64, seed: i64) -> Batch {
+        let key: Vec<Value> = (0..n)
+            .map(|i| {
+                if i % 7 == 3 {
+                    Value::Null
+                } else if i % 11 == 5 {
+                    Value::Int((i + seed) % n)
+                } else {
+                    Value::Int((i * 37 + seed) % n)
+                }
+            })
+            .collect();
+        let payload: Vec<Value> = key
+            .iter()
+            .map(|k| match k {
+                Value::Int(v) => Value::Int(v * 10),
+                _ => Value::Str("null-key".into()),
+            })
+            .collect();
+        let flag: Vec<Value> = key
+            .iter()
+            .map(|k| Value::Bool(matches!(k, Value::Int(v) if v % 3 == 0)))
+            .collect();
+        Batch::new(n as usize)
+            .with_column("key", key)
+            .with_column("payload", payload)
+            .with_column("flag", flag)
+    }
+
+    /// `SELECT payload, key FROM t [WHERE flag] ORDER BY key ... LIMIT`.
+    fn late_program(with_filter: bool) -> Vec<Opcode> {
+        let mut program = Vec::new();
+        if with_filter {
+            program.push(Opcode::LoadColumn {
+                reg: 2,
+                column: "flag".into(),
+            });
+            program.push(Opcode::Filter { predicate: 2 });
+        }
+        program.push(Opcode::LoadColumn {
+            reg: 0,
+            column: "payload".into(),
+        });
+        program.push(Opcode::LoadColumn {
+            reg: 1,
+            column: "key".into(),
+        });
+        program.push(Opcode::Emit {
+            registers: vec![0, 1].into(),
+        });
+        program
+    }
+
+    fn eager_rows(batches: &[Batch], program: &[Opcode], spec: &TopN) -> Vec<Vec<Value>> {
+        let segments: Vec<InMemorySegment> = batches.iter().cloned().map(InMemorySegment).collect();
+        run_parallel_top_n(&segments, program, spec)
+            .unwrap()
+            .into_rows()
+    }
+
+    #[test]
+    fn late_top_n_loads_only_the_key_and_gathers_only_the_winners() {
+        let batches = vec![
+            late_fixture(1_000, 0),
+            late_fixture(1_000, 400),
+            late_fixture(50, 7),
+        ];
+        let program = late_program(false);
+        for descending in [true, false] {
+            let spec = TopN {
+                col: 1,
+                descending,
+                limit: 5,
+            };
+            let segments: Vec<LateSegment> = batches
+                .iter()
+                .cloned()
+                .map(|b| LateSegment::new(b, true))
+                .collect();
+            let rows = run_parallel_top_n(&segments, &program, &spec)
+                .unwrap()
+                .into_rows();
+            assert_eq!(
+                rows,
+                eager_rows(&batches, &program, &spec),
+                "descending={descending}"
+            );
+            for segment in &segments {
+                let loads = segment.loads.lock().unwrap();
+                assert_eq!(
+                    *loads,
+                    vec![vec!["key".to_string()]],
+                    "only the key column is loaded"
+                );
+                let gathers = segment.gathers.lock().unwrap();
+                assert_eq!(gathers.len(), 1);
+                assert_eq!(gathers[0].0, vec!["payload".to_string()]);
+                assert!(
+                    gathers[0].1.len() <= 5,
+                    "gathered {} positions",
+                    gathers[0].1.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn late_top_n_maps_emitted_rows_back_through_the_filters_survivors() {
+        let batches = vec![late_fixture(1_000, 0), late_fixture(1_000, 400)];
+        let program = late_program(true);
+        let spec = TopN {
+            col: 1,
+            descending: true,
+            limit: 7,
+        };
+        let segments: Vec<LateSegment> = batches
+            .iter()
+            .cloned()
+            .map(|b| LateSegment::new(b, true))
+            .collect();
+        let rows = run_parallel_top_n(&segments, &program, &spec)
+            .unwrap()
+            .into_rows();
+        assert_eq!(rows, eager_rows(&batches, &program, &spec));
+        assert_eq!(rows.len(), 7);
+        for row in &rows {
+            // Every winner satisfies the WHERE, and its payload is its own.
+            let (Value::Int(payload), Value::Int(key)) = (&row[0], &row[1]) else {
+                panic!("unexpected row {row:?}");
+            };
+            assert_eq!(*payload, key * 10);
+            assert_eq!(key % 3, 0);
+        }
+        for segment in &segments {
+            let loads = segment.loads.lock().unwrap();
+            assert_eq!(*loads, vec![vec!["flag".to_string(), "key".to_string()]]);
+        }
+    }
+
+    #[test]
+    fn late_top_n_falls_back_to_the_eager_scan_when_a_segment_cannot_gather() {
+        let batches = vec![late_fixture(300, 0), late_fixture(300, 100)];
+        let program = late_program(false);
+        let spec = TopN {
+            col: 1,
+            descending: true,
+            limit: 4,
+        };
+        let segments: Vec<LateSegment> = batches
+            .iter()
+            .cloned()
+            .map(|b| LateSegment::new(b, false))
+            .collect();
+        let rows = run_parallel_top_n(&segments, &program, &spec)
+            .unwrap()
+            .into_rows();
+        assert_eq!(rows, eager_rows(&batches, &program, &spec));
+        for segment in &segments {
+            let loads = segment.loads.lock().unwrap();
+            assert_eq!(
+                *loads,
+                vec![vec!["key".to_string()], vec!["*".to_string()]],
+                "key-only load, then the full fallback load"
+            );
+            assert!(segment.gathers.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn late_plan_declines_computed_outputs_and_programs_with_nothing_to_defer() {
+        let spec = TopN {
+            col: 1,
+            descending: true,
+            limit: 3,
+        };
+        assert!(late_plan(&late_program(false), &spec).is_some());
+        assert!(late_plan(&late_program(true), &spec).is_some());
+        // Key only: nothing to defer.
+        let key_only = [
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "key".into(),
+            },
+            Opcode::Emit {
+                registers: vec![1].into(),
+            },
+        ];
+        assert!(late_plan(&key_only, &TopN { col: 0, ..spec }).is_none());
+        // An emitted register computed by Map: not a loaded column.
+        let computed = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "payload".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "key".into(),
+            },
+            Opcode::Map {
+                dst: 3,
+                op: MapOp::Add,
+                a: 0,
+                b: 1,
+            },
+            Opcode::Emit {
+                registers: vec![3, 1].into(),
+            },
+        ];
+        assert!(late_plan(&computed, &spec).is_none());
+        // A non-LoadColumn opcode after the filter prefix.
+        let post_filter_map = [
+            Opcode::LoadColumn {
+                reg: 2,
+                column: "flag".into(),
+            },
+            Opcode::Filter { predicate: 2 },
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "payload".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "key".into(),
+            },
+            Opcode::Map {
+                dst: 0,
+                op: MapOp::Add,
+                a: 0,
+                b: 0,
+            },
+            Opcode::Emit {
+                registers: vec![0, 1].into(),
+            },
+        ];
+        assert!(late_plan(&post_filter_map, &spec).is_none());
+        // The key itself is loaded pre-filter (a predicate column): the
+        // payload is still deferrable.
+        let key_is_predicate = [
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "key".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 2,
+                column: "flag".into(),
+            },
+            Opcode::Filter { predicate: 2 },
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "payload".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0, 1].into(),
+            },
+        ];
+        let plan = late_plan(&key_is_predicate, &spec).unwrap();
+        assert_eq!(
+            plan.key_columns,
+            vec!["key".to_string(), "flag".to_string()]
+        );
+        assert_eq!(plan.deferred, vec!["payload".to_string()]);
+        assert_eq!(
+            plan.rest.len(),
+            1,
+            "only the key-only Emit remains after the prefix"
+        );
+    }
+
+    // vm_batch_late_plan_36dce767: `!key_columns.contains(name) && !deferred.contains(name)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_late_plan_36dce767__v1_an_output_column_that_is_neither_key_nor_seen_is_deferred(
+    ) {
+        let spec = TopN {
+            col: 1,
+            descending: true,
+            limit: 3,
+        };
+        let plan = late_plan(&late_program(false), &spec).unwrap();
+        assert_eq!(plan.deferred, vec!["payload".to_string()]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_late_plan_36dce767__v2_the_key_column_is_never_deferred() {
+        // Emit [key, payload] with the key at output 0: the key is in
+        // `key_columns`, so only the payload is deferred.
+        let program = [
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "key".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "payload".into(),
+            },
+            Opcode::Emit {
+                registers: vec![1, 0].into(),
+            },
+        ];
+        let plan = late_plan(
+            &program,
+            &TopN {
+                col: 0,
+                descending: true,
+                limit: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(plan.key_columns, vec!["key".to_string()]);
+        assert_eq!(plan.deferred, vec!["payload".to_string()]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_late_plan_36dce767__v3_a_repeated_output_column_is_deferred_once() {
+        let program = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "payload".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "key".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0, 1, 0].into(),
+            },
+        ];
+        let plan = late_plan(
+            &program,
+            &TopN {
+                col: 1,
+                descending: true,
+                limit: 3,
+            },
+        )
+        .unwrap();
+        assert_eq!(plan.deferred, vec!["payload".to_string()]);
+        assert_eq!(plan.output_columns.len(), 3);
+    }
+
+    #[test]
+    fn late_top_n_limit_zero_and_duplicate_output_columns_match_eager() {
+        let batches = vec![late_fixture(200, 0)];
+        let program = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "payload".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "key".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0, 1, 0].into(),
+            },
+        ];
+        for limit in [0, 1, 3] {
+            let spec = TopN {
+                col: 1,
+                descending: false,
+                limit,
+            };
+            let segments: Vec<LateSegment> = batches
+                .iter()
+                .cloned()
+                .map(|b| LateSegment::new(b, true))
+                .collect();
+            let rows = run_parallel_top_n(&segments, &program, &spec)
+                .unwrap()
+                .into_rows();
+            assert_eq!(rows, eager_rows(&batches, &program, &spec), "limit={limit}");
+        }
     }
 
     #[test]
