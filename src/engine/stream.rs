@@ -1349,4 +1349,36 @@ mod mcdc_vectors {
         let range: Range<i64> = i64::MIN..i64::MAX;
         let _ = e.merge_retained_summaries(&select, Some(range), rows, &mut rep);
     }
+
+    // engine_stream_requests_dc81f428 (`requests`, the pre-split check):
+    // `is_predefined(name) || self.fields.iter().any(|f| f == name)`
+    #[test]
+    fn mcdc__engine_stream_requests_dc81f428__v1_predefined_name_resolves_before_any_split() {
+        let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
+        let e = StreamEngine::open(&p).unwrap();
+        // "severity" is predefined (true), not a seen field (false).
+        let reqs = e.requests(&["severity".to_string()]).unwrap();
+        assert_eq!(reqs[0].name, "severity");
+    }
+
+    #[test]
+    fn mcdc__engine_stream_requests_dc81f428__v2_seen_field_name_resolves_before_any_split() {
+        let p = temp_log_with("<134>Sep 10 08:00:01 h nginx[7]: msg\n");
+        let e = StreamEngine::open(&p).unwrap();
+        // "pid" is not predefined (false) but was seen as a field (true):
+        // the request keeps the name whole, no table prefix stripped.
+        let reqs = e.requests(&["pid".to_string()]).unwrap();
+        assert_eq!(reqs[0].name, "pid");
+    }
+
+    #[test]
+    fn mcdc__engine_stream_requests_dc81f428__v3_qualified_name_falls_through_to_the_split() {
+        let p = temp_log_with("<134>Sep 10 08:00:01 h app: msg\n");
+        let e = StreamEngine::open(&p).unwrap();
+        // "log.severity" is neither predefined nor a seen field as a
+        // whole (both leafs false) -- only the split-off column resolves.
+        let reqs = e.requests(&["log.severity".to_string()]).unwrap();
+        assert_eq!(reqs[0].key, "log.severity");
+        assert_eq!(reqs[0].name, "severity");
+    }
 }

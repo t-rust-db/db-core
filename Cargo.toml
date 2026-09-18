@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.110.0"
+version = "0.111.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -218,6 +218,12 @@ memmap2 = { version = "0.9.11", optional = true }
 ruzstd = { version = "0.7", optional = true }
 
 [dev-dependencies]
+# Self-dependency so a bare `cargo test` (what `cargo-mvl-mcdc harvest`
+# runs -- it has no `--features` flag) compiles every test target,
+# including the ones that need `storage-test-support`'s `FakeClock`.
+# Enables the feature for test builds only; the library's own default
+# feature set is unchanged.
+db-core = { path = ".", features = ["storage-test-support"] }
 
 [[bin]]
 name = "lock_probe"

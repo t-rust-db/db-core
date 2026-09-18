@@ -6870,4 +6870,175 @@ mod tests {
             "expected more than one segment to run concurrently"
         );
     }
+
+    fn filtered_projection(loads_after_filter: &[&'static str]) -> Program {
+        let mut instructions = vec![
+            Instruction::new(Opcode::LoadColumn {
+                reg: 0,
+                column: "p".into(),
+            }),
+            Instruction::new(Opcode::Filter { predicate: 0 }),
+        ];
+        for (i, name) in loads_after_filter.iter().enumerate() {
+            instructions.push(Instruction::new(Opcode::LoadColumn {
+                reg: i + 1,
+                column: (*name).into(),
+            }));
+        }
+        Program::new(instructions)
+    }
+
+    // vm_batch_projection_only_columns_27b097ab (`projection_only_columns`):
+    // `!predicate.iter().any(|c| c == &name) && !out.iter().any(|c| c == &name)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_projection_only_columns_27b097ab__v1_fresh_non_predicate_column_is_collected()
+    {
+        let program = filtered_projection(&["x"]);
+        assert_eq!(program.projection_only_columns(), vec!["x".to_string()]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_projection_only_columns_27b097ab__v2_predicate_column_reloaded_after_filter_is_skipped(
+    ) {
+        // `p` drives the Filter, so a post-Filter reload of it is already
+        // covered by `predicate_columns` (first leaf false).
+        let program = filtered_projection(&["p"]);
+        assert!(program.projection_only_columns().is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_projection_only_columns_27b097ab__v3_duplicate_post_filter_load_is_collected_once(
+    ) {
+        // `x` is not a predicate column (first leaf true) but its second
+        // load already sits in `out` (second leaf false).
+        let program = filtered_projection(&["x", "x"]);
+        assert_eq!(program.projection_only_columns(), vec!["x".to_string()]);
+    }
+
+    // vm_batch_run_morsels_ordered_04f69f8a (`run_morsels_ordered` worker
+    // claim loop): `s.cancelled || s.next_claim >= len`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_run_morsels_ordered_04f69f8a__v1_sink_error_cancels_remaining_claims() {
+        // 64 items, the sink fails on the first delivery: workers see
+        // `cancelled` (true) long before `next_claim` reaches `len`.
+        let items: Vec<usize> = (0..64).collect();
+        let delivered = std::sync::atomic::AtomicUsize::new(0);
+        let result = run_morsels_ordered(
+            &items,
+            |i| *i,
+            |_| {
+                delivered.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(VmError::MalformedProgram {
+                    opcode: "test",
+                    reason: "sink refused".to_string(),
+                })
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(VmError::MalformedProgram { opcode: "test", .. })
+        ));
+        assert_eq!(delivered.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_run_morsels_ordered_04f69f8a__v2_exhausted_items_end_the_worker() {
+        // Every item claimed (`next_claim >= len`, never cancelled): each
+        // result is delivered exactly once, in item order.
+        let items: Vec<usize> = (0..16).collect();
+        let mut seen = Vec::new();
+        run_morsels_ordered(
+            &items,
+            |i| *i * 2,
+            |v| {
+                seen.push(v);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(seen, (0..16).map(|i| i * 2).collect::<Vec<_>>());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_run_morsels_ordered_04f69f8a__v3_live_run_keeps_claiming() {
+        // Neither leaf holds mid-run: a single item is claimed (the loop
+        // falls through to the window check) and delivered.
+        let items = [7usize];
+        let mut seen = Vec::new();
+        run_morsels_ordered(
+            &items,
+            |i| *i,
+            |v| {
+                seen.push(v);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(seen, vec![7]);
+    }
+
+    /// Two `LoadColumn`s (typed registers) combined by `Map`; a `Bool`
+    /// column is the "typed but not numeric" operand.
+    fn typed_map(a: Vec<Value>, b: Vec<Value>) -> Vec<Value> {
+        let batch = Batch::new(a.len()).with_column("a", a).with_column("b", b);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "a".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "b".into(),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        vm.register(2).unwrap().to_vec()
+    }
+
+    // vm_batch_typed_arithmetic_b747ddc4 (`typed_arithmetic`):
+    // `!matches!(a_col, Int | Float) || !matches!(b_col, Int | Float)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_typed_arithmetic_b747ddc4__v1_non_numeric_lhs_falls_back_to_the_general_path()
+    {
+        // Bool + Int: the fast path declines (first leaf true) and the
+        // general elementwise path decides the result (non-numeric
+        // operand -> Null) instead of the typed kernel.
+        let out = typed_map(vec![Value::Bool(true)], vec![Value::Int(4)]);
+        assert_eq!(out, vec![Value::Null]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_typed_arithmetic_b747ddc4__v2_non_numeric_rhs_falls_back_to_the_general_path()
+    {
+        let out = typed_map(vec![Value::Int(4)], vec![Value::Bool(true)]);
+        assert_eq!(out, vec![Value::Null]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_typed_arithmetic_b747ddc4__v3_both_numeric_take_the_typed_path() {
+        let out = typed_map(
+            vec![Value::Int(4), Value::Null],
+            vec![Value::Float(1.5), Value::Int(1)],
+        );
+        assert_eq!(out, vec![Value::Float(5.5), Value::Null]);
+    }
 }
