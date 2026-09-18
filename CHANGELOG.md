@@ -4,6 +4,14 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.114.0] - 2026-09-19
+
+### Changed
+
+- **Live top-N threshold skips row groups by footer statistics** (#464, PR #512): `Segment` gains `order_key_bound(descending)` -- the best `ORDER BY` key a segment could produce from its summary without loading (`None` = unknown, always loaded). `run_parallel_top_n` claims segments best-bound-first and feeds one shared bounded heap, so a segment whose bound cannot beat the current n-th candidate is never loaded; `engine::column::RowGroupSegment` answers from the row group's `min`/`max` for a single bare-column `ORDER BY` via the same `prune::decode_stat_bytes` #458's WHERE pruning uses. Parity `large.parquet` `ORDER BY amount DESC LIMIT 100`: 82 -> 56-58 row groups loaded, 21.5 -> 15.3 ms in-process.
+- **Non-key top-N columns are late-materialized; PLAIN pages gathered positionally** (#513, PR #515): `Segment` gains `load_columns(names)` and `gather_at(names, positions)`. For a plain `ORDER BY ... LIMIT` body, `top_n_over_segments` loads only the key (and predicate) columns, heaps, then gathers the other output columns at the winning positions only. `storage::column` gets a truly positional PLAIN gather (`read_plain_fixed_at`, `read_plain_fixed_column_at`: decompress only the pages holding a wanted row, stop after the last), which `decode_column_at` uses for its fixed-width arms -- also speeding ADR-0026's filtered projections. In-process on `large.parquet`: `SELECT id, amount ... ORDER BY amount DESC LIMIT 100` 14.8 ms / 179 MB -> 11.4 ms / 137 MB; four output columns 41.4 -> 30.1 ms.
+- **Join probe stops SipHash-ing an already-computed hash; the fused fold groups by build row** (#514, PR #516): `BuildTable::index` re-hashed every probe row's `u64` with SipHash and verified through a `Value == Value` compare; the slot is now `murmur_finalize(hash) & mask` with a typed key compare. For an inner join grouped only by payload columns, `fold_group_row` no longer hashes the payload string per matched row: `BuildTable` classifies its rows once (`payload_groups`, a `OnceLock` shared by all probe workers) and the fold indexes by build row. Fused `HashProbeGroupReduce` per fact row 58 -> 28 ns; `run_join_segments` on the parity join, 12 threads, 100 -> 54 ms wall.
+
 ## [0.113.2] - 2026-09-18
 
 ### Changed
@@ -28,7 +36,6 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 - **Aggregate expressions** (#496): `SUM(amount * 2)` (an expression inside an aggregate's argument) and `SUM(x) * 2` / `SUM(x) + SUM(y)` / `SUM(x) / COUNT(*)` (an aggregate composed with arithmetic, including alongside `GROUP BY`) now compile, where both were previously rejected. `vm::batch::AggPart` gains `Hidden` (a merged aggregate that isn't itself an output column) and `Expr` (a post-`Combine` scalar op over two `AggOperand`s), generalizing the `Avg` finalize hook to arbitrary aggregate arithmetic; both stay `Copy` so the AOT-emitted `const PROGRAM` path is unaffected. Nested aggregates and aggregates in `WHERE` are still rejected, each with its own dedicated error message.
 
-||||||| parent of 9bbc801 (feat(codegen-row): sqlite_stat4 range estimates decide seek versus scan like sqlite3 (#498))
 ## [0.111.1] - 2026-09-18
 
 ### Fixed
