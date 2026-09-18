@@ -52,7 +52,8 @@ use crate::parser::ast::{
     TableRefKind,
 };
 use crate::vm::batch::{
-    AggFunc, AggPart, Instruction, MapOp, Opcode, Program, ScanSource, Value, ValueSource,
+    AggFunc, AggOperand, AggPart, HiddenPart, Instruction, MapOp, Opcode, Program, ScanSource,
+    Value, ValueSource,
 };
 use crate::vm::engine::JoinProgram;
 use std::borrow::Cow;
@@ -214,8 +215,47 @@ enum Item {
     Star,
     /// `agg(arg) [FILTER (WHERE ...)]`; the third field is the filter
     /// predicate, if any.
-    Agg(AggFunc, Option<String>, Option<AstExpr>),
+    Agg(AggFunc, Option<AggArg>, Option<AstExpr>),
     Window(WindowSpec),
+    Expr(AstExpr),
+    /// A scalar expression over one or more aggregate calls (#496: `SUM(x)
+    /// * 2`, `SUM(x) + SUM(y)`, `SUM(x) / COUNT(*)`) -- anything
+    /// `expr_contains_agg` catches that isn't itself a bare aggregate call.
+    AggExpr(AstExpr),
+}
+
+/// True if `expr` contains an aggregate call anywhere in its tree (#496).
+/// Mirrors `parser::column::expr_contains_agg`, which already had to
+/// classify the same shape for the "non-aggregated `SELECT` columns must
+/// match `GROUP BY`" check -- kept as its own small copy here rather than
+/// shared across the parser/planner boundary, like `is_known_agg_name`
+/// and `AggFunc` already are for "is this name an aggregate".
+fn expr_contains_agg(expr: &AstExpr) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, .. } if AggFunc::from_name(name).is_some() => true,
+        ExprKind::FunctionCall {
+            args: FunctionArgs::List(list),
+            ..
+        } => list.iter().any(expr_contains_agg),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            expr_contains_agg(lhs) || expr_contains_agg(rhs)
+        }
+        ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Paren(inner) => expr_contains_agg(inner),
+        _ => false,
+    }
+}
+
+/// An aggregate's single argument (`None` is `COUNT(*)`): a bare column,
+/// the common case (still tracked by name rather than a one-node `Expr`,
+/// so `ctx.load_column` keeps memoizing it against the same register a
+/// plain projection of that column would use), or an arbitrary expression
+/// (#496, e.g. `SUM(amount * 2)`) computed once via `compile_expr` into a
+/// fresh register before the aggregate reads it.
+#[derive(Debug, Clone, PartialEq)]
+enum AggArg {
+    Column(String),
     Expr(AstExpr),
 }
 
@@ -256,7 +296,7 @@ fn arg_count(args: &FunctionArgs) -> usize {
     }
 }
 
-fn agg_arg(_expr: &AstExpr, agg: AggFunc, args: &FunctionArgs) -> Result<Option<String>> {
+fn agg_arg(_expr: &AstExpr, agg: AggFunc, args: &FunctionArgs) -> Result<Option<AggArg>> {
     match args {
         FunctionArgs::Star => {
             if agg != AggFunc::Count {
@@ -266,14 +306,128 @@ fn agg_arg(_expr: &AstExpr, agg: AggFunc, args: &FunctionArgs) -> Result<Option<
             }
             Ok(None)
         }
+        // `parser::column::validate_aggregate_arg` (#496) already rejects a
+        // nested aggregate and anything outside this subset's expression
+        // grammar, so anything that isn't a bare column reference here is
+        // an arbitrary expression this planner can `compile_expr` on its
+        // own terms.
         FunctionArgs::List(list) => match list.as_slice() {
-            [one] => expr_column_name(one).map(Some).ok_or_else(|| {
-                PlanError::UnsupportedSelectItem("expected a column reference".into())
-            }),
+            [one] => Ok(Some(match expr_column_name(one) {
+                Some(name) => AggArg::Column(name),
+                None => AggArg::Expr(one.clone()),
+            })),
             _ => Err(PlanError::UnsupportedSelectItem(
                 "an aggregate takes exactly one column or *".into(),
             )),
         },
+    }
+}
+
+/// Every aggregate call reachable from an `Item::AggExpr`'s expression
+/// (#496), in left-to-right order -- the fixed traversal order the
+/// pre-`Filter` source-loading pass and the register-allocation pass in
+/// `compile` must agree on, so the same call resolves to the same source
+/// register in both. `validate_expr`/`validate_aggregate_arg` (#496)
+/// already restrict an `AggExpr`'s shape to exactly one `Binary` over
+/// aggregate-or-literal operands, so this only ever finds 0-2 calls in
+/// practice, but walks generally rather than assuming that shape itself.
+fn agg_expr_calls(expr: &AstExpr) -> Vec<&AstExpr> {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, .. } if AggFunc::from_name(name).is_some() => vec![expr],
+        ExprKind::Binary { lhs, rhs, .. } => {
+            let mut out = agg_expr_calls(lhs);
+            out.extend(agg_expr_calls(rhs));
+            out
+        }
+        ExprKind::Paren(inner) | ExprKind::Unary { expr: inner, .. } => agg_expr_calls(inner),
+        _ => vec![],
+    }
+}
+
+/// `AstBinOp` restricted to the arithmetic subset an `AggPart::Expr` can
+/// execute (#496) -- comparisons/boolean ops combined with an aggregate
+/// (`SUM(x) > 1`) aren't part of this issue's scope and are rejected with
+/// a clear message rather than silently miscompiling.
+fn agg_expr_map_op(op: AstBinOp) -> Result<MapOp> {
+    match op {
+        AstBinOp::Add => Ok(MapOp::Add),
+        AstBinOp::Sub => Ok(MapOp::Sub),
+        AstBinOp::Mul => Ok(MapOp::Mul),
+        AstBinOp::Div => Ok(MapOp::Div),
+        other => Err(PlanError::UnsupportedSelectItem(format!(
+            "aggregate expression operator {other:?} is not supported"
+        ))),
+    }
+}
+
+/// Resolves one operand of an `Item::AggExpr`'s top-level `Binary` (#496):
+/// a numeric literal (`AggOperand::Literal`), or an aggregate call, whose
+/// source register was already resolved and filter-masked by `compile`'s
+/// pre-`Filter` pass and handed to `srcs` in the same left-to-right order
+/// `agg_expr_calls` walks in -- this only allocates the aggregate's own
+/// destination register(s) and its `Hidden` `AggPart`(s) (#496: merged
+/// like a plain aggregate, but not itself an output column; only the
+/// `Expr` part built from these operands is).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "threads the same accumulators `compile`'s own Item::Agg branch already threads"
+)]
+fn compile_agg_operand(
+    expr: &AstExpr,
+    srcs: &mut std::vec::IntoIter<Option<usize>>,
+    aggs: &mut Vec<(AggFunc, Option<usize>)>,
+    agg_dst: &mut Vec<usize>,
+    agg_parts: &mut Vec<AggPart>,
+    emit_regs: &mut Vec<usize>,
+    ctx: &mut Ctx,
+) -> Result<AggOperand> {
+    match &expr.kind {
+        ExprKind::Literal(AstLiteral::Integer(n)) => Ok(AggOperand::Literal(*n as f64)),
+        ExprKind::Literal(AstLiteral::Float(f)) => Ok(AggOperand::Literal(*f)),
+        ExprKind::Paren(inner) => {
+            compile_agg_operand(inner, srcs, aggs, agg_dst, agg_parts, emit_regs, ctx)
+        }
+        ExprKind::FunctionCall { name, .. } if AggFunc::from_name(name).is_some() => {
+            let func = AggFunc::from_name(name).unwrap_or(AggFunc::Count);
+            let Some(src) = srcs.next() else {
+                return Err(PlanError::UnsupportedSelectItem(
+                    "internal: aggregate-expression source count mismatch".into(),
+                ));
+            };
+            if func == AggFunc::Avg {
+                let sum_dst = ctx.alloc();
+                let count_dst = ctx.alloc();
+                aggs.push((AggFunc::Sum, src));
+                agg_dst.push(sum_dst);
+                aggs.push((AggFunc::Count, src));
+                agg_dst.push(count_dst);
+                let sum_slot = emit_regs.len();
+                agg_parts.push(AggPart::Hidden(HiddenPart::Sum));
+                agg_parts.push(AggPart::Hidden(HiddenPart::Count));
+                emit_regs.push(sum_dst);
+                emit_regs.push(count_dst);
+                Ok(AggOperand::Avg(sum_slot, sum_slot.saturating_add(1)))
+            } else {
+                let dst = ctx.alloc();
+                aggs.push((func, src));
+                agg_dst.push(dst);
+                let hidden = match func {
+                    AggFunc::Sum => HiddenPart::Sum,
+                    AggFunc::Count => HiddenPart::Count,
+                    AggFunc::Min => HiddenPart::Min,
+                    AggFunc::Max => HiddenPart::Max,
+                    AggFunc::Avg => HiddenPart::Sum, // unreachable, handled above
+                };
+                let slot = emit_regs.len();
+                agg_parts.push(AggPart::Hidden(hidden));
+                emit_regs.push(dst);
+                Ok(AggOperand::Slot(slot))
+            }
+        }
+        _ => Err(PlanError::UnsupportedSelectItem(
+            "an aggregate expression's operand must be an aggregate call or a numeric literal"
+                .into(),
+        )),
     }
 }
 
@@ -461,6 +615,7 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
                     "unknown function {name}"
                 ))),
             },
+            _ if expr_contains_agg(expr) => Ok(Item::AggExpr(expr.clone())),
             _ => Ok(Item::Expr(expr.clone())),
         },
     }
@@ -1047,12 +1202,47 @@ pub fn compile(select: &Select) -> Result<Program> {
         collect_expr_columns(where_clause, &mut where_columns);
     }
 
-    let mut agg_srcs: Vec<Option<usize>> = Vec::new();
+    // One entry per source register an `Item::Agg`/`Item::AggExpr` needs:
+    // a single `Option<usize>` for a plain aggregate, one per nested
+    // aggregate call (in `agg_expr_calls`' left-to-right order) for #496's
+    // `AggExpr`, empty otherwise.
+    let mut agg_srcs: Vec<Vec<Option<usize>>> = Vec::new();
     for item in &items {
         match item {
             Item::Agg(_, arg, filter) => {
-                let base = arg.as_ref().map(|name| ctx.load_column(name));
-                agg_srcs.push(mask_filtered_source(&mut ctx, base, filter.as_ref()));
+                let base = arg.as_ref().map(|a| match a {
+                    AggArg::Column(name) => ctx.load_column(name),
+                    AggArg::Expr(expr) => compile_expr(expr, &mut ctx),
+                });
+                agg_srcs.push(vec![mask_filtered_source(&mut ctx, base, filter.as_ref())]);
+            }
+            // #496: each nested aggregate call's own argument is resolved
+            // here, pre-`Filter`, for the same reason `Item::Agg`'s is
+            // above -- `compile`'s second pass only allocates registers
+            // and `AggPart`s from these already-resolved sources, it
+            // never loads a column itself.
+            Item::AggExpr(expr) => {
+                let srcs = agg_expr_calls(expr)
+                    .into_iter()
+                    .map(|call| {
+                        let ExprKind::FunctionCall {
+                            name, args, tail, ..
+                        } = &call.kind
+                        else {
+                            return Err(PlanError::UnsupportedSelectItem(
+                                "internal: agg_expr_calls returned a non-FunctionCall node".into(),
+                            ));
+                        };
+                        let func = AggFunc::from_name(name).unwrap_or(AggFunc::Count);
+                        let base = agg_arg(call, func, args)?.map(|a| match a {
+                            AggArg::Column(name) => ctx.load_column(&name),
+                            AggArg::Expr(e) => compile_expr(&e, &mut ctx),
+                        });
+                        let filter = tail.as_deref().and_then(|t| t.filter.as_ref());
+                        Ok(mask_filtered_source(&mut ctx, base, filter))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                agg_srcs.push(srcs);
             }
             // Plain projected columns are emitted (not aggregated). A
             // column the WHERE clause also reads must be loaded here for
@@ -1070,7 +1260,7 @@ pub fn compile(select: &Select) -> Result<Program> {
                 if where_columns.iter().any(|c| c == name) {
                     ctx.load_column(name);
                 }
-                agg_srcs.push(None);
+                agg_srcs.push(Vec::new());
             }
             Item::Expr(expr) if group_by.is_empty() => {
                 let mut cols = Vec::new();
@@ -1080,9 +1270,9 @@ pub fn compile(select: &Select) -> Result<Program> {
                         ctx.load_column(name);
                     }
                 }
-                agg_srcs.push(None);
+                agg_srcs.push(Vec::new());
             }
-            _ => agg_srcs.push(None),
+            _ => agg_srcs.push(Vec::new()),
         }
     }
 
@@ -1103,9 +1293,9 @@ pub fn compile(select: &Select) -> Result<Program> {
     let mut agg_dst = Vec::new();
     let mut emit_regs = group_by_regs.clone();
 
-    for (item, &agg_src) in items.iter().zip(&agg_srcs) {
+    for (item, agg_src) in items.iter().zip(&agg_srcs) {
         if let Item::Agg(func, _, _) = item {
-            let src = agg_src;
+            let src = agg_src.first().copied().flatten();
             // Resolved up front so the dispatch below has no "can't happen"
             // arm: `None` *is* the `Avg` case (the only aggregate that
             // needs two partials), not a wildcard hiding one.
@@ -1159,6 +1349,40 @@ pub fn compile(select: &Select) -> Result<Program> {
                 let reg = compile_expr(expr, &mut ctx);
                 emit_regs.push(reg);
             }
+        } else if let Item::AggExpr(expr) = item {
+            // #496: `SUM(x) * 2`, `SUM(x) + SUM(y)`, `SUM(x) / COUNT(*)`.
+            // `validate_expr`/`validate_aggregate_arg` already restrict
+            // this to exactly one `Binary` over aggregate-or-literal
+            // operands -- the only shape `AggPart::Expr`'s two fixed
+            // operands can represent.
+            let ExprKind::Binary { op, lhs, rhs } = &expr.kind else {
+                return Err(PlanError::UnsupportedSelectItem(
+                    "an aggregate expression must be exactly one operator over two \
+                     aggregate-or-literal operands"
+                        .into(),
+                ));
+            };
+            let map_op = agg_expr_map_op(*op)?;
+            let mut srcs = agg_src.clone().into_iter();
+            let lhs_operand = compile_agg_operand(
+                lhs,
+                &mut srcs,
+                &mut aggs,
+                &mut agg_dst,
+                &mut agg_parts,
+                &mut emit_regs,
+                &mut ctx,
+            )?;
+            let rhs_operand = compile_agg_operand(
+                rhs,
+                &mut srcs,
+                &mut aggs,
+                &mut agg_dst,
+                &mut agg_parts,
+                &mut emit_regs,
+                &mut ctx,
+            )?;
+            agg_parts.push(AggPart::Expr(map_op, lhs_operand, rhs_operand));
         }
     }
 
@@ -1206,7 +1430,7 @@ pub fn compile(select: &Select) -> Result<Program> {
     let limit = select_limit(select);
     let has_agg = classify_items(select)?
         .iter()
-        .any(|c| matches!(c, Item::Agg(..)));
+        .any(|c| matches!(c, Item::Agg(..) | Item::AggExpr(_)));
     let group_by_present = !group_by.is_empty();
 
     // `Combine` is always emitted, mirroring the old bundled `Finalize`
@@ -1867,7 +2091,7 @@ pub fn compile_window(select: &Select) -> Result<Program> {
                     push_needed(o, &mut needed);
                 }
             }
-            Item::Agg(..) | Item::Star | Item::Expr(_) => {}
+            Item::Agg(..) | Item::Star | Item::Expr(_) | Item::AggExpr(_) => {}
         }
     }
 
@@ -1963,7 +2187,7 @@ pub fn compile_window(select: &Select) -> Result<Program> {
                 ));
                 emit_regs.push(dst);
             }
-            Item::Agg(..) | Item::Star | Item::Expr(_) => {
+            Item::Agg(..) | Item::Star | Item::Expr(_) | Item::AggExpr(_) => {
                 let reg = *null_reg.get_or_insert_with(|| {
                     let reg = next_reg;
                     next_reg = next_reg.saturating_add(1);
@@ -2581,11 +2805,14 @@ fn select_item_label(item: &ResultColumn) -> String {
         Ok(Item::Column(name)) => name,
         Ok(Item::Star) => "*".to_string(),
         Ok(Item::Agg(func, arg, _)) => match arg {
-            Some(col) => format!("{}({col})", agg_func_name(func)),
+            Some(AggArg::Column(col)) => format!("{}({col})", agg_func_name(func)),
+            Some(AggArg::Expr(expr)) => {
+                format!("{}({})", agg_func_name(func), expr_to_string(&expr))
+            }
             None => format!("{}(*)", agg_func_name(func)),
         },
         Ok(Item::Window(spec)) => format!("{}()", window_func_name(spec.func)),
-        Ok(Item::Expr(expr)) => expr_to_string(&expr),
+        Ok(Item::Expr(expr) | Item::AggExpr(expr)) => expr_to_string(&expr),
         Err(_) => String::new(),
     }
 }
@@ -2784,8 +3011,10 @@ fn referenced_columns(select: &Select) -> Result<Vec<String>> {
             Item::Column(name) => push_unique(&mut out, name.clone()),
             Item::Star => {}
             Item::Agg(_, arg, filter) => {
-                if let Some(name) = arg {
-                    push_unique(&mut out, name.clone());
+                match arg {
+                    Some(AggArg::Column(name)) => push_unique(&mut out, name.clone()),
+                    Some(AggArg::Expr(expr)) => collect_expr_columns(expr, &mut out),
+                    None => {}
                 }
                 if let Some(f) = filter {
                     let mut cols = Vec::new();
@@ -2809,7 +3038,7 @@ fn referenced_columns(select: &Select) -> Result<Vec<String>> {
                     collect_expr_columns(f, &mut out);
                 }
             }
-            Item::Expr(expr) => collect_expr_columns(expr, &mut out),
+            Item::Expr(expr) | Item::AggExpr(expr) => collect_expr_columns(expr, &mut out),
         }
     }
     if let Some(where_clause) = &select.where_clause {

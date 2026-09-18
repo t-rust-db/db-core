@@ -57,7 +57,7 @@ use crate::parser::ast::{
     TableRef, TableRefKind, UnaryOp, WindowDef,
 };
 use crate::parser::ParseError;
-use crate::vm::batch::{AggFunc, AggPart, MapOp, Opcode, Program, Value};
+use crate::vm::batch::{AggFunc, AggOperand, AggPart, HiddenPart, MapOp, Opcode, Program, Value};
 use std::fmt::Write as _;
 
 #[derive(Debug)]
@@ -247,7 +247,7 @@ pub fn render_flat(
     let _ = writeln!(out, "use {crate_name}::sql::AggFunc;");
     let _ = writeln!(
         out,
-        "use {crate_name}::vm::{{AggPart, MapOp, Opcode, Value}};\n"
+        "use {crate_name}::vm::{{AggOperand, AggPart, HiddenPart, MapOp, Opcode, Value}};\n"
     );
 
     out.push_str("const PROGRAM: &[Opcode] = &[\n");
@@ -311,6 +311,32 @@ fn render_agg_part(part: &AggPart) -> String {
         AggPart::Min => "AggPart::Min".to_string(),
         AggPart::Max => "AggPart::Max".to_string(),
         AggPart::Avg(sum, count) => format!("AggPart::Avg({sum}, {count})"),
+        AggPart::Hidden(kind) => {
+            format!("AggPart::Hidden(HiddenPart::{})", render_hidden_part(*kind))
+        }
+        AggPart::Expr(op, lhs, rhs) => format!(
+            "AggPart::Expr(MapOp::{}, {}, {})",
+            render_map_op(*op),
+            render_agg_operand(lhs),
+            render_agg_operand(rhs)
+        ),
+    }
+}
+
+fn render_hidden_part(kind: HiddenPart) -> String {
+    match kind {
+        HiddenPart::Sum => "Sum".to_string(),
+        HiddenPart::Count => "Count".to_string(),
+        HiddenPart::Min => "Min".to_string(),
+        HiddenPart::Max => "Max".to_string(),
+    }
+}
+
+fn render_agg_operand(op: &AggOperand) -> String {
+    match op {
+        AggOperand::Slot(i) => format!("AggOperand::Slot({i})"),
+        AggOperand::Avg(sum, count) => format!("AggOperand::Avg({sum}, {count})"),
+        AggOperand::Literal(f) => format!("AggOperand::Literal({f:?})"),
     }
 }
 

@@ -278,24 +278,42 @@ fn is_known_agg_name(name: &str) -> bool {
 
 /// Validates an aggregate `FunctionCall` (`COUNT(x)`, `COUNT(*)`, ...):
 /// a known aggregate name, and exactly one column or `(*)` (`COUNT` only).
-fn validate_aggregate_call(expr: &AstExpr, name: &str, args: &FunctionArgs) -> Result<()> {
+fn validate_aggregate_call(span: Span, name: &str, args: &FunctionArgs) -> Result<()> {
     if !is_known_agg_name(name) {
-        return Err(unsupported(expr.span, format!("unknown function {name}")));
+        return Err(unsupported(span, format!("unknown function {name}")));
     }
     match args {
         FunctionArgs::Star => {
             if !name.eq_ignore_ascii_case("COUNT") {
-                return Err(unsupported(expr.span, "only COUNT supports (*)".into()));
+                return Err(unsupported(span, "only COUNT supports (*)".into()));
             }
             Ok(())
         }
         FunctionArgs::List(list) => match list.as_slice() {
-            [one] => column_name(one).map(|_| ()),
+            [one] => validate_aggregate_arg(one),
             _ => Err(unsupported(
-                expr.span,
+                span,
                 "an aggregate takes exactly one column or *".into(),
             )),
         },
+    }
+}
+
+/// Validates an aggregate's single argument (#496): a bare column (the
+/// common case, still checked via [`column_name`] for its specific error
+/// message), or any expression this subset otherwise allows -- e.g.
+/// `SUM(amount * 2)`. A nested aggregate (`SUM(COUNT(*))`) is rejected here
+/// with a dedicated message rather than falling through to `validate_expr`,
+/// which -- once it grows its own `FunctionCall` arm for #496's other half
+/// (an aggregate composed with arithmetic) -- would otherwise accept it.
+fn validate_aggregate_arg(expr: &AstExpr) -> Result<()> {
+    match &expr.kind {
+        ExprKind::Column { .. } => column_name(expr).map(|_| ()),
+        ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => Err(unsupported(
+            expr.span,
+            format!("nested aggregate: {name} inside an aggregate argument"),
+        )),
+        _ => validate_expr(&mut expr.clone(), false),
     }
 }
 
@@ -511,7 +529,7 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
                             "DISTINCT inside an aggregate".into(),
                         ));
                     }
-                    return validate_aggregate_call(expr, name, args);
+                    return validate_aggregate_call(expr.span, name, args);
                 }
                 // Not an aggregate: a scalar call (#307) -- its arguments
                 // are validated like any other expression (e.g. `raw`/
@@ -549,7 +567,7 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
                     }
                 }
             }
-            _ => validate_expr(expr),
+            _ => validate_expr(expr, true),
         },
     }
 }
@@ -562,6 +580,28 @@ enum ItemKind {
     Agg,
     Window,
     Expr,
+}
+
+/// True if `expr` contains an aggregate call anywhere in its tree (`SUM(x)
+/// * 2`, `SUM(x) / COUNT(*)`, #496) -- used by [`item_kind`] to treat such
+/// an expression the same as a bare aggregate for the "non-aggregated
+/// `SELECT` columns must match `GROUP BY`" check below, since it's derived
+/// from aggregates the same way a bare `SUM(x)` is.
+fn expr_contains_agg(expr: &AstExpr) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => true,
+        ExprKind::FunctionCall {
+            args: FunctionArgs::List(list),
+            ..
+        } => list.iter().any(expr_contains_agg),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            expr_contains_agg(lhs) || expr_contains_agg(rhs)
+        }
+        ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Paren(inner) => expr_contains_agg(inner),
+        _ => false,
+    }
 }
 
 fn item_kind(col: &crate::parser::ast::ResultColumn) -> Result<ItemKind> {
@@ -580,12 +620,20 @@ fn item_kind(col: &crate::parser::ast::ResultColumn) -> Result<ItemKind> {
             // aggregate -- `is_known_agg_name` is the real distinction
             // `validate_result_column` already draws for the same call.
             ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => ItemKind::Agg,
+            _ if expr_contains_agg(expr) => ItemKind::Agg,
             _ => ItemKind::Expr,
         },
     })
 }
 
-fn validate_expr(expr: &mut AstExpr) -> Result<()> {
+/// Validates a scalar expression against the batch subset. `allow_agg`
+/// gates whether an aggregate `FunctionCall` reachable from here is a
+/// select-item-level expression (`SUM(x) * 2`, #496 -- `true`, threaded
+/// through every recursive call so a nested aggregate two `Binary` levels
+/// down is still allowed) or anything else this validator reaches an
+/// expression from (`WHERE`, an aggregate's own argument, ...), where an
+/// aggregate is never valid regardless of nesting depth -- `false`.
+fn validate_expr(expr: &mut AstExpr, allow_agg: bool) -> Result<()> {
     match &mut expr.kind {
         ExprKind::Literal(_) => Ok(()),
         ExprKind::Column {
@@ -595,46 +643,69 @@ fn validate_expr(expr: &mut AstExpr) -> Result<()> {
         ExprKind::Unary {
             op: UnaryOp::Not | UnaryOp::Minus | UnaryOp::Plus,
             expr: inner,
-        } => validate_expr(inner),
+        } => validate_expr(inner, allow_agg),
         ExprKind::Unary { op, .. } => Err(unsupported(expr.span, format!("unary operator {op:?}"))),
         // `expr IS [NOT] NULL` may parse as `Is{lhs, rhs: NULL literal,
         // negated}` instead of the dedicated `IsNull` node.
         ExprKind::Is { lhs, rhs, .. }
             if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>
         {
-            validate_expr(lhs)
+            validate_expr(lhs, allow_agg)
         }
         ExprKind::Binary { op, lhs, rhs } => {
             ast_binop_allowed(*op, expr.span)?;
-            validate_expr(lhs)?;
-            validate_expr(rhs)
+            validate_expr(lhs, allow_agg)?;
+            validate_expr(rhs, allow_agg)
         }
-        ExprKind::IsNull { expr: inner, .. } => validate_expr(inner),
+        ExprKind::IsNull { expr: inner, .. } => validate_expr(inner, allow_agg),
         ExprKind::Like {
             expr: inner,
             pattern,
             escape: None,
             ..
         } => {
-            validate_expr(inner)?;
-            validate_expr(pattern)
+            validate_expr(inner, allow_agg)?;
+            validate_expr(pattern, allow_agg)
         }
         ExprKind::Like {
             escape: Some(_), ..
         } => Err(unsupported(expr.span, "LIKE ... ESCAPE".into())),
-        ExprKind::Paren(inner) => validate_expr(inner),
+        ExprKind::Paren(inner) => validate_expr(inner, allow_agg),
         ExprKind::InSubquery {
             expr: inner,
             subquery,
             negated: false,
         } => {
-            validate_expr(inner)?;
+            validate_expr(inner, allow_agg)?;
             validate_select(subquery)
         }
         ExprKind::InSubquery { negated: true, .. } => {
             Err(unsupported(expr.span, "NOT IN (SELECT ...)".into()))
         }
         ExprKind::Exists { subquery, .. } => validate_select(subquery),
+        // #496: an aggregate composed with arithmetic (`SUM(x) * 2`,
+        // `SUM(x) + SUM(y)`, `SUM(x) / COUNT(*)`) is only valid where an
+        // aggregate itself is valid (a `SELECT`-list expression), not
+        // inside `WHERE` or another aggregate's argument -- `allow_agg`
+        // distinguishes the two, both of which reach `validate_expr`.
+        ExprKind::FunctionCall {
+            name,
+            distinct,
+            args,
+            tail: None,
+        } if allow_agg && is_known_agg_name(name) => {
+            if *distinct {
+                return Err(unsupported(
+                    expr.span,
+                    "DISTINCT inside an aggregate".into(),
+                ));
+            }
+            validate_aggregate_call(expr.span, name, args)
+        }
+        ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => Err(unsupported(
+            expr.span,
+            format!("aggregate function {name} not allowed here"),
+        )),
         other => Err(unsupported(
             expr.span,
             format!("unsupported expression form {other:?}"),
@@ -763,7 +834,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
     }
 
     if let Some(where_clause) = &mut select.where_clause {
-        validate_expr(where_clause)?;
+        validate_expr(where_clause, false)?;
     }
 
     for e in &select.group_by {
@@ -793,7 +864,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
                         "DISTINCT inside an aggregate".into(),
                     ));
                 }
-                validate_aggregate_call(&term.expr, name, args)?;
+                validate_aggregate_call(term.expr.span, name, args)?;
             }
             _ => {
                 return Err(unsupported(
@@ -1915,5 +1986,43 @@ mod tests {
     fn catalog_qualified_column_and_non_column_join_operand_are_rejected() {
         assert!(parse("SELECT db.orders.id FROM orders").is_err());
         assert!(parse("SELECT o.id FROM orders o JOIN items i ON o.id + 1 = i.oid").is_err());
+    }
+
+    // #496: an aggregate composed with arithmetic (`validate_expr`'s new
+    // `FunctionCall` arm) and an expression inside an aggregate's argument
+    // (`validate_aggregate_arg`) are both accepted now; a nested aggregate
+    // and an aggregate in `WHERE` are still rejected, with their own
+    // dedicated messages rather than falling through to the generic
+    // "unsupported expression form".
+
+    #[test]
+    fn aggregate_composed_with_arithmetic_is_accepted() {
+        assert!(parse("SELECT SUM(amount) * 2 FROM t").is_ok());
+        assert!(parse("SELECT SUM(amount) + 1 FROM t").is_ok());
+        assert!(parse("SELECT SUM(amount) + SUM(id) FROM t").is_ok());
+        assert!(parse("SELECT SUM(amount) / COUNT(*) FROM t").is_ok());
+        assert!(parse("SELECT region, SUM(amount) / COUNT(*) FROM t GROUP BY region").is_ok());
+    }
+
+    #[test]
+    fn expression_inside_an_aggregate_is_accepted() {
+        assert!(parse("SELECT SUM(amount * 2) FROM t").is_ok());
+    }
+
+    #[test]
+    fn nested_aggregate_is_rejected_with_a_dedicated_message() {
+        let err = parse("SELECT SUM(COUNT(*)) FROM t").unwrap_err();
+        assert!(err.to_string().contains("nested aggregate"), "{err}");
+    }
+
+    #[test]
+    fn aggregate_in_where_is_rejected_with_a_dedicated_message() {
+        let err = parse("SELECT id FROM t WHERE SUM(amount) > 10").unwrap_err();
+        assert!(err.to_string().contains("not allowed here"), "{err}");
+    }
+
+    #[test]
+    fn aggregate_composed_with_arithmetic_in_where_is_still_rejected() {
+        assert!(parse("SELECT id FROM t WHERE SUM(amount) * 2 > 10").is_err());
     }
 }

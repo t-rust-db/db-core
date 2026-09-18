@@ -275,7 +275,7 @@ pub enum WindowFunc {
 /// `Min`/`Max` compare, `Avg` divides its `(sum_index, count_index)` pair
 /// at the very end). Pure planning metadata, storage-agnostic. `Copy` so
 /// an AOT-emitted `const PROGRAM` can hold a `Cow::Borrowed(&[AggPart])`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AggPart {
     /// A `GROUP BY` key column: identifies the group, never merged.
     GroupKey,
@@ -289,6 +289,51 @@ pub enum AggPart {
     Max,
     /// `(sum_index, count_index)` into the emitted row, combined at the end.
     Avg(usize, usize),
+    /// A partial `SUM`/`COUNT`/`MIN`/`MAX`, merged the same as its plain
+    /// counterpart, but not itself an output column (#496) -- only an
+    /// [`AggPart::Expr`] elsewhere in the same `agg_parts` references its
+    /// row slot. `SUM(x) + SUM(y)`'s two `SUM`s are each `Hidden`; the
+    /// `Expr` after them is the query's one actual output column.
+    Hidden(HiddenPart),
+    /// A scalar expression over already-merged aggregate slots, computed
+    /// once after every other part has finalized (#496: `SUM(x) * 2`,
+    /// `SUM(x) + SUM(y)`, `SUM(x) / COUNT(*)`). Unlike every other part,
+    /// this claims no row slot of its own -- both operands name slots an
+    /// earlier `Sum`/`Count`/`Min`/`Max`/`Avg`/`Hidden` part already
+    /// claimed, so it neither advances the row cursor nor gets its own
+    /// emitted register.
+    Expr(MapOp, AggOperand, AggOperand),
+}
+
+/// One partial-aggregate kind that can be [`AggPart::Hidden`] -- deliberately
+/// a subset of [`AggPart`] without `Avg` (an `AVG` feeding an [`AggPart::Expr`]
+/// is instead named directly via [`AggOperand::Avg`], since it already
+/// spans two slots and has no single slot of its own to hide).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HiddenPart {
+    /// A partial `SUM`.
+    Sum,
+    /// A partial `COUNT`.
+    Count,
+    /// A partial `MIN`.
+    Min,
+    /// A partial `MAX`.
+    Max,
+}
+
+/// One operand of an [`AggPart::Expr`]: a merged aggregate's raw row slot,
+/// an `AVG`'s `(sum, count)` pair (divided the same way [`AggPart::Avg`]
+/// is), or a numeric literal. `Copy`, like [`AggPart`] itself, so an
+/// AOT-emitted `const PROGRAM` can still hold a `Cow::Borrowed(&[AggPart])`
+/// (`f64` rather than `Value` for the literal case, for the same reason).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AggOperand {
+    /// A `Sum`/`Count`/`Min`/`Max`/`Hidden` part's merged row slot.
+    Slot(usize),
+    /// An `AVG`'s `(sum_index, count_index)` pair.
+    Avg(usize, usize),
+    /// A literal numeric constant (e.g. the `2` in `SUM(x) * 2`).
+    Literal(f64),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3831,7 +3876,7 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
     }
 }
 
-fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
+pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
     // `IsNull`/`IsNotNull` must observe a `Null` operand, so they run
     // before the null-propagation rule below.
     if matches!(op, MapOp::IsNull) {

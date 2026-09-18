@@ -217,6 +217,67 @@ fn batch_group_by_one_key_is_segment_split_invariant() {
     );
 }
 
+#[test]
+fn batch_aggregate_arithmetic_is_segment_split_invariant() {
+    // #496: `SUM(x) * 2`, `SUM(x) + SUM(y)` (`SUM(amt)` against itself,
+    // since `synthetic_dataset` only has one numeric column), and
+    // `SUM(x) / COUNT(*)` -- each computed by `AggPart::Expr` post-Combine,
+    // over the same rows an ordinary `SUM`/`COUNT` already covers above.
+    let (grp, amt) = synthetic_dataset();
+    for sql in [
+        "SELECT sum(amt) * 2 FROM t",
+        "SELECT sum(amt) + 1 FROM t",
+        "SELECT sum(amt) + sum(amt) FROM t",
+        "SELECT sum(amt) / count(*) FROM t",
+    ] {
+        assert_split_invariant(sql, grp.len(), ("grp", &grp), ("amt", &amt));
+    }
+}
+
+#[test]
+fn batch_aggregate_arithmetic_matches_the_expected_value() {
+    // #496: pins the actual computed value, not just cross-segmentation
+    // agreement -- `synthetic_dataset`'s `amt` is 10, 20, .., 120
+    // (sum = 780, count = 12).
+    let (grp, amt) = synthetic_dataset();
+    let cases: [(&str, Value); 4] = [
+        ("SELECT sum(amt) * 2 FROM t", Value::Float(1560.0)),
+        ("SELECT sum(amt) + 1 FROM t", Value::Float(781.0)),
+        ("SELECT sum(amt) + sum(amt) FROM t", Value::Float(1560.0)),
+        ("SELECT sum(amt) / count(*) FROM t", Value::Float(65.0)),
+    ];
+    for (sql, expected) in cases {
+        let rows = run_batch(sql, &[grp.len()], ("grp", &grp), ("amt", &amt));
+        assert_eq!(rows, vec![vec![expected]], "{sql}");
+    }
+}
+
+#[test]
+fn batch_group_by_with_aggregate_arithmetic_is_segment_split_invariant() {
+    let (grp, amt) = synthetic_dataset();
+    assert_split_invariant(
+        "SELECT grp, sum(amt) / count(*) FROM t GROUP BY grp ORDER BY grp",
+        grp.len(),
+        ("grp", &grp),
+        ("amt", &amt),
+    );
+}
+
+#[test]
+fn batch_sum_of_an_expression_is_segment_split_invariant() {
+    // #496: `SUM(amount * 2)` -- the expression is computed once pre-
+    // `Reduce`/`GroupReduce`, so this is a much smaller change (no new
+    // `AggPart`) than the aggregate-arithmetic case above, but still worth
+    // pinning against segmentation.
+    let (grp, amt) = synthetic_dataset();
+    assert_split_invariant(
+        "SELECT sum(amt * 2) FROM t",
+        grp.len(),
+        ("grp", &grp),
+        ("amt", &amt),
+    );
+}
+
 /// 12 rows over 2 group keys (`grp` x `sub`, 3x2 = 6 groups, 2 rows each).
 fn synthetic_two_key_dataset() -> (Vec<Value>, Vec<Value>, Vec<Value>) {
     let groups = ["a", "b", "c"];
