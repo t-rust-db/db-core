@@ -1803,10 +1803,22 @@ fn scan_segment_late<S: Segment>(
         return Ok(local);
     }
     let positions: Vec<u32> = local.iter().map(|item| item.position).collect();
-    let Some(gathered) = segment.gather_at(&plan.deferred, &positions) else {
-        return scan_segment_eager(segment, program, spec);
+    let gathered = match segment.gather_at(&plan.deferred, &positions) {
+        Some(gathered) => gathered?,
+        // No positional gather: a segment whose `load_columns` is the
+        // default full `load()` already holds the deferred columns, so
+        // gather from that batch in memory rather than loading it again
+        // (measured: a second load doubled the parity `order_by` time
+        // for such segments). Only a segment that served a real subset
+        // but cannot gather falls back to the eager scan.
+        None if plan.deferred.iter().all(|name| {
+            batch.columns.contains_key(name) || batch.typed_columns.contains_key(name)
+        }) =>
+        {
+            gather_in_memory(&batch, &plan.deferred, &positions)
+        }
+        None => return scan_segment_eager(segment, program, spec),
     };
-    let gathered = gathered?;
     for (k, item) in local.iter_mut().enumerate() {
         item.row = plan
             .output_columns
@@ -1822,6 +1834,20 @@ fn scan_segment_late<S: Segment>(
             .collect();
     }
     Ok(local)
+}
+
+/// `columns` of `batch` at `positions`, as a `positions.len()`-row batch
+/// -- the in-memory stand-in for [`Segment::gather_at`].
+fn gather_in_memory(batch: &Batch, columns: &[String], positions: &[u32]) -> Batch {
+    let mut out = Batch::new(positions.len());
+    for name in columns {
+        let values: Vec<Value> = positions
+            .iter()
+            .map(|&p| usize::try_from(p).map_or(Value::Null, |p| batch_cell(batch, name, p)))
+            .collect();
+        out = out.with_column(name.clone(), values);
+    }
+    out
 }
 
 /// [`top_n_reduce_output`] over a key-only output, keeping each kept
@@ -7388,6 +7414,9 @@ mod tests {
         loads: std::sync::Mutex<Vec<Vec<String>>>,
         gathers: std::sync::Mutex<Vec<(Vec<String>, Vec<u32>)>>,
         can_gather: bool,
+        /// `false` = `load_columns` is the trait default (a full load),
+        /// like every implementor that predates #513.
+        subset_loads: bool,
     }
 
     impl LateSegment {
@@ -7397,6 +7426,15 @@ mod tests {
                 loads: std::sync::Mutex::new(Vec::new()),
                 gathers: std::sync::Mutex::new(Vec::new()),
                 can_gather,
+                subset_loads: true,
+            }
+        }
+
+        fn with_default_hooks(batch: Batch) -> Self {
+            LateSegment {
+                can_gather: false,
+                subset_loads: false,
+                ..LateSegment::new(batch, false)
             }
         }
 
@@ -7424,6 +7462,9 @@ mod tests {
         }
 
         fn load_columns(&self, columns: &[String]) -> Result<Arc<Batch>> {
+            if !self.subset_loads {
+                return self.load();
+            }
             self.loads.lock().unwrap().push(columns.to_vec());
             Ok(Arc::new(self.subset(columns, None)))
         }
@@ -7607,6 +7648,33 @@ mod tests {
                 vec![vec!["key".to_string()], vec!["*".to_string()]],
                 "key-only load, then the full fallback load"
             );
+            assert!(segment.gathers.lock().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn late_top_n_loads_a_default_hook_segment_exactly_once_and_gathers_in_memory() {
+        // An implementor that predates #513 (both hooks defaulted) must
+        // not pay a second load: the full batch it already returned is
+        // gathered in memory.
+        let batches = vec![late_fixture(500, 0), late_fixture(500, 250)];
+        let program = late_program(true);
+        let spec = TopN {
+            col: 1,
+            descending: true,
+            limit: 6,
+        };
+        let segments: Vec<LateSegment> = batches
+            .iter()
+            .cloned()
+            .map(LateSegment::with_default_hooks)
+            .collect();
+        let rows = run_parallel_top_n(&segments, &program, &spec)
+            .unwrap()
+            .into_rows();
+        assert_eq!(rows, eager_rows(&batches, &program, &spec));
+        for segment in &segments {
+            assert_eq!(*segment.loads.lock().unwrap(), vec![vec!["*".to_string()]]);
             assert!(segment.gathers.lock().unwrap().is_empty());
         }
     }
