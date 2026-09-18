@@ -179,6 +179,39 @@ impl db_core::vm::batch::Segment for BoundedSegment {
             self.min.clone()
         }
     }
+
+    /// #513: serve only the named columns ...
+    fn load_columns(
+        &self,
+        columns: &[String],
+    ) -> Result<std::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError> {
+        let mut out = db_core::vm::batch::Batch::new(self.batch.num_rows);
+        for name in columns {
+            out = out.with_column(name.clone(), self.batch.columns[name].to_vec());
+        }
+        Ok(std::sync::Arc::new(out))
+    }
+
+    /// ... and gather them at positions, so the late-materializing top-N
+    /// path is the one under test for every segmentation.
+    fn gather_at(
+        &self,
+        columns: &[String],
+        positions: &[u32],
+    ) -> Option<Result<db_core::vm::batch::Batch, db_core::vm::batch::VmError>> {
+        let mut out = db_core::vm::batch::Batch::new(positions.len());
+        for name in columns {
+            let values = &self.batch.columns[name];
+            out = out.with_column(
+                name.clone(),
+                positions
+                    .iter()
+                    .map(|&p| values[p as usize].clone())
+                    .collect(),
+            );
+        }
+        Some(Ok(out))
+    }
 }
 
 fn bounded_segments_for(sizes: &[usize], grp: &[Value], amt: &[Value]) -> Vec<BoundedSegment> {
@@ -204,9 +237,11 @@ fn bounded_segments_for(sizes: &[usize], grp: &[Value], amt: &[Value]) -> Vec<Bo
         .collect()
 }
 
-/// Obligation 1 for #464's threshold pruning: `ORDER BY ... LIMIT` over
-/// segments that advertise truthful bounds gives bit-identical rows for
-/// every segmentation, and the same rows as unbounded segments.
+/// Obligation 1 for #464's threshold pruning and #513's late
+/// materialization: `ORDER BY ... LIMIT` over segments that advertise
+/// truthful bounds and serve column subsets / positional gathers gives
+/// bit-identical rows for every segmentation, and the same rows as plain
+/// in-memory segments (eager path).
 #[test]
 fn batch_top_n_with_segment_bounds_is_segment_split_invariant() {
     let (grp, amt) = synthetic_dataset();

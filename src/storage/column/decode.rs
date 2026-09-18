@@ -108,23 +108,50 @@ pub fn decode_column_at(
     physical_type: PhysicalType,
     positions: &[u32],
 ) -> Result<Decoded, FileError> {
+    // #513: fixed-width primitives read only the wanted rows of only the
+    // pages holding them; `None` (a non-PLAIN chunk) keeps the
+    // decode-then-gather readers below.
     match physical_type {
-        PhysicalType::Int64 => rg
-            .read_int64_column_at(index, positions)
-            .map(|col| Decoded::Column(int_column(col))),
-        PhysicalType::Int32 => rg.read_int32_column_at(index, positions).map(|col| {
-            Decoded::Column(int_column(
-                col.into_iter().map(|v| v.map(i64::from)).collect(),
-            ))
-        }),
-        PhysicalType::Double => rg
-            .read_double_column_at(index, positions)
-            .map(|col| Decoded::Column(float_column(col))),
-        PhysicalType::Float => rg.read_float_column_at(index, positions).map(|col| {
-            Decoded::Column(float_column(
-                col.into_iter().map(|v| v.map(f64::from)).collect(),
-            ))
-        }),
+        PhysicalType::Int64 => {
+            match rg.read_plain_fixed_column_at(index, i64::from_le_bytes, positions)? {
+                Some(typed) => Ok(Decoded::Column(typed_int(typed))),
+                None => rg
+                    .read_int64_column_at(index, positions)
+                    .map(|col| Decoded::Column(int_column(col))),
+            }
+        }
+        PhysicalType::Int32 => match rg.read_plain_fixed_column_at(
+            index,
+            |b| i64::from(i32::from_le_bytes(b)),
+            positions,
+        )? {
+            Some(typed) => Ok(Decoded::Column(typed_int(typed))),
+            None => rg.read_int32_column_at(index, positions).map(|col| {
+                Decoded::Column(int_column(
+                    col.into_iter().map(|v| v.map(i64::from)).collect(),
+                ))
+            }),
+        },
+        PhysicalType::Double => {
+            match rg.read_plain_fixed_column_at(index, f64::from_le_bytes, positions)? {
+                Some(typed) => Ok(Decoded::Column(typed_float(typed))),
+                None => rg
+                    .read_double_column_at(index, positions)
+                    .map(|col| Decoded::Column(float_column(col))),
+            }
+        }
+        PhysicalType::Float => match rg.read_plain_fixed_column_at(
+            index,
+            |b| f64::from(f32::from_le_bytes(b)),
+            positions,
+        )? {
+            Some(typed) => Ok(Decoded::Column(typed_float(typed))),
+            None => rg.read_float_column_at(index, positions).map(|col| {
+                Decoded::Column(float_column(
+                    col.into_iter().map(|v| v.map(f64::from)).collect(),
+                ))
+            }),
+        },
         PhysicalType::Boolean => rg
             .read_boolean_column_at(index, positions)
             .map(|col| Decoded::Column(bool_column(col))),

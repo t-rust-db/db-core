@@ -12420,9 +12420,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "engine_column_leaves_named_47db8089",
+    "file": "src/engine/column.rs",
+    "line": 246,
+    "decision": "!self.columns.iter().any(|(leaf, _, _)| leaf == name)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_column_order_key_bound_96ce0bd6",
     "file": "src/engine/column.rs",
-    "line": 230,
+    "line": 284,
     "decision": "descending",
     "conditions": 1,
     "vectors_required": 2,
@@ -12432,7 +12442,7 @@
   {
     "id": "engine_column_load_c2239b69",
     "file": "src/engine/column.rs",
-    "line": 293,
+    "line": 359,
     "decision": "let Some(values) = predicate_batch.columns.get(name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -12442,7 +12452,7 @@
   {
     "id": "engine_column_load_eae013f0",
     "file": "src/engine/column.rs",
-    "line": 299,
+    "line": 365,
     "decision": "let Some(column) = predicate_batch.typed_columns.get(name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -12452,7 +12462,7 @@
   {
     "id": "engine_column_row_group_segments_b8f6287e",
     "file": "src/engine/column.rs",
-    "line": 358,
+    "line": 424,
     "decision": "match (where_clause, file.row_group(i)) {\n            (Some(expr), Some(rg)) => !prune::definitely_empty(expr, &rg, &leaves_by_name),\n            _ => true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12462,7 +12472,7 @@
   {
     "id": "engine_column_into_value_64b9c9ef",
     "file": "src/engine/column.rs",
-    "line": 394,
+    "line": 460,
     "decision": "match stat {\n            StatValue::Int(i) => Value::Int(i),\n            StatValue::Float(f) => Value::Float(f),\n            StatValue::Str(s) => Value::Str(s.into()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12472,7 +12482,7 @@
   {
     "id": "engine_column_compare_eb9e37d0",
     "file": "src/engine/column.rs",
-    "line": 402,
+    "line": 468,
     "decision": "match (a, b) {\n            (StatValue::Int(x), StatValue::Int(y)) => Some(x.cmp(y)),\n            (StatValue::Float(x), StatValue::Float(y)) => x.partial_cmp(y),\n            (StatValue::Int(x), StatValue::Float(y)) => (*x as f64).partial_cmp(y),\n            (StatValue::Float(x), StatValue::Int(y)) => x.partial_cmp(&(*y as f64)),\n            (StatValue::Str(x), StatValue::Str(y)) => Some(x.cmp(y)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12482,7 +12492,7 @@
   {
     "id": "engine_column_decode_stat_bytes_94ae8332",
     "file": "src/engine/column.rs",
-    "line": 420,
+    "line": 486,
     "decision": "match physical_type {\n            PhysicalType::Int32 => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from(i32::from_le_bytes(arr))))\n            }\n            PhysicalType::Int64 => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from_le_bytes(arr)))\n            }\n            PhysicalType::Float => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from(f32::from_le_bytes(arr))))\n            }\n            PhysicalType::Double => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from_le_bytes(arr)))\n            }\n            PhysicalType::ByteArray => std::str::from_utf8(bytes)\n                .ok()\n                .map(str::to_string)\n                .map(StatValue::Str),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12492,7 +12502,7 @@
   {
     "id": "engine_column_literal_stat_value_46d4637c",
     "file": "src/engine/column.rs",
-    "line": 446,
+    "line": 512,
     "decision": "match (lit, physical_type) {\n            (Literal::Integer(i), PhysicalType::Int32 | PhysicalType::Int64) => {\n                Some(StatValue::Int(*i))\n            }\n            (Literal::Integer(i), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*i as f64))\n            }\n            (Literal::Float(f), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*f))\n            }\n            (Literal::Str(s), PhysicalType::ByteArray) => Some(StatValue::Str(s.clone())),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12502,7 +12512,7 @@
   {
     "id": "engine_column_as_column_and_literal_34999e3c",
     "file": "src/engine/column.rs",
-    "line": 469,
+    "line": 535,
     "decision": "match (&lhs.kind, &rhs.kind) {\n            (ExprKind::Column { name, .. }, ExprKind::Literal(lit)) => Some((name, lit, false)),\n            (ExprKind::Literal(lit), ExprKind::Column { name, .. }) => Some((name, lit, true)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12512,7 +12522,7 @@
   {
     "id": "engine_column_flip_3667ef35",
     "file": "src/engine/column.rs",
-    "line": 477,
+    "line": 543,
     "decision": "match op {\n            BinaryOp::Lt => BinaryOp::Gt,\n            BinaryOp::Le => BinaryOp::Ge,\n            BinaryOp::Gt => BinaryOp::Lt,\n            BinaryOp::Ge => BinaryOp::Le,\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12522,7 +12532,7 @@
   {
     "id": "engine_column_comparison_definitely_empty_a3ff3693",
     "file": "src/engine/column.rs",
-    "line": 494,
+    "line": 560,
     "decision": "flipped",
     "conditions": 1,
     "vectors_required": 2,
@@ -12532,7 +12542,7 @@
   {
     "id": "engine_column_comparison_definitely_empty_e54e6aca",
     "file": "src/engine/column.rs",
-    "line": 507,
+    "line": 573,
     "decision": "match op {\n            BinaryOp::Eq => {\n                let below_min = min\n                    .as_ref()\n                    .and_then(|m| compare(&literal, m))\n                    .is_some_and(|o| o == Ordering::Less);\n                let above_max = max\n                    .as_ref()\n                    .and_then(|m| compare(&literal, m))\n                    .is_some_and(|o| o == Ordering::Greater);\n                below_min || above_max\n            }\n            BinaryOp::Lt => min\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o != Ordering::Less),\n            BinaryOp::Le => min\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o == Ordering::Greater),\n            BinaryOp::Gt => max\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o != Ordering::Greater),\n            BinaryOp::Ge => max\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o == Ordering::Less),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12542,7 +12552,7 @@
   {
     "id": "engine_column_definitely_empty_f9c337cf",
     "file": "src/engine/column.rs",
-    "line": 549,
+    "line": 615,
     "decision": "match &expr.kind {\n            ExprKind::Paren(inner) => definitely_empty(inner, rg, leaves_by_name),\n            ExprKind::Binary {\n                op: BinaryOp::And,\n                lhs,\n                rhs,\n            } => {\n                definitely_empty(lhs, rg, leaves_by_name)\n                    || definitely_empty(rhs, rg, leaves_by_name)\n            }\n            ExprKind::Binary {\n                op: BinaryOp::Or,\n                lhs,\n                rhs,\n            } => {\n                definitely_empty(lhs, rg, leaves_by_name)\n                    && definitely_empty(rhs, rg, leaves_by_name)\n            }\n            ExprKind::Binary { op, lhs, rhs } => {\n                comparison_definitely_empty(*op, lhs, rhs, rg, leaves_by_name).unwrap_or(false)\n            }\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12552,7 +12562,7 @@
   {
     "id": "engine_column_in_subquery_38ffb216",
     "file": "src/engine/column.rs",
-    "line": 590,
+    "line": 656,
     "decision": "match &select.where_clause {\n        Some(Expr {\n            kind: ExprKind::InSubquery { subquery, .. },\n            ..\n        }) => Some(subquery),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12562,7 +12572,7 @@
   {
     "id": "engine_column_is_window_column_21d3bda9",
     "file": "src/engine/column.rs",
-    "line": 600,
+    "line": 666,
     "decision": "match column {\n        ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { tail, .. },\n                    ..\n                },\n            ..\n        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12572,7 +12582,7 @@
   {
     "id": "engine_column_plan_err_bbf17c28",
     "file": "src/engine/column.rs",
-    "line": 616,
+    "line": 682,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12582,7 +12592,7 @@
   {
     "id": "engine_column_type_name_16b2089b",
     "file": "src/engine/column.rs",
-    "line": 629,
+    "line": 695,
     "decision": "match pt {\n        PhysicalType::Boolean => \"BOOLEAN\",\n        PhysicalType::Int32 => \"INT32\",\n        PhysicalType::Int64 => \"INT64\",\n        PhysicalType::Int96 => \"INT96\",\n        PhysicalType::Float => \"FLOAT\",\n        PhysicalType::Double => \"DOUBLE\",\n        PhysicalType::ByteArray => \"BYTE_ARRAY\",\n        PhysicalType::FixedLenByteArray => \"FIXED_LEN_BYTE_ARRAY\",\n        PhysicalType::Unknown(_) => \"\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12592,7 +12602,7 @@
   {
     "id": "engine_column_write_varint_2427714d",
     "file": "src/engine/column.rs",
-    "line": 811,
+    "line": 877,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -12602,7 +12612,7 @@
   {
     "id": "engine_column_write_varint_a5b1bbc4",
     "file": "src/engine/column.rs",
-    "line": 815,
+    "line": 881,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -12612,7 +12622,7 @@
   {
     "id": "engine_column_list_of_structs_field_b09c4ad2",
     "file": "src/engine/column.rs",
-    "line": 854,
+    "line": 920,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -12622,7 +12632,7 @@
   {
     "id": "engine_column_build_double_row_group_4ca87ac2",
     "file": "src/engine/column.rs",
-    "line": 914,
+    "line": 980,
     "decision": "let Some(stats) = stats_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -12632,7 +12642,7 @@
   {
     "id": "engine_column_a_string_literal_prunes_a_byte_array_column_3ad0fe2b",
     "file": "src/engine/column.rs",
-    "line": 1455,
+    "line": 1561,
     "decision": "let Some(s) = stats",
     "conditions": 1,
     "vectors_required": 2,
@@ -21400,19 +21410,59 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_column_decode_decode_column_at_732deede",
+    "id": "storage_column_decode_decode_column_at_21fbbbc5",
     "file": "src/storage/column/decode.rs",
-    "line": 111,
-    "decision": "match physical_type {\n        PhysicalType::Int64 => rg\n            .read_int64_column_at(index, positions)\n            .map(|col| Decoded::Column(int_column(col))),\n        PhysicalType::Int32 => rg.read_int32_column_at(index, positions).map(|col| {\n            Decoded::Column(int_column(\n                col.into_iter().map(|v| v.map(i64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Double => rg\n            .read_double_column_at(index, positions)\n            .map(|col| Decoded::Column(float_column(col))),\n        PhysicalType::Float => rg.read_float_column_at(index, positions).map(|col| {\n            Decoded::Column(float_column(\n                col.into_iter().map(|v| v.map(f64::from)).collect(),\n            ))\n        }),\n        PhysicalType::Boolean => rg\n            .read_boolean_column_at(index, positions)\n            .map(|col| Decoded::Column(bool_column(col))),\n        _ => rg\n            .read_string_column_at(index, positions)\n            .map(|col| Decoded::Column(str_column(col))),\n    }",
+    "line": 114,
+    "decision": "match physical_type {\n        PhysicalType::Int64 => {\n            match rg.read_plain_fixed_column_at(index, i64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n                None => rg\n                    .read_int64_column_at(index, positions)\n                    .map(|col| Decoded::Column(int_column(col))),\n            }\n        }\n        PhysicalType::Int32 => match rg.read_plain_fixed_column_at(\n            index,\n            |b| i64::from(i32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n            None => rg.read_int32_column_at(index, positions).map(|col| {\n                Decoded::Column(int_column(\n                    col.into_iter().map(|v| v.map(i64::from)).collect(),\n                ))\n            }),\n        },\n        PhysicalType::Double => {\n            match rg.read_plain_fixed_column_at(index, f64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n                None => rg\n                    .read_double_column_at(index, positions)\n                    .map(|col| Decoded::Column(float_column(col))),\n            }\n        }\n        PhysicalType::Float => match rg.read_plain_fixed_column_at(\n            index,\n            |b| f64::from(f32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n            None => rg.read_float_column_at(index, positions).map(|col| {\n                Decoded::Column(float_column(\n                    col.into_iter().map(|v| v.map(f64::from)).collect(),\n                ))\n            }),\n        },\n        PhysicalType::Boolean => rg\n            .read_boolean_column_at(index, positions)\n            .map(|col| Decoded::Column(bool_column(col))),\n        _ => rg\n            .read_string_column_at(index, positions)\n            .map(|col| Decoded::Column(str_column(col))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
+    "id": "storage_column_decode_decode_column_at_65161c71",
+    "file": "src/storage/column/decode.rs",
+    "line": 116,
+    "decision": "match rg.read_plain_fixed_column_at(index, i64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n                None => rg\n                    .read_int64_column_at(index, positions)\n                    .map(|col| Decoded::Column(int_column(col))),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_at_3cbbc943",
+    "file": "src/storage/column/decode.rs",
+    "line": 123,
+    "decision": "match rg.read_plain_fixed_column_at(\n            index,\n            |b| i64::from(i32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n            None => rg.read_int32_column_at(index, positions).map(|col| {\n                Decoded::Column(int_column(\n                    col.into_iter().map(|v| v.map(i64::from)).collect(),\n                ))\n            }),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_at_3a678b08",
+    "file": "src/storage/column/decode.rs",
+    "line": 136,
+    "decision": "match rg.read_plain_fixed_column_at(index, f64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n                None => rg\n                    .read_double_column_at(index, positions)\n                    .map(|col| Decoded::Column(float_column(col))),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_decode_decode_column_at_fdc76108",
+    "file": "src/storage/column/decode.rs",
+    "line": 143,
+    "decision": "match rg.read_plain_fixed_column_at(\n            index,\n            |b| f64::from(f32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n            None => rg.read_float_column_at(index, positions).map(|col| {\n                Decoded::Column(float_column(\n                    col.into_iter().map(|v| v.map(f64::from)).collect(),\n                ))\n            }),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_column_decode_validity_9c9d171f",
     "file": "src/storage/column/decode.rs",
-    "line": 157,
+    "line": 184,
     "decision": "present.is_empty() || present.iter().all(|&p| p)",
     "conditions": 2,
     "vectors_required": 3,
@@ -21422,7 +21472,7 @@
   {
     "id": "storage_column_decode_dict_column_carries_codes_through_unchanged_adc30411",
     "file": "src/storage/column/decode.rs",
-    "line": 227,
+    "line": 254,
     "decision": "match column {\n            Column::Dict {\n                dict,\n                indices,\n                valid,\n            } => {\n                assert_eq!(\n                    dict.iter().map(AsRef::as_ref).collect::<Vec<_>>(),\n                    [\"east\", \"west\"]\n                );\n                assert_eq!(indices, vec![0, 1, 0]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21432,7 +21482,7 @@
   {
     "id": "storage_column_decode_dict_column_defaults_a_null_rows_code_to_zero_but_marks_it_invalid_7147f221",
     "file": "src/storage/column/decode.rs",
-    "line": 252,
+    "line": 279,
     "decision": "match &column {\n            Column::Dict { indices, valid, .. } => {\n                assert_eq!(*indices, vec![0, 0, 0]);\n                assert!(valid.get(0));\n                assert!(!valid.get(1));\n                assert!(valid.get(2));\n            }\n            other => panic!(\"expected Column::Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21442,7 +21492,7 @@
   {
     "id": "storage_column_decode_write_varint_2427714d",
     "file": "src/storage/column/decode.rs",
-    "line": 402,
+    "line": 429,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -21452,7 +21502,7 @@
   {
     "id": "storage_column_decode_write_varint_a5b1bbc4",
     "file": "src/storage/column/decode.rs",
-    "line": 406,
+    "line": 433,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -21462,7 +21512,7 @@
   {
     "id": "storage_column_decode_list_of_structs_field_b09c4ad2",
     "file": "src/storage/column/decode.rs",
-    "line": 440,
+    "line": 467,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -21472,7 +21522,7 @@
   {
     "id": "storage_column_decode_decode_column_full_widens_int32_to_column_int_ef0f624c",
     "file": "src/storage/column/decode.rs",
-    "line": 551,
+    "line": 578,
     "decision": "match column {\n            Column::Int { data, valid } => {\n                assert_eq!(data, vec![1, -2, 3]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Int, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21482,7 +21532,7 @@
   {
     "id": "storage_column_decode_decode_column_full_widens_float_to_column_float_ef9139a1",
     "file": "src/storage/column/decode.rs",
-    "line": 573,
+    "line": 600,
     "decision": "match column {\n            Column::Float { data, valid } => {\n                assert_eq!(data, vec![1.5, -2.5]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Float, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21492,7 +21542,7 @@
   {
     "id": "storage_column_decode_decode_column_full_decodes_boolean_to_column_bool_b34c7ab6",
     "file": "src/storage/column/decode.rs",
-    "line": 589,
+    "line": 616,
     "decision": "*v",
     "conditions": 1,
     "vectors_required": 2,
@@ -21502,7 +21552,7 @@
   {
     "id": "storage_column_decode_decode_column_full_decodes_boolean_to_column_bool_186e79d1",
     "file": "src/storage/column/decode.rs",
-    "line": 598,
+    "line": 625,
     "decision": "match column {\n            Column::Bool { data, valid } => {\n                assert_eq!(data, values.to_vec());\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Bool, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21512,7 +21562,7 @@
   {
     "id": "storage_column_decode_decode_column_at_int32_and_boolean_match_the_eager_path_at_selected_positions_b34c7ab6",
     "file": "src/storage/column/decode.rs",
-    "line": 630,
+    "line": 657,
     "decision": "*v",
     "conditions": 1,
     "vectors_required": 2,
@@ -22330,9 +22380,79 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_f95568f1",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 552,
+    "decision": "pos < chunk_bytes.len() && next < wanted.len()",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_53dde488",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 567,
+    "decision": "data_page_header.encoding != page::Encoding::Plain",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_09289e59",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 580,
+    "decision": "let Some(&(position, slot)) = wanted.get(next)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_020b6d33",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 581,
+    "decision": "position >= page_end_row",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_1c99f19c",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 587,
+    "decision": "!rows.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_27b449af",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 606,
+    "decision": "let Some(&(position, _)) = wanted.get(next)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_parquet_file_read_plain_fixed_column_at_4c7ae637",
+    "file": "src/storage/column/parquet/parquet_file.rs",
+    "line": 609,
+    "decision": "max_def_level == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_column_parquet_parquet_file_read_column_dictionary_indices_7d4f73a5",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 543,
+    "line": 639,
     "decision": "pos < chunk_bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22342,7 +22462,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_column_dictionary_indices_3a94da7c",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 556,
+    "line": 652,
     "decision": "match header.page_type {\n                PageType::Data(data_page_header) => {\n                    if dictionary.is_none()\n                        || !matches!(\n                            data_page_header.encoding,\n                            page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                        )\n                    {\n                        return Ok(None);\n                    }\n                    let page_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    indices.extend(reader::read_dictionary_index_column(\n                        &page_body,\n                        &data_page_header,\n                        max_def_level,\n                    )?);\n                }\n                PageType::Dictionary(dictionary_page_header) => {\n                    if dictionary.is_some() {\n                        return Err(FileError::UnexpectedDictionaryPage);\n                    }\n                    let dictionary_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    dictionary = Some(decode_dictionary(\n                        &dictionary_body,\n                        dictionary_page_header.num_values,\n                    )?);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22352,7 +22472,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_column_dictionary_indices_1b5585c0",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 558,
+    "line": 654,
     "decision": "dictionary.is_none()\n                        || !matches!(\n                            data_page_header.encoding,\n                            page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                        )",
     "conditions": 2,
     "vectors_required": 3,
@@ -22362,7 +22482,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_column_dictionary_indices_d31770f8",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 578,
+    "line": 674,
     "decision": "dictionary.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22372,7 +22492,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_7d4f73a5",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 612,
+    "line": 708,
     "decision": "pos < chunk_bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22382,7 +22502,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_4d4fe138",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 625,
+    "line": 721,
     "decision": "match header.page_type {\n                PageType::Dictionary(_) => return Err(FileError::UnsupportedNestedDictionary),\n                PageType::Data(data_page_header) => {\n                    if data_page_header.encoding != Encoding::Plain {\n                        return Err(FileError::UnsupportedNestedEncoding(\n                            data_page_header.encoding,\n                        ));\n                    }\n                    let page_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    let (rep_levels, def_levels, mut value_bytes) = reader::split_rep_def_levels(\n                        &page_body,\n                        &data_page_header,\n                        leaf.max_rep_level,\n                        leaf.max_def_level,\n                    )?;\n\n                    let num_values =\n                        usize::try_from(data_page_header.num_values).map_err(|_| {\n                            FileError::InvalidMetadata {\n                                field: \"data_page.num_values\",\n                                value: i64::from(data_page_header.num_values),\n                            }\n                        })?;\n                    let mut bit_pos = 0usize;\n                    for i in 0..num_values {\n                        let def = def_levels.get(i).copied().unwrap_or(leaf.max_def_level);\n                        if def == leaf.max_def_level {\n                            let scalar = reader::read_plain_scalar(\n                                &mut value_bytes,\n                                physical_type,\n                                &mut bit_pos,\n                            )?;\n                            out.values.push(Some(scalar));\n                        } else {\n                            out.values.push(None);\n                        }\n                    }\n                    if rep_levels.is_empty() {\n                        out.rep_levels.extend(std::iter::repeat_n(0, num_values));\n                    } else {\n                        out.rep_levels.extend(rep_levels);\n                    }\n                    if def_levels.is_empty() {\n                        out.def_levels\n                            .extend(std::iter::repeat_n(leaf.max_def_level, num_values));\n                    } else {\n                        out.def_levels.extend(def_levels);\n                    }\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22392,7 +22512,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_012840c2",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 628,
+    "line": 724,
     "decision": "data_page_header.encoding != Encoding::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -22402,7 +22522,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_4235326a",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 655,
+    "line": 751,
     "decision": "def == leaf.max_def_level",
     "conditions": 1,
     "vectors_required": 2,
@@ -22412,7 +22532,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_7959e6f3",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 666,
+    "line": 762,
     "decision": "rep_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22422,7 +22542,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_leaf_entries_f3e67ac5",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 671,
+    "line": 767,
     "decision": "def_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22432,7 +22552,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_timestamp_column_c91e7f9e",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 871,
+    "line": 967,
     "decision": "match self.column_meta(column_index)?.physical_type {\n            footer::PhysicalType::Int64 => {\n                let is_millis = matches!(\n                    self.file.converted_type(column_index),\n                    Some(footer::ConvertedType::TimestampMillis)\n                );\n                let raw = self.read_int64_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| v.map(|v| if is_millis { v * 1000 } else { v }))\n                    .collect())\n            }\n            footer::PhysicalType::Int96 => {\n                let raw = self.read_int96_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| v.map(int96_to_epoch_micros))\n                    .collect())\n            }\n            other => Err(FileError::UnsupportedTimestampPhysicalType(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22442,7 +22562,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_timestamp_column_8829ff3d",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 880,
+    "line": 976,
     "decision": "is_millis",
     "conditions": 1,
     "vectors_required": 2,
@@ -22452,7 +22572,7 @@
   {
     "id": "storage_column_parquet_parquet_file_read_decimal_column_6a591949",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 902,
+    "line": 998,
     "decision": "match self.column_meta(column_index)?.physical_type {\n            footer::PhysicalType::Int32 => {\n                let raw = self.read_int32_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|v| crate::storage::column::parquet::decimal::Decimal {\n                            unscaled: v as i128,\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            footer::PhysicalType::Int64 => {\n                let raw = self.read_int64_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|v| crate::storage::column::parquet::decimal::Decimal {\n                            unscaled: v as i128,\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            footer::PhysicalType::FixedLenByteArray => {\n                let raw = self.read_fixed_len_byte_array_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|bytes| crate::storage::column::parquet::decimal::Decimal {\n                            unscaled: crate::storage::column::parquet::decimal::from_be_bytes(\n                                &bytes,\n                            ),\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            other => Err(FileError::UnsupportedDecimalPhysicalType(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22462,7 +22582,7 @@
   {
     "id": "storage_column_parquet_parquet_file_write_varint_2427714d",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 982,
+    "line": 1078,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22472,7 +22592,7 @@
   {
     "id": "storage_column_parquet_parquet_file_write_varint_a5b1bbc4",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 986,
+    "line": 1082,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22482,7 +22602,7 @@
   {
     "id": "storage_column_parquet_parquet_file_list_of_structs_field_b09c4ad2",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1020,
+    "line": 1116,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -22492,7 +22612,7 @@
   {
     "id": "storage_column_parquet_parquet_file_build_file_from_chunk_typed_642303d1",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1177,
+    "line": 1273,
     "decision": "let Some(len) = type_length",
     "conditions": 1,
     "vectors_required": 2,
@@ -22502,7 +22622,7 @@
   {
     "id": "storage_column_parquet_parquet_file_build_file_from_chunk_annotated_642303d1",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1210,
+    "line": 1306,
     "decision": "let Some(len) = type_length",
     "conditions": 1,
     "vectors_required": 2,
@@ -22512,7 +22632,7 @@
   {
     "id": "storage_column_parquet_parquet_file_build_file_from_chunk_annotated_aafe5a53",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1216,
+    "line": 1312,
     "decision": "let Some(s) = scale",
     "conditions": 1,
     "vectors_required": 2,
@@ -22522,7 +22642,7 @@
   {
     "id": "storage_column_parquet_parquet_file_encode_dictionary_indices_9466a82b",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1245,
+    "line": 1341,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -22532,7 +22652,7 @@
   {
     "id": "storage_column_parquet_parquet_file_negative_page_size_is_invalid_metadata_not_a_huge_allocation_a5ccf881",
     "file": "src/storage/column/parquet/parquet_file.rs",
-    "line": 1838,
+    "line": 2023,
     "decision": "match page_size(\"compressed_page_size\", -1) {\n            Err(FileError::InvalidMetadata { field, value }) => {\n                assert_eq!(field, \"compressed_page_size\");\n                assert_eq!(value, -1);\n            }\n            other => panic!(\"expected InvalidMetadata, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22790,9 +22910,49 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_column_parquet_reader_read_plain_fixed_at_242a8da5",
+    "file": "src/storage/column/parquet/reader.rs",
+    "line": 519,
+    "decision": "all_present",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_reader_read_plain_fixed_at_66766719",
+    "file": "src/storage/column/parquet/reader.rs",
+    "line": 526,
+    "decision": "level == max_def_level",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_reader_read_plain_fixed_at_084cc378",
+    "file": "src/storage/column/parquet/reader.rs",
+    "line": 534,
+    "decision": "r >= num_values",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_column_parquet_reader_read_plain_fixed_at_e3b5d9f1",
+    "file": "src/storage/column/parquet/reader.rs",
+    "line": 539,
+    "decision": "!is_present",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_column_parquet_reader_read_double_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 524,
+    "line": 580,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22802,7 +22962,7 @@
   {
     "id": "storage_column_parquet_reader_read_boolean_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 540,
+    "line": 596,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22812,7 +22972,7 @@
   {
     "id": "storage_column_parquet_reader_read_boolean_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 563,
+    "line": 619,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22822,7 +22982,7 @@
   {
     "id": "storage_column_parquet_reader_read_string_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 579,
+    "line": 635,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22832,7 +22992,7 @@
   {
     "id": "storage_column_parquet_reader_read_string_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 594,
+    "line": 650,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22842,7 +23002,7 @@
   {
     "id": "storage_column_parquet_reader_read_int32_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 609,
+    "line": 665,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22852,7 +23012,7 @@
   {
     "id": "storage_column_parquet_reader_read_int32_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 624,
+    "line": 680,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22862,7 +23022,7 @@
   {
     "id": "storage_column_parquet_reader_read_float_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 639,
+    "line": 695,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22872,7 +23032,7 @@
   {
     "id": "storage_column_parquet_reader_read_float_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 654,
+    "line": 710,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22882,7 +23042,7 @@
   {
     "id": "storage_column_parquet_reader_read_fixed_len_byte_array_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 671,
+    "line": 727,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22892,7 +23052,7 @@
   {
     "id": "storage_column_parquet_reader_read_fixed_len_byte_array_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 688,
+    "line": 744,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22902,7 +23062,7 @@
   {
     "id": "storage_column_parquet_reader_read_int96_column_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 703,
+    "line": 759,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22912,7 +23072,7 @@
   {
     "id": "storage_column_parquet_reader_read_int96_column_dictionary_5a0692d6",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 726,
+    "line": 782,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22922,7 +23082,7 @@
   {
     "id": "storage_column_parquet_reader_encode_def_levels_62d37561",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 821,
+    "line": 877,
     "decision": "idx < n && levels[idx] == 1",
     "conditions": 2,
     "vectors_required": 3,
@@ -22932,7 +23092,7 @@
   {
     "id": "storage_column_parquet_reader_encode_dictionary_indices_9466a82b",
     "file": "src/storage/column/parquet/reader.rs",
-    "line": 1140,
+    "line": 1278,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -30862,7 +31022,7 @@
   {
     "id": "vm_batch_run_morsels_c2cb3a06",
     "file": "src/vm/batch.rs",
-    "line": 1165,
+    "line": 1188,
     "decision": "len == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -30872,7 +31032,7 @@
   {
     "id": "vm_batch_run_morsels_fold_c2cb3a06",
     "file": "src/vm/batch.rs",
-    "line": 1221,
+    "line": 1244,
     "decision": "len == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -30882,7 +31042,7 @@
   {
     "id": "vm_batch_run_morsels_fold_023eccb8",
     "file": "src/vm/batch.rs",
-    "line": 1239,
+    "line": 1262,
     "decision": "failed.load(Ordering::Relaxed)",
     "conditions": 1,
     "vectors_required": 2,
@@ -30892,7 +31052,7 @@
   {
     "id": "vm_batch_run_morsels_fold_6e72f3d8",
     "file": "src/vm/batch.rs",
-    "line": 1246,
+    "line": 1269,
     "decision": "let Err(e) = fold(&mut state, item)",
     "conditions": 1,
     "vectors_required": 2,
@@ -30902,7 +31062,7 @@
   {
     "id": "vm_batch_run_morsels_ordered_c2cb3a06",
     "file": "src/vm/batch.rs",
-    "line": 1304,
+    "line": 1327,
     "decision": "len == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -30912,7 +31072,7 @@
   {
     "id": "vm_batch_run_morsels_ordered_04f69f8a",
     "file": "src/vm/batch.rs",
-    "line": 1329,
+    "line": 1352,
     "decision": "s.cancelled || s.next_claim >= len",
     "conditions": 2,
     "vectors_required": 3,
@@ -30922,7 +31082,7 @@
   {
     "id": "vm_batch_run_morsels_ordered_144843cb",
     "file": "src/vm/batch.rs",
-    "line": 1332,
+    "line": 1355,
     "decision": "s.next_claim < s.next_deliver + window",
     "conditions": 1,
     "vectors_required": 2,
@@ -30932,7 +31092,7 @@
   {
     "id": "vm_batch_run_morsels_ordered_90888420",
     "file": "src/vm/batch.rs",
-    "line": 1351,
+    "line": 1374,
     "decision": "s.next_deliver < len",
     "conditions": 1,
     "vectors_required": 2,
@@ -30942,7 +31102,7 @@
   {
     "id": "vm_batch_run_morsels_ordered_4830f2b0",
     "file": "src/vm/batch.rs",
-    "line": 1362,
+    "line": 1385,
     "decision": "let Err(e) = sink(result)",
     "conditions": 1,
     "vectors_required": 2,
@@ -30952,7 +31112,7 @@
   {
     "id": "vm_batch_compare_for_order_467c6673",
     "file": "src/vm/batch.rs",
-    "line": 1451,
+    "line": 1474,
     "decision": "match (matches!(a, Value::Null), matches!(b, Value::Null)) {\n        (true, true) => Ordering::Equal,\n        (true, false) => Ordering::Greater,\n        (false, true) => Ordering::Less,\n        (false, false) => {\n            let ord = match (a.as_f64(), b.as_f64()) {\n                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),\n                // #266: compare `Str`/`Str` directly -- `Value`'s `Display`\n                // prints a `Str`'s contents verbatim (no quoting), so this\n                // is byte-identical to the `to_string()` fallback below\n                // without the two allocations.\n                _ => match (a, b) {\n                    (Value::Str(x), Value::Str(y)) => x.cmp(y),\n                    _ => a.to_string().cmp(&b.to_string()),\n                },\n            };\n            // ORDER BY direction flips the comparison, not the sort itself.\n            if descending {\n                ord.reverse()\n            } else {\n                ord\n            }\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30962,7 +31122,7 @@
   {
     "id": "vm_batch_compare_for_order_654ada80",
     "file": "src/vm/batch.rs",
-    "line": 1456,
+    "line": 1479,
     "decision": "match (a.as_f64(), b.as_f64()) {\n                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),\n                // #266: compare `Str`/`Str` directly -- `Value`'s `Display`\n                // prints a `Str`'s contents verbatim (no quoting), so this\n                // is byte-identical to the `to_string()` fallback below\n                // without the two allocations.\n                _ => match (a, b) {\n                    (Value::Str(x), Value::Str(y)) => x.cmp(y),\n                    _ => a.to_string().cmp(&b.to_string()),\n                },\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30972,7 +31132,7 @@
   {
     "id": "vm_batch_compare_for_order_a5826a61",
     "file": "src/vm/batch.rs",
-    "line": 1462,
+    "line": 1485,
     "decision": "match (a, b) {\n                    (Value::Str(x), Value::Str(y)) => x.cmp(y),\n                    _ => a.to_string().cmp(&b.to_string()),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30982,7 +31142,7 @@
   {
     "id": "vm_batch_compare_for_order_96ce0bd6",
     "file": "src/vm/batch.rs",
-    "line": 1468,
+    "line": 1491,
     "decision": "descending",
     "conditions": 1,
     "vectors_required": 2,
@@ -30992,7 +31152,7 @@
   {
     "id": "vm_batch_top_n_merge_c61d27f3",
     "file": "src/vm/batch.rs",
-    "line": 1521,
+    "line": 1548,
     "decision": "limit == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31002,7 +31162,7 @@
   {
     "id": "vm_batch_top_n_reduce_output_eea76443",
     "file": "src/vm/batch.rs",
-    "line": 1551,
+    "line": 1578,
     "decision": "spec.limit == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31012,7 +31172,7 @@
   {
     "id": "vm_batch_top_n_reduce_output_78ab12de",
     "file": "src/vm/batch.rs",
-    "line": 1563,
+    "line": 1590,
     "decision": "heap.len() < spec.limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -31022,7 +31182,7 @@
   {
     "id": "vm_batch_top_n_reduce_output_3040660a",
     "file": "src/vm/batch.rs",
-    "line": 1569,
+    "line": 1597,
     "decision": "let Some(worst) = heap.peek()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31032,7 +31192,7 @@
   {
     "id": "vm_batch_top_n_reduce_output_9644a5c8",
     "file": "src/vm/batch.rs",
-    "line": 1570,
+    "line": 1598,
     "decision": "compare_for_order(&key, &worst.key, spec.descending) == std::cmp::Ordering::Less",
     "conditions": 1,
     "vectors_required": 2,
@@ -31042,7 +31202,7 @@
   {
     "id": "vm_batch_push_bounded_7fd7996c",
     "file": "src/vm/batch.rs",
-    "line": 1618,
+    "line": 1647,
     "decision": "heap.len() < limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -31052,7 +31212,7 @@
   {
     "id": "vm_batch_push_bounded_3040660a",
     "file": "src/vm/batch.rs",
-    "line": 1620,
+    "line": 1649,
     "decision": "let Some(worst) = heap.peek()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31062,8 +31222,158 @@
   {
     "id": "vm_batch_push_bounded_2b81938f",
     "file": "src/vm/batch.rs",
-    "line": 1621,
+    "line": 1650,
     "decision": "item.cmp(worst) == std::cmp::Ordering::Less",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_late_plan_068dba25",
+    "file": "src/vm/batch.rs",
+    "line": 1686,
+    "decision": "match op {\n            Opcode::LoadColumn { reg: r, column } if *r == reg => Some(column.to_string()),\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_batch_late_plan_ba566b67",
+    "file": "src/vm/batch.rs",
+    "line": 1687,
+    "decision": "*r == reg",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_late_plan_80ca6ff4",
+    "file": "src/vm/batch.rs",
+    "line": 1702,
+    "decision": "!tail\n        .iter()\n        .all(|op| matches!(op, Opcode::LoadColumn { .. }))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_late_plan_d03f1046",
+    "file": "src/vm/batch.rs",
+    "line": 1710,
+    "decision": "match op {\n            Opcode::LoadColumn { column, .. } => Some(column.to_string()),\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_batch_late_plan_e149c450",
+    "file": "src/vm/batch.rs",
+    "line": 1715,
+    "decision": "!key_columns.contains(&key_column)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_late_plan_36dce767",
+    "file": "src/vm/batch.rs",
+    "line": 1720,
+    "decision": "!key_columns.contains(name) && !deferred.contains(name)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_late_plan_388cd779",
+    "file": "src/vm/batch.rs",
+    "line": 1724,
+    "decision": "deferred.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_late_plan_fcb32527",
+    "file": "src/vm/batch.rs",
+    "line": 1729,
+    "decision": "match op {\n            Opcode::LoadColumn { column, .. } => key_columns.iter().any(|k| k == column.as_ref()),\n            _ => false,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_batch_batch_cell_987c1059",
+    "file": "src/vm/batch.rs",
+    "line": 1751,
+    "decision": "let Some(column) = batch.typed_columns.get(name)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_scan_segment_late_71ecff9c",
+    "file": "src/vm/batch.rs",
+    "line": 1802,
+    "decision": "local.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_scan_segment_late_a029ec01",
+    "file": "src/vm/batch.rs",
+    "line": 1806,
+    "decision": "match segment.gather_at(&plan.deferred, &positions) {\n        Some(gathered) => gathered?,\n        // No positional gather: a segment whose `load_columns` is the\n        // default full `load()` already holds the deferred columns, so\n        // gather from that batch in memory rather than loading it again\n        // (measured: a second load doubled the parity `order_by` time\n        // for such segments). Only a segment that served a real subset\n        // but cannot gather falls back to the eager scan.\n        None if plan.deferred.iter().all(|name| {\n            batch.columns.contains_key(name) || batch.typed_columns.contains_key(name)\n        }) =>\n        {\n            gather_in_memory(&batch, &plan.deferred, &positions)\n        }\n        None => return scan_segment_eager(segment, program, spec),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_scan_segment_late_762c4390",
+    "file": "src/vm/batch.rs",
+    "line": 1814,
+    "decision": "plan.deferred.iter().all(|name| {\n            batch.columns.contains_key(name) || batch.typed_columns.contains_key(name)\n        })",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_scan_segment_late_1e0f2bf2",
+    "file": "src/vm/batch.rs",
+    "line": 1828,
+    "decision": "j == spec.col",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_top_n_reduce_positions_8d80770a",
+    "file": "src/vm/batch.rs",
+    "line": 1865,
+    "decision": "match survivors {\n            Some(s) => s.get(ordinal).copied(),\n            None => u32::try_from(ordinal).ok(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_top_n_reduce_positions_04ab849f",
+    "file": "src/vm/batch.rs",
+    "line": 1887,
+    "decision": "keep",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -31072,7 +31382,7 @@
   {
     "id": "vm_batch_top_n_over_segments_eea76443",
     "file": "src/vm/batch.rs",
-    "line": 1641,
+    "line": 1915,
     "decision": "spec.limit == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31082,7 +31392,7 @@
   {
     "id": "vm_batch_top_n_over_segments_e2eb35a2",
     "file": "src/vm/batch.rs",
-    "line": 1653,
+    "line": 1927,
     "decision": "match (bound_of(a), bound_of(b)) {\n        (None, None) => Ordering::Equal,\n        (None, Some(_)) => Ordering::Less,\n        (Some(_), None) => Ordering::Greater,\n        (Some(x), Some(y)) => compare_for_order(x, y, spec.descending),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31092,7 +31402,7 @@
   {
     "id": "vm_batch_top_n_over_segments_e03fd91f",
     "file": "src/vm/batch.rs",
-    "line": 1668,
+    "line": 1943,
     "decision": "let Some(bound) = bound_of(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31102,7 +31412,7 @@
   {
     "id": "vm_batch_top_n_over_segments_d479fdb2",
     "file": "src/vm/batch.rs",
-    "line": 1680,
+    "line": 1955,
     "decision": "beaten",
     "conditions": 1,
     "vectors_required": 2,
@@ -31110,9 +31420,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "vm_batch_top_n_over_segments_1dcb7635",
+    "file": "src/vm/batch.rs",
+    "line": 1960,
+    "decision": "match &plan {\n            Some(plan) => scan_segment_late(segment, program, plan, spec)?,\n            None => scan_segment_eager(segment, program, spec)?,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "vm_batch_fmt_77bc3a49",
     "file": "src/vm/batch.rs",
-    "line": 1816,
+    "line": 2091,
     "decision": "match self {\n            VmError::UnknownColumn { opcode, column } => {\n                write!(f, \"{opcode}: unknown column: {column}\")\n            }\n            VmError::UnknownRegister { opcode, register } => {\n                write!(f, \"{opcode}: unknown register: {register}\")\n            }\n            VmError::RegisterLengthMismatch { opcode } => {\n                write!(f, \"{opcode}: register length mismatch\")\n            }\n            VmError::UnknownJoinTable { opcode, table } => {\n                write!(f, \"{opcode}: unknown join table: {table}\")\n            }\n            VmError::StepLimitExceeded { opcode, limit } => {\n                write!(f, \"{opcode}: exceeded step limit of {limit}\")\n            }\n            VmError::UnsupportedOp { opcode, op } => {\n                write!(f, \"{opcode}: no dispatch for {op}\")\n            }\n            VmError::MissingWindowArgument { opcode, func } => {\n                write!(f, \"{opcode}: {func:?} requires an argument register\")\n            }\n            VmError::MalformedProgram { opcode, reason } => {\n                write!(f, \"{opcode}: malformed program: {reason}\")\n            }\n            VmError::SegmentLoad { reason } => write!(f, \"segment load failed: {reason}\"),\n            VmError::NotStreamable { reason } => write!(f, \"cannot stream this program: {reason}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31122,7 +31442,7 @@
   {
     "id": "vm_batch_hash_group_value_70a0f9b7",
     "file": "src/vm/batch.rs",
-    "line": 1879,
+    "line": 2154,
     "decision": "match value {\n        Value::Int(v) => {\n            0u8.hash(state);\n            v.hash(state);\n        }\n        Value::Float(v) => {\n            1u8.hash(state);\n            v.to_bits().hash(state);\n        }\n        Value::Bool(v) => {\n            2u8.hash(state);\n            v.hash(state);\n        }\n        Value::Str(v) => {\n            3u8.hash(state);\n            v.hash(state);\n        }\n        Value::Null => 4u8.hash(state),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31132,7 +31452,7 @@
   {
     "id": "vm_batch_hash_one_value_808d6262",
     "file": "src/vm/batch.rs",
-    "line": 1924,
+    "line": 2199,
     "decision": "match value {\n        Value::Int(v) => murmur_finalize(u64::from_ne_bytes(v.to_ne_bytes()) ^ TAG_INT),\n        Value::Float(v) => murmur_finalize(v.to_bits() ^ TAG_FLOAT),\n        Value::Bool(v) => murmur_finalize(u64::from(*v) ^ TAG_BOOL),\n        Value::Str(s) => hash_str_bytes(s.as_bytes()),\n        Value::Null => murmur_finalize(TAG_NULL),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31142,7 +31462,7 @@
   {
     "id": "vm_batch_hash_str_bytes_48099f4f",
     "file": "src/vm/batch.rs",
-    "line": 1940,
+    "line": 2215,
     "decision": "let Some(target) = word.get_mut(..chunk.len())",
     "conditions": 1,
     "vectors_required": 2,
@@ -31152,7 +31472,7 @@
   {
     "id": "vm_batch_len_f1cb5759",
     "file": "src/vm/batch.rs",
-    "line": 2021,
+    "line": 2296,
     "decision": "match self {\n            KeyView::Typed(column) => column.len(),\n            KeyView::Values(values) => values.len(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31162,7 +31482,7 @@
   {
     "id": "vm_batch_hash_cell_c166de9c",
     "file": "src/vm/batch.rs",
-    "line": 2050,
+    "line": 2325,
     "decision": "match self {\n            KeyView::Values(values) => hash_one_value(&values[p]),\n            KeyView::Typed(column) => match column.as_ref() {\n                Column::Int { data, valid } if valid.get(p) => {\n                    murmur_finalize(u64::from_ne_bytes(data[p].to_ne_bytes()) ^ TAG_INT)\n                }\n                Column::Float { data, valid } if valid.get(p) => {\n                    murmur_finalize(data[p].to_bits() ^ TAG_FLOAT)\n                }\n                Column::Bool { data, valid } if valid.get(p) => {\n                    murmur_finalize(u64::from(data[p]) ^ TAG_BOOL)\n                }\n                Column::Str {\n                    offsets,\n                    data,\n                    valid,\n                } if valid.get(p) => hash_str_bytes(\n                    data.as_bytes()\n                        .get(Self::str_range(offsets, p))\n                        .unwrap_or(&[]),\n                ),\n                Column::Dict { indices, valid, .. } if valid.get(p) => {\n                    murmur_finalize(u64::from(indices[p]) ^ TAG_DICT)\n                }\n                _ => murmur_finalize(TAG_NULL),\n            },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31172,7 +31492,7 @@
   {
     "id": "vm_batch_hash_cell_6e266740",
     "file": "src/vm/batch.rs",
-    "line": 2052,
+    "line": 2327,
     "decision": "match column.as_ref() {\n                Column::Int { data, valid } if valid.get(p) => {\n                    murmur_finalize(u64::from_ne_bytes(data[p].to_ne_bytes()) ^ TAG_INT)\n                }\n                Column::Float { data, valid } if valid.get(p) => {\n                    murmur_finalize(data[p].to_bits() ^ TAG_FLOAT)\n                }\n                Column::Bool { data, valid } if valid.get(p) => {\n                    murmur_finalize(u64::from(data[p]) ^ TAG_BOOL)\n                }\n                Column::Str {\n                    offsets,\n                    data,\n                    valid,\n                } if valid.get(p) => hash_str_bytes(\n                    data.as_bytes()\n                        .get(Self::str_range(offsets, p))\n                        .unwrap_or(&[]),\n                ),\n                Column::Dict { indices, valid, .. } if valid.get(p) => {\n                    murmur_finalize(u64::from(indices[p]) ^ TAG_DICT)\n                }\n                _ => murmur_finalize(TAG_NULL),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31182,7 +31502,7 @@
   {
     "id": "vm_batch_hash_cell_5103903a",
     "file": "src/vm/batch.rs",
-    "line": 2053,
+    "line": 2328,
     "decision": "valid.get(p)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31192,7 +31512,7 @@
   {
     "id": "vm_batch_hash_cell_5103903a_2",
     "file": "src/vm/batch.rs",
-    "line": 2056,
+    "line": 2331,
     "decision": "valid.get(p)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31202,7 +31522,7 @@
   {
     "id": "vm_batch_hash_cell_5103903a_3",
     "file": "src/vm/batch.rs",
-    "line": 2059,
+    "line": 2334,
     "decision": "valid.get(p)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31212,7 +31532,7 @@
   {
     "id": "vm_batch_hash_cell_5103903a_4",
     "file": "src/vm/batch.rs",
-    "line": 2066,
+    "line": 2341,
     "decision": "valid.get(p)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31222,7 +31542,7 @@
   {
     "id": "vm_batch_hash_cell_5103903a_5",
     "file": "src/vm/batch.rs",
-    "line": 2071,
+    "line": 2346,
     "decision": "valid.get(p)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31232,7 +31552,7 @@
   {
     "id": "vm_batch_cells_equal_938e54c5",
     "file": "src/vm/batch.rs",
-    "line": 2087,
+    "line": 2362,
     "decision": "match self {\n            KeyView::Values(values) => values[p] == values[q],\n            KeyView::Typed(column) => match column.as_ref() {\n                Column::Int { data, valid } => {\n                    valid.get(p) == valid.get(q) && (!valid.get(p) || data[p] == data[q])\n                }\n                Column::Float { data, valid } => {\n                    valid.get(p) == valid.get(q) && (!valid.get(p) || data[p] == data[q])\n                }\n                Column::Bool { data, valid } => {\n                    valid.get(p) == valid.get(q) && (!valid.get(p) || data[p] == data[q])\n                }\n                Column::Str {\n                    offsets,\n                    data,\n                    valid,\n                } => {\n                    valid.get(p) == valid.get(q)\n                        && (!valid.get(p)\n                            || data.as_bytes().get(Self::str_range(offsets, p))\n                                == data.as_bytes().get(Self::str_range(offsets, q)))\n                }\n                Column::Dict { indices, valid, .. } => {\n                    valid.get(p) == valid.get(q) && (!valid.get(p) || indices[p] == indices[q])\n                }\n            },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31242,7 +31562,7 @@
   {
     "id": "vm_batch_cells_equal_5401fbe4",
     "file": "src/vm/batch.rs",
-    "line": 2089,
+    "line": 2364,
     "decision": "match column.as_ref() {\n                Column::Int { data, valid } => {\n                    valid.get(p) == valid.get(q) && (!valid.get(p) || data[p] == data[q])\n                }\n                Column::Float { data, valid } => {\n                    valid.get(p) == valid.get(q) && (!valid.get(p) || data[p] == data[q])\n                }\n                Column::Bool { data, valid } => {\n                    valid.get(p) == valid.get(q) && (!valid.get(p) || data[p] == data[q])\n                }\n                Column::Str {\n                    offsets,\n                    data,\n                    valid,\n                } => {\n                    valid.get(p) == valid.get(q)\n                        && (!valid.get(p)\n                            || data.as_bytes().get(Self::str_range(offsets, p))\n                                == data.as_bytes().get(Self::str_range(offsets, q)))\n                }\n                Column::Dict { indices, valid, .. } => {\n                    valid.get(p) == valid.get(q) && (!valid.get(p) || indices[p] == indices[q])\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31252,7 +31572,7 @@
   {
     "id": "vm_batch_value_618804b4",
     "file": "src/vm/batch.rs",
-    "line": 2119,
+    "line": 2394,
     "decision": "match self {\n            KeyView::Values(values) => values[p].clone(),\n            KeyView::Typed(column) => column.get(p),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31262,7 +31582,7 @@
   {
     "id": "vm_batch_group_by_key_views_df6fc515",
     "file": "src/vm/batch.rs",
-    "line": 2156,
+    "line": 2431,
     "decision": "inserted",
     "conditions": 1,
     "vectors_required": 2,
@@ -31272,7 +31592,7 @@
   {
     "id": "vm_batch_int_group_by_single_column_5103903a",
     "file": "src/vm/batch.rs",
-    "line": 2191,
+    "line": 2466,
     "decision": "valid.get(p)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31282,7 +31602,7 @@
   {
     "id": "vm_batch_int_group_by_single_column_df6fc515",
     "file": "src/vm/batch.rs",
-    "line": 2196,
+    "line": 2471,
     "decision": "inserted",
     "conditions": 1,
     "vectors_required": 2,
@@ -31292,7 +31612,7 @@
   {
     "id": "vm_batch_dict_group_by_single_column_5103903a",
     "file": "src/vm/batch.rs",
-    "line": 2234,
+    "line": 2509,
     "decision": "valid.get(p)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31302,7 +31622,7 @@
   {
     "id": "vm_batch_dict_group_by_single_column_a84486c2",
     "file": "src/vm/batch.rs",
-    "line": 2241,
+    "line": 2516,
     "decision": "match code_to_group[slot] {\n            Some(g) => g,\n            None => {\n                let key = if slot == null_slot {\n                    Value::Null\n                } else {\n                    Value::Str(dict[slot].to_string().into())\n                };\n                let g = group_keys.len();\n                group_keys.push(vec![key]);\n                code_to_group[slot] = Some(g);\n                g\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31312,7 +31632,7 @@
   {
     "id": "vm_batch_dict_group_by_single_column_b609758d",
     "file": "src/vm/batch.rs",
-    "line": 2244,
+    "line": 2519,
     "decision": "slot == null_slot",
     "conditions": 1,
     "vectors_required": 2,
@@ -31322,7 +31642,7 @@
   {
     "id": "vm_batch_push_d241cc06",
     "file": "src/vm/batch.rs",
-    "line": 2352,
+    "line": 2627,
     "decision": "matches!(value, Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31332,7 +31652,7 @@
   {
     "id": "vm_batch_push_b65d07f7",
     "file": "src/vm/batch.rs",
-    "line": 2356,
+    "line": 2631,
     "decision": "match value.as_f64() {\n            Some(x) => self.push_f64(x),\n            None => {\n                self.row_count = self.row_count.saturating_add(1);\n                self.non_null_count = self.non_null_count.saturating_add(1);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31342,7 +31662,7 @@
   {
     "id": "vm_batch_finalize_56c14ff6",
     "file": "src/vm/batch.rs",
-    "line": 2396,
+    "line": 2671,
     "decision": "match func {\n            AggFunc::Count => Value::Int(if is_count_star {\n                self.row_count\n            } else {\n                self.non_null_count\n            }),\n            AggFunc::Sum => {\n                if self.numeric_count == 0 {\n                    Value::Null\n                } else {\n                    Value::Float(self.sum)\n                }\n            }\n            AggFunc::Avg => {\n                if self.numeric_count == 0 {\n                    Value::Null\n                } else {\n                    Value::Float(self.sum / self.numeric_count as f64)\n                }\n            }\n            AggFunc::Min => self.min.map_or(Value::Null, Value::Float),\n            AggFunc::Max => self.max.map_or(Value::Null, Value::Float),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31352,7 +31672,7 @@
   {
     "id": "vm_batch_finalize_eda7bdd5",
     "file": "src/vm/batch.rs",
-    "line": 2397,
+    "line": 2672,
     "decision": "is_count_star",
     "conditions": 1,
     "vectors_required": 2,
@@ -31362,7 +31682,7 @@
   {
     "id": "vm_batch_finalize_7867807d",
     "file": "src/vm/batch.rs",
-    "line": 2403,
+    "line": 2678,
     "decision": "self.numeric_count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31372,7 +31692,7 @@
   {
     "id": "vm_batch_finalize_7867807d_2",
     "file": "src/vm/batch.rs",
-    "line": 2410,
+    "line": 2685,
     "decision": "self.numeric_count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31382,7 +31702,7 @@
   {
     "id": "vm_batch_with_value_source_3e356bcb",
     "file": "src/vm/batch.rs",
-    "line": 2445,
+    "line": 2720,
     "decision": "match source {\n        ValueSource::Probe(reg) => match probe_columns.iter().find(|(r, _)| *r == reg) {\n            Some((_, col)) => f(&col[probe_row]),\n            None => f(&Value::Null),\n        },\n        ValueSource::Payload(i) => match build_row {\n            Some(br) => f(&bt.payload[i][br]),\n            None => f(&Value::Null),\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31392,7 +31712,7 @@
   {
     "id": "vm_batch_with_value_source_71ca96b4",
     "file": "src/vm/batch.rs",
-    "line": 2446,
+    "line": 2721,
     "decision": "match probe_columns.iter().find(|(r, _)| *r == reg) {\n            Some((_, col)) => f(&col[probe_row]),\n            None => f(&Value::Null),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31402,7 +31722,7 @@
   {
     "id": "vm_batch_with_value_source_5e2a4325",
     "file": "src/vm/batch.rs",
-    "line": 2450,
+    "line": 2725,
     "decision": "match build_row {\n            Some(br) => f(&bt.payload[i][br]),\n            None => f(&Value::Null),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31412,7 +31732,7 @@
   {
     "id": "vm_batch_fold_group_row_1e44cf34",
     "file": "src/vm/batch.rs",
-    "line": 2502,
+    "line": 2777,
     "decision": "match existing {\n        Some(g) => g,\n        None => {\n            let key_values: Vec<Value> = group_by\n                .iter()\n                .map(|(src, _)| {\n                    with_value_source(*src, probe_columns, probe_row, bt, build_row, Value::clone)\n                })\n                .collect();\n            let g = group_keys.len();\n            group_keys.push(key_values);\n            bucket.push(g);\n            for accs in accumulators.iter_mut() {\n                accs.push(RunningAgg::default());\n            }\n            g\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31422,7 +31742,7 @@
   {
     "id": "vm_batch_fold_group_row_a45ea808",
     "file": "src/vm/batch.rs",
-    "line": 2521,
+    "line": 2796,
     "decision": "match src {\n            Some(s) => with_value_source(*s, probe_columns, probe_row, bt, build_row, |value| {\n                accumulators[i][group].push(Some(value));\n            }),\n            None => accumulators[i][group].push(None),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31432,7 +31752,7 @@
   {
     "id": "vm_batch_key_view_7fa34a5e",
     "file": "src/vm/batch.rs",
-    "line": 2706,
+    "line": 2981,
     "decision": "let Some(column) = self.typed_registers.get(&reg)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31442,7 +31762,7 @@
   {
     "id": "vm_batch_ensure_materialized_940aa9db",
     "file": "src/vm/batch.rs",
-    "line": 2719,
+    "line": 2994,
     "decision": "self.registers.contains_key(&reg)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31452,7 +31772,7 @@
   {
     "id": "vm_batch_ensure_materialized_7fa34a5e",
     "file": "src/vm/batch.rs",
-    "line": 2722,
+    "line": 2997,
     "decision": "let Some(column) = self.typed_registers.get(&reg)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31462,7 +31782,7 @@
   {
     "id": "vm_batch_check_step_limit_5b5be923",
     "file": "src/vm/batch.rs",
-    "line": 2733,
+    "line": 3008,
     "decision": "self.steps > MAX_STEPS",
     "conditions": 1,
     "vectors_required": 2,
@@ -31472,7 +31792,7 @@
   {
     "id": "vm_batch_resolve_selection_2c22b8d9",
     "file": "src/vm/batch.rs",
-    "line": 2797,
+    "line": 3072,
     "decision": "self.scalar_registers.contains(reg)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31482,7 +31802,7 @@
   {
     "id": "vm_batch_resolve_selection_71d1a71c",
     "file": "src/vm/batch.rs",
-    "line": 2800,
+    "line": 3075,
     "decision": "values.len() != selection.base_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -31492,7 +31812,7 @@
   {
     "id": "vm_batch_dict_literal_compare_52320c49",
     "file": "src/vm/batch.rs",
-    "line": 2839,
+    "line": 3114,
     "decision": "!matches!(op, MapOp::Eq | MapOp::Ne)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31502,7 +31822,7 @@
   {
     "id": "vm_batch_dict_literal_compare_fa2abd69",
     "file": "src/vm/batch.rs",
-    "line": 2867,
+    "line": 3142,
     "decision": "!valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31512,7 +31832,7 @@
   {
     "id": "vm_batch_dict_literal_compare_a5dea07c",
     "file": "src/vm/batch.rs",
-    "line": 2872,
+    "line": 3147,
     "decision": "op == MapOp::Eq",
     "conditions": 1,
     "vectors_required": 2,
@@ -31522,7 +31842,7 @@
   {
     "id": "vm_batch_typed_arithmetic_0468bf91",
     "file": "src/vm/batch.rs",
-    "line": 2898,
+    "line": 3173,
     "decision": "!matches!(op, MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31532,7 +31852,7 @@
   {
     "id": "vm_batch_typed_arithmetic_b747ddc4",
     "file": "src/vm/batch.rs",
-    "line": 2906,
+    "line": 3181,
     "decision": "!matches!(a_col.as_ref(), Column::Int { .. } | Column::Float { .. })\n            || !matches!(b_col.as_ref(), Column::Int { .. } | Column::Float { .. })",
     "conditions": 2,
     "vectors_required": 3,
@@ -31542,7 +31862,7 @@
   {
     "id": "vm_batch_typed_arithmetic_5cfe40e4",
     "file": "src/vm/batch.rs",
-    "line": 2911,
+    "line": 3186,
     "decision": "a_col.len() != b_col.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31552,7 +31872,7 @@
   {
     "id": "vm_batch_typed_arithmetic_ffca0832",
     "file": "src/vm/batch.rs",
-    "line": 2919,
+    "line": 3194,
     "decision": "result_is_int",
     "conditions": 1,
     "vectors_required": 2,
@@ -31562,7 +31882,7 @@
   {
     "id": "vm_batch_typed_arithmetic_8f05497e",
     "file": "src/vm/batch.rs",
-    "line": 2922,
+    "line": 3197,
     "decision": "match (column_num_at(a_col, i), column_num_at(b_col, i)) {\n                    (Some((x, _)), Some((y, _))) => {\n                        #[allow(\n                            clippy::cast_possible_truncation,\n                            reason = \"saturating f64 -> i64 is arithmetic's documented overflow semantics, mirrored here for the typed fast path\"\n                        )]\n                        data.push(arith_op(op, x, y) as i64);\n                        valid_bits.push(true);\n                    }\n                    _ => {\n                        data.push(0);\n                        valid_bits.push(false);\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31572,7 +31892,7 @@
   {
     "id": "vm_batch_typed_arithmetic_439d9593",
     "file": "src/vm/batch.rs",
-    "line": 2944,
+    "line": 3219,
     "decision": "match (column_num_at(a_col, i), column_num_at(b_col, i)) {\n                    (Some((x, _)), Some((y, _))) => {\n                        data.push(arith_op(op, x, y));\n                        valid_bits.push(true);\n                    }\n                    _ => {\n                        data.push(0.0);\n                        valid_bits.push(false);\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31582,7 +31902,7 @@
   {
     "id": "vm_batch_run_928766e1",
     "file": "src/vm/batch.rs",
-    "line": 2975,
+    "line": 3250,
     "decision": "match source.next_batch() {\n            Some(b) => b,\n            None => return Ok(QueryOutput::default()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31592,7 +31912,7 @@
   {
     "id": "vm_batch_run_ef9efea2",
     "file": "src/vm/batch.rs",
-    "line": 2983,
+    "line": 3258,
     "decision": "let Some(op) = program.get(pc)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31602,7 +31922,7 @@
   {
     "id": "vm_batch_run_1d1d7eab",
     "file": "src/vm/batch.rs",
-    "line": 2985,
+    "line": 3260,
     "decision": "match op {\n                Opcode::NextSegment { loop_start } => match source.next_batch() {\n                    Some(next) => {\n                        batch = next;\n                        // #265: a new segment's registers start over\n                        // (`LoadColumn` re-loads full columns at the top\n                        // of the loop body), so any selection pending\n                        // from the previous segment is meaningless here.\n                        self.selection = None;\n                        self.selected_rows = None;\n                        pc = *loop_start;\n                    }\n                    None => pc = pc.saturating_add(1),\n                },\n                Opcode::Halt => break,\n                other => {\n                    self.step(&batch, other)?;\n                    pc = pc.saturating_add(1);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31612,7 +31932,7 @@
   {
     "id": "vm_batch_run_2bac44eb",
     "file": "src/vm/batch.rs",
-    "line": 2986,
+    "line": 3261,
     "decision": "match source.next_batch() {\n                    Some(next) => {\n                        batch = next;\n                        // #265: a new segment's registers start over\n                        // (`LoadColumn` re-loads full columns at the top\n                        // of the loop body), so any selection pending\n                        // from the previous segment is meaningless here.\n                        self.selection = None;\n                        self.selected_rows = None;\n                        pc = *loop_start;\n                    }\n                    None => pc = pc.saturating_add(1),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31622,7 +31942,7 @@
   {
     "id": "vm_batch_step_3f0c1bbd",
     "file": "src/vm/batch.rs",
-    "line": 3017,
+    "line": 3292,
     "decision": "match op {\n            Opcode::LoadColumn { reg, column } => {\n                if let Some(typed) = batch.typed_columns.get(column.as_ref()) {\n                    // #482: no longer eagerly materializes into\n                    // `registers` -- only `typed_registers` is populated\n                    // here. `Vm::ensure_materialized` lazily builds the\n                    // `Vec<Value>` copy, only when something actually\n                    // reads this register that way (an opcode not yet\n                    // ported to `Column` dispatch, or a typed fast-path\n                    // miss) -- this is why a bare `SUM(amount)` (typed\n                    // `Reduce`'s fast path never touches `registers` at\n                    // all) no longer burns the cost of a copy nothing\n                    // reads. `registers.remove` invalidates any stale\n                    // materialization left over from a previous segment\n                    // reusing this same register number (`NextSegment`\n                    // doesn't clear `registers` between iterations).\n                    self.registers.remove(reg);\n                    self.typed_registers.insert(*reg, Arc::clone(typed));\n                } else {\n                    let values = batch.columns.get(column.as_ref()).ok_or_else(|| {\n                        VmError::UnknownColumn {\n                            opcode,\n                            column: column.to_string(),\n                        }\n                    })?;\n                    self.registers.insert(*reg, Arc::clone(values));\n                    self.typed_registers.remove(reg);\n                }\n            }\n            Opcode::LoadConst { reg, value } => {\n                self.registers\n                    .insert(*reg, Arc::new(vec![value.clone(); batch.num_rows]));\n            }\n            Opcode::Map { dst, op, a, b } => {\n                // #265: reads registers elementwise (no row-index\n                // concept), so any pending selection must be resolved\n                // (compacted) first rather than taught to this opcode.\n                self.resolve_selection(opcode)?;\n                if let Some(result) = self.dict_literal_compare(*op, *a, *b, opcode)? {\n                    self.registers.insert(*dst, Arc::new(result));\n                    self.typed_registers.remove(dst);\n                } else if let Some(column) = self.typed_arithmetic(*op, *a, *b, opcode)? {\n                    // #431: a genuine typed Column result -- also\n                    // materialize into `registers` (same pattern as\n                    // `LoadColumn`, #429) so a downstream un-migrated\n                    // opcode keeps working unchanged.\n                    let materialized: Vec<Value> =\n                        (0..column.len()).map(|i| column.get(i)).collect();\n                    self.registers.insert(*dst, Arc::new(materialized));\n                    self.typed_registers.insert(*dst, Arc::new(column));\n                } else {\n                    self.ensure_materialized(*a);\n                    self.ensure_materialized(*b);\n                    let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);\n                    if a_vals.len() != b_vals.len() {\n                        return Err(VmError::RegisterLengthMismatch { opcode });\n                    }\n                    let result: Vec<Value> = a_vals\n                        .iter()\n                        .zip(b_vals.iter())\n                        .map(|(x, y)| apply_map_op(*op, x, y))\n                        .collect();\n                    self.registers.insert(*dst, Arc::new(result));\n                    self.typed_registers.remove(dst);\n                }\n            }\n            Opcode::Call { dst, name, args } => {\n                // Elementwise, like `Map`: resolve any pending selection\n                // first (see the comment on that arm).\n                self.resolve_selection(opcode)?;\n                for &a in args.iter() {\n                    self.ensure_materialized(a);\n                }\n                let arg_regs: Vec<&[Value]> = args\n                    .iter()\n                    .map(|&a| self.reg(a, opcode))\n                    .collect::<Result<_>>()?;\n                let num_rows = arg_regs.first().map_or(batch.num_rows, |r| r.len());\n                if arg_regs.iter().any(|r| r.len() != num_rows) {\n                    return Err(VmError::RegisterLengthMismatch { opcode });\n                }\n                let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];\n                let mut result = Vec::with_capacity(num_rows);\n                for row in 0..num_rows {\n                    for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {\n                        *slot = to_scalar_value(&reg[row]);\n                    }\n                    let value = crate::functions::call(name, &call_args)\n                        .map_or(Value::Null, from_scalar_value);\n                    result.push(value);\n                }\n                self.registers.insert(*dst, Arc::new(result));\n            }\n            Opcode::Filter { predicate } => {\n                // #265: produces a selection vector (surviving row\n                // indices) instead of eagerly compacting every live\n                // register -- registers stay exactly as they are;\n                // whichever opcode later actually needs dense rows\n                // resolves this (see `Selection`).\n                let mask: Vec<bool> = match self.typed_registers.get(predicate) {\n                    // #429: a typed Bool predicate register (e.g. loaded\n                    // straight from a sealed segment's Bool column) reads\n                    // its bitmap-backed buffer directly, skipping the\n                    // `Value::Bool(true)` match entirely.\n                    Some(column) => match column.as_ref() {\n                        Column::Bool { data, valid } => (0..data.len())\n                            .map(|i| valid.get(i) && data.get(i).copied().unwrap_or(false))\n                            .collect(),\n                        other => (0..other.len())\n                            .map(|i| matches!(other.get(i), Value::Bool(true)))\n                            .collect(),\n                    },\n                    None => {\n                        self.ensure_materialized(*predicate);\n                        self.reg(*predicate, opcode)?\n                            .iter()\n                            .map(|v| matches!(v, Value::Bool(true)))\n                            .collect()\n                    }\n                };\n                let base_len = mask.len();\n                for values in self.registers.values() {\n                    if values.len() != base_len {\n                        return Err(VmError::RegisterLengthMismatch { opcode });\n                    }\n                }\n                let source_indices: Vec<u32> = match self.selection.take() {\n                    Some(existing) => {\n                        if existing.base_len != base_len {\n                            return Err(VmError::RegisterLengthMismatch { opcode });\n                        }\n                        existing.indices\n                    }\n                    // #110: size the surviving-index buffer to the actual\n                    // survivor count up front (not the pre-filter length)\n                    // -- at 50% selectivity on a 10M-row scan, over-\n                    // allocating by 2x is real peak-RSS waste for no\n                    // benefit (the excess capacity is never used).\n                    None => (0..u32::try_from(base_len).unwrap_or(u32::MAX)).collect(),\n                };\n                let kept_len = mask.iter().filter(|&&keep| keep).count();\n                let mut indices = Vec::with_capacity(kept_len);\n                for idx in source_indices {\n                    if mask.get(idx as usize).copied().unwrap_or(false) {\n                        indices.push(idx);\n                    }\n                }\n                self.selection = Some(Selection { base_len, indices });\n            }\n            Opcode::Reduce { func, src, dst } => {\n                let result = match src {\n                    Some(reg) => {\n                        // #265: see the comment on `Map`'s same call. Also\n                        // clears `typed_registers` when it actually\n                        // resolves a selection, so the typed fast path\n                        // below only ever fires over an unfiltered (or\n                        // already-compacted) typed column -- never a\n                        // stale, wrong-length shadow.\n                        self.resolve_selection(opcode)?;\n                        let typed = self\n                            .typed_registers\n                            .get(reg)\n                            .and_then(|column| typed_reduce_values(*func, column));\n                        match typed {\n                            Some(result) => result,\n                            None => {\n                                self.ensure_materialized(*reg);\n                                reduce_values(*func, self.reg(*reg, opcode)?)\n                            }\n                        }\n                    }\n                    // #452/#474: bare `COUNT(*)` never reads register\n                    // contents, only the survivor count -- so unlike\n                    // every other `src`, it must NOT force\n                    // `resolve_selection`'s per-register compaction\n                    // (O(live registers x survivors), the dominant cost\n                    // at high selectivity per #474). Peek (don't take)\n                    // the pending selection's index count: another\n                    // `Reduce`/`Map` in the same SELECT list (e.g.\n                    // `count(*), sum(amt)`) still needs the selection\n                    // itself to compact its own source register.\n                    None => {\n                        let count = match &self.selection {\n                            Some(selection) => selection.indices.len(),\n                            None => self.selected_rows.unwrap_or(batch.num_rows),\n                        };\n                        reduce_count_star(*func, count)\n                    }\n                };\n                self.registers.insert(*dst, Arc::new(vec![result]));\n                self.typed_registers.remove(dst);\n                self.scalar_registers.insert(*dst);\n            }\n            Opcode::GroupReduce {\n                group_by,\n                aggs,\n                agg_dst,\n            } => {\n                // #265: lazily resolves any pending selection -- only the\n                // group-key and per-aggregate source registers this\n                // opcode actually reads are indexed through it, instead\n                // of every live register being eagerly compacted back in\n                // `Filter`. Taken up front so the borrows below are of\n                // `self.registers` alone, not all of `self`.\n                let selection = self.selection.take();\n                // #457: a single dict-encoded group-by column groups by its\n                // integer code instead of decoding every row to a `String`\n                // first -- for a low-cardinality dictionary the group table\n                // degenerates to a `dict.len()`-sized array, skipping the\n                // per-row hash entirely. Only fires for exactly one group-by\n                // column (matching a `GROUP BY <dict col>` with no other\n                // key); a composite key falls back to the general path.\n                let dict_group_by = match &group_by[..] {\n                    [reg] => match self.typed_registers.get(reg).map(Arc::as_ref) {\n                        Some(Column::Dict {\n                            dict,\n                            indices,\n                            valid,\n                        }) => Some((dict.clone(), indices.clone(), valid.clone())),\n                        _ => None,\n                    },\n                    _ => None,\n                };\n                // #482: materialize every register this opcode might read\n                // as `Vec<Value>` up front, before `key_columns` below\n                // starts borrowing `self.registers` -- the `aggs` fallback\n                // a few lines down only fires when `group_by` is empty\n                // (so `key_columns` is empty too), but it still needs its\n                // agg-source registers materialized, and by then\n                // `key_columns`'s live borrow would make a mutating\n                // `ensure_materialized` call a borrow-checker conflict.\n                // #479: a single typed `Int` key -- the `GROUP BY\n                // customer_id` shape -- groups through `IntKeyTable` on the\n                // packed `i64`s below: the key register is never\n                // materialized to `Vec<Value>` (which would hand back, for\n                // exactly this column, the copy #482 stopped `LoadColumn`\n                // from making), no SipHash per cell, `i64 == i64` on a\n                // probe. `Dict` keeps #457's own path; composite, `Str` and\n                // `Float` keys keep the generic hash-then-verify below.\n                let int_group_by: Option<Arc<Column>> = match &group_by[..] {\n                    [reg] if dict_group_by.is_none() => self\n                        .typed_registers\n                        .get(reg)\n                        .filter(|column| matches!(column.as_ref(), Column::Int { .. }))\n                        .map(Arc::clone),\n                    _ => None,\n                };\n                for (_, src) in aggs.iter() {\n                    if let Some(reg) = src {\n                        self.ensure_materialized(*reg);\n                    }\n                }\n                // #479: the generic path reads each key register through a\n                // `KeyView` -- the typed column when there is one, the\n                // `Vec<Value>` otherwise -- so a typed key is hashed and\n                // compared in place and never materialized to `Vec<Value>`\n                // (which would hand back, for the key column, the copy #482\n                // stopped `LoadColumn` from making).\n                let key_views: Vec<KeyView> = if int_group_by.is_some() || dict_group_by.is_some() {\n                    Vec::new()\n                } else {\n                    group_by\n                        .iter()\n                        .map(|reg| self.key_view(*reg, opcode))\n                        .collect::<Result<_>>()?\n                };\n                let base_len = match &selection {\n                    Some(sel) => sel.base_len,\n                    None => match key_views\n                        .first()\n                        .map(KeyView::len)\n                        .or(int_group_by.as_ref().map(|c| c.len()))\n                        .or(dict_group_by.as_ref().map(|(_, _, valid)| valid.len()))\n                    {\n                        Some(len) => len,\n                        None => match aggs.iter().find_map(|(_, src)| {\n                            src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len))\n                        }) {\n                            Some(len) => len?,\n                            // `COUNT(*)` alone: no key or source column\n                            // carries the row count, but every live\n                            // register has the post-`Filter` length\n                            // (RegisterLengthMismatch guards that), so any\n                            // one of them is it; with no register at all\n                            // nothing was filtered and the batch's own row\n                            // count is exact.\n                            None => self\n                                .registers\n                                .values()\n                                .next()\n                                .map_or(batch.num_rows, |v| v.len()),\n                        },\n                    },\n                };\n                for view in &key_views {\n                    if view.len() != base_len {\n                        return Err(VmError::RegisterLengthMismatch { opcode });\n                    }\n                }\n                if int_group_by.as_ref().is_some_and(|c| c.len() != base_len) {\n                    return Err(VmError::RegisterLengthMismatch { opcode });\n                }\n                let int_key: Option<(&[i64], &Bitmap)> = match int_group_by.as_deref() {\n                    Some(Column::Int { data, valid }) => Some((data.as_slice(), valid)),\n                    _ => None,\n                };\n                let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());\n                let physical = |row: usize| {\n                    selection\n                        .as_ref()\n                        .map_or(row, |sel| sel.indices[row] as usize)\n                };\n\n                let (row_group, group_keys): (Vec<usize>, Vec<Vec<Value>>) = match dict_group_by {\n                    Some((dict, indices, valid)) => {\n                        dict_group_by_single_column(&dict, &indices, &valid, num_rows, physical)\n                    }\n                    // #439/#440: hash column-wise (`hash_columns_by_row`, no\n                    // per-row key materialized), then probe by hash first on\n                    // a borrowed row view, only clone+allocate a\n                    // `Vec<Value>` key on a genuine new group -- the old\n                    // code built and cloned that `Vec` (plus its `String`s)\n                    // for every input row, even though nearly every row\n                    // lands in a group that already exists. `group_index`\n                    // buckets group ids by hash (collisions possible, so\n                    // each bucket is checked for an exact match) rather\n                    // than owning a `GroupKey` per entry.\n                    None => match int_key {\n                        Some((data, valid)) => {\n                            int_group_by_single_column(data, valid, num_rows, physical)?\n                        }\n                        None => group_by_key_views(&key_views, num_rows, physical)?,\n                    },\n                };\n                let num_groups = group_keys.len();\n\n                for (i, reg) in group_by.iter().enumerate() {\n                    let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();\n                    self.registers.insert(*reg, Arc::new(column));\n                }\n\n                for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {\n                    // #477: one `RunningAgg` per group instead of\n                    // `per_group: Vec<Vec<Value>>` + a final\n                    // `reduce_values` pass -- O(1) memory per row instead\n                    // of O(matched rows), same accumulator\n                    // `Opcode::HashProbeGroupReduce` (#441) already uses.\n                    let mut accs: Vec<RunningAgg> = vec![RunningAgg::default(); num_groups];\n                    match src {\n                        Some(reg) => match self.typed_registers.get(reg).map(Arc::clone) {\n                            // #477: read straight from the typed column's\n                            // packed `data`/`valid` for `Int`/`Float` --\n                            // no `Value` allocated per row at all, unlike\n                            // `Column::get`'s scalar-at-a-time path used\n                            // for every other variant below.\n                            Some(column) if column.len() == base_len => match column.as_ref() {\n                                Column::Float { data, valid } => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let p = physical(row);\n                                        if valid.get(p) {\n                                            accs[*group].push_f64(data[p]);\n                                        } else {\n                                            accs[*group].push_null();\n                                        }\n                                    }\n                                }\n                                Column::Int { data, valid } => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let p = physical(row);\n                                        if valid.get(p) {\n                                            #[allow(\n                                                clippy::cast_precision_loss,\n                                                reason = \"matches Value::Int's own as_f64 widening; RunningAgg's sum/min/max are f64 for every numeric AggFunc\"\n                                            )]\n                                            accs[*group].push_f64(data[p] as f64);\n                                        } else {\n                                            accs[*group].push_null();\n                                        }\n                                    }\n                                }\n                                other => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let value = other.get(physical(row));\n                                        accs[*group].push(Some(&value));\n                                    }\n                                }\n                            },\n                            _ => {\n                                // #110: borrow instead of `.to_vec()` --\n                                // same redundant-clone pattern as the old\n                                // `Emit`. #482: already materialized above.\n                                let values = self.reg(*reg, opcode)?;\n                                if values.len() != base_len {\n                                    return Err(VmError::RegisterLengthMismatch { opcode });\n                                }\n                                for (row, group) in row_group.iter().enumerate() {\n                                    accs[*group].push(Some(&values[physical(row)]));\n                                }\n                            }\n                        },\n                        None => {\n                            for group in &row_group {\n                                accs[*group].push_null();\n                            }\n                        }\n                    }\n                    let is_count_star = src.is_none();\n                    let result: Vec<Value> = accs\n                        .iter()\n                        .map(|acc| acc.finalize(*func, is_count_star))\n                        .collect();\n                    self.registers.insert(*dst, Arc::new(result));\n                }\n            }\n            Opcode::HashBuild {\n                key_cols,\n                payload_cols,\n                table,\n            } => {\n                // #265: lazily resolves any pending selection -- only the\n                // key/payload registers this opcode actually reads are\n                // indexed through it, rather than every live register\n                // being eagerly compacted back in `Filter`. Taken up\n                // front so the borrows below are of `self.registers`\n                // alone, not all of `self`.\n                let selection = self.selection.take();\n                for r in key_cols.iter().chain(payload_cols.iter()) {\n                    self.ensure_materialized(*r);\n                }\n                let key_columns: Vec<&[Value]> = key_cols\n                    .iter()\n                    .map(|r| self.reg(*r, opcode))\n                    .collect::<Result<_>>()?;\n                let payload_columns: Vec<&[Value]> = payload_cols\n                    .iter()\n                    .map(|r| self.reg(*r, opcode))\n                    .collect::<Result<_>>()?;\n                let base_len = key_columns.first().map(|c| c.len()).ok_or_else(|| {\n                    VmError::MalformedProgram {\n                        opcode,\n                        reason: \"hash build has no key columns\".to_string(),\n                    }\n                })?;\n                for c in key_columns.iter().chain(&payload_columns) {\n                    if c.len() != base_len {\n                        return Err(VmError::RegisterLengthMismatch { opcode });\n                    }\n                }\n                if let Some(sel) = &selection {\n                    if sel.base_len != base_len {\n                        return Err(VmError::RegisterLengthMismatch { opcode });\n                    }\n                }\n                let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());\n                let physical = |row: usize| {\n                    selection\n                        .as_ref()\n                        .map_or(row, |sel| sel.indices[row] as usize)\n                };\n\n                // #440: hash the key columns column-wise (no per-row\n                // `Vec<Value>` key), then store key/payload data\n                // column-major too -- one allocation per key/payload\n                // column (reserved up front), not one per row. `index`\n                // maps each row's hash to its own row number; a later\n                // probe still has to verify a candidate row's actual\n                // values (`join_keys_match`), since two different keys\n                // can share a hash.\n                let hashes = hash_columns_by_row(&key_columns, num_rows, physical);\n                let mut keys: Vec<Vec<Value>> = key_columns\n                    .iter()\n                    .map(|_| Vec::with_capacity(num_rows))\n                    .collect();\n                let mut payload: Vec<Vec<Value>> = payload_columns\n                    .iter()\n                    .map(|_| Vec::with_capacity(num_rows))\n                    .collect();\n                let mut index: JoinHashTable<u64, usize> = JoinHashTable::with_capacity(num_rows);\n                for row in 0..num_rows {\n                    let p = physical(row);\n                    for (i, c) in key_columns.iter().enumerate() {\n                        keys[i].push(c[p].clone());\n                    }\n                    for (i, c) in payload_columns.iter().enumerate() {\n                        payload[i].push(c[p].clone());\n                    }\n                    index.insert(hashes[row], row);\n                }\n                self.join_tables.0.insert(\n                    *table,\n                    Arc::new(BuildTable {\n                        index,\n                        keys,\n                        payload,\n                    }),\n                );\n            }\n            Opcode::HashProbe {\n                key_cols,\n                table,\n                payload_dst,\n                kind,\n            } => {\n                // #265: HashProbe already reshapes every live register\n                // itself (below) based on its own match/fan-out indices,\n                // a different and richer concept than a plain `Filter`\n                // selection vector -- resolve any pending selection first\n                // so the rest of this arm is unchanged from before #265.\n                self.resolve_selection(opcode)?;\n                for r in key_cols.iter() {\n                    self.ensure_materialized(*r);\n                }\n                let key_columns: Vec<&[Value]> = key_cols\n                    .iter()\n                    .map(|r| self.reg(*r, opcode))\n                    .collect::<Result<_>>()?;\n                let num_rows = key_columns.first().map(|c| c.len()).ok_or_else(|| {\n                    VmError::MalformedProgram {\n                        opcode,\n                        reason: \"hash probe has no key columns\".to_string(),\n                    }\n                })?;\n                // An `Arc` bump, so `bt` is a local the payload columns\n                // below can read from after the reshape has mutably\n                // borrowed `self.registers` (#272: no payload clone per\n                // matched row -- `emitted` records the build row, and\n                // each payload cell is cloned once, straight into its\n                // destination column).\n                let bt = Arc::clone(self.join_tables.0.get(table).ok_or(\n                    VmError::UnknownJoinTable {\n                        opcode,\n                        table: *table,\n                    },\n                )?);\n\n                // #440: hash the probe rows column-wise (no per-row\n                // `Vec<Value>` key, not even a reused buffer) and probe\n                // `bt.index` by hash; `join_keys_match` resolves both\n                // genuine hash collisions and NULL-never-matches against\n                // `bt.keys` before a candidate counts as a real match.\n                let hashes = hash_columns_by_row(&key_columns, num_rows, |row| row);\n                let mut emitted: Vec<(usize, Option<usize>)> = Vec::with_capacity(num_rows);\n                for row in 0..num_rows {\n                    let mut matched = false;\n                    let emit_payload =\n                        !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);\n                    bt.index.for_each_match_slot(&hashes[row], |slot| {\n                        let Some(&build_row) = bt.index.value_at(slot) else {\n                            return;\n                        };\n                        if !join_keys_match(&key_columns, row, &bt.keys, build_row) {\n                            return;\n                        }\n                        matched = true;\n                        if emit_payload {\n                            emitted.push((row, Some(build_row)));\n                        }\n                    });\n                    if !matched {\n                        if should_emit(*kind, false, false) {\n                            emitted.push((row, None));\n                        }\n                    } else if matches!(kind, JoinKind::Semi) {\n                        // At most one row per probe-side match, regardless\n                        // of build-side fanout; no payload (see doc comment\n                        // on `Opcode::HashProbe`).\n                        emitted.push((row, None));\n                    }\n                }\n\n                // #482: every live register gets reshaped below by row\n                // position -- a typed-only register (never read as\n                // `Vec<Value>` yet) would otherwise be silently skipped\n                // here, then left both stale (still describing pre-probe\n                // rows) and undetected once `typed_registers` is cleared\n                // below.\n                let typed_only: Vec<usize> = self.typed_registers.keys().copied().collect();\n                for r in typed_only {\n                    self.ensure_materialized(r);\n                }\n                for values in self.registers.values_mut() {\n                    if values.len() != num_rows {\n                        return Err(VmError::RegisterLengthMismatch { opcode });\n                    }\n                    let reshaped: Vec<Value> = emitted\n                        .iter()\n                        .map(|(row, _)| values[*row].clone())\n                        .collect();\n                    *values = Arc::new(reshaped);\n                }\n                // #482: every register above was just reshaped to the\n                // post-probe row order/count, so any `typed_registers`\n                // shadow of one is now stale -- clear them (mirrors\n                // `resolve_selection`'s same discipline) rather than let a\n                // later opcode's typed fast path read pre-probe data.\n                self.typed_registers.clear();\n\n                for (i, dst) in payload_dst.iter().enumerate() {\n                    let col: Vec<Value> = emitted\n                        .iter()\n                        .map(|(_, build_row)| match build_row {\n                            // `None` is an unmatched LEFT JOIN probe row: NULL\n                            // by definition. A payload narrower than its\n                            // destinations is a planner bug, not NULL data;\n                            // `build_row` always indexes a real row of\n                            // `bt.payload` (it came from `bt.index` itself),\n                            // so only the column count can be wrong.\n                            Some(build_row) => bt\n                                .payload\n                                .get(i)\n                                .and_then(|column| column.get(*build_row))\n                                .cloned()\n                                .ok_or_else(|| VmError::MalformedProgram {\n                                    opcode,\n                                    reason: format!(\n                                        \"join payload has {} columns but destination {i} was requested\",\n                                        bt.payload.len()\n                                    ),\n                                }),\n                            None => Ok(Value::Null),\n                        })\n                        .collect::<Result<_>>()?;\n                    self.registers.insert(*dst, Arc::new(col));\n                }\n            }\n            Opcode::HashProbeGroupReduce {\n                key_cols,\n                table,\n                kind,\n                group_by,\n                aggs,\n                agg_dst,\n            } => {\n                // #441: same probe-resolution rule as `Opcode::HashProbe`\n                // above -- this opcode reshapes nothing (there is no\n                // per-row output to reshape), but still reads live\n                // registers by row index below, so any pending selection\n                // must be resolved first.\n                self.resolve_selection(opcode)?;\n                // Every distinct probe-side register `key_cols` or a\n                // `group_by`/`aggs` source reads -- materialized (#482)\n                // and resolved once up front, before `key_columns` below\n                // starts holding `&[Value]` borrows across this whole\n                // arm; a later `ensure_materialized` call (mutable)\n                // couldn't run alongside a borrow still live in\n                // `key_columns`/`probe_columns` from an earlier step.\n                let probe_regs: Vec<usize> = group_by\n                    .iter()\n                    .filter_map(|(src, _)| match src {\n                        ValueSource::Probe(reg) => Some(*reg),\n                        ValueSource::Payload(_) => None,\n                    })\n                    .chain(aggs.iter().filter_map(|(_, src)| match src {\n                        Some(ValueSource::Probe(reg)) => Some(*reg),\n                        _ => None,\n                    }))\n                    .collect();\n                for r in key_cols.iter() {\n                    self.ensure_materialized(*r);\n                }\n                for &reg in &probe_regs {\n                    self.ensure_materialized(reg);\n                }\n                let key_columns: Vec<&[Value]> = key_cols\n                    .iter()\n                    .map(|r| self.reg(*r, opcode))\n                    .collect::<Result<_>>()?;\n                let num_rows = key_columns.first().map(|c| c.len()).ok_or_else(|| {\n                    VmError::MalformedProgram {\n                        opcode,\n                        reason: \"hash probe has no key columns\".to_string(),\n                    }\n                })?;\n                let bt = Arc::clone(self.join_tables.0.get(table).ok_or(\n                    VmError::UnknownJoinTable {\n                        opcode,\n                        table: *table,\n                    },\n                )?);\n\n                let mut probe_columns: Vec<(usize, &[Value])> = Vec::new();\n                for reg in probe_regs {\n                    if !probe_columns.iter().any(|(r, _)| *r == reg) {\n                        probe_columns.push((reg, self.reg(reg, opcode)?));\n                    }\n                }\n\n                // #440-style hash-then-verify probe, but folding each real\n                // match straight into a group's `RunningAgg`s instead of\n                // recording `(row, build_row)` pairs to reshape later\n                // (#439's `HashProbe`) or materializing a joined row at\n                // all (this is the whole point of #441): a join feeding\n                // only an aggregate never allocates one register set per\n                // matched row, only one `RunningAgg` per *group*.\n                let hashes = hash_columns_by_row(&key_columns, num_rows, |row| row);\n                let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();\n                let mut group_keys: Vec<Vec<Value>> = Vec::new();\n                let mut accumulators: Vec<Vec<RunningAgg>> = vec![Vec::new(); aggs.len()];\n                for row in 0..num_rows {\n                    let mut matched = false;\n                    let emit_payload =\n                        !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);\n                    bt.index.for_each_match_slot(&hashes[row], |slot| {\n                        let Some(&build_row) = bt.index.value_at(slot) else {\n                            return;\n                        };\n                        if !join_keys_match(&key_columns, row, &bt.keys, build_row) {\n                            return;\n                        }\n                        matched = true;\n                        if emit_payload {\n                            fold_group_row(\n                                group_by,\n                                aggs,\n                                &probe_columns,\n                                &bt,\n                                row,\n                                Some(build_row),\n                                &mut group_index,\n                                &mut group_keys,\n                                &mut accumulators,\n                            );\n                        }\n                    });\n                    if !matched {\n                        if should_emit(*kind, false, false) {\n                            fold_group_row(\n                                group_by,\n                                aggs,\n                                &probe_columns,\n                                &bt,\n                                row,\n                                None,\n                                &mut group_index,\n                                &mut group_keys,\n                                &mut accumulators,\n                            );\n                        }\n                    } else if matches!(kind, JoinKind::Semi) {\n                        // Mirrors `Opcode::HashProbe`'s own `Semi` handling:\n                        // at most one contribution per probe row, with every\n                        // `Payload` source NULL (semi-joins never surface\n                        // the build side's columns).\n                        fold_group_row(\n                            group_by,\n                            aggs,\n                            &probe_columns,\n                            &bt,\n                            row,\n                            None,\n                            &mut group_index,\n                            &mut group_keys,\n                            &mut accumulators,\n                        );\n                    }\n                }\n\n                for (i, (_src, dst)) in group_by.iter().enumerate() {\n                    let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();\n                    self.registers.insert(*dst, Arc::new(column));\n                }\n                for (i, (func, src)) in aggs.iter().enumerate() {\n                    let is_count_star = src.is_none();\n                    let result: Vec<Value> = accumulators[i]\n                        .iter()\n                        .map(|acc| acc.finalize(*func, is_count_star))\n                        .collect();\n                    self.registers.insert(agg_dst[i], Arc::new(result));\n                }\n            }\n            Opcode::Window {\n                func,\n                arg,\n                offset,\n                partition_by,\n                order_by,\n                dst,\n            } => {\n                // #265: see the comment on `Map`'s same call.\n                self.resolve_selection(opcode)?;\n                for r in partition_by.iter() {\n                    self.ensure_materialized(*r);\n                }\n                for (r, _) in order_by.iter() {\n                    self.ensure_materialized(*r);\n                }\n                if let Some(r) = arg {\n                    self.ensure_materialized(*r);\n                }\n                let partition_cols: Vec<&[Value]> = partition_by\n                    .iter()\n                    .map(|r| self.reg(*r, opcode))\n                    .collect::<Result<_>>()?;\n                let order_cols: Vec<(&[Value], bool)> = order_by\n                    .iter()\n                    .map(|(r, desc)| self.reg(*r, opcode).map(|c| (c, *desc)))\n                    .collect::<Result<_>>()?;\n                let arg_col: Option<&[Value]> = match arg {\n                    Some(r) => Some(self.reg(*r, opcode)?),\n                    None => None,\n                };\n\n                let num_rows = partition_cols.first().map_or_else(\n                    || {\n                        order_cols.first().map_or_else(\n                            || arg_col.map_or(batch.num_rows, <[Value]>::len),\n                            |(c, _)| c.len(),\n                        )\n                    },\n                    |c| c.len(),\n                );\n\n                let result = compute_window(\n                    *func,\n                    *offset,\n                    &partition_cols,\n                    &order_cols,\n                    arg_col,\n                    num_rows,\n                )?;\n                self.registers.insert(*dst, Arc::new(result));\n            }\n            Opcode::Emit { registers } => {\n                // #262: Emit is terminal for these registers, so remove\n                // each column from `self.registers` instead of borrowing\n                // and cloning every cell into the output rows. A register\n                // listed more than once in `registers` (e.g. `SELECT a,\n                // a`) is removed on its first occurrence and `Arc::clone`d\n                // (a refcount bump, not a cell copy) for the repeats.\n                // #474: every emitted register already scalar (a bare\n                // `Reduce`'s single-value `dst`) means this is a bare\n                // aggregate SELECT list -- any selection still pending\n                // (peeked but never resolved by a `COUNT(*)`-only run of\n                // `Reduce`s) is stale, not something to index these\n                // columns by. See the comment below where it's used.\n                let all_scalar = registers.iter().all(|r| self.scalar_registers.contains(r));\n                let mut cols: Vec<Arc<Vec<Value>>> = Vec::with_capacity(registers.len());\n                for r in registers.iter() {\n                    self.ensure_materialized(*r);\n                    let owned = if let Some(existing) = self.registers.remove(r) {\n                        existing\n                    } else {\n                        cols.iter()\n                            .zip(registers.iter())\n                            .find(|(_, seen_r)| *seen_r == r)\n                            .map(|(col, _)| Arc::clone(col))\n                            .ok_or(VmError::UnknownRegister {\n                                opcode,\n                                register: *r,\n                            })?\n                    };\n                    cols.push(owned);\n                }\n                let base_len =\n                    cols.first()\n                        .map(|c| c.len())\n                        .ok_or_else(|| VmError::MalformedProgram {\n                            opcode,\n                            reason: \"emit has no registers\".to_string(),\n                        })?;\n                for c in &cols {\n                    if c.len() != base_len {\n                        return Err(VmError::RegisterLengthMismatch { opcode });\n                    }\n                }\n                // #265: lazily resolves any pending selection, indexing\n                // straight into the (still uncompacted) emitted columns\n                // instead of `Filter` having eagerly compacted every live\n                // register up front.\n                // #474: a pending selection is stale, not malformed, once\n                // every emitted column is already scalar -- nothing here\n                // ever needed the row-level data it pointed to. Drop it\n                // instead of indexing into already-scalar columns (or\n                // erroring on their length).\n                let selection = if all_scalar {\n                    self.selection.take();\n                    None\n                } else {\n                    self.selection.take()\n                };\n                if let Some(sel) = &selection {\n                    if sel.base_len != base_len {\n                        return Err(VmError::RegisterLengthMismatch { opcode });\n                    }\n                }\n                // #436: one chunk per `Emit` -- no per-row `Vec`, no\n                // row-major transpose, and no copy at all when there is\n                // no selection: the emitted `Arc` *is* the register's\n                // column (a bare `LoadColumn`'s is the batch's own, shared\n                // by refcount; a `Map`/`Reduce` result is moved as-is).\n                // Only a selected subset has to be materialized, since\n                // the unselected cells can't be left behind in a shared\n                // `Arc`.\n                let chunk: Chunk = cols\n                    .into_iter()\n                    .map(|col| match &selection {\n                        Some(sel) => Arc::new(\n                            sel.indices\n                                .iter()\n                                .map(|&idx| col[idx as usize].clone())\n                                .collect(),\n                        ),\n                        None => col,\n                    })\n                    .collect();\n                self.output.push_chunk(chunk);\n            }\n            // Meaningful only as loop markers interpreted by `run` --\n            // and `Combine`/`Sort`/`Limit` are the cross-segment\n            // sequential phase applied once by `crate::vm::engine::run`,\n            // never inside a single segment. `ScanSource` is likewise a\n            // no-op here: resolving it into a `Batch` happens above the\n            // per-segment `Vm`, in `crate::vm::engine` (#385) -- this\n            // ticket (#384) only defines the opcode/type, no emitted\n            // program references it yet.\n            Opcode::Scan\n            | Opcode::NextSegment { .. }\n            | Opcode::Halt\n            | Opcode::Combine { .. }\n            | Opcode::Sort { .. }\n            | Opcode::Limit { .. }\n            | Opcode::ScanSource { .. } => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31632,7 +31952,7 @@
   {
     "id": "vm_batch_step_c496f0ca",
     "file": "src/vm/batch.rs",
-    "line": 3019,
+    "line": 3294,
     "decision": "let Some(typed) = batch.typed_columns.get(column.as_ref())",
     "conditions": 1,
     "vectors_required": 2,
@@ -31642,7 +31962,7 @@
   {
     "id": "vm_batch_step_1d3a63f0",
     "file": "src/vm/batch.rs",
-    "line": 3055,
+    "line": 3330,
     "decision": "let Some(result) = self.dict_literal_compare(*op, *a, *b, opcode)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -31652,7 +31972,7 @@
   {
     "id": "vm_batch_step_e1dc7ae5",
     "file": "src/vm/batch.rs",
-    "line": 3058,
+    "line": 3333,
     "decision": "let Some(column) = self.typed_arithmetic(*op, *a, *b, opcode)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -31662,7 +31982,7 @@
   {
     "id": "vm_batch_step_7dc95fd8",
     "file": "src/vm/batch.rs",
-    "line": 3071,
+    "line": 3346,
     "decision": "a_vals.len() != b_vals.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31672,7 +31992,7 @@
   {
     "id": "vm_batch_step_b727905a",
     "file": "src/vm/batch.rs",
-    "line": 3095,
+    "line": 3370,
     "decision": "arg_regs.iter().any(|r| r.len() != num_rows)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31682,7 +32002,7 @@
   {
     "id": "vm_batch_step_7aa0d1f0",
     "file": "src/vm/batch.rs",
-    "line": 3116,
+    "line": 3391,
     "decision": "match self.typed_registers.get(predicate) {\n                    // #429: a typed Bool predicate register (e.g. loaded\n                    // straight from a sealed segment's Bool column) reads\n                    // its bitmap-backed buffer directly, skipping the\n                    // `Value::Bool(true)` match entirely.\n                    Some(column) => match column.as_ref() {\n                        Column::Bool { data, valid } => (0..data.len())\n                            .map(|i| valid.get(i) && data.get(i).copied().unwrap_or(false))\n                            .collect(),\n                        other => (0..other.len())\n                            .map(|i| matches!(other.get(i), Value::Bool(true)))\n                            .collect(),\n                    },\n                    None => {\n                        self.ensure_materialized(*predicate);\n                        self.reg(*predicate, opcode)?\n                            .iter()\n                            .map(|v| matches!(v, Value::Bool(true)))\n                            .collect()\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31692,7 +32012,7 @@
   {
     "id": "vm_batch_step_ad527909",
     "file": "src/vm/batch.rs",
-    "line": 3121,
+    "line": 3396,
     "decision": "match column.as_ref() {\n                        Column::Bool { data, valid } => (0..data.len())\n                            .map(|i| valid.get(i) && data.get(i).copied().unwrap_or(false))\n                            .collect(),\n                        other => (0..other.len())\n                            .map(|i| matches!(other.get(i), Value::Bool(true)))\n                            .collect(),\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31702,7 +32022,7 @@
   {
     "id": "vm_batch_step_6adef195",
     "file": "src/vm/batch.rs",
-    "line": 3139,
+    "line": 3414,
     "decision": "values.len() != base_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -31712,7 +32032,7 @@
   {
     "id": "vm_batch_step_c2a52d51",
     "file": "src/vm/batch.rs",
-    "line": 3143,
+    "line": 3418,
     "decision": "match self.selection.take() {\n                    Some(existing) => {\n                        if existing.base_len != base_len {\n                            return Err(VmError::RegisterLengthMismatch { opcode });\n                        }\n                        existing.indices\n                    }\n                    // #110: size the surviving-index buffer to the actual\n                    // survivor count up front (not the pre-filter length)\n                    // -- at 50% selectivity on a 10M-row scan, over-\n                    // allocating by 2x is real peak-RSS waste for no\n                    // benefit (the excess capacity is never used).\n                    None => (0..u32::try_from(base_len).unwrap_or(u32::MAX)).collect(),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31722,7 +32042,7 @@
   {
     "id": "vm_batch_step_3b74a593",
     "file": "src/vm/batch.rs",
-    "line": 3145,
+    "line": 3420,
     "decision": "existing.base_len != base_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -31732,7 +32052,7 @@
   {
     "id": "vm_batch_step_5205441f",
     "file": "src/vm/batch.rs",
-    "line": 3160,
+    "line": 3435,
     "decision": "mask.get(idx as usize).copied().unwrap_or(false)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31742,7 +32062,7 @@
   {
     "id": "vm_batch_step_0d8ca0b3",
     "file": "src/vm/batch.rs",
-    "line": 3167,
+    "line": 3442,
     "decision": "match src {\n                    Some(reg) => {\n                        // #265: see the comment on `Map`'s same call. Also\n                        // clears `typed_registers` when it actually\n                        // resolves a selection, so the typed fast path\n                        // below only ever fires over an unfiltered (or\n                        // already-compacted) typed column -- never a\n                        // stale, wrong-length shadow.\n                        self.resolve_selection(opcode)?;\n                        let typed = self\n                            .typed_registers\n                            .get(reg)\n                            .and_then(|column| typed_reduce_values(*func, column));\n                        match typed {\n                            Some(result) => result,\n                            None => {\n                                self.ensure_materialized(*reg);\n                                reduce_values(*func, self.reg(*reg, opcode)?)\n                            }\n                        }\n                    }\n                    // #452/#474: bare `COUNT(*)` never reads register\n                    // contents, only the survivor count -- so unlike\n                    // every other `src`, it must NOT force\n                    // `resolve_selection`'s per-register compaction\n                    // (O(live registers x survivors), the dominant cost\n                    // at high selectivity per #474). Peek (don't take)\n                    // the pending selection's index count: another\n                    // `Reduce`/`Map` in the same SELECT list (e.g.\n                    // `count(*), sum(amt)`) still needs the selection\n                    // itself to compact its own source register.\n                    None => {\n                        let count = match &self.selection {\n                            Some(selection) => selection.indices.len(),\n                            None => self.selected_rows.unwrap_or(batch.num_rows),\n                        };\n                        reduce_count_star(*func, count)\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31752,7 +32072,7 @@
   {
     "id": "vm_batch_step_4f7f16f0",
     "file": "src/vm/batch.rs",
-    "line": 3180,
+    "line": 3455,
     "decision": "match typed {\n                            Some(result) => result,\n                            None => {\n                                self.ensure_materialized(*reg);\n                                reduce_values(*func, self.reg(*reg, opcode)?)\n                            }\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31762,7 +32082,7 @@
   {
     "id": "vm_batch_step_fb12615e",
     "file": "src/vm/batch.rs",
-    "line": 3199,
+    "line": 3474,
     "decision": "match &self.selection {\n                            Some(selection) => selection.indices.len(),\n                            None => self.selected_rows.unwrap_or(batch.num_rows),\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31772,7 +32092,7 @@
   {
     "id": "vm_batch_step_e4fdb634",
     "file": "src/vm/batch.rs",
-    "line": 3229,
+    "line": 3504,
     "decision": "match &group_by[..] {\n                    [reg] => match self.typed_registers.get(reg).map(Arc::as_ref) {\n                        Some(Column::Dict {\n                            dict,\n                            indices,\n                            valid,\n                        }) => Some((dict.clone(), indices.clone(), valid.clone())),\n                        _ => None,\n                    },\n                    _ => None,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31782,7 +32102,7 @@
   {
     "id": "vm_batch_step_cc6053a1",
     "file": "src/vm/batch.rs",
-    "line": 3230,
+    "line": 3505,
     "decision": "match self.typed_registers.get(reg).map(Arc::as_ref) {\n                        Some(Column::Dict {\n                            dict,\n                            indices,\n                            valid,\n                        }) => Some((dict.clone(), indices.clone(), valid.clone())),\n                        _ => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31792,7 +32112,7 @@
   {
     "id": "vm_batch_step_c54fae31",
     "file": "src/vm/batch.rs",
-    "line": 3256,
+    "line": 3531,
     "decision": "match &group_by[..] {\n                    [reg] if dict_group_by.is_none() => self\n                        .typed_registers\n                        .get(reg)\n                        .filter(|column| matches!(column.as_ref(), Column::Int { .. }))\n                        .map(Arc::clone),\n                    _ => None,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31802,7 +32122,7 @@
   {
     "id": "vm_batch_step_0777a264",
     "file": "src/vm/batch.rs",
-    "line": 3257,
+    "line": 3532,
     "decision": "dict_group_by.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31812,7 +32132,7 @@
   {
     "id": "vm_batch_step_fc1ce6de",
     "file": "src/vm/batch.rs",
-    "line": 3265,
+    "line": 3540,
     "decision": "let Some(reg) = src",
     "conditions": 1,
     "vectors_required": 2,
@@ -31822,7 +32142,7 @@
   {
     "id": "vm_batch_step_e967929c",
     "file": "src/vm/batch.rs",
-    "line": 3275,
+    "line": 3550,
     "decision": "int_group_by.is_some() || dict_group_by.is_some()",
     "conditions": 2,
     "vectors_required": 3,
@@ -31832,7 +32152,7 @@
   {
     "id": "vm_batch_step_68ce536e",
     "file": "src/vm/batch.rs",
-    "line": 3283,
+    "line": 3558,
     "decision": "match &selection {\n                    Some(sel) => sel.base_len,\n                    None => match key_views\n                        .first()\n                        .map(KeyView::len)\n                        .or(int_group_by.as_ref().map(|c| c.len()))\n                        .or(dict_group_by.as_ref().map(|(_, _, valid)| valid.len()))\n                    {\n                        Some(len) => len,\n                        None => match aggs.iter().find_map(|(_, src)| {\n                            src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len))\n                        }) {\n                            Some(len) => len?,\n                            // `COUNT(*)` alone: no key or source column\n                            // carries the row count, but every live\n                            // register has the post-`Filter` length\n                            // (RegisterLengthMismatch guards that), so any\n                            // one of them is it; with no register at all\n                            // nothing was filtered and the batch's own row\n                            // count is exact.\n                            None => self\n                                .registers\n                                .values()\n                                .next()\n                                .map_or(batch.num_rows, |v| v.len()),\n                        },\n                    },\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31842,7 +32162,7 @@
   {
     "id": "vm_batch_step_fabf9656",
     "file": "src/vm/batch.rs",
-    "line": 3285,
+    "line": 3560,
     "decision": "match key_views\n                        .first()\n                        .map(KeyView::len)\n                        .or(int_group_by.as_ref().map(|c| c.len()))\n                        .or(dict_group_by.as_ref().map(|(_, _, valid)| valid.len()))\n                    {\n                        Some(len) => len,\n                        None => match aggs.iter().find_map(|(_, src)| {\n                            src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len))\n                        }) {\n                            Some(len) => len?,\n                            // `COUNT(*)` alone: no key or source column\n                            // carries the row count, but every live\n                            // register has the post-`Filter` length\n                            // (RegisterLengthMismatch guards that), so any\n                            // one of them is it; with no register at all\n                            // nothing was filtered and the batch's own row\n                            // count is exact.\n                            None => self\n                                .registers\n                                .values()\n                                .next()\n                                .map_or(batch.num_rows, |v| v.len()),\n                        },\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31852,7 +32172,7 @@
   {
     "id": "vm_batch_step_5f349c15",
     "file": "src/vm/batch.rs",
-    "line": 3292,
+    "line": 3567,
     "decision": "match aggs.iter().find_map(|(_, src)| {\n                            src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len))\n                        }) {\n                            Some(len) => len?,\n                            // `COUNT(*)` alone: no key or source column\n                            // carries the row count, but every live\n                            // register has the post-`Filter` length\n                            // (RegisterLengthMismatch guards that), so any\n                            // one of them is it; with no register at all\n                            // nothing was filtered and the batch's own row\n                            // count is exact.\n                            None => self\n                                .registers\n                                .values()\n                                .next()\n                                .map_or(batch.num_rows, |v| v.len()),\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31862,7 +32182,7 @@
   {
     "id": "vm_batch_step_5318c4eb",
     "file": "src/vm/batch.rs",
-    "line": 3312,
+    "line": 3587,
     "decision": "view.len() != base_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -31872,7 +32192,7 @@
   {
     "id": "vm_batch_step_96be83b9",
     "file": "src/vm/batch.rs",
-    "line": 3316,
+    "line": 3591,
     "decision": "int_group_by.as_ref().is_some_and(|c| c.len() != base_len)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31882,7 +32202,7 @@
   {
     "id": "vm_batch_step_59ba4d00",
     "file": "src/vm/batch.rs",
-    "line": 3319,
+    "line": 3594,
     "decision": "match int_group_by.as_deref() {\n                    Some(Column::Int { data, valid }) => Some((data.as_slice(), valid)),\n                    _ => None,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31892,7 +32212,7 @@
   {
     "id": "vm_batch_step_73e76d6e",
     "file": "src/vm/batch.rs",
-    "line": 3330,
+    "line": 3605,
     "decision": "match dict_group_by {\n                    Some((dict, indices, valid)) => {\n                        dict_group_by_single_column(&dict, &indices, &valid, num_rows, physical)\n                    }\n                    // #439/#440: hash column-wise (`hash_columns_by_row`, no\n                    // per-row key materialized), then probe by hash first on\n                    // a borrowed row view, only clone+allocate a\n                    // `Vec<Value>` key on a genuine new group -- the old\n                    // code built and cloned that `Vec` (plus its `String`s)\n                    // for every input row, even though nearly every row\n                    // lands in a group that already exists. `group_index`\n                    // buckets group ids by hash (collisions possible, so\n                    // each bucket is checked for an exact match) rather\n                    // than owning a `GroupKey` per entry.\n                    None => match int_key {\n                        Some((data, valid)) => {\n                            int_group_by_single_column(data, valid, num_rows, physical)?\n                        }\n                        None => group_by_key_views(&key_views, num_rows, physical)?,\n                    },\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31902,7 +32222,7 @@
   {
     "id": "vm_batch_step_0dd0cdf8",
     "file": "src/vm/batch.rs",
-    "line": 3344,
+    "line": 3619,
     "decision": "match int_key {\n                        Some((data, valid)) => {\n                            int_group_by_single_column(data, valid, num_rows, physical)?\n                        }\n                        None => group_by_key_views(&key_views, num_rows, physical)?,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31912,7 +32232,7 @@
   {
     "id": "vm_batch_step_59b36497",
     "file": "src/vm/batch.rs",
-    "line": 3365,
+    "line": 3640,
     "decision": "match src {\n                        Some(reg) => match self.typed_registers.get(reg).map(Arc::clone) {\n                            // #477: read straight from the typed column's\n                            // packed `data`/`valid` for `Int`/`Float` --\n                            // no `Value` allocated per row at all, unlike\n                            // `Column::get`'s scalar-at-a-time path used\n                            // for every other variant below.\n                            Some(column) if column.len() == base_len => match column.as_ref() {\n                                Column::Float { data, valid } => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let p = physical(row);\n                                        if valid.get(p) {\n                                            accs[*group].push_f64(data[p]);\n                                        } else {\n                                            accs[*group].push_null();\n                                        }\n                                    }\n                                }\n                                Column::Int { data, valid } => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let p = physical(row);\n                                        if valid.get(p) {\n                                            #[allow(\n                                                clippy::cast_precision_loss,\n                                                reason = \"matches Value::Int's own as_f64 widening; RunningAgg's sum/min/max are f64 for every numeric AggFunc\"\n                                            )]\n                                            accs[*group].push_f64(data[p] as f64);\n                                        } else {\n                                            accs[*group].push_null();\n                                        }\n                                    }\n                                }\n                                other => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let value = other.get(physical(row));\n                                        accs[*group].push(Some(&value));\n                                    }\n                                }\n                            },\n                            _ => {\n                                // #110: borrow instead of `.to_vec()` --\n                                // same redundant-clone pattern as the old\n                                // `Emit`. #482: already materialized above.\n                                let values = self.reg(*reg, opcode)?;\n                                if values.len() != base_len {\n                                    return Err(VmError::RegisterLengthMismatch { opcode });\n                                }\n                                for (row, group) in row_group.iter().enumerate() {\n                                    accs[*group].push(Some(&values[physical(row)]));\n                                }\n                            }\n                        },\n                        None => {\n                            for group in &row_group {\n                                accs[*group].push_null();\n                            }\n                        }\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31922,7 +32242,7 @@
   {
     "id": "vm_batch_step_2bfd45f5",
     "file": "src/vm/batch.rs",
-    "line": 3366,
+    "line": 3641,
     "decision": "match self.typed_registers.get(reg).map(Arc::clone) {\n                            // #477: read straight from the typed column's\n                            // packed `data`/`valid` for `Int`/`Float` --\n                            // no `Value` allocated per row at all, unlike\n                            // `Column::get`'s scalar-at-a-time path used\n                            // for every other variant below.\n                            Some(column) if column.len() == base_len => match column.as_ref() {\n                                Column::Float { data, valid } => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let p = physical(row);\n                                        if valid.get(p) {\n                                            accs[*group].push_f64(data[p]);\n                                        } else {\n                                            accs[*group].push_null();\n                                        }\n                                    }\n                                }\n                                Column::Int { data, valid } => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let p = physical(row);\n                                        if valid.get(p) {\n                                            #[allow(\n                                                clippy::cast_precision_loss,\n                                                reason = \"matches Value::Int's own as_f64 widening; RunningAgg's sum/min/max are f64 for every numeric AggFunc\"\n                                            )]\n                                            accs[*group].push_f64(data[p] as f64);\n                                        } else {\n                                            accs[*group].push_null();\n                                        }\n                                    }\n                                }\n                                other => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let value = other.get(physical(row));\n                                        accs[*group].push(Some(&value));\n                                    }\n                                }\n                            },\n                            _ => {\n                                // #110: borrow instead of `.to_vec()` --\n                                // same redundant-clone pattern as the old\n                                // `Emit`. #482: already materialized above.\n                                let values = self.reg(*reg, opcode)?;\n                                if values.len() != base_len {\n                                    return Err(VmError::RegisterLengthMismatch { opcode });\n                                }\n                                for (row, group) in row_group.iter().enumerate() {\n                                    accs[*group].push(Some(&values[physical(row)]));\n                                }\n                            }\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31932,7 +32252,7 @@
   {
     "id": "vm_batch_step_40236db5",
     "file": "src/vm/batch.rs",
-    "line": 3372,
+    "line": 3647,
     "decision": "column.len() == base_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -31942,7 +32262,7 @@
   {
     "id": "vm_batch_step_b8af3e12",
     "file": "src/vm/batch.rs",
-    "line": 3372,
+    "line": 3647,
     "decision": "match column.as_ref() {\n                                Column::Float { data, valid } => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let p = physical(row);\n                                        if valid.get(p) {\n                                            accs[*group].push_f64(data[p]);\n                                        } else {\n                                            accs[*group].push_null();\n                                        }\n                                    }\n                                }\n                                Column::Int { data, valid } => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let p = physical(row);\n                                        if valid.get(p) {\n                                            #[allow(\n                                                clippy::cast_precision_loss,\n                                                reason = \"matches Value::Int's own as_f64 widening; RunningAgg's sum/min/max are f64 for every numeric AggFunc\"\n                                            )]\n                                            accs[*group].push_f64(data[p] as f64);\n                                        } else {\n                                            accs[*group].push_null();\n                                        }\n                                    }\n                                }\n                                other => {\n                                    for (row, group) in row_group.iter().enumerate() {\n                                        let value = other.get(physical(row));\n                                        accs[*group].push(Some(&value));\n                                    }\n                                }\n                            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31952,7 +32272,7 @@
   {
     "id": "vm_batch_step_5103903a",
     "file": "src/vm/batch.rs",
-    "line": 3376,
+    "line": 3651,
     "decision": "valid.get(p)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31962,7 +32282,7 @@
   {
     "id": "vm_batch_step_5103903a_2",
     "file": "src/vm/batch.rs",
-    "line": 3386,
+    "line": 3661,
     "decision": "valid.get(p)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31972,7 +32292,7 @@
   {
     "id": "vm_batch_step_6adef195_2",
     "file": "src/vm/batch.rs",
-    "line": 3409,
+    "line": 3684,
     "decision": "values.len() != base_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -31982,7 +32302,7 @@
   {
     "id": "vm_batch_step_f96cdb28",
     "file": "src/vm/batch.rs",
-    "line": 3461,
+    "line": 3736,
     "decision": "c.len() != base_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -31992,7 +32312,7 @@
   {
     "id": "vm_batch_step_f6596d84",
     "file": "src/vm/batch.rs",
-    "line": 3465,
+    "line": 3740,
     "decision": "let Some(sel) = &selection",
     "conditions": 1,
     "vectors_required": 2,
@@ -32002,7 +32322,7 @@
   {
     "id": "vm_batch_step_70a78004",
     "file": "src/vm/batch.rs",
-    "line": 3466,
+    "line": 3741,
     "decision": "sel.base_len != base_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -32012,7 +32332,7 @@
   {
     "id": "vm_batch_step_c174fc53",
     "file": "src/vm/batch.rs",
-    "line": 3567,
+    "line": 3842,
     "decision": "!join_keys_match(&key_columns, row, &bt.keys, build_row)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32022,7 +32342,7 @@
   {
     "id": "vm_batch_step_366cbf26",
     "file": "src/vm/batch.rs",
-    "line": 3571,
+    "line": 3846,
     "decision": "emit_payload",
     "conditions": 1,
     "vectors_required": 2,
@@ -32032,7 +32352,7 @@
   {
     "id": "vm_batch_step_3aaa30af",
     "file": "src/vm/batch.rs",
-    "line": 3575,
+    "line": 3850,
     "decision": "!matched",
     "conditions": 1,
     "vectors_required": 2,
@@ -32042,7 +32362,7 @@
   {
     "id": "vm_batch_step_fd980e99",
     "file": "src/vm/batch.rs",
-    "line": 3576,
+    "line": 3851,
     "decision": "should_emit(*kind, false, false)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32052,7 +32372,7 @@
   {
     "id": "vm_batch_step_c1420519",
     "file": "src/vm/batch.rs",
-    "line": 3579,
+    "line": 3854,
     "decision": "matches!(kind, JoinKind::Semi)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32062,7 +32382,7 @@
   {
     "id": "vm_batch_step_238046d9",
     "file": "src/vm/batch.rs",
-    "line": 3598,
+    "line": 3873,
     "decision": "values.len() != num_rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -32072,7 +32392,7 @@
   {
     "id": "vm_batch_step_345f99e7",
     "file": "src/vm/batch.rs",
-    "line": 3617,
+    "line": 3892,
     "decision": "match build_row {\n                            // `None` is an unmatched LEFT JOIN probe row: NULL\n                            // by definition. A payload narrower than its\n                            // destinations is a planner bug, not NULL data;\n                            // `build_row` always indexes a real row of\n                            // `bt.payload` (it came from `bt.index` itself),\n                            // so only the column count can be wrong.\n                            Some(build_row) => bt\n                                .payload\n                                .get(i)\n                                .and_then(|column| column.get(*build_row))\n                                .cloned()\n                                .ok_or_else(|| VmError::MalformedProgram {\n                                    opcode,\n                                    reason: format!(\n                                        \"join payload has {} columns but destination {i} was requested\",\n                                        bt.payload.len()\n                                    ),\n                                }),\n                            None => Ok(Value::Null),\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32082,7 +32402,7 @@
   {
     "id": "vm_batch_step_77dbf139",
     "file": "src/vm/batch.rs",
-    "line": 3665,
+    "line": 3940,
     "decision": "match src {\n                        ValueSource::Probe(reg) => Some(*reg),\n                        ValueSource::Payload(_) => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32092,7 +32412,7 @@
   {
     "id": "vm_batch_step_d9823d41",
     "file": "src/vm/batch.rs",
-    "line": 3669,
+    "line": 3944,
     "decision": "match src {\n                        Some(ValueSource::Probe(reg)) => Some(*reg),\n                        _ => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32102,7 +32422,7 @@
   {
     "id": "vm_batch_step_2dbab72f",
     "file": "src/vm/batch.rs",
-    "line": 3699,
+    "line": 3974,
     "decision": "!probe_columns.iter().any(|(r, _)| *r == reg)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32112,7 +32432,7 @@
   {
     "id": "vm_batch_step_c174fc53_2",
     "file": "src/vm/batch.rs",
-    "line": 3723,
+    "line": 3998,
     "decision": "!join_keys_match(&key_columns, row, &bt.keys, build_row)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32122,7 +32442,7 @@
   {
     "id": "vm_batch_step_366cbf26_2",
     "file": "src/vm/batch.rs",
-    "line": 3727,
+    "line": 4002,
     "decision": "emit_payload",
     "conditions": 1,
     "vectors_required": 2,
@@ -32132,7 +32452,7 @@
   {
     "id": "vm_batch_step_3aaa30af_2",
     "file": "src/vm/batch.rs",
-    "line": 3741,
+    "line": 4016,
     "decision": "!matched",
     "conditions": 1,
     "vectors_required": 2,
@@ -32142,7 +32462,7 @@
   {
     "id": "vm_batch_step_fd980e99_2",
     "file": "src/vm/batch.rs",
-    "line": 3742,
+    "line": 4017,
     "decision": "should_emit(*kind, false, false)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32152,7 +32472,7 @@
   {
     "id": "vm_batch_step_c1420519_2",
     "file": "src/vm/batch.rs",
-    "line": 3755,
+    "line": 4030,
     "decision": "matches!(kind, JoinKind::Semi)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32162,7 +32482,7 @@
   {
     "id": "vm_batch_step_82de0010",
     "file": "src/vm/batch.rs",
-    "line": 3803,
+    "line": 4078,
     "decision": "let Some(r) = arg",
     "conditions": 1,
     "vectors_required": 2,
@@ -32172,7 +32492,7 @@
   {
     "id": "vm_batch_step_c58bd317",
     "file": "src/vm/batch.rs",
-    "line": 3814,
+    "line": 4089,
     "decision": "match arg {\n                    Some(r) => Some(self.reg(*r, opcode)?),\n                    None => None,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32182,7 +32502,7 @@
   {
     "id": "vm_batch_step_fd0b5d75",
     "file": "src/vm/batch.rs",
-    "line": 3856,
+    "line": 4131,
     "decision": "let Some(existing) = self.registers.remove(r)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32192,7 +32512,7 @@
   {
     "id": "vm_batch_step_f96cdb28_2",
     "file": "src/vm/batch.rs",
-    "line": 3878,
+    "line": 4153,
     "decision": "c.len() != base_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -32202,7 +32522,7 @@
   {
     "id": "vm_batch_step_6cf23215",
     "file": "src/vm/batch.rs",
-    "line": 3891,
+    "line": 4166,
     "decision": "all_scalar",
     "conditions": 1,
     "vectors_required": 2,
@@ -32212,7 +32532,7 @@
   {
     "id": "vm_batch_step_f6596d84_2",
     "file": "src/vm/batch.rs",
-    "line": 3897,
+    "line": 4172,
     "decision": "let Some(sel) = &selection",
     "conditions": 1,
     "vectors_required": 2,
@@ -32222,7 +32542,7 @@
   {
     "id": "vm_batch_step_70a78004_2",
     "file": "src/vm/batch.rs",
-    "line": 3898,
+    "line": 4173,
     "decision": "sel.base_len != base_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -32232,7 +32552,7 @@
   {
     "id": "vm_batch_step_ea4b5703",
     "file": "src/vm/batch.rs",
-    "line": 3912,
+    "line": 4187,
     "decision": "match &selection {\n                        Some(sel) => Arc::new(\n                            sel.indices\n                                .iter()\n                                .map(|&idx| col[idx as usize].clone())\n                                .collect(),\n                        ),\n                        None => col,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32242,7 +32562,7 @@
   {
     "id": "vm_batch_compute_window_143bc8e9",
     "file": "src/vm/batch.rs",
-    "line": 3970,
+    "line": 4245,
     "decision": "!partitions.contains_key(&key)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32252,7 +32572,7 @@
   {
     "id": "vm_batch_compute_window_4659ab60",
     "file": "src/vm/batch.rs",
-    "line": 3982,
+    "line": 4257,
     "decision": "ord != std::cmp::Ordering::Equal",
     "conditions": 1,
     "vectors_required": 2,
@@ -32262,7 +32582,7 @@
   {
     "id": "vm_batch_compute_window_0d36fc64",
     "file": "src/vm/batch.rs",
-    "line": 3989,
+    "line": 4264,
     "decision": "match func {\n            WindowFunc::RowNumber => {\n                for (pos, &row) in indices.iter().enumerate() {\n                    output[row] = Value::Int(len_to_i64(pos + 1));\n                }\n            }\n            WindowFunc::Rank | WindowFunc::DenseRank => {\n                let mut rank = 0i64;\n                let mut dense = 0i64;\n                let mut prev: Option<usize> = None;\n                for (pos, &row) in indices.iter().enumerate() {\n                    let is_new = match prev {\n                        None => true,\n                        // #266: reuses `compare_for_order`'s (now\n                        // allocation-free for Str/Str and numeric pairs)\n                        // ordering instead of a separate stringify-and-\n                        // compare -- direction doesn't matter for an\n                        // equality check, so `false` is arbitrary.\n                        Some(prev_row) => order_cols.iter().any(|(col, _)| {\n                            compare_for_order(&col[row], &col[prev_row], false)\n                                != std::cmp::Ordering::Equal\n                        }),\n                    };\n                    if is_new {\n                        rank = len_to_i64(pos + 1);\n                        dense += 1;\n                    }\n                    output[row] = Value::Int(if func == WindowFunc::Rank {\n                        rank\n                    } else {\n                        dense\n                    });\n                    prev = Some(row);\n                }\n            }\n            WindowFunc::Lag | WindowFunc::Lead => {\n                let offset = offset.unwrap_or(1);\n                let Some(arg) = arg_col else {\n                    return Err(VmError::MissingWindowArgument {\n                        opcode: \"Window\",\n                        func,\n                    });\n                };\n                for (pos, &row) in indices.iter().enumerate() {\n                    let pos = len_to_i64(pos);\n                    let target = if func == WindowFunc::Lag {\n                        pos - offset\n                    } else {\n                        pos + offset\n                    };\n                    // A negative or past-the-end target is out of frame\n                    // -> NULL; `try_from` folds the `>= 0` check into the\n                    // `get`.\n                    output[row] = usize::try_from(target)\n                        .ok()\n                        .and_then(|t| indices.get(t))\n                        .map_or(Value::Null, |&r| arg[r].clone());\n                }\n            }\n            WindowFunc::FirstValue => {\n                let Some(arg) = arg_col else {\n                    return Err(VmError::MissingWindowArgument {\n                        opcode: \"Window\",\n                        func,\n                    });\n                };\n                if let Some(&first) = indices.first() {\n                    let v = arg[first].clone();\n                    for &row in &indices {\n                        output[row] = v.clone();\n                    }\n                }\n            }\n            WindowFunc::LastValue => {\n                let Some(arg) = arg_col else {\n                    return Err(VmError::MissingWindowArgument {\n                        opcode: \"Window\",\n                        func,\n                    });\n                };\n                for &row in &indices {\n                    output[row] = arg[row].clone();\n                }\n            }\n            WindowFunc::Sum | WindowFunc::Avg | WindowFunc::Count => {\n                // No ORDER BY: the frame is the whole partition -- one aggregate value for every row.\n                if order_cols.is_empty() {\n                    let agg = whole_partition_aggregate(func, arg_col, &indices)?;\n                    for &row in &indices {\n                        output[row] = agg.clone();\n                    }\n                } else {\n                    let mut running_sum = 0.0;\n                    let mut running_count = 0i64;\n                    for &row in &indices {\n                        // Running frame: every row up to and including this one counts.\n                        let counted = match arg_col {\n                            Some(a) => !matches!(a[row], Value::Null),\n                            None => true,\n                        };\n                        if counted {\n                            running_count += 1;\n                            if let Some(a) = arg_col {\n                                if let Some(v) = a[row].as_f64() {\n                                    running_sum += v;\n                                }\n                            }\n                        }\n                        output[row] = match func {\n                            WindowFunc::Count => Value::Int(running_count),\n                            WindowFunc::Sum => {\n                                if running_count > 0 {\n                                    Value::Float(running_sum)\n                                } else {\n                                    Value::Null\n                                }\n                            }\n                            WindowFunc::Avg => {\n                                // AVG over an empty running frame is NULL, never a division by zero.\n                                if running_count > 0 {\n                                    Value::Float(running_sum / running_count as f64)\n                                } else {\n                                    Value::Null\n                                }\n                            }\n                            other => {\n                                return Err(VmError::UnsupportedOp {\n                                    opcode: \"Window\",\n                                    op: format!(\"{other:?} as a running aggregate\"),\n                                })\n                            }\n                        };\n                    }\n                }\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32272,7 +32592,7 @@
   {
     "id": "vm_batch_compute_window_6a0fcc7c",
     "file": "src/vm/batch.rs",
-    "line": 4000,
+    "line": 4275,
     "decision": "match prev {\n                        None => true,\n                        // #266: reuses `compare_for_order`'s (now\n                        // allocation-free for Str/Str and numeric pairs)\n                        // ordering instead of a separate stringify-and-\n                        // compare -- direction doesn't matter for an\n                        // equality check, so `false` is arbitrary.\n                        Some(prev_row) => order_cols.iter().any(|(col, _)| {\n                            compare_for_order(&col[row], &col[prev_row], false)\n                                != std::cmp::Ordering::Equal\n                        }),\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32282,7 +32602,7 @@
   {
     "id": "vm_batch_compute_window_619ec208",
     "file": "src/vm/batch.rs",
-    "line": 4012,
+    "line": 4287,
     "decision": "is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -32292,7 +32612,7 @@
   {
     "id": "vm_batch_compute_window_7d222137",
     "file": "src/vm/batch.rs",
-    "line": 4016,
+    "line": 4291,
     "decision": "func == WindowFunc::Rank",
     "conditions": 1,
     "vectors_required": 2,
@@ -32302,7 +32622,7 @@
   {
     "id": "vm_batch_compute_window_319bd9a2",
     "file": "src/vm/batch.rs",
-    "line": 4034,
+    "line": 4309,
     "decision": "func == WindowFunc::Lag",
     "conditions": 1,
     "vectors_required": 2,
@@ -32312,7 +32632,7 @@
   {
     "id": "vm_batch_compute_window_b093ea3d",
     "file": "src/vm/batch.rs",
-    "line": 4055,
+    "line": 4330,
     "decision": "let Some(&first) = indices.first()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32322,7 +32642,7 @@
   {
     "id": "vm_batch_compute_window_cb224922",
     "file": "src/vm/batch.rs",
-    "line": 4075,
+    "line": 4350,
     "decision": "order_cols.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32332,7 +32652,7 @@
   {
     "id": "vm_batch_compute_window_5fdc3f5e",
     "file": "src/vm/batch.rs",
-    "line": 4085,
+    "line": 4360,
     "decision": "match arg_col {\n                            Some(a) => !matches!(a[row], Value::Null),\n                            None => true,\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32342,7 +32662,7 @@
   {
     "id": "vm_batch_compute_window_61c60911",
     "file": "src/vm/batch.rs",
-    "line": 4089,
+    "line": 4364,
     "decision": "counted",
     "conditions": 1,
     "vectors_required": 2,
@@ -32352,7 +32672,7 @@
   {
     "id": "vm_batch_compute_window_5ee29b95",
     "file": "src/vm/batch.rs",
-    "line": 4091,
+    "line": 4366,
     "decision": "let Some(a) = arg_col",
     "conditions": 1,
     "vectors_required": 2,
@@ -32362,7 +32682,7 @@
   {
     "id": "vm_batch_compute_window_d48b95ee",
     "file": "src/vm/batch.rs",
-    "line": 4092,
+    "line": 4367,
     "decision": "let Some(v) = a[row].as_f64()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32372,7 +32692,7 @@
   {
     "id": "vm_batch_compute_window_dd1a977e",
     "file": "src/vm/batch.rs",
-    "line": 4097,
+    "line": 4372,
     "decision": "match func {\n                            WindowFunc::Count => Value::Int(running_count),\n                            WindowFunc::Sum => {\n                                if running_count > 0 {\n                                    Value::Float(running_sum)\n                                } else {\n                                    Value::Null\n                                }\n                            }\n                            WindowFunc::Avg => {\n                                // AVG over an empty running frame is NULL, never a division by zero.\n                                if running_count > 0 {\n                                    Value::Float(running_sum / running_count as f64)\n                                } else {\n                                    Value::Null\n                                }\n                            }\n                            other => {\n                                return Err(VmError::UnsupportedOp {\n                                    opcode: \"Window\",\n                                    op: format!(\"{other:?} as a running aggregate\"),\n                                })\n                            }\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32382,7 +32702,7 @@
   {
     "id": "vm_batch_compute_window_7d159f42",
     "file": "src/vm/batch.rs",
-    "line": 4100,
+    "line": 4375,
     "decision": "running_count > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -32392,7 +32712,7 @@
   {
     "id": "vm_batch_compute_window_7d159f42_2",
     "file": "src/vm/batch.rs",
-    "line": 4108,
+    "line": 4383,
     "decision": "running_count > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -32402,7 +32722,7 @@
   {
     "id": "vm_batch_whole_partition_aggregate_83d4a014",
     "file": "src/vm/batch.rs",
-    "line": 4141,
+    "line": 4416,
     "decision": "func == WindowFunc::Count",
     "conditions": 1,
     "vectors_required": 2,
@@ -32412,7 +32732,7 @@
   {
     "id": "vm_batch_whole_partition_aggregate_f115ddef",
     "file": "src/vm/batch.rs",
-    "line": 4142,
+    "line": 4417,
     "decision": "match arg_col {\n            Some(a) => indices\n                .iter()\n                .filter(|&&row| !matches!(a[row], Value::Null))\n                .count(),\n            None => indices.len(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32422,7 +32742,7 @@
   {
     "id": "vm_batch_whole_partition_aggregate_abe8d87c",
     "file": "src/vm/batch.rs",
-    "line": 4155,
+    "line": 4430,
     "decision": "values.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32432,7 +32752,7 @@
   {
     "id": "vm_batch_whole_partition_aggregate_815f9e5f",
     "file": "src/vm/batch.rs",
-    "line": 4158,
+    "line": 4433,
     "decision": "match func {\n        WindowFunc::Sum => Ok(Value::Float(values.iter().sum())),\n        WindowFunc::Avg => Ok(Value::Float(\n            values.iter().sum::<f64>() / values.len() as f64,\n        )),\n        other => Err(VmError::UnsupportedOp {\n            opcode: \"Window\",\n            op: format!(\"{other:?} as a partition aggregate\"),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32442,7 +32762,7 @@
   {
     "id": "vm_batch_reduce_count_star_06c4edf6",
     "file": "src/vm/batch.rs",
-    "line": 4172,
+    "line": 4447,
     "decision": "match func {\n        AggFunc::Count => Value::Int(len_to_i64(num_rows)),\n        _ => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32452,7 +32772,7 @@
   {
     "id": "vm_batch_typed_reduce_values_5be521a0",
     "file": "src/vm/batch.rs",
-    "line": 4189,
+    "line": 4464,
     "decision": "!matches!(column, Column::Int { .. } | Column::Float { .. })",
     "conditions": 1,
     "vectors_required": 2,
@@ -32462,7 +32782,7 @@
   {
     "id": "vm_batch_typed_reduce_values_18824246",
     "file": "src/vm/batch.rs",
-    "line": 4194,
+    "line": 4469,
     "decision": "match func {\n        AggFunc::Count => Value::Int(len_to_i64((0..len).filter(|&i| !column.is_null(i)).count())),\n        AggFunc::Sum => {\n            let (sum, count) =\n                non_null().fold((0.0, 0usize), |(s, c), x| (s + x, c.saturating_add(1)));\n            if count == 0 {\n                Value::Null\n            } else {\n                Value::Float(sum)\n            }\n        }\n        AggFunc::Avg => {\n            let (sum, count) =\n                non_null().fold((0.0, 0usize), |(s, c), x| (s + x, c.saturating_add(1)));\n            if count == 0 {\n                Value::Null\n            } else {\n                Value::Float(sum / count as f64)\n            }\n        }\n        AggFunc::Min => non_null()\n            .fold(None, |acc: Option<f64>, v| {\n                Some(acc.map_or(v, |a| a.min(v)))\n            })\n            .map_or(Value::Null, Value::Float),\n        AggFunc::Max => non_null()\n            .fold(None, |acc: Option<f64>, v| {\n                Some(acc.map_or(v, |a| a.max(v)))\n            })\n            .map_or(Value::Null, Value::Float),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32472,7 +32792,7 @@
   {
     "id": "vm_batch_typed_reduce_values_faaf46ac",
     "file": "src/vm/batch.rs",
-    "line": 4199,
+    "line": 4474,
     "decision": "count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -32482,7 +32802,7 @@
   {
     "id": "vm_batch_typed_reduce_values_faaf46ac_2",
     "file": "src/vm/batch.rs",
-    "line": 4208,
+    "line": 4483,
     "decision": "count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -32492,7 +32812,7 @@
   {
     "id": "vm_batch_reduce_values_f71077a4",
     "file": "src/vm/batch.rs",
-    "line": 4229,
+    "line": 4504,
     "decision": "match func {\n        AggFunc::Count => Value::Int(len_to_i64(\n            values.iter().filter(|v| !matches!(v, Value::Null)).count(),\n        )),\n        AggFunc::Sum => {\n            if non_null.is_empty() {\n                Value::Null\n            } else {\n                Value::Float(non_null.iter().sum())\n            }\n        }\n        AggFunc::Avg => {\n            if non_null.is_empty() {\n                Value::Null\n            } else {\n                Value::Float(non_null.iter().sum::<f64>() / non_null.len() as f64)\n            }\n        }\n        AggFunc::Min => non_null\n            .into_iter()\n            .fold(None, |acc: Option<f64>, v| {\n                Some(acc.map_or(v, |a| a.min(v)))\n            })\n            .map_or(Value::Null, Value::Float),\n        AggFunc::Max => non_null\n            .into_iter()\n            .fold(None, |acc: Option<f64>, v| {\n                Some(acc.map_or(v, |a| a.max(v)))\n            })\n            .map_or(Value::Null, Value::Float),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32502,7 +32822,7 @@
   {
     "id": "vm_batch_reduce_values_3c6afa02",
     "file": "src/vm/batch.rs",
-    "line": 4234,
+    "line": 4509,
     "decision": "non_null.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32512,7 +32832,7 @@
   {
     "id": "vm_batch_reduce_values_3c6afa02_2",
     "file": "src/vm/batch.rs",
-    "line": 4241,
+    "line": 4516,
     "decision": "non_null.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32522,7 +32842,7 @@
   {
     "id": "vm_batch_apply_map_op_6d9c07a7",
     "file": "src/vm/batch.rs",
-    "line": 4265,
+    "line": 4540,
     "decision": "matches!(op, MapOp::IsNull)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32532,7 +32852,7 @@
   {
     "id": "vm_batch_apply_map_op_5e3cfcce",
     "file": "src/vm/batch.rs",
-    "line": 4268,
+    "line": 4543,
     "decision": "matches!(op, MapOp::IsNotNull)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32542,7 +32862,7 @@
   {
     "id": "vm_batch_apply_map_op_0e991c46",
     "file": "src/vm/batch.rs",
-    "line": 4271,
+    "line": 4546,
     "decision": "matches!(a, Value::Null) || matches!(b, Value::Null)",
     "conditions": 2,
     "vectors_required": 3,
@@ -32552,7 +32872,7 @@
   {
     "id": "vm_batch_apply_map_op_e8ef7312",
     "file": "src/vm/batch.rs",
-    "line": 4275,
+    "line": 4550,
     "decision": "match op {\n        MapOp::Add => arithmetic(op, a, b, |x, y| x + y),\n        MapOp::Sub => arithmetic(op, a, b, |x, y| x - y),\n        MapOp::Mul => arithmetic(op, a, b, |x, y| x * y),\n        MapOp::Div => arithmetic(op, a, b, |x, y| x / y),\n        MapOp::Eq => comparison(a, b, |o| o == Some(Equal)),\n        MapOp::Ne => comparison(a, b, |o| o != Some(Equal)),\n        MapOp::Lt => comparison(a, b, |o| o == Some(Less)),\n        MapOp::Le => comparison(a, b, |o| matches!(o, Some(Less | Equal))),\n        MapOp::Gt => comparison(a, b, |o| o == Some(Greater)),\n        MapOp::Ge => comparison(a, b, |o| matches!(o, Some(Greater | Equal))),\n        MapOp::And => Value::Bool(as_bool(a) && as_bool(b)),\n        MapOp::Or => Value::Bool(as_bool(a) || as_bool(b)),\n        MapOp::Not => Value::Bool(!as_bool(a)),\n        MapOp::Concat => Value::Str(Cow::Owned(format!(\"{a}{b}\"))),\n        MapOp::Neg => match a {\n            // `-i64::MIN` has no integer representation; SQLite promotes\n            // that one case to REAL rather than overflowing.\n            Value::Int(v) => v\n                .checked_neg()\n                .map_or(Value::Float(-(*v as f64)), Value::Int),\n            Value::Float(v) => Value::Float(-v),\n            _ => Value::Null,\n        },\n        // Already answered by the early returns above (they must see\n        // `Null`); the same semantics here keep this match total without\n        // an `unreachable!` the qualified subset forbids.\n        MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),\n        MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),\n        MapOp::MaskIf => {\n            // MaskIf keeps `a` wherever the predicate register is true.\n            if matches!(b, Value::Bool(true)) {\n                a.clone()\n            } else {\n                Value::Null\n            }\n        }\n        MapOp::Like { negated } => {\n            let matched = crate::functions::like_match(&a.to_string(), &b.to_string(), None);\n            Value::Bool(matched != negated)\n        }\n        MapOp::Glob { negated } => {\n            let matched = crate::functions::glob_match(&a.to_string(), &b.to_string());\n            Value::Bool(matched != negated)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32562,7 +32882,7 @@
   {
     "id": "vm_batch_apply_map_op_1463b6cd",
     "file": "src/vm/batch.rs",
-    "line": 4290,
+    "line": 4565,
     "decision": "match a {\n            // `-i64::MIN` has no integer representation; SQLite promotes\n            // that one case to REAL rather than overflowing.\n            Value::Int(v) => v\n                .checked_neg()\n                .map_or(Value::Float(-(*v as f64)), Value::Int),\n            Value::Float(v) => Value::Float(-v),\n            _ => Value::Null,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32572,7 +32892,7 @@
   {
     "id": "vm_batch_apply_map_op_2ce6a5d0",
     "file": "src/vm/batch.rs",
-    "line": 4306,
+    "line": 4581,
     "decision": "matches!(b, Value::Bool(true))",
     "conditions": 1,
     "vectors_required": 2,
@@ -32582,7 +32902,7 @@
   {
     "id": "vm_batch_arithmetic_f08e9d82",
     "file": "src/vm/batch.rs",
-    "line": 4330,
+    "line": 4605,
     "decision": "matches!(a, Value::Int(_)) && matches!(b, Value::Int(_)) && op != MapOp::Div",
     "conditions": 3,
     "vectors_required": 4,
@@ -32592,7 +32912,7 @@
   {
     "id": "vm_batch_column_num_at_62923587",
     "file": "src/vm/batch.rs",
-    "line": 4357,
+    "line": 4632,
     "decision": "match column {\n        Column::Int { data, valid } => {\n            if !valid.get(i) {\n                return None;\n            }\n            #[allow(\n                clippy::cast_precision_loss,\n                reason = \"matches Value::as_f64's existing `*v as f64` widening for Int\"\n            )]\n            data.get(i).map(|&x| (x as f64, true))\n        }\n        Column::Float { data, valid } => {\n            if !valid.get(i) {\n                return None;\n            }\n            data.get(i).map(|&x| (x, false))\n        }\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32602,7 +32922,7 @@
   {
     "id": "vm_batch_column_num_at_fa2abd69",
     "file": "src/vm/batch.rs",
-    "line": 4359,
+    "line": 4634,
     "decision": "!valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32612,7 +32932,7 @@
   {
     "id": "vm_batch_column_num_at_fa2abd69_2",
     "file": "src/vm/batch.rs",
-    "line": 4369,
+    "line": 4644,
     "decision": "!valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32622,7 +32942,7 @@
   {
     "id": "vm_batch_arith_op_a3fb3dfe",
     "file": "src/vm/batch.rs",
-    "line": 4385,
+    "line": 4660,
     "decision": "match op {\n        MapOp::Add => x + y,\n        MapOp::Sub => x - y,\n        MapOp::Mul => x * y,\n        MapOp::Div => x / y,\n        _ => 0.0,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32632,7 +32952,7 @@
   {
     "id": "vm_batch_compare_values_0bc353ae",
     "file": "src/vm/batch.rs",
-    "line": 4411,
+    "line": 4686,
     "decision": "match (a, b) {\n        (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),\n        (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),\n        _ => a.as_f64()?.partial_cmp(&b.as_f64()?),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32642,7 +32962,7 @@
   {
     "id": "vm_batch_name_to_reg_bc77aadd",
     "file": "src/vm/batch.rs",
-    "line": 6557,
+    "line": 6832,
     "decision": "match name {\n            \"part\" => 0,\n            \"ord\" => 1,\n            \"val\" => 2,\n            other => panic!(\"unexpected test column: {other}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32652,7 +32972,7 @@
   {
     "id": "vm_batch_run_parallel_scans_all_segments_in_order_1887f16c",
     "file": "src/vm/batch.rs",
-    "line": 7042,
+    "line": 7317,
     "decision": "match &r[0] {\n                Value::Int(v) => *v,\n                other => panic!(\"expected Value::Int, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32662,8 +32982,78 @@
   {
     "id": "vm_batch_load_d1418253",
     "file": "src/vm/batch.rs",
-    "line": 7098,
+    "line": 7373,
     "decision": "!self.delay.is_zero()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_subset_0c27f214",
+    "file": "src/vm/batch.rs",
+    "line": 7445,
+    "decision": "match positions {\n                    Some(p) => p\n                        .iter()\n                        .map(|&i| batch_cell(&self.batch, name, i as usize))\n                        .collect(),\n                    None => (0..n).map(|i| batch_cell(&self.batch, name, i)).collect(),\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_load_columns_6d7ce722",
+    "file": "src/vm/batch.rs",
+    "line": 7465,
+    "decision": "!self.subset_loads",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_gather_at_7b5f6f17",
+    "file": "src/vm/batch.rs",
+    "line": 7473,
+    "decision": "!self.can_gather",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_late_fixture_7ba6769d",
+    "file": "src/vm/batch.rs",
+    "line": 7490,
+    "decision": "i % 7 == 3",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_late_fixture_98a22069",
+    "file": "src/vm/batch.rs",
+    "line": 7492,
+    "decision": "i % 11 == 5",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_late_fixture_ccd4547d",
+    "file": "src/vm/batch.rs",
+    "line": 7501,
+    "decision": "match k {\n                Value::Int(v) => Value::Int(v * 10),\n                _ => Value::Str(\"null-key\".into()),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_batch_late_program_f8be12f4",
+    "file": "src/vm/batch.rs",
+    "line": 7519,
+    "decision": "with_filter",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -32672,7 +33062,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_7ccb2b33",
     "file": "src/vm/batch.rs",
-    "line": 7435,
+    "line": 8190,
     "decision": "num_threads < 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -32682,7 +33072,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_1b6ca759",
     "file": "src/vm/batch.rs",
-    "line": 7440,
+    "line": 8195,
     "decision": "i % num_threads == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -32692,7 +33082,7 @@
   {
     "id": "vm_batch_group_reduce_typed_int_key_matches_the_value_key_path_5216460c",
     "file": "src/vm/batch.rs",
-    "line": 7652,
+    "line": 8407,
     "decision": "match i % 7 {\n                0 => None,\n                1 => Some(-(i % 13)),\n                2 => Some((i % 11) << 40),\n                _ => Some(i % 17),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32702,7 +33092,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_98a22246",
     "file": "src/vm/batch.rs",
-    "line": 7817,
+    "line": 8572,
     "decision": "i % 11 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -32712,7 +33102,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_35425997",
     "file": "src/vm/batch.rs",
-    "line": 7825,
+    "line": 8580,
     "decision": "match i % 5 {\n                0 => Value::Null,\n                r => Value::Str(format!(\"s{r}\").into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32722,7 +33112,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_a209a191",
     "file": "src/vm/batch.rs",
-    "line": 7832,
+    "line": 8587,
     "decision": "i % 13 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -32732,7 +33122,7 @@
   {
     "id": "vm_batch_group_reduce_dict_plus_int_composite_key_matches_the_value_key_path_bde636e8",
     "file": "src/vm/batch.rs",
-    "line": 7917,
+    "line": 8672,
     "decision": "ok",
     "conditions": 1,
     "vectors_required": 2,

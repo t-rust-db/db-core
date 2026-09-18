@@ -619,7 +619,9 @@ pub fn db_core::engine::cross_mode::RowTableSegment::clone(&self) -> db_core::en
 impl core::fmt::Debug for db_core::engine::cross_mode::RowTableSegment
 pub fn db_core::engine::cross_mode::RowTableSegment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::vm::batch::Segment for db_core::engine::cross_mode::RowTableSegment
+pub fn db_core::engine::cross_mode::RowTableSegment::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<db_core::vm::batch::Result<db_core::vm::batch::Batch>>
 pub fn db_core::engine::cross_mode::RowTableSegment::load(&self) -> core::result::Result<alloc::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::engine::cross_mode::RowTableSegment::load_columns(&self, &[alloc::string::String]) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
 pub fn db_core::engine::cross_mode::RowTableSegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub struct db_core::engine::cross_mode::RowTableSource
 impl db_core::engine::cross_mode::RowTableSource
@@ -2866,6 +2868,7 @@ pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<i64>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
@@ -2939,6 +2942,7 @@ pub fn db_core::storage::column::parquet::reader::read_int64_column_dictionary(&
 pub fn db_core::storage::column::parquet::reader::read_int96_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
 pub fn db_core::storage::column::parquet::reader::read_int96_column_dictionary(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, &[db_core::storage::column::parquet::reader::Int96]) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
 pub fn db_core::storage::column::parquet::reader::read_plain_fixed<T: core::marker::Copy + core::default::Default, const N: usize>(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, impl core::ops::function::Fn([u8; N]) -> T, &mut alloc::vec::Vec<T>, &mut alloc::vec::Vec<bool>) -> db_core::storage::column::parquet::reader::Result<()>
+pub fn db_core::storage::column::parquet::reader::read_plain_fixed_at<T: core::marker::Copy + core::default::Default, const N: usize>(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, impl core::ops::function::Fn([u8; N]) -> T, &[(u32, usize)], &mut [T], &mut [bool]) -> db_core::storage::column::parquet::reader::Result<()>
 pub fn db_core::storage::column::parquet::reader::read_plain_scalar(&mut &[u8], db_core::storage::column::parquet::footer::PhysicalType, &mut usize) -> db_core::storage::column::parquet::reader::Result<db_core::storage::column::parquet::reader::LeafScalar>
 pub fn db_core::storage::column::parquet::reader::read_string_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::column::parquet::reader::read_string_column_dictionary(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, &[alloc::string::String]) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
@@ -3076,6 +3080,7 @@ pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<i64>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
@@ -3212,6 +3217,7 @@ pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<i64>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
@@ -4221,7 +4227,9 @@ pub fn db_core::storage::stream::adapter::StreamSegment::clone(&self) -> db_core
 impl core::fmt::Debug for db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::vm::batch::Segment for db_core::storage::stream::adapter::StreamSegment
+pub fn db_core::storage::stream::adapter::StreamSegment::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<db_core::vm::batch::Result<db_core::vm::batch::Batch>>
 pub fn db_core::storage::stream::adapter::StreamSegment::load(&self) -> core::result::Result<alloc::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::storage::stream::adapter::StreamSegment::load_columns(&self, &[alloc::string::String]) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
 pub fn db_core::storage::stream::adapter::StreamSegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub struct db_core::storage::stream::adapter::TailSource
 impl db_core::storage::stream::adapter::TailSource
@@ -5083,7 +5091,9 @@ pub fn db_core::storage::stream::adapter::StreamSegment::clone(&self) -> db_core
 impl core::fmt::Debug for db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::vm::batch::Segment for db_core::storage::stream::adapter::StreamSegment
+pub fn db_core::storage::stream::adapter::StreamSegment::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<db_core::vm::batch::Result<db_core::vm::batch::Batch>>
 pub fn db_core::storage::stream::adapter::StreamSegment::load(&self) -> core::result::Result<alloc::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::storage::stream::adapter::StreamSegment::load_columns(&self, &[alloc::string::String]) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
 pub fn db_core::storage::stream::adapter::StreamSegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub struct db_core::storage::stream::SyslogParser
 impl db_core::storage::stream::syslog::SyslogParser
@@ -5353,6 +5363,7 @@ pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<i64>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
@@ -5938,16 +5949,24 @@ pub fn db_core::vm::batch::Vm::fmt(&self, &mut core::fmt::Formatter<'_>) -> core
 pub const db_core::vm::batch::BATCH_SIZE: usize
 pub const db_core::vm::batch::MAX_STEPS: usize
 pub trait db_core::vm::batch::Segment: core::marker::Send + core::marker::Sync
+pub fn db_core::vm::batch::Segment::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<db_core::vm::batch::Result<db_core::vm::batch::Batch>>
 pub fn db_core::vm::batch::Segment::load(&self) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
+pub fn db_core::vm::batch::Segment::load_columns(&self, &[alloc::string::String]) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
 pub fn db_core::vm::batch::Segment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 impl db_core::vm::batch::Segment for db_core::engine::cross_mode::RowTableSegment
+pub fn db_core::engine::cross_mode::RowTableSegment::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<db_core::vm::batch::Result<db_core::vm::batch::Batch>>
 pub fn db_core::engine::cross_mode::RowTableSegment::load(&self) -> core::result::Result<alloc::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::engine::cross_mode::RowTableSegment::load_columns(&self, &[alloc::string::String]) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
 pub fn db_core::engine::cross_mode::RowTableSegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 impl db_core::vm::batch::Segment for db_core::storage::stream::adapter::StreamSegment
+pub fn db_core::storage::stream::adapter::StreamSegment::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<db_core::vm::batch::Result<db_core::vm::batch::Batch>>
 pub fn db_core::storage::stream::adapter::StreamSegment::load(&self) -> core::result::Result<alloc::sync::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::storage::stream::adapter::StreamSegment::load_columns(&self, &[alloc::string::String]) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
 pub fn db_core::storage::stream::adapter::StreamSegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 impl db_core::vm::batch::Segment for db_core::vm::engine::InMemorySegment
+pub fn db_core::vm::engine::InMemorySegment::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<db_core::vm::batch::Result<db_core::vm::batch::Batch>>
 pub fn db_core::vm::engine::InMemorySegment::load(&self) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
+pub fn db_core::vm::engine::InMemorySegment::load_columns(&self, &[alloc::string::String]) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
 pub fn db_core::vm::engine::InMemorySegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub trait db_core::vm::batch::Source
 pub fn db_core::vm::batch::Source::next_batch(&mut self) -> core::option::Option<db_core::vm::batch::Batch>
@@ -6014,7 +6033,9 @@ impl core::marker::StructuralPartialEq for db_core::vm::column::Bitmap
 pub mod db_core::vm::engine
 pub struct db_core::vm::engine::InMemorySegment(pub db_core::vm::batch::Batch)
 impl db_core::vm::batch::Segment for db_core::vm::engine::InMemorySegment
+pub fn db_core::vm::engine::InMemorySegment::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<db_core::vm::batch::Result<db_core::vm::batch::Batch>>
 pub fn db_core::vm::engine::InMemorySegment::load(&self) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
+pub fn db_core::vm::engine::InMemorySegment::load_columns(&self, &[alloc::string::String]) -> db_core::vm::batch::Result<alloc::sync::Arc<db_core::vm::batch::Batch>>
 pub fn db_core::vm::engine::InMemorySegment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub struct db_core::vm::engine::JoinBuildSide
 pub db_core::vm::engine::JoinBuildSide::build: db_core::vm::batch::Program

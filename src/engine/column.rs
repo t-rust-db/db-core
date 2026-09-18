@@ -208,11 +208,65 @@ impl RowGroupSegment<'_, '_> {
     /// when the program has no `Filter` to defer projection-only columns
     /// past (GROUP BY / no-WHERE queries stay out of this ADR's scope).
     fn load_eager(&self, rg: &RowGroupReader<'_, '_>, num_rows: usize) -> Result<Batch, VmError> {
+        self.decode_leaves(rg, num_rows, &self.columns)
+    }
+
+    /// Every row of `rg` for just `leaves`, decoded eagerly.
+    fn decode_leaves(
+        &self,
+        rg: &RowGroupReader<'_, '_>,
+        num_rows: usize,
+        leaves: &[Leaf],
+    ) -> Result<Batch, VmError> {
         let mut batch = Batch::new(num_rows);
-        for (name, index, physical_type) in &self.columns {
+        for (name, index, physical_type) in leaves {
             let decoded = decode_column_full(rg, *index, *physical_type)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             batch = apply_decoded(batch, name, decoded);
+        }
+        Ok(batch)
+    }
+
+    /// This row group's row count as a `usize`.
+    fn row_count(&self, rg: &RowGroupReader<'_, '_>) -> Result<usize, VmError> {
+        usize::try_from(rg.num_rows()).map_err(|_| VmError::SegmentLoad {
+            reason: format!(
+                "row group {}: negative row count {}",
+                self.row_group_index,
+                rg.num_rows()
+            ),
+        })
+    }
+
+    /// The subset of this segment's leaves named in `columns`, in the
+    /// segment's own column order; a name this segment does not load is
+    /// a [`VmError::SegmentLoad`] rather than a silently missing column.
+    fn leaves_named(&self, columns: &[String]) -> Result<Vec<Leaf>, VmError> {
+        for name in columns {
+            if !self.columns.iter().any(|(leaf, _, _)| leaf == name) {
+                return Err(VmError::SegmentLoad {
+                    reason: format!(
+                        "row group {}: column `{name}` is not loaded by this segment",
+                        self.row_group_index
+                    ),
+                });
+            }
+        }
+        Ok(self
+            .columns
+            .iter()
+            .filter(|(leaf, _, _)| columns.contains(leaf))
+            .cloned()
+            .collect())
+    }
+
+    fn gather_leaves_at(&self, columns: &[String], positions: &[u32]) -> Result<Batch, VmError> {
+        let rg = self.row_group()?;
+        let mut batch = Batch::new(positions.len());
+        for (name, index, physical_type) in self.leaves_named(columns)? {
+            let decoded = decode_column_at(&rg, index, physical_type, positions)
+                .map_err(|e| segment_error(self.row_group_index, &name, &e))?;
+            batch = apply_decoded(batch, &name, decoded);
         }
         Ok(batch)
     }
@@ -235,15 +289,27 @@ impl Segment for RowGroupSegment<'_, '_> {
         prune::decode_stat_bytes(bytes, physical_type).map(prune::into_value)
     }
 
+    /// #513: only the named leaves, every row, eagerly -- the
+    /// late-materializing top-N's first phase runs its own filter prefix
+    /// over this batch, so the ADR-0026 split does not apply here.
+    fn load_columns(&self, columns: &[String]) -> Result<Arc<Batch>, VmError> {
+        let rg = self.row_group()?;
+        let num_rows = self.row_count(&rg)?;
+        let leaves = self.leaves_named(columns)?;
+        self.decode_leaves(&rg, num_rows, &leaves).map(Arc::new)
+    }
+
+    /// #513: the named leaves at exactly `positions` (row indices within
+    /// this row group), through [`decode_column_at`] -- the same
+    /// positional decoder ADR-0026's filtered projection uses, here for
+    /// the handful of rows that won a top-N.
+    fn gather_at(&self, columns: &[String], positions: &[u32]) -> Option<Result<Batch, VmError>> {
+        Some(self.gather_leaves_at(columns, positions))
+    }
+
     fn load(&self) -> Result<Arc<Batch>, VmError> {
         let rg = self.row_group()?;
-        let num_rows = usize::try_from(rg.num_rows()).map_err(|_| VmError::SegmentLoad {
-            reason: format!(
-                "row group {}: negative row count {}",
-                self.row_group_index,
-                rg.num_rows()
-            ),
-        })?;
+        let num_rows = self.row_count(&rg)?;
 
         let predicate_names = self.program.predicate_columns();
         let projection_only_names = self.program.projection_only_columns();
@@ -1037,6 +1103,46 @@ mod tests {
             segments[2].order_key_bound(true),
             None,
             "malformed statistics: unknown"
+        );
+    }
+
+    #[test]
+    fn load_columns_and_gather_at_decode_only_the_named_leaves() {
+        let path = Path::new("tests/fixtures/parquet/production.parquet");
+        let engine = BatchEngine::open(path).unwrap();
+        let file = engine.file().unwrap();
+        let leaves = engine.leaves.clone();
+        let program = Program::new(Vec::new());
+        let segments = row_group_segments(&file, &leaves, &leaves, None, &program);
+        let seg = &segments[2];
+        let amount = vec!["amount".to_string()];
+        let key_only = seg.load_columns(&amount).unwrap();
+        assert_eq!(key_only.num_rows, 904);
+        assert!(key_only.typed_columns.contains_key("amount"));
+        assert!(
+            !key_only.typed_columns.contains_key("id"),
+            "id was not asked for"
+        );
+
+        let gathered = seg
+            .gather_at(&["id".to_string(), "region".to_string()], &[903, 0, 903])
+            .expect("row groups can always gather")
+            .unwrap();
+        assert_eq!(gathered.num_rows, 3);
+        let full = seg.load().unwrap();
+        for (k, &p) in [903u32, 0, 903].iter().enumerate() {
+            for name in ["id", "region"] {
+                assert_eq!(
+                    crate::vm::batch::Column::get(&gathered.typed_columns[name], k),
+                    crate::vm::batch::Column::get(&full.typed_columns[name], p as usize),
+                    "{name} at position {p}"
+                );
+            }
+        }
+        let err = seg.load_columns(&["nosuch".to_string()]).unwrap_err();
+        assert!(
+            err.to_string().contains("not loaded by this segment"),
+            "{err}"
         );
     }
 
