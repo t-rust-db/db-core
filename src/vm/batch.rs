@@ -13,6 +13,7 @@
 //! (`Vec<Value>`, one entry per row). Opcodes operate on whole registers at
 //! once rather than row-by-row.
 
+use super::int_key_table::IntKeyTable;
 use crate::value::len_to_i64;
 pub use crate::vm::column::{Bitmap, Column};
 pub use crate::vm::join::JoinKind;
@@ -1850,6 +1851,46 @@ pub(crate) fn hash_columns_by_row(
     hashes
 }
 
+/// `GroupReduce` fast path for `GROUP BY <typed Int column>` (#479): maps
+/// every row to a group id through an [`IntKeyTable`] on the column's
+/// packed `i64`s -- no `Value` per row, no SipHash, `i64 == i64` on a
+/// probe -- and hands back the same `(row -> group, one key per group)`
+/// shape the generic and dict paths do, groups in first-seen order. A
+/// `Null` key is one group of its own (`GROUP BY` semantics). The table
+/// starts small and doubles as groups appear, so four groups cost four
+/// entries and 100K groups a handful of resizes.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "`data[p]`/`valid.get(p)`: `p = physical(row)` is drawn from the selection over `0..base_len`, and the column has exactly `base_len` values (checked by the caller via `RegisterLengthMismatch` before this runs)"
+)]
+fn int_group_by_single_column(
+    data: &[i64],
+    valid: &Bitmap,
+    num_rows: usize,
+    physical: impl Fn(usize) -> usize,
+) -> Result<(Vec<usize>, Vec<Vec<Value>>)> {
+    let mut table = IntKeyTable::with_capacity(1 << 10);
+    let mut group_keys: Vec<Vec<Value>> = Vec::new();
+    let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
+    for row in 0..num_rows {
+        let p = physical(row);
+        let (group, inserted) = if valid.get(p) {
+            table.get_or_insert(data[p], group_keys.len())?
+        } else {
+            table.null_group_or_insert(group_keys.len())
+        };
+        if inserted {
+            group_keys.push(vec![if valid.get(p) {
+                Value::Int(data[p])
+            } else {
+                Value::Null
+            }]);
+        }
+        row_group.push(group);
+    }
+    Ok((row_group, group_keys))
+}
+
 /// `GroupReduce` fast path for `GROUP BY <dict column>` (#457): groups by
 /// the row's dictionary code directly instead of hashing a decoded
 /// `Value::Str`. `code_to_group` is a `dict.len() + 1`-sized array indexed
@@ -2874,22 +2915,48 @@ impl Vm {
                 // agg-source registers materialized, and by then
                 // `key_columns`'s live borrow would make a mutating
                 // `ensure_materialized` call a borrow-checker conflict.
-                for reg in group_by.iter() {
-                    self.ensure_materialized(*reg);
+                // #479: a single typed `Int` key -- the `GROUP BY
+                // customer_id` shape -- groups through `IntKeyTable` on the
+                // packed `i64`s below: the key register is never
+                // materialized to `Vec<Value>` (which would hand back, for
+                // exactly this column, the copy #482 stopped `LoadColumn`
+                // from making), no SipHash per cell, `i64 == i64` on a
+                // probe. `Dict` keeps #457's own path; composite, `Str` and
+                // `Float` keys keep the generic hash-then-verify below.
+                let int_group_by: Option<Arc<Column>> = match &group_by[..] {
+                    [reg] if dict_group_by.is_none() => self
+                        .typed_registers
+                        .get(reg)
+                        .filter(|column| matches!(column.as_ref(), Column::Int { .. }))
+                        .map(Arc::clone),
+                    _ => None,
+                };
+                if int_group_by.is_none() {
+                    for reg in group_by.iter() {
+                        self.ensure_materialized(*reg);
+                    }
                 }
                 for (_, src) in aggs.iter() {
                     if let Some(reg) = src {
                         self.ensure_materialized(*reg);
                     }
                 }
-                let key_columns: Vec<&[Value]> = group_by
-                    .iter()
-                    .map(|reg| self.reg(*reg, opcode))
-                    .collect::<Result<_>>()?;
+                let key_columns: Vec<&[Value]> = if int_group_by.is_some() {
+                    Vec::new()
+                } else {
+                    group_by
+                        .iter()
+                        .map(|reg| self.reg(*reg, opcode))
+                        .collect::<Result<_>>()?
+                };
                 let base_len = match &selection {
                     Some(sel) => sel.base_len,
-                    None => match key_columns.first() {
-                        Some(c) => c.len(),
+                    None => match key_columns
+                        .first()
+                        .map(|c| c.len())
+                        .or(int_group_by.as_ref().map(|c| c.len()))
+                    {
+                        Some(len) => len,
                         None => match aggs.iter().find_map(|(_, src)| {
                             src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len))
                         }) {
@@ -2914,6 +2981,13 @@ impl Vm {
                         return Err(VmError::RegisterLengthMismatch { opcode });
                     }
                 }
+                if int_group_by.as_ref().is_some_and(|c| c.len() != base_len) {
+                    return Err(VmError::RegisterLengthMismatch { opcode });
+                }
+                let int_key: Option<(&[i64], &Bitmap)> = match int_group_by.as_deref() {
+                    Some(Column::Int { data, valid }) => Some((data.as_slice(), valid)),
+                    _ => None,
+                };
                 let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());
                 let physical = |row: usize| {
                     selection
@@ -2935,35 +3009,40 @@ impl Vm {
                     // buckets group ids by hash (collisions possible, so
                     // each bucket is checked for an exact match) rather
                     // than owning a `GroupKey` per entry.
-                    None => {
-                        let hashes = hash_columns_by_row(&key_columns, num_rows, physical);
-                        let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
-                        let mut group_keys: Vec<Vec<Value>> = Vec::new();
-                        let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
-                        for row in 0..num_rows {
-                            let p = physical(row);
-                            let bucket = group_index.entry(hashes[row]).or_default();
-                            let existing = bucket.iter().copied().find(|&g| {
-                                key_columns
-                                    .iter()
-                                    .enumerate()
-                                    .all(|(i, c)| c[p] == group_keys[g][i])
-                            });
-                            let group = match existing {
-                                Some(g) => g,
-                                None => {
-                                    let key: Vec<Value> =
-                                        key_columns.iter().map(|c| c[p].clone()).collect();
-                                    let g = group_keys.len();
-                                    group_keys.push(key);
-                                    bucket.push(g);
-                                    g
-                                }
-                            };
-                            row_group.push(group);
+                    None => match int_key {
+                        Some((data, valid)) => {
+                            int_group_by_single_column(data, valid, num_rows, physical)?
                         }
-                        (row_group, group_keys)
-                    }
+                        None => {
+                            let hashes = hash_columns_by_row(&key_columns, num_rows, physical);
+                            let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
+                            let mut group_keys: Vec<Vec<Value>> = Vec::new();
+                            let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
+                            for row in 0..num_rows {
+                                let p = physical(row);
+                                let bucket = group_index.entry(hashes[row]).or_default();
+                                let existing = bucket.iter().copied().find(|&g| {
+                                    key_columns
+                                        .iter()
+                                        .enumerate()
+                                        .all(|(i, c)| c[p] == group_keys[g][i])
+                                });
+                                let group = match existing {
+                                    Some(g) => g,
+                                    None => {
+                                        let key: Vec<Value> =
+                                            key_columns.iter().map(|c| c[p].clone()).collect();
+                                        let g = group_keys.len();
+                                        group_keys.push(key);
+                                        bucket.push(g);
+                                        g
+                                    }
+                                };
+                                row_group.push(group);
+                            }
+                            (row_group, group_keys)
+                        }
+                    },
                 };
                 let num_groups = group_keys.len();
 
@@ -7085,5 +7164,169 @@ mod tests {
             vec![Value::Float(1.5), Value::Int(1)],
         );
         assert_eq!(out, vec![Value::Float(5.5), Value::Null]);
+    }
+
+    /// #479: a single typed `Int` key groups through `IntKeyTable` without
+    /// materializing the key register; the result -- groups, first-seen
+    /// order, aggregates -- must be exactly what the generic `Value`-keyed
+    /// path produces for the same values, including `Null` keys (one
+    /// group), negative keys and keys whose entropy sits above bit 32.
+    #[test]
+    fn group_reduce_typed_int_key_matches_the_value_key_path() {
+        let keys: Vec<Option<i64>> = (0..3_000i64)
+            .map(|i| match i % 7 {
+                0 => None,
+                1 => Some(-(i % 13)),
+                2 => Some((i % 11) << 40),
+                _ => Some(i % 17),
+            })
+            .collect();
+        let amounts: Vec<Value> = (0..3_000i64).map(|i| Value::Int(i % 100)).collect();
+        let typed = Column::Int {
+            data: keys.iter().map(|k| k.unwrap_or(0)).collect(),
+            valid: Bitmap::from_bools(keys.iter().map(Option::is_some)),
+        };
+        let values: Vec<Value> = keys
+            .iter()
+            .map(|k| k.map_or(Value::Null, Value::Int))
+            .collect();
+        let program = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "k".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "v".into(),
+            },
+            Opcode::GroupReduce {
+                group_by: vec![0].into(),
+                aggs: vec![(AggFunc::Sum, Some(1)), (AggFunc::Count, None)].into(),
+                agg_dst: vec![2, 3].into(),
+            },
+        ];
+        let mut typed_vm = Vm::new();
+        typed_vm
+            .execute(
+                &Batch::new(3_000)
+                    .with_typed_column("k", typed)
+                    .with_column("v", amounts.clone()),
+                &program,
+            )
+            .unwrap();
+        let mut value_vm = Vm::new();
+        value_vm
+            .execute(
+                &Batch::new(3_000)
+                    .with_column("k", values)
+                    .with_column("v", amounts),
+                &program,
+            )
+            .unwrap();
+        for reg in [0, 2, 3] {
+            assert_eq!(
+                typed_vm.register(reg).unwrap(),
+                value_vm.register(reg).unwrap(),
+                "register {reg}"
+            );
+        }
+        // 1 Null group + 13 negatives (0..=12 -> -0 is 0, so 12 negatives
+        // plus 0) ... just pin the count against the generic path's, and
+        // that the Null group exists exactly once in first-seen order.
+        let groups = typed_vm.register(0).unwrap();
+        assert_eq!(groups.iter().filter(|k| **k == Value::Null).count(), 1);
+        assert_eq!(groups[0], Value::Null, "row 0's key is Null: first-seen");
+        assert_eq!(groups[1], Value::Int(-1));
+        assert_eq!(groups[2], Value::Int(2 << 40));
+    }
+
+    /// #479: the typed-`Int`-key path respects a pending `Filter`
+    /// selection, like the dict path (#457) and the generic path (#265).
+    #[test]
+    fn filter_then_group_reduce_on_a_typed_int_key_resolves_the_pending_selection() {
+        let key = Column::Int {
+            data: vec![1, 2, 1, 2],
+            valid: Bitmap::from_bools([true, true, true, true].into_iter()),
+        };
+        let batch = Batch::new(4)
+            .with_typed_column("k", key)
+            .with_column(
+                "amount",
+                vec![
+                    Value::Int(10),
+                    Value::Int(5),
+                    Value::Int(20),
+                    Value::Int(15),
+                ],
+            )
+            .with_column(
+                "keep",
+                vec![
+                    Value::Bool(true),
+                    Value::Bool(false),
+                    Value::Bool(true),
+                    Value::Bool(true),
+                ],
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "k".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "amount".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 2,
+                    column: "keep".into(),
+                },
+                Opcode::Filter { predicate: 2 },
+                Opcode::GroupReduce {
+                    group_by: vec![0].into(),
+                    aggs: vec![(AggFunc::Sum, Some(1)), (AggFunc::Count, None)].into(),
+                    agg_dst: vec![3, 4].into(),
+                },
+            ],
+        )
+        .unwrap();
+        // Row 1 (key 2, 5) is filtered out.
+        assert_eq!(vm.register(0).unwrap(), &[Value::Int(1), Value::Int(2)]);
+        assert_eq!(
+            vm.register(3).unwrap(),
+            &[Value::Float(30.0), Value::Float(15.0)]
+        );
+        assert_eq!(vm.register(4).unwrap(), &[Value::Int(2), Value::Int(1)]);
+    }
+
+    /// #479: a typed `Int` key whose register length disagrees with the
+    /// aggregate source is a `RegisterLengthMismatch`, not a panic.
+    #[test]
+    fn group_reduce_typed_int_key_length_mismatch_is_an_error() {
+        let key = Column::Int {
+            data: vec![1, 2],
+            valid: Bitmap::from_bools([true, true].into_iter()),
+        };
+        let mut vm = Vm::new();
+        vm.typed_registers.insert(0, std::sync::Arc::new(key));
+        vm.registers
+            .insert(1, std::sync::Arc::new(vec![Value::Int(1); 3]));
+        let err = vm
+            .execute(
+                &Batch::new(3),
+                &[Opcode::GroupReduce {
+                    group_by: vec![0].into(),
+                    aggs: vec![(AggFunc::Sum, Some(1))].into(),
+                    agg_dst: vec![2].into(),
+                }],
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, VmError::RegisterLengthMismatch { .. }),
+            "{err:?}"
+        );
     }
 }
