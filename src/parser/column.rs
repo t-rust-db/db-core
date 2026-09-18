@@ -1695,6 +1695,42 @@ mod tests {
         assert!(q.limit.is_none());
     }
 
+    /// MC/DC vector (obligation `parser_column_validate_expr_a300f79e`, #496's
+    /// aggregate-in-expression arm `allow_agg && is_known_agg_name(name)`):
+    /// both leaves true -- an aggregate composed with arithmetic in the
+    /// SELECT list is accepted.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_expr_a300f79e__v1_aggregate_arithmetic_in_the_select_list_is_accepted(
+    ) {
+        let q = parse("SELECT SUM(amount) * 2 FROM t").unwrap();
+        assert_eq!(q.columns.len(), 1);
+    }
+
+    /// MC/DC vector (obligation `parser_column_validate_expr_a300f79e`): leaf A
+    /// (`allow_agg`) false -- the same aggregate inside WHERE is rejected.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_expr_a300f79e__v2_aggregate_in_where_is_rejected() {
+        let err = parse("SELECT id FROM t WHERE SUM(amount) * 2 > 10").unwrap_err();
+        assert!(matches!(err, ParseError::Unexpected { .. }), "{err:?}");
+    }
+
+    /// MC/DC vector (obligation `parser_column_validate_expr_a300f79e`): leaf B
+    /// (`is_known_agg_name`) false -- a scalar function in the SELECT
+    /// list skips the aggregate arm and lands on the column grammar's
+    /// generic "unsupported expression form" rejection (scalar functions
+    /// are not part of this grammar yet), not the "not allowed here"
+    /// aggregate error.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_expr_a300f79e__v3_scalar_function_skips_the_aggregate_arm() {
+        let err = parse("SELECT abs(amount) * 2 FROM t").unwrap_err();
+        let text = format!("{err:?}");
+        assert!(text.contains("unsupported expression form"), "{text}");
+        assert!(!text.contains("not allowed here"), "{text}");
+    }
+
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__parser_column_validate_select_8e763e04__v1_agg_without_window_validates_group_by_keys()
