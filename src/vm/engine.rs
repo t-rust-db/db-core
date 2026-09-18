@@ -21,11 +21,13 @@
 //! it isn't. And [`semi_filter`].
 
 use super::batch::{
-    compare_for_order, hash_group_key, run_parallel, run_parallel_streaming, run_parallel_top_n,
-    AggPart, Batch, Chunk, GroupKey, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource,
-    Segment, TopN, Value, Vm, VmError,
+    compare_for_order, hash_group_key, run_morsels_fold, run_parallel, run_parallel_streaming,
+    run_parallel_top_n, AggPart, Batch, Chunk, GroupKey, JoinTables, Opcode, Program, QueryOutput,
+    Result, ScanSource, Segment, TopN, Value, Vm, VmError,
 };
-use super::combine::{combine_chunks, finish_avg, merge_slot, slot_ops, SlotOp};
+use super::combine::{
+    combine_chunks, combine_partials, finish_avg, merge_slot, order_key, slot_ops, Combiner, SlotOp,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -137,6 +139,26 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
     if is_identity_finalize(agg_parts, *distinct, &order_by, limit) {
         return run_parallel(segments, &body);
     }
+    // #478/#488: aggregates never go through `run_parallel` + a row
+    // transpose. Each pool worker pre-aggregates every segment it claims
+    // into one partial (`vm::combine::Combiner`), so the final merge sees
+    // at most `threads x groups` rows instead of `segments x groups`, and
+    // merges them column-major. Only the DISTINCT/ORDER BY/LIMIT tail,
+    // whose input is bounded by the number of surviving groups, still
+    // goes through the row-based `finalize`.
+    if !agg_parts.is_empty() {
+        let combined = if preaggregation_pays(segments.len()) {
+            let partials = run_parallel_preaggregate(segments, &body, agg_parts, *num_group_keys)?;
+            combine_partials(agg_parts, *num_group_keys, &partials)?
+        } else {
+            let output = run_parallel(segments, &body)?;
+            combine_chunks(agg_parts, *num_group_keys, output.chunks())?
+        };
+        if !*distinct && order_by.is_none() && limit.is_none() {
+            return Ok(combined);
+        }
+        return finalize(&[], 0, *distinct, order_by, limit, combined.into_rows());
+    }
     let output = match (agg_parts.is_empty() && !distinct, order_by, limit) {
         (true, Some((col, descending)), Some(limit)) => run_parallel_top_n(
             segments,
@@ -149,17 +171,6 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
         )?,
         _ => run_parallel(segments, &body)?,
     };
-    // #478: aggregates merge column-major straight off the per-segment
-    // chunks (`vm::combine`) -- never transposed to rows. Only the
-    // DISTINCT/ORDER BY/LIMIT tail, whose input is bounded by the number
-    // of surviving groups, still goes through the row-based `finalize`.
-    if !agg_parts.is_empty() {
-        let combined = combine_chunks(agg_parts, *num_group_keys, output.chunks())?;
-        if !*distinct && order_by.is_none() && limit.is_none() {
-            return Ok(combined);
-        }
-        return finalize(&[], 0, *distinct, order_by, limit, combined.into_rows());
-    }
     finalize(
         agg_parts,
         *num_group_keys,
@@ -167,6 +178,55 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
         order_by,
         limit,
         output.into_rows(),
+    )
+}
+
+/// Segments per worker below which `run()` merges the per-segment chunks
+/// directly instead of pre-aggregating per worker (#488). Pre-aggregation
+/// costs each worker a copy of its first chunk into an accumulator and the
+/// final merge a sort of the groups back into first-seen order; it pays
+/// only when a worker folds several segments' partials into one. Every
+/// engine gates thread-local aggregation the same way (DuckDB above ~10K
+/// groups per thread, ClickHouse above 100K keys): measured here, 16
+/// segments over ~10 threads was 14% *slower* pre-aggregated, 64 segments
+/// clearly faster.
+const PREAGGREGATE_MIN_SEGMENTS_PER_THREAD: usize = 4;
+
+/// Whether `num_segments` gives each worker enough segments to make
+/// per-worker pre-aggregation worthwhile.
+fn preaggregation_pays(num_segments: usize) -> bool {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    num_segments >= threads.saturating_mul(PREAGGREGATE_MIN_SEGMENTS_PER_THREAD)
+}
+
+/// Runs `body` over every segment on the morsel pool and pre-aggregates
+/// per worker (#488): each worker folds the `GroupReduce` output of every
+/// segment it claims into its own [`Combiner`], and hands back one
+/// still-mergeable partial -- `(chunk, first-seen keys)` -- when the pool
+/// drains. `combine_partials` then merges at most `threads x groups`
+/// rows. The per-segment `GroupReduce` itself is unchanged; this is
+/// DuckDB's / Velox's thread-local pre-aggregation applied at the merge
+/// boundary rather than inside the VM.
+pub(crate) fn run_parallel_preaggregate<S: Segment>(
+    segments: &[S],
+    body: &[Opcode],
+    agg_parts: &[AggPart],
+    num_group_keys: usize,
+) -> Result<Vec<(Chunk, Vec<u64>)>> {
+    let items: Vec<(usize, &S)> = segments.iter().enumerate().collect();
+    run_morsels_fold(
+        &items,
+        || Combiner::new(agg_parts, num_group_keys),
+        |combiner, (segment_index, segment)| {
+            let batch = segment.load()?;
+            let mut vm = Vm::new();
+            vm.execute(&batch, body)?;
+            for chunk in vm.take_output().into_chunks() {
+                combiner.push_chunk(&chunk, |row| order_key(*segment_index, row))?;
+            }
+            Ok(())
+        },
+        |combiner| Ok(combiner.finish_partial()),
     )
 }
 
@@ -1160,5 +1220,105 @@ mod tests {
             &[Value::Int(10), Value::Int(30)]
         );
         assert!(semi_filter(&batch, "nope", &allowed).is_err());
+    }
+}
+
+#[cfg(test)]
+mod preaggregation_tests {
+    use super::super::batch::{
+        chunk_len, run_parallel, AggFunc, AggPart, Batch, Instruction, Opcode, Program, Value,
+    };
+    use super::super::combine::combine_chunks;
+    use super::{run, run_parallel_preaggregate, InMemorySegment};
+
+    fn segments(num_segments: usize, groups: i64) -> Vec<InMemorySegment> {
+        (0..num_segments)
+            .map(|seg| {
+                // Every segment sees every group, in a segment-dependent
+                // rotation so first-seen order differs from key order.
+                let keys: Vec<Value> = (0..groups)
+                    .map(|g| Value::Int((g + seg as i64) % groups))
+                    .collect();
+                let amounts: Vec<Value> = (0..groups).map(|g| Value::Int(g + seg as i64)).collect();
+                InMemorySegment(
+                    Batch::new(groups as usize)
+                        .with_column("k", keys)
+                        .with_column("v", amounts),
+                )
+            })
+            .collect()
+    }
+
+    fn group_sum_program() -> Program {
+        Program::new(vec![
+            Instruction::new(Opcode::LoadColumn {
+                reg: 0,
+                column: "k".into(),
+            }),
+            Instruction::new(Opcode::LoadColumn {
+                reg: 1,
+                column: "v".into(),
+            }),
+            Instruction::new(Opcode::GroupReduce {
+                group_by: vec![0].into(),
+                aggs: vec![(AggFunc::Sum, Some(1))].into(),
+                agg_dst: vec![2].into(),
+            }),
+            Instruction::new(Opcode::Emit {
+                registers: vec![0, 2].into(),
+            }),
+            Instruction::new(Opcode::Combine {
+                agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
+                num_group_keys: 1,
+                distinct: false,
+            }),
+        ])
+    }
+
+    /// #488's acceptance criterion: the final merge receives at most
+    /// `threads x groups` partial rows -- 40 segments x 500 groups is
+    /// 20K rows into `Combine` today, but only `threads x 500` here.
+    #[test]
+    fn combine_receives_at_most_threads_times_groups_partial_rows() {
+        let (num_segments, groups) = (40usize, 500i64);
+        let segs = segments(num_segments, groups);
+        let program = group_sum_program();
+        let (body, ..) = program.split_finalize();
+        let partials =
+            run_parallel_preaggregate(&segs, &body, &[AggPart::GroupKey, AggPart::Sum], 1).unwrap();
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert!(partials.len() <= threads.min(num_segments));
+        let total: usize = partials.iter().map(|(c, _)| chunk_len(c)).sum();
+        assert!(
+            total <= threads * groups as usize,
+            "{total} partial rows for {threads} threads x {groups} groups"
+        );
+        assert!(total < num_segments * groups as usize / 2 || threads * 2 > num_segments);
+        for (chunk, first_seen) in &partials {
+            assert_eq!(first_seen.len(), chunk_len(chunk));
+        }
+    }
+
+    /// The pre-aggregated `run()` must produce exactly what the direct
+    /// per-segment merge does -- values and group order -- and do so
+    /// identically on every run, whatever the pool's segment interleaving.
+    #[test]
+    fn preaggregated_run_matches_the_direct_merge_and_is_deterministic() {
+        let segs = segments(40, 500);
+        let program = group_sum_program();
+        let (body, ..) = program.split_finalize();
+        let per_segment = run_parallel(&segs, &body).unwrap();
+        let direct =
+            combine_chunks(&[AggPart::GroupKey, AggPart::Sum], 1, per_segment.chunks()).unwrap();
+        for _ in 0..10 {
+            let got = run(&segs, &program).unwrap();
+            assert_eq!(got, direct);
+        }
+        // Rotation puts key 0 first in segment 0, so first-seen order is
+        // 0, 1, 2, ... regardless of which worker saw which segment.
+        let rows = direct.into_rows();
+        assert_eq!(rows[0][0], Value::Int(0));
+        assert_eq!(rows[1][0], Value::Int(1));
+        assert_eq!(rows[499][0], Value::Int(499));
     }
 }
