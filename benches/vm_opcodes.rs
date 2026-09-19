@@ -34,11 +34,15 @@ mod common;
 use std::hint::black_box;
 
 use db_core::value::Value as RowValue;
+use db_core::value::{Collation, TextEncoding};
 use db_core::vm::batch::{
     compare_for_order, AggFunc, AggPart, Batch, Instruction, MapOp, Opcode as BatchOpcode, Program,
     Value as BatchValue, Vm as BatchVm, WindowFunc,
 };
 use db_core::vm::engine::{run, InMemorySegment};
+use db_core::vm::row::cursor::HashAggCursor;
+use db_core::vm::row::program::GroupKeyColumn;
+use db_core::vm::row::record::encode_record;
 use db_core::vm::row::{
     execute, Cursor, EphemeralTableCursor, Instruction as RowInstruction, Opcode as RowOpcode,
     Program as RowProgram, Vm as RowVm,
@@ -603,6 +607,38 @@ fn bench_row_scan_column(r: &mut common::Report) {
     });
 }
 
+/// #486: `HashAggCursor::hash_agg_find`'s `GROUP BY` key lookup, before
+/// this bench existed the row engine had no cardinality-swept
+/// `group_by_agg` coverage at all (unlike the batch engine's
+/// [`bench_batch_group_reduce`]). Sweeps group count the same way: low
+/// cardinality is the common case, `cardinality == ROWS` is the
+/// pathological one-group-per-row case the hash lookup must not regress
+/// against the old O(groups) linear scan on.
+fn bench_row_hash_agg_find(r: &mut common::Report) {
+    for (label, cardinality) in [
+        ("low (100 groups)", 100),
+        ("medium (1% of rows)", (ROWS / 100).max(1)),
+        ("unique (no grouping)", ROWS),
+    ] {
+        let rows: Vec<std::rc::Rc<[u8]>> = (0..ROWS)
+            .map(|i| {
+                let key = i64::try_from(i % cardinality).unwrap_or(0);
+                encode_record(&[RowValue::Integer(key)], TextEncoding::Utf8).into()
+            })
+            .collect();
+        r.bench(&format!("vm_opcodes/row::HashAggFind ({label})"), || {
+            let mut cursor = HashAggCursor::new(vec![GroupKeyColumn {
+                index: 0,
+                collation: Collation::Binary,
+                affinity: b'A',
+            }]);
+            for row in &rows {
+                assert!(cursor.hash_agg_find(std::rc::Rc::clone(black_box(row))));
+            }
+        });
+    }
+}
+
 fn bench_row_compare(r: &mut common::Report) {
     let program = RowProgram::new(vec![
         RowInstruction::new(RowOpcode::Integer, 1, 0, 0),
@@ -815,5 +851,6 @@ fn main() {
     bench_batch_emit_duplicate_register(&mut report);
     bench_row_scan_column(&mut report);
     bench_row_compare(&mut report);
+    bench_row_hash_agg_find(&mut report);
     report.finish();
 }

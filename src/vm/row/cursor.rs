@@ -15,6 +15,7 @@ use super::aggregate::{AggState, AggregateError};
 use super::program::{GroupKeyColumn, SortKeyColumn};
 use super::record::{decode_column, decode_record, encode_record, RecordError};
 use crate::value::{Collation, TextEncoding, Value};
+use crate::vm::int_key_table::murmur_finalize;
 
 /// A forward-scanning, row-at-a-time cursor over a table's rows.
 /// Mirrors the read-only subset of sqlite-rs's `TableCursor` interface
@@ -904,19 +905,24 @@ struct GroupSlot {
 /// [`SorterCursor`]'s sort-then-group strategy -- see this module's own
 /// scope note.
 ///
-/// **Group lookup is a linear scan over `groups`, not an actual
-/// hash table** -- a correctness-equivalent, simpler stand-in (same
-/// tradeoff [`SorterCursor`]'s bound truncation makes): building a
-/// `Hash` impl consistent with [`super::compare::compare`]'s
-/// collation-aware equality (so `1` and `1.0` hash alike) is
-/// non-trivial and not worth it for a reference VM that is not
-/// perf-critical. `HashAggRewind` still only sorts the `K` distinct
-/// groups, not all `n` rows, so the strategy's O(rows) find + O(K log
-/// K) order still beats the sort strategy's O(n log n) whenever groups
-/// are few relative to rows.
+/// Group lookup hashes the key with [`Self::hash_key`] (collation-aware
+/// and consistent with [`super::compare::compare`]'s cross-type numeric
+/// equality, so `1` and `1.0` hash alike) into `index`, a bucket of
+/// candidate group ids sharing that hash; a hash match still confirms
+/// with `keys_equal` before reusing a group, so a hash collision only
+/// costs an extra comparison, never a wrong merge (db-core#486). This
+/// turns `hash_agg_find` from an O(groups) scan into O(1) amortized per
+/// row. `HashAggRewind` still only sorts the `K` distinct groups, not
+/// all `n` rows, so the strategy's O(rows) find + O(K log K) order still
+/// beats the sort strategy's O(n log n) whenever groups are few relative
+/// to rows.
 pub struct HashAggCursor {
     keys: Vec<GroupKeyColumn>,
     groups: Vec<GroupSlot>,
+    /// Candidate group ids per key hash -- `hash_agg_find`'s index.
+    /// Several groups can share a bucket on a hash collision; each is
+    /// still confirmed with `keys_equal` before reuse.
+    index: HashMap<u64, Vec<usize>>,
     /// Group positions in output order, filled in by `rewind` (freezing
     /// the group set -- no further `hash_agg_find` after this).
     order: Vec<usize>,
@@ -927,12 +933,22 @@ pub struct HashAggCursor {
     current_group: Option<usize>,
 }
 
+/// The largest integer magnitude an `f64` represents exactly -- 2^53.
+/// Above this, `i64 as f64` can round two distinct integers to the same
+/// double (or round a real that looks distinct into a whole number),
+/// which is exactly the precision edge [`super::compare::compare_int_real`]
+/// documents. [`HashAggCursor::hash_numeric`] pushes every value in that
+/// danger zone into one shared bucket instead of trying to canonicalize
+/// it, so a hash collision (never a miss) is the only cost.
+const SAFE_INT_F64_MAGNITUDE: f64 = 9_007_199_254_740_992.0; // 2^53
+
 impl HashAggCursor {
     /// Creates an empty hash aggregator grouping by `keys`.
     pub fn new(keys: Vec<GroupKeyColumn>) -> Self {
         HashAggCursor {
             keys,
             groups: Vec::new(),
+            index: HashMap::new(),
             order: Vec::new(),
             pos: None,
             frozen: false,
@@ -949,10 +965,84 @@ impl HashAggCursor {
         })
     }
 
+    /// A hash for one numeric value (`Integer` or `Real`), equal for any
+    /// two values [`super::compare::compare`] would call equal --
+    /// in-range values hash by their exact `f64` bit pattern (so `1`
+    /// and `1.0` collide, and `-0.0`/`0.0` are normalized together);
+    /// everything past [`SAFE_INT_F64_MAGNITUDE`], and NaN/infinities,
+    /// fall into one shared bucket per class rather than risk a false
+    /// miss.
+    fn hash_numeric(int_val: Option<i64>, real_val: Option<f64>) -> u64 {
+        const LARGE_MAGNITUDE_BUCKET: u64 = 1;
+        const NAN_BUCKET: u64 = 2;
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "magnitude-checked against SAFE_INT_F64_MAGNITUDE before use"
+        )]
+        match (int_val, real_val) {
+            (Some(i), None) => {
+                if (i as f64).abs() <= SAFE_INT_F64_MAGNITUDE {
+                    (i as f64).to_bits()
+                } else {
+                    LARGE_MAGNITUDE_BUCKET
+                }
+            }
+            (None, Some(r)) => {
+                if r.is_nan() {
+                    NAN_BUCKET
+                } else if r.abs() <= SAFE_INT_F64_MAGNITUDE {
+                    // Normalize -0.0 to 0.0: `compare_real` treats them equal.
+                    (if r == 0.0 { 0.0 } else { r }).to_bits()
+                } else {
+                    LARGE_MAGNITUDE_BUCKET
+                }
+            }
+            _ => 0, // unreachable: callers pass exactly one of int_val/real_val
+        }
+    }
+
+    /// FNV-1a over `bytes` -- a cheap, well-mixed byte hash for text/blob
+    /// key columns (not cryptographic; `keys_equal` still confirms any
+    /// hash match with the real bytes).
+    fn fnv1a(bytes: impl Iterator<Item = u8>) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in bytes {
+            h ^= u64::from(byte);
+            h = h.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        h
+    }
+
+    /// A hash over `key_values` consistent with `keys_equal` -- any two
+    /// keys `keys_equal` considers equal hash equal here too, so
+    /// `hash_agg_find`'s bucket lookup never misses a real match (a
+    /// bucket collision only costs an extra `keys_equal` check).
+    fn hash_key(&self, key_values: &[Value]) -> u64 {
+        let mut hash: u64 = 0;
+        for (value, key) in key_values.iter().zip(&self.keys) {
+            let column_hash = match value {
+                Value::Null => 0,
+                Value::Integer(i) => Self::hash_numeric(Some(*i), None),
+                Value::Real(r) => Self::hash_numeric(None, Some(*r)),
+                Value::Text(t) => match key.collation {
+                    Collation::Binary => Self::fnv1a(t.bytes()),
+                    Collation::NoCase => Self::fnv1a(t.bytes().map(|b| b.to_ascii_lowercase())),
+                    Collation::RTrim => Self::fnv1a(t.trim_end_matches(' ').bytes()),
+                },
+                Value::Blob(b) => Self::fnv1a(b.iter().copied()),
+            };
+            hash = murmur_finalize(hash ^ column_hash);
+        }
+        hash
+    }
+
     fn find_group(&self, key_values: &[Value]) -> Option<usize> {
-        self.groups
-            .iter()
-            .position(|g| self.keys_equal(&g.key_values, key_values))
+        let hash = self.hash_key(key_values);
+        self.index.get(&hash)?.iter().copied().find(|&idx| {
+            self.groups
+                .get(idx)
+                .is_some_and(|g| self.keys_equal(&g.key_values, key_values))
+        })
     }
 }
 
@@ -1036,11 +1126,13 @@ impl Cursor for HashAggCursor {
             Some(idx) => idx,
             None => {
                 let idx = self.groups.len();
+                let hash = self.hash_key(&key_values);
                 self.groups.push(GroupSlot {
                     row: blob,
                     key_values,
                     accumulators: Vec::new(),
                 });
+                self.index.entry(hash).or_default().push(idx);
                 idx
             }
         };
@@ -1697,6 +1789,45 @@ mod tests {
             Some([Some(AggState::Count(1))].as_slice())
         );
         assert!(!c.next());
+    }
+
+    /// `HashAggCursor::hash_key` must agree with `keys_equal` (and so
+    /// with `super::compare::compare`) on every cross-type numeric
+    /// equality it recognizes, or a hash miss would wrongly split one
+    /// logical group into two (db-core#486). `Integer(1)`/`Real(1.0)`
+    /// and `Real(0.0)`/`Real(-0.0)` must land in the same group; a
+    /// `NoCase` key must fold "A"/"a" together.
+    #[test]
+    fn hash_agg_cursor_groups_cross_type_numeric_and_collated_text_keys_together() {
+        let mut c = HashAggCursor::new(vec![group_key(0)]);
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(1)])));
+        assert!(c.hash_agg_find(make_row(&[Value::Real(1.0)])));
+        assert!(c.hash_agg_find(make_row(&[Value::Real(0.0)])));
+        assert!(c.hash_agg_find(make_row(&[Value::Real(-0.0)])));
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(2)])));
+        assert!(c.rewind());
+        // Only 3 distinct groups: {1, 1.0}, {0.0, -0.0}, {2}.
+        let mut seen = Vec::new();
+        loop {
+            seen.push(c.column(0).unwrap());
+            if !c.next() {
+                break;
+            }
+        }
+        assert_eq!(seen.len(), 3, "expected 3 groups, got {seen:?}");
+
+        let mut nc = HashAggCursor::new(vec![GroupKeyColumn {
+            index: 0,
+            collation: crate::value::Collation::NoCase,
+            affinity: b'A',
+        }]);
+        assert!(nc.hash_agg_find(make_row(&[Value::Text("A".to_string().into())])));
+        assert!(nc.hash_agg_find(make_row(&[Value::Text("a".to_string().into())])));
+        assert!(nc.rewind());
+        assert!(
+            !nc.next(),
+            "NOCASE should have folded \"A\"/\"a\" into one group"
+        );
     }
 
     #[test]

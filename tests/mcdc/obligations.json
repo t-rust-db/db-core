@@ -34752,7 +34752,7 @@
   {
     "id": "vm_row_cursor_rewind_5ef90c9b",
     "file": "src/vm/row/cursor.rs",
-    "line": 310,
+    "line": 311,
     "decision": "self.rows.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34762,7 +34762,7 @@
   {
     "id": "vm_row_cursor_next_3ca40ef4",
     "file": "src/vm/row/cursor.rs",
-    "line": 316,
+    "line": 317,
     "decision": "next < self.rows.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34772,7 +34772,7 @@
   {
     "id": "vm_row_cursor_seek_77aa5b67",
     "file": "src/vm/row/cursor.rs",
-    "line": 348,
+    "line": 349,
     "decision": "match idx.filter(|&idx| idx < self.rows.len()) {\n            Some(idx) => {\n                self.pos = Some(idx);\n                true\n            }\n            None => {\n                self.pos = None;\n                false\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34782,7 +34782,7 @@
   {
     "id": "vm_row_cursor_delete_b21b6a71",
     "file": "src/vm/row/cursor.rs",
-    "line": 364,
+    "line": 365,
     "decision": "pos >= self.rows.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34792,7 +34792,7 @@
   {
     "id": "vm_row_cursor_row_index_d9858fef",
     "file": "src/vm/row/cursor.rs",
-    "line": 439,
+    "line": 440,
     "decision": "let Some(idx) = self.current_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -34802,7 +34802,7 @@
   {
     "id": "vm_row_cursor_row_index_b5f5c102",
     "file": "src/vm/row/cursor.rs",
-    "line": 440,
+    "line": 441,
     "decision": "rows.get(idx).is_some_and(|(r, _)| *r == rowid)",
     "conditions": 1,
     "vectors_required": 2,
@@ -34812,7 +34812,7 @@
   {
     "id": "vm_row_cursor_position_at_28209b68",
     "file": "src/vm/row/cursor.rs",
-    "line": 449,
+    "line": 450,
     "decision": "match found {\n            Some((idx, rowid)) => {\n                self.current_rowid = Some(rowid);\n                self.current_index = Some(idx);\n                self.at_row = true;\n                true\n            }\n            None => {\n                self.at_row = false;\n                false\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34822,7 +34822,7 @@
   {
     "id": "vm_row_cursor_rewind_5092d053",
     "file": "src/vm/row/cursor.rs",
-    "line": 467,
+    "line": 468,
     "decision": "first.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34832,7 +34832,7 @@
   {
     "id": "vm_row_cursor_next_902656d6",
     "file": "src/vm/row/cursor.rs",
-    "line": 480,
+    "line": 481,
     "decision": "match self.current_index {\n                Some(idx) if self.at_row && rows.get(idx).is_some_and(|(r, _)| *r == after) => {\n                    idx.saturating_add(1)\n                }\n                _ => rows.partition_point(|(r, _)| *r <= after),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34842,7 +34842,7 @@
   {
     "id": "vm_row_cursor_next_664e4c8e",
     "file": "src/vm/row/cursor.rs",
-    "line": 481,
+    "line": 482,
     "decision": "self.at_row && rows.get(idx).is_some_and(|(r, _)| *r == after)",
     "conditions": 2,
     "vectors_required": 3,
@@ -34852,7 +34852,7 @@
   {
     "id": "vm_row_cursor_last_2c70e91b",
     "file": "src/vm/row/cursor.rs",
-    "line": 496,
+    "line": 497,
     "decision": "last.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34862,7 +34862,7 @@
   {
     "id": "vm_row_cursor_rowid_80922ecc",
     "file": "src/vm/row/cursor.rs",
-    "line": 524,
+    "line": 525,
     "decision": "!self.at_row",
     "conditions": 1,
     "vectors_required": 2,
@@ -34872,7 +34872,7 @@
   {
     "id": "vm_row_cursor_insert_a9e906d2",
     "file": "src/vm/row/cursor.rs",
-    "line": 538,
+    "line": 539,
     "decision": "let Some(existing) = rows.get_mut(pos).filter(|(r, _)| *r == rowid)",
     "conditions": 1,
     "vectors_required": 2,
@@ -34882,7 +34882,7 @@
   {
     "id": "vm_row_cursor_insert_1263673f",
     "file": "src/vm/row/cursor.rs",
-    "line": 541,
+    "line": 542,
     "decision": "rows.len() >= MAX_EPHEMERAL_ROWS",
     "conditions": 1,
     "vectors_required": 2,
@@ -34892,7 +34892,7 @@
   {
     "id": "vm_row_cursor_delete_80922ecc",
     "file": "src/vm/row/cursor.rs",
-    "line": 550,
+    "line": 551,
     "decision": "!self.at_row",
     "conditions": 1,
     "vectors_required": 2,
@@ -34902,7 +34902,7 @@
   {
     "id": "vm_row_cursor_normalize_key_values_b78e5484",
     "file": "src/vm/row/cursor.rs",
-    "line": 613,
+    "line": 614,
     "decision": "match (v, collation) {\n            (Value::Text(s), Collation::NoCase) => {\n                Value::Text(Rc::from(s.to_ascii_lowercase().as_str()))\n            }\n            (Value::Text(s), Collation::RTrim) => Value::Text(Rc::from(s.trim_end_matches(' '))),\n            _ => v.clone(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34912,7 +34912,7 @@
   {
     "id": "vm_row_cursor_ephemeral_idx_insert_a165b7fb",
     "file": "src/vm/row/cursor.rs",
-    "line": 683,
+    "line": 684,
     "decision": "!self.entries.contains_key(&encoded) && self.entries.len() >= MAX_EPHEMERAL_ROWS",
     "conditions": 2,
     "vectors_required": 3,
@@ -34922,7 +34922,7 @@
   {
     "id": "vm_row_cursor_idx_delete_ce63136a",
     "file": "src/vm/row/cursor.rs",
-    "line": 694,
+    "line": 695,
     "decision": "self.last_key.as_ref() == Some(&encoded)",
     "conditions": 1,
     "vectors_required": 2,
@@ -34932,7 +34932,7 @@
   {
     "id": "vm_row_cursor_delete_0f80d757",
     "file": "src/vm/row/cursor.rs",
-    "line": 701,
+    "line": 702,
     "decision": "let Some(key) = self.last_key.take()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34942,7 +34942,7 @@
   {
     "id": "vm_row_cursor_idx_compare_b785c52e",
     "file": "src/vm/row/cursor.rs",
-    "line": 711,
+    "line": 712,
     "decision": "match &self.last_key {\n            Some(last) => last.as_slice().cmp(encode_key(key, collations).as_slice()),\n            None => std::cmp::Ordering::Less,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34952,7 +34952,7 @@
   {
     "id": "vm_row_cursor_compare_key_2c1f6b93",
     "file": "src/vm/row/cursor.rs",
-    "line": 774,
+    "line": 775,
     "decision": "match (a, b) {\n        (Value::Null, Value::Null) => Ordering::Equal,\n        (Value::Null, _) => {\n            if key.nulls_first {\n                Ordering::Less\n            } else {\n                Ordering::Greater\n            }\n        }\n        (_, Value::Null) => {\n            if key.nulls_first {\n                Ordering::Greater\n            } else {\n                Ordering::Less\n            }\n        }\n        _ => {\n            let ord = super::compare::compare(a, b, key.collation);\n            if key.descending {\n                ord.reverse()\n            } else {\n                ord\n            }\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34962,7 +34962,7 @@
   {
     "id": "vm_row_cursor_compare_key_f720b6c9",
     "file": "src/vm/row/cursor.rs",
-    "line": 777,
+    "line": 778,
     "decision": "key.nulls_first",
     "conditions": 1,
     "vectors_required": 2,
@@ -34972,7 +34972,7 @@
   {
     "id": "vm_row_cursor_compare_key_f720b6c9_2",
     "file": "src/vm/row/cursor.rs",
-    "line": 784,
+    "line": 785,
     "decision": "key.nulls_first",
     "conditions": 1,
     "vectors_required": 2,
@@ -34982,7 +34982,7 @@
   {
     "id": "vm_row_cursor_compare_key_bbe7391d",
     "file": "src/vm/row/cursor.rs",
-    "line": 792,
+    "line": 793,
     "decision": "key.descending",
     "conditions": 1,
     "vectors_required": 2,
@@ -34992,7 +34992,7 @@
   {
     "id": "vm_row_cursor_compare_keys_4659ab60",
     "file": "src/vm/row/cursor.rs",
-    "line": 806,
+    "line": 807,
     "decision": "ord != std::cmp::Ordering::Equal",
     "conditions": 1,
     "vectors_required": 2,
@@ -35002,7 +35002,7 @@
   {
     "id": "vm_row_cursor_rewind_16751306",
     "file": "src/vm/row/cursor.rs",
-    "line": 818,
+    "line": 819,
     "decision": "!self.sorted",
     "conditions": 1,
     "vectors_required": 2,
@@ -35012,7 +35012,7 @@
   {
     "id": "vm_row_cursor_rewind_9f3577d1",
     "file": "src/vm/row/cursor.rs",
-    "line": 824,
+    "line": 825,
     "decision": "self.buffer.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35022,7 +35022,7 @@
   {
     "id": "vm_row_cursor_next_c55efdb7",
     "file": "src/vm/row/cursor.rs",
-    "line": 834,
+    "line": 835,
     "decision": "next < self.buffer.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35032,7 +35032,7 @@
   {
     "id": "vm_row_cursor_sorter_insert_2b7178a7",
     "file": "src/vm/row/cursor.rs",
-    "line": 865,
+    "line": 866,
     "decision": "let Some(bound) = self.bound",
     "conditions": 1,
     "vectors_required": 2,
@@ -35042,7 +35042,7 @@
   {
     "id": "vm_row_cursor_sorter_insert_e2e03c4c",
     "file": "src/vm/row/cursor.rs",
-    "line": 866,
+    "line": 867,
     "decision": "self.buffer.len() > bound",
     "conditions": 1,
     "vectors_required": 2,
@@ -35050,9 +35050,79 @@
     "wildcard_risk": false
   },
   {
+    "id": "vm_row_cursor_hash_numeric_786c4dcf",
+    "file": "src/vm/row/cursor.rs",
+    "line": 982,
+    "decision": "#[allow(\n            clippy::cast_precision_loss,\n            reason = \"magnitude-checked against SAFE_INT_F64_MAGNITUDE before use\"\n        )]\n        match (int_val, real_val) {\n            (Some(i), None) => {\n                if (i as f64).abs() <= SAFE_INT_F64_MAGNITUDE {\n                    (i as f64).to_bits()\n                } else {\n                    LARGE_MAGNITUDE_BUCKET\n                }\n            }\n            (None, Some(r)) => {\n                if r.is_nan() {\n                    NAN_BUCKET\n                } else if r.abs() <= SAFE_INT_F64_MAGNITUDE {\n                    // Normalize -0.0 to 0.0: `compare_real` treats them equal.\n                    (if r == 0.0 { 0.0 } else { r }).to_bits()\n                } else {\n                    LARGE_MAGNITUDE_BUCKET\n                }\n            }\n            _ => 0, // unreachable: callers pass exactly one of int_val/real_val\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_row_cursor_hash_numeric_5cfe19d8",
+    "file": "src/vm/row/cursor.rs",
+    "line": 984,
+    "decision": "(i as f64).abs() <= SAFE_INT_F64_MAGNITUDE",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_row_cursor_hash_numeric_991d96cd",
+    "file": "src/vm/row/cursor.rs",
+    "line": 991,
+    "decision": "r.is_nan()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_row_cursor_hash_numeric_b64f13f3",
+    "file": "src/vm/row/cursor.rs",
+    "line": 993,
+    "decision": "r.abs() <= SAFE_INT_F64_MAGNITUDE",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_row_cursor_hash_numeric_319d7947",
+    "file": "src/vm/row/cursor.rs",
+    "line": 995,
+    "decision": "r == 0.0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_row_cursor_hash_key_f6288f93",
+    "file": "src/vm/row/cursor.rs",
+    "line": 1023,
+    "decision": "match value {\n                Value::Null => 0,\n                Value::Integer(i) => Self::hash_numeric(Some(*i), None),\n                Value::Real(r) => Self::hash_numeric(None, Some(*r)),\n                Value::Text(t) => match key.collation {\n                    Collation::Binary => Self::fnv1a(t.bytes()),\n                    Collation::NoCase => Self::fnv1a(t.bytes().map(|b| b.to_ascii_lowercase())),\n                    Collation::RTrim => Self::fnv1a(t.trim_end_matches(' ').bytes()),\n                },\n                Value::Blob(b) => Self::fnv1a(b.iter().copied()),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_row_cursor_hash_key_d7e87c38",
+    "file": "src/vm/row/cursor.rs",
+    "line": 1027,
+    "decision": "match key.collation {\n                    Collation::Binary => Self::fnv1a(t.bytes()),\n                    Collation::NoCase => Self::fnv1a(t.bytes().map(|b| b.to_ascii_lowercase())),\n                    Collation::RTrim => Self::fnv1a(t.trim_end_matches(' ').bytes()),\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "vm_row_cursor_rewind_3cad5db9",
     "file": "src/vm/row/cursor.rs",
-    "line": 964,
+    "line": 1054,
     "decision": "!self.frozen",
     "conditions": 1,
     "vectors_required": 2,
@@ -35062,7 +35132,7 @@
   {
     "id": "vm_row_cursor_rewind_4659ab60",
     "file": "src/vm/row/cursor.rs",
-    "line": 970,
+    "line": 1060,
     "decision": "ord != std::cmp::Ordering::Equal",
     "conditions": 1,
     "vectors_required": 2,
@@ -35072,7 +35142,7 @@
   {
     "id": "vm_row_cursor_rewind_6c860d31",
     "file": "src/vm/row/cursor.rs",
-    "line": 979,
+    "line": 1069,
     "decision": "self.order.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35082,7 +35152,7 @@
   {
     "id": "vm_row_cursor_next_79ed1a0c",
     "file": "src/vm/row/cursor.rs",
-    "line": 985,
+    "line": 1075,
     "decision": "next < self.order.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35090,10 +35160,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_cursor_hash_agg_find_6ce5f96c",
+    "id": "vm_row_cursor_hash_agg_find_4f5a3259",
     "file": "src/vm/row/cursor.rs",
-    "line": 1035,
-    "decision": "match self.find_group(&key_values) {\n            Some(idx) => idx,\n            None => {\n                let idx = self.groups.len();\n                self.groups.push(GroupSlot {\n                    row: blob,\n                    key_values,\n                    accumulators: Vec::new(),\n                });\n                idx\n            }\n        }",
+    "line": 1125,
+    "decision": "match self.find_group(&key_values) {\n            Some(idx) => idx,\n            None => {\n                let idx = self.groups.len();\n                let hash = self.hash_key(&key_values);\n                self.groups.push(GroupSlot {\n                    row: blob,\n                    key_values,\n                    accumulators: Vec::new(),\n                });\n                self.index.entry(hash).or_default().push(idx);\n                idx\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -35102,7 +35172,7 @@
   {
     "id": "vm_row_cursor_hash_agg_step_bcf01a99",
     "file": "src/vm/row/cursor.rs",
-    "line": 1064,
+    "line": 1156,
     "decision": "group.accumulators.len() <= slot",
     "conditions": 1,
     "vectors_required": 2,
@@ -35112,7 +35182,7 @@
   {
     "id": "vm_row_cursor_hash_agg_group_accumulators_dae728d7",
     "file": "src/vm/row/cursor.rs",
-    "line": 1082,
+    "line": 1174,
     "decision": "self.frozen",
     "conditions": 1,
     "vectors_required": 2,
@@ -35122,7 +35192,7 @@
   {
     "id": "vm_row_cursor_auto_index_next_45483803",
     "file": "src/vm/row/cursor.rs",
-    "line": 1208,
+    "line": 1300,
     "decision": "next_pos < len",
     "conditions": 1,
     "vectors_required": 2,
@@ -35132,7 +35202,7 @@
   {
     "id": "vm_row_cursor_rewind_c8cdb147",
     "file": "src/vm/row/cursor.rs",
-    "line": 1254,
+    "line": 1346,
     "decision": "self.entries.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35142,7 +35212,7 @@
   {
     "id": "vm_row_cursor_next_4dc703a2",
     "file": "src/vm/row/cursor.rs",
-    "line": 1264,
+    "line": 1356,
     "decision": "next < self.entries.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35152,7 +35222,7 @@
   {
     "id": "vm_row_cursor_seek_index_eq_42f4944d",
     "file": "src/vm/row/cursor.rs",
-    "line": 1315,
+    "line": 1407,
     "decision": "match self.entries.get(pos) {\n            Some((k, _)) if compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Equal => {\n                self.pos = Some(pos);\n                true\n            }\n            _ => {\n                self.pos = None;\n                false\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35162,7 +35232,7 @@
   {
     "id": "vm_row_cursor_seek_index_eq_95938265",
     "file": "src/vm/row/cursor.rs",
-    "line": 1316,
+    "line": 1408,
     "decision": "compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Equal",
     "conditions": 1,
     "vectors_required": 2,
@@ -35172,8 +35242,18 @@
   {
     "id": "vm_row_cursor_seek_index_ge_ee129cdb",
     "file": "src/vm/row/cursor.rs",
-    "line": 1331,
+    "line": 1423,
     "decision": "pos < self.entries.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_row_cursor_hash_agg_cursor_groups_cross_type_numeric_and_collated_text_keys_together_64b3e0ac",
+    "file": "src/vm/row/cursor.rs",
+    "line": 1813,
+    "decision": "!c.next()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
