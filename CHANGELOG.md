@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.114.5] - 2026-09-19
+
+### Changed
+
+- **Dropped the per-row has-seen-a-row flag around implicit-group `AggStep`** (#525, PR #526): `try_compile_direct_agg_scan`'s whole-table-group scan only runs once per program execution, so an agg-context slot always starts `None` -- `AggState::initial`/`finalize(None)` already give correct zero-row semantics without a forced reset. Every row now simply folds, and the `have_group_reg` boundary branch (`Eq`/`Goto`/`Integer`/`Goto`, 5 opcodes/row) is only emitted when the select list needs a first-match snapshot of a plain column; a pure `count(*)`/aggregate-only projection -- the `IN (subquery) ... COUNT(*)` shape #525 reports at 8-10x sqlite3 -- drops the branch entirely.
+
 ## [0.114.4] - 2026-09-19
 
 ### Changed
