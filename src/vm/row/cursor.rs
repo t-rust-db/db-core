@@ -842,14 +842,11 @@ impl Cursor for SorterCursor {
 
     fn column(&self, col: usize) -> Option<Value> {
         let (blob, _) = self.buffer.get(self.pos?)?;
-        // Every buffered blob decoded in `sorter_insert`, so the `.ok()`
-        // fallback is unreachable; a `col` past the row's width is NULL.
-        Some(
-            decode_record(blob, TextEncoding::Utf8)
-                .ok()
-                .and_then(|values| values.get(col).cloned())
-                .unwrap_or(Value::Null),
-        )
+        // `decode_column` walks the header once and decodes only `col`'s
+        // body, rather than `decode_record`'s full-row decode (db-core#485)
+        // -- a wide sorted projection would otherwise re-decode every
+        // column's body on each of its `Column` opcodes.
+        Some(decode_column(blob, col, TextEncoding::Utf8).unwrap_or(Value::Null))
     }
 
     fn rowid(&self) -> Option<i64> {

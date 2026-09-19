@@ -25,10 +25,14 @@ use crate::vm::row::{
 
 use crate::storage::row::btree::{self, IndexCursor, IndexRow, Payload, TableCursor};
 use crate::storage::row::header::{DatabaseHeader, JournalMode, SynchronousMode};
-use crate::storage::row::record::{decode_record, Value};
+use crate::storage::row::record::{decode_record, decode_serial_value, parse_header_into, Value};
 use crate::storage::row::vfs::{PageError, PageSource};
 
 type SharedPager = Rc<RefCell<crate::storage::row::pager::Pager>>;
+
+/// A positioned row's payload and its header entries -- `(serial_type,
+/// body_offset)` per column, from [`parse_header_into`].
+type CachedRow = (Payload, Vec<(u64, usize)>);
 
 fn storage_err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -44,9 +48,15 @@ pub struct TableCursorAdapter {
     header: DatabaseHeader,
     root_page: u32,
     current_rowid: Option<i64>,
-    /// The current row's payload and its decoded columns, fetched lazily
-    /// on the first `column()`/`payload()` after positioning.
-    cached: Option<(Payload, Vec<Value>)>,
+    /// The current row's payload and its header (serial type, body offset
+    /// per column), parsed lazily on the first `column()`/`payload()`
+    /// after positioning. `column()` takes `&self` (the `Cursor` trait's
+    /// signature), so this is filled in through a `RefCell` rather than
+    /// up front in `position()`. Caching offsets rather than decoded
+    /// `Value`s means the header is walked once per row regardless of how
+    /// many columns a projection reads (db-core#485), while `column()`
+    /// still only decodes the one column body it's asked for.
+    cached: RefCell<Option<CachedRow>>,
 }
 
 impl TableCursorAdapter {
@@ -63,14 +73,28 @@ impl TableCursorAdapter {
             header,
             root_page,
             current_rowid: None,
-            cached: None,
+            cached: RefCell::new(None),
         }
     }
 
     fn position(&mut self, rowid: Result<Option<i64>, btree::BtreeError>) -> bool {
         self.current_rowid = rowid.ok().flatten();
-        self.cached = None;
+        *self.cached.borrow_mut() = None;
         self.current_rowid.is_some()
+    }
+
+    /// Ensures `cached` holds the current row's payload and header
+    /// offsets, parsing the header at most once per positioned row.
+    fn ensure_cached(&self) -> Option<()> {
+        if self.cached.borrow().is_some() {
+            return Some(());
+        }
+        self.current_rowid?;
+        let payload = self.cursor.current_payload().ok()?;
+        let mut entries = Vec::new();
+        parse_header_into(&payload, &mut entries).ok()?;
+        *self.cached.borrow_mut() = Some((payload, entries));
+        Some(())
     }
 
     fn max_rowid(&self) -> i64 {
@@ -109,19 +133,23 @@ impl Cursor for TableCursorAdapter {
     }
 
     fn column(&self, col: usize) -> Option<Value> {
-        // `column` takes `&self`; the dispatcher always positions first,
-        // and `payload()`/`ensure_cached` is called through `&mut self`
-        // paths, so fall back to a direct read when nothing is cached.
-        // `None` is "no current row" (db-core#231); a column index past the
-        // record's end is `Some(Null)`, SQLite's short-record rule.
-        match &self.cached {
-            Some((_, values)) => Some(values.get(col).cloned().unwrap_or(Value::Null)),
-            None => {
-                self.current_rowid?;
-                let payload = self.cursor.current_payload().ok()?;
-                let values = decode_record(&payload, self.header.text_encoding).ok()?;
-                Some(values.get(col).cloned().unwrap_or(Value::Null))
+        // The header (serial types/offsets) is parsed at most once per
+        // positioned row via `ensure_cached`, regardless of how many
+        // columns a projection reads (db-core#485); only the requested
+        // column's body is decoded here. `None` is "no current row"
+        // (db-core#231); a column index past the record's end is
+        // `Some(Null)`, SQLite's short-record rule.
+        self.ensure_cached()?;
+        let cached = self.cached.borrow();
+        let (payload, entries) = cached.as_ref()?;
+        match entries.get(col) {
+            Some(&(serial_type, offset)) => {
+                let (value, _) =
+                    decode_serial_value(serial_type, payload, offset, self.header.text_encoding)
+                        .ok()?;
+                Some(value)
             }
+            None => Some(Value::Null),
         }
     }
 
@@ -130,8 +158,9 @@ impl Cursor for TableCursorAdapter {
     }
 
     fn payload(&self) -> Option<Rc<[u8]>> {
-        self.current_rowid?;
-        let payload = self.cursor.current_payload().ok()?;
+        self.ensure_cached()?;
+        let cached = self.cached.borrow();
+        let (payload, _) = cached.as_ref()?;
         Some(Rc::from(&payload[..]))
     }
 
@@ -145,7 +174,7 @@ impl Cursor for TableCursorAdapter {
             payload,
         )
         .is_ok();
-        self.cached = None;
+        *self.cached.borrow_mut() = None;
         Some(ok)
     }
 
@@ -168,7 +197,7 @@ impl Cursor for TableCursorAdapter {
         )
         .is_ok();
         self.current_rowid = None;
-        self.cached = None;
+        *self.cached.borrow_mut() = None;
         ok
     }
 
@@ -764,7 +793,7 @@ mod tests {
         assert!(factory.open_write(1).is_err());
     }
 
-    /// `TableCursorAdapter::last`/`prev`/`column` (uncached path) and
+    /// `TableCursorAdapter::last`/`prev`/`column` (lazily-cached header) and
     /// `IndexCursorAdapter::last`/`prev`/`idx_compare`/`idx_delete`: a
     /// reverse table scan, a reverse index scan, and a delete through a
     /// secondary index, none of which the forward-scan-only tests
@@ -783,8 +812,8 @@ mod tests {
         .unwrap();
 
         // ORDER BY a DESC without an index -- exercises the table
-        // cursor's last()/prev() in reverse, and column() falling back
-        // to a direct read on an entry with nothing cached yet.
+        // cursor's last()/prev() in reverse, and column() parsing the
+        // header lazily on an entry with nothing cached yet.
         let rows = e
             .run_query("SELECT a FROM rs ORDER BY a DESC")
             .unwrap()
@@ -811,6 +840,86 @@ mod tests {
         e.run_query("DELETE FROM rs WHERE b = 20").unwrap();
         let rows = e.run_query("SELECT count(*) FROM rs").unwrap().rows;
         assert_eq!(rows[0][0].to_string(), "2");
+    }
+
+    /// A `PageSource` wrapper counting `read_page` calls, to check that
+    /// `TableCursorAdapter::column()` doesn't re-fetch/re-decode a row's
+    /// payload once per projected column (db-core#485).
+    struct CountingSource {
+        inner: Rc<dyn PageSource>,
+        reads: RefCell<usize>,
+    }
+
+    impl PageSource for CountingSource {
+        fn read_page(&self, page_num: u32) -> Result<Rc<[u8]>, PageError> {
+            *self.reads.borrow_mut() += 1;
+            self.inner.read_page(page_num)
+        }
+    }
+
+    /// Reading every column of a row must not cost more page reads than
+    /// reading just one -- if `column()` re-fetched/re-decoded the payload
+    /// per requested column, each extra column read would cost at least
+    /// one more `read_page` per row (db-core#485).
+    #[test]
+    fn reading_more_columns_of_a_row_does_not_multiply_page_reads() {
+        use crate::engine::{row::RowEngine, Engine};
+        use crate::storage::row::vfs::{UnixVfs, VfsPageSource};
+
+        // A large text column forces the row's payload past the b-tree
+        // cell's local-storage limit onto an overflow-page chain, so
+        // reassembling it (`TableCursor::current_payload`) costs multiple
+        // `read_page` calls -- exactly what would multiply per projected
+        // column under the old always-re-decode `column()`.
+        let big = "x".repeat(20_000);
+        let db = TempDb::new("adapter-page-read-count");
+        let root_page = {
+            let mut e = RowEngine::open(db.path()).unwrap();
+            e.run_query(&format!(
+                "CREATE TABLE pc(a INTEGER, b INTEGER, c INTEGER, d INTEGER, big TEXT); \
+                 INSERT INTO pc(a, b, c, d, big) VALUES (1, 10, 100, 1000, '{big}')",
+            ))
+            .unwrap();
+            e.table_schema("pc").unwrap().root_page
+        };
+
+        let header = {
+            let e = RowEngine::open(db.path()).unwrap();
+            e.with_storage(|_pager, header| *header)
+        };
+
+        fn count_reads(
+            db_path: &std::path::Path,
+            header: DatabaseHeader,
+            root_page: u32,
+            cols: usize,
+        ) -> usize {
+            let inner: Rc<dyn PageSource> =
+                Rc::new(VfsPageSource::open(&UnixVfs, db_path, header.page_size).unwrap());
+            let counting = Rc::new(CountingSource {
+                inner,
+                reads: RefCell::new(0),
+            });
+            let mut factory = StorageFactory::read_only(Rc::clone(&counting), header);
+            let mut cursor = factory.open_read(root_page).unwrap();
+            assert!(cursor.rewind());
+            for col in 0..cols {
+                assert!(cursor.column(col).is_some());
+            }
+            let reads = *counting.reads.borrow();
+            reads
+        }
+
+        let one_col = count_reads(db.path(), header, root_page, 1);
+        let five_col = count_reads(db.path(), header, root_page, 5);
+        assert!(
+            one_col > 1,
+            "the overflowing text column should force more than one page read: got {one_col}"
+        );
+        assert_eq!(
+            one_col, five_col,
+            "reading 5 columns instead of 1 should not change the page-read count"
+        );
     }
 
     /// `PagerTransaction::begin` (IMMEDIATE/EXCLUSIVE), `set_journal_mode`,

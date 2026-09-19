@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.114.1] - 2026-09-19
+
+### Changed
+
+- **`TableCursorAdapter::column()` decoded a row's entire record per requested column** (#485, PR #518): the dormant per-row cache field is now wired up -- the payload and its parsed header (serial type + body offset per column) are cached once per positioned row via `parse_header_into`, and `column()` decodes only the requested column's body from that cache. `SorterCursor::column()` had the same full-decode-per-call pattern; switched to `decode_column()`.
+
 ## [0.114.0] - 2026-09-19
 
 ### Changed

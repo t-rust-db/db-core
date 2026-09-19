@@ -13160,10 +13160,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_row_adapter_column_ef38c31c",
+    "id": "engine_row_adapter_ensure_cached_e79b4a90",
     "file": "src/engine/row/adapter.rs",
-    "line": 117,
-    "decision": "match &self.cached {\n            Some((_, values)) => Some(values.get(col).cloned().unwrap_or(Value::Null)),\n            None => {\n                self.current_rowid?;\n                let payload = self.cursor.current_payload().ok()?;\n                let values = decode_record(&payload, self.header.text_encoding).ok()?;\n                Some(values.get(col).cloned().unwrap_or(Value::Null))\n            }\n        }",
+    "line": 89,
+    "decision": "self.cached.borrow().is_some()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_adapter_column_5582b55d",
+    "file": "src/engine/row/adapter.rs",
+    "line": 145,
+    "decision": "match entries.get(col) {\n            Some(&(serial_type, offset)) => {\n                let (value, _) =\n                    decode_serial_value(serial_type, payload, offset, self.header.text_encoding)\n                        .ok()?;\n                Some(value)\n            }\n            None => Some(Value::Null),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -13172,7 +13182,7 @@
   {
     "id": "engine_row_adapter_compare_leading_5d98fde3",
     "file": "src/engine/row/adapter.rs",
-    "line": 226,
+    "line": 255,
     "decision": "values.len() <= probe.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13182,7 +13192,7 @@
   {
     "id": "engine_row_adapter_idx_rowid_aafdaf30",
     "file": "src/engine/row/adapter.rs",
-    "line": 277,
+    "line": 306,
     "decision": "match values.last()? {\n            Value::Integer(rowid) => Some(*rowid),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13192,7 +13202,7 @@
   {
     "id": "engine_row_adapter_seek_index_eq_92036a38",
     "file": "src/engine/row/adapter.rs",
-    "line": 285,
+    "line": 314,
     "decision": "!self.set_current(r)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13202,7 +13212,7 @@
   {
     "id": "engine_row_adapter_seek_index_eq_3aaa30af",
     "file": "src/engine/row/adapter.rs",
-    "line": 289,
+    "line": 318,
     "decision": "!matched",
     "conditions": 1,
     "vectors_required": 2,
@@ -13212,7 +13222,7 @@
   {
     "id": "engine_row_adapter_open_write_cb2a8617",
     "file": "src/engine/row/adapter.rs",
-    "line": 405,
+    "line": 434,
     "decision": "self.writer.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13222,7 +13232,7 @@
   {
     "id": "engine_row_adapter_begin_745e4425",
     "file": "src/engine/row/adapter.rs",
-    "line": 471,
+    "line": 500,
     "decision": "match mode {\n            crate::vm::row::TRANSACTION_MODE_IMMEDIATE => pager.begin_immediate(),\n            crate::vm::row::TRANSACTION_MODE_EXCLUSIVE => pager.begin_exclusive(),\n            _ => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13232,7 +13242,7 @@
   {
     "id": "engine_row_adapter_commit_2254f3df",
     "file": "src/engine/row/adapter.rs",
-    "line": 480,
+    "line": 509,
     "decision": "match self.writer.as_ref() {\n            Some(writer) => writer\n                .borrow_mut()\n                .flush()\n                .map_err(|e| TransactionError(storage_err(e))),\n            None => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13242,7 +13252,7 @@
   {
     "id": "engine_row_adapter_rollback_fa5777ea",
     "file": "src/engine/row/adapter.rs",
-    "line": 490,
+    "line": 519,
     "decision": "match self.writer.as_ref() {\n            Some(writer) => writer\n                .borrow_mut()\n                .rollback()\n                .map_err(|e| TransactionError(storage_err(e))),\n            None => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13252,7 +13262,7 @@
   {
     "id": "engine_row_adapter_set_journal_mode_931d7438",
     "file": "src/engine/row/adapter.rs",
-    "line": 503,
+    "line": 532,
     "decision": "mode == JOURNAL_MODE_WAL",
     "conditions": 1,
     "vectors_required": 2,
@@ -13262,7 +13272,7 @@
   {
     "id": "engine_row_adapter_set_synchronous_205dc366",
     "file": "src/engine/row/adapter.rs",
-    "line": 520,
+    "line": 549,
     "decision": "let Some(writer) = self.writer.as_ref()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13272,7 +13282,7 @@
   {
     "id": "engine_row_adapter_set_synchronous_d6b2ee70",
     "file": "src/engine/row/adapter.rs",
-    "line": 521,
+    "line": 550,
     "decision": "match level {\n                SYNCHRONOUS_OFF => SynchronousMode::Off,\n                SYNCHRONOUS_NORMAL => SynchronousMode::Normal,\n                _ => SynchronousMode::Full,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13282,7 +13292,7 @@
   {
     "id": "engine_row_adapter_count_index_entries_and_avg_eq_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 572,
+    "line": 601,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -13292,7 +13302,7 @@
   {
     "id": "engine_row_adapter_count_index_entries_and_avg_eq_f76da1f3",
     "file": "src/engine/row/adapter.rs",
-    "line": 575,
+    "line": 604,
     "decision": "prev_leading.as_ref() != leading.as_ref()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13302,7 +13312,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 695,
+    "line": 724,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -13312,7 +13322,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_15a637f2",
     "file": "src/engine/row/adapter.rs",
-    "line": 697,
+    "line": 726,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) =\n                    (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -13322,7 +13332,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_892d9090",
     "file": "src/engine/row/adapter.rs",
-    "line": 700,
+    "line": 729,
     "decision": "&**n == table",
     "conditions": 1,
     "vectors_required": 2,
@@ -35022,7 +35032,7 @@
   {
     "id": "vm_row_cursor_sorter_insert_2b7178a7",
     "file": "src/vm/row/cursor.rs",
-    "line": 868,
+    "line": 865,
     "decision": "let Some(bound) = self.bound",
     "conditions": 1,
     "vectors_required": 2,
@@ -35032,7 +35042,7 @@
   {
     "id": "vm_row_cursor_sorter_insert_e2e03c4c",
     "file": "src/vm/row/cursor.rs",
-    "line": 869,
+    "line": 866,
     "decision": "self.buffer.len() > bound",
     "conditions": 1,
     "vectors_required": 2,
@@ -35042,7 +35052,7 @@
   {
     "id": "vm_row_cursor_rewind_3cad5db9",
     "file": "src/vm/row/cursor.rs",
-    "line": 967,
+    "line": 964,
     "decision": "!self.frozen",
     "conditions": 1,
     "vectors_required": 2,
@@ -35052,7 +35062,7 @@
   {
     "id": "vm_row_cursor_rewind_4659ab60",
     "file": "src/vm/row/cursor.rs",
-    "line": 973,
+    "line": 970,
     "decision": "ord != std::cmp::Ordering::Equal",
     "conditions": 1,
     "vectors_required": 2,
@@ -35062,7 +35072,7 @@
   {
     "id": "vm_row_cursor_rewind_6c860d31",
     "file": "src/vm/row/cursor.rs",
-    "line": 982,
+    "line": 979,
     "decision": "self.order.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35072,7 +35082,7 @@
   {
     "id": "vm_row_cursor_next_79ed1a0c",
     "file": "src/vm/row/cursor.rs",
-    "line": 988,
+    "line": 985,
     "decision": "next < self.order.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35082,7 +35092,7 @@
   {
     "id": "vm_row_cursor_hash_agg_find_6ce5f96c",
     "file": "src/vm/row/cursor.rs",
-    "line": 1038,
+    "line": 1035,
     "decision": "match self.find_group(&key_values) {\n            Some(idx) => idx,\n            None => {\n                let idx = self.groups.len();\n                self.groups.push(GroupSlot {\n                    row: blob,\n                    key_values,\n                    accumulators: Vec::new(),\n                });\n                idx\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35092,7 +35102,7 @@
   {
     "id": "vm_row_cursor_hash_agg_step_bcf01a99",
     "file": "src/vm/row/cursor.rs",
-    "line": 1067,
+    "line": 1064,
     "decision": "group.accumulators.len() <= slot",
     "conditions": 1,
     "vectors_required": 2,
@@ -35102,7 +35112,7 @@
   {
     "id": "vm_row_cursor_hash_agg_group_accumulators_dae728d7",
     "file": "src/vm/row/cursor.rs",
-    "line": 1085,
+    "line": 1082,
     "decision": "self.frozen",
     "conditions": 1,
     "vectors_required": 2,
@@ -35112,7 +35122,7 @@
   {
     "id": "vm_row_cursor_auto_index_next_45483803",
     "file": "src/vm/row/cursor.rs",
-    "line": 1211,
+    "line": 1208,
     "decision": "next_pos < len",
     "conditions": 1,
     "vectors_required": 2,
@@ -35122,7 +35132,7 @@
   {
     "id": "vm_row_cursor_rewind_c8cdb147",
     "file": "src/vm/row/cursor.rs",
-    "line": 1257,
+    "line": 1254,
     "decision": "self.entries.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35132,7 +35142,7 @@
   {
     "id": "vm_row_cursor_next_4dc703a2",
     "file": "src/vm/row/cursor.rs",
-    "line": 1267,
+    "line": 1264,
     "decision": "next < self.entries.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35142,7 +35152,7 @@
   {
     "id": "vm_row_cursor_seek_index_eq_42f4944d",
     "file": "src/vm/row/cursor.rs",
-    "line": 1318,
+    "line": 1315,
     "decision": "match self.entries.get(pos) {\n            Some((k, _)) if compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Equal => {\n                self.pos = Some(pos);\n                true\n            }\n            _ => {\n                self.pos = None;\n                false\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35152,7 +35162,7 @@
   {
     "id": "vm_row_cursor_seek_index_eq_95938265",
     "file": "src/vm/row/cursor.rs",
-    "line": 1319,
+    "line": 1316,
     "decision": "compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Equal",
     "conditions": 1,
     "vectors_required": 2,
@@ -35162,7 +35172,7 @@
   {
     "id": "vm_row_cursor_seek_index_ge_ee129cdb",
     "file": "src/vm/row/cursor.rs",
-    "line": 1334,
+    "line": 1331,
     "decision": "pos < self.entries.len()",
     "conditions": 1,
     "vectors_required": 2,
