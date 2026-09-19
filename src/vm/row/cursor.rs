@@ -629,12 +629,40 @@ fn encode_key(values: &[Value], collations: &[Collation]) -> Vec<u8> {
     )
 }
 
+/// The key `EphemeralIndexCursor` last touched: either the untouched
+/// `i64` from the #527 single-integer-column fast path, or the encoded,
+/// collation-normalized record `encode_key` produces for every other
+/// key shape.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum EphKey {
+    Int(i64),
+    Encoded(Vec<u8>),
+}
+
+/// #527: `IN (SELECT int_col ...)`/`DISTINCT int_col` -- the common case
+/// -- probes a single `INTEGER`-affinity column. `normalize_key_values`
+/// only ever rewrites `Value::Text` (under NOCASE/RTRIM); an integer key
+/// is untouched by any collation, so this fast path applies regardless
+/// of what `collations` says. It skips `normalize_key_values`/
+/// `encode_record` entirely (no clone, no heap allocation, no
+/// varint/serial-type encoding) and goes straight into an `i64`-keyed
+/// map. Any other shape (multi-column or non-integer) falls back to the
+/// encoded path.
+fn fast_int_key(key: &[Value]) -> Option<i64> {
+    let [Value::Integer(i)] = key else {
+        return None;
+    };
+    Some(*i)
+}
+
 /// sqlite-rs's `CursorSlot::Ephemeral` (`OpenEphemeral p5 = 0`, #134): the
 /// in-memory index behind DISTINCT and `IN (SELECT …)` — entries keyed by
 /// the encoded, collation-normalized key record, each holding the stored
 /// values (key columns plus any trailing payload columns `IdxInsert`'s
 /// `p5` asked for). `Found`/`IdxInsert` remember the key they touched so
-/// a following `Delete` or `Column` acts on it.
+/// a following `Delete` or `Column` acts on it. `int_entries` is the
+/// #527 fast path for [`fast_int_key`]; every probe/insert/delete tries
+/// it first and falls back to `entries` otherwise.
 ///
 /// #525/#527: `Found`/`NotFound` (membership) is the only access pattern
 /// codegen ever compiles against this cursor kind — no `IN (SELECT ...)`
@@ -650,13 +678,18 @@ fn encode_key(values: &[Value], collations: &[Collation]) -> Vec<u8> {
 #[derive(Default)]
 pub struct EphemeralIndexCursor {
     entries: HashMap<Vec<u8>, Vec<Value>>,
-    last_key: Option<Vec<u8>>,
+    int_entries: HashMap<i64, Vec<Value>>,
+    last_key: Option<EphKey>,
 }
 
 impl EphemeralIndexCursor {
     /// Creates an empty ephemeral index.
     pub fn new() -> Self {
         EphemeralIndexCursor::default()
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len().saturating_add(self.int_entries.len())
     }
 }
 
@@ -672,7 +705,10 @@ impl Cursor for EphemeralIndexCursor {
     }
 
     fn column(&self, col: usize) -> Option<Value> {
-        let values = self.entries.get(self.last_key.as_ref()?)?;
+        let values = match self.last_key.as_ref()? {
+            EphKey::Int(i) => self.int_entries.get(i)?,
+            EphKey::Encoded(k) => self.entries.get(k)?,
+        };
         Some(values.get(col).cloned().unwrap_or(Value::Null))
     }
 
@@ -681,9 +717,14 @@ impl Cursor for EphemeralIndexCursor {
     }
 
     fn found(&mut self, key: &[Value], collations: &[Collation]) -> Option<bool> {
+        if let Some(i) = fast_int_key(key) {
+            let present = self.int_entries.contains_key(&i);
+            self.last_key = Some(EphKey::Int(i));
+            return Some(present);
+        }
         let encoded = encode_key(key, collations);
         let present = self.entries.contains_key(&encoded);
-        self.last_key = Some(encoded);
+        self.last_key = Some(EphKey::Encoded(encoded));
         Some(present)
     }
 
@@ -693,27 +734,48 @@ impl Cursor for EphemeralIndexCursor {
         collations: &[Collation],
         stored: Vec<Value>,
     ) -> Option<bool> {
+        if let Some(i) = fast_int_key(key) {
+            if !self.int_entries.contains_key(&i) && self.len() >= MAX_EPHEMERAL_ROWS {
+                return Some(false);
+            }
+            self.int_entries.insert(i, stored);
+            self.last_key = Some(EphKey::Int(i));
+            return Some(true);
+        }
         let encoded = encode_key(key, collations);
-        if !self.entries.contains_key(&encoded) && self.entries.len() >= MAX_EPHEMERAL_ROWS {
+        if !self.entries.contains_key(&encoded) && self.len() >= MAX_EPHEMERAL_ROWS {
             return Some(false);
         }
         self.entries.insert(encoded.clone(), stored);
-        self.last_key = Some(encoded);
+        self.last_key = Some(EphKey::Encoded(encoded));
         Some(true)
     }
 
     fn idx_delete(&mut self, key: &[Value]) -> bool {
+        if let Some(i) = fast_int_key(key) {
+            self.int_entries.remove(&i);
+            if self.last_key.as_ref() == Some(&EphKey::Int(i)) {
+                self.last_key = None;
+            }
+            return true;
+        }
         let encoded = encode_record(key, TextEncoding::Utf8);
         self.entries.remove(&encoded);
-        if self.last_key.as_ref() == Some(&encoded) {
+        if self.last_key.as_ref() == Some(&EphKey::Encoded(encoded)) {
             self.last_key = None;
         }
         true
     }
 
     fn delete(&mut self) -> bool {
-        if let Some(key) = self.last_key.take() {
-            self.entries.remove(&key);
+        match self.last_key.take() {
+            Some(EphKey::Int(i)) => {
+                self.int_entries.remove(&i);
+            }
+            Some(EphKey::Encoded(k)) => {
+                self.entries.remove(&k);
+            }
+            None => {}
         }
         true
     }
@@ -2025,19 +2087,21 @@ mod tests {
     }
 
     /// MC/DC vector (obligation `cursor_695`, `EphemeralIndexCursor::
-    /// ephemeral_idx_insert`'s decision `!entries.contains_key(&encoded)
-    /// && entries.len() >= MAX_EPHEMERAL_ROWS`): both leaves true --
-    /// a genuinely new key once the table is already at capacity is
-    /// rejected. Constructs the cursor with `entries` pre-filled to
-    /// `MAX_EPHEMERAL_ROWS` directly (rather than inserting a million
-    /// real rows through the public API) since only `entries.len()`
-    /// matters here, not the entries' actual content.
+    /// ephemeral_idx_insert`'s decision `!int_entries.contains_key(&i)
+    /// && len() >= MAX_EPHEMERAL_ROWS`): both leaves true -- a genuinely
+    /// new key once the table is already at capacity is rejected. A
+    /// single-`INTEGER` key (#527) always takes the `int_entries` fast
+    /// path, so the fixture pre-fills that map directly to
+    /// `MAX_EPHEMERAL_ROWS` (rather than inserting a million real rows
+    /// through the public API) since only `len()` matters here, not the
+    /// entries' actual content.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_row_cursor_ephemeral_idx_insert_a165b7fb__v1_new_key_at_capacity_is_rejected() {
+    fn mcdc__vm_row_cursor_ephemeral_idx_insert_1d6450e4__v1_new_key_at_capacity_is_rejected() {
         let mut c = EphemeralIndexCursor {
-            entries: (0..MAX_EPHEMERAL_ROWS)
-                .map(|i| (i.to_le_bytes().to_vec(), Vec::new()))
+            entries: HashMap::new(),
+            int_entries: (0..MAX_EPHEMERAL_ROWS)
+                .map(|i| (i64::try_from(i).unwrap_or(i64::MAX), Vec::new()))
                 .collect(),
             last_key: None,
         };
@@ -2052,10 +2116,10 @@ mod tests {
     /// MC/DC vector (obligation `cursor_695`): leaf A (`!contains_key`)
     /// true, leaf B (`len() >= MAX_EPHEMERAL_ROWS`) false -- an ordinary
     /// insert under capacity succeeds. Independence pair for B against
-    /// `mcdc__vm_row_cursor_ephemeral_idx_insert_a165b7fb__v1_new_key_at_capacity_is_rejected`.
+    /// `mcdc__vm_row_cursor_ephemeral_idx_insert_1d6450e4__v1_new_key_at_capacity_is_rejected`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_row_cursor_ephemeral_idx_insert_a165b7fb__v2_new_key_under_capacity_is_accepted() {
+    fn mcdc__vm_row_cursor_ephemeral_idx_insert_1d6450e4__v2_new_key_under_capacity_is_accepted() {
         let mut c = EphemeralIndexCursor::new();
         let key = [Value::Integer(1)];
         let collations = [Collation::Binary];
@@ -2069,24 +2133,92 @@ mod tests {
     /// already-present key is accepted (an update, not a new row) even
     /// with the table at capacity, since leaf B is never reached.
     /// Independence pair for A against
-    /// `mcdc__vm_row_cursor_ephemeral_idx_insert_a165b7fb__v1_new_key_at_capacity_is_rejected`.
+    /// `mcdc__vm_row_cursor_ephemeral_idx_insert_1d6450e4__v1_new_key_at_capacity_is_rejected`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_row_cursor_ephemeral_idx_insert_a165b7fb__v3_existing_key_at_capacity_is_still_accepted(
+    fn mcdc__vm_row_cursor_ephemeral_idx_insert_1d6450e4__v3_existing_key_at_capacity_is_still_accepted(
     ) {
         let key = [Value::Integer(-1)];
+        let collations = [Collation::Binary];
+        let mut int_entries: HashMap<i64, Vec<Value>> = (0..MAX_EPHEMERAL_ROWS)
+            .map(|i| (i64::try_from(i).unwrap_or(i64::MAX), Vec::new()))
+            .collect();
+        int_entries.insert(-1, vec![Value::Integer(-1)]);
+        let mut c = EphemeralIndexCursor {
+            entries: HashMap::new(),
+            int_entries,
+            last_key: None,
+        };
+        assert_eq!(
+            c.ephemeral_idx_insert(&key, &collations, vec![Value::Integer(-2)]),
+            Some(true)
+        );
+    }
+
+    /// MC/DC vector (`EphemeralIndexCursor::ephemeral_idx_insert`'s
+    /// encoded-path decision `!entries.contains_key(&encoded) &&
+    /// len() >= MAX_EPHEMERAL_ROWS`): both leaves true -- a non-integer
+    /// key (so [`fast_int_key`] declines it and it falls to `entries`,
+    /// #527) is rejected once the table is at capacity. Independence
+    /// pair for the int-path vectors above: same decision shape, the
+    /// other `EphemeralIndexCursor` map.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_row_cursor_ephemeral_idx_insert_91321b7c__v1_new_key_at_capacity_is_rejected() {
+        let mut c = EphemeralIndexCursor {
+            entries: (0..MAX_EPHEMERAL_ROWS)
+                .map(|i| (i.to_le_bytes().to_vec(), Vec::new()))
+                .collect(),
+            int_entries: HashMap::new(),
+            last_key: None,
+        };
+        let key = [Value::Text("z".into())];
+        let collations = [Collation::Binary];
+        assert_eq!(
+            c.ephemeral_idx_insert(&key, &collations, vec![Value::Text("z".into())]),
+            Some(false)
+        );
+    }
+
+    /// MC/DC vector: leaf A (`!contains_key`) true, leaf B (`len() >=
+    /// MAX_EPHEMERAL_ROWS`) false -- an ordinary non-integer-key insert
+    /// under capacity succeeds. Independence pair for B against
+    /// `mcdc__vm_row_cursor_ephemeral_idx_insert_91321b7c__v1_new_key_at_capacity_is_rejected`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_row_cursor_ephemeral_idx_insert_91321b7c__v2_new_key_under_capacity_is_accepted() {
+        let mut c = EphemeralIndexCursor::new();
+        let key = [Value::Text("a".into())];
+        let collations = [Collation::Binary];
+        assert_eq!(
+            c.ephemeral_idx_insert(&key, &collations, vec![Value::Text("a".into())]),
+            Some(true)
+        );
+    }
+
+    /// MC/DC vector: leaf A false -- an already-present non-integer key
+    /// is accepted (an update, not a new row) even with the table at
+    /// capacity, since leaf B is never reached. Independence pair for A
+    /// against
+    /// `mcdc__vm_row_cursor_ephemeral_idx_insert_91321b7c__v1_new_key_at_capacity_is_rejected`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_row_cursor_ephemeral_idx_insert_91321b7c__v3_existing_key_at_capacity_is_still_accepted(
+    ) {
+        let key = [Value::Text("z".into())];
         let collations = [Collation::Binary];
         let encoded = encode_key(&key, &collations);
         let mut entries: HashMap<Vec<u8>, Vec<Value>> = (0..MAX_EPHEMERAL_ROWS)
             .map(|i| (i.to_le_bytes().to_vec(), Vec::new()))
             .collect();
-        entries.insert(encoded, vec![Value::Integer(-1)]);
+        entries.insert(encoded, vec![Value::Text("z".into())]);
         let mut c = EphemeralIndexCursor {
             entries,
+            int_entries: HashMap::new(),
             last_key: None,
         };
         assert_eq!(
-            c.ephemeral_idx_insert(&key, &collations, vec![Value::Integer(-2)]),
+            c.ephemeral_idx_insert(&key, &collations, vec![Value::Text("z2".into())]),
             Some(true)
         );
     }
