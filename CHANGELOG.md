@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.114.7] - 2026-09-19
+
+### Changed
+
+- **`EphemeralIndexCursor` (`IN (SELECT ...)`/`DISTINCT` probes) switched from a `BTreeMap` to a `HashMap`, plus a typed `i64` fast path** (#527, PR #529): the ordered-bound guarantee a `BTreeMap` gives was never used by this cursor kind (`IdxLE`/`IdxCompareGT` are only ever compiled against a real index cursor opened via `OpenRead`, never an `OpenEphemeral` slot), so the cursor now gets O(1) average membership instead of an O(log n) descent. A single-column `INTEGER` key -- the common `IN (SELECT int_col ...)`/`DISTINCT int_col` shape -- additionally skips `normalize_key_values`/`encode_record` entirely and goes straight into a dedicated `int_entries: HashMap<i64, Vec<Value>>`. A/B/A on the `vm_opcodes/row::Found+AggStep` micro-benchmark (#526): ~540-560ns/call (`BTreeMap`) -> ~245-260ns/call (`HashMap` + fast path), a ~2.1x improvement.
+
 ## [0.114.6] - 2026-09-19
 
 ### Changed
