@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.114.2] - 2026-09-19
+
+### Changed
+
+- **`prepare` built the projection's expression scope once per result column** (#486, PR #521): `compile_row_values` called `Scope::single_shared(..).with_catalog(catalog)` for every result-column expression, and `with_catalog` copies every `TableSchema` into a fresh `Rc<[TableSchema]>` that was dropped right after -- ~60% of prepare time for a plain five-column `SELECT` in sqlite-rs's `prepare_only` bench. The scope is now built lazily once per projection: 6.63 -> 3.68 us (sqlite3 1.05 us), 6.4x -> 3.5x.
+
 ## [0.114.1] - 2026-09-19
 
 ### Changed
