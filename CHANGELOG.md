@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.114.3] - 2026-09-19
+
+### Changed
+
+- **Record header vectors presized; sorter parses the key header once** (#486, PR #520): a profile of sqlite-rs's `group_by_agg` (50 MB) put ~10% of VM time in `Vec::grow_one` under the storage `decode_record`'s serial-type vector, and `SorterCursor` re-parsed the record header once per sort-key column. Both header vectors are now sized from the header's byte length (clamped to the payload) and all sort keys decode off one parsed header. A/B/A `ours`: 1 MB 8.76 -> 7.89 ms, 50 MB 456 -> 423 ms.
+- **`HashAggCursor` groups are indexed by a `compare`-consistent key hash** (#486, PR #520): the O(groups) linear scan in `find_group` is replaced by a `HashMap<u64, Vec<usize>>` bucket index whose hash normalises exactly the equalities `compare` reports (integral REAL as its INTEGER, NaNs canonical, NOCASE lowercased, RTRIM trimmed); equality still goes through `keys_equal`. `HashAggStep` borrows its argument registers as a slice instead of cloning them into a per-row `Vec`. Codegen does not emit this cursor yet (#519), so no benchmark moves on its own.
+
 ## [0.114.2] - 2026-09-19
 
 ### Changed
