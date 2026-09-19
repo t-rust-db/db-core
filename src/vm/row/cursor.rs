@@ -8,7 +8,7 @@
 //! largest remaining sqlite-rs VDBE file, `cursor.rs`, 4,498 lines).
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use super::aggregate::{AggState, AggregateError};
@@ -635,9 +635,21 @@ fn encode_key(values: &[Value], collations: &[Collation]) -> Vec<u8> {
 /// values (key columns plus any trailing payload columns `IdxInsert`'s
 /// `p5` asked for). `Found`/`IdxInsert` remember the key they touched so
 /// a following `Delete` or `Column` acts on it.
+///
+/// #525/#527: `Found`/`NotFound` (membership) is the only access pattern
+/// codegen ever compiles against this cursor kind — no `IN (SELECT ...)`
+/// or `DISTINCT` shape emits `IdxLE`/`IdxCompareGT` against an
+/// `OpenEphemeral` slot (those always target a real b-tree/in-memory
+/// index cursor opened via `OpenRead`, a separate cursor number). A
+/// `HashMap` gives O(1) average membership instead of a `BTreeMap`'s
+/// O(log n) descent, at the cost of the byte-ordering guarantee an
+/// ordered-bound seek (`IdxLE`) would need — which this cursor kind
+/// never receives, so [`Cursor::idx_compare`]'s default (`None`, "not an
+/// index cursor for ordered seeks") is left un-overridden rather than
+/// silently comparing in an arbitrary hash order.
 #[derive(Default)]
 pub struct EphemeralIndexCursor {
-    entries: BTreeMap<Vec<u8>, Vec<Value>>,
+    entries: HashMap<Vec<u8>, Vec<Value>>,
     last_key: Option<Vec<u8>>,
 }
 
@@ -706,15 +718,11 @@ impl Cursor for EphemeralIndexCursor {
         true
     }
 
-    /// `IdxLE` on an ephemeral index (sqlite-rs `cursor::idx_le`): the last
-    /// touched key against the probe, by encoded-record byte order; with no
-    /// key touched yet the bound trivially holds.
-    fn idx_compare(&self, key: &[Value], collations: &[Collation]) -> Option<std::cmp::Ordering> {
-        Some(match &self.last_key {
-            Some(last) => last.as_slice().cmp(encode_key(key, collations).as_slice()),
-            None => std::cmp::Ordering::Less,
-        })
-    }
+    // #525/#527: no `idx_compare` override — see the struct doc. `IdxLE`
+    // against this cursor kind now hits [`Cursor::idx_compare`]'s default
+    // (`None`), which the VM surfaces as a clear "not an index cursor"
+    // error instead of silently comparing in the `HashMap`'s arbitrary
+    // iteration order, should a future codegen change ever route one here.
 }
 
 /// `ORDER BY` buffering and sort, backing `Opcode::SorterOpen`/
@@ -2069,7 +2077,7 @@ mod tests {
         let key = [Value::Integer(-1)];
         let collations = [Collation::Binary];
         let encoded = encode_key(&key, &collations);
-        let mut entries: BTreeMap<Vec<u8>, Vec<Value>> = (0..MAX_EPHEMERAL_ROWS)
+        let mut entries: HashMap<Vec<u8>, Vec<Value>> = (0..MAX_EPHEMERAL_ROWS)
             .map(|i| (i.to_le_bytes().to_vec(), Vec::new()))
             .collect();
         entries.insert(encoded, vec![Value::Integer(-1)]);
