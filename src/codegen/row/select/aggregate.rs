@@ -474,22 +474,38 @@ where
          row_cursor: i32,
          positions: &[Option<usize>]|
          -> Result<(), CodegenError> {
+            // #525: this scan is the *only* pass over this table's single
+            // implicit group — each `agg_slots` slot number is never
+            // reused for a second group within this program, so its agg
+            // context starts (and, absent a fold, stays) `None` for the
+            // very first matching row. `AggStep`'s fold path
+            // (`Vm::take_agg_context` returning `None`) already routes
+            // through `AggState::initial`, identical to what a forced
+            // `reset: true` would produce — so every row, including the
+            // first, can simply fold. That removes the need for a
+            // per-row "have we seen a row yet" branch just to steer
+            // `AggStep`; `have_group_reg` now only gates the one-time
+            // snapshot of plain (non-aggregate) columns below.
+            for agg in &agg_slots {
+                emit_agg_step(em, reg, row_scope, agg, false)?;
+            }
+
+            // `count(*)`-only projections read no plain columns
+            // (`needed` is empty) — skip the boundary check entirely.
+            if needed.is_empty() {
+                return Ok(());
+            }
+
             let boundary_label = em.new_label();
-            let not_boundary_label = em.new_label();
+            let after_label = em.new_label();
             let first_row_check =
                 em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
             em.patch_p2(first_row_check, boundary_label);
-            let goto_not_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-            em.patch_p2(goto_not_boundary, not_boundary_label);
+            let goto_after = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+            em.patch_p2(goto_after, after_label);
 
             em.place(boundary_label);
             em.emit(Instruction::new(Opcode::Integer, 1, have_group_reg, 0));
-            // This table's first matching row: fold with `reset: true` so a
-            // freshly-numbered slot starts a fresh accumulator — see
-            // `compile_grouped_scan`'s identical comment.
-            for agg in &agg_slots {
-                emit_agg_step(em, reg, row_scope, agg, true)?;
-            }
             // The single implicit group's "arbitrary row" for any plain
             // (non-aggregate) result/`HAVING` column is its first matching
             // row, matching `compile_grouped_scan`'s choice — snapshotted
@@ -511,16 +527,8 @@ where
                 })?;
                 emit_column_read(em, row_schema, row_cursor, pos, r)?;
             }
-            let after_accumulate = em.new_label();
-            let goto_after_accumulate = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-            em.patch_p2(goto_after_accumulate, after_accumulate);
 
-            em.place(not_boundary_label);
-            for agg in &agg_slots {
-                emit_agg_step(em, reg, row_scope, agg, false)?;
-            }
-
-            em.place(after_accumulate);
+            em.place(after_label);
             Ok(())
         };
 

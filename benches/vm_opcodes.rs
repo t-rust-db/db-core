@@ -40,8 +40,8 @@ use db_core::vm::batch::{
 };
 use db_core::vm::engine::{run, InMemorySegment};
 use db_core::vm::row::{
-    execute, Cursor, EphemeralTableCursor, Instruction as RowInstruction, Opcode as RowOpcode,
-    Program as RowProgram, Vm as RowVm,
+    execute, Cursor, EphemeralIndexCursor, EphemeralTableCursor, Instruction as RowInstruction,
+    Opcode as RowOpcode, Program as RowProgram, Vm as RowVm, P4,
 };
 
 const ROWS: usize = 4096;
@@ -603,6 +603,72 @@ fn bench_row_scan_column(r: &mut common::Report) {
     });
 }
 
+/// #525: `try_compile_direct_agg_scan`'s `IN (SELECT ...)` + `count(*)`
+/// shape -- an ephemeral-index `Found` probe followed by a fold-only
+/// `AggStep` (no per-row "have we seen a row" flag around it, since
+/// `count(*)`'s projection needs no plain-column snapshot). One row in
+/// ten matches, mirroring the issue's `bucket IN (SELECT code ...)`
+/// selectivity. Compare this bench's ns/call across a `BTreeMap`-vs-hash
+/// `EphemeralIndexCursor` change to isolate the probe's contribution
+/// from the aggregate fold's.
+fn bench_row_in_subquery_count_scan(r: &mut common::Report) {
+    // 0 Rewind -> 6 (empty table skips straight to Halt)
+    // 1 Column   bucket -> r2
+    // 2 Found(r2) -> 4 (match: fall into AggStep)
+    // 3 Goto -> 5 (no match: skip AggStep, go straight to Next)
+    // 4 AggStep count(*), fold (p5 = 0)
+    // 5 Next -> 1
+    // 6 Halt
+    let program = RowProgram::new(vec![
+        RowInstruction::new(RowOpcode::Rewind, 0, 6, 0),
+        RowInstruction::new(RowOpcode::Column, 0, 0, 2),
+        RowInstruction::with_p4(RowOpcode::Found, 1, 4, 2, P4::Int(1)),
+        RowInstruction::new(RowOpcode::Goto, 0, 5, 0),
+        RowInstruction::with_p4(
+            RowOpcode::AggStep,
+            0,
+            0,
+            0,
+            P4::AggFunc {
+                name: "count".to_string(),
+                arity: 0,
+                collation: db_core::value::Collation::Binary,
+            },
+        ),
+        RowInstruction::new(RowOpcode::Next, 0, 1, 0),
+        RowInstruction::new(RowOpcode::Halt, 0, 0, 0),
+    ]);
+    let mut vm = RowVm::new();
+    let mut table = EphemeralTableCursor::new();
+    for i in 0..ROWS {
+        table.insert(
+            i64::try_from(i).unwrap_or(i64::MAX),
+            vec![RowValue::Integer(i64::try_from(i).unwrap_or(i64::MAX))],
+        );
+    }
+    vm.open_cursor(0, Box::new(table)).unwrap();
+    let mut lookup = EphemeralIndexCursor::new();
+    for i in (0..ROWS).step_by(10) {
+        lookup
+            .ephemeral_idx_insert(
+                &[RowValue::Integer(i64::try_from(i).unwrap_or(i64::MAX))],
+                &[],
+                vec![],
+            )
+            .unwrap();
+    }
+    vm.open_cursor(1, Box::new(lookup)).unwrap();
+    assert!(execute(&mut vm, &program).is_ok());
+    // `Rewind` repositions the table cursor on every call, so only the
+    // scan+probe+fold loop is measured; the ephemeral index and agg
+    // context are left as-is across calls (harmless -- only timing, not
+    // the accumulated count, is observed).
+    r.bench(
+        "vm_opcodes/row::Found+AggStep (IN-subquery count scan)",
+        || execute(&mut vm, black_box(&program)),
+    );
+}
+
 fn bench_row_compare(r: &mut common::Report) {
     let program = RowProgram::new(vec![
         RowInstruction::new(RowOpcode::Integer, 1, 0, 0),
@@ -814,6 +880,7 @@ fn main() {
     bench_batch_emit(&mut report);
     bench_batch_emit_duplicate_register(&mut report);
     bench_row_scan_column(&mut report);
+    bench_row_in_subquery_count_scan(&mut report);
     bench_row_compare(&mut report);
     report.finish();
 }

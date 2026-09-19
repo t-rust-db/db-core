@@ -35,6 +35,11 @@ path = "tests/unit/index_seek_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_in_subquery_aggregate"
+path = "tests/unit/in_subquery_aggregate_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_index_ordered_scan"
 path = "tests/unit/index_ordered_scan_test.rs"
 required-features = ["engine-row"]
