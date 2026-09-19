@@ -1260,6 +1260,17 @@ impl core::fmt::Debug for db_core::parser::ast::Distinctness
 pub fn db_core::parser::ast::Distinctness::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::ast::Distinctness
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Distinctness
+pub enum db_core::parser::ast::ExplainBody
+pub db_core::parser::ast::ExplainBody::Delete(alloc::boxed::Box<db_core::parser::ast::Delete>)
+pub db_core::parser::ast::ExplainBody::Select(alloc::boxed::Box<db_core::parser::ast::Select>)
+pub db_core::parser::ast::ExplainBody::Update(alloc::boxed::Box<db_core::parser::ast::Update>)
+impl core::clone::Clone for db_core::parser::ast::ExplainBody
+pub fn db_core::parser::ast::ExplainBody::clone(&self) -> db_core::parser::ast::ExplainBody
+impl core::cmp::PartialEq for db_core::parser::ast::ExplainBody
+pub fn db_core::parser::ast::ExplainBody::eq(&self, &db_core::parser::ast::ExplainBody) -> bool
+impl core::fmt::Debug for db_core::parser::ast::ExplainBody
+pub fn db_core::parser::ast::ExplainBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::parser::ast::ExplainBody
 pub enum db_core::parser::ast::ExprKind
 pub db_core::parser::ast::ExprKind::Between
 pub db_core::parser::ast::ExprKind::Between::expr: alloc::boxed::Box<db_core::parser::ast::Expr>
@@ -1732,8 +1743,8 @@ impl core::fmt::Display for db_core::parser::ast::DropView
 pub fn db_core::parser::ast::DropView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::DropView
 pub struct db_core::parser::ast::Explain
+pub db_core::parser::ast::Explain::body: db_core::parser::ast::ExplainBody
 pub db_core::parser::ast::Explain::query_plan: bool
-pub db_core::parser::ast::Explain::select: alloc::boxed::Box<db_core::parser::ast::Select>
 impl core::clone::Clone for db_core::parser::ast::Explain
 pub fn db_core::parser::ast::Explain::clone(&self) -> db_core::parser::ast::Explain
 impl core::cmp::PartialEq for db_core::parser::ast::Explain
