@@ -1646,22 +1646,31 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     })
                 }
             };
-            let mut args = Vec::with_capacity(arity);
-            for i in 0..arity {
-                let reg = instr
-                    .p2
-                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-                    .ok_or(ExecError::RegisterOutOfRange {
-                        opcode: "HashAggStep",
-                        index: instr.p2,
-                    })?;
-                args.push(vm.register(reg)?.clone());
+            let start = Vm::index("HashAggStep", instr.p2)?;
+            let end = start
+                .checked_add(arity)
+                .filter(|&end| end <= MAX_REGISTERS)
+                .ok_or(ExecError::RegisterOutOfRange {
+                    opcode: "HashAggStep",
+                    index: instr.p2,
+                })?;
+            if vm.registers.len() < end {
+                vm.registers.resize(end, Value::Null);
             }
             #[allow(clippy::cast_sign_loss)]
             let slot = instr.p1.max(0) as usize;
-            let handled = vm
-                .cursor_mut(instr.p3)?
-                .hash_agg_step(slot, name, &args, collation)
+            // Borrow the argument registers in place (no per-row `Vec` +
+            // `Value` clones, #486): `registers` and `cursors` are
+            // disjoint fields, so both borrows coexist.
+            let cursor_idx = Vm::index("cursor slot write", instr.p3)?;
+            let cursor = vm
+                .cursors
+                .get_mut(cursor_idx)
+                .and_then(Option::as_mut)
+                .ok_or(ExecError::CursorNotOpen { slot: instr.p3 })?;
+            let args = vm.registers.get(start..end).unwrap_or(&[]);
+            let handled = cursor
+                .hash_agg_step(slot, name, args, collation)
                 .map_err(|e| ExecError::MalformedInstruction {
                     opcode: "HashAggStep",
                     reason: e.to_string(),
