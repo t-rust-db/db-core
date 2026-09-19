@@ -1,6 +1,6 @@
 [package]
 name = "db-core"
-version = "0.114.4"
+version = "0.114.5"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -32,6 +32,11 @@ path = "tests/unit/parser_public_api_test.rs"
 [[test]]
 name = "unit_index_seek"
 path = "tests/unit/index_seek_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_in_subquery_aggregate"
+path = "tests/unit/in_subquery_aggregate_test.rs"
 required-features = ["engine-row"]
 
 [[test]]

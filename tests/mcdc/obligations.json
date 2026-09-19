@@ -4210,9 +4210,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_856bb15e",
+    "file": "src/codegen/row/select/aggregate.rs",
+    "line": 495,
+    "decision": "needed.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_a9ca7739",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 501,
+    "line": 517,
     "decision": "!needed.contains(&idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -4222,7 +4232,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_48c38f44",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 531,
+    "line": 539,
     "decision": "match (&select.where_clause, covering) {\n        (Some(where_expr), Some(key_order)) => {\n            let index_schema = Rc::new(compact_schema(schema, &key_order)?);\n            let index_scope = Scope::single_shared(&index_schema, range_index_cursor)\n                .with_catalog(catalog)\n                .with_hoisted(Rc::clone(&table_scope.hoisted));\n            let positions = compact_index_map(&key_order, schema.columns.len());\n            try_compile_range_row_seek(\n                em,\n                reg,\n                where_expr,\n                schema,\n                &table_scope,\n                range_index_cursor,\n                tail_label,\n                stats,\n                true,\n                &mut |em, reg, index_cursor, _row_skip| {\n                    accumulate_row(\n                        em,\n                        reg,\n                        &index_scope,\n                        &index_schema,\n                        index_cursor,\n                        &positions,\n                    )\n                },\n            )?\n        }\n        (Some(where_expr), None) => try_compile_range_row_seek(\n            em,\n            reg,\n            where_expr,\n            schema,\n            &table_scope,\n            range_index_cursor,\n            tail_label,\n            stats,\n            false,\n            &mut |em, reg, index_cursor, row_skip| {\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::IdxRowid,\n                    index_cursor,\n                    rowid_reg,\n                    0,\n                ));\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    cursors.table,\n                    0,\n                    rowid_reg,\n                ));\n                em.patch_p2(seek_addr, row_skip);\n                accumulate_row(\n                    em,\n                    reg,\n                    &table_scope,\n                    schema,\n                    cursors.table,\n                    &identity_positions,\n                )\n            },\n        )?,\n        (None, _) => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4232,7 +4242,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_1128723f",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 598,
+    "line": 606,
     "decision": "!used_range_seek",
     "conditions": 1,
     "vectors_required": 2,
@@ -4242,7 +4252,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_direct_agg_scan_0d86c16d",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 605,
+    "line": 613,
     "decision": "let Some(where_expr) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -4252,7 +4262,7 @@
   {
     "id": "codegen_row_select_aggregate_covering_range_index_6e1d9672",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 683,
+    "line": 691,
     "decision": "!covered",
     "conditions": 1,
     "vectors_required": 2,
@@ -4262,7 +4272,7 @@
   {
     "id": "codegen_row_select_aggregate_direct_agg_range_seek_is_covering_e31d1018",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 710,
+    "line": 718,
     "decision": "has_distinct_agg",
     "conditions": 1,
     "vectors_required": 2,
@@ -4272,7 +4282,7 @@
   {
     "id": "codegen_row_select_aggregate_columns_needed_for_projection_66344390",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 746,
+    "line": 754,
     "decision": "match col {\n            ResultColumn::Expr { expr, .. } => {\n                walk_expr_for_column_refs(expr, &mut names, &mut bail)\n            }\n            ResultColumn::Star | ResultColumn::TableStar { .. } => bail = true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4282,7 +4292,7 @@
   {
     "id": "codegen_row_select_aggregate_columns_needed_for_projection_75087af1",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 753,
+    "line": 761,
     "decision": "let Some(having) = &select.having",
     "conditions": 1,
     "vectors_required": 2,
@@ -4292,7 +4302,7 @@
   {
     "id": "codegen_row_select_aggregate_columns_needed_for_projection_302e8372",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 756,
+    "line": 764,
     "decision": "bail",
     "conditions": 1,
     "vectors_required": 2,
@@ -4302,7 +4312,7 @@
   {
     "id": "codegen_row_select_aggregate_columns_needed_for_projection_8bff95f7",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 762,
+    "line": 770,
     "decision": "match schema\n            .columns\n            .iter()\n            .position(|c| c.eq_ignore_ascii_case(name))\n        {\n            Some(idx) => {\n                indices.insert(idx);\n            }\n            // Should always resolve at this point in codegen — an\n            // unknown column would already have failed earlier\n            // validation. Fall back to \"every column\" rather than\n            // silently dropping one we can't place, on the off chance\n            // this is reached some other way.\n            None => return all_columns(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4312,7 +4322,7 @@
   {
     "id": "codegen_row_select_aggregate_compact_index_map_9bdf8b2a",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 801,
+    "line": 809,
     "decision": "let Some(slot) = map.get_mut(orig)",
     "conditions": 1,
     "vectors_required": 2,
@@ -4322,7 +4332,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_4d912e62",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 900,
+    "line": 908,
     "decision": "*bail",
     "conditions": 1,
     "vectors_required": 2,
@@ -4332,7 +4342,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_cc6478e3",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 903,
+    "line": 911,
     "decision": "match &expr.kind {\n        ExprKind::Column { name, .. } => {\n            names.insert(name.to_ascii_lowercase());\n        }\n        ExprKind::Literal(_) | ExprKind::Param(_) => {}\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(list) = args {\n                for a in list {\n                    walk_expr_for_column_refs(a, names, bail);\n                }\n            }\n        }\n        ExprKind::Unary { expr: e, .. }\n        | ExprKind::IsNull { expr: e, .. }\n        | ExprKind::Cast { expr: e, .. }\n        | ExprKind::Collate { expr: e, .. }\n        | ExprKind::Paren(e) => walk_expr_for_column_refs(e, names, bail),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            walk_expr_for_column_refs(lhs, names, bail);\n            walk_expr_for_column_refs(rhs, names, bail);\n        }\n        ExprKind::Between {\n            expr: e, lo, hi, ..\n        } => {\n            walk_expr_for_column_refs(e, names, bail);\n            walk_expr_for_column_refs(lo, names, bail);\n            walk_expr_for_column_refs(hi, names, bail);\n        }\n        ExprKind::In { expr: e, list, .. } => {\n            walk_expr_for_column_refs(e, names, bail);\n            for item in list {\n                walk_expr_for_column_refs(item, names, bail);\n            }\n        }\n        ExprKind::Like {\n            expr: e,\n            pattern,\n            escape,\n            ..\n        } => {\n            walk_expr_for_column_refs(e, names, bail);\n            walk_expr_for_column_refs(pattern, names, bail);\n            if let Some(esc) = escape {\n                walk_expr_for_column_refs(esc, names, bail);\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(o) = operand {\n                walk_expr_for_column_refs(o, names, bail);\n            }\n            for (w, t) in whens {\n                walk_expr_for_column_refs(w, names, bail);\n                walk_expr_for_column_refs(t, names, bail);\n            }\n            if let Some(e) = else_ {\n                walk_expr_for_column_refs(e, names, bail);\n            }\n        }\n        ExprKind::Subquery(_)\n        | ExprKind::Exists { .. }\n        | ExprKind::InSubquery { .. }\n        | ExprKind::InSubqueryMulti { .. } => {\n            *bail = true;\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4342,7 +4352,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_a77e706f",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 909,
+    "line": 917,
     "decision": "let FunctionArgs::List(list) = args",
     "conditions": 1,
     "vectors_required": 2,
@@ -4352,7 +4362,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_e05c35b7",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 945,
+    "line": 953,
     "decision": "let Some(esc) = escape",
     "conditions": 1,
     "vectors_required": 2,
@@ -4362,7 +4372,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_1bf37598",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 954,
+    "line": 962,
     "decision": "let Some(o) = operand",
     "conditions": 1,
     "vectors_required": 2,
@@ -4372,7 +4382,7 @@
   {
     "id": "codegen_row_select_aggregate_walk_expr_for_column_refs_56705ec3",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 961,
+    "line": 969,
     "decision": "let Some(e) = else_",
     "conditions": 1,
     "vectors_required": 2,
@@ -4382,7 +4392,7 @@
   {
     "id": "codegen_row_select_aggregate_emit_reset_subroutine_6ed41c5c",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1099,
+    "line": 1107,
     "decision": "let Some(eph_cursor) = agg.eph_cursor",
     "conditions": 1,
     "vectors_required": 2,
@@ -4392,7 +4402,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_ac0766bf",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1125,
+    "line": 1133,
     "decision": "let Some(outer) = outer_scope",
     "conditions": 1,
     "vectors_required": 2,
@@ -4402,7 +4412,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_fba90692",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1137,
+    "line": 1145,
     "decision": "match &select.where_clause {\n        Some(where_expr) => crate::codegen::row::subquery::hoist_uncorrelated_where_subqueries(\n            em,\n            reg,\n            &table_scope,\n            where_expr,\n        )?,\n        None => std::collections::HashMap::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4412,7 +4422,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_ac0766bf_2",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1163,
+    "line": 1171,
     "decision": "let Some(outer) = outer_scope",
     "conditions": 1,
     "vectors_required": 2,
@@ -4422,7 +4432,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_9a23357d",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1194,
+    "line": 1202,
     "decision": "match target {\n                // Always resolves: `needed_columns` includes every column\n                // `select.group_by` references (`columns_needed_for_projection`),\n                // so `idx` always has a compacted position.\n                OrderByTarget::Column(idx) => {\n                    compact_of.get(*idx).copied().flatten().ok_or_else(|| {\n                        CodegenError::Internal {\n                            reason: format!(\"GROUP BY column {idx} has no compacted position\"),\n                        }\n                    })?\n                }\n                OrderByTarget::Expr(e) => {\n                    let r = compile_value(em, reg, &table_scope, e)?;\n                    key_index(r, first)?\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4432,7 +4442,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_32915b9c",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1246,
+    "line": 1254,
     "decision": "match &select.where_clause {\n        Some(where_expr) => try_compile_range_row_seek(\n            em,\n            reg,\n            where_expr,\n            schema,\n            &table_scope,\n            range_index_cursor,\n            sort_step,\n            stats,\n            false,\n            &mut |em, reg, index_cursor, row_skip| {\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::IdxRowid,\n                    index_cursor,\n                    rowid_reg,\n                    0,\n                ));\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    cursors.table,\n                    0,\n                    rowid_reg,\n                ));\n                em.patch_p2(seek_addr, row_skip);\n                emit_pass1_row(em, reg)\n            },\n        )?,\n        None => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4442,7 +4452,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_1128723f",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1278,
+    "line": 1286,
     "decision": "!used_range_seek",
     "conditions": 1,
     "vectors_required": 2,
@@ -4452,7 +4462,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_0d86c16d",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1285,
+    "line": 1293,
     "decision": "let Some(where_expr) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -4462,7 +4472,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_3342071b",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1312,
+    "line": 1320,
     "decision": "implicit_group",
     "conditions": 1,
     "vectors_required": 2,
@@ -4472,7 +4482,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_519a9db9",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1393,
+    "line": 1401,
     "decision": "match target {\n            OrderByTarget::Column(idx) => {\n                let r = reg.alloc();\n                // Always resolves — see the identical comment on\n                // pass 1's `sort_keys` loop above.\n                let compact_idx = compact_of.get(*idx).copied().flatten().ok_or_else(|| {\n                    CodegenError::Internal {\n                        reason: format!(\"GROUP BY column {idx} has no compacted position\"),\n                    }\n                })?;\n                read_pseudo_column(em, &pseudo_schema, cursors.pseudo, compact_idx, r)?;\n                Ok(r)\n            }\n            OrderByTarget::Expr(_) => compile_value(em, reg, &pseudo_scope, expr),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4482,7 +4492,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_60f9d020",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1485,
+    "line": 1493,
     "decision": "let Some(compact_idx) = compact_of.get(orig_idx).copied().flatten()",
     "conditions": 1,
     "vectors_required": 2,
@@ -4492,7 +4502,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_3342071b_2",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1510,
+    "line": 1518,
     "decision": "implicit_group",
     "conditions": 1,
     "vectors_required": 2,
@@ -4502,7 +4512,7 @@
   {
     "id": "codegen_row_select_aggregate_compile_grouped_scan_0b9ce1f2",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1514,
+    "line": 1522,
     "decision": "!implicit_group",
     "conditions": 1,
     "vectors_required": 2,
@@ -4512,7 +4522,7 @@
   {
     "id": "codegen_row_select_aggregate_group_by_index_ordering_d63afa68",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1573,
+    "line": 1581,
     "decision": "implicit_group || select.group_by.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -4522,7 +4532,7 @@
   {
     "id": "codegen_row_select_aggregate_group_by_index_ordering_ae83a762",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1579,
+    "line": 1587,
     "decision": "select.where_clause.is_some() || schema.without_rowid",
     "conditions": 2,
     "vectors_required": 3,
@@ -4532,7 +4542,7 @@
   {
     "id": "codegen_row_select_aggregate_group_by_index_ordering_ca556ce9",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1596,
+    "line": 1604,
     "decision": "match t {\n            OrderByTarget::Column(idx) => Some(*idx),\n            OrderByTarget::Expr(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4542,7 +4552,7 @@
   {
     "id": "codegen_row_select_aggregate_group_by_index_ordering_b90d0567",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1611,
+    "line": 1619,
     "decision": "match target {\n                OrderByTarget::Column(idx) => schema\n                    .column_collations\n                    .get(*idx)\n                    .copied()\n                    .unwrap_or(Collation::Binary),\n                OrderByTarget::Expr(_) => Collation::Binary,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4552,7 +4562,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_index_ordered_group_by_ca556ce9",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1654,
+    "line": 1662,
     "decision": "match t {\n            OrderByTarget::Column(idx) => Some(*idx),\n            OrderByTarget::Expr(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4562,7 +4572,7 @@
   {
     "id": "codegen_row_select_aggregate_try_compile_index_ordered_group_by_0d4adb54",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1712,
+    "line": 1720,
     "decision": "forward",
     "conditions": 1,
     "vectors_required": 2,
@@ -4572,7 +4582,7 @@
   {
     "id": "codegen_row_select_aggregate_ok_e61d3dd7",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1894,
+    "line": 1902,
     "decision": "match compile(sql, schemas) {\n            Ok(p) => p,\n            Err(e) => panic!(\"{sql}: expected Ok, got {e:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4582,7 +4592,7 @@
   {
     "id": "codegen_row_select_aggregate_err_text_60f80ce7",
     "file": "src/codegen/row/select/aggregate.rs",
-    "line": 1901,
+    "line": 1909,
     "decision": "match compile(sql, schemas) {\n            Ok(p) => panic!(\"{sql}: expected Err, got program {p:?}\"),\n            Err(e) => format!(\"{e:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
