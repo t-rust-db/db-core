@@ -68,6 +68,11 @@ pub(super) fn compile_row_values(
     catalog: &[TableSchema],
 ) -> Result<(i32, usize), CodegenError> {
     let mut regs = Vec::with_capacity(cols.len());
+    // One expression scope for the whole projection, built on first use:
+    // `with_catalog` copies every `TableSchema` into a fresh
+    // `Rc<[TableSchema]>`, and doing that per result column was ~60% of
+    // `prepare` time for a plain five-column SELECT (#486).
+    let mut expr_scope: Option<Scope> = None;
     for col in cols {
         let r = match col {
             ResultColumnPlan::Column(name) => {
@@ -145,7 +150,9 @@ pub(super) fn compile_row_values(
                         compile_value(
                             em,
                             reg,
-                            &Scope::single_shared(schema, cursor).with_catalog(catalog),
+                            expr_scope.get_or_insert_with(|| {
+                                Scope::single_shared(schema, cursor).with_catalog(catalog)
+                            }),
                             expr,
                         )?
                     }
@@ -153,7 +160,9 @@ pub(super) fn compile_row_values(
                     compile_value(
                         em,
                         reg,
-                        &Scope::single_shared(schema, cursor).with_catalog(catalog),
+                        expr_scope.get_or_insert_with(|| {
+                            Scope::single_shared(schema, cursor).with_catalog(catalog)
+                        }),
                         expr,
                     )?
                 }
