@@ -13,9 +13,7 @@ use std::rc::Rc;
 
 use super::aggregate::{AggState, AggregateError};
 use super::program::{GroupKeyColumn, SortKeyColumn};
-use super::record::{
-    decode_column, decode_column_with, decode_record, encode_record, parse_header, RecordError,
-};
+use super::record::{decode_column_with, decode_record, encode_record, parse_header, RecordError};
 use crate::value::{Collation, TextEncoding, Value};
 
 /// A forward-scanning, row-at-a-time cursor over a table's rows.
@@ -724,7 +722,7 @@ impl Cursor for EphemeralIndexCursor {
 /// Rows buffer as raw record bytes (`SorterData` hands them back
 /// unchanged) paired with their already-decoded sort-key values (so
 /// `SorterSort`'s comparisons never re-decode); each key column is
-/// decoded once at `sorter_insert` time via [`decode_column`], not the
+/// decoded once at `sorter_insert` time via [`decode_column_with`], not the
 /// whole row, matching sqlite-rs's "decode only what comparisons need"
 /// design (its own `#507`/`#631`).
 ///
@@ -762,9 +760,11 @@ impl SorterCursor {
     /// NULL (SQLite), so `None` is real corruption, not a short row
     /// (db-core#232).
     fn decode_keys(&self, blob: &[u8]) -> Option<Vec<Value>> {
+        // Parse the record header once for all key columns (#258 pattern).
+        let header = parse_header(blob).ok()?;
         self.keys
             .iter()
-            .map(|k| decode_column(blob, k.index, TextEncoding::Utf8).ok())
+            .map(|k| decode_column_with(blob, &header, k.index, TextEncoding::Utf8).ok())
             .collect()
     }
 }
