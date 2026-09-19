@@ -8250,10 +8250,10 @@
     "wildcard_risk": true
   },
   {
-    "id": "codegen_row_select_projection_compile_row_values_aeebe45f",
+    "id": "codegen_row_select_projection_compile_row_values_c1ae8931",
     "file": "src/codegen/row/select/projection.rs",
-    "line": 72,
-    "decision": "match col {\n            ResultColumnPlan::Column(name) => {\n                let idx =\n                    column_index(schema, name).ok_or_else(|| CodegenError::UnknownColumn {\n                        name: (*name).to_string(),\n                    })?;\n                let r = reg.alloc();\n                if pseudo && schema.rowid_alias == Some(idx) {\n                    // `cursor` is a post-`ORDER BY` `OpenPseudo` re-read\n                    // of an already-materialized record (see\n                    // `compile_sorted_scan`'s pass 1), not a live table\n                    // cursor — there is no rowid to fetch via\n                    // `Opcode::Rowid` (it isn't a table cursor at all).\n                    // Pass 1 built this record via `emit_column_read`\n                    // against the *real* cursor, which already resolved\n                    // the rowid alias into an ordinary field at this\n                    // same position — so a plain `Column` read recovers\n                    // it here.\n                    em.emit(Instruction::new(\n                        Opcode::Column,\n                        cursor,\n                        i32::try_from(idx).map_err(|_| CodegenError::Unsupported {\n                            reason: format!(\"column index {idx} does not fit in a P2 operand\"),\n                        })?,\n                        r,\n                    ));\n                } else {\n                    // Must go through `emit_column_read`, not a bare\n                    // `Column`: this is the `*` / `tbl.*` expansion path, and\n                    // an `INTEGER PRIMARY KEY` column is a NULL placeholder\n                    // in the record. Emitting `Column` here is why\n                    // `SELECT * FROM t` answered NULL for the rowid alias\n                    // while `SELECT id FROM t` (which routes through\n                    // `compile_value`) answered correctly.\n                    emit_column_read(em, schema, cursor, idx, r)?;\n                }\n                r\n            }\n            ResultColumnPlan::Expr(expr) => {\n                // A bare `name`/`tbl.name` reference — e.g. plain\n                // `SELECT id FROM t ORDER BY id` — compiles as an `Expr`\n                // here, not the `Column` variant above (that one is\n                // reserved for `*`/`tbl.*` expansion), so it needs the\n                // same pseudo-cursor rowid-alias special case: `Rowid`\n                // only works against a real table cursor, and `cursor`\n                // here may be the post-`ORDER BY` pseudo cursor instead.\n                // A compound expression that merely *references* the\n                // rowid alias (`id + 1`) isn't covered by this — falls\n                // through to `compile_value`, matching this crate's\n                // existing register-reuse limitations for compound\n                // result-column expressions.\n                if let ExprKind::Column {\n                    name,\n                    table: None,\n                    catalog: None,\n                } = &expr.kind\n                {\n                    let pseudo_rowid_idx = pseudo\n                        .then(|| column_index(schema, name))\n                        .flatten()\n                        .filter(|idx| schema.rowid_alias == Some(*idx));\n                    if let Some(idx) = pseudo_rowid_idx {\n                        let r = reg.alloc();\n                        em.emit(Instruction::new(\n                            Opcode::Column,\n                            cursor,\n                            i32::try_from(idx).map_err(|_| CodegenError::Unsupported {\n                                reason: format!(\"column index {idx} does not fit in a P2 operand\"),\n                            })?,\n                            r,\n                        ));\n                        r\n                    } else {\n                        compile_value(\n                            em,\n                            reg,\n                            &Scope::single_shared(schema, cursor).with_catalog(catalog),\n                            expr,\n                        )?\n                    }\n                } else {\n                    compile_value(\n                        em,\n                        reg,\n                        &Scope::single_shared(schema, cursor).with_catalog(catalog),\n                        expr,\n                    )?\n                }\n            }\n        }",
+    "line": 77,
+    "decision": "match col {\n            ResultColumnPlan::Column(name) => {\n                let idx =\n                    column_index(schema, name).ok_or_else(|| CodegenError::UnknownColumn {\n                        name: (*name).to_string(),\n                    })?;\n                let r = reg.alloc();\n                if pseudo && schema.rowid_alias == Some(idx) {\n                    // `cursor` is a post-`ORDER BY` `OpenPseudo` re-read\n                    // of an already-materialized record (see\n                    // `compile_sorted_scan`'s pass 1), not a live table\n                    // cursor — there is no rowid to fetch via\n                    // `Opcode::Rowid` (it isn't a table cursor at all).\n                    // Pass 1 built this record via `emit_column_read`\n                    // against the *real* cursor, which already resolved\n                    // the rowid alias into an ordinary field at this\n                    // same position — so a plain `Column` read recovers\n                    // it here.\n                    em.emit(Instruction::new(\n                        Opcode::Column,\n                        cursor,\n                        i32::try_from(idx).map_err(|_| CodegenError::Unsupported {\n                            reason: format!(\"column index {idx} does not fit in a P2 operand\"),\n                        })?,\n                        r,\n                    ));\n                } else {\n                    // Must go through `emit_column_read`, not a bare\n                    // `Column`: this is the `*` / `tbl.*` expansion path, and\n                    // an `INTEGER PRIMARY KEY` column is a NULL placeholder\n                    // in the record. Emitting `Column` here is why\n                    // `SELECT * FROM t` answered NULL for the rowid alias\n                    // while `SELECT id FROM t` (which routes through\n                    // `compile_value`) answered correctly.\n                    emit_column_read(em, schema, cursor, idx, r)?;\n                }\n                r\n            }\n            ResultColumnPlan::Expr(expr) => {\n                // A bare `name`/`tbl.name` reference — e.g. plain\n                // `SELECT id FROM t ORDER BY id` — compiles as an `Expr`\n                // here, not the `Column` variant above (that one is\n                // reserved for `*`/`tbl.*` expansion), so it needs the\n                // same pseudo-cursor rowid-alias special case: `Rowid`\n                // only works against a real table cursor, and `cursor`\n                // here may be the post-`ORDER BY` pseudo cursor instead.\n                // A compound expression that merely *references* the\n                // rowid alias (`id + 1`) isn't covered by this — falls\n                // through to `compile_value`, matching this crate's\n                // existing register-reuse limitations for compound\n                // result-column expressions.\n                if let ExprKind::Column {\n                    name,\n                    table: None,\n                    catalog: None,\n                } = &expr.kind\n                {\n                    let pseudo_rowid_idx = pseudo\n                        .then(|| column_index(schema, name))\n                        .flatten()\n                        .filter(|idx| schema.rowid_alias == Some(*idx));\n                    if let Some(idx) = pseudo_rowid_idx {\n                        let r = reg.alloc();\n                        em.emit(Instruction::new(\n                            Opcode::Column,\n                            cursor,\n                            i32::try_from(idx).map_err(|_| CodegenError::Unsupported {\n                                reason: format!(\"column index {idx} does not fit in a P2 operand\"),\n                            })?,\n                            r,\n                        ));\n                        r\n                    } else {\n                        compile_value(\n                            em,\n                            reg,\n                            expr_scope.get_or_insert_with(|| {\n                                Scope::single_shared(schema, cursor).with_catalog(catalog)\n                            }),\n                            expr,\n                        )?\n                    }\n                } else {\n                    compile_value(\n                        em,\n                        reg,\n                        expr_scope.get_or_insert_with(|| {\n                            Scope::single_shared(schema, cursor).with_catalog(catalog)\n                        }),\n                        expr,\n                    )?\n                }\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -8262,7 +8262,7 @@
   {
     "id": "codegen_row_select_projection_compile_row_values_7db81c2f",
     "file": "src/codegen/row/select/projection.rs",
-    "line": 79,
+    "line": 84,
     "decision": "pseudo && schema.rowid_alias == Some(idx)",
     "conditions": 2,
     "vectors_required": 3,
@@ -8272,7 +8272,7 @@
   {
     "id": "codegen_row_select_projection_compile_row_values_81d8b913",
     "file": "src/codegen/row/select/projection.rs",
-    "line": 123,
+    "line": 128,
     "decision": "let ExprKind::Column {\n                    name,\n                    table: None,\n                    catalog: None,\n                } = &expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -8282,7 +8282,7 @@
   {
     "id": "codegen_row_select_projection_compile_row_values_e2615f9c",
     "file": "src/codegen/row/select/projection.rs",
-    "line": 133,
+    "line": 138,
     "decision": "let Some(idx) = pseudo_rowid_idx",
     "conditions": 1,
     "vectors_required": 2,
@@ -8292,7 +8292,7 @@
   {
     "id": "codegen_row_select_projection_compile_row_values_6578afd0",
     "file": "src/codegen/row/select/projection.rs",
-    "line": 164,
+    "line": 173,
     "decision": "cols.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -8302,7 +8302,7 @@
   {
     "id": "codegen_row_select_projection_compile_row_values_0693ceae",
     "file": "src/codegen/row/select/projection.rs",
-    "line": 174,
+    "line": 183,
     "decision": "already_contiguous",
     "conditions": 1,
     "vectors_required": 2,
@@ -8312,7 +8312,7 @@
   {
     "id": "codegen_row_select_projection_emit_distinct_guard_7f473e72",
     "file": "src/codegen/row/select/projection.rs",
-    "line": 229,
+    "line": 238,
     "decision": "!matches!(select.distinct, Some(Distinctness::Distinct))",
     "conditions": 1,
     "vectors_required": 2,
@@ -8322,7 +8322,7 @@
   {
     "id": "codegen_row_select_projection_select_96ddc009",
     "file": "src/codegen/row/select/projection.rs",
-    "line": 287,
+    "line": 296,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"expected {sql:?} to parse as a SELECT, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -8332,7 +8332,7 @@
   {
     "id": "codegen_row_select_projection_schema_cfa672e9",
     "file": "src/codegen/row/select/projection.rs",
-    "line": 297,
+    "line": 306,
     "decision": "indexed",
     "conditions": 1,
     "vectors_required": 2,
@@ -8342,7 +8342,7 @@
   {
     "id": "codegen_row_select_projection_schema_3534660c",
     "file": "src/codegen/row/select/projection.rs",
-    "line": 319,
+    "line": 328,
     "decision": "alias",
     "conditions": 1,
     "vectors_required": 2,
