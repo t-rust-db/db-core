@@ -851,7 +851,15 @@ fn compile_row(
         // The new row's values are already sitting in `col_regs`/
         // `rowid_reg` — build index keys from those directly instead of
         // seeking `TABLE_CURSOR` back onto the just-written row.
-        emit_index_key_ops_from_regs(em, reg, schema, &col_regs, rowid_reg, FIRST_INDEX_CURSOR)?;
+        emit_index_key_ops_from_regs(
+            em,
+            reg,
+            schema,
+            &col_regs,
+            rowid_reg,
+            FIRST_INDEX_CURSOR,
+            None,
+        )?;
     }
 
     em.place(row_skip);
@@ -924,6 +932,7 @@ fn emit_pk_conflict(
                 TABLE_CURSOR,
                 FIRST_INDEX_CURSOR,
                 Opcode::IdxDelete,
+                None,
             )?;
             em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));
         }
@@ -1032,6 +1041,7 @@ fn emit_unique_check(
                 TABLE_CURSOR,
                 FIRST_INDEX_CURSOR,
                 Opcode::IdxDelete,
+                None,
             )?;
             em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));
             em.place(seek_ok);

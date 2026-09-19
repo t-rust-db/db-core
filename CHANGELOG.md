@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.114.6] - 2026-09-19
+
+### Changed
+
+- **`UPDATE` skips index maintenance for indexes the `SET` clause doesn't touch** (#524, PR #528): every index on the table was rebuilt (`IdxDelete`+`IdxInsert`) per matched row regardless of whether `SET` assigned any of that index's columns, making `update_filtered_range` 12.7x slower than sqlite3 (8.7us vs 0.7us per row). `emit_index_key_ops`/`emit_index_key_ops_from_regs` now take a per-index `touched` flag computed from the assignment list (or forced for every index when the rowid is reassigned, since it's part of every index's key); `INSERT`/`DELETE` are unaffected since a full row write/removal legitimately invalidates every index.
+
+### Added
+
+- **`EXPLAIN` accepts an `UPDATE`/`DELETE` body** (#524, PR #528): `ast::Explain::select: Box<Select>` is replaced by `ast::Explain::body: ExplainBody` (`Select`/`Update`/`Delete`), needed to diagnose per-row index-maintenance cost like the above from the CLI. `EXPLAIN QUERY PLAN` over a non-`Select` body remains `Unsupported` (EQP is join-planner output with no equivalent for a write statement).
+
 ## [0.114.5] - 2026-09-19
 
 ### Changed

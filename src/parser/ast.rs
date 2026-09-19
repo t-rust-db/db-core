@@ -210,19 +210,40 @@ pub enum CompoundOp {
     Union,
 }
 
-/// `EXPLAIN [QUERY PLAN] select-stmt` (#243) — pulled forward from its
-/// original V7 slot (`.openspec/grammar/sqlite.ebnf`'s `explain-stmt`)
-/// because the planner's join equality-index-selection work needs EQP
-/// output to be observable now. Wraps only a `Select`: the acceptance
-/// criterion this exists for ("EXPLAIN QUERY PLAN shows index usage")
-/// is about the join planner, not `EXPLAIN`'s general opcode-dump form
-/// over every statement kind — that broader form remains future scope.
+/// `EXPLAIN [QUERY PLAN] stmt` (#243, widened by #524). `EXPLAIN QUERY
+/// PLAN` was pulled forward from its original V7 slot
+/// (`.openspec/grammar/sqlite.ebnf`'s `explain-stmt`) because the
+/// planner's join equality-index-selection work needs EQP output to be
+/// observable now — that acceptance criterion ("EXPLAIN QUERY PLAN
+/// shows index usage") is about the join planner, so `query_plan: true`
+/// still only makes sense over a `Select` body; a caller compiling EQP
+/// for a non-`Select` [`ExplainBody`] should treat it as unsupported.
+/// Bare `EXPLAIN` (opcode dump) has no such restriction — [`explain`]
+/// (`vm::row`) renders any compiled `Program` regardless of the
+/// statement kind that produced it, so #524 widened the body to also
+/// accept `UPDATE`/`DELETE` (diagnosing per-row index-maintenance cost
+/// needed `EXPLAIN UPDATE ...` runnable from the CLI).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Explain {
     /// `true` for `EXPLAIN QUERY PLAN`, `false` for bare `EXPLAIN`.
     pub query_plan: bool,
-    /// The wrapped `select-stmt`.
-    pub select: Box<Select>,
+    /// The wrapped statement.
+    pub body: ExplainBody,
+}
+
+/// The statement kind [`Explain`] wraps.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExplainBody {
+    /// `EXPLAIN [QUERY PLAN] select-stmt`.
+    Select(Box<Select>),
+    /// `EXPLAIN update-stmt` (#524) — `EXPLAIN QUERY PLAN` over an
+    /// `UPDATE` is not meaningful (no join-planner EQP for a write
+    /// statement) and should be rejected by whichever caller handles
+    /// `query_plan: true`.
+    Update(Box<Update>),
+    /// `EXPLAIN delete-stmt` (#524) — same `query_plan` caveat as
+    /// [`ExplainBody::Update`].
+    Delete(Box<Delete>),
 }
 
 /// `DISTINCT`/`ALL` qualifier on a `SELECT`'s result columns.

@@ -2480,10 +2480,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_2cd298d5",
+    "id": "codegen_row_dispatch_compile_statement_0fbce5f1",
     "file": "src/codegen/row/dispatch.rs",
     "line": 262,
-    "decision": "match head {\n        \"BEGIN\" => match parse_begin(sql) {\n            ParseOutcome::Accepted(begin) => Ok(compile_begin(&begin)),\n            other => Err(parse_error(other)),\n        },\n        \"COMMIT\" | \"END\" => match parse_commit(sql) {\n            ParseOutcome::Accepted(commit) => Ok(compile_commit(&commit)),\n            other => Err(parse_error(other)),\n        },\n        \"ROLLBACK\" => match parse_rollback(sql) {\n            ParseOutcome::Accepted(rollback) => Ok(compile_rollback(&rollback)),\n            other => Err(parse_error(other)),\n        },\n        \"PRAGMA\" => match parse_pragma(sql) {\n            ParseOutcome::Accepted(pragma) => Ok(compile_pragma(&pragma)),\n            other => Err(parse_error(other)),\n        },\n        \"ANALYZE\" => match parse_analyze(sql) {\n            ParseOutcome::Accepted(analyze) => {\n                let targets: Vec<&TableSchema> = match &analyze.target {\n                    None => schemas.iter().collect(),\n                    Some(name) => {\n                        if let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))\n                        {\n                            vec![schema]\n                        } else if schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))\n                        {\n                            // Real SQLite also accepts `ANALYZE index-name`\n                            // (analyzing just that index's owning table) —\n                            // syntactically valid, but out of this MVP's\n                            // scope (spec 011/Req 1), so `Unsupported`\n                            // rather than the `NoSuchTable` a genuinely\n                            // unknown name gets below.\n                            return Err(CodegenError::Unsupported {\n                                reason: format!(\n                                    \"ANALYZE of a single index ({name:?}) is not yet supported\"\n                                ),\n                            }\n                            .into());\n                        } else {\n                            return Err(DispatchError::NoSuchTable(name.clone()));\n                        }\n                    }\n                };\n                Ok(compile_analyze(&targets)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        // db-core addition (#219): sqlite-rs dispatches SELECT from its\n        // CLI binary (`src/bin/sqlite-rs/query.rs::compile_select_program`),\n        // which db-core has no counterpart for -- so that function's pure\n        // half lives here as [`compile_select_statement`] /\n        // [`explain_select_statement`], and `compile_statement` covers the\n        // whole statement vocabulary as a library entry point. `WITH` is a\n        // `SELECT`'s CTE prefix (only `Select` carries a `with_clause`).\n        \"SELECT\" | \"WITH\" => match parse_select(sql) {\n            ParseOutcome::Accepted(select) => {\n                compile_select_statement(&select, schemas, views, &HashMap::new())\n            }\n            other => Err(parse_error(other)),\n        },\n        \"EXPLAIN\" => match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                let rows =\n                    explain_select_statement(&explain.select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        },\n        \"INSERT\" => match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"UPDATE\" => match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(&update, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"DELETE\" => match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(&delete, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"CREATE\" if second == \"TABLE\" => dispatch_create_table(sql, schemas),\n        \"CREATE\" if second == \"VIEW\" => dispatch_create_view(sql),\n        \"CREATE\" if is_create_index => dispatch_create_index(sql, schemas),\n        \"DROP\" if second == \"TABLE\" => dispatch_drop_table(sql, schemas),\n        \"DROP\" if second == \"INDEX\" => dispatch_drop_index(sql, schemas),\n        // Reports the statement's actual leading word (uppercased, as\n        // before), not `canonical`'s `\"\"` sentinel — this is a cold\n        // path, so the one allocation is free.\n        _ => Err(DispatchError::Unrecognized(first_word.to_ascii_uppercase())),\n    }",
+    "decision": "match head {\n        \"BEGIN\" => match parse_begin(sql) {\n            ParseOutcome::Accepted(begin) => Ok(compile_begin(&begin)),\n            other => Err(parse_error(other)),\n        },\n        \"COMMIT\" | \"END\" => match parse_commit(sql) {\n            ParseOutcome::Accepted(commit) => Ok(compile_commit(&commit)),\n            other => Err(parse_error(other)),\n        },\n        \"ROLLBACK\" => match parse_rollback(sql) {\n            ParseOutcome::Accepted(rollback) => Ok(compile_rollback(&rollback)),\n            other => Err(parse_error(other)),\n        },\n        \"PRAGMA\" => match parse_pragma(sql) {\n            ParseOutcome::Accepted(pragma) => Ok(compile_pragma(&pragma)),\n            other => Err(parse_error(other)),\n        },\n        \"ANALYZE\" => match parse_analyze(sql) {\n            ParseOutcome::Accepted(analyze) => {\n                let targets: Vec<&TableSchema> = match &analyze.target {\n                    None => schemas.iter().collect(),\n                    Some(name) => {\n                        if let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))\n                        {\n                            vec![schema]\n                        } else if schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))\n                        {\n                            // Real SQLite also accepts `ANALYZE index-name`\n                            // (analyzing just that index's owning table) —\n                            // syntactically valid, but out of this MVP's\n                            // scope (spec 011/Req 1), so `Unsupported`\n                            // rather than the `NoSuchTable` a genuinely\n                            // unknown name gets below.\n                            return Err(CodegenError::Unsupported {\n                                reason: format!(\n                                    \"ANALYZE of a single index ({name:?}) is not yet supported\"\n                                ),\n                            }\n                            .into());\n                        } else {\n                            return Err(DispatchError::NoSuchTable(name.clone()));\n                        }\n                    }\n                };\n                Ok(compile_analyze(&targets)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        // db-core addition (#219): sqlite-rs dispatches SELECT from its\n        // CLI binary (`src/bin/sqlite-rs/query.rs::compile_select_program`),\n        // which db-core has no counterpart for -- so that function's pure\n        // half lives here as [`compile_select_statement`] /\n        // [`explain_select_statement`], and `compile_statement` covers the\n        // whole statement vocabulary as a library entry point. `WITH` is a\n        // `SELECT`'s CTE prefix (only `Select` carries a `with_clause`).\n        \"SELECT\" | \"WITH\" => match parse_select(sql) {\n            ParseOutcome::Accepted(select) => {\n                compile_select_statement(&select, schemas, views, &HashMap::new())\n            }\n            other => Err(parse_error(other)),\n        },\n        \"EXPLAIN\" => match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                // #524: `EXPLAIN QUERY PLAN` renders the join planner's\n                // EQP output, which only exists for a `SELECT` — parsing\n                // now accepts `EXPLAIN UPDATE`/`EXPLAIN DELETE` (bare\n                // `EXPLAIN`'s opcode dump), but there's no equivalent\n                // \"query plan\" summary for a write statement to render.\n                let select = match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                };\n                let rows = explain_select_statement(select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        },\n        \"INSERT\" => match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"UPDATE\" => match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(&update, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"DELETE\" => match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(&delete, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"CREATE\" if second == \"TABLE\" => dispatch_create_table(sql, schemas),\n        \"CREATE\" if second == \"VIEW\" => dispatch_create_view(sql),\n        \"CREATE\" if is_create_index => dispatch_create_index(sql, schemas),\n        \"DROP\" if second == \"TABLE\" => dispatch_drop_table(sql, schemas),\n        \"DROP\" if second == \"INDEX\" => dispatch_drop_index(sql, schemas),\n        // Reports the statement's actual leading word (uppercased, as\n        // before), not `canonical`'s `\"\"` sentinel — this is a cold\n        // path, so the one allocation is free.\n        _ => Err(DispatchError::Unrecognized(first_word.to_ascii_uppercase())),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -2492,7 +2492,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_4ca02b2c",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 409,
+    "line": 424,
     "decision": "second == \"TABLE\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -2502,7 +2502,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_fc01ca5d",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 410,
+    "line": 425,
     "decision": "second == \"VIEW\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -2512,7 +2512,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_cbbea3d0",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 411,
+    "line": 426,
     "decision": "is_create_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -2522,7 +2522,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_4ca02b2c_2",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 412,
+    "line": 427,
     "decision": "second == \"TABLE\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -2532,7 +2532,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_65522442",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 413,
+    "line": 428,
     "decision": "second == \"INDEX\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -2630,10 +2630,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_f1b679eb",
+    "id": "codegen_row_dispatch_compile_statement_ad467fea",
     "file": "src/codegen/row/dispatch.rs",
     "line": 327,
-    "decision": "match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                let rows =\n                    explain_select_statement(&explain.select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        }",
+    "decision": "match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                // #524: `EXPLAIN QUERY PLAN` renders the join planner's\n                // EQP output, which only exists for a `SELECT` — parsing\n                // now accepts `EXPLAIN UPDATE`/`EXPLAIN DELETE` (bare\n                // `EXPLAIN`'s opcode dump), but there's no equivalent\n                // \"query plan\" summary for a write statement to render.\n                let select = match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                };\n                let rows = explain_select_statement(select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -2650,9 +2650,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_dispatch_compile_statement_94701bcb",
+    "file": "src/codegen/row/dispatch.rs",
+    "line": 340,
+    "decision": "match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_dispatch_compile_statement_128e6b37",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 341,
+    "line": 356,
     "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2662,7 +2672,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_99895de6",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 344,
+    "line": 359,
     "decision": "match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2672,7 +2682,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_8144d3a5",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 371,
+    "line": 386,
     "decision": "is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))",
     "conditions": 2,
     "vectors_required": 3,
@@ -2682,7 +2692,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_df111e5c",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 395,
+    "line": 410,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(&update, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2692,7 +2702,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_32a68754",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 402,
+    "line": 417,
     "decision": "match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(&delete, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2702,7 +2712,7 @@
   {
     "id": "codegen_row_dispatch_compile_select_statement_13fa7590",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 457,
+    "line": 472,
     "decision": "!select.compound.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2712,7 +2722,7 @@
   {
     "id": "codegen_row_dispatch_compile_select_statement_8a16b420",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 466,
+    "line": 481,
     "decision": "from.joins.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -3470,9 +3480,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_index_maintenance_emit_index_key_ops_284cba5b",
+    "file": "src/codegen/row/index_maintenance.rs",
+    "line": 110,
+    "decision": "touched.is_some_and(|flags| flags.get(i) == Some(&false))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_b7b491d5",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 104,
+    "line": 116,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -3482,7 +3502,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_0b949c87",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 128,
+    "line": 140,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -3492,8 +3512,18 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_0b949c87_2",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 134,
+    "line": 146,
     "decision": "start.is_none()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_index_maintenance_emit_index_key_ops_from_regs_284cba5b",
+    "file": "src/codegen/row/index_maintenance.rs",
+    "line": 185,
+    "decision": "touched.is_some_and(|flags| flags.get(i) == Some(&false))",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -3502,7 +3532,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_from_regs_b7b491d5",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 174,
+    "line": 191,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -3512,7 +3542,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_from_regs_6c346ace",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 193,
+    "line": 210,
     "decision": "Some(col_idx) == schema.rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -3522,7 +3552,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_from_regs_0b949c87",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 206,
+    "line": 223,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -3532,7 +3562,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_from_regs_0b949c87_2",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 212,
+    "line": 229,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -9252,7 +9282,7 @@
   {
     "id": "codegen_row_stmt_delete_compile_delete_with_catalog_de09fb1a",
     "file": "src/codegen/row/stmt/delete.rs",
-    "line": 134,
+    "line": 135,
     "decision": "let Some(where_expr) = &delete.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -9552,7 +9582,7 @@
   {
     "id": "codegen_row_stmt_insert_table_check_constraints_cfdbd8dc",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 869,
+    "line": 877,
     "decision": "match c {\n            TableConstraint::Check { expr, name, body } => {\n                Some((expr.clone(), check_label(schema, name.as_deref(), *body)))\n            }\n            TableConstraint::PrimaryKey(_) | TableConstraint::Unique(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9562,7 +9592,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_constraint_violation_f9999294",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 885,
+    "line": 893,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Abort\n        | ConflictAction::Fail\n        | ConflictAction::Rollback\n        | ConflictAction::Replace => {\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                code,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9570,10 +9600,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_emit_pk_conflict_15820c67",
+    "id": "codegen_row_stmt_insert_emit_pk_conflict_1a78c7f5",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 911,
-    "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // `SeekRowid` above landed the cursor on the row this\n            // INSERT is about to displace — its secondary-index\n            // entries must be removed before it's deleted, exactly\n            // like `delete.rs`'s ordinary `DELETE` path, or they go\n            // stale (`#196` follow-up: this conflict path predates\n            // index maintenance and wasn't updated when it landed).\n            emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\n                \"UNIQUE constraint failed: {}.{} (PRIMARY KEY)\",\n                schema.name,\n                schema.columns.get(idx).map_or(\"?\", String::as_str)\n            );\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_PRIMARYKEY,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
+    "line": 919,
+    "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // `SeekRowid` above landed the cursor on the row this\n            // INSERT is about to displace — its secondary-index\n            // entries must be removed before it's deleted, exactly\n            // like `delete.rs`'s ordinary `DELETE` path, or they go\n            // stale (`#196` follow-up: this conflict path predates\n            // index maintenance and wasn't updated when it landed).\n            emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n                None,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\n                \"UNIQUE constraint failed: {}.{} (PRIMARY KEY)\",\n                schema.name,\n                schema.columns.get(idx).map_or(\"?\", String::as_str)\n            );\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_PRIMARYKEY,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -9582,7 +9612,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_check_b7b491d5",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 969,
+    "line": 978,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -9592,7 +9622,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_check_0b949c87",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 985,
+    "line": 994,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -9600,10 +9630,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_emit_unique_check_2dd119e2",
+    "id": "codegen_row_stmt_insert_emit_unique_check_51467db7",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1011,
-    "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // The conflicting row's rowid was written into\n            // `conflict_rowid_reg` by `NoConflict` itself — seek the\n            // table cursor onto it, remove its index entries, then\n            // delete it, exactly like `emit_pk_conflict`'s `Replace`\n            // branch (which instead already had the cursor positioned\n            // via `SeekRowid`).\n            let seek_ok = em.new_label();\n            let seek_addr = em.emit(Instruction::new(\n                Opcode::SeekRowid,\n                TABLE_CURSOR,\n                0,\n                conflict_rowid_reg,\n            ));\n            em.patch_p2(seek_addr, seek_ok);\n            crate::codegen::row::index_maintenance::emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n            em.place(seek_ok);\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\"UNIQUE constraint failed: {}.{}\", schema.name, index.name);\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_UNIQUE,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
+    "line": 1020,
+    "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // The conflicting row's rowid was written into\n            // `conflict_rowid_reg` by `NoConflict` itself — seek the\n            // table cursor onto it, remove its index entries, then\n            // delete it, exactly like `emit_pk_conflict`'s `Replace`\n            // branch (which instead already had the cursor positioned\n            // via `SeekRowid`).\n            let seek_ok = em.new_label();\n            let seek_addr = em.emit(Instruction::new(\n                Opcode::SeekRowid,\n                TABLE_CURSOR,\n                0,\n                conflict_rowid_reg,\n            ));\n            em.patch_p2(seek_addr, seek_ok);\n            crate::codegen::row::index_maintenance::emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n                None,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n            em.place(seek_ok);\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\"UNIQUE constraint failed: {}.{}\", schema.name, index.name);\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_UNIQUE,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -9612,7 +9642,7 @@
   {
     "id": "codegen_row_stmt_insert_insert_result_e7f78d1c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1120,
+    "line": 1130,
     "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(insert) => *insert,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9622,7 +9652,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_3633baaa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 81,
+    "line": 83,
     "decision": "schema.without_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -9632,7 +9662,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_b410d928",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 111,
+    "line": 113,
     "decision": "let Some(slot) = assigned.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9642,7 +9672,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_b5ba86aa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 142,
+    "line": 166,
     "decision": "is_rowid_reference(schema, lhs)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9652,7 +9682,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_4ccc9dd6",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 144,
+    "line": 168,
     "decision": "is_rowid_reference(schema, rhs)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9662,7 +9692,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_87d7bd20",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 163,
+    "line": 187,
     "decision": "let Some(operand) = rowid_seek_operand",
     "conditions": 1,
     "vectors_required": 2,
@@ -9672,7 +9702,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_10a1f5f2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 236,
+    "line": 261,
     "decision": "let Some(where_expr) = &update.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -9682,7 +9712,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_4baed9e2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 237,
+    "line": 262,
     "decision": "range_seek_touches_scanned_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -9692,7 +9722,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_8d819a73",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 346,
+    "line": 372,
     "decision": "used_range_seek && range_seek_touches_scanned_index",
     "conditions": 2,
     "vectors_required": 3,
@@ -9702,7 +9732,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_1128723f",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 380,
+    "line": 407,
     "decision": "!used_range_seek",
     "conditions": 1,
     "vectors_required": 2,
@@ -9712,7 +9742,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_10a1f5f2_2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 387,
+    "line": 414,
     "decision": "let Some(where_expr) = &update.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -9722,7 +9752,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_c1433547",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 448,
+    "line": 477,
     "decision": "match rowid_alias.and_then(|idx| assigned.get(idx).copied().flatten()) {\n        Some(expr) => compile_value(em, reg, scope, expr)?,\n        None => {\n            let r = reg.alloc();\n            em.emit(Instruction::new(Opcode::Rowid, TABLE_CURSOR, r, 0));\n            r\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9732,7 +9762,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_c861879c",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 459,
+    "line": 488,
     "decision": "Some(idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -9742,7 +9772,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_1812a01d",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 465,
+    "line": 494,
     "decision": "match expr {\n            Some(expr) => compile_value(em, reg, scope, expr)?,\n            None => {\n                let r = reg.alloc();\n                emit_column_read(em, schema, TABLE_CURSOR, idx, r)?;\n                r\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9752,7 +9782,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_3c6999fa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 499,
+    "line": 528,
     "decision": "!plan.not_null",
     "conditions": 1,
     "vectors_required": 2,
@@ -9762,7 +9792,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_d93931f7",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 533,
+    "line": 562,
     "decision": "has_checks",
     "conditions": 1,
     "vectors_required": 2,
@@ -9772,7 +9802,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_1af88378",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 614,
+    "line": 644,
     "decision": "!schema.indexes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -9782,7 +9812,17 @@
   {
     "id": "codegen_row_stmt_update_update_program_36cf9018",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 674,
+    "line": 712,
+    "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_update_compile_36cf9018",
+    "file": "src/codegen/row/stmt/update.rs",
+    "line": 780,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15462,7 +15502,7 @@
   {
     "id": "parser_ast_name_c545e562",
     "file": "src/parser/ast.rs",
-    "line": 283,
+    "line": 304,
     "decision": "match &self.kind {\n            TableRefKind::Name(name) => Some(name),\n            TableRefKind::Subquery(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15472,7 +15512,7 @@
   {
     "id": "parser_ast_span_c6fb8178",
     "file": "src/parser/ast.rs",
-    "line": 967,
+    "line": 988,
     "decision": "match self {\n            Pragma::JournalMode { span, .. }\n            | Pragma::IntegrityCheck { span, .. }\n            | Pragma::Synchronous { span, .. } => *span,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16420,10 +16460,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_parse_explain_686f12b1",
+    "id": "parser_column_parse_explain_ac407a98",
     "file": "src/parser/column.rs",
     "line": 1028,
-    "decision": "match crate::parser::row::parse_explain(sql_text) {\n        ParseOutcome::Accepted(explain) => {\n            let form = if explain.query_plan {\n                Explain::QueryPlan\n            } else {\n                Explain::Opcodes\n            };\n            let mut select = *explain.select;\n            validate_select(&mut select)?;\n            Ok((form, select))\n        }\n        ParseOutcome::Unsupported { message, span } | ParseOutcome::Invalid { message, span } => {\n            Err(from_outcome(message, span))\n        }\n    }",
+    "decision": "match crate::parser::row::parse_explain(sql_text) {\n        ParseOutcome::Accepted(explain) => {\n            let form = if explain.query_plan {\n                Explain::QueryPlan\n            } else {\n                Explain::Opcodes\n            };\n            // This entry point's return type (`Select`) predates #524's\n            // `EXPLAIN UPDATE`/`EXPLAIN DELETE` widening — `column-rs`'s\n            // analytics subset has no UPDATE/DELETE codegen to hand an\n            // `Update`/`Delete` body to, so those remain `Unsupported`\n            // here (row's own `parse_explain`/`compile_statement` do\n            // support them).\n            let mut select = match explain.body {\n                crate::parser::ast::ExplainBody::Select(select) => *select,\n                crate::parser::ast::ExplainBody::Update(update) => {\n                    return Err(unsupported(\n                        update.span,\n                        \"EXPLAIN UPDATE is not supported here\".to_string(),\n                    ))\n                }\n                crate::parser::ast::ExplainBody::Delete(delete) => {\n                    return Err(unsupported(\n                        delete.span,\n                        \"EXPLAIN DELETE is not supported here\".to_string(),\n                    ))\n                }\n            };\n            validate_select(&mut select)?;\n            Ok((form, select))\n        }\n        ParseOutcome::Unsupported { message, span } | ParseOutcome::Invalid { message, span } => {\n            Err(from_outcome(message, span))\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -16440,9 +16480,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "parser_column_parse_explain_a9200493",
+    "file": "src/parser/column.rs",
+    "line": 1041,
+    "decision": "match explain.body {\n                crate::parser::ast::ExplainBody::Select(select) => *select,\n                crate::parser::ast::ExplainBody::Update(update) => {\n                    return Err(unsupported(\n                        update.span,\n                        \"EXPLAIN UPDATE is not supported here\".to_string(),\n                    ))\n                }\n                crate::parser::ast::ExplainBody::Delete(delete) => {\n                    return Err(unsupported(\n                        delete.span,\n                        \"EXPLAIN DELETE is not supported here\".to_string(),\n                    ))\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "parser_column_bare_col_0f88bcf2",
     "file": "src/parser/column.rs",
-    "line": 1053,
+    "line": 1073,
     "decision": "match rc {\n            ResultColumn::Expr { expr, alias: None }\n                if matches!(expr.kind, ExprKind::Column { .. }) =>\n            {\n                column_name(expr).ok()\n            }\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16452,7 +16502,7 @@
   {
     "id": "parser_column_bare_col_0fa6e87f",
     "file": "src/parser/column.rs",
-    "line": 1055,
+    "line": 1075,
     "decision": "matches!(expr.kind, ExprKind::Column { .. })",
     "conditions": 1,
     "vectors_required": 2,
@@ -16462,7 +16512,7 @@
   {
     "id": "parser_column_from_name_f82695b0",
     "file": "src/parser/column.rs",
-    "line": 1074,
+    "line": 1094,
     "decision": "match &from.first.kind {\n            TableRefKind::Name(name) => name,\n            TableRefKind::Subquery(_) => from.first.alias.as_deref().unwrap(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16472,7 +16522,7 @@
   {
     "id": "parser_column_parses_is_null_ed581d7b",
     "file": "src/parser/column.rs",
-    "line": 1797,
+    "line": 1827,
     "decision": "match &where_expr(&q).kind {\n            ExprKind::IsNull { negated, .. } => assert!(!negated),\n            ExprKind::Is { negated, .. } => assert!(!negated),\n            other => panic!(\"expected IsNull-shaped expr, found {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16482,7 +16532,7 @@
   {
     "id": "parser_column_parses_is_not_null_9a123387",
     "file": "src/parser/column.rs",
-    "line": 1807,
+    "line": 1837,
     "decision": "match &where_expr(&q).kind {\n            ExprKind::IsNull { negated, .. } => assert!(negated),\n            ExprKind::Is { negated, .. } => assert!(negated),\n            other => panic!(\"expected IsNull-shaped expr, found {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16854,6 +16904,26 @@
     "file": "src/parser/row/error.rs",
     "line": 441,
     "decision": "match outcome {\n            ParseOutcome::Invalid { .. } => {}\n            other => panic!(\"expected invalid for {src:?}, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_row_error_explain_accepts_update_and_delete_bodies_70698f55",
+    "file": "src/parser/row/error.rs",
+    "line": 487,
+    "decision": "match parse_explain(\"EXPLAIN UPDATE t SET a = 1 WHERE b = 2\") {\n            ParseOutcome::Accepted(explain) => {\n                assert!(!explain.query_plan);\n                assert!(matches!(explain.body, ExplainBody::Update(_)));\n            }\n            other => panic!(\"expected accepted, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_row_error_explain_accepts_update_and_delete_bodies_efab1e0e",
+    "file": "src/parser/row/error.rs",
+    "line": 495,
+    "decision": "match parse_explain(\"EXPLAIN DELETE FROM t WHERE b = 2\") {\n            ParseOutcome::Accepted(explain) => {\n                assert!(!explain.query_plan);\n                assert!(matches!(explain.body, ExplainBody::Delete(_)));\n            }\n            other => panic!(\"expected accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -17872,8 +17942,28 @@
   {
     "id": "parser_row_grammar_parse_explain_stmt_b3be7002",
     "file": "src/parser/row/grammar.rs",
-    "line": 1130,
+    "line": 1134,
     "decision": "self.eat_kw(Keyword::QUERY)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_row_grammar_parse_explain_stmt_876e4837",
+    "file": "src/parser/row/grammar.rs",
+    "line": 1140,
+    "decision": "self.at_kw(Keyword::UPDATE)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_row_grammar_parse_explain_stmt_6b345ac7",
+    "file": "src/parser/row/grammar.rs",
+    "line": 1142,
+    "decision": "self.at_kw(Keyword::DELETE)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -17882,7 +17972,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_26879197",
     "file": "src/parser/row/grammar.rs",
-    "line": 1144,
+    "line": 1151,
     "decision": "self.at_kw(Keyword::WITH)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17892,7 +17982,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_7fb35b2e",
     "file": "src/parser/row/grammar.rs",
-    "line": 1149,
+    "line": 1156,
     "decision": "self.at_kw(Keyword::VALUES)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17902,7 +17992,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_d6746c93",
     "file": "src/parser/row/grammar.rs",
-    "line": 1158,
+    "line": 1165,
     "decision": "with_clause.is_some()\n            && (self.at_kw(Keyword::INSERT)\n                || self.at_kw(Keyword::UPDATE)\n                || self.at_kw(Keyword::DELETE))",
     "conditions": 4,
     "vectors_required": 5,
@@ -17912,7 +18002,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_35bae04d",
     "file": "src/parser/row/grammar.rs",
-    "line": 1168,
+    "line": 1175,
     "decision": "self.eat_kw(Keyword::DISTINCT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17922,7 +18012,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_05bba3c2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1170,
+    "line": 1177,
     "decision": "self.eat_kw(Keyword::ALL)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17932,7 +18022,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 1177,
+    "line": 1184,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17942,7 +18032,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_8f306afb",
     "file": "src/parser/row/grammar.rs",
-    "line": 1181,
+    "line": 1188,
     "decision": "self.eat_kw(Keyword::FROM)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17952,7 +18042,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_26d8615b",
     "file": "src/parser/row/grammar.rs",
-    "line": 1187,
+    "line": 1194,
     "decision": "self.at_kw(Keyword::WINDOW)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17962,7 +18052,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_0912c65b",
     "file": "src/parser/row/grammar.rs",
-    "line": 1191,
+    "line": 1198,
     "decision": "self.eat_kw(Keyword::WHERE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17972,7 +18062,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_6f209d02",
     "file": "src/parser/row/grammar.rs",
-    "line": 1199,
+    "line": 1206,
     "decision": "self.eat_kw(Keyword::GROUP)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17982,7 +18072,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_e9025c84_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1202,
+    "line": 1209,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17992,7 +18082,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_b6bf67ef",
     "file": "src/parser/row/grammar.rs",
-    "line": 1205,
+    "line": 1212,
     "decision": "self.eat_kw(Keyword::HAVING)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18002,7 +18092,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_b6bf67ef_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1208,
+    "line": 1215,
     "decision": "self.eat_kw(Keyword::HAVING)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18012,7 +18102,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_9cf34b6a",
     "file": "src/parser/row/grammar.rs",
-    "line": 1217,
+    "line": 1224,
     "decision": "self.at_kw(Keyword::INTERSECT) || self.at_kw(Keyword::EXCEPT)",
     "conditions": 2,
     "vectors_required": 3,
@@ -18022,7 +18112,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_76d80bd7",
     "file": "src/parser/row/grammar.rs",
-    "line": 1220,
+    "line": 1227,
     "decision": "!self.at_kw(Keyword::UNION)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18032,7 +18122,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_05bba3c2_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1224,
+    "line": 1231,
     "decision": "self.eat_kw(Keyword::ALL)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18042,7 +18132,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_980f2400",
     "file": "src/parser/row/grammar.rs",
-    "line": 1233,
+    "line": 1240,
     "decision": "self.eat_kw(Keyword::ORDER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18052,7 +18142,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_e9025c84_3",
     "file": "src/parser/row/grammar.rs",
-    "line": 1236,
+    "line": 1243,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18062,7 +18152,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_9af79630",
     "file": "src/parser/row/grammar.rs",
-    "line": 1241,
+    "line": 1248,
     "decision": "self.eat_kw(Keyword::LIMIT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18072,7 +18162,7 @@
   {
     "id": "parser_row_grammar_select_stmt_body_96cb589c",
     "file": "src/parser/row/grammar.rs",
-    "line": 1243,
+    "line": 1250,
     "decision": "self.eat_kw(Keyword::OFFSET) || self.eat_punct(&TokenKind::Comma)",
     "conditions": 2,
     "vectors_required": 3,
@@ -18082,7 +18172,7 @@
   {
     "id": "parser_row_grammar_parse_scope_clause_2c7f0adf",
     "file": "src/parser/row/grammar.rs",
-    "line": 1284,
+    "line": 1291,
     "decision": "self.eat_kw(Keyword::SINCE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18092,7 +18182,7 @@
   {
     "id": "parser_row_grammar_parse_scope_clause_06a4c160",
     "file": "src/parser/row/grammar.rs",
-    "line": 1289,
+    "line": 1296,
     "decision": "self.eat_kw(Keyword::UNTIL)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18102,7 +18192,7 @@
   {
     "id": "parser_row_grammar_parse_scope_clause_6911cfb8",
     "file": "src/parser/row/grammar.rs",
-    "line": 1294,
+    "line": 1301,
     "decision": "since.is_none() && until.is_none()",
     "conditions": 2,
     "vectors_required": 3,
@@ -18112,7 +18202,7 @@
   {
     "id": "parser_row_grammar_scope_bound_4b309dbb",
     "file": "src/parser/row/grammar.rs",
-    "line": 1306,
+    "line": 1313,
     "decision": "match self.peek().kind.clone() {\n            TokenKind::Integer(n) if n >= 0 => {\n                self.advance();\n                u64::try_from(n).unwrap_or(0)\n            }\n            other => {\n                return Err(ParseFail::Invalid {\n                    message: format!(\"expected a non-negative integer, found {other:?}\"),\n                    span: start,\n                });\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18122,7 +18212,7 @@
   {
     "id": "parser_row_grammar_scope_bound_3c4e8be6",
     "file": "src/parser/row/grammar.rs",
-    "line": 1307,
+    "line": 1314,
     "decision": "n >= 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -18132,7 +18222,7 @@
   {
     "id": "parser_row_grammar_scope_bound_08910f25",
     "file": "src/parser/row/grammar.rs",
-    "line": 1319,
+    "line": 1326,
     "decision": "match &unit_tok.kind {\n            TokenKind::Identifier(name) => match_scope_unit(name).ok_or_else(|| {\n                ParseFail::Invalid {\n                    message: format!(\n                        \"unknown SINCE/UNTIL unit '{name}' (expected s/sec/seconds, m/min/minutes, h/hour/hours, d/day/days, lines, or b/kb/mb/gb/bytes)\"\n                    ),\n                    span: unit_tok.span,\n                }\n            })?,\n            other => {\n                return Err(ParseFail::Invalid {\n                    message: format!(\"expected a SINCE/UNTIL unit, found {other:?}\"),\n                    span: unit_tok.span,\n                });\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18142,7 +18232,7 @@
   {
     "id": "parser_row_grammar_parse_with_clause_6adaf4ca",
     "file": "src/parser/row/grammar.rs",
-    "line": 1352,
+    "line": 1359,
     "decision": "self.at_kw(Keyword::RECURSIVE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18152,7 +18242,7 @@
   {
     "id": "parser_row_grammar_parse_with_clause_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 1356,
+    "line": 1363,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18162,7 +18252,7 @@
   {
     "id": "parser_row_grammar_parse_common_table_expr_bffb0a0b",
     "file": "src/parser/row/grammar.rs",
-    "line": 1370,
+    "line": 1377,
     "decision": "self.eat_punct(&TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18172,7 +18262,7 @@
   {
     "id": "parser_row_grammar_parse_common_table_expr_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 1372,
+    "line": 1379,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18182,7 +18272,7 @@
   {
     "id": "parser_row_grammar_parse_common_table_expr_501ed359",
     "file": "src/parser/row/grammar.rs",
-    "line": 1386,
+    "line": 1393,
     "decision": "self.at_kw(Keyword::MATERIALIZED)\n            || (self.at_kw(Keyword::NOT)\n                && matches!(\n                    self.peek_at(1).kind,\n                    TokenKind::Keyword(Keyword::MATERIALIZED)\n                ))",
     "conditions": 3,
     "vectors_required": 4,
@@ -18192,7 +18282,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_7fb35b2e",
     "file": "src/parser/row/grammar.rs",
-    "line": 1416,
+    "line": 1423,
     "decision": "self.at_kw(Keyword::VALUES)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18202,7 +18292,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_35bae04d",
     "file": "src/parser/row/grammar.rs",
-    "line": 1421,
+    "line": 1428,
     "decision": "self.eat_kw(Keyword::DISTINCT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18212,7 +18302,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_05bba3c2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1423,
+    "line": 1430,
     "decision": "self.eat_kw(Keyword::ALL)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18222,7 +18312,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 1430,
+    "line": 1437,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18232,7 +18322,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_8f306afb",
     "file": "src/parser/row/grammar.rs",
-    "line": 1434,
+    "line": 1441,
     "decision": "self.eat_kw(Keyword::FROM)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18242,7 +18332,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_26d8615b",
     "file": "src/parser/row/grammar.rs",
-    "line": 1440,
+    "line": 1447,
     "decision": "self.at_kw(Keyword::WINDOW)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18252,7 +18342,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_0912c65b",
     "file": "src/parser/row/grammar.rs",
-    "line": 1444,
+    "line": 1451,
     "decision": "self.eat_kw(Keyword::WHERE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18262,7 +18352,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_6f209d02",
     "file": "src/parser/row/grammar.rs",
-    "line": 1452,
+    "line": 1459,
     "decision": "self.eat_kw(Keyword::GROUP)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18272,7 +18362,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_e9025c84_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1455,
+    "line": 1462,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18282,7 +18372,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_b6bf67ef",
     "file": "src/parser/row/grammar.rs",
-    "line": 1458,
+    "line": 1465,
     "decision": "self.eat_kw(Keyword::HAVING)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18292,7 +18382,7 @@
   {
     "id": "parser_row_grammar_parse_compound_select_arm_b816a1d3",
     "file": "src/parser/row/grammar.rs",
-    "line": 1461,
+    "line": 1468,
     "decision": "self.at_kw(Keyword::HAVING)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18302,7 +18392,7 @@
   {
     "id": "parser_row_grammar_result_column_9105415c",
     "file": "src/parser/row/grammar.rs",
-    "line": 1482,
+    "line": 1489,
     "decision": "self.eat_punct(&TokenKind::Star)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18312,7 +18402,7 @@
   {
     "id": "parser_row_grammar_result_column_ac148dfc",
     "file": "src/parser/row/grammar.rs",
-    "line": 1487,
+    "line": 1494,
     "decision": "let TokenKind::Identifier(name) = self.peek().kind.clone()",
     "conditions": 1,
     "vectors_required": 2,
@@ -18322,7 +18412,7 @@
   {
     "id": "parser_row_grammar_result_column_16fe68da",
     "file": "src/parser/row/grammar.rs",
-    "line": 1488,
+    "line": 1495,
     "decision": "matches!(self.peek_at(1).kind, TokenKind::Dot)\n                && matches!(self.peek_at(2).kind, TokenKind::Star)",
     "conditions": 2,
     "vectors_required": 3,
@@ -18332,7 +18422,7 @@
   {
     "id": "parser_row_grammar_opt_alias_be646807",
     "file": "src/parser/row/grammar.rs",
-    "line": 1505,
+    "line": 1512,
     "decision": "self.eat_kw(Keyword::AS)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18342,7 +18432,7 @@
   {
     "id": "parser_row_grammar_opt_alias_560664d2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1513,
+    "line": 1520,
     "decision": "matches!(self.peek().kind, TokenKind::String(_))",
     "conditions": 1,
     "vectors_required": 2,
@@ -18352,7 +18442,7 @@
   {
     "id": "parser_row_grammar_opt_alias_ac148dfc",
     "file": "src/parser/row/grammar.rs",
-    "line": 1521,
+    "line": 1528,
     "decision": "let TokenKind::Identifier(name) = self.peek().kind.clone()",
     "conditions": 1,
     "vectors_required": 2,
@@ -18362,7 +18452,7 @@
   {
     "id": "parser_row_grammar_using_columns_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 1534,
+    "line": 1541,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18372,7 +18462,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 1556,
+    "line": 1563,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18382,7 +18472,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_b7543630",
     "file": "src/parser/row/grammar.rs",
-    "line": 1563,
+    "line": 1570,
     "decision": "self.eat_kw(Keyword::ON)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18392,7 +18482,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_e770e3bc",
     "file": "src/parser/row/grammar.rs",
-    "line": 1565,
+    "line": 1572,
     "decision": "self.at_kw(Keyword::USING)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18402,7 +18492,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_5823a159",
     "file": "src/parser/row/grammar.rs",
-    "line": 1587,
+    "line": 1594,
     "decision": "self.at_kw(Keyword::OUTER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18412,7 +18502,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_53992f1c",
     "file": "src/parser/row/grammar.rs",
-    "line": 1591,
+    "line": 1598,
     "decision": "self.eat_kw(Keyword::CROSS)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18422,7 +18512,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_5a82e326",
     "file": "src/parser/row/grammar.rs",
-    "line": 1593,
+    "line": 1600,
     "decision": "natural",
     "conditions": 1,
     "vectors_required": 2,
@@ -18432,7 +18522,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_a14ff044",
     "file": "src/parser/row/grammar.rs",
-    "line": 1597,
+    "line": 1604,
     "decision": "self.at_kw(Keyword::ON)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18442,7 +18532,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_e770e3bc_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1600,
+    "line": 1607,
     "decision": "self.at_kw(Keyword::USING)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18452,7 +18542,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_3e93cffa",
     "file": "src/parser/row/grammar.rs",
-    "line": 1613,
+    "line": 1620,
     "decision": "self.eat_kw(Keyword::LEFT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18462,7 +18552,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_c69361d4",
     "file": "src/parser/row/grammar.rs",
-    "line": 1617,
+    "line": 1624,
     "decision": "self.eat_kw(Keyword::RIGHT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18472,7 +18562,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_fb97edba",
     "file": "src/parser/row/grammar.rs",
-    "line": 1621,
+    "line": 1628,
     "decision": "self.eat_kw(Keyword::FULL)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18482,7 +18572,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_e235e1c5",
     "file": "src/parser/row/grammar.rs",
-    "line": 1625,
+    "line": 1632,
     "decision": "self.eat_kw(Keyword::INNER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18492,7 +18582,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_afc648be",
     "file": "src/parser/row/grammar.rs",
-    "line": 1628,
+    "line": 1635,
     "decision": "self.eat_kw(Keyword::JOIN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18502,7 +18592,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_5a82e326_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1634,
+    "line": 1641,
     "decision": "natural",
     "conditions": 1,
     "vectors_required": 2,
@@ -18512,7 +18602,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_5a82e326_3",
     "file": "src/parser/row/grammar.rs",
-    "line": 1640,
+    "line": 1647,
     "decision": "natural",
     "conditions": 1,
     "vectors_required": 2,
@@ -18522,7 +18612,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_e770e3bc_3",
     "file": "src/parser/row/grammar.rs",
-    "line": 1652,
+    "line": 1659,
     "decision": "self.at_kw(Keyword::USING)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18532,7 +18622,7 @@
   {
     "id": "parser_row_grammar_parse_from_clause_b583ecb6",
     "file": "src/parser/row/grammar.rs",
-    "line": 1671,
+    "line": 1678,
     "decision": "!self.at_kw(Keyword::ON)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18542,7 +18632,7 @@
   {
     "id": "parser_row_grammar_table_ref_dbaa03a3",
     "file": "src/parser/row/grammar.rs",
-    "line": 1695,
+    "line": 1702,
     "decision": "matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18552,7 +18642,7 @@
   {
     "id": "parser_row_grammar_table_ref_5c17547d",
     "file": "src/parser/row/grammar.rs",
-    "line": 1698,
+    "line": 1705,
     "decision": "!self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18562,7 +18652,7 @@
   {
     "id": "parser_row_grammar_table_ref_69f32dff",
     "file": "src/parser/row/grammar.rs",
-    "line": 1720,
+    "line": 1727,
     "decision": "matches!(self.peek().kind, TokenKind::Dot)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18572,7 +18662,7 @@
   {
     "id": "parser_row_grammar_table_ref_32a35312",
     "file": "src/parser/row/grammar.rs",
-    "line": 1725,
+    "line": 1732,
     "decision": "end",
     "conditions": 1,
     "vectors_required": 2,
@@ -18582,7 +18672,7 @@
   {
     "id": "parser_row_grammar_table_ref_e46c4d34",
     "file": "src/parser/row/grammar.rs",
-    "line": 1736,
+    "line": 1743,
     "decision": "self.at_kw(Keyword::INDEXED)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18592,7 +18682,7 @@
   {
     "id": "parser_row_grammar_table_ref_c4a80912",
     "file": "src/parser/row/grammar.rs",
-    "line": 1739,
+    "line": 1746,
     "decision": "self.at_kw(Keyword::NOT)\n            && matches!(self.peek_at(1).kind, TokenKind::Keyword(Keyword::INDEXED))",
     "conditions": 2,
     "vectors_required": 3,
@@ -18602,7 +18692,7 @@
   {
     "id": "parser_row_grammar_table_ref_dbaa03a3_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1744,
+    "line": 1751,
     "decision": "matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18612,7 +18702,7 @@
   {
     "id": "parser_row_grammar_ordering_term_4c01fddf",
     "file": "src/parser/row/grammar.rs",
-    "line": 1757,
+    "line": 1764,
     "decision": "self.eat_kw(Keyword::ASC)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18622,7 +18712,7 @@
   {
     "id": "parser_row_grammar_ordering_term_761732f3",
     "file": "src/parser/row/grammar.rs",
-    "line": 1759,
+    "line": 1766,
     "decision": "self.eat_kw(Keyword::DESC)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18632,7 +18722,7 @@
   {
     "id": "parser_row_grammar_ordering_term_ac34efe0",
     "file": "src/parser/row/grammar.rs",
-    "line": 1764,
+    "line": 1771,
     "decision": "self.eat_kw(Keyword::NULLS)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18642,7 +18732,7 @@
   {
     "id": "parser_row_grammar_ordering_term_55c168f3",
     "file": "src/parser/row/grammar.rs",
-    "line": 1765,
+    "line": 1772,
     "decision": "self.eat_kw(Keyword::FIRST)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18652,7 +18742,7 @@
   {
     "id": "parser_row_grammar_ordering_term_8c70a702",
     "file": "src/parser/row/grammar.rs",
-    "line": 1767,
+    "line": 1774,
     "decision": "self.eat_kw(Keyword::LAST)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18662,7 +18752,7 @@
   {
     "id": "parser_row_grammar_bool_expr_56d55d9f",
     "file": "src/parser/row/grammar.rs",
-    "line": 1801,
+    "line": 1808,
     "decision": "self.at_kw(Keyword::AND)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18672,7 +18762,7 @@
   {
     "id": "parser_row_grammar_bool_expr_b82160ce",
     "file": "src/parser/row/grammar.rs",
-    "line": 1802,
+    "line": 1809,
     "decision": "min_prec > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -18682,7 +18772,7 @@
   {
     "id": "parser_row_grammar_bool_expr_a1d3e530",
     "file": "src/parser/row/grammar.rs",
-    "line": 1807,
+    "line": 1814,
     "decision": "self.at_kw(Keyword::OR)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18692,7 +18782,7 @@
   {
     "id": "parser_row_grammar_bool_expr_b821619d",
     "file": "src/parser/row/grammar.rs",
-    "line": 1808,
+    "line": 1815,
     "decision": "min_prec > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -18702,7 +18792,7 @@
   {
     "id": "parser_row_grammar_not_expr_aeca0d40",
     "file": "src/parser/row/grammar.rs",
-    "line": 1822,
+    "line": 1829,
     "decision": "this.at_kw(Keyword::NOT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18712,7 +18802,7 @@
   {
     "id": "parser_row_grammar_not_expr_028d44e2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1824,
+    "line": 1831,
     "decision": "this.at_kw(Keyword::EXISTS)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18722,7 +18812,7 @@
   {
     "id": "parser_row_grammar_equality_expr_9fd175c2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1843,
+    "line": 1850,
     "decision": "let Some(multi_in) = self.try_tuple_in_subquery()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -18732,7 +18822,7 @@
   {
     "id": "parser_row_grammar_equality_expr_927be6f7",
     "file": "src/parser/row/grammar.rs",
-    "line": 1848,
+    "line": 1855,
     "decision": "match self.peek().kind.clone() {\n                TokenKind::Eq => {\n                    self.advance();\n                    let rhs = self.binary_expr(1)?;\n                    bin(BinaryOp::Eq, lhs, rhs)\n                }\n                TokenKind::Ne => {\n                    self.advance();\n                    let rhs = self.binary_expr(1)?;\n                    bin(BinaryOp::Ne, lhs, rhs)\n                }\n                TokenKind::Keyword(Keyword::IS) => {\n                    self.advance();\n                    let negated = self.eat_kw(Keyword::NOT);\n                    let rhs = self.binary_expr(1)?;\n                    let span = join_span(lhs.span, rhs.span);\n                    Expr {\n                        kind: ExprKind::Is {\n                            lhs: Box::new(lhs),\n                            rhs: Box::new(rhs),\n                            negated,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::ISNULL) => {\n                    let end = self.advance_span();\n                    let span = join_span(lhs.span, end);\n                    Expr {\n                        kind: ExprKind::IsNull {\n                            expr: Box::new(lhs),\n                            negated: false,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::NOTNULL) => {\n                    let end = self.advance_span();\n                    let span = join_span(lhs.span, end);\n                    Expr {\n                        kind: ExprKind::IsNull {\n                            expr: Box::new(lhs),\n                            negated: true,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::BETWEEN) => {\n                    self.advance();\n                    let (lo, hi) = self.between_tail()?;\n                    let span = join_span(lhs.span, hi.span);\n                    Expr {\n                        kind: ExprKind::Between {\n                            expr: Box::new(lhs),\n                            lo: Box::new(lo),\n                            hi: Box::new(hi),\n                            negated: false,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::IN) => {\n                    self.advance();\n                    self.in_tail(lhs, false)?\n                }\n                TokenKind::Keyword(Keyword::LIKE) | TokenKind::Keyword(Keyword::GLOB) => {\n                    let glob = self.at_kw(Keyword::GLOB);\n                    self.advance();\n                    self.like_tail(lhs, glob, false)?\n                }\n                TokenKind::Keyword(Keyword::NOT) => match self.peek_at(1).kind.clone() {\n                    TokenKind::Null => {\n                        self.advance();\n                        let end = self.advance_span();\n                        let span = join_span(lhs.span, end);\n                        Expr {\n                            kind: ExprKind::IsNull {\n                                expr: Box::new(lhs),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::BETWEEN) => {\n                        self.advance();\n                        self.advance();\n                        let (lo, hi) = self.between_tail()?;\n                        let span = join_span(lhs.span, hi.span);\n                        Expr {\n                            kind: ExprKind::Between {\n                                expr: Box::new(lhs),\n                                lo: Box::new(lo),\n                                hi: Box::new(hi),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::IN) => {\n                        self.advance();\n                        self.advance();\n                        self.in_tail(lhs, true)?\n                    }\n                    TokenKind::Keyword(Keyword::LIKE) | TokenKind::Keyword(Keyword::GLOB) => {\n                        let glob =\n                            matches!(self.peek_at(1).kind, TokenKind::Keyword(Keyword::GLOB));\n                        self.advance();\n                        self.advance();\n                        self.like_tail(lhs, glob, true)?\n                    }\n                    _ => break,\n                },\n                _ => break,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18742,7 +18832,7 @@
   {
     "id": "parser_row_grammar_equality_expr_bd91394a",
     "file": "src/parser/row/grammar.rs",
-    "line": 1918,
+    "line": 1925,
     "decision": "match self.peek_at(1).kind.clone() {\n                    TokenKind::Null => {\n                        self.advance();\n                        let end = self.advance_span();\n                        let span = join_span(lhs.span, end);\n                        Expr {\n                            kind: ExprKind::IsNull {\n                                expr: Box::new(lhs),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::BETWEEN) => {\n                        self.advance();\n                        self.advance();\n                        let (lo, hi) = self.between_tail()?;\n                        let span = join_span(lhs.span, hi.span);\n                        Expr {\n                            kind: ExprKind::Between {\n                                expr: Box::new(lhs),\n                                lo: Box::new(lo),\n                                hi: Box::new(hi),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::IN) => {\n                        self.advance();\n                        self.advance();\n                        self.in_tail(lhs, true)?\n                    }\n                    TokenKind::Keyword(Keyword::LIKE) | TokenKind::Keyword(Keyword::GLOB) => {\n                        let glob =\n                            matches!(self.peek_at(1).kind, TokenKind::Keyword(Keyword::GLOB));\n                        self.advance();\n                        self.advance();\n                        self.like_tail(lhs, glob, true)?\n                    }\n                    _ => break,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18752,7 +18842,7 @@
   {
     "id": "parser_row_grammar_exists_tail_5c17547d",
     "file": "src/parser/row/grammar.rs",
-    "line": 1980,
+    "line": 1987,
     "decision": "!self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18762,7 +18852,7 @@
   {
     "id": "parser_row_grammar_exists_tail_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 1984,
+    "line": 1991,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::UNION)\n                | TokenKind::Keyword(Keyword::INTERSECT)\n                | TokenKind::Keyword(Keyword::EXCEPT)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -18772,7 +18862,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_48731267",
     "file": "src/parser/row/grammar.rs",
-    "line": 2019,
+    "line": 2026,
     "decision": "match self.tokens.get(idx) {\n                Some(t) => &t.kind,\n                None => return false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18782,7 +18872,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_b688b62b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2023,
+    "line": 2030,
     "decision": "match kind {\n                TokenKind::Eof => return false,\n                TokenKind::LParen => depth = depth.saturating_add(1),\n                TokenKind::RParen => {\n                    if depth == 0 {\n                        let after_in = matches!(\n                            self.tokens.get(idx.saturating_add(1)).map(|t| &t.kind),\n                            Some(TokenKind::Keyword(Keyword::IN))\n                        );\n                        let after_not_in = matches!(\n                            self.tokens.get(idx.saturating_add(1)).map(|t| &t.kind),\n                            Some(TokenKind::Keyword(Keyword::NOT))\n                        ) && matches!(\n                            self.tokens.get(idx.saturating_add(2)).map(|t| &t.kind),\n                            Some(TokenKind::Keyword(Keyword::IN))\n                        );\n                        return saw_top_comma && (after_in || after_not_in);\n                    }\n                    depth = depth.saturating_sub(1);\n                }\n                TokenKind::Comma if depth == 0 => saw_top_comma = true,\n                _ => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18792,7 +18882,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_42bcd25d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2043,
+    "line": 2050,
     "decision": "depth == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -18802,7 +18892,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_42bcd25d_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 2027,
+    "line": 2034,
     "decision": "depth == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -18812,7 +18902,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_517114c6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2062,
+    "line": 2069,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen) || !self.looks_like_tuple_in()",
     "conditions": 2,
     "vectors_required": 3,
@@ -18822,7 +18912,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_91decef1",
     "file": "src/parser/row/grammar.rs",
-    "line": 2068,
+    "line": 2075,
     "decision": "match self.expr_list() {\n            Ok(list) => list,\n            Err(_) => {\n                self.pos = start_pos;\n                return Ok(None);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18832,7 +18922,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_2e7a8ba6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2075,
+    "line": 2082,
     "decision": "self.expect_punct(TokenKind::RParen, \"')'\").is_err()",
     "conditions": 1,
     "vectors_required": 2,
@@ -18842,7 +18932,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_989c1966",
     "file": "src/parser/row/grammar.rs",
-    "line": 2079,
+    "line": 2086,
     "decision": "self.at_kw(Keyword::IN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18852,7 +18942,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_90cc7e65",
     "file": "src/parser/row/grammar.rs",
-    "line": 2082,
+    "line": 2089,
     "decision": "self.at_kw(Keyword::NOT)\n            && matches!(self.peek_at(1).kind, TokenKind::Keyword(Keyword::IN))",
     "conditions": 2,
     "vectors_required": 3,
@@ -18862,7 +18952,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_7a03b6fa",
     "file": "src/parser/row/grammar.rs",
-    "line": 2092,
+    "line": 2099,
     "decision": "list.len() < 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -18872,7 +18962,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_5c17547d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2097,
+    "line": 2104,
     "decision": "!self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18882,7 +18972,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2102,
+    "line": 2109,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::UNION)\n                | TokenKind::Keyword(Keyword::INTERSECT)\n                | TokenKind::Keyword(Keyword::EXCEPT)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -18892,7 +18982,7 @@
   {
     "id": "parser_row_grammar_in_tail_849b6473",
     "file": "src/parser/row/grammar.rs",
-    "line": 2123,
+    "line": 2130,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18902,7 +18992,7 @@
   {
     "id": "parser_row_grammar_in_tail_2a50be6e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2127,
+    "line": 2134,
     "decision": "self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18912,7 +19002,7 @@
   {
     "id": "parser_row_grammar_in_tail_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2129,
+    "line": 2136,
     "decision": "matches!(\n                self.peek().kind,\n                TokenKind::Keyword(Keyword::UNION)\n                    | TokenKind::Keyword(Keyword::INTERSECT)\n                    | TokenKind::Keyword(Keyword::EXCEPT)\n            )",
     "conditions": 1,
     "vectors_required": 2,
@@ -18922,7 +19012,7 @@
   {
     "id": "parser_row_grammar_in_tail_2629d5b7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2149,
+    "line": 2156,
     "decision": "matches!(self.peek().kind, TokenKind::RParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18932,7 +19022,7 @@
   {
     "id": "parser_row_grammar_like_tail_fe8c0a5a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2169,
+    "line": 2176,
     "decision": "self.eat_kw(Keyword::ESCAPE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18942,7 +19032,7 @@
   {
     "id": "parser_row_grammar_binary_expr_4bd4b69d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2204,
+    "line": 2211,
     "decision": "let Some((op, prec)) = Self::binary_op(&self.peek().kind)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18952,7 +19042,7 @@
   {
     "id": "parser_row_grammar_binary_expr_41e08d0e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2205,
+    "line": 2212,
     "decision": "prec < min_prec",
     "conditions": 1,
     "vectors_required": 2,
@@ -18962,7 +19052,7 @@
   {
     "id": "parser_row_grammar_binary_op_628a1458",
     "file": "src/parser/row/grammar.rs",
-    "line": 2216,
+    "line": 2223,
     "decision": "match kind {\n            TokenKind::Lt => (BinaryOp::Lt, 1),\n            TokenKind::Le => (BinaryOp::Le, 1),\n            TokenKind::Gt => (BinaryOp::Gt, 1),\n            TokenKind::Ge => (BinaryOp::Ge, 1),\n            TokenKind::BitAnd => (BinaryOp::BitAnd, 2),\n            TokenKind::BitOr => (BinaryOp::BitOr, 2),\n            TokenKind::Shl => (BinaryOp::Shl, 2),\n            TokenKind::Shr => (BinaryOp::Shr, 2),\n            TokenKind::Plus => (BinaryOp::Add, 3),\n            TokenKind::Minus => (BinaryOp::Sub, 3),\n            TokenKind::Star => (BinaryOp::Mul, 4),\n            TokenKind::Slash => (BinaryOp::Div, 4),\n            TokenKind::Percent => (BinaryOp::Mod, 4),\n            TokenKind::Concat => (BinaryOp::Concat, 5),\n            _ => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18972,7 +19062,7 @@
   {
     "id": "parser_row_grammar_arrow_expr_505e4cbe",
     "file": "src/parser/row/grammar.rs",
-    "line": 2240,
+    "line": 2247,
     "decision": "matches!(self.peek().kind, TokenKind::Arrow | TokenKind::ArrowArrow)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18982,7 +19072,7 @@
   {
     "id": "parser_row_grammar_collate_expr_4a6546b9",
     "file": "src/parser/row/grammar.rs",
-    "line": 2248,
+    "line": 2255,
     "decision": "self.eat_kw(Keyword::COLLATE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18992,7 +19082,7 @@
   {
     "id": "parser_row_grammar_unary_expr_284bde8c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2264,
+    "line": 2271,
     "decision": "match this.peek().kind {\n                TokenKind::Plus => Some(UnaryOp::Plus),\n                TokenKind::Minus => Some(UnaryOp::Minus),\n                TokenKind::BitNot => Some(UnaryOp::BitNot),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19002,7 +19092,7 @@
   {
     "id": "parser_row_grammar_unary_expr_00220ef9",
     "file": "src/parser/row/grammar.rs",
-    "line": 2270,
+    "line": 2277,
     "decision": "let Some(op) = op",
     "conditions": 1,
     "vectors_required": 2,
@@ -19012,7 +19102,7 @@
   {
     "id": "parser_row_grammar_unary_expr_97843e2a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2279,
+    "line": 2286,
     "decision": "matches!(op, UnaryOp::Minus)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19022,7 +19112,7 @@
   {
     "id": "parser_row_grammar_unary_expr_6cf76295",
     "file": "src/parser/row/grammar.rs",
-    "line": 2280,
+    "line": 2287,
     "decision": "let ExprKind::Literal(Literal::Float(f)) = inner.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -19032,7 +19122,7 @@
   {
     "id": "parser_row_grammar_unary_expr_77230782",
     "file": "src/parser/row/grammar.rs",
-    "line": 2281,
+    "line": 2288,
     "decision": "f == 9_223_372_036_854_775_808.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -19042,7 +19132,7 @@
   {
     "id": "parser_row_grammar_primary_expr_5b6da293",
     "file": "src/parser/row/grammar.rs",
-    "line": 2303,
+    "line": 2310,
     "decision": "match tok.kind {\n            TokenKind::Integer(v) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Integer(v)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Float(v) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Float(v)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::String(s) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Str(s)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Blob(b) => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Blob(*b)),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Null => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Null),\n                    span: tok.span,\n                })\n            }\n            TokenKind::True => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::True),\n                    span: tok.span,\n                })\n            }\n            TokenKind::False => {\n                self.advance();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::False),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Param(p) => {\n                self.advance();\n                let kind = match *p {\n                    Param::Anonymous => ParamKind::Anonymous,\n                    Param::Numbered(n) => ParamKind::Numbered(n),\n                    Param::Colon(s) => ParamKind::Colon(s),\n                    Param::At(s) => ParamKind::At(s),\n                    Param::Dollar(s) => ParamKind::Dollar(s),\n                };\n                Ok(Expr {\n                    kind: ExprKind::Param(kind),\n                    span: tok.span,\n                })\n            }\n            TokenKind::Keyword(Keyword::CURRENT_TIME)\n            | TokenKind::Keyword(Keyword::CURRENT_DATE)\n            | TokenKind::Keyword(Keyword::CURRENT_TIMESTAMP) => {\n                self.unsupported(\"CURRENT_TIME/CURRENT_DATE/CURRENT_TIMESTAMP not yet supported\")\n            }\n            TokenKind::Keyword(Keyword::CASE) => self.case_expr(),\n            TokenKind::Keyword(Keyword::CAST) => self.cast_expr(),\n            TokenKind::Keyword(Keyword::EXISTS) => {\n                let start = tok.span;\n                self.advance();\n                self.exists_tail(start, false)\n            }\n            TokenKind::Identifier(name) => {\n                self.advance();\n                if matches!(self.peek().kind, TokenKind::LParen) {\n                    return self.function_call(name, tok.span);\n                }\n                let mut parts = vec![name];\n                while matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3 {\n                    self.advance();\n                    let (part, _) = self.identifier()?;\n                    parts.push(part);\n                }\n                let end = self\n                    .tokens\n                    .get(self.pos.saturating_sub(1))\n                    .map_or(tok.span, |t| t.span);\n                let span = join_span(tok.span, end);\n                // Exactly one, two or three parts (db-core#232): the old\n                // wildcard arm also matched `a.b.c.d`, silently dropping\n                // the trailing parts, and `unwrap_or_default()` could\n                // mint an empty identifier. Moved out of `parts` by\n                // value (db-core#486: `parts.as_slice()` forced a\n                // `.clone()` of every identifier `String` here -- a\n                // second heap copy on top of the one `self.identifier()`/\n                // the `Identifier(name)` match already produced --\n                // instead of just moving the `String`s `parts` already\n                // owns.\n                let len = parts.len();\n                let mut parts = parts.into_iter();\n                let kind = match len {\n                    1..=3 => {\n                        let catalog = if len == 3 { parts.next() } else { None };\n                        let table = if len >= 2 { parts.next() } else { None };\n                        let Some(name) = parts.next() else {\n                            return self\n                                .invalid(\"a column reference has at most three dotted parts\");\n                        };\n                        ExprKind::Column {\n                            catalog,\n                            table,\n                            name,\n                        }\n                    }\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                };\n                Ok(Expr { kind, span })\n            }\n            // SQLite treats most keywords as usable function names when\n            // followed by `(` (e.g. `replace(...)`, `glob(...)`) — only\n            // the handful matched above (CASE/CAST/EXISTS/CURRENT_*)\n            // are true reserved words in expression position.\n            TokenKind::Keyword(kw) if matches!(self.peek_at(1).kind, TokenKind::LParen) => {\n                self.advance();\n                self.function_call(format!(\"{kw:?}\"), tok.span)\n            }\n            TokenKind::LParen => {\n                self.advance();\n                if self.at_kw(Keyword::SELECT) {\n                    let subquery = self.parse_select_stmt()?;\n                    if matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    ) {\n                        return self.unsupported(\n                            \"compound SELECT (UNION/INTERSECT/EXCEPT) not yet supported\",\n                        );\n                    }\n                    let end = self.expect_punct(TokenKind::RParen, \"')' to close subquery\")?;\n                    let span = join_span(tok.span, end);\n                    return Ok(Expr {\n                        kind: ExprKind::Subquery(Box::new(subquery)),\n                        span,\n                    });\n                }\n                let inner = self.expr()?;\n                let end = self.expect_punct(TokenKind::RParen, \"')' to close expression\")?;\n                let span = join_span(tok.span, end);\n                Ok(Expr {\n                    kind: ExprKind::Paren(Box::new(inner)),\n                    span,\n                })\n            }\n            other => Err(ParseFail::Invalid {\n                message: format!(\"expected column or expression, found {other:?}\"),\n                span: tok.span,\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19052,7 +19142,7 @@
   {
     "id": "parser_row_grammar_primary_expr_d95902fa",
     "file": "src/parser/row/grammar.rs",
-    "line": 2429,
+    "line": 2436,
     "decision": "matches!(self.peek_at(1).kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19062,7 +19152,7 @@
   {
     "id": "parser_row_grammar_primary_expr_699e0b5a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2355,
+    "line": 2362,
     "decision": "match *p {\n                    Param::Anonymous => ParamKind::Anonymous,\n                    Param::Numbered(n) => ParamKind::Numbered(n),\n                    Param::Colon(s) => ParamKind::Colon(s),\n                    Param::At(s) => ParamKind::At(s),\n                    Param::Dollar(s) => ParamKind::Dollar(s),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19072,7 +19162,7 @@
   {
     "id": "parser_row_grammar_primary_expr_dbaa03a3",
     "file": "src/parser/row/grammar.rs",
-    "line": 2381,
+    "line": 2388,
     "decision": "matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19082,7 +19172,7 @@
   {
     "id": "parser_row_grammar_primary_expr_c99e92d7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2385,
+    "line": 2392,
     "decision": "matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3",
     "conditions": 2,
     "vectors_required": 3,
@@ -19092,7 +19182,7 @@
   {
     "id": "parser_row_grammar_primary_expr_cca4606b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2407,
+    "line": 2414,
     "decision": "match len {\n                    1..=3 => {\n                        let catalog = if len == 3 { parts.next() } else { None };\n                        let table = if len >= 2 { parts.next() } else { None };\n                        let Some(name) = parts.next() else {\n                            return self\n                                .invalid(\"a column reference has at most three dotted parts\");\n                        };\n                        ExprKind::Column {\n                            catalog,\n                            table,\n                            name,\n                        }\n                    }\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19102,7 +19192,7 @@
   {
     "id": "parser_row_grammar_primary_expr_c2cb254b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2409,
+    "line": 2416,
     "decision": "len == 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -19112,7 +19202,7 @@
   {
     "id": "parser_row_grammar_primary_expr_1511b2a6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2410,
+    "line": 2417,
     "decision": "len >= 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -19122,7 +19212,7 @@
   {
     "id": "parser_row_grammar_primary_expr_2a50be6e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2435,
+    "line": 2442,
     "decision": "self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19132,7 +19222,7 @@
   {
     "id": "parser_row_grammar_primary_expr_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2437,
+    "line": 2444,
     "decision": "matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    )",
     "conditions": 1,
     "vectors_required": 2,
@@ -19142,7 +19232,7 @@
   {
     "id": "parser_row_grammar_function_call_9105415c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2472,
+    "line": 2479,
     "decision": "self.eat_punct(&TokenKind::Star)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19152,7 +19242,7 @@
   {
     "id": "parser_row_grammar_function_call_2629d5b7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2474,
+    "line": 2481,
     "decision": "matches!(self.peek().kind, TokenKind::RParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19162,7 +19252,7 @@
   {
     "id": "parser_row_grammar_function_tail_3403c85a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2517,
+    "line": 2524,
     "decision": "self.eat_kw(Keyword::RANGE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19172,7 +19262,7 @@
   {
     "id": "parser_row_grammar_function_tail_f75851c6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2522,
+    "line": 2529,
     "decision": "let Some(r) = &range",
     "conditions": 1,
     "vectors_required": 2,
@@ -19182,7 +19272,7 @@
   {
     "id": "parser_row_grammar_function_tail_2258eb7c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2525,
+    "line": 2532,
     "decision": "self.eat_kw(Keyword::FILTER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19192,7 +19282,7 @@
   {
     "id": "parser_row_grammar_function_tail_87133733",
     "file": "src/parser/row/grammar.rs",
-    "line": 2534,
+    "line": 2541,
     "decision": "self.eat_kw(Keyword::OVER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19202,7 +19292,7 @@
   {
     "id": "parser_row_grammar_function_tail_b001c5a8",
     "file": "src/parser/row/grammar.rs",
-    "line": 2541,
+    "line": 2548,
     "decision": "filter.is_none() && over.is_none() && range.is_none()",
     "conditions": 3,
     "vectors_required": 4,
@@ -19212,7 +19302,7 @@
   {
     "id": "parser_row_grammar_window_def_849b6473",
     "file": "src/parser/row/grammar.rs",
-    "line": 2558,
+    "line": 2565,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19222,7 +19312,7 @@
   {
     "id": "parser_row_grammar_window_def_c4d1976d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2566,
+    "line": 2573,
     "decision": "self.eat_kw(Keyword::PARTITION)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19232,7 +19322,7 @@
   {
     "id": "parser_row_grammar_window_def_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2569,
+    "line": 2576,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19242,7 +19332,7 @@
   {
     "id": "parser_row_grammar_window_def_980f2400",
     "file": "src/parser/row/grammar.rs",
-    "line": 2575,
+    "line": 2582,
     "decision": "self.eat_kw(Keyword::ORDER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19252,7 +19342,7 @@
   {
     "id": "parser_row_grammar_window_def_e9025c84_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 2578,
+    "line": 2585,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19262,7 +19352,7 @@
   {
     "id": "parser_row_grammar_window_def_6907c266",
     "file": "src/parser/row/grammar.rs",
-    "line": 2583,
+    "line": 2590,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::ROWS)\n                | TokenKind::Keyword(Keyword::RANGE)\n                | TokenKind::Keyword(Keyword::GROUPS)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -19272,7 +19362,7 @@
   {
     "id": "parser_row_grammar_case_expr_d359b45c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2604,
+    "line": 2611,
     "decision": "self.at_kw(Keyword::WHEN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19282,7 +19372,7 @@
   {
     "id": "parser_row_grammar_case_expr_47ae9dae",
     "file": "src/parser/row/grammar.rs",
-    "line": 2610,
+    "line": 2617,
     "decision": "self.eat_kw(Keyword::WHEN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19292,7 +19382,7 @@
   {
     "id": "parser_row_grammar_case_expr_2c73542b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2616,
+    "line": 2623,
     "decision": "whens.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -19302,7 +19392,7 @@
   {
     "id": "parser_row_grammar_case_expr_9ca297d5",
     "file": "src/parser/row/grammar.rs",
-    "line": 2619,
+    "line": 2626,
     "decision": "self.eat_kw(Keyword::ELSE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19312,7 +19402,7 @@
   {
     "id": "parser_row_grammar_type_name_ac37c31a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2655,
+    "line": 2662,
     "decision": "let TokenKind::Identifier(_) = self.peek().kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -19322,7 +19412,7 @@
   {
     "id": "parser_row_grammar_type_name_bffb0a0b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2660,
+    "line": 2667,
     "decision": "self.eat_punct(&TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19332,7 +19422,7 @@
   {
     "id": "parser_row_grammar_type_name_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2664,
+    "line": 2671,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19342,7 +19432,7 @@
   {
     "id": "parser_row_grammar_number_literal_84884d30",
     "file": "src/parser/row/grammar.rs",
-    "line": 2676,
+    "line": 2683,
     "decision": "match self.peek().kind.clone() {\n            TokenKind::Integer(v) => {\n                self.advance();\n                Ok(v.to_string())\n            }\n            other => {\n                let span = self.peek().span;\n                Err(ParseFail::Invalid {\n                    message: format!(\"expected number, found {other:?}\"),\n                    span,\n                })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19352,7 +19442,7 @@
   {
     "id": "parser_row_grammar_expr_list_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2693,
+    "line": 2700,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -19362,7 +19452,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_e4a5bc85",
     "file": "src/parser/row/grammar.rs",
-    "line": 3384,
+    "line": 3391,
     "decision": "match crate::parser::row::parse_select(sql) {\n            crate::parser::row::ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19372,7 +19462,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_20abd9ee",
     "file": "src/parser/row/grammar.rs",
-    "line": 3388,
+    "line": 3395,
     "decision": "match &select.columns[0] {\n            ResultColumn::Expr { expr, .. } => match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            },\n            other => panic!(\"expected an expression column, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19382,7 +19472,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_0bdb902e",
     "file": "src/parser/row/grammar.rs",
-    "line": 3389,
+    "line": 3396,
     "decision": "match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -19392,7 +19482,7 @@
   {
     "id": "parser_row_grammar_parse_select_stmt_aa58f6cd",
     "file": "src/parser/row/grammar.rs",
-    "line": 3453,
+    "line": 3460,
     "decision": "self.depth > MAX_EXPR_DEPTH",
     "conditions": 1,
     "vectors_required": 2,

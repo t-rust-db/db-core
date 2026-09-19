@@ -89,6 +89,14 @@ pub(crate) fn open_index_cursors(
 /// entries are being built — callers use this both pre-`Delete` (cursor
 /// already there) and post-`Insert` (after a `SeekRowid` back onto the
 /// just-written row).
+///
+/// `touched` gates which indexes get maintenance emitted at all:
+/// `None` (the `INSERT`/`DELETE` callers) always maintains every index —
+/// a fresh row or a fully-removed row touches every index by definition.
+/// `Some(flags)` (`UPDATE`, #524) skips index `i` entirely when
+/// `flags[i]` is false, i.e. the `SET` clause doesn't touch that index's
+/// key — no reason to pay a b-tree delete+insert on an index whose
+/// on-disk key is provably unchanged.
 pub(crate) fn emit_index_key_ops(
     em: &mut Emitter,
     reg: &mut RegAlloc,
@@ -96,8 +104,12 @@ pub(crate) fn emit_index_key_ops(
     table_cursor: i32,
     first_index_cursor: i32,
     opcode: Opcode,
+    touched: Option<&[bool]>,
 ) -> Result<(), CodegenError> {
     for (i, index) in schema.indexes.iter().enumerate() {
+        if touched.is_some_and(|flags| flags.get(i) == Some(&false)) {
+            continue;
+        }
         let index_cursor = first_index_cursor.saturating_add(i32::try_from(i).unwrap_or(0));
         let mut start = None;
         for col in &index.columns {
@@ -159,6 +171,7 @@ pub(crate) fn emit_index_key_ops(
 /// `IdxDelete` (removing a *different*, already-on-disk row's stale
 /// entries) has no such register run to reuse and stays on
 /// [`emit_index_key_ops`].
+/// `touched` has the same meaning as [`emit_index_key_ops`]'s parameter.
 pub(crate) fn emit_index_key_ops_from_regs(
     em: &mut Emitter,
     reg: &mut RegAlloc,
@@ -166,8 +179,12 @@ pub(crate) fn emit_index_key_ops_from_regs(
     col_regs: &[i32],
     rowid_reg: i32,
     first_index_cursor: i32,
+    touched: Option<&[bool]>,
 ) -> Result<(), CodegenError> {
     for (i, index) in schema.indexes.iter().enumerate() {
+        if touched.is_some_and(|flags| flags.get(i) == Some(&false)) {
+            continue;
+        }
         let index_cursor = first_index_cursor.saturating_add(i32::try_from(i).unwrap_or(0));
         let mut start = None;
         for col in &index.columns {
@@ -297,6 +314,7 @@ mod tests {
             0,
             1,
             Opcode::IdxInsert,
+            None,
         )
         .unwrap_err();
         assert!(matches!(e, CodegenError::Unsupported { .. }), "{e:?}");

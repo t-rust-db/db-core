@@ -1032,7 +1032,27 @@ pub fn parse_explain(sql_text: &str) -> Result<(Explain, Select)> {
             } else {
                 Explain::Opcodes
             };
-            let mut select = *explain.select;
+            // This entry point's return type (`Select`) predates #524's
+            // `EXPLAIN UPDATE`/`EXPLAIN DELETE` widening — `column-rs`'s
+            // analytics subset has no UPDATE/DELETE codegen to hand an
+            // `Update`/`Delete` body to, so those remain `Unsupported`
+            // here (row's own `parse_explain`/`compile_statement` do
+            // support them).
+            let mut select = match explain.body {
+                crate::parser::ast::ExplainBody::Select(select) => *select,
+                crate::parser::ast::ExplainBody::Update(update) => {
+                    return Err(unsupported(
+                        update.span,
+                        "EXPLAIN UPDATE is not supported here".to_string(),
+                    ))
+                }
+                crate::parser::ast::ExplainBody::Delete(delete) => {
+                    return Err(unsupported(
+                        delete.span,
+                        "EXPLAIN DELETE is not supported here".to_string(),
+                    ))
+                }
+            };
             validate_select(&mut select)?;
             Ok((form, select))
         }
@@ -1092,6 +1112,16 @@ mod tests {
 
         let (explain, _) = parse_explain("SELECT id FROM orders").unwrap();
         assert_eq!(explain, Explain::None);
+    }
+
+    // #524: this entry point's return type is `Select`-only —
+    // `column-rs`'s analytics subset has no UPDATE/DELETE codegen — so
+    // an `EXPLAIN UPDATE`/`EXPLAIN DELETE` body is `Unsupported` here
+    // even though `row`'s own `parse_explain` now accepts it.
+    #[test]
+    fn parse_explain_rejects_update_and_delete_bodies() {
+        assert!(parse_explain("EXPLAIN UPDATE orders SET id = 1").is_err());
+        assert!(parse_explain("EXPLAIN DELETE FROM orders").is_err());
     }
 
     #[test]

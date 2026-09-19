@@ -13,18 +13,20 @@
 //! rowid, since a `SET`-assignment to the rowid-alias column can change
 //! the row's key.
 //!
-//! Known simplifications (deferred to follow-up tickets, not chased
+//! Known simplification (deferred to a follow-up ticket, not chased
 //! here): `DEFAULT` is not substituted for an assigned `NULL` (`SET col
 //! = DEFAULT` isn't a thing this parser accepts yet, and an explicit
 //! `SET col = NULL` on a NOT NULL column is correctly a violation, not
 //! a default substitution — unlike `INSERT ... OR REPLACE`, `UPDATE`
 //! has no "explicit NULL means take the default" convention in stock
-//! SQLite either), and no "skip unchanged indexed columns" optimization
-//! — every index is fully rebuilt (delete old key, insert new key) on
-//! every matched row regardless of whether the `SET` clause actually
-//! touched that index's columns. All correctness-neutral;
-//! `insert.rs`/`select.rs` already document precedent for the
-//! index-optimization simplification.
+//! SQLite either). Correctness-neutral.
+//!
+//! #524: an index is only rebuilt (delete old key, insert new key) on a
+//! matched row when the `SET` clause actually assigns one of its
+//! columns (or the rowid, which is part of every index's key) —
+//! `index_touched` in [`compile_update_with_catalog`], threaded into
+//! [`emit_update_row_body`]'s `emit_index_key_ops`/
+//! `emit_index_key_ops_from_regs` calls.
 //!
 //! #336: `WHERE rowid = <int literal|param>` (or the table's `INTEGER
 //! PRIMARY KEY` rowid-alias column) compiles to `SeekRowid` instead of
@@ -114,6 +116,28 @@ pub fn compile_update_with_catalog(
         }
     }
 
+    // #524: an index whose key is provably unchanged by this statement
+    // doesn't need its b-tree entry rebuilt per matched row. A
+    // reassigned rowid changes every index's key (rowid is the last key
+    // component), so it forces every index touched; otherwise an index
+    // is touched only if the `SET` clause assigns one of its columns. An
+    // `IndexedColumn` whose name isn't a plain column (an expression
+    // index) can't be proven untouched, so it's conservatively treated
+    // as touched — same reasoning `range_seek_touches_scanned_index`
+    // below already applies to the single index a range-seek scans.
+    let rowid_reassigned = rowid_alias.and_then(|idx| assigned.get(idx).copied().flatten());
+    let index_touched: Vec<bool> = schema
+        .indexes
+        .iter()
+        .map(|index| {
+            rowid_reassigned.is_some()
+                || index.columns.iter().any(|c| {
+                    column_index(schema, &c.name)
+                        .is_none_or(|idx| assigned.get(idx).is_some_and(Option::is_some))
+                })
+        })
+        .collect();
+
     let mut em = Emitter::new();
     let mut reg = RegAlloc::new();
 
@@ -180,6 +204,7 @@ pub fn compile_update_with_catalog(
             action,
             rowid_alias,
             &assigned,
+            &index_touched,
             end_label,
         )?;
         em.place(end_label);
@@ -334,6 +359,7 @@ pub fn compile_update_with_catalog(
                         action,
                         rowid_alias,
                         &assigned,
+                        &index_touched,
                         row_skip,
                     )
                 },
@@ -371,6 +397,7 @@ pub fn compile_update_with_catalog(
             action,
             rowid_alias,
             &assigned,
+            &index_touched,
             row_skip,
         )?;
 
@@ -405,6 +432,7 @@ pub fn compile_update_with_catalog(
             action,
             rowid_alias,
             &assigned,
+            &index_touched,
             row_skip,
         )?;
 
@@ -440,6 +468,7 @@ fn emit_update_row_body(
     action: ConflictAction,
     rowid_alias: Option<usize>,
     assigned: &[Option<&Expr>],
+    index_touched: &[bool],
     row_skip: Label,
 ) -> Result<(), CodegenError> {
     // Every value the new row needs — including a possibly-reassigned
@@ -602,6 +631,7 @@ fn emit_update_row_body(
         TABLE_CURSOR,
         FIRST_INDEX_CURSOR,
         Opcode::IdxDelete,
+        Some(index_touched),
     )?;
     em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));
     em.emit(Instruction::new(
@@ -615,7 +645,15 @@ fn emit_update_row_body(
         // The new row's values are already sitting in `col_regs`/
         // `rowid_reg` — build index keys from those directly instead of
         // seeking `TABLE_CURSOR` back onto the just-written row.
-        emit_index_key_ops_from_regs(em, reg, schema, &col_regs, rowid_reg, FIRST_INDEX_CURSOR)?;
+        emit_index_key_ops_from_regs(
+            em,
+            reg,
+            schema,
+            &col_regs,
+            rowid_reg,
+            FIRST_INDEX_CURSOR,
+            Some(index_touched),
+        )?;
     }
 
     Ok(())
@@ -704,5 +742,81 @@ mod mcdc_vectors {
             !has(&p, Opcode::IdxRowid) && !has(&p, Opcode::OpenEphemeral),
             "{p:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod index_skip_tests {
+    //! #524: `UPDATE` shouldn't rebuild an index whose columns the `SET`
+    //! clause never touches.
+
+    use super::compile_update_with_catalog;
+    use crate::codegen::row::{IndexSchema, IndexedColumn, TableSchema};
+    use crate::parser::row::{parse_update, ParseOutcome};
+    use crate::vm::row::{Opcode, Program};
+
+    fn table_with_index(root_page: u32, columns: &[&str], index_column: &str) -> TableSchema {
+        TableSchema {
+            name: "t".to_string(),
+            root_page,
+            columns: columns.iter().map(|c| (*c).to_string()).collect(),
+            column_types: columns.iter().map(|_| "INTEGER".to_string()).collect(),
+            sql: format!("CREATE TABLE t ({})", columns.join(", ")),
+            indexes: vec![IndexSchema {
+                name: "ix".to_string(),
+                root_page: root_page + 1,
+                unique: false,
+                columns: vec![IndexedColumn {
+                    name: index_column.to_string(),
+                    desc: false,
+                    collation: Default::default(),
+                }],
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn compile(sql: &str, schema: &TableSchema) -> Program {
+        let update = match parse_update(sql) {
+            ParseOutcome::Accepted(update) => *update,
+            other => panic!("{sql:?} must parse, got {other:?}"),
+        };
+        compile_update_with_catalog(&update, schema, std::slice::from_ref(schema)).unwrap()
+    }
+
+    fn count(program: &Program, opcode: Opcode) -> usize {
+        program
+            .instructions
+            .iter()
+            .filter(|i| i.opcode == opcode)
+            .count()
+    }
+
+    #[test]
+    fn update_skips_index_maintenance_when_set_does_not_touch_index_column() {
+        // `x` (the index's column) is never assigned — no IdxDelete/IdxInsert.
+        let schema = table_with_index(2, &["x", "n"], "x");
+        let p = compile("UPDATE t SET n = n + 1 WHERE x > 5", &schema);
+        assert_eq!(count(&p, Opcode::IdxDelete), 0, "{p:?}");
+        assert_eq!(count(&p, Opcode::IdxInsert), 0, "{p:?}");
+    }
+
+    #[test]
+    fn update_maintains_index_when_set_touches_index_column() {
+        let schema = table_with_index(2, &["x", "n"], "x");
+        let p = compile("UPDATE t SET x = x + 1 WHERE x > 5", &schema);
+        assert_eq!(count(&p, Opcode::IdxDelete), 1, "{p:?}");
+        assert_eq!(count(&p, Opcode::IdxInsert), 1, "{p:?}");
+    }
+
+    #[test]
+    fn update_maintains_every_index_when_rowid_is_reassigned() {
+        // Reassigning the rowid-alias column changes every index's key,
+        // even one over an otherwise-untouched column.
+        let mut schema = table_with_index(2, &["id", "n"], "n");
+        schema.rowid_alias = Some(0);
+        let p = compile("UPDATE t SET id = id + 1 WHERE id > 5", &schema);
+        assert_eq!(count(&p, Opcode::IdxDelete), 1, "{p:?}");
+        assert_eq!(count(&p, Opcode::IdxInsert), 1, "{p:?}");
     }
 }

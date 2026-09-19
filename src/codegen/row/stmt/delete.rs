@@ -117,6 +117,7 @@ pub fn compile_delete_with_catalog(
             TABLE_CURSOR,
             FIRST_INDEX_CURSOR,
             Opcode::IdxDelete,
+            None,
         )?;
         em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));
 
@@ -148,6 +149,7 @@ pub fn compile_delete_with_catalog(
         TABLE_CURSOR,
         FIRST_INDEX_CURSOR,
         Opcode::IdxDelete,
+        None,
     )?;
     em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));
 
