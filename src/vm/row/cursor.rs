@@ -13,7 +13,9 @@ use std::rc::Rc;
 
 use super::aggregate::{AggState, AggregateError};
 use super::program::{GroupKeyColumn, SortKeyColumn};
-use super::record::{decode_column_with, decode_record, encode_record, parse_header, RecordError};
+use super::record::{
+    decode_column, decode_column_with, decode_record, encode_record, parse_header, RecordError,
+};
 use crate::value::{Collation, TextEncoding, Value};
 
 /// A forward-scanning, row-at-a-time cursor over a table's rows.
