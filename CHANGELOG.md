@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.114.4] - 2026-09-19
+
+### Changed
+
+- **`col < ?` / `col <= ?` (and `? > col` / `? >= col`) seek the index as an upper-bound-only range** (#508, PR #523): the row planner recognised only lower-bound comparisons, so `a <= 20` compiled to a full scan whatever the statistics said. `as_forward_comparison` now accepts all eight spellings and reports which side the bound is on; upper-bound shapes compile to `IdxRewind` then a walk stopped by `IdxCompareGT` (`<=`) or the new `IdxCompareGE` opcode (`<`), shared by the SELECT emitter and the UPDATE/DELETE + aggregate row seek. EQP reports `SEARCH t USING INDEX ia (a<?)`; the #498 stat4 gate receives the bound as an upper bound, so `a <= 20` seeks and `a < 4000` scans on the stat4 fixture, both as sqlite3 3.53.4 plans them. Also fixes `? < col` / `? <= col` being estimated as an upper bound while compiled as a lower-bound seek. Parity 19/19.
+
 ## [0.114.3] - 2026-09-19
 
 ### Changed

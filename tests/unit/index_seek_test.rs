@@ -244,6 +244,61 @@ fn equality_still_scans_when_it_cannot_seek() {
     );
 }
 
+/// #508: `col < lit` / `col <= lit` (and the mirrored `lit > col` /
+/// `lit >= col`) walk the index from its first entry and stop at the
+/// bound. Results match the unindexed mirror for inclusive and exclusive
+/// bounds, duplicate keys at the bound, a REAL bound on an INTEGER column
+/// and a NULL bound (no rows).
+#[test]
+fn upper_bound_comparison_plans_as_search_and_matches_the_scan() {
+    let (_db, mut e) = seeded("upper-bound");
+    for pred in ["k < 2", "k <= 2", "2 > k", "2 >= k", "k < 3", "k <= 1"] {
+        assert_eq!(
+            plan(&e, &format!("SELECT tag FROM s WHERE {pred}")),
+            "SEARCH s USING INDEX s_k (k<?)",
+            "{pred}"
+        );
+    }
+    assert_seek_matches_scan(&mut e, "s", "k < 2", "mirror < 2");
+    assert_seek_matches_scan(&mut e, "s", "k <= 2", "mirror <= 2");
+    assert_seek_matches_scan(&mut e, "s", "2 > k", "mirror < 2");
+    assert_seek_matches_scan(&mut e, "s", "2 >= k", "mirror <= 2");
+    assert_seek_matches_scan(&mut e, "s", "k < 3", "mirror < 3");
+    assert_seek_matches_scan(&mut e, "s", "k <= 1", "mirror = 1");
+    assert_seek_matches_scan(&mut e, "s", "k < 1.5", "mirror < 1.5");
+    assert_seek_matches_scan(&mut e, "s", "k <= 1.0", "mirror = 1");
+    assert!(rows(&mut e, "SELECT id FROM s WHERE k < 1").is_empty());
+    assert!(rows(&mut e, "SELECT id FROM s WHERE k < NULL").is_empty());
+    // Aggregates take the same walk.
+    assert_eq!(
+        rows(&mut e, "SELECT count(*), sum(k) FROM s WHERE k <= 2"),
+        rows(
+            &mut e,
+            "SELECT count(*), sum(mirror) FROM s WHERE mirror <= 2"
+        )
+    );
+}
+
+#[test]
+fn update_and_delete_with_upper_bound_touch_exactly_the_rows_below_it() {
+    let (_db, mut e) = seeded("write-upper");
+    e.run_query("UPDATE s SET tag = 'low' WHERE k < 2").unwrap();
+    assert_eq!(
+        rows(&mut e, "SELECT count(*) FROM s WHERE tag = 'low'"),
+        vec![vec![Cell::Int(3)]]
+    );
+    e.run_query("DELETE FROM s WHERE k <= 2").unwrap();
+    assert_eq!(
+        rows(&mut e, "SELECT count(*) FROM s"),
+        vec![vec![Cell::Int(2)]]
+    );
+    assert!(rows(&mut e, "SELECT id FROM s WHERE mirror <= 2").is_empty());
+    assert_eq!(
+        rows(&mut e, "SELECT count(*) FROM s WHERE k = 3"),
+        vec![vec![Cell::Int(2)]]
+    );
+}
+
 #[test]
 fn update_and_delete_with_equality_touch_exactly_the_duplicates() {
     let (_db, mut e) = seeded("write");

@@ -264,6 +264,38 @@ fn stat4_narrow_range_still_seeks_like_sqlite3() {
     );
 }
 
+/// #508: an upper-bound-only predicate is a seek shape, gated by the same
+/// stat4 estimate as the lower-bound one. Every line is sqlite3 3.53.4's
+/// own on this fixture.
+#[test]
+fn stat4_upper_bound_seeks_or_scans_like_sqlite3() {
+    let (_db, e) = stat4_engine("stat4-upper");
+    for sql in [
+        "SELECT sum(b) FROM t WHERE a <= 20",
+        "SELECT sum(b) FROM t WHERE a < 20",
+        "SELECT sum(b) FROM t WHERE 20 >= a",
+        "SELECT b FROM t WHERE a < 20",
+    ] {
+        assert_eq!(plan(&e, sql), ["SEARCH t USING INDEX ia (a<?)"], "{sql}");
+    }
+    assert_eq!(plan(&e, "SELECT sum(b) FROM t WHERE a < 4000"), ["SCAN t"]);
+    assert_eq!(
+        plan(&e, "SELECT count(*) FROM t WHERE a < 3900"),
+        ["SEARCH t USING COVERING INDEX ia (a<?)"]
+    );
+}
+
+#[test]
+fn stat4_removed_upper_bound_seeks_without_statistics() {
+    let (_db, mut e) = stat4_engine("stat4-upper-nostats");
+    e.run_query("DELETE FROM sqlite_stat1; DELETE FROM sqlite_stat4")
+        .unwrap();
+    assert_eq!(
+        plan(&e, "SELECT sum(b) FROM t WHERE a < 4000"),
+        ["SEARCH t USING INDEX ia (a<?)"]
+    );
+}
+
 #[test]
 fn stat4_cannot_see_through_a_subquery_bound_so_the_seek_stays() {
     let (_db, e) = stat4_engine("stat4-subquery");

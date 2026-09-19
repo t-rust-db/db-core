@@ -610,6 +610,19 @@ where
     open_index_cursor(em, index, index_cursor)?;
     let bound_reg = compile_value(em, reg, scope, operand)?;
 
+    if !is_lower {
+        emit_upper_bound_index_walk(
+            em,
+            index_cursor,
+            bound_reg,
+            inclusive,
+            leading_collation,
+            end_label,
+            |em, row_skip| sink(em, reg, index_cursor, row_skip),
+        )?;
+        return Ok(true);
+    }
+
     // #280: see `try_compile_between_seek`'s identical comment.
     let bound_null_addr = em.emit(Instruction::new(Opcode::IsNull, bound_reg, 0, 0));
     em.patch_p2(bound_null_addr, end_label);
@@ -950,30 +963,31 @@ where
 }
 
 /// Normalizes a single top-level comparison `WHERE` clause to
-/// `(col_name, literal_operand, inclusive)` when it has the shape
-/// `col > lit`/`col >= lit`/`lit < col`/`lit <= col` — the four spellings
-/// of "the index should seek to the first entry strictly/inclusively
-/// past `lit` and then walk forward with no upper bound". `col <
-/// lit`/`col <= lit`/`lit > col`/`lit >= col` (the descending-bound
-/// shapes) return `None`: walking those forward from a low-bound seek
-/// would require a *backward* walk from the top of the index, which
-/// needs an `IdxLast`/`IdxPrev` stop-check opcode this codegen doesn't
-/// have yet (#654) — those shapes keep falling back to the ordinary
-/// scan, unchanged from before this function existed.
+/// `(col_name, operand, inclusive, operand_is_lower_bound)` when one
+/// side is a plain column and the operator is `<`/`<=`/`>`/`>=`. The
+/// operand is a *lower* bound for `col > lit`/`col >= lit`/`lit < col`/
+/// `lit <= col` (seek to the first entry past `lit`, walk forward with
+/// no upper bound) and an *upper* bound for `col < lit`/`col <= lit`/
+/// `lit > col`/`lit >= col` (walk forward from the index's first entry,
+/// stop at the first entry past `lit`, #508). The last flag also feeds
+/// #498's selectivity estimate, which needs to know which side of the
+/// column the operand sits on.
 fn as_forward_comparison(expr: &Expr) -> Option<(&str, &Expr, bool, bool)> {
     let ExprKind::Binary { op, lhs, rhs } = &expr.kind else {
         return None;
     };
-    // `(column, operand, inclusive, operand is a lower bound)` -- the
-    // last flag feeds #498's selectivity estimate, which needs to know
-    // which side of the column the operand sits on.
+    let inclusive = matches!(op, BinaryOp::Ge | BinaryOp::Le);
+    // `col > lit` / `col >= lit`: the operand is below the column.
+    let column_is_greater = matches!(op, BinaryOp::Gt | BinaryOp::Ge);
     match op {
-        BinaryOp::Gt => Some((where_col(lhs)?, rhs.as_ref(), false, true)),
-        BinaryOp::Ge => Some((where_col(lhs)?, rhs.as_ref(), true, true)),
-        BinaryOp::Lt => Some((where_col(rhs)?, lhs.as_ref(), false, false)),
-        BinaryOp::Le => Some((where_col(rhs)?, lhs.as_ref(), true, false)),
-        _ => None,
+        BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Lt | BinaryOp::Le => {}
+        _ => return None,
     }
+    if let Some(col_name) = where_col(lhs) {
+        return Some((col_name, rhs.as_ref(), inclusive, column_is_greater));
+    }
+    // Mirrored spelling, `lit OP col`: the operand's side flips.
+    Some((where_col(rhs)?, lhs.as_ref(), inclusive, !column_is_greater))
 }
 
 /// A range bound's literal value coerced to the indexed column's
@@ -1128,6 +1142,34 @@ where
 
     let limit = compile_limit_setup(em, reg, &scope, select)?;
     let bound_reg = compile_value(em, reg, &scope, operand)?;
+
+    if !is_lower {
+        emit_upper_bound_index_walk(
+            em,
+            index_cursor,
+            bound_reg,
+            inclusive,
+            leading_collation,
+            end_label,
+            |em, row_skip| {
+                emit_matched_row(
+                    em,
+                    reg,
+                    select,
+                    schema,
+                    cursors,
+                    index_cursor,
+                    col_name,
+                    &limit,
+                    row_skip,
+                    end_label,
+                    catalog,
+                    sink,
+                )
+            },
+        )?;
+        return Ok(true);
+    }
 
     // #280: see `try_compile_between_seek`'s identical comment.
     let bound_null_addr = em.emit(Instruction::new(Opcode::IsNull, bound_reg, 0, 0));
@@ -1441,11 +1483,13 @@ pub(super) fn find_range_seek_detail(
                     return None;
                 }
                 // Real sqlite3 collapses inclusive and exclusive into the
-                // same `(col>?)` wording (see `try_compile_forward_comparison_seek`'s
-                // doc) -- `_inclusive` only matters to the compiled seek's
-                // dup-skip, not to this report.
+                // same `(col>?)` / `(col<?)` wording (see
+                // `try_compile_forward_comparison_seek`'s doc) --
+                // `inclusive` only matters to the compiled walk's
+                // dup-skip / stop check, not to this report.
+                let op = if is_lower { '>' } else { '<' };
                 Some(format!(
-                    "SEARCH {table_display} USING INDEX {} ({col_name}>?)",
+                    "SEARCH {table_display} USING INDEX {} ({col_name}{op}?)",
                     index.name
                 ))
             },
@@ -1539,6 +1583,54 @@ where
     Ok(())
 }
 
+/// Emits the upper-bound-only index walk `col < hi` / `col <= hi`
+/// (#508): a `NULL` bound matches nothing (jump to `exit`);
+/// `IdxRewind` positions on the index's first entry (empty: `exit`);
+/// then loop -- `IdxCompareGT(hi)` (inclusive) or `IdxCompareGE(hi)`
+/// (exclusive) exits once past the bound, `body` handles the positioned
+/// entry (it receives `row_skip` to jump to on a missing table row),
+/// `IdxNext` advances and re-enters the loop. The mirror image of the
+/// lower-bound-only `SeekIndexGE` walk in
+/// [`try_compile_forward_comparison_seek`].
+fn emit_upper_bound_index_walk<B>(
+    em: &mut Emitter,
+    index_cursor: i32,
+    hi_reg: i32,
+    inclusive: bool,
+    leading_collation: Collation,
+    exit: Label,
+    body: B,
+) -> Result<(), CodegenError>
+where
+    B: FnOnce(&mut Emitter, Label) -> Result<(), CodegenError>,
+{
+    let hi_null_addr = em.emit(Instruction::new(Opcode::IsNull, hi_reg, 0, 0));
+    em.patch_p2(hi_null_addr, exit);
+    let rewind_addr = em.emit(Instruction::new(Opcode::IdxRewind, index_cursor, 0, 0));
+    em.patch_p2(rewind_addr, exit);
+    let loop_start = em.new_label();
+    em.place(loop_start);
+    let stop_opcode = if inclusive {
+        Opcode::IdxCompareGT
+    } else {
+        Opcode::IdxCompareGE
+    };
+    let stop_addr = em.emit(Instruction::with_p4(
+        stop_opcode,
+        index_cursor,
+        0,
+        hi_reg,
+        P4::SeekKey(vec![leading_collation]),
+    ));
+    em.patch_p2(stop_addr, exit);
+    let row_skip = em.new_label();
+    body(em, row_skip)?;
+    em.place(row_skip);
+    let next_addr = em.emit(Instruction::new(Opcode::IdxNext, index_cursor, 0, 0));
+    em.patch_p2(next_addr, loop_start);
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod mcdc_vectors {
@@ -1546,6 +1638,7 @@ mod mcdc_vectors {
     //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
     //! by `make test-mcdc`; db-core#219/#235).
 
+    use super::as_forward_comparison;
     use crate::codegen::row::compile_select_with_catalog_and_stats;
     use crate::codegen::row::explain_query_plan;
     use crate::codegen::row::planner::Stats;
@@ -1820,6 +1913,123 @@ mod mcdc_vectors {
         );
         assert!(seeks(&p));
         assert!(has(&p, Opcode::IsNull));
+    }
+
+    // --- #508: upper-bound-only comparisons walk from IdxRewind ---------
+    fn upper_walks(program: &Program, exclusive: bool) -> bool {
+        has(program, Opcode::IdxRewind)
+            && !has(program, Opcode::SeekIndexGE)
+            && !has(program, Opcode::Rewind)
+            && has(program, Opcode::IsNull)
+            && has(
+                program,
+                if exclusive {
+                    Opcode::IdxCompareGE
+                } else {
+                    Opcode::IdxCompareGT
+                },
+            )
+    }
+
+    #[test]
+    fn range_seek_508_upper_bound_shapes_walk_from_the_index_start() {
+        let s = schema("INTEGER", true, false);
+        for (sql, exclusive) in [
+            ("SELECT b FROM t WHERE a < 5", true),
+            ("SELECT b FROM t WHERE a <= 5", false),
+            ("SELECT b FROM t WHERE 5 > a", true),
+            ("SELECT b FROM t WHERE 5 >= a", false),
+        ] {
+            let p = compile(sql, &s);
+            assert!(upper_walks(&p, exclusive), "{sql}: {p:?}");
+            assert_eq!(
+                eqp_detail(sql, &s),
+                "SEARCH t USING INDEX idx (a<?)",
+                "{sql}"
+            );
+        }
+        // The exclusive/inclusive distinction is the stop opcode only.
+        assert!(!has(
+            &compile("SELECT b FROM t WHERE a < 5", &s),
+            Opcode::IdxCompareGT
+        ));
+        assert!(!has(
+            &compile("SELECT b FROM t WHERE a <= 5", &s),
+            Opcode::IdxCompareGE
+        ));
+    }
+
+    #[test]
+    fn range_seek_508_upper_bound_row_seek_for_update() {
+        let s = schema("INTEGER", true, false);
+        let p = compile_upd("UPDATE t SET b = 'z' WHERE a < 5", &s);
+        assert!(upper_walks(&p, true), "{p:?}");
+        let p = compile_upd("UPDATE t SET b = 'z' WHERE 5 >= a", &s);
+        assert!(upper_walks(&p, false), "{p:?}");
+    }
+
+    /// `lit < col` is a *lower* bound (the column is the greater side):
+    /// it seeks exactly like `col > lit` and reports `(a>?)`. Before #508
+    /// this spelling was flagged as an upper bound for the #498 estimate
+    /// while being compiled as a lower-bound seek.
+    #[test]
+    fn range_seek_508_mirrored_lower_bound_still_seeks_forward() {
+        let s = schema("INTEGER", true, false);
+        for sql in [
+            "SELECT b FROM t WHERE 5 < a",
+            "SELECT b FROM t WHERE 5 <= a",
+            "SELECT b FROM t WHERE a > 5",
+        ] {
+            let p = compile(sql, &s);
+            assert!(seeks(&p) && !has(&p, Opcode::IdxRewind), "{sql}: {p:?}");
+            assert_eq!(
+                eqp_detail(sql, &s),
+                "SEARCH t USING INDEX idx (a>?)",
+                "{sql}"
+            );
+        }
+        assert_eq!(
+            as_forward_comparison(
+                &select("SELECT b FROM t WHERE 5 < a")
+                    .where_clause
+                    .expect("where")
+            )
+            .map(|(col, _, inclusive, is_lower)| (
+                col.to_string(),
+                inclusive,
+                is_lower
+            )),
+            Some(("a".to_string(), false, true))
+        );
+        assert_eq!(
+            as_forward_comparison(
+                &select("SELECT b FROM t WHERE 5 >= a")
+                    .where_clause
+                    .expect("where")
+            )
+            .map(|(col, _, inclusive, is_lower)| (
+                col.to_string(),
+                inclusive,
+                is_lower
+            )),
+            Some(("a".to_string(), true, false))
+        );
+    }
+
+    #[test]
+    fn range_seek_508_upper_bound_needs_an_index_and_matching_affinity() {
+        // No index: plain scan.
+        let p = compile(
+            "SELECT b FROM t WHERE a < 5",
+            &schema("INTEGER", false, false),
+        );
+        assert!(has(&p, Opcode::Rewind) && !has(&p, Opcode::IdxRewind));
+        // Text bound against an INTEGER column: plain scan (same rule as `>`).
+        let p = compile(
+            "SELECT b FROM t WHERE a < 'x'",
+            &schema("INTEGER", true, false),
+        );
+        assert!(has(&p, Opcode::Rewind) && !has(&p, Opcode::IdxRewind));
     }
 
     // --- range_scan_518: row-seek (UPDATE) BETWEEN operands supported -----
