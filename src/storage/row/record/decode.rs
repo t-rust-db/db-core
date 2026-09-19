@@ -22,7 +22,11 @@ pub fn decode_record(payload: &[u8], encoding: TextEncoding) -> Result<Vec<Value
         });
     }
 
-    let mut serial_types = Vec::new();
+    // Every serial type is at least one byte, so the header's remaining
+    // bytes bound the column count (#486: growing from empty was ~10%
+    // of a GROUP BY scan). Clamp to the payload's real length so an
+    // absurd declared header cannot drive an absurd allocation.
+    let mut serial_types = Vec::with_capacity(header_len.min(payload.len()).saturating_sub(n));
     let mut pos = n;
     while pos < header_len {
         let (serial_type, len) = decode_varint_at(payload, pos)?;

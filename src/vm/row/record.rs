@@ -459,7 +459,10 @@ pub(crate) fn parse_header(payload: &[u8]) -> Result<Vec<(u64, usize)>, RecordEr
         });
     }
 
-    let mut entries = Vec::new();
+    // Each serial type is at least one byte, so the header's remaining
+    // bytes bound the entry count; clamp to the real payload length so
+    // an absurd declared header cannot drive an absurd allocation.
+    let mut entries = Vec::with_capacity(header_len.min(payload.len()).saturating_sub(n));
     let mut pos = n;
     let mut body_pos = header_len;
     while pos < header_len {

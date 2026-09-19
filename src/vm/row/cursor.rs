@@ -13,7 +13,9 @@ use std::rc::Rc;
 
 use super::aggregate::{AggState, AggregateError};
 use super::program::{GroupKeyColumn, SortKeyColumn};
-use super::record::{decode_column, decode_record, encode_record, RecordError};
+use super::record::{
+    decode_column, decode_column_with, decode_record, encode_record, parse_header, RecordError,
+};
 use crate::value::{Collation, TextEncoding, Value};
 
 /// A forward-scanning, row-at-a-time cursor over a table's rows.
@@ -722,7 +724,7 @@ impl Cursor for EphemeralIndexCursor {
 /// Rows buffer as raw record bytes (`SorterData` hands them back
 /// unchanged) paired with their already-decoded sort-key values (so
 /// `SorterSort`'s comparisons never re-decode); each key column is
-/// decoded once at `sorter_insert` time via [`decode_column`], not the
+/// decoded once at `sorter_insert` time via [`decode_column_with`], not the
 /// whole row, matching sqlite-rs's "decode only what comparisons need"
 /// design (its own `#507`/`#631`).
 ///
@@ -760,9 +762,11 @@ impl SorterCursor {
     /// NULL (SQLite), so `None` is real corruption, not a short row
     /// (db-core#232).
     fn decode_keys(&self, blob: &[u8]) -> Option<Vec<Value>> {
+        // Parse the record header once for all key columns (#258 pattern).
+        let header = parse_header(blob).ok()?;
         self.keys
             .iter()
-            .map(|k| decode_column(blob, k.index, TextEncoding::Utf8).ok())
+            .map(|k| decode_column_with(blob, &header, k.index, TextEncoding::Utf8).ok())
             .collect()
     }
 }
@@ -904,19 +908,20 @@ struct GroupSlot {
 /// [`SorterCursor`]'s sort-then-group strategy -- see this module's own
 /// scope note.
 ///
-/// **Group lookup is a linear scan over `groups`, not an actual
-/// hash table** -- a correctness-equivalent, simpler stand-in (same
-/// tradeoff [`SorterCursor`]'s bound truncation makes): building a
-/// `Hash` impl consistent with [`super::compare::compare`]'s
-/// collation-aware equality (so `1` and `1.0` hash alike) is
-/// non-trivial and not worth it for a reference VM that is not
-/// perf-critical. `HashAggRewind` still only sorts the `K` distinct
-/// groups, not all `n` rows, so the strategy's O(rows) find + O(K log
-/// K) order still beats the sort strategy's O(n log n) whenever groups
-/// are few relative to rows.
+/// Group lookup hashes the key (`index`, db-core#486) and confirms the
+/// hit with [`super::compare::compare`]'s collation-aware equality, so
+/// the hash only has to be *consistent* with `compare` (`1` and `1.0`,
+/// `'a'` and `'A'` under NOCASE, `'a '` and `'a'` under RTRIM hash
+/// alike -- see [`hash_key_value`]) while equality itself is unchanged.
+/// `HashAggRewind` still only sorts the `K` distinct groups, not all
+/// `n` rows.
 pub struct HashAggCursor {
     keys: Vec<GroupKeyColumn>,
     groups: Vec<GroupSlot>,
+    /// Key hash -> positions in `groups` sharing that hash (a bucket
+    /// is almost always one entry; collisions are resolved by
+    /// `keys_equal`).
+    index: HashMap<u64, Vec<usize>>,
     /// Group positions in output order, filled in by `rewind` (freezing
     /// the group set -- no further `hash_agg_find` after this).
     order: Vec<usize>,
@@ -933,6 +938,7 @@ impl HashAggCursor {
         HashAggCursor {
             keys,
             groups: Vec::new(),
+            index: HashMap::new(),
             order: Vec::new(),
             pos: None,
             frozen: false,
@@ -949,10 +955,75 @@ impl HashAggCursor {
         })
     }
 
-    fn find_group(&self, key_values: &[Value]) -> Option<usize> {
-        self.groups
-            .iter()
-            .position(|g| self.keys_equal(&g.key_values, key_values))
+    fn key_hash(&self, key_values: &[Value]) -> u64 {
+        use std::hash::Hasher;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for (key, value) in self.keys.iter().zip(key_values) {
+            hash_key_value(&mut h, value, key.collation);
+        }
+        h.finish()
+    }
+
+    fn find_group(&self, hash: u64, key_values: &[Value]) -> Option<usize> {
+        self.index.get(&hash)?.iter().copied().find(|&i| {
+            self.groups
+                .get(i)
+                .is_some_and(|g| self.keys_equal(&g.key_values, key_values))
+        })
+    }
+}
+
+/// Feeds `value` to `h` such that two values `compare` reports `Equal`
+/// under `collation` hash identically: NULL and the type classes get a
+/// tag; a REAL that `compare_int_real` would equate with an INTEGER
+/// hashes as that integer; NaNs (all mutually equal) hash as one
+/// canonical NaN; NOCASE text hashes ASCII-lowercased and RTRIM text
+/// hashes with trailing spaces stripped, matching `compare_text`.
+fn hash_key_value<H: std::hash::Hasher>(h: &mut H, value: &Value, collation: Collation) {
+    match value {
+        Value::Null => h.write_u8(0),
+        Value::Integer(i) => {
+            h.write_u8(1);
+            h.write_i64(*i);
+        }
+        Value::Real(r) => {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+            // Same window `compare_int_real` accepts: an in-range real
+            // whose truncation round-trips exactly equals that integer.
+            let as_int = (*r >= -9_223_372_036_854_775_808.0 && *r < 9_223_372_036_854_775_808.0)
+                .then_some(*r as i64)
+                .filter(|i| *i as f64 == *r);
+            match as_int {
+                Some(i) => {
+                    h.write_u8(1);
+                    h.write_i64(i);
+                }
+                None => {
+                    h.write_u8(2);
+                    h.write_u64(if r.is_nan() {
+                        f64::NAN.to_bits()
+                    } else {
+                        r.to_bits()
+                    });
+                }
+            }
+        }
+        Value::Text(s) => {
+            h.write_u8(3);
+            match collation {
+                Collation::Binary => h.write(s.as_bytes()),
+                Collation::NoCase => {
+                    for b in s.bytes() {
+                        h.write_u8(b.to_ascii_lowercase());
+                    }
+                }
+                Collation::RTrim => h.write(s.trim_end_matches(' ').as_bytes()),
+            }
+        }
+        Value::Blob(b) => {
+            h.write_u8(4);
+            h.write(b);
+        }
     }
 }
 
@@ -1017,11 +1088,16 @@ impl Cursor for HashAggCursor {
         // Same discipline as `SorterCursor::sorter_insert`: an undecodable
         // blob is rejected here (the VM turns `false` into an error) rather
         // than silently keyed as NULL, which would merge distinct groups.
+        // Parse the record header once for all key columns (#258 pattern).
+        let Ok(header) = parse_header(&blob) else {
+            return false;
+        };
         let Some(key_values) = self
             .keys
             .iter()
             .map(|k| {
-                let mut value = decode_column(&blob, k.index, TextEncoding::Utf8).ok()?;
+                let mut value =
+                    decode_column_with(&blob, &header, k.index, TextEncoding::Utf8).ok()?;
                 super::affinity::apply_affinity(
                     &mut value,
                     super::affinity::Affinity::from_p4_byte(k.affinity),
@@ -1032,7 +1108,8 @@ impl Cursor for HashAggCursor {
         else {
             return false;
         };
-        let idx = match self.find_group(&key_values) {
+        let hash = self.key_hash(&key_values);
+        let idx = match self.find_group(hash, &key_values) {
             Some(idx) => idx,
             None => {
                 let idx = self.groups.len();
@@ -1041,6 +1118,7 @@ impl Cursor for HashAggCursor {
                     key_values,
                     accumulators: Vec::new(),
                 });
+                self.index.entry(hash).or_default().push(idx);
                 idx
             }
         };
@@ -1824,6 +1902,118 @@ mod tests {
         assert!(c.next());
         assert_eq!(c.column(1).unwrap(), Value::Integer(2));
         assert!(!c.next());
+    }
+
+    /// The hash index must agree with `compare`: values `compare` calls
+    /// `Equal` under the key's collation land in one group (#486).
+    #[test]
+    fn hash_agg_cursor_index_hashes_compare_equal_keys_alike() {
+        fn groups_for(collation: Collation, rows: &[Value]) -> usize {
+            let mut c = HashAggCursor::new(vec![GroupKeyColumn {
+                index: 0,
+                collation,
+                affinity: b'A', // BLOB affinity: leave the key value as is
+            }]);
+            for v in rows {
+                assert!(c.hash_agg_find(make_row(std::slice::from_ref(v))));
+            }
+            c.groups.len()
+        }
+        let text = |s: &str| Value::Text(s.into());
+        // Integer vs equal-valued real, including both i64 extremes
+        // `compare_int_real` still accepts, and -0.0 vs 0.
+        assert_eq!(
+            groups_for(
+                Collation::Binary,
+                &[
+                    Value::Integer(1),
+                    Value::Real(1.0),
+                    Value::Real(-0.0),
+                    Value::Integer(0)
+                ]
+            ),
+            2
+        );
+        assert_eq!(
+            groups_for(
+                Collation::Binary,
+                &[
+                    Value::Integer(i64::MIN),
+                    Value::Real(-9_223_372_036_854_775_808.0)
+                ]
+            ),
+            1
+        );
+        assert_eq!(
+            groups_for(
+                Collation::Binary,
+                &[
+                    Value::Integer(i64::MAX),
+                    Value::Real(9_223_372_036_854_775_808.0)
+                ]
+            ),
+            2
+        );
+        // All NaNs are one group; a non-integral real is its own.
+        assert_eq!(
+            groups_for(
+                Collation::Binary,
+                &[
+                    Value::Real(f64::NAN),
+                    Value::Real(-f64::NAN),
+                    Value::Real(1.5)
+                ]
+            ),
+            2
+        );
+        // Text collations.
+        assert_eq!(
+            groups_for(Collation::Binary, &[text("a"), text("A"), text("a ")]),
+            3
+        );
+        assert_eq!(
+            groups_for(Collation::NoCase, &[text("a"), text("A"), text("a ")]),
+            2
+        );
+        assert_eq!(
+            groups_for(Collation::RTrim, &[text("a"), text("A"), text("a ")]),
+            2
+        );
+        // Type classes never merge, NULL keys form one group.
+        assert_eq!(
+            groups_for(
+                Collation::Binary,
+                &[
+                    Value::Null,
+                    Value::Null,
+                    Value::Integer(0),
+                    text("0"),
+                    Value::Blob(vec![b'0'].into())
+                ]
+            ),
+            4
+        );
+    }
+
+    /// A hash-bucket collision falls back to `keys_equal`, never merging
+    /// distinct keys.
+    #[test]
+    fn hash_agg_cursor_bucket_collision_keeps_groups_distinct() {
+        let mut c = HashAggCursor::new(vec![group_key(0)]);
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(1)])));
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(2)])));
+        // Force both groups into one bucket, then re-find each.
+        let all: Vec<usize> = c.index.values().flatten().copied().collect();
+        c.index.clear();
+        let h1 = c.key_hash(&[Value::Integer(1)]);
+        let h2 = c.key_hash(&[Value::Integer(2)]);
+        c.index.insert(h1, all.clone());
+        c.index.insert(h2, all);
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(2)])));
+        assert_eq!(c.current_group, Some(1));
+        assert!(c.hash_agg_find(make_row(&[Value::Integer(1)])));
+        assert_eq!(c.current_group, Some(0));
+        assert_eq!(c.groups.len(), 2);
     }
 
     /// MC/DC vector (obligation `cursor_695`, `EphemeralIndexCursor::
