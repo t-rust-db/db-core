@@ -1118,13 +1118,17 @@ impl Parser {
         })
     }
 
-    /// `explain-stmt` (#243, grammar V4): `EXPLAIN [QUERY PLAN]
-    /// select-stmt`. Only a `SELECT` body is supported — wrapping any
+    /// `explain-stmt` (#243, grammar V4; widened by #524): `EXPLAIN
+    /// [QUERY PLAN] (select-stmt | update-stmt | delete-stmt)`. Any
     /// other statement kind is `Unsupported` rather than silently
     /// accepted. Bare `EXPLAIN` (#538) and `EXPLAIN QUERY PLAN` share
     /// this same parse; the caller distinguishes them via `query_plan`
     /// and renders bare `EXPLAIN` as an opcode/bytecode listing (spec
-    /// 009 Requirement 10) rather than a query-plan summary.
+    /// 009 Requirement 10) rather than a query-plan summary — #524
+    /// widened the accepted body to `UPDATE`/`DELETE` so that opcode
+    /// dump is diagnosable for write statements too; `query_plan: true`
+    /// over a non-`SELECT` body is still meaningless (no join-planner
+    /// EQP for a write statement) and is left for the caller to reject.
     pub(super) fn parse_explain_stmt(&mut self) -> PResult<Explain> {
         self.expect_kw(Keyword::EXPLAIN)?;
         let query_plan = if self.eat_kw(Keyword::QUERY) {
@@ -1133,11 +1137,14 @@ impl Parser {
         } else {
             false
         };
-        let select = self.parse_select_stmt()?;
-        Ok(Explain {
-            query_plan,
-            select: Box::new(select),
-        })
+        let body = if self.at_kw(Keyword::UPDATE) {
+            ExplainBody::Update(Box::new(self.parse_update_stmt()?))
+        } else if self.at_kw(Keyword::DELETE) {
+            ExplainBody::Delete(Box::new(self.parse_delete_stmt()?))
+        } else {
+            ExplainBody::Select(Box::new(self.parse_select_stmt()?))
+        };
+        Ok(Explain { query_plan, body })
     }
 
     fn select_stmt_body(&mut self) -> PResult<Select> {

@@ -332,8 +332,23 @@ pub fn compile_statement(
                     }
                     .into());
                 }
-                let rows =
-                    explain_select_statement(&explain.select, schemas, views, &HashMap::new())?;
+                // #524: `EXPLAIN QUERY PLAN` renders the join planner's
+                // EQP output, which only exists for a `SELECT` — parsing
+                // now accepts `EXPLAIN UPDATE`/`EXPLAIN DELETE` (bare
+                // `EXPLAIN`'s opcode dump), but there's no equivalent
+                // "query plan" summary for a write statement to render.
+                let select = match &explain.body {
+                    crate::parser::ast::ExplainBody::Select(select) => select,
+                    crate::parser::ast::ExplainBody::Update(_)
+                    | crate::parser::ast::ExplainBody::Delete(_) => {
+                        return Err(CodegenError::Unsupported {
+                            reason: "EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported"
+                                .to_string(),
+                        }
+                        .into());
+                    }
+                };
+                let rows = explain_select_statement(select, schemas, views, &HashMap::new())?;
                 Ok(compile_eqp_program(&rows))
             }
             other => Err(parse_error(other)),

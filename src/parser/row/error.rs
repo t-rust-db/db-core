@@ -476,6 +476,31 @@ mod tests {
         );
     }
 
+    // #524: `EXPLAIN` accepts an `UPDATE`/`DELETE` body too (bare
+    // `EXPLAIN`'s opcode dump has no reason to be SELECT-only — the
+    // acceptance criterion diagnosing #524's per-row index-maintenance
+    // cost needed `EXPLAIN UPDATE ...` runnable from the CLI).
+    #[test]
+    fn explain_accepts_update_and_delete_bodies() {
+        use crate::parser::ast::ExplainBody;
+
+        match parse_explain("EXPLAIN UPDATE t SET a = 1 WHERE b = 2") {
+            ParseOutcome::Accepted(explain) => {
+                assert!(!explain.query_plan);
+                assert!(matches!(explain.body, ExplainBody::Update(_)));
+            }
+            other => panic!("expected accepted, got {other:?}"),
+        }
+
+        match parse_explain("EXPLAIN DELETE FROM t WHERE b = 2") {
+            ParseOutcome::Accepted(explain) => {
+                assert!(!explain.query_plan);
+                assert!(matches!(explain.body, ExplainBody::Delete(_)));
+            }
+            other => panic!("expected accepted, got {other:?}"),
+        }
+    }
+
     #[test]
     fn bool_expr_three_way_outcome() {
         // db-core#369's bare-predicate entry point -- untested at every
