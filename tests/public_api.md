@@ -6977,6 +6977,7 @@ pub db_core::vm::row::program::Opcode::HashAggNext
 pub db_core::vm::row::program::Opcode::HashAggOpen
 pub db_core::vm::row::program::Opcode::HashAggRewind
 pub db_core::vm::row::program::Opcode::HashAggStep
+pub db_core::vm::row::program::Opcode::IdxCompareGE
 pub db_core::vm::row::program::Opcode::IdxCompareGT
 pub db_core::vm::row::program::Opcode::IdxDelete
 pub db_core::vm::row::program::Opcode::IdxInsert
@@ -7541,6 +7542,7 @@ pub db_core::vm::row::Opcode::HashAggNext
 pub db_core::vm::row::Opcode::HashAggOpen
 pub db_core::vm::row::Opcode::HashAggRewind
 pub db_core::vm::row::Opcode::HashAggStep
+pub db_core::vm::row::Opcode::IdxCompareGE
 pub db_core::vm::row::Opcode::IdxCompareGT
 pub db_core::vm::row::Opcode::IdxDelete
 pub db_core::vm::row::Opcode::IdxInsert

@@ -1077,11 +1077,15 @@ mod mcdc_vectors {
     }
 
     /// Whether `program` seeks (a `SEARCH`) rather than walking a b-tree
-    /// end to end (a `SCAN`): a `SeekIndex*` probe, or a `SeekRowid` that
-    /// isn't the per-entry rowid lookup of an `IdxRewind`/`Rewind` walk.
+    /// end to end (a `SCAN`): a `SeekIndex*` probe, an `IdxRewind` walk
+    /// that stops at an upper bound (`IdxCompareGT`/`GE`, #508), or a
+    /// `SeekRowid` that isn't the per-entry rowid lookup of an
+    /// `IdxRewind`/`Rewind` walk.
     fn program_seeks(program: &Program) -> bool {
         has(program, Opcode::SeekIndexEq)
             || has(program, Opcode::SeekIndexGE)
+            || (has(program, Opcode::IdxRewind)
+                && (has(program, Opcode::IdxCompareGT) || has(program, Opcode::IdxCompareGE)))
             || (has(program, Opcode::SeekRowid)
                 && !has(program, Opcode::Rewind)
                 && !has(program, Opcode::IdxRewind))

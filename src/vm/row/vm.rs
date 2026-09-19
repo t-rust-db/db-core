@@ -2244,6 +2244,21 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 Step::Next
             })
         }
+        Opcode::IdxCompareGE => {
+            let (key, collations) = key_from_registers(vm, "IdxCompareGE", instr.p3, &instr.p4)?;
+            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(
+                ExecError::MalformedInstruction {
+                    opcode: "IdxCompareGE",
+                    reason: "cursor slot is not an index cursor, or has no current entry"
+                        .to_string(),
+                },
+            )?;
+            Ok(if cmp == Ordering::Less {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
         Opcode::IdxLE => {
             let (key, collations) = key_from_registers(vm, "IdxLE", instr.p3, &instr.p4)?;
             let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(

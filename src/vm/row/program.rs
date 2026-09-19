@@ -244,6 +244,10 @@ pub enum Opcode {
     /// Compares index cursor `p1`'s entry against `p3..p3+p4`, jumping
     /// to `p2` if strictly greater.
     IdxCompareGT,
+    /// Compares index cursor `p1`'s entry against `p3..p3+p4`, jumping
+    /// to `p2` if greater or equal -- the stop check of an exclusive
+    /// upper-bound walk (`col < ?`, #508).
+    IdxCompareGE,
     /// Positions index cursor `p1` at its first entry, jumping to `p2`
     /// if empty.
     IdxRewind,
@@ -821,6 +825,7 @@ impl Opcode {
             | Opcode::SeekIndexEq
             | Opcode::SeekIndexGE
             | Opcode::IdxCompareGT
+            | Opcode::IdxCompareGE
             | Opcode::AutoIndexSeek
             | Opcode::AggFinal => P3,
             Opcode::Insert | Opcode::AutoIndexInsert => P2_P3,
