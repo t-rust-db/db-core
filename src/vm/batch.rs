@@ -4089,10 +4089,26 @@ impl Vm {
                     .collect();
                 let mut index: JoinHashTable<u64, usize, SlotState> =
                     JoinHashTable::with_capacity_and_hasher(num_rows, SlotState);
+                // #514: `int_keys` used to be a second pass over the
+                // freshly cloned `keys` column, re-walking and re-copying
+                // values this loop already touched. Fold it into the same
+                // pass instead: for a single-column key, track the `i64`s
+                // as we go and drop the accumulator the moment a
+                // non-`Int` value shows up.
+                let mut int_keys: Option<Vec<i64>> =
+                    (key_columns.len() == 1).then(|| Vec::with_capacity(num_rows));
                 for row in 0..num_rows {
                     let p = physical(row);
                     for (i, c) in key_columns.iter().enumerate() {
-                        keys[i].push(c[p].clone());
+                        let value = &c[p];
+                        if i == 0 {
+                            match (value, int_keys.as_mut()) {
+                                (Value::Int(v), Some(ik)) => ik.push(*v),
+                                (_, Some(_)) => int_keys = None,
+                                (_, None) => {}
+                            }
+                        }
+                        keys[i].push(value.clone());
                     }
                     index.insert(hashes[row], row);
                 }
@@ -4108,16 +4124,6 @@ impl Vm {
                         self.hash_build_payload_column(*r, opcode, base_len, num_rows, &physical)
                     })
                     .collect::<Result<_>>()?;
-                let int_keys: Option<Vec<i64>> = match keys.as_slice() {
-                    [column] => column
-                        .iter()
-                        .map(|v| match v {
-                            Value::Int(i) => Some(*i),
-                            _ => None,
-                        })
-                        .collect(),
-                    _ => None,
-                };
                 self.join_tables.0.insert(
                     *table,
                     Arc::new(BuildTable {
