@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.115.0] - 2026-09-20
+
+### Added
+
+- **`Opcode::Filter`/`Opcode::FilterAdd` bloom-filter opcodes for ephemeral-index probes** (#527, PR #540): mirrors sqlite3's own `Filter`/`FilterAdd` pair (confirmed present in its `EXPLAIN` for `IN (SELECT ...)`), which db-core previously had no equivalent for. Backed by a 64 KiB two-hash bloom filter on `EphemeralIndexCursor`, exposed via new `Cursor::filter_add`/`filter_maybe_present` trait methods (safe no-op defaults for every other cursor kind). Wired into every ephemeral-index `Found`/`IdxInsert` dedup site (`IN (subquery)` build+probe, `SELECT DISTINCT`, `LIMIT`-scan, DISTINCT+JOIN, `count(DISTINCT x)`) except `join_full.rs`'s FULL/RIGHT JOIN unmatched-row detection, which reuses the same opcodes with inverted semantics and is left for a separate, correctness-reviewed change. `EXPLAIN x IN (SELECT ...)` now shows `Filter`/`FilterAdd` in the same position sqlite3's own plan does. Measured impact is real but modest: `in_subquery_agg_outer` moved 6.2x -> 5.3x sqlite3 at 1MB, 4.7x -> 4.2x at 50MB -- #525's <=3x ratio target is not yet met; the remaining gap is elsewhere in the per-row VM/adapter cost.
+
 ## [0.114.8] - 2026-09-20
 
 ### Changed
