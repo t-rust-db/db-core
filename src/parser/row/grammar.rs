@@ -2305,70 +2305,83 @@ impl Parser {
         })
     }
 
+    // db-core#531: matches on `&self.peek().kind` (a borrow) instead of
+    // `self.peek().clone()` up front, so the common Copy-only atoms
+    // (numeric/boolean/NULL literals, parens, keywords) never pay for a
+    // clone of a token they don't own any heap data from. `String`/
+    // `Blob`/`Param`/`Identifier` still clone their one heap-owning
+    // field -- exactly the cost `self.peek().clone()` paid for them
+    // before, no more -- because `try_tuple_in_subquery` (an outer,
+    // speculative caller) can rewind `self.pos` back over this token on
+    // a failed parse, so `self.tokens[pos]`'s payload must stay intact
+    // for a retry; moving it out in place would corrupt that retry.
     fn primary_expr(&mut self) -> PResult<Expr> {
-        let tok = self.peek().clone();
-        match tok.kind {
+        match &self.peek().kind {
             TokenKind::Integer(v) => {
-                self.advance();
+                let v = *v;
+                let span = self.advance_span();
                 Ok(Expr {
                     kind: ExprKind::Literal(Literal::Integer(v)),
-                    span: tok.span,
+                    span,
                 })
             }
             TokenKind::Float(v) => {
-                self.advance();
+                let v = *v;
+                let span = self.advance_span();
                 Ok(Expr {
                     kind: ExprKind::Literal(Literal::Float(v)),
-                    span: tok.span,
+                    span,
                 })
             }
             TokenKind::String(s) => {
-                self.advance();
+                let s = s.clone();
+                let span = self.advance_span();
                 Ok(Expr {
                     kind: ExprKind::Literal(Literal::Str(s)),
-                    span: tok.span,
+                    span,
                 })
             }
             TokenKind::Blob(b) => {
-                self.advance();
+                let b = (**b).clone();
+                let span = self.advance_span();
                 Ok(Expr {
-                    kind: ExprKind::Literal(Literal::Blob(*b)),
-                    span: tok.span,
+                    kind: ExprKind::Literal(Literal::Blob(b)),
+                    span,
                 })
             }
             TokenKind::Null => {
-                self.advance();
+                let span = self.advance_span();
                 Ok(Expr {
                     kind: ExprKind::Literal(Literal::Null),
-                    span: tok.span,
+                    span,
                 })
             }
             TokenKind::True => {
-                self.advance();
+                let span = self.advance_span();
                 Ok(Expr {
                     kind: ExprKind::Literal(Literal::True),
-                    span: tok.span,
+                    span,
                 })
             }
             TokenKind::False => {
-                self.advance();
+                let span = self.advance_span();
                 Ok(Expr {
                     kind: ExprKind::Literal(Literal::False),
-                    span: tok.span,
+                    span,
                 })
             }
             TokenKind::Param(p) => {
-                self.advance();
-                let kind = match *p {
+                let kind = match p.as_ref() {
                     Param::Anonymous => ParamKind::Anonymous,
-                    Param::Numbered(n) => ParamKind::Numbered(n),
-                    Param::Colon(s) => ParamKind::Colon(s),
-                    Param::At(s) => ParamKind::At(s),
-                    Param::Dollar(s) => ParamKind::Dollar(s),
+                    Param::Numbered(n) => ParamKind::Numbered(*n),
+                    Param::Colon(s) => ParamKind::Colon(s.clone()),
+                    Param::At(s) => ParamKind::At(s.clone()),
+                    Param::Dollar(s) => ParamKind::Dollar(s.clone()),
                 };
+                let span = self.advance_span();
                 Ok(Expr {
                     kind: ExprKind::Param(kind),
-                    span: tok.span,
+                    span,
                 })
             }
             TokenKind::Keyword(Keyword::CURRENT_TIME)
@@ -2379,14 +2392,14 @@ impl Parser {
             TokenKind::Keyword(Keyword::CASE) => self.case_expr(),
             TokenKind::Keyword(Keyword::CAST) => self.cast_expr(),
             TokenKind::Keyword(Keyword::EXISTS) => {
-                let start = tok.span;
-                self.advance();
+                let start = self.advance_span();
                 self.exists_tail(start, false)
             }
             TokenKind::Identifier(name) => {
-                self.advance();
+                let name = name.clone();
+                let start = self.advance_span();
                 if matches!(self.peek().kind, TokenKind::LParen) {
-                    return self.function_call(name, tok.span);
+                    return self.function_call(name, start);
                 }
                 let mut parts = vec![name];
                 while matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3 {
@@ -2397,8 +2410,8 @@ impl Parser {
                 let end = self
                     .tokens
                     .get(self.pos.saturating_sub(1))
-                    .map_or(tok.span, |t| t.span);
-                let span = join_span(tok.span, end);
+                    .map_or(start, |t| t.span);
+                let span = join_span(start, end);
                 // Exactly one, two or three parts (db-core#232): the old
                 // wildcard arm also matched `a.b.c.d`, silently dropping
                 // the trailing parts, and `unwrap_or_default()` could
@@ -2434,11 +2447,12 @@ impl Parser {
             // the handful matched above (CASE/CAST/EXISTS/CURRENT_*)
             // are true reserved words in expression position.
             TokenKind::Keyword(kw) if matches!(self.peek_at(1).kind, TokenKind::LParen) => {
-                self.advance();
-                self.function_call(format!("{kw:?}"), tok.span)
+                let kw = *kw;
+                let span = self.advance_span();
+                self.function_call(format!("{kw:?}"), span)
             }
             TokenKind::LParen => {
-                self.advance();
+                let start = self.advance_span();
                 if self.at_kw(Keyword::SELECT) {
                     let subquery = self.parse_select_stmt()?;
                     if matches!(
@@ -2452,7 +2466,7 @@ impl Parser {
                         );
                     }
                     let end = self.expect_punct(TokenKind::RParen, "')' to close subquery")?;
-                    let span = join_span(tok.span, end);
+                    let span = join_span(start, end);
                     return Ok(Expr {
                         kind: ExprKind::Subquery(Box::new(subquery)),
                         span,
@@ -2460,7 +2474,7 @@ impl Parser {
                 }
                 let inner = self.expr()?;
                 let end = self.expect_punct(TokenKind::RParen, "')' to close expression")?;
-                let span = join_span(tok.span, end);
+                let span = join_span(start, end);
                 Ok(Expr {
                     kind: ExprKind::Paren(Box::new(inner)),
                     span,
@@ -2468,7 +2482,7 @@ impl Parser {
             }
             other => Err(ParseFail::Invalid {
                 message: format!("expected column or expression, found {other:?}"),
-                span: tok.span,
+                span: self.peek().span,
             }),
         }
     }
@@ -3356,6 +3370,79 @@ mod tests {
             expr.kind,
             ExprKind::Column { catalog: Some(cat), table: Some(t), name }
                 if cat == "a" && t == "b" && name == "c"
+        ));
+    }
+
+    /// #531: `primary_expr` now matches on `&self.peek().kind` instead
+    /// of cloning the whole token up front -- one test per atom shape it
+    /// dispatches on, to pin down that every arm still produces the
+    /// right value and still advances past its token.
+    #[test]
+    fn primary_expr_parses_every_atom_shape() {
+        let int = parser("42").primary_expr().unwrap();
+        assert!(matches!(int.kind, ExprKind::Literal(Literal::Integer(42))));
+
+        let float = parser("1.5").primary_expr().unwrap();
+        assert!(matches!(float.kind, ExprKind::Literal(Literal::Float(v)) if v == 1.5));
+
+        let s = parser("'hi'").primary_expr().unwrap();
+        assert!(matches!(s.kind, ExprKind::Literal(Literal::Str(ref v)) if v == "hi"));
+
+        let blob = parser("X'AB'").primary_expr().unwrap();
+        assert!(matches!(blob.kind, ExprKind::Literal(Literal::Blob(ref v)) if v == &[0xAB]));
+
+        let null = parser("NULL").primary_expr().unwrap();
+        assert!(matches!(null.kind, ExprKind::Literal(Literal::Null)));
+
+        let t = parser("TRUE").primary_expr().unwrap();
+        assert!(matches!(t.kind, ExprKind::Literal(Literal::True)));
+
+        let f = parser("FALSE").primary_expr().unwrap();
+        assert!(matches!(f.kind, ExprKind::Literal(Literal::False)));
+
+        let param = parser(":name").primary_expr().unwrap();
+        assert!(matches!(param.kind, ExprKind::Param(ParamKind::Colon(ref v)) if v == "name"));
+
+        let paren = parser("(1)").primary_expr().unwrap();
+        assert!(matches!(
+            paren.kind,
+            ExprKind::Paren(inner) if matches!(inner.kind, ExprKind::Literal(Literal::Integer(1)))
+        ));
+
+        let func_kw = parser("REPLACE(a, b, c)").primary_expr().unwrap();
+        assert!(
+            matches!(func_kw.kind, ExprKind::FunctionCall { ref name, .. } if name == "REPLACE")
+        );
+
+        let ident = parser("a").primary_expr().unwrap();
+        assert!(matches!(ident.kind, ExprKind::Column { name, .. } if name == "a"));
+
+        assert!(parser(";").primary_expr().is_err());
+    }
+
+    /// #531: a failed speculative multi-column-IN parse
+    /// (`try_tuple_in_subquery`) rewinds `self.pos` back over tokens
+    /// `primary_expr` already consumed -- including a `String`, whose
+    /// payload `primary_expr` now reads via `&self.peek().kind` instead
+    /// of an upfront `self.peek().clone()`. The retry below must see the
+    /// original, uncorrupted string, not a moved-out/left-behind one.
+    #[test]
+    fn tuple_in_rewind_reparses_a_consumed_string_literal_intact() {
+        // `looks_like_tuple_in` is satisfied (top-level comma, `IN`
+        // follows the matching `)`), so `try_tuple_in_subquery` consumes
+        // `'a'` via `primary_expr` before its second element
+        // (`@`, not a valid parameter/expression start) fails
+        // `expr_list()` and rewinds `self.pos` to the opening `(`.
+        let mut p = parser("('a', @) IN (SELECT 1)");
+        assert!(matches!(p.try_tuple_in_subquery(), Ok(None)));
+        // `self.pos` is rewound to the opening `(`; skip it and re-read
+        // the first element directly -- it must still be an intact
+        // `'a'`, not a corrupted/moved-out token.
+        p.advance();
+        let reparsed = p.primary_expr().unwrap();
+        assert!(matches!(
+            reparsed.kind,
+            ExprKind::Literal(Literal::Str(ref v)) if v == "a"
         ));
     }
 
