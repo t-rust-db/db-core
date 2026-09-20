@@ -2704,9 +2704,9 @@ impl BuildTable {
                         Some(g) if g != u32::MAX => g,
                         _ => {
                             let g = u32::try_from(keys.len()).unwrap_or(u32::MAX);
-                            let value = dict.get(idx).map_or(Value::Null, |s| {
-                                Value::Str(s.to_string().into())
-                            });
+                            let value = dict
+                                .get(idx)
+                                .map_or(Value::Null, |s| Value::Str(s.to_string().into()));
                             keys.push(vec![value]);
                             if let Some(slot) = code_to_group.get_mut(idx) {
                                 *slot = g;
@@ -2980,7 +2980,11 @@ fn with_value_source<R>(
             None => f(&Value::Null),
         },
         ValueSource::Payload(i) => match build_row {
-            Some(br) => f(&bt.payload.get(i).and_then(|c| c.get(br)).unwrap_or(Value::Null)),
+            Some(br) => f(&bt
+                .payload
+                .get(i)
+                .and_then(|c| c.get(br))
+                .unwrap_or(Value::Null)),
             None => f(&Value::Null),
         },
     }
@@ -3288,7 +3292,12 @@ impl Vm {
         physical: &impl Fn(usize) -> usize,
     ) -> Result<PayloadColumn> {
         if let Some(col) = self.typed_registers.get(&reg) {
-            if let Column::Dict { dict, indices, valid } = col.as_ref() {
+            if let Column::Dict {
+                dict,
+                indices,
+                valid,
+            } = col.as_ref()
+            {
                 if col.len() != base_len {
                     return Err(VmError::RegisterLengthMismatch { opcode });
                 }
@@ -3314,7 +3323,9 @@ impl Vm {
             return Err(VmError::RegisterLengthMismatch { opcode });
         }
         Ok(PayloadColumn::Values(
-            (0..num_rows).map(|row| column[physical(row)].clone()).collect(),
+            (0..num_rows)
+                .map(|row| column[physical(row)].clone())
+                .collect(),
         ))
     }
 
@@ -4093,7 +4104,9 @@ impl Vm {
                 // `payload_groups`'s classification.
                 let payload: Vec<PayloadColumn> = payload_cols
                     .iter()
-                    .map(|r| self.hash_build_payload_column(*r, opcode, base_len, num_rows, &physical))
+                    .map(|r| {
+                        self.hash_build_payload_column(*r, opcode, base_len, num_rows, &physical)
+                    })
                     .collect::<Result<_>>()?;
                 let int_keys: Option<Vec<i64>> = match keys.as_slice() {
                     [column] => column
@@ -8418,15 +8431,22 @@ mod tests {
             valid: crate::vm::column::Bitmap::from_bools([true, true, false, true].into_iter()),
         };
         let dim = Batch::new(4)
-            .with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)])
+            .with_column(
+                "id",
+                vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+            )
             .with_typed_column("tier", tier_dict);
-        let fact = Batch::new(3).with_column(
-            "fk",
-            vec![Value::Int(1), Value::Int(3), Value::Int(4)],
-        );
+        let fact =
+            Batch::new(3).with_column("fk", vec![Value::Int(1), Value::Int(3), Value::Int(4)]);
         let build = [
-            Opcode::LoadColumn { reg: 10, column: "id".into() },
-            Opcode::LoadColumn { reg: 11, column: "tier".into() },
+            Opcode::LoadColumn {
+                reg: 10,
+                column: "id".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 11,
+                column: "tier".into(),
+            },
             Opcode::HashBuild {
                 key_cols: vec![10].into(),
                 payload_cols: vec![11].into(),
@@ -8434,7 +8454,10 @@ mod tests {
             },
         ];
         let probe = [
-            Opcode::LoadColumn { reg: 0, column: "fk".into() },
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "fk".into(),
+            },
             Opcode::HashProbe {
                 key_cols: vec![0].into(),
                 table: 0,
@@ -8450,7 +8473,10 @@ mod tests {
 
         // Equivalent build over a plain `Str` payload column.
         let str_dim = Batch::new(4)
-            .with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)])
+            .with_column(
+                "id",
+                vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+            )
             .with_column(
                 "tier",
                 vec![
@@ -8505,8 +8531,14 @@ mod tests {
         vm.execute(
             &dim,
             &[
-                Opcode::LoadColumn { reg: 0, column: "id".into() },
-                Opcode::LoadColumn { reg: 1, column: "tier".into() },
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "id".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "tier".into(),
+                },
                 Opcode::HashBuild {
                     key_cols: vec![0].into(),
                     payload_cols: vec![1].into(),
@@ -8545,8 +8577,14 @@ mod tests {
             .execute(
                 &str_dim,
                 &[
-                    Opcode::LoadColumn { reg: 0, column: "id".into() },
-                    Opcode::LoadColumn { reg: 1, column: "tier".into() },
+                    Opcode::LoadColumn {
+                        reg: 0,
+                        column: "id".into(),
+                    },
+                    Opcode::LoadColumn {
+                        reg: 1,
+                        column: "tier".into(),
+                    },
                     Opcode::HashBuild {
                         key_cols: vec![0].into(),
                         payload_cols: vec![1].into(),
@@ -8600,8 +8638,14 @@ mod tests {
         vm.execute(
             &batch,
             &[
-                Opcode::LoadColumn { reg: 0, column: "id".into() },
-                Opcode::LoadColumn { reg: 1, column: "tier".into() },
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "id".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "tier".into(),
+                },
                 Opcode::HashBuild {
                     key_cols: vec![0].into(),
                     payload_cols: vec![1].into(),
