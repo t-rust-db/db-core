@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.114.8] - 2026-09-20
+
+### Changed
+
+- **`TableCursorAdapter` reuses its header-entries `Vec` across rows** (#533, PR #537): `ensure_cached()` replaced its cached `(Payload, Vec)` tuple wholesale on every row, dropping and reallocating the header-entries buffer each time even though `parse_header_into` already supports clear-and-refill. The cache is now split into a `payload` field (reset per row) and a persistent `entries` field whose backing allocation survives across rows. A/B benchmark against the sqlite3 oracle (`full_scan`/`full_scan_3col`, 1MB and 50MB fixtures) showed no measurable improvement -- deltas were within the ~10% bench-noise floor -- so this is a correctness-neutral allocation-hygiene cleanup, not a fix for #533's ~2-3x full_scan gap, which stays open.
+
 ## [0.114.7] - 2026-09-19
 
 ### Changed
