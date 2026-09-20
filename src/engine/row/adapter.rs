@@ -31,8 +31,28 @@ use crate::storage::row::vfs::{PageError, PageSource};
 type SharedPager = Rc<RefCell<crate::storage::row::pager::Pager>>;
 
 /// A positioned row's payload and its header entries -- `(serial_type,
-/// body_offset)` per column, from [`parse_header_into`].
-type CachedRow = (Payload, Vec<(u64, usize)>);
+/// body_offset)` per column. `payload` is `None` between `ensure_cached`
+/// calls (invalidated by `position()`/writes); `entries`' backing `Vec`
+/// is kept and reused across rows via `parse_header_into` (which clears
+/// it in place) rather than reallocated on every `Rewind`/`Next`
+/// (db-core#533).
+struct RowCache {
+    payload: Option<Payload>,
+    entries: Vec<(u64, usize)>,
+}
+
+impl RowCache {
+    fn empty() -> Self {
+        RowCache {
+            payload: None,
+            entries: Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.payload = None;
+    }
+}
 
 fn storage_err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -56,7 +76,7 @@ pub struct TableCursorAdapter {
     /// `Value`s means the header is walked once per row regardless of how
     /// many columns a projection reads (db-core#485), while `column()`
     /// still only decodes the one column body it's asked for.
-    cached: RefCell<Option<CachedRow>>,
+    cached: RefCell<RowCache>,
 }
 
 impl TableCursorAdapter {
@@ -73,27 +93,28 @@ impl TableCursorAdapter {
             header,
             root_page,
             current_rowid: None,
-            cached: RefCell::new(None),
+            cached: RefCell::new(RowCache::empty()),
         }
     }
 
     fn position(&mut self, rowid: Result<Option<i64>, btree::BtreeError>) -> bool {
         self.current_rowid = rowid.ok().flatten();
-        *self.cached.borrow_mut() = None;
+        self.cached.borrow_mut().clear();
         self.current_rowid.is_some()
     }
 
     /// Ensures `cached` holds the current row's payload and header
-    /// offsets, parsing the header at most once per positioned row.
+    /// offsets, parsing the header at most once per positioned row, into
+    /// the same `Vec` allocation reused across rows.
     fn ensure_cached(&self) -> Option<()> {
-        if self.cached.borrow().is_some() {
+        if self.cached.borrow().payload.is_some() {
             return Some(());
         }
         self.current_rowid?;
         let payload = self.cursor.current_payload().ok()?;
-        let mut entries = Vec::new();
-        parse_header_into(&payload, &mut entries).ok()?;
-        *self.cached.borrow_mut() = Some((payload, entries));
+        let mut cached = self.cached.borrow_mut();
+        parse_header_into(&payload, &mut cached.entries).ok()?;
+        cached.payload = Some(payload);
         Some(())
     }
 
@@ -141,8 +162,8 @@ impl Cursor for TableCursorAdapter {
         // `Some(Null)`, SQLite's short-record rule.
         self.ensure_cached()?;
         let cached = self.cached.borrow();
-        let (payload, entries) = cached.as_ref()?;
-        match entries.get(col) {
+        let payload = cached.payload.as_ref()?;
+        match cached.entries.get(col) {
             Some(&(serial_type, offset)) => {
                 let (value, _) =
                     decode_serial_value(serial_type, payload, offset, self.header.text_encoding)
@@ -160,8 +181,7 @@ impl Cursor for TableCursorAdapter {
     fn payload(&self) -> Option<Rc<[u8]>> {
         self.ensure_cached()?;
         let cached = self.cached.borrow();
-        let (payload, _) = cached.as_ref()?;
-        Some(Rc::from(&payload[..]))
+        Some(Rc::from(&cached.payload.as_ref()?[..]))
     }
 
     fn insert_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
@@ -174,7 +194,7 @@ impl Cursor for TableCursorAdapter {
             payload,
         )
         .is_ok();
-        *self.cached.borrow_mut() = None;
+        self.cached.borrow_mut().clear();
         Some(ok)
     }
 
@@ -197,7 +217,7 @@ impl Cursor for TableCursorAdapter {
         )
         .is_ok();
         self.current_rowid = None;
-        *self.cached.borrow_mut() = None;
+        self.cached.borrow_mut().clear();
         ok
     }
 
