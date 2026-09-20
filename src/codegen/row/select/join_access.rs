@@ -675,6 +675,17 @@ pub(super) fn emit_pseudo_distinct_guard(
     skip_label: Label,
 ) {
     let width = P4::Int(i64::try_from(count).unwrap_or(0));
+    // db-core#527: bloom pre-filter ahead of `Found`, same shape as
+    // `projection::emit_dedup_check`.
+    let insert_label = em.new_label();
+    let filter_addr = em.emit(Instruction::with_p4(
+        Opcode::Filter,
+        distinct_cursor,
+        0,
+        first,
+        width.clone(),
+    ));
+    em.patch_p2(filter_addr, insert_label);
     let addr = em.emit(Instruction::with_p4(
         Opcode::Found,
         distinct_cursor,
@@ -683,6 +694,14 @@ pub(super) fn emit_pseudo_distinct_guard(
         width.clone(),
     ));
     em.patch_p2(addr, skip_label);
+    em.place(insert_label);
+    em.emit(Instruction::with_p4(
+        Opcode::FilterAdd,
+        distinct_cursor,
+        0,
+        first,
+        width.clone(),
+    ));
     em.emit(Instruction::with_p4(
         Opcode::IdxInsert,
         distinct_cursor,

@@ -696,6 +696,8 @@ pub fn db_core::engine::row::adapter::IndexCursorAdapter::current_blob(&self) ->
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::delete(&mut self) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::engine::row::adapter::IndexCursorAdapter::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::engine::row::adapter::IndexCursorAdapter::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -749,6 +751,8 @@ pub fn db_core::engine::row::adapter::TableCursorAdapter::current_blob(&self) ->
 pub fn db_core::engine::row::adapter::TableCursorAdapter::delete(&mut self) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::engine::row::adapter::TableCursorAdapter::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::engine::row::adapter::TableCursorAdapter::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::engine::row::adapter::TableCursorAdapter::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::engine::row::adapter::TableCursorAdapter::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6238,6 +6242,8 @@ pub fn db_core::vm::row::cursor::AutoIndexCursor::current_blob(&self) -> core::o
 pub fn db_core::vm::row::cursor::AutoIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::AutoIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::AutoIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::AutoIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::AutoIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6264,7 +6270,7 @@ pub struct db_core::vm::row::cursor::EphemeralIndexCursor
 impl db_core::vm::row::cursor::EphemeralIndexCursor
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::new() -> Self
 impl core::default::Default for db_core::vm::row::cursor::EphemeralIndexCursor
-pub fn db_core::vm::row::cursor::EphemeralIndexCursor::default() -> db_core::vm::row::cursor::EphemeralIndexCursor
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::default() -> Self
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::EphemeralIndexCursor
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::auto_index_next(&mut self) -> bool
@@ -6275,6 +6281,8 @@ pub fn db_core::vm::row::cursor::EphemeralIndexCursor::current_blob(&self) -> co
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6312,6 +6320,8 @@ pub fn db_core::vm::row::cursor::EphemeralTableCursor::current_blob(&self) -> co
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6347,6 +6357,8 @@ pub fn db_core::vm::row::cursor::HashAggCursor::current_blob(&self) -> core::opt
 pub fn db_core::vm::row::cursor::HashAggCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::HashAggCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::HashAggCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::HashAggCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::HashAggCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6382,6 +6394,8 @@ pub fn db_core::vm::row::cursor::InMemoryCursor::current_blob(&self) -> core::op
 pub fn db_core::vm::row::cursor::InMemoryCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::InMemoryCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::InMemoryCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::InMemoryCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::InMemoryCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6417,6 +6431,8 @@ pub fn db_core::vm::row::cursor::InMemoryIndexCursor::current_blob(&self) -> cor
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6454,6 +6470,8 @@ pub fn db_core::vm::row::cursor::PseudoCursor::current_blob(&self) -> core::opti
 pub fn db_core::vm::row::cursor::PseudoCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::PseudoCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::PseudoCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::PseudoCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::PseudoCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6489,6 +6507,8 @@ pub fn db_core::vm::row::cursor::SorterCursor::current_blob(&self) -> core::opti
 pub fn db_core::vm::row::cursor::SorterCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::SorterCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::SorterCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::SorterCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::SorterCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6522,6 +6542,8 @@ pub fn db_core::vm::row::cursor::Cursor::current_blob(&self) -> core::option::Op
 pub fn db_core::vm::row::cursor::Cursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::Cursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::Cursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::Cursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::Cursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::Cursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::Cursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::Cursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6554,6 +6576,8 @@ pub fn db_core::engine::row::adapter::IndexCursorAdapter::current_blob(&self) ->
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::delete(&mut self) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::engine::row::adapter::IndexCursorAdapter::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::engine::row::adapter::IndexCursorAdapter::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6586,6 +6610,8 @@ pub fn db_core::engine::row::adapter::TableCursorAdapter::current_blob(&self) ->
 pub fn db_core::engine::row::adapter::TableCursorAdapter::delete(&mut self) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::engine::row::adapter::TableCursorAdapter::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::engine::row::adapter::TableCursorAdapter::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::engine::row::adapter::TableCursorAdapter::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::engine::row::adapter::TableCursorAdapter::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6618,6 +6644,8 @@ pub fn db_core::vm::row::cursor::AutoIndexCursor::current_blob(&self) -> core::o
 pub fn db_core::vm::row::cursor::AutoIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::AutoIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::AutoIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::AutoIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::AutoIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6650,6 +6678,8 @@ pub fn db_core::vm::row::cursor::EphemeralIndexCursor::current_blob(&self) -> co
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6682,6 +6712,8 @@ pub fn db_core::vm::row::cursor::EphemeralTableCursor::current_blob(&self) -> co
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6714,6 +6746,8 @@ pub fn db_core::vm::row::cursor::HashAggCursor::current_blob(&self) -> core::opt
 pub fn db_core::vm::row::cursor::HashAggCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::HashAggCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::HashAggCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::HashAggCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::HashAggCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6746,6 +6780,8 @@ pub fn db_core::vm::row::cursor::InMemoryCursor::current_blob(&self) -> core::op
 pub fn db_core::vm::row::cursor::InMemoryCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::InMemoryCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::InMemoryCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::InMemoryCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::InMemoryCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6778,6 +6814,8 @@ pub fn db_core::vm::row::cursor::InMemoryIndexCursor::current_blob(&self) -> cor
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6810,6 +6848,8 @@ pub fn db_core::vm::row::cursor::PseudoCursor::current_blob(&self) -> core::opti
 pub fn db_core::vm::row::cursor::PseudoCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::PseudoCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::PseudoCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::PseudoCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::PseudoCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6842,6 +6882,8 @@ pub fn db_core::vm::row::cursor::SorterCursor::current_blob(&self) -> core::opti
 pub fn db_core::vm::row::cursor::SorterCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::SorterCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::SorterCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::SorterCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::SorterCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -6975,6 +7017,8 @@ pub db_core::vm::row::program::Opcode::Divide
 pub db_core::vm::row::program::Opcode::DropIndex
 pub db_core::vm::row::program::Opcode::DropTable
 pub db_core::vm::row::program::Opcode::Eq
+pub db_core::vm::row::program::Opcode::Filter
+pub db_core::vm::row::program::Opcode::FilterAdd
 pub db_core::vm::row::program::Opcode::Found
 pub db_core::vm::row::program::Opcode::Function
 pub db_core::vm::row::program::Opcode::Ge
@@ -7540,6 +7584,8 @@ pub db_core::vm::row::Opcode::Divide
 pub db_core::vm::row::Opcode::DropIndex
 pub db_core::vm::row::Opcode::DropTable
 pub db_core::vm::row::Opcode::Eq
+pub db_core::vm::row::Opcode::Filter
+pub db_core::vm::row::Opcode::FilterAdd
 pub db_core::vm::row::Opcode::Found
 pub db_core::vm::row::Opcode::Function
 pub db_core::vm::row::Opcode::Ge
@@ -7752,6 +7798,8 @@ pub fn db_core::vm::row::cursor::AutoIndexCursor::current_blob(&self) -> core::o
 pub fn db_core::vm::row::cursor::AutoIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::AutoIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::AutoIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::AutoIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::AutoIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -7790,7 +7838,7 @@ pub struct db_core::vm::row::EphemeralIndexCursor
 impl db_core::vm::row::cursor::EphemeralIndexCursor
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::new() -> Self
 impl core::default::Default for db_core::vm::row::cursor::EphemeralIndexCursor
-pub fn db_core::vm::row::cursor::EphemeralIndexCursor::default() -> db_core::vm::row::cursor::EphemeralIndexCursor
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::default() -> Self
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::EphemeralIndexCursor
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::auto_index_next(&mut self) -> bool
@@ -7801,6 +7849,8 @@ pub fn db_core::vm::row::cursor::EphemeralIndexCursor::current_blob(&self) -> co
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -7838,6 +7888,8 @@ pub fn db_core::vm::row::cursor::EphemeralTableCursor::current_blob(&self) -> co
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -7902,6 +7954,8 @@ pub fn db_core::vm::row::cursor::HashAggCursor::current_blob(&self) -> core::opt
 pub fn db_core::vm::row::cursor::HashAggCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::HashAggCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::HashAggCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::HashAggCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::HashAggCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -7937,6 +7991,8 @@ pub fn db_core::vm::row::cursor::InMemoryCursor::current_blob(&self) -> core::op
 pub fn db_core::vm::row::cursor::InMemoryCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::InMemoryCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::InMemoryCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::InMemoryCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::InMemoryCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -7972,6 +8028,8 @@ pub fn db_core::vm::row::cursor::InMemoryIndexCursor::current_blob(&self) -> cor
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8049,6 +8107,8 @@ pub fn db_core::vm::row::cursor::PseudoCursor::current_blob(&self) -> core::opti
 pub fn db_core::vm::row::cursor::PseudoCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::PseudoCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::PseudoCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::PseudoCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::PseudoCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8110,6 +8170,8 @@ pub fn db_core::vm::row::cursor::SorterCursor::current_blob(&self) -> core::opti
 pub fn db_core::vm::row::cursor::SorterCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::SorterCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::SorterCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::SorterCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::SorterCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8183,6 +8245,8 @@ pub fn db_core::vm::row::Cursor::current_blob(&self) -> core::option::Option<db_
 pub fn db_core::vm::row::Cursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::Cursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::Cursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::Cursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::Cursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::Cursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::Cursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::Cursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8215,6 +8279,8 @@ pub fn db_core::engine::row::adapter::IndexCursorAdapter::current_blob(&self) ->
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::delete(&mut self) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::engine::row::adapter::IndexCursorAdapter::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::engine::row::adapter::IndexCursorAdapter::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8247,6 +8313,8 @@ pub fn db_core::engine::row::adapter::TableCursorAdapter::current_blob(&self) ->
 pub fn db_core::engine::row::adapter::TableCursorAdapter::delete(&mut self) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::engine::row::adapter::TableCursorAdapter::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::engine::row::adapter::TableCursorAdapter::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::engine::row::adapter::TableCursorAdapter::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::engine::row::adapter::TableCursorAdapter::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8279,6 +8347,8 @@ pub fn db_core::vm::row::cursor::AutoIndexCursor::current_blob(&self) -> core::o
 pub fn db_core::vm::row::cursor::AutoIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::AutoIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::AutoIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::AutoIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::AutoIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8311,6 +8381,8 @@ pub fn db_core::vm::row::cursor::EphemeralIndexCursor::current_blob(&self) -> co
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8343,6 +8415,8 @@ pub fn db_core::vm::row::cursor::EphemeralTableCursor::current_blob(&self) -> co
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8375,6 +8449,8 @@ pub fn db_core::vm::row::cursor::HashAggCursor::current_blob(&self) -> core::opt
 pub fn db_core::vm::row::cursor::HashAggCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::HashAggCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::HashAggCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::HashAggCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::HashAggCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8407,6 +8483,8 @@ pub fn db_core::vm::row::cursor::InMemoryCursor::current_blob(&self) -> core::op
 pub fn db_core::vm::row::cursor::InMemoryCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::InMemoryCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::InMemoryCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::InMemoryCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::InMemoryCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8439,6 +8517,8 @@ pub fn db_core::vm::row::cursor::InMemoryIndexCursor::current_blob(&self) -> cor
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8471,6 +8551,8 @@ pub fn db_core::vm::row::cursor::PseudoCursor::current_blob(&self) -> core::opti
 pub fn db_core::vm::row::cursor::PseudoCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::PseudoCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::PseudoCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::PseudoCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::PseudoCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>
@@ -8503,6 +8585,8 @@ pub fn db_core::vm::row::cursor::SorterCursor::current_blob(&self) -> core::opti
 pub fn db_core::vm::row::cursor::SorterCursor::delete(&mut self) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::dup(&self) -> core::option::Option<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>>
 pub fn db_core::vm::row::cursor::SorterCursor::ephemeral_idx_insert(&mut self, &[db_core::value::Value], &[db_core::value::Collation], alloc::vec::Vec<db_core::value::Value>) -> core::option::Option<bool>
+pub fn db_core::vm::row::cursor::SorterCursor::filter_add(&mut self, &[db_core::value::Value], &[db_core::value::Collation])
+pub fn db_core::vm::row::cursor::SorterCursor::filter_maybe_present(&self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::found(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::SorterCursor::hash_agg_find(&mut self, alloc::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::hash_agg_group_accumulators(&self) -> core::option::Option<&[core::option::Option<db_core::vm::row::aggregate::AggState>]>

@@ -332,6 +332,17 @@ pub(in crate::codegen::row::select) fn emit_agg_step(
         em.emit(Instruction::new(Opcode::OpenEphemeral, eph_cursor, 0, 0));
     }
     let skip_step = em.new_label();
+    // db-core#527: bloom pre-filter ahead of `Found`, same shape as
+    // `projection::emit_dedup_check`.
+    let insert_label = em.new_label();
+    let filter_addr = em.emit(Instruction::with_p4(
+        Opcode::Filter,
+        eph_cursor,
+        0,
+        p2,
+        P4::Int(1),
+    ));
+    em.patch_p2(filter_addr, insert_label);
     let found_addr = em.emit(Instruction::with_p4(
         Opcode::Found,
         eph_cursor,
@@ -340,6 +351,14 @@ pub(in crate::codegen::row::select) fn emit_agg_step(
         P4::Int(1),
     ));
     em.patch_p2(found_addr, skip_step);
+    em.place(insert_label);
+    em.emit(Instruction::with_p4(
+        Opcode::FilterAdd,
+        eph_cursor,
+        0,
+        p2,
+        P4::Int(1),
+    ));
     em.emit(Instruction::with_p4(
         Opcode::IdxInsert,
         eph_cursor,

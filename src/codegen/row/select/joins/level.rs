@@ -641,6 +641,17 @@ pub(in crate::codegen::row::select) fn emit_join_distinct_guard(
     let Some((first, count)) = captured else {
         return Ok(());
     };
+    // db-core#527: bloom pre-filter ahead of `Found`, same shape as
+    // `projection::emit_dedup_check`.
+    let insert_label = em.new_label();
+    let filter_addr = em.emit(Instruction::with_p4(
+        Opcode::Filter,
+        distinct_cursor,
+        0,
+        first,
+        P4::Int(i64::from(count)),
+    ));
+    em.patch_p2(filter_addr, insert_label);
     let addr = em.emit(Instruction::with_p4(
         Opcode::Found,
         distinct_cursor,
@@ -649,6 +660,14 @@ pub(in crate::codegen::row::select) fn emit_join_distinct_guard(
         P4::Int(i64::from(count)),
     ));
     em.patch_p2(addr, skip_label);
+    em.place(insert_label);
+    em.emit(Instruction::with_p4(
+        Opcode::FilterAdd,
+        distinct_cursor,
+        0,
+        first,
+        P4::Int(i64::from(count)),
+    ));
     em.emit(Instruction::with_p4(
         Opcode::IdxInsert,
         distinct_cursor,

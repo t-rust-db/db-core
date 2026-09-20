@@ -192,6 +192,8 @@ fn opcode_name(opcode: Opcode) -> &'static str {
         Opcode::NullRow => "NullRow",
         Opcode::Sequence => "Sequence",
         Opcode::Found => "Found",
+        Opcode::Filter => "Filter",
+        Opcode::FilterAdd => "FilterAdd",
         Opcode::IdxInsert => "IdxInsert",
         Opcode::IdxDelete => "IdxDelete",
         Opcode::Count => "Count",
@@ -301,6 +303,12 @@ fn comment_for(opcode: Opcode, p1: i32, p2: i32, p3: i32) -> String {
         Opcode::HashAggData => format!("r[{p2}] = cursor {p1} group row"),
         Opcode::HashAggNext => format!("cursor {p1} next group, jump {p2} if group found"),
         Opcode::Found => format!("cursor {p1} found key at r[{p3}..], jump {p2}"),
+        Opcode::Filter => {
+            format!(
+                "cursor {p1} bloom filter test key at r[{p3}..], jump {p2} if definitely absent"
+            )
+        }
+        Opcode::FilterAdd => format!("cursor {p1} bloom filter add key at r[{p3}..]"),
         Opcode::IdxInsert => format!("cursor {p1} insert key r[{p2}..]"),
         Opcode::IdxDelete => format!("cursor {p1} delete key r[{p2}..]"),
         Opcode::Count => format!("r[{p2}] = count of b-tree rooted at page {p1}"),

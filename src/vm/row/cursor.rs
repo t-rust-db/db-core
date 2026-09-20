@@ -278,6 +278,23 @@ pub trait Cursor {
         None
     }
 
+    /// `Opcode::FilterAdd`: records `key` in this cursor's bloom
+    /// pre-filter (db-core#527, mirroring sqlite3's own `FilterAdd`).
+    /// The default is a no-op -- only [`EphemeralIndexCursor`] keeps a
+    /// filter; every other cursor kind is either scanned directly (no
+    /// probe to skip) or backed by a b-tree seek cheap enough that a
+    /// bloom pre-check isn't worth the bits.
+    fn filter_add(&mut self, _key: &[Value], _collations: &[Collation]) {}
+
+    /// `Opcode::Filter`: `false` means `key` is **definitely absent** --
+    /// codegen can jump straight past the exact `Found`/`NotFound` probe
+    /// (db-core#527). The default is `true` ("maybe present"), which is
+    /// always safe: it just means every row falls through to the real
+    /// probe, exactly as if no `Filter` had been emitted.
+    fn filter_maybe_present(&self, _key: &[Value], _collations: &[Collation]) -> bool {
+        true
+    }
+
     /// `OpenDup`: a second cursor over the same underlying rows with a
     /// fresh position (sqlite-rs: ephemeral tables only). `None` means
     /// the dispatcher re-opens through the cursor factory instead (#134).
@@ -655,6 +672,74 @@ fn fast_int_key(key: &[Value]) -> Option<i64> {
     Some(*i)
 }
 
+/// #527: bit width of `EphemeralIndexCursor`'s bloom pre-filter -- 65536
+/// bits (8 KiB), the same order of magnitude as sqlite3's own per-cursor
+/// bloom filter (~10 KB, `sqlite3BloomFilterInit`). Sized for the common
+/// case (a low-selectivity `IN (SELECT ...)`/semi-join probe against a
+/// materialized subquery result of up to a few hundred thousand rows);
+/// past that the false-positive rate rises and the filter degrades
+/// toward "always maybe", but `found()` always falls through to the
+/// exact `HashMap` check on a "maybe" answer, so this never affects
+/// correctness -- only how much of the O(1) hash lookup a miss avoids.
+const BLOOM_BITS: usize = 1 << 16;
+const BLOOM_WORDS: usize = BLOOM_BITS / 64;
+
+/// Finalizer from MurmurHash3/splitmix64 -- a small, fast, well-mixed
+/// avalanche so both halves of the 64-bit hash (used as two independent
+/// bit positions below, Kirsch-Mitzenmacher style) are well distributed.
+fn bloom_mix(mut z: u64) -> u64 {
+    z = (z ^ (z >> 33)).wrapping_mul(0xff51afd7ed558ccd);
+    z = (z ^ (z >> 33)).wrapping_mul(0xc4ceb9fe1a85ec53);
+    z ^ (z >> 33)
+}
+
+fn bloom_hash_int(key: i64) -> u64 {
+    bloom_mix(key.cast_unsigned())
+}
+
+fn bloom_hash_bytes(bytes: &[u8]) -> u64 {
+    // FNV-1a: fast, allocation-free, good enough avalanche for a bloom
+    // filter's two derived bit positions (unlike SipHash, not DoS-hardened,
+    // but this key space is server-controlled query data, not attacker input).
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    bloom_mix(h)
+}
+
+// `BLOOM_BITS`/64 are powers of two, so masking (never panics, unlike
+// `%`/`/`) extracts both the bit index within `BLOOM_BITS` and the
+// word/within-word split.
+const BLOOM_BIT_MASK: u64 = (BLOOM_BITS as u64) - 1;
+const WORD_BIT_MASK: usize = 63;
+const WORD_SHIFT: u32 = 6; // 2^6 == 64
+
+fn bloom_bit_positions(hash: u64) -> [usize; 2] {
+    let h1 = hash & BLOOM_BIT_MASK;
+    let h2 = (hash >> 32) & BLOOM_BIT_MASK;
+    [
+        usize::try_from(h1).unwrap_or(0),
+        usize::try_from(h2).unwrap_or(0),
+    ]
+}
+
+fn bloom_set(bits: &mut [u64; BLOOM_WORDS], hash: u64) {
+    for bit in bloom_bit_positions(hash) {
+        if let Some(word) = bits.get_mut(bit >> WORD_SHIFT) {
+            *word |= 1 << (bit & WORD_BIT_MASK);
+        }
+    }
+}
+
+fn bloom_maybe_present(bits: &[u64; BLOOM_WORDS], hash: u64) -> bool {
+    bloom_bit_positions(hash).into_iter().all(|bit| {
+        bits.get(bit >> WORD_SHIFT)
+            .is_some_and(|w| w & (1 << (bit & WORD_BIT_MASK)) != 0)
+    })
+}
+
 /// sqlite-rs's `CursorSlot::Ephemeral` (`OpenEphemeral p5 = 0`, #134): the
 /// in-memory index behind DISTINCT and `IN (SELECT …)` — entries keyed by
 /// the encoded, collation-normalized key record, each holding the stored
@@ -662,7 +747,17 @@ fn fast_int_key(key: &[Value]) -> Option<i64> {
 /// `p5` asked for). `Found`/`IdxInsert` remember the key they touched so
 /// a following `Delete` or `Column` acts on it. `int_entries` is the
 /// #527 fast path for [`fast_int_key`]; every probe/insert/delete tries
-/// it first and falls back to `entries` otherwise.
+/// it first and falls back to `entries` otherwise. `bloom` is a
+/// mirror of sqlite3's own `Filter`/`FilterAdd` bloom pre-filter (its
+/// `EXPLAIN` for this query shape emits exactly that pair ahead of its
+/// `NotFound` probe): `ephemeral_idx_insert` sets two bits per key,
+/// `found` checks them before the exact lookup and returns "absent"
+/// immediately on a miss, skipping the `HashMap` entirely for
+/// definitely-absent keys. `idx_delete`/`delete` never clear bits (a
+/// standard bloom-filter limitation): a deleted key's bits can make a
+/// later different key look "maybe present" when it isn't, but `found`
+/// always falls through to the exact check on "maybe", so this can only
+/// cost an avoidable lookup, never a wrong answer.
 ///
 /// #525/#527: `Found`/`NotFound` (membership) is the only access pattern
 /// codegen ever compiles against this cursor kind — no `IN (SELECT ...)`
@@ -675,11 +770,27 @@ fn fast_int_key(key: &[Value]) -> Option<i64> {
 /// never receives, so [`Cursor::idx_compare`]'s default (`None`, "not an
 /// index cursor for ordered seeks") is left un-overridden rather than
 /// silently comparing in an arbitrary hash order.
-#[derive(Default)]
 pub struct EphemeralIndexCursor {
     entries: HashMap<Vec<u8>, Vec<Value>>,
     int_entries: HashMap<i64, Vec<Value>>,
     last_key: Option<EphKey>,
+    /// #527: set by `ephemeral_idx_insert`, consulted by `found` before
+    /// the exact `HashMap` lookup -- a "definitely absent" answer skips
+    /// it entirely (see [`BLOOM_BITS`]'s doc for the correctness
+    /// argument). Boxed so an empty/never-probed cursor (most `Column`-
+    /// only or single-lookup use sites) doesn't pay the 8 KiB inline.
+    bloom: Box<[u64; BLOOM_WORDS]>,
+}
+
+impl Default for EphemeralIndexCursor {
+    fn default() -> Self {
+        EphemeralIndexCursor {
+            entries: HashMap::new(),
+            int_entries: HashMap::new(),
+            last_key: None,
+            bloom: Box::new([0u64; BLOOM_WORDS]),
+        }
+    }
 }
 
 impl EphemeralIndexCursor {
@@ -749,6 +860,22 @@ impl Cursor for EphemeralIndexCursor {
         self.entries.insert(encoded.clone(), stored);
         self.last_key = Some(EphKey::Encoded(encoded));
         Some(true)
+    }
+
+    fn filter_add(&mut self, key: &[Value], collations: &[Collation]) {
+        let hash = match fast_int_key(key) {
+            Some(i) => bloom_hash_int(i),
+            None => bloom_hash_bytes(&encode_key(key, collations)),
+        };
+        bloom_set(&mut self.bloom, hash);
+    }
+
+    fn filter_maybe_present(&self, key: &[Value], collations: &[Collation]) -> bool {
+        let hash = match fast_int_key(key) {
+            Some(i) => bloom_hash_int(i),
+            None => bloom_hash_bytes(&encode_key(key, collations)),
+        };
+        bloom_maybe_present(&self.bloom, hash)
     }
 
     fn idx_delete(&mut self, key: &[Value]) -> bool {
@@ -2104,6 +2231,7 @@ mod tests {
                 .map(|i| (i64::try_from(i).unwrap_or(i64::MAX), Vec::new()))
                 .collect(),
             last_key: None,
+            bloom: Box::new([0u64; BLOOM_WORDS]),
         };
         let key = [Value::Integer(-1)];
         let collations = [Collation::Binary];
@@ -2148,6 +2276,7 @@ mod tests {
             entries: HashMap::new(),
             int_entries,
             last_key: None,
+            bloom: Box::new([0u64; BLOOM_WORDS]),
         };
         assert_eq!(
             c.ephemeral_idx_insert(&key, &collations, vec![Value::Integer(-2)]),
@@ -2171,6 +2300,7 @@ mod tests {
                 .collect(),
             int_entries: HashMap::new(),
             last_key: None,
+            bloom: Box::new([0u64; BLOOM_WORDS]),
         };
         let key = [Value::Text("z".into())];
         let collations = [Collation::Binary];
@@ -2216,6 +2346,7 @@ mod tests {
             entries,
             int_entries: HashMap::new(),
             last_key: None,
+            bloom: Box::new([0u64; BLOOM_WORDS]),
         };
         assert_eq!(
             c.ephemeral_idx_insert(&key, &collations, vec![Value::Text("z2".into())]),

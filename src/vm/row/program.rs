@@ -213,6 +213,18 @@ pub enum Opcode {
     Found,
     /// Inserts the index entry in register `p2` into cursor `p1`.
     IdxInsert,
+    /// db-core#527, mirroring sqlite3's own `Filter`: tests the key from
+    /// registers `p3..p3+p4` against cursor `p1`'s bloom pre-filter,
+    /// jumping to `p2` if the key is definitely absent (never a false
+    /// negative -- cursor kinds without a filter always report "maybe
+    /// present", so this only ever skips a `Found`/`NotFound` probe that
+    /// would have missed anyway).
+    Filter,
+    /// db-core#527, mirroring sqlite3's own `FilterAdd`: records the key
+    /// from registers `p3..p3+p4` in cursor `p1`'s bloom pre-filter.
+    /// Always paired with an `IdxInsert` building the same ephemeral
+    /// index a later `Filter` probes.
+    FilterAdd,
     /// Compares cursor `p1`'s key against `p3..p3+p4`, jumping to `p2`
     /// if `<=`.
     IdxLE,
@@ -820,6 +832,8 @@ impl Opcode {
             Opcode::Column
             | Opcode::SeekRowid
             | Opcode::Found
+            | Opcode::Filter
+            | Opcode::FilterAdd
             | Opcode::IdxLE
             | Opcode::NoConflict
             | Opcode::SeekIndexEq

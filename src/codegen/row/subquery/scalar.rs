@@ -485,6 +485,18 @@ pub(crate) fn compile_in_subquery(
 
     let null_addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));
     em.patch_p2(null_addr, null_label);
+    // db-core#527, mirroring sqlite3's own `Filter`/`FilterAdd` pair
+    // ahead of its `NotFound` probe: a bloom-filter miss means `l` is
+    // definitely not in the materialized subquery result, so control
+    // jumps straight to `notfound_label`, skipping the `Found` lookup.
+    let filter_addr = em.emit(Instruction::with_p4(
+        Opcode::Filter,
+        eph_cursor,
+        0,
+        l,
+        P4::Int(1),
+    ));
+    em.patch_p2(filter_addr, notfound_label);
     let found_addr = em.emit(Instruction::with_p4(
         Opcode::Found,
         eph_cursor,
@@ -551,6 +563,13 @@ pub(super) fn materialize_in_subquery_index(
         )?;
     }
     let v = compile_value(em, reg, &sub_scope, col_expr)?;
+    em.emit(Instruction::with_p4(
+        Opcode::FilterAdd,
+        eph_cursor,
+        0,
+        v,
+        P4::Int(1),
+    ));
     em.emit(Instruction::with_p4(
         Opcode::IdxInsert,
         eph_cursor,
@@ -644,6 +663,13 @@ pub(crate) fn compile_in_subquery_multi(
         "multi-column IN's subquery projection",
     )?;
     em.emit(Instruction::with_p4(
+        Opcode::FilterAdd,
+        eph_cursor,
+        0,
+        v_first,
+        P4::Int(v_count.into()),
+    ));
+    em.emit(Instruction::with_p4(
         Opcode::IdxInsert,
         eph_cursor,
         v_first,
@@ -672,6 +698,16 @@ pub(crate) fn compile_in_subquery_multi(
         let null_addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));
         em.patch_p2(null_addr, null_label);
     }
+    // db-core#527: bloom pre-filter ahead of `Found`, same shape as
+    // `compile_in_subquery`'s single-column probe.
+    let filter_addr = em.emit(Instruction::with_p4(
+        Opcode::Filter,
+        eph_cursor,
+        0,
+        l_first,
+        P4::Int(l_count.into()),
+    ));
+    em.patch_p2(filter_addr, notfound_label);
     let found_addr = em.emit(Instruction::with_p4(
         Opcode::Found,
         eph_cursor,
