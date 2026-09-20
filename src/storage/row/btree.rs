@@ -32,7 +32,7 @@ pub use master::{
     update_sequence, MasterEntry, SQLITE_MASTER_ROOT_PAGE,
 };
 pub use schema::{create_empty_index_root, create_empty_table_root, populate_index_from_table};
-pub use table::{delete_row, insert_row};
+pub use table::{delete_row, insert_row, update_row};
 
 use std::ops::Deref;
 use std::rc::Rc;

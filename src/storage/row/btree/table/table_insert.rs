@@ -64,7 +64,7 @@ pub fn insert_row(
 /// Builds a leaf table-b-tree cell: payload-length varint + rowid varint +
 /// local payload bytes, plus a trailing 4-byte overflow-page pointer when
 /// `payload` doesn't fit locally (fileformat2.html "Cell Payload Overflow").
-fn encode_leaf_cell(
+pub(super) fn encode_leaf_cell(
     pager: &mut Pager,
     usable_size: u32,
     rowid: i64,
@@ -186,7 +186,7 @@ fn interior_median_by_bytes(cells: &[Vec<u8>]) -> usize {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn insert_into_leaf(
+pub(super) fn insert_into_leaf(
     pager: &mut Pager,
     usable_size: u32,
     page_len: usize,

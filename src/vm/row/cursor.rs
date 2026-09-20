@@ -295,6 +295,15 @@ pub trait Cursor {
         true
     }
 
+    /// `Opcode::Update`: rewrites the current row to `payload` under the
+    /// same `rowid`, as one combined operation rather than
+    /// [`Self::delete`] followed by [`Self::insert_payload`] (db-core#524).
+    /// `None` means "not supported directly" and the dispatcher falls
+    /// back to that pair.
+    fn update_payload(&mut self, _rowid: i64, _payload: &Rc<[u8]>) -> Option<bool> {
+        None
+    }
+
     /// `OpenDup`: a second cursor over the same underlying rows with a
     /// fresh position (sqlite-rs: ephemeral tables only). `None` means
     /// the dispatcher re-opens through the cursor factory instead (#134).

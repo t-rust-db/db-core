@@ -720,6 +720,7 @@ pub fn db_core::engine::row::adapter::IndexCursorAdapter::seek_index_eq(&mut sel
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::sequence_base(&self) -> i64
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::engine::row::adapter::IndexCursorAdapter::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::engine::row::adapter::PagerTransaction
 impl db_core::engine::row::adapter::PagerTransaction
 pub fn db_core::engine::row::adapter::PagerTransaction::read_only<P: db_core::storage::row::vfs::PageSource + ?core::marker::Sized + 'static>(alloc::rc::Rc<P>, db_core::storage::row::header::DatabaseHeader) -> Self
@@ -775,6 +776,7 @@ pub fn db_core::engine::row::adapter::TableCursorAdapter::seek_index_eq(&mut sel
 pub fn db_core::engine::row::adapter::TableCursorAdapter::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::sequence_base(&self) -> i64
 pub fn db_core::engine::row::adapter::TableCursorAdapter::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::engine::row::adapter::TableCursorAdapter::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub mod db_core::engine::row::stats
 pub struct db_core::engine::row::stats::PlanCost
 pub db_core::engine::row::stats::PlanCost::estimated_io: u64
@@ -3413,6 +3415,7 @@ pub fn db_core::storage::row::btree::insert_row(&mut db_core::storage::row::page
 pub fn db_core::storage::row::btree::insert_stat1_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &str, core::option::Option<&str>, &str) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::populate_index_from_table(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, u32, &[usize]) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::test_minimal_db(u32) -> (db_core::storage::row::vfs::MemoryVfs, db_core::storage::row::header::DatabaseHeader)
+pub fn db_core::storage::row::btree::update_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, i64, &[u8]) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::update_sequence(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &str, i64) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub mod db_core::storage::row::format
 pub fn db_core::storage::row::format::csv_quote(&str) -> alloc::string::String
@@ -6266,6 +6269,7 @@ pub fn db_core::vm::row::cursor::AutoIndexCursor::seek_index_eq(&mut self, &[db_
 pub fn db_core::vm::row::cursor::AutoIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::AutoIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::AutoIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::cursor::EphemeralIndexCursor
 impl db_core::vm::row::cursor::EphemeralIndexCursor
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::new() -> Self
@@ -6305,6 +6309,7 @@ pub fn db_core::vm::row::cursor::EphemeralIndexCursor::seek_index_eq(&mut self, 
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::cursor::EphemeralTableCursor
 impl db_core::vm::row::cursor::EphemeralTableCursor
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::new() -> Self
@@ -6344,6 +6349,7 @@ pub fn db_core::vm::row::cursor::EphemeralTableCursor::seek_index_eq(&mut self, 
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::cursor::HashAggCursor
 impl db_core::vm::row::cursor::HashAggCursor
 pub fn db_core::vm::row::cursor::HashAggCursor::new(alloc::vec::Vec<db_core::vm::row::program::GroupKeyColumn>) -> Self
@@ -6381,6 +6387,7 @@ pub fn db_core::vm::row::cursor::HashAggCursor::seek_index_eq(&mut self, &[db_co
 pub fn db_core::vm::row::cursor::HashAggCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::HashAggCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::HashAggCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::cursor::InMemoryCursor
 impl db_core::vm::row::cursor::InMemoryCursor
 pub fn db_core::vm::row::cursor::InMemoryCursor::new(alloc::vec::Vec<alloc::vec::Vec<db_core::value::Value>>) -> Self
@@ -6418,6 +6425,7 @@ pub fn db_core::vm::row::cursor::InMemoryCursor::seek_index_eq(&mut self, &[db_c
 pub fn db_core::vm::row::cursor::InMemoryCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::InMemoryCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::InMemoryCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::cursor::InMemoryIndexCursor
 impl db_core::vm::row::cursor::InMemoryIndexCursor
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::new(alloc::vec::Vec<db_core::vm::row::program::SortKeyColumn>) -> Self
@@ -6455,6 +6463,7 @@ pub fn db_core::vm::row::cursor::InMemoryIndexCursor::seek_index_eq(&mut self, &
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::cursor::PseudoCursor
 impl db_core::vm::row::cursor::PseudoCursor
 pub fn db_core::vm::row::cursor::PseudoCursor::new(&[u8]) -> core::result::Result<Self, db_core::vm::row::record::RecordError>
@@ -6494,6 +6503,7 @@ pub fn db_core::vm::row::cursor::PseudoCursor::seek_index_eq(&mut self, &[db_cor
 pub fn db_core::vm::row::cursor::PseudoCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::PseudoCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::PseudoCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::cursor::SorterCursor
 impl db_core::vm::row::cursor::SorterCursor
 pub fn db_core::vm::row::cursor::SorterCursor::new(alloc::vec::Vec<db_core::vm::row::program::SortKeyColumn>, core::option::Option<usize>) -> Self
@@ -6531,6 +6541,7 @@ pub fn db_core::vm::row::cursor::SorterCursor::seek_index_eq(&mut self, &[db_cor
 pub fn db_core::vm::row::cursor::SorterCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::SorterCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::SorterCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub const db_core::vm::row::cursor::MAX_EPHEMERAL_ROWS: usize
 pub trait db_core::vm::row::cursor::Cursor
 pub fn db_core::vm::row::cursor::Cursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
@@ -6566,6 +6577,7 @@ pub fn db_core::vm::row::cursor::Cursor::seek_index_eq(&mut self, &[db_core::val
 pub fn db_core::vm::row::cursor::Cursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::Cursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::Cursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::Cursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::engine::row::adapter::IndexCursorAdapter
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::auto_index_next(&mut self) -> bool
@@ -6600,6 +6612,7 @@ pub fn db_core::engine::row::adapter::IndexCursorAdapter::seek_index_eq(&mut sel
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::sequence_base(&self) -> i64
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::engine::row::adapter::IndexCursorAdapter::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::engine::row::adapter::TableCursorAdapter
 pub fn db_core::engine::row::adapter::TableCursorAdapter::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::auto_index_next(&mut self) -> bool
@@ -6634,6 +6647,7 @@ pub fn db_core::engine::row::adapter::TableCursorAdapter::seek_index_eq(&mut sel
 pub fn db_core::engine::row::adapter::TableCursorAdapter::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::sequence_base(&self) -> i64
 pub fn db_core::engine::row::adapter::TableCursorAdapter::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::engine::row::adapter::TableCursorAdapter::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::AutoIndexCursor
 pub fn db_core::vm::row::cursor::AutoIndexCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::auto_index_next(&mut self) -> bool
@@ -6668,6 +6682,7 @@ pub fn db_core::vm::row::cursor::AutoIndexCursor::seek_index_eq(&mut self, &[db_
 pub fn db_core::vm::row::cursor::AutoIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::AutoIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::AutoIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::EphemeralIndexCursor
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::auto_index_next(&mut self) -> bool
@@ -6702,6 +6717,7 @@ pub fn db_core::vm::row::cursor::EphemeralIndexCursor::seek_index_eq(&mut self, 
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::EphemeralTableCursor
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::auto_index_next(&mut self) -> bool
@@ -6736,6 +6752,7 @@ pub fn db_core::vm::row::cursor::EphemeralTableCursor::seek_index_eq(&mut self, 
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::HashAggCursor
 pub fn db_core::vm::row::cursor::HashAggCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::auto_index_next(&mut self) -> bool
@@ -6770,6 +6787,7 @@ pub fn db_core::vm::row::cursor::HashAggCursor::seek_index_eq(&mut self, &[db_co
 pub fn db_core::vm::row::cursor::HashAggCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::HashAggCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::HashAggCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::InMemoryCursor
 pub fn db_core::vm::row::cursor::InMemoryCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::auto_index_next(&mut self) -> bool
@@ -6804,6 +6822,7 @@ pub fn db_core::vm::row::cursor::InMemoryCursor::seek_index_eq(&mut self, &[db_c
 pub fn db_core::vm::row::cursor::InMemoryCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::InMemoryCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::InMemoryCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::InMemoryIndexCursor
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::auto_index_next(&mut self) -> bool
@@ -6838,6 +6857,7 @@ pub fn db_core::vm::row::cursor::InMemoryIndexCursor::seek_index_eq(&mut self, &
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::PseudoCursor
 pub fn db_core::vm::row::cursor::PseudoCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::auto_index_next(&mut self) -> bool
@@ -6872,6 +6892,7 @@ pub fn db_core::vm::row::cursor::PseudoCursor::seek_index_eq(&mut self, &[db_cor
 pub fn db_core::vm::row::cursor::PseudoCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::PseudoCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::PseudoCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::SorterCursor
 pub fn db_core::vm::row::cursor::SorterCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::auto_index_next(&mut self) -> bool
@@ -6906,6 +6927,7 @@ pub fn db_core::vm::row::cursor::SorterCursor::seek_index_eq(&mut self, &[db_cor
 pub fn db_core::vm::row::cursor::SorterCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::SorterCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::SorterCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub fn db_core::vm::row::cursor::normalize_key_values(&[db_core::value::Value], &[db_core::value::Collation]) -> alloc::vec::Vec<db_core::value::Value>
 pub mod db_core::vm::row::cursor_conformance
 pub fn db_core::vm::row::cursor_conformance::assert_cursor_conformance<C: db_core::vm::row::cursor::Cursor>(impl core::ops::function::FnMut() -> C)
@@ -7095,6 +7117,7 @@ pub db_core::vm::row::program::Opcode::String8
 pub db_core::vm::row::program::Opcode::Subtract
 pub db_core::vm::row::program::Opcode::Synchronous
 pub db_core::vm::row::program::Opcode::Transaction
+pub db_core::vm::row::program::Opcode::Update
 pub db_core::vm::row::program::Opcode::Variable
 impl db_core::vm::row::program::Opcode
 pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 69]
@@ -7662,6 +7685,7 @@ pub db_core::vm::row::Opcode::String8
 pub db_core::vm::row::Opcode::Subtract
 pub db_core::vm::row::Opcode::Synchronous
 pub db_core::vm::row::Opcode::Transaction
+pub db_core::vm::row::Opcode::Update
 pub db_core::vm::row::Opcode::Variable
 impl db_core::vm::row::program::Opcode
 pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 69]
@@ -7822,6 +7846,7 @@ pub fn db_core::vm::row::cursor::AutoIndexCursor::seek_index_eq(&mut self, &[db_
 pub fn db_core::vm::row::cursor::AutoIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::AutoIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::AutoIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::CursorFactoryError(pub alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::cursor_factory::CursorFactoryError
 pub fn db_core::vm::row::cursor_factory::CursorFactoryError::clone(&self) -> db_core::vm::row::cursor_factory::CursorFactoryError
@@ -7873,6 +7898,7 @@ pub fn db_core::vm::row::cursor::EphemeralIndexCursor::seek_index_eq(&mut self, 
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::EphemeralTableCursor
 impl db_core::vm::row::cursor::EphemeralTableCursor
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::new() -> Self
@@ -7912,6 +7938,7 @@ pub fn db_core::vm::row::cursor::EphemeralTableCursor::seek_index_eq(&mut self, 
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::ExplainRow
 pub db_core::vm::row::ExplainRow::addr: usize
 pub db_core::vm::row::ExplainRow::comment: alloc::string::String
@@ -7978,6 +8005,7 @@ pub fn db_core::vm::row::cursor::HashAggCursor::seek_index_eq(&mut self, &[db_co
 pub fn db_core::vm::row::cursor::HashAggCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::HashAggCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::HashAggCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::InMemoryCursor
 impl db_core::vm::row::cursor::InMemoryCursor
 pub fn db_core::vm::row::cursor::InMemoryCursor::new(alloc::vec::Vec<alloc::vec::Vec<db_core::value::Value>>) -> Self
@@ -8015,6 +8043,7 @@ pub fn db_core::vm::row::cursor::InMemoryCursor::seek_index_eq(&mut self, &[db_c
 pub fn db_core::vm::row::cursor::InMemoryCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::InMemoryCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::InMemoryCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::InMemoryIndexCursor
 impl db_core::vm::row::cursor::InMemoryIndexCursor
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::new(alloc::vec::Vec<db_core::vm::row::program::SortKeyColumn>) -> Self
@@ -8052,6 +8081,7 @@ pub fn db_core::vm::row::cursor::InMemoryIndexCursor::seek_index_eq(&mut self, &
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::Instruction
 pub db_core::vm::row::Instruction::comment: core::option::Option<alloc::string::String>
 pub db_core::vm::row::Instruction::opcode: db_core::vm::row::program::Opcode
@@ -8131,6 +8161,7 @@ pub fn db_core::vm::row::cursor::PseudoCursor::seek_index_eq(&mut self, &[db_cor
 pub fn db_core::vm::row::cursor::PseudoCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::PseudoCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::PseudoCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::SchemaStorageError(pub alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::schema_storage::SchemaStorageError
 pub fn db_core::vm::row::schema_storage::SchemaStorageError::clone(&self) -> db_core::vm::row::schema_storage::SchemaStorageError
@@ -8194,6 +8225,7 @@ pub fn db_core::vm::row::cursor::SorterCursor::seek_index_eq(&mut self, &[db_cor
 pub fn db_core::vm::row::cursor::SorterCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::SorterCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::SorterCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::TransactionError(pub alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::transaction::TransactionError
 pub fn db_core::vm::row::transaction::TransactionError::clone(&self) -> db_core::vm::row::transaction::TransactionError
@@ -8269,6 +8301,7 @@ pub fn db_core::vm::row::Cursor::seek_index_eq(&mut self, &[db_core::value::Valu
 pub fn db_core::vm::row::Cursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::Cursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::Cursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::Cursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::engine::row::adapter::IndexCursorAdapter
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::auto_index_next(&mut self) -> bool
@@ -8303,6 +8336,7 @@ pub fn db_core::engine::row::adapter::IndexCursorAdapter::seek_index_eq(&mut sel
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::sequence_base(&self) -> i64
 pub fn db_core::engine::row::adapter::IndexCursorAdapter::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::engine::row::adapter::IndexCursorAdapter::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::engine::row::adapter::TableCursorAdapter
 pub fn db_core::engine::row::adapter::TableCursorAdapter::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::auto_index_next(&mut self) -> bool
@@ -8337,6 +8371,7 @@ pub fn db_core::engine::row::adapter::TableCursorAdapter::seek_index_eq(&mut sel
 pub fn db_core::engine::row::adapter::TableCursorAdapter::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::engine::row::adapter::TableCursorAdapter::sequence_base(&self) -> i64
 pub fn db_core::engine::row::adapter::TableCursorAdapter::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::engine::row::adapter::TableCursorAdapter::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::AutoIndexCursor
 pub fn db_core::vm::row::cursor::AutoIndexCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::auto_index_next(&mut self) -> bool
@@ -8371,6 +8406,7 @@ pub fn db_core::vm::row::cursor::AutoIndexCursor::seek_index_eq(&mut self, &[db_
 pub fn db_core::vm::row::cursor::AutoIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::AutoIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::AutoIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::EphemeralIndexCursor
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::auto_index_next(&mut self) -> bool
@@ -8405,6 +8441,7 @@ pub fn db_core::vm::row::cursor::EphemeralIndexCursor::seek_index_eq(&mut self, 
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::EphemeralIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::EphemeralIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::EphemeralTableCursor
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::auto_index_next(&mut self) -> bool
@@ -8439,6 +8476,7 @@ pub fn db_core::vm::row::cursor::EphemeralTableCursor::seek_index_eq(&mut self, 
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::EphemeralTableCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::EphemeralTableCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::HashAggCursor
 pub fn db_core::vm::row::cursor::HashAggCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::auto_index_next(&mut self) -> bool
@@ -8473,6 +8511,7 @@ pub fn db_core::vm::row::cursor::HashAggCursor::seek_index_eq(&mut self, &[db_co
 pub fn db_core::vm::row::cursor::HashAggCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::HashAggCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::HashAggCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::HashAggCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::InMemoryCursor
 pub fn db_core::vm::row::cursor::InMemoryCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::auto_index_next(&mut self) -> bool
@@ -8507,6 +8546,7 @@ pub fn db_core::vm::row::cursor::InMemoryCursor::seek_index_eq(&mut self, &[db_c
 pub fn db_core::vm::row::cursor::InMemoryCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::InMemoryCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::InMemoryCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::InMemoryIndexCursor
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::auto_index_next(&mut self) -> bool
@@ -8541,6 +8581,7 @@ pub fn db_core::vm::row::cursor::InMemoryIndexCursor::seek_index_eq(&mut self, &
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::InMemoryIndexCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::InMemoryIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::PseudoCursor
 pub fn db_core::vm::row::cursor::PseudoCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::auto_index_next(&mut self) -> bool
@@ -8575,6 +8616,7 @@ pub fn db_core::vm::row::cursor::PseudoCursor::seek_index_eq(&mut self, &[db_cor
 pub fn db_core::vm::row::cursor::PseudoCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::PseudoCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::PseudoCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::SorterCursor
 pub fn db_core::vm::row::cursor::SorterCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::auto_index_next(&mut self) -> bool
@@ -8609,6 +8651,7 @@ pub fn db_core::vm::row::cursor::SorterCursor::seek_index_eq(&mut self, &[db_cor
 pub fn db_core::vm::row::cursor::SorterCursor::seek_index_ge(&mut self, &[db_core::value::Value], &[db_core::value::Collation]) -> bool
 pub fn db_core::vm::row::cursor::SorterCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::SorterCursor::sorter_insert(&mut self, alloc::rc::Rc<[u8]>) -> bool
+pub fn db_core::vm::row::cursor::SorterCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub trait db_core::vm::row::CursorFactory
 pub fn db_core::vm::row::CursorFactory::open_index(&mut self, u32, &[db_core::vm::row::program::SortKeyColumn]) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::vm::row::CursorFactory::open_read(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
