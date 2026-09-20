@@ -2566,7 +2566,7 @@ fn join_keys_match(
 struct BuildTable {
     index: JoinHashTable<u64, usize, SlotState>,
     keys: Vec<Vec<Value>>,
-    payload: Vec<Vec<Value>>,
+    payload: Vec<PayloadColumn>,
     /// #514: for a single-column key whose every build value is an
     /// `Int`, the keys again as packed `i64`s, so a probe candidate is
     /// verified by one `i64 == i64` against an 8-byte array instead of a
@@ -2578,6 +2578,70 @@ struct BuildTable {
     /// columns, computed once per table on first use (see
     /// [`BuildTable::payload_groups`]) and shared by every probe worker.
     payload_groups: std::sync::OnceLock<PayloadGroups>,
+}
+
+/// One payload column of a [`BuildTable`] (#514): either fully decoded
+/// `Value`s, or -- for a `Column::Dict` payload register -- the build
+/// rows' dictionary codes plus the (small) dictionary itself, never
+/// decoded to an owned `Value::Str` per row at all. `HashBuild` used to
+/// call [`Vm::ensure_materialized`] on every payload register
+/// unconditionally, which for a dict-coded column meant one heap
+/// allocation per build row (`Column::get`'s `to_string()`) just to
+/// throw most of that decoding away moments later in
+/// [`BuildTable::payload_groups`]'s hash-and-compare classification --
+/// measured at ~17 ns/row (100K-row build side) for a 3-value dictionary,
+/// entirely avoidable since the dict code already *is* a per-distinct-value
+/// id.
+enum PayloadColumn {
+    Values(Vec<Value>),
+    Dict {
+        /// Row `i`'s dictionary code, meaningless (and unused) where `!valid.get(i)`.
+        codes: Vec<u32>,
+        /// The distinct values `codes` indexes into.
+        dict: Vec<std::sync::Arc<str>>,
+        valid: Bitmap,
+    },
+}
+
+impl PayloadColumn {
+    fn len(&self) -> usize {
+        match self {
+            PayloadColumn::Values(v) => v.len(),
+            PayloadColumn::Dict { codes, .. } => codes.len(),
+        }
+    }
+
+    /// The decoded value at `row`, or `None` if out of range. Only
+    /// decodes a dict-coded column's string on demand -- a caller that
+    /// only needs `row`'s dict code (see [`PayloadColumn::code`]) should
+    /// use that instead of throwing this allocation away.
+    fn get(&self, row: usize) -> Option<Value> {
+        match self {
+            PayloadColumn::Values(v) => v.get(row).cloned(),
+            PayloadColumn::Dict { codes, dict, valid } => {
+                let &code = codes.get(row)?;
+                if !valid.get(row) {
+                    return Some(Value::Null);
+                }
+                let code = usize::try_from(code).ok()?;
+                dict.get(code).map(|s| Value::Str(s.to_string().into()))
+            }
+        }
+    }
+
+    /// `row`'s dictionary code, if this column is dict-coded and `row` is
+    /// valid (not NULL) -- the [`BuildTable::payload_groups`] fast path's
+    /// group id, with no hashing or string compare needed at all: two
+    /// build rows with the same code share the same distinct value by
+    /// construction.
+    fn code(&self, row: usize) -> Option<u32> {
+        match self {
+            PayloadColumn::Values(_) => None,
+            PayloadColumn::Dict { codes, valid, .. } => {
+                valid.get(row).then(|| codes.get(row).copied()).flatten()
+            }
+        }
+    }
 }
 
 /// Every build row classified by its values in `columns` (payload column
@@ -2599,45 +2663,117 @@ impl BuildTable {
     /// the general fold) or has more groups than `u32` can number.
     fn payload_groups(&self, columns: &[usize]) -> Option<&PayloadGroups> {
         let groups = self.payload_groups.get_or_init(|| {
-            let mut index: HashMap<u64, Vec<usize>> = HashMap::new();
-            let mut keys: Vec<Vec<Value>> = Vec::new();
-            let mut group_of: Vec<u32> = Vec::with_capacity(self.index.len());
-            let num_rows = self.payload.first().map_or(0, Vec::len);
-            for row in 0..num_rows {
-                let values: Vec<&Value> = columns
-                    .iter()
-                    .map(|&c| self.payload.get(c).and_then(|col| col.get(row)))
-                    .map(|v| v.unwrap_or(&Value::Null))
-                    .collect();
-                let mut hasher = DefaultHasher::new();
-                for v in &values {
-                    hash_group_value(v, &mut hasher);
+            // #514: a single dict-coded `GROUP BY` column classifies by
+            // its own dict code directly -- no hashing or string compare
+            // needed at all, since two build rows sharing a code already
+            // share the same distinct value by construction.
+            if let [c] = columns {
+                if let Some(col @ PayloadColumn::Dict { dict, .. }) = self.payload.get(*c) {
+                    return Self::dict_payload_groups(columns, dict, col);
                 }
-                let bucket = index.entry(hasher.finish()).or_default();
-                let group = bucket
-                    .iter()
-                    .copied()
-                    .find(|&g| {
-                        keys.get(g)
-                            .is_some_and(|key| key.iter().zip(&values).all(|(k, v)| k == *v))
-                    })
-                    .unwrap_or_else(|| {
-                        let g = keys.len();
-                        keys.push(values.iter().map(|v| (*v).clone()).collect());
-                        bucket.push(g);
-                        g
-                    });
-                group_of.push(u32::try_from(group).unwrap_or(u32::MAX));
             }
-            PayloadGroups {
-                columns: columns.to_vec(),
-                group_of,
-                keys,
-            }
+            Self::generic_payload_groups(columns, &self.payload)
         });
         (groups.columns == columns
             && groups.keys.len() < usize::try_from(u32::MAX).unwrap_or(usize::MAX))
         .then_some(groups)
+    }
+
+    /// [`Self::payload_groups`]'s fast path for a single dict-coded
+    /// `GROUP BY` column.
+    fn dict_payload_groups(
+        columns: &[usize],
+        dict: &[std::sync::Arc<str>],
+        col: &PayloadColumn,
+    ) -> PayloadGroups {
+        let num_rows = col.len();
+        // `u32::MAX` doubles as "unassigned" here and as the
+        // too-many-groups sentinel below; a table with `u32::MAX` or more
+        // distinct values already invalidates the whole classification
+        // (see the `keys.len()` check in `payload_groups`), so the two
+        // never need to be told apart.
+        let mut code_to_group: Vec<u32> = vec![u32::MAX; dict.len()];
+        let mut null_group = u32::MAX;
+        let mut keys: Vec<Vec<Value>> = Vec::new();
+        let mut group_of: Vec<u32> = Vec::with_capacity(num_rows);
+        for row in 0..num_rows {
+            let group = match col.code(row) {
+                Some(code) => {
+                    let idx = code as usize;
+                    match code_to_group.get(idx).copied() {
+                        Some(g) if g != u32::MAX => g,
+                        _ => {
+                            let g = u32::try_from(keys.len()).unwrap_or(u32::MAX);
+                            let value = dict.get(idx).map_or(Value::Null, |s| {
+                                Value::Str(s.to_string().into())
+                            });
+                            keys.push(vec![value]);
+                            if let Some(slot) = code_to_group.get_mut(idx) {
+                                *slot = g;
+                            }
+                            g
+                        }
+                    }
+                }
+                None => {
+                    if null_group == u32::MAX {
+                        null_group = u32::try_from(keys.len()).unwrap_or(u32::MAX);
+                        keys.push(vec![Value::Null]);
+                    }
+                    null_group
+                }
+            };
+            group_of.push(group);
+        }
+        PayloadGroups {
+            columns: columns.to_vec(),
+            group_of,
+            keys,
+        }
+    }
+
+    /// [`Self::payload_groups`]'s general path: any composite key, or any
+    /// non-dict-coded column, hashed and compared as decoded `Value`s.
+    fn generic_payload_groups(columns: &[usize], payload: &[PayloadColumn]) -> PayloadGroups {
+        let mut index: HashMap<u64, Vec<usize>> = HashMap::new();
+        let mut keys: Vec<Vec<Value>> = Vec::new();
+        let num_rows = payload.first().map_or(0, PayloadColumn::len);
+        let mut group_of: Vec<u32> = Vec::with_capacity(num_rows);
+        for row in 0..num_rows {
+            let values: Vec<Value> = columns
+                .iter()
+                .map(|&c| {
+                    payload
+                        .get(c)
+                        .and_then(|col| col.get(row))
+                        .unwrap_or(Value::Null)
+                })
+                .collect();
+            let mut hasher = DefaultHasher::new();
+            for v in &values {
+                hash_group_value(v, &mut hasher);
+            }
+            let bucket = index.entry(hasher.finish()).or_default();
+            let group = bucket
+                .iter()
+                .copied()
+                .find(|&g| {
+                    keys.get(g)
+                        .is_some_and(|key| key.iter().zip(&values).all(|(k, v)| k == v))
+                })
+                .unwrap_or_else(|| {
+                    let g = keys.len();
+                    keys.push(values.clone());
+                    bucket.push(g);
+                    g
+                });
+            group_of.push(u32::try_from(group).unwrap_or(u32::MAX));
+        }
+        PayloadGroups {
+            columns: columns.to_vec(),
+            group_of,
+            keys,
+        }
     }
 
     /// Whether probe row `probe_row` of `probe_columns` has the same key
@@ -2844,7 +2980,7 @@ fn with_value_source<R>(
             None => f(&Value::Null),
         },
         ValueSource::Payload(i) => match build_row {
-            Some(br) => f(&bt.payload[i][br]),
+            Some(br) => f(&bt.payload.get(i).and_then(|c| c.get(br)).unwrap_or(Value::Null)),
             None => f(&Value::Null),
         },
     }
@@ -3129,6 +3265,57 @@ impl Vm {
             let materialized: Vec<Value> = (0..column.len()).map(|i| column.get(i)).collect();
             self.registers.insert(reg, Arc::new(materialized));
         }
+    }
+
+    /// One `Opcode::HashBuild` payload column (#514): a register still
+    /// holding its `Column::Dict` shape (not yet forced into
+    /// `self.registers` by [`Vm::ensure_materialized`]) stays dict-coded
+    /// -- codes and dictionary cloned, never decoded into an owned
+    /// `Value::Str` per row -- instead of paying for a full decode this
+    /// build only to throw most of it away in [`BuildTable::payload_groups`]'s
+    /// classification. Any other column materializes and clones per row,
+    /// same as before.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "`column.len() == base_len` is checked just above, and `physical(row)` is always `< base_len` (the same invariant `Opcode::HashBuild`'s key loop relies on for `c[p]`)"
+    )]
+    fn hash_build_payload_column(
+        &mut self,
+        reg: usize,
+        opcode: &'static str,
+        base_len: usize,
+        num_rows: usize,
+        physical: &impl Fn(usize) -> usize,
+    ) -> Result<PayloadColumn> {
+        if let Some(col) = self.typed_registers.get(&reg) {
+            if let Column::Dict { dict, indices, valid } = col.as_ref() {
+                if col.len() != base_len {
+                    return Err(VmError::RegisterLengthMismatch { opcode });
+                }
+                let mut codes = Vec::with_capacity(num_rows);
+                let mut row_valid = Bitmap::new(num_rows, true);
+                for row in 0..num_rows {
+                    let p = physical(row);
+                    codes.push(indices.get(p).copied().unwrap_or(0));
+                    if !valid.get(p) {
+                        row_valid.set(row, false);
+                    }
+                }
+                return Ok(PayloadColumn::Dict {
+                    codes,
+                    dict: dict.clone(),
+                    valid: row_valid,
+                });
+            }
+        }
+        self.ensure_materialized(reg);
+        let column = self.reg(reg, opcode)?;
+        if column.len() != base_len {
+            return Err(VmError::RegisterLengthMismatch { opcode });
+        }
+        Ok(PayloadColumn::Values(
+            (0..num_rows).map(|row| column[physical(row)].clone()).collect(),
+        ))
     }
 
     /// Count one more executed instruction, failing once [`MAX_STEPS`] is
@@ -3846,14 +4033,10 @@ impl Vm {
                 // front so the borrows below are of `self.registers`
                 // alone, not all of `self`.
                 let selection = self.selection.take();
-                for r in key_cols.iter().chain(payload_cols.iter()) {
+                for r in key_cols.iter() {
                     self.ensure_materialized(*r);
                 }
                 let key_columns: Vec<&[Value]> = key_cols
-                    .iter()
-                    .map(|r| self.reg(*r, opcode))
-                    .collect::<Result<_>>()?;
-                let payload_columns: Vec<&[Value]> = payload_cols
                     .iter()
                     .map(|r| self.reg(*r, opcode))
                     .collect::<Result<_>>()?;
@@ -3863,7 +4046,7 @@ impl Vm {
                         reason: "hash build has no key columns".to_string(),
                     }
                 })?;
-                for c in key_columns.iter().chain(&payload_columns) {
+                for c in &key_columns {
                     if c.len() != base_len {
                         return Err(VmError::RegisterLengthMismatch { opcode });
                     }
@@ -3893,10 +4076,6 @@ impl Vm {
                     .iter()
                     .map(|_| Vec::with_capacity(num_rows))
                     .collect();
-                let mut payload: Vec<Vec<Value>> = payload_columns
-                    .iter()
-                    .map(|_| Vec::with_capacity(num_rows))
-                    .collect();
                 let mut index: JoinHashTable<u64, usize, SlotState> =
                     JoinHashTable::with_capacity_and_hasher(num_rows, SlotState);
                 for row in 0..num_rows {
@@ -3904,11 +4083,18 @@ impl Vm {
                     for (i, c) in key_columns.iter().enumerate() {
                         keys[i].push(c[p].clone());
                     }
-                    for (i, c) in payload_columns.iter().enumerate() {
-                        payload[i].push(c[p].clone());
-                    }
                     index.insert(hashes[row], row);
                 }
+                // #514: built after `keys`, once `key_columns` (and any
+                // borrow of `self.typed_registers` it needed) is done --
+                // a payload register still shaped as `Column::Dict` stays
+                // dict-coded instead of decoding every build row into an
+                // owned `Value::Str` just to throw most of that away in
+                // `payload_groups`'s classification.
+                let payload: Vec<PayloadColumn> = payload_cols
+                    .iter()
+                    .map(|r| self.hash_build_payload_column(*r, opcode, base_len, num_rows, &physical))
+                    .collect::<Result<_>>()?;
                 let int_keys: Option<Vec<i64>> = match keys.as_slice() {
                     [column] => column
                         .iter()
@@ -4044,7 +4230,6 @@ impl Vm {
                                 .payload
                                 .get(i)
                                 .and_then(|column| column.get(*build_row))
-                                .cloned()
                                 .ok_or_else(|| VmError::MalformedProgram {
                                     opcode,
                                     reason: format!(
@@ -4209,10 +4394,10 @@ impl Vm {
                                             .unwrap_or(&Value::Null),
                                     )),
                                     Some(AggSource::Payload(i)) => acc.push(Some(
-                                        bt.payload
+                                        &bt.payload
                                             .get(*i)
                                             .and_then(|c| c.get(build_row))
-                                            .unwrap_or(&Value::Null),
+                                            .unwrap_or(Value::Null),
                                     )),
                                 }
                             }
@@ -8218,6 +8403,219 @@ mod tests {
             let tables = vm.join_tables();
             assert!(tables.0.get(&0).unwrap().int_keys.is_none(), "{keys:?}");
         }
+    }
+
+    /// #514: a `Column::Dict` payload register must probe identically to
+    /// an equivalent plain `Str` column -- `HashBuild` keeping it
+    /// dict-coded (`PayloadColumn::Dict`) is an internal representation
+    /// change, never observable through `HashProbe`'s emitted payload.
+    #[test]
+    fn hash_probe_dict_coded_payload_matches_str_payload() {
+        let dict: Vec<std::sync::Arc<str>> = vec!["bronze".into(), "silver".into(), "gold".into()];
+        let tier_dict = Column::Dict {
+            dict,
+            indices: vec![0, 1, 2, 0],
+            valid: crate::vm::column::Bitmap::from_bools([true, true, false, true].into_iter()),
+        };
+        let dim = Batch::new(4)
+            .with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)])
+            .with_typed_column("tier", tier_dict);
+        let fact = Batch::new(3).with_column(
+            "fk",
+            vec![Value::Int(1), Value::Int(3), Value::Int(4)],
+        );
+        let build = [
+            Opcode::LoadColumn { reg: 10, column: "id".into() },
+            Opcode::LoadColumn { reg: 11, column: "tier".into() },
+            Opcode::HashBuild {
+                key_cols: vec![10].into(),
+                payload_cols: vec![11].into(),
+                table: 0,
+            },
+        ];
+        let probe = [
+            Opcode::LoadColumn { reg: 0, column: "fk".into() },
+            Opcode::HashProbe {
+                key_cols: vec![0].into(),
+                table: 0,
+                payload_dst: vec![1].into(),
+                kind: JoinKind::Inner,
+            },
+        ];
+        let mut build_vm = Vm::new();
+        build_vm.execute(&dim, &build).unwrap();
+        let mut vm = Vm::with_join_tables(build_vm.join_tables());
+        vm.execute(&fact, &probe).unwrap();
+        let dict_result = vm.register(1).unwrap().to_vec();
+
+        // Equivalent build over a plain `Str` payload column.
+        let str_dim = Batch::new(4)
+            .with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)])
+            .with_column(
+                "tier",
+                vec![
+                    Value::Str("bronze".into()),
+                    Value::Str("silver".into()),
+                    Value::Null,
+                    Value::Str("bronze".into()),
+                ],
+            );
+        let mut str_build_vm = Vm::new();
+        str_build_vm.execute(&str_dim, &build).unwrap();
+        let mut str_vm = Vm::with_join_tables(str_build_vm.join_tables());
+        str_vm.execute(&fact, &probe).unwrap();
+        assert_eq!(dict_result, str_vm.register(1).unwrap());
+        assert_eq!(
+            dict_result,
+            vec![
+                Value::Str("bronze".into()),
+                Value::Null,
+                Value::Str("bronze".into()),
+            ]
+        );
+    }
+
+    /// #514: `payload_groups`'s single-dict-column fast path must produce
+    /// the same `group_of`/`keys` classification as the generic
+    /// hash-and-compare path over an equivalent decoded `Str` column,
+    /// including `NULL` rows sharing one group.
+    #[test]
+    fn build_table_payload_groups_dict_fast_path_matches_generic_classification() {
+        let dict: Vec<std::sync::Arc<str>> = vec!["bronze".into(), "silver".into()];
+        let tier_dict = Column::Dict {
+            dict,
+            indices: vec![1, 0, 1, 0, 0],
+            valid: crate::vm::column::Bitmap::from_bools(
+                [true, true, false, true, true].into_iter(),
+            ),
+        };
+        let dim = Batch::new(5)
+            .with_column(
+                "id",
+                vec![
+                    Value::Int(1),
+                    Value::Int(2),
+                    Value::Int(3),
+                    Value::Int(4),
+                    Value::Int(5),
+                ],
+            )
+            .with_typed_column("tier", tier_dict);
+        let mut vm = Vm::new();
+        vm.execute(
+            &dim,
+            &[
+                Opcode::LoadColumn { reg: 0, column: "id".into() },
+                Opcode::LoadColumn { reg: 1, column: "tier".into() },
+                Opcode::HashBuild {
+                    key_cols: vec![0].into(),
+                    payload_cols: vec![1].into(),
+                    table: 0,
+                },
+            ],
+        )
+        .unwrap();
+        let tables = vm.join_tables();
+        let bt = tables.0.get(&0).unwrap();
+        let groups = bt.payload_groups(&[0]).expect("dict fast path classifies");
+
+        let str_dim = Batch::new(5)
+            .with_column(
+                "id",
+                vec![
+                    Value::Int(1),
+                    Value::Int(2),
+                    Value::Int(3),
+                    Value::Int(4),
+                    Value::Int(5),
+                ],
+            )
+            .with_column(
+                "tier",
+                vec![
+                    Value::Str("silver".into()),
+                    Value::Str("bronze".into()),
+                    Value::Null,
+                    Value::Str("bronze".into()),
+                    Value::Str("bronze".into()),
+                ],
+            );
+        let mut str_vm = Vm::new();
+        str_vm
+            .execute(
+                &str_dim,
+                &[
+                    Opcode::LoadColumn { reg: 0, column: "id".into() },
+                    Opcode::LoadColumn { reg: 1, column: "tier".into() },
+                    Opcode::HashBuild {
+                        key_cols: vec![0].into(),
+                        payload_cols: vec![1].into(),
+                        table: 0,
+                    },
+                ],
+            )
+            .unwrap();
+        let str_tables = str_vm.join_tables();
+        let str_bt = str_tables.0.get(&0).unwrap();
+        let str_groups = str_bt
+            .payload_groups(&[0])
+            .expect("generic path classifies");
+
+        assert_eq!(groups.group_of, str_groups.group_of);
+        assert_eq!(groups.keys, str_groups.keys);
+        assert_eq!(groups.group_of, vec![0, 1, 2, 1, 1]);
+        assert_eq!(
+            groups.keys,
+            vec![
+                vec![Value::Str("silver".into())],
+                vec![Value::Str("bronze".into())],
+                vec![Value::Null],
+            ]
+        );
+    }
+
+    /// #514: a `Column::Dict` payload register must build into
+    /// `PayloadColumn::Dict`, not decode into `Vec<Value>` -- this is the
+    /// representation change the whole ledger item rests on.
+    #[test]
+    fn hash_build_keeps_a_dict_coded_payload_dict_coded() {
+        let dict: Vec<std::sync::Arc<str>> = ["bronze", "silver", "gold"]
+            .iter()
+            .map(|s| std::sync::Arc::from(*s))
+            .collect();
+        let batch = Batch::new(4)
+            .with_column(
+                "id",
+                vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+            )
+            .with_typed_column(
+                "tier",
+                Column::Dict {
+                    dict,
+                    indices: vec![0, 1, 2, 0],
+                    valid: crate::vm::column::Bitmap::new(4, true),
+                },
+            );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn { reg: 0, column: "id".into() },
+                Opcode::LoadColumn { reg: 1, column: "tier".into() },
+                Opcode::HashBuild {
+                    key_cols: vec![0].into(),
+                    payload_cols: vec![1].into(),
+                    table: 0,
+                },
+            ],
+        )
+        .unwrap();
+        let tables = vm.join_tables();
+        let bt = tables.0.get(&0).unwrap();
+        assert!(
+            matches!(&bt.payload[0], PayloadColumn::Dict { .. }),
+            "expected dict fast path"
+        );
     }
 
     #[test]
