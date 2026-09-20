@@ -233,6 +233,13 @@ pub enum Opcode {
     /// Inserts the record in register `p2` (rowid `p3`) into cursor
     /// `p1`.
     Insert,
+    /// Rewrites cursor `p1`'s current row to the record in register
+    /// `p3`, keeping rowid `p2` (which must equal the row's existing
+    /// rowid -- an `UPDATE` that reassigns the rowid uses `Delete`+
+    /// `Insert` instead). A storage-backed cursor does this as one
+    /// combined leaf-page rewrite rather than `Delete` followed by
+    /// `Insert`'s two independent root-to-leaf descents (db-core#524).
+    Update,
     /// Generates a new rowid for cursor `p1`'s table into register
     /// `p2`.
     NewRowid,
@@ -842,7 +849,7 @@ impl Opcode {
             | Opcode::IdxCompareGE
             | Opcode::AutoIndexSeek
             | Opcode::AggFinal => P3,
-            Opcode::Insert | Opcode::AutoIndexInsert => P2_P3,
+            Opcode::Insert | Opcode::AutoIndexInsert | Opcode::Update => P2_P3,
 
             // Compare: `r[p1] <op> r[p3]`, jump `p2`.
             Opcode::Eq | Opcode::Ge | Opcode::Gt | Opcode::Le | Opcode::Lt => P1_P3,

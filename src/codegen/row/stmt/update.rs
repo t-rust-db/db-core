@@ -203,6 +203,7 @@ pub fn compile_update_with_catalog(
             &check_schema,
             action,
             rowid_alias,
+            rowid_reassigned.is_some(),
             &assigned,
             &index_touched,
             end_label,
@@ -358,6 +359,7 @@ pub fn compile_update_with_catalog(
                         &check_schema,
                         action,
                         rowid_alias,
+                        rowid_reassigned.is_some(),
                         &assigned,
                         &index_touched,
                         row_skip,
@@ -396,6 +398,7 @@ pub fn compile_update_with_catalog(
             &check_schema,
             action,
             rowid_alias,
+            rowid_reassigned.is_some(),
             &assigned,
             &index_touched,
             row_skip,
@@ -431,6 +434,7 @@ pub fn compile_update_with_catalog(
             &check_schema,
             action,
             rowid_alias,
+            rowid_reassigned.is_some(),
             &assigned,
             &index_touched,
             row_skip,
@@ -467,6 +471,7 @@ fn emit_update_row_body(
     check_schema: &TableSchema,
     action: ConflictAction,
     rowid_alias: Option<usize>,
+    rowid_reassigned: bool,
     assigned: &[Option<&Expr>],
     index_touched: &[bool],
     row_skip: Label,
@@ -633,13 +638,27 @@ fn emit_update_row_body(
         Opcode::IdxDelete,
         Some(index_touched),
     )?;
-    em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));
-    em.emit(Instruction::new(
-        Opcode::Insert,
-        TABLE_CURSOR,
-        rowid_reg,
-        record_reg,
-    ));
+    if rowid_reassigned {
+        // The row moves to a different rowid -- `Update` requires the
+        // rowid to stay put (it rewrites the existing b-tree cell in
+        // place), so this keeps the old two-op rebuild.
+        em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));
+        em.emit(Instruction::new(
+            Opcode::Insert,
+            TABLE_CURSOR,
+            rowid_reg,
+            record_reg,
+        ));
+    } else {
+        // #524: same rowid -- one combined leaf-page rewrite instead of
+        // `Delete`'s and `Insert`'s independent root-to-leaf descents.
+        em.emit(Instruction::new(
+            Opcode::Update,
+            TABLE_CURSOR,
+            rowid_reg,
+            record_reg,
+        ));
+    }
 
     if !schema.indexes.is_empty() {
         // The new row's values are already sitting in `col_regs`/
@@ -818,5 +837,29 @@ mod index_skip_tests {
         let p = compile("UPDATE t SET id = id + 1 WHERE id > 5", &schema);
         assert_eq!(count(&p, Opcode::IdxDelete), 1, "{p:?}");
         assert_eq!(count(&p, Opcode::IdxInsert), 1, "{p:?}");
+    }
+
+    #[test]
+    fn update_emits_a_single_update_op_when_the_rowid_is_unchanged() {
+        // db-core#524: the common case (SET doesn't touch the rowid
+        // alias) rewrites the row with one `Update` op instead of a
+        // `Delete`+`Insert` pair, avoiding two root-to-leaf descents.
+        let schema = table_with_index(2, &["x", "n"], "x");
+        let p = compile("UPDATE t SET n = n + 1 WHERE x > 5", &schema);
+        assert_eq!(count(&p, Opcode::Update), 1, "{p:?}");
+        assert_eq!(count(&p, Opcode::Delete), 0, "{p:?}");
+        assert_eq!(count(&p, Opcode::Insert), 0, "{p:?}");
+    }
+
+    #[test]
+    fn update_falls_back_to_delete_and_insert_when_the_rowid_is_reassigned() {
+        // `Update` requires the rowid to stay put; a reassignment keeps
+        // the two-op rebuild since it moves the row to a different cell.
+        let mut schema = table_with_index(2, &["id", "n"], "n");
+        schema.rowid_alias = Some(0);
+        let p = compile("UPDATE t SET id = id + 1 WHERE id > 5", &schema);
+        assert_eq!(count(&p, Opcode::Update), 0, "{p:?}");
+        assert_eq!(count(&p, Opcode::Delete), 1, "{p:?}");
+        assert_eq!(count(&p, Opcode::Insert), 1, "{p:?}");
     }
 }

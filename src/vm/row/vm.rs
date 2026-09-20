@@ -1758,6 +1758,62 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
+        Opcode::Update => {
+            let rowid = match vm.register(instr.p2)? {
+                Value::Integer(i) => *i,
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "Update",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let payload = match vm.register(instr.p3)? {
+                Value::Blob(bytes) => bytes.clone(),
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "Update",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let encoding = vm.text_encoding;
+            let cursor = vm.cursor_mut(instr.p1)?;
+            let updated = match cursor.update_payload(rowid, &payload) {
+                Some(ok) => ok,
+                None => {
+                    // Cursor kinds without a combined rewrite (in-memory
+                    // fixtures, ephemeral tables) fall back to the
+                    // Delete+Insert pair a storage-backed cursor avoids.
+                    if !cursor.delete() {
+                        return Err(ExecError::MalformedInstruction {
+                            opcode: "Update",
+                            reason: "cursor slot does not support deletion".to_string(),
+                        });
+                    }
+                    match cursor.insert_payload(rowid, &payload) {
+                        Some(ok) => ok,
+                        None => {
+                            let values = decode_record(&payload, encoding).map_err(|e| {
+                                ExecError::MalformedInstruction {
+                                    opcode: "Update",
+                                    reason: e.to_string(),
+                                }
+                            })?;
+                            cursor.insert(rowid, values)
+                        }
+                    }
+                }
+            };
+            if !updated {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "Update",
+                    reason: "cursor slot does not support update".to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+
         Opcode::Function => {
             let descriptor = match &instr.p4 {
                 P4::Str(s) => s.as_str(),

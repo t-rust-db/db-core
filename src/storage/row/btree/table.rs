@@ -9,6 +9,9 @@
 mod delete;
 #[path = "table/table_insert.rs"]
 mod insert;
+#[path = "table/table_update.rs"]
+mod update;
 
 pub use delete::delete_row;
 pub use insert::insert_row;
+pub use update::update_row;

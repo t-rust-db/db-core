@@ -188,6 +188,23 @@ impl Cursor for TableCursorAdapter {
         Some(ok)
     }
 
+    fn update_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
+        let writer = self.writer.as_ref()?;
+        let ok = btree::update_row(
+            &mut writer.borrow_mut(),
+            &self.header,
+            self.root_page,
+            rowid,
+            payload,
+        )
+        .is_ok();
+        // The rowid is unchanged (codegen only emits `Update` for that
+        // case); only the cached payload/header, not `current_rowid`,
+        // needs invalidating.
+        *self.payload.borrow_mut() = None;
+        Some(ok)
+    }
+
     fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
         let payload =
             crate::storage::row::record::encode_record(&values, self.header.text_encoding);

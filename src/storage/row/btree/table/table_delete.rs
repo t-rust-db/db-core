@@ -80,7 +80,7 @@ pub fn delete_row(
 /// chain back to the freelist (#167). Guards against a corrupt/cyclic
 /// chain the same way [`super::reassemble_payload`] does, so a malformed
 /// on-disk chain fails deletion cleanly rather than looping forever.
-fn free_overflow_chain(pager: &mut Pager, first_page: u32) -> Result<(), BtreeError> {
+pub(super) fn free_overflow_chain(pager: &mut Pager, first_page: u32) -> Result<(), BtreeError> {
     let mut page_num = first_page;
     let mut visited = std::collections::HashSet::new();
     while page_num != 0 {

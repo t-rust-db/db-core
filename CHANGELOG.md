@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.115.1] - 2026-09-20
+
+### Changed
+
+- **`UPDATE` rewrites a row whose rowid is unchanged with one `Opcode::Update` instead of `Delete`+`Insert`** (#524, PR #541): the two-op pair each independently walked root-to-leaf (`find_leaf_page`) and did its own pager dirty-map bookkeeping for what is provably the same leaf page both times. New `btree::update_row` does a single descent, splicing the old cell out and the new one in on the same page (falling back to the two-descent path only when the leaf would otherwise collapse). A/B on `update_filtered_range` (1MB fixture) showed no measurable improvement over the pre-existing ~6.5x-vs-sqlite3 ratio -- within bench noise, same pattern as #533 -- so this is a correctness-neutral cleanup, not a fix for #524's gap, which stays open.
+
 ## [0.115.0] - 2026-09-20
 
 ### Added
