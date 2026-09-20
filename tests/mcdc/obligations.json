@@ -13270,10 +13270,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_row_adapter_ensure_cached_e79b4a90",
+    "id": "engine_row_adapter_ensure_cached_8fe9046d",
     "file": "src/engine/row/adapter.rs",
-    "line": 89,
-    "decision": "self.cached.borrow().is_some()",
+    "line": 99,
+    "decision": "self.payload.borrow().is_some()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -13282,7 +13282,7 @@
   {
     "id": "engine_row_adapter_column_5582b55d",
     "file": "src/engine/row/adapter.rs",
-    "line": 145,
+    "line": 155,
     "decision": "match entries.get(col) {\n            Some(&(serial_type, offset)) => {\n                let (value, _) =\n                    decode_serial_value(serial_type, payload, offset, self.header.text_encoding)\n                        .ok()?;\n                Some(value)\n            }\n            None => Some(Value::Null),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13292,7 +13292,7 @@
   {
     "id": "engine_row_adapter_compare_leading_5d98fde3",
     "file": "src/engine/row/adapter.rs",
-    "line": 255,
+    "line": 265,
     "decision": "values.len() <= probe.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13302,7 +13302,7 @@
   {
     "id": "engine_row_adapter_idx_rowid_aafdaf30",
     "file": "src/engine/row/adapter.rs",
-    "line": 306,
+    "line": 316,
     "decision": "match values.last()? {\n            Value::Integer(rowid) => Some(*rowid),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13312,7 +13312,7 @@
   {
     "id": "engine_row_adapter_seek_index_eq_92036a38",
     "file": "src/engine/row/adapter.rs",
-    "line": 314,
+    "line": 324,
     "decision": "!self.set_current(r)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13322,7 +13322,7 @@
   {
     "id": "engine_row_adapter_seek_index_eq_3aaa30af",
     "file": "src/engine/row/adapter.rs",
-    "line": 318,
+    "line": 328,
     "decision": "!matched",
     "conditions": 1,
     "vectors_required": 2,
@@ -13332,7 +13332,7 @@
   {
     "id": "engine_row_adapter_open_write_cb2a8617",
     "file": "src/engine/row/adapter.rs",
-    "line": 434,
+    "line": 444,
     "decision": "self.writer.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13342,7 +13342,7 @@
   {
     "id": "engine_row_adapter_begin_745e4425",
     "file": "src/engine/row/adapter.rs",
-    "line": 500,
+    "line": 510,
     "decision": "match mode {\n            crate::vm::row::TRANSACTION_MODE_IMMEDIATE => pager.begin_immediate(),\n            crate::vm::row::TRANSACTION_MODE_EXCLUSIVE => pager.begin_exclusive(),\n            _ => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13352,7 +13352,7 @@
   {
     "id": "engine_row_adapter_commit_2254f3df",
     "file": "src/engine/row/adapter.rs",
-    "line": 509,
+    "line": 519,
     "decision": "match self.writer.as_ref() {\n            Some(writer) => writer\n                .borrow_mut()\n                .flush()\n                .map_err(|e| TransactionError(storage_err(e))),\n            None => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13362,7 +13362,7 @@
   {
     "id": "engine_row_adapter_rollback_fa5777ea",
     "file": "src/engine/row/adapter.rs",
-    "line": 519,
+    "line": 529,
     "decision": "match self.writer.as_ref() {\n            Some(writer) => writer\n                .borrow_mut()\n                .rollback()\n                .map_err(|e| TransactionError(storage_err(e))),\n            None => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13372,7 +13372,7 @@
   {
     "id": "engine_row_adapter_set_journal_mode_931d7438",
     "file": "src/engine/row/adapter.rs",
-    "line": 532,
+    "line": 542,
     "decision": "mode == JOURNAL_MODE_WAL",
     "conditions": 1,
     "vectors_required": 2,
@@ -13382,7 +13382,7 @@
   {
     "id": "engine_row_adapter_set_synchronous_205dc366",
     "file": "src/engine/row/adapter.rs",
-    "line": 549,
+    "line": 559,
     "decision": "let Some(writer) = self.writer.as_ref()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13392,7 +13392,7 @@
   {
     "id": "engine_row_adapter_set_synchronous_d6b2ee70",
     "file": "src/engine/row/adapter.rs",
-    "line": 550,
+    "line": 560,
     "decision": "match level {\n                SYNCHRONOUS_OFF => SynchronousMode::Off,\n                SYNCHRONOUS_NORMAL => SynchronousMode::Normal,\n                _ => SynchronousMode::Full,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13402,7 +13402,7 @@
   {
     "id": "engine_row_adapter_count_index_entries_and_avg_eq_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 601,
+    "line": 611,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -13412,7 +13412,7 @@
   {
     "id": "engine_row_adapter_count_index_entries_and_avg_eq_f76da1f3",
     "file": "src/engine/row/adapter.rs",
-    "line": 604,
+    "line": 614,
     "decision": "prev_leading.as_ref() != leading.as_ref()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13422,7 +13422,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 724,
+    "line": 734,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -13432,7 +13432,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_15a637f2",
     "file": "src/engine/row/adapter.rs",
-    "line": 726,
+    "line": 736,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) =\n                    (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -13442,7 +13442,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_892d9090",
     "file": "src/engine/row/adapter.rs",
-    "line": 729,
+    "line": 739,
     "decision": "&**n == table",
     "conditions": 1,
     "vectors_required": 2,

@@ -30,9 +30,9 @@ use crate::storage::row::vfs::{PageError, PageSource};
 
 type SharedPager = Rc<RefCell<crate::storage::row::pager::Pager>>;
 
-/// A positioned row's payload and its header entries -- `(serial_type,
-/// body_offset)` per column, from [`parse_header_into`].
-type CachedRow = (Payload, Vec<(u64, usize)>);
+/// A positioned row's header entries -- `(serial_type, body_offset)` per
+/// column, from [`parse_header_into`].
+type HeaderEntries = Vec<(u64, usize)>;
 
 fn storage_err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -48,15 +48,23 @@ pub struct TableCursorAdapter {
     header: DatabaseHeader,
     root_page: u32,
     current_rowid: Option<i64>,
-    /// The current row's payload and its header (serial type, body offset
-    /// per column), parsed lazily on the first `column()`/`payload()`
+    /// The current row's payload, set on the first `column()`/`payload()`
     /// after positioning. `column()` takes `&self` (the `Cursor` trait's
     /// signature), so this is filled in through a `RefCell` rather than
-    /// up front in `position()`. Caching offsets rather than decoded
-    /// `Value`s means the header is walked once per row regardless of how
-    /// many columns a projection reads (db-core#485), while `column()`
-    /// still only decodes the one column body it's asked for.
-    cached: RefCell<Option<CachedRow>>,
+    /// up front in `position()`.
+    payload: RefCell<Option<Payload>>,
+    /// Header entries (serial type, body offset per column) for the
+    /// current row, parsed once alongside `payload`. Caching offsets
+    /// rather than decoded `Value`s means the header is walked once per
+    /// row regardless of how many columns a projection reads
+    /// (db-core#485), while `column()` still only decodes the one column
+    /// body it's asked for. Kept as a separate field from `payload` (not
+    /// folded into one `Option<(Payload, HeaderEntries)>`) so its backing
+    /// allocation survives across rows: `position()` only clears
+    /// `payload` to mark "not parsed"; `ensure_cached()` reuses this
+    /// `Vec`'s capacity via `parse_header_into`'s `clear()` instead of
+    /// allocating a fresh one every row (db-core#533).
+    entries: RefCell<HeaderEntries>,
 }
 
 impl TableCursorAdapter {
@@ -73,27 +81,28 @@ impl TableCursorAdapter {
             header,
             root_page,
             current_rowid: None,
-            cached: RefCell::new(None),
+            payload: RefCell::new(None),
+            entries: RefCell::new(Vec::new()),
         }
     }
 
     fn position(&mut self, rowid: Result<Option<i64>, btree::BtreeError>) -> bool {
         self.current_rowid = rowid.ok().flatten();
-        *self.cached.borrow_mut() = None;
+        *self.payload.borrow_mut() = None;
         self.current_rowid.is_some()
     }
 
-    /// Ensures `cached` holds the current row's payload and header
-    /// offsets, parsing the header at most once per positioned row.
+    /// Ensures `payload`/`entries` hold the current row's payload and
+    /// header offsets, parsing the header at most once per positioned
+    /// row. `entries`' backing allocation is reused across rows.
     fn ensure_cached(&self) -> Option<()> {
-        if self.cached.borrow().is_some() {
+        if self.payload.borrow().is_some() {
             return Some(());
         }
         self.current_rowid?;
         let payload = self.cursor.current_payload().ok()?;
-        let mut entries = Vec::new();
-        parse_header_into(&payload, &mut entries).ok()?;
-        *self.cached.borrow_mut() = Some((payload, entries));
+        parse_header_into(&payload, &mut self.entries.borrow_mut()).ok()?;
+        *self.payload.borrow_mut() = Some(payload);
         Some(())
     }
 
@@ -140,8 +149,9 @@ impl Cursor for TableCursorAdapter {
         // (db-core#231); a column index past the record's end is
         // `Some(Null)`, SQLite's short-record rule.
         self.ensure_cached()?;
-        let cached = self.cached.borrow();
-        let (payload, entries) = cached.as_ref()?;
+        let payload = self.payload.borrow();
+        let payload = payload.as_ref()?;
+        let entries = self.entries.borrow();
         match entries.get(col) {
             Some(&(serial_type, offset)) => {
                 let (value, _) =
@@ -159,8 +169,8 @@ impl Cursor for TableCursorAdapter {
 
     fn payload(&self) -> Option<Rc<[u8]>> {
         self.ensure_cached()?;
-        let cached = self.cached.borrow();
-        let (payload, _) = cached.as_ref()?;
+        let payload = self.payload.borrow();
+        let payload = payload.as_ref()?;
         Some(Rc::from(&payload[..]))
     }
 
@@ -174,7 +184,7 @@ impl Cursor for TableCursorAdapter {
             payload,
         )
         .is_ok();
-        *self.cached.borrow_mut() = None;
+        *self.payload.borrow_mut() = None;
         Some(ok)
     }
 
@@ -197,7 +207,7 @@ impl Cursor for TableCursorAdapter {
         )
         .is_ok();
         self.current_rowid = None;
-        *self.cached.borrow_mut() = None;
+        *self.payload.borrow_mut() = None;
         ok
     }
 
