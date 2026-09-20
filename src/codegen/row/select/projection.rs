@@ -260,6 +260,19 @@ pub(super) fn emit_dedup_check(
     collations: Vec<Collation>,
     skip_label: Label,
 ) {
+    // db-core#527, mirroring sqlite3's own `Filter`/`FilterAdd` pair
+    // ahead of its `NotFound` probe: a bloom-filter miss means the key
+    // is definitely new, so control jumps straight to `IdxInsert`,
+    // skipping the `Found` lookup entirely.
+    let insert_label = em.new_label();
+    let filter_addr = em.emit(Instruction::with_p4(
+        Opcode::Filter,
+        dedup_cursor,
+        0,
+        first,
+        P4::SeekKey(collations.clone()),
+    ));
+    em.patch_p2(filter_addr, insert_label);
     let addr = em.emit(Instruction::with_p4(
         Opcode::Found,
         dedup_cursor,
@@ -268,6 +281,14 @@ pub(super) fn emit_dedup_check(
         P4::SeekKey(collations.clone()),
     ));
     em.patch_p2(addr, skip_label);
+    em.place(insert_label);
+    em.emit(Instruction::with_p4(
+        Opcode::FilterAdd,
+        dedup_cursor,
+        0,
+        first,
+        P4::SeekKey(collations.clone()),
+    ));
     em.emit(Instruction::with_p4(
         Opcode::IdxInsert,
         dedup_cursor,

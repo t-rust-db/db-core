@@ -2289,6 +2289,20 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 Step::Next
             })
         }
+        Opcode::Filter => {
+            let (key, collations) = key_from_registers(vm, "Filter", instr.p3, &instr.p4)?;
+            let maybe_present = vm.cursor(instr.p1)?.filter_maybe_present(&key, &collations);
+            Ok(if maybe_present {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::FilterAdd => {
+            let (key, collations) = key_from_registers(vm, "FilterAdd", instr.p3, &instr.p4)?;
+            vm.cursor_mut(instr.p1)?.filter_add(&key, &collations);
+            Ok(Step::Next)
+        }
         Opcode::NoConflict => {
             let (key, collations) = key_from_registers(vm, "NoConflict", instr.p3, &instr.p4)?;
             let count = i32::try_from(key.len()).unwrap_or(i32::MAX);
