@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.116.0] - 2026-09-21
+
+### Added
+
+- **Grammar-driven SQL statement generator (`fuzz-gen` crate, `make fuzz-sql`)** (#544, PR #550; first increment of fuzzing epic #543): the root `Cargo.toml` is now a workspace (`members = [".", "fuzz/gen"]`) with a shared `[workspace.lints]` table so `fuzz/gen` inherits the same strict lint bar. The new `fuzz-gen` crate holds a recursive-descent EBNF parser for the three sections of `src/parser/grammar.ebnf` (SHARED / COLUMN-RS / SQLITE-RS), tagging `(* Vn *)` V-blocks per alternative, and a seeded, depth-bounded, weighted-alternative `Walker` that produces statement strings for a chosen entry rule with `VBlockScope` filtering and a rule-coverage report. Termination is backed by a fixpoint minimum-height computation over the grammar, so an exhausted depth budget returns a typed `WalkError` rather than overflowing the stack. `make fuzz-sql TARGET=row|column|stream N= SEED= MAX_DEPTH=` generates statements only; the totality runner (`catch_unwind`, per-statement timeout) follows in #545 and the sqlite3 oracle comparison in #546.
+
 ## [0.115.1] - 2026-09-20
 
 ### Changed
