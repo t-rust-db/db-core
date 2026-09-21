@@ -52,7 +52,8 @@ test-spike: ## Run only the throwaway experiments under tests/spike/
 # `fuzz-sql` is the totality probe: generate N statements from
 # src/parser/grammar.ebnf with catalog-aware terminals, run each through
 # parser::row -> codegen::row -> vm::row (each stage under catch_unwind,
-# TIMEOUT_MS per statement) and record only panics/hangs as findings
+# TIMEOUT_MS per statement; STAGE=parse|codegen stops the chain early) and
+# record only panics/hangs/corruption as findings
 # under OUT (findings.jsonl + one .sql per hit). Typed rejections at any
 # stage are the expected outcome and are counted, not reported. Exit 3
 # when findings were recorded. REPLAY=<seed>:<index> re-runs one hit.
@@ -64,9 +65,10 @@ SEED ?= 1
 MAX_DEPTH ?= 16
 TIMEOUT_MS ?= 2000
 OUT ?= target/fuzz
+STAGE ?= vm
 
-fuzz-sql: ## Totality-fuzz TARGET=row: N statements from grammar.ebnf through parse/codegen/vm (SEED=, MAX_DEPTH=, TIMEOUT_MS=, OUT=, REPLAY=seed:idx)
-	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) TIMEOUT_MS=$(TIMEOUT_MS) OUT=$(OUT) cargo run -q -p fuzz-run --bin run
+fuzz-sql: ## Totality-fuzz TARGET=row: N statements from grammar.ebnf through parse/codegen/vm (STAGE=parse|codegen|vm, SEED=, MAX_DEPTH=, TIMEOUT_MS=, OUT=, REPLAY=seed:idx)
+	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) TIMEOUT_MS=$(TIMEOUT_MS) OUT=$(OUT) STAGE=$(STAGE) cargo run -q -p fuzz-run --bin run
 
 fuzz-gen: ## Generate N statements for TARGET=row|column|stream from grammar.ebnf without running them (SEED=, MAX_DEPTH=)
 	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) cargo run -q -p fuzz-gen --bin gen

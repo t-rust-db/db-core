@@ -33,8 +33,54 @@ fn runner(timeout: Duration) -> Runner {
         fixture: fixture(),
         timeout,
         allow_impldef: false,
+        stop_after: Stage::Vm,
     })
     .expect("runner")
+}
+
+fn runner_until(stop_after: Stage) -> Runner {
+    Runner::new(RunConfig {
+        fixture: fixture(),
+        timeout: Duration::from_secs(5),
+        allow_impldef: false,
+        stop_after,
+    })
+    .expect("runner")
+}
+
+#[test]
+fn stage_knob_stops_the_probe_chain_early() {
+    // Unknown table: rejected by codegen, but a parser-only run never
+    // gets there and reports Ok.
+    let sql = "SELECT * FROM no_such_table";
+    assert_eq!(
+        runner_until(Stage::Parse).run_one(sql).unwrap(),
+        Outcome::Ok
+    );
+    rejected_at(
+        &runner_until(Stage::Codegen).run_one(sql).unwrap(),
+        Stage::Codegen,
+        Rejection::Compile,
+    );
+    // Duplicate rowid: only the VM can refuse it, so codegen-only says Ok.
+    let dup = "INSERT INTO t(id, i) VALUES (1, 0)";
+    assert_eq!(
+        runner_until(Stage::Codegen).run_one(dup).unwrap(),
+        Outcome::Ok
+    );
+    rejected_at(
+        &runner(Duration::from_secs(5)).run_one(dup).unwrap(),
+        Stage::Vm,
+        Rejection::Execute,
+    );
+    // Parser-only still classifies parse failures.
+    rejected_at(
+        &runner_until(Stage::Parse).run_one("SELEKT").unwrap(),
+        Stage::Parse,
+        Rejection::Invalid,
+    );
+    assert_eq!(Stage::parse("codegen"), Some(Stage::Codegen));
+    assert_eq!(Stage::parse("all"), None);
 }
 
 fn rejected_at(outcome: &Outcome, want_stage: Stage, want_kind: Rejection) {
