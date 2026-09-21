@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use fuzz_gen::{load_db_core_grammar, Section, VBlockScope, Walker, WalkerConfig};
 use fuzz_run::{
-    catalog_of, fixture_path, install_panic_capture, probe, Finding, Outcome, Rejection,
-    RowDialect, RunConfig, Runner, Stage,
+    catalog_of, fixture_path, install_panic_capture, probe, run_parallel, Finding, Outcome,
+    Rejection, RowDialect, RunConfig, Runner, Stage,
 };
 
 fn fixture() -> std::path::PathBuf {
@@ -324,5 +324,42 @@ fn view_table_name_collisions_are_rejected_not_corrupting() {
         r.workers_spawned(),
         1,
         "no corruption, no engine replacement"
+    );
+}
+
+#[test]
+fn parallel_lanes_cover_every_statement_and_tag_findings_with_their_lane() {
+    let stmts: Vec<(usize, String)> = generate(77, 120).into_iter().enumerate().collect();
+    let config = RunConfig {
+        fixture: fixture(),
+        timeout: Duration::from_secs(5),
+        allow_impldef: false,
+        stop_after: Stage::Vm,
+    };
+    let (summary, spawned) = run_parallel(&config, 4, 77, stmts.clone(), None).unwrap();
+    assert_eq!(summary.total, 120);
+    assert_eq!(
+        summary.ok + summary.rejected_total() + summary.skipped_impldef + summary.findings.len(),
+        120
+    );
+    assert!(summary.findings.is_empty(), "{}", summary.render());
+    assert_eq!(spawned, 4, "one worker per lane, no hangs");
+    // JOBS=1 goes through the plain sequential runner.
+    let (single, spawned1) = run_parallel(&config, 1, 77, stmts, None).unwrap();
+    assert_eq!(single.total, 120);
+    assert_eq!(spawned1, 1);
+    // Finding records carry lane/jobs (defaults 0/1 from from_outcome).
+    let panic = Outcome::Panic {
+        stage: Stage::Vm,
+        message: "x".to_string(),
+    };
+    let mut f = Finding::from_outcome(77, 3, "SELECT 1", &panic, 0).unwrap();
+    assert_eq!((f.lane, f.jobs), (0, 1));
+    f.lane = 2;
+    f.jobs = 4;
+    assert!(
+        f.to_json_line().ends_with("\"lane\":2,\"jobs\":4}"),
+        "{}",
+        f.to_json_line()
     );
 }

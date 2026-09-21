@@ -69,6 +69,18 @@ impl RunSummary {
         self.rejected.values().fold(0, |a, n| a.saturating_add(*n))
     }
 
+    /// Adds `other`'s counters and findings into `self`.
+    pub fn merge(&mut self, other: RunSummary) {
+        self.total = self.total.saturating_add(other.total);
+        self.ok = self.ok.saturating_add(other.ok);
+        self.skipped_impldef = self.skipped_impldef.saturating_add(other.skipped_impldef);
+        for (k, v) in other.rejected {
+            let n = self.rejected.entry(k).or_insert(0);
+            *n = n.saturating_add(v);
+        }
+        self.findings.extend(other.findings);
+    }
+
     /// Findings of one class (`"panic"`, `"hang"`, `"corruption"`).
     pub fn findings_of(&self, class: &str) -> usize {
         self.findings.iter().filter(|f| f.class == class).count()
@@ -178,9 +190,15 @@ pub struct TempDb(PathBuf);
 
 impl TempDb {
     pub fn copy_of(fixture: &Path, label: &str) -> Result<Self, RunError> {
+        // Parallel lanes spawn their first workers within the same
+        // nanosecond under the same label, so a timestamp alone collides
+        // (one lane's copy truncates another's mid-open); the counter
+        // makes every path in this process unique.
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut path = std::env::temp_dir();
         path.push(format!(
-            "db-core-fuzz-{label}-{}-{}.db",
+            "db-core-fuzz-{label}-{}-{seq}-{}.db",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -506,4 +524,72 @@ impl Runner {
         }
         Ok(summary)
     }
+}
+
+/// Runs `statements` over `jobs` independent lanes, each a [`Runner`] with
+/// its own fixture copy and engine, dealt round-robin by generator index
+/// so `(seed, index)` still names a statement. Returns the merged summary
+/// (findings sorted by index, tagged with `lane`/`jobs`) and the total
+/// number of worker threads spawned across lanes.
+///
+/// Parallelism changes *which* statements share an engine, so DDL
+/// interaction bugs surface at a different rate than sequentially; for
+/// panic hunting that is irrelevant, and the panic hook is process-wide
+/// with per-thread capture, so lanes never confuse each other's panics.
+pub fn run_parallel(
+    config: &RunConfig,
+    jobs: usize,
+    seed: u64,
+    statements: Vec<(usize, String)>,
+    sink: Option<&mut FindingsSink>,
+) -> Result<(RunSummary, usize), RunError> {
+    let jobs = jobs.max(1);
+    if jobs == 1 {
+        let mut runner = Runner::new(config.clone())?;
+        let summary = runner.run_all(seed, statements, sink)?;
+        return Ok((summary, runner.workers_spawned()));
+    }
+    let mut lanes: Vec<Vec<(usize, String)>> = (0..jobs).map(|_| Vec::new()).collect();
+    for (i, stmt) in statements.into_iter().enumerate() {
+        if let Some(lane) = lanes.get_mut(i.checked_rem(jobs).unwrap_or(0)) {
+            lane.push(stmt);
+        }
+    }
+    install_panic_capture();
+    let handles: Vec<_> = lanes
+        .into_iter()
+        .enumerate()
+        .map(|(lane, stmts)| {
+            let config = config.clone();
+            thread::Builder::new()
+                .name(format!("fuzz-lane-{lane}"))
+                .spawn(move || -> Result<(RunSummary, usize), RunError> {
+                    let mut runner = Runner::new(config)?;
+                    let mut summary = runner.run_all(seed, stmts, None)?;
+                    for f in &mut summary.findings {
+                        f.lane = lane;
+                        f.jobs = jobs;
+                    }
+                    Ok((summary, runner.workers_spawned()))
+                })
+                .map_err(|e| RunError(format!("spawning lane {lane}: {e}")))
+        })
+        .collect::<Result<Vec<_>, RunError>>()?;
+    let mut merged = RunSummary::default();
+    let mut spawned = 0usize;
+    for handle in handles {
+        let (summary, n) = handle
+            .join()
+            .map_err(|_| RunError("a fuzz lane panicked outside a probe".to_string()))??;
+        merged.merge(summary);
+        spawned = spawned.saturating_add(n);
+    }
+    merged.findings.sort_by_key(|f| f.index);
+    if let Some(sink) = sink {
+        for f in &merged.findings {
+            sink.record(f)
+                .map_err(|e| RunError(format!("writing finding: {e}")))?;
+        }
+    }
+    Ok((merged, spawned))
 }

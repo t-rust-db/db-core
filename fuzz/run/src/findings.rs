@@ -25,6 +25,13 @@ pub struct Finding {
     /// history. Empty otherwise.
     pub script: Vec<String>,
     pub elapsed_ms: u128,
+    /// Which of `jobs` parallel lanes ran the statement (0-based). With
+    /// `JOBS=1` always `0`/`1`. Statements are dealt round-robin, so a
+    /// lane's engine history depends on `jobs`; a corruption repro is
+    /// self-contained via `script`, but re-running the whole batch
+    /// needs the same `JOBS`.
+    pub lane: usize,
+    pub jobs: usize,
 }
 
 impl Finding {
@@ -53,12 +60,14 @@ impl Finding {
             sql: sql.to_string(),
             script,
             elapsed_ms,
+            lane: 0,
+            jobs: 1,
         })
     }
 
     pub fn to_json_line(&self) -> String {
         format!(
-            "{{\"seed\":{},\"index\":{},\"stage\":\"{}\",\"class\":\"{}\",\"message\":\"{}\",\"sql\":\"{}\",\"script_len\":{},\"elapsed_ms\":{}}}",
+            "{{\"seed\":{},\"index\":{},\"stage\":\"{}\",\"class\":\"{}\",\"message\":\"{}\",\"sql\":\"{}\",\"script_len\":{},\"elapsed_ms\":{},\"lane\":{},\"jobs\":{}}}",
             self.seed,
             self.index,
             self.stage.as_str(),
@@ -66,7 +75,9 @@ impl Finding {
             json_escape(&self.message),
             json_escape(&self.sql),
             self.script.len(),
-            self.elapsed_ms
+            self.elapsed_ms,
+            self.lane,
+            self.jobs
         )
     }
 }

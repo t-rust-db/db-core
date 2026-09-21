@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.121.0] - 2026-09-21
+
+### Added
+
+- **`make fuzz-sql JOBS=n` parallel lanes** (#543, PR #559): each lane is a `Runner` with its own fixture copy and engine; statements are dealt round-robin by generator index so `(seed, index)` still names a statement and `REPLAY` keeps working. Findings carry `lane`/`jobs`. Temp fixture names gain a process-wide counter (lanes spawned within the same nanosecond collided). 20k statements: 33 s -> 9 s at `JOBS=8`. With this, `N=100000` over seeds 1–4 ran clean (0 panics/hangs/corruption), completing epic #543's Phase 1a.
+
 ## [0.120.0] - 2026-09-21
 
 ### Changed

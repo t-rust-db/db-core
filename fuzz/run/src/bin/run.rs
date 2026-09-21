@@ -9,6 +9,9 @@
 //!   OUT                     findings directory (default target/fuzz)
 //!   REPLAY=<seed>:<index>   regenerate exactly that statement and run it
 //!   STAGE=parse|codegen|vm  last probe to run (default vm: the whole chain)
+//!   JOBS=n                  parallel lanes, each with its own fixture copy
+//!                           (default 1; statements dealt round-robin;
+//!                           ignored under VERBOSE/REPLAY)
 //!   ALLOW_IMPLDEF=1         also run RANDOM()/CURRENT_* statements
 //!   VERBOSE=1               print every statement and its outcome
 //!   UNEXERCISED=1           list in-scope grammar alternatives never chosen
@@ -22,7 +25,8 @@ use std::time::Duration;
 
 use fuzz_gen::{load_db_core_grammar, Section, VBlockScope, Walker, WalkerConfig};
 use fuzz_run::{
-    catalog_of, fixture_path, FindingsSink, Outcome, RowDialect, RunConfig, Runner, Stage,
+    catalog_of, fixture_path, run_parallel, FindingsSink, Outcome, RowDialect, RunConfig, Runner,
+    Stage,
 };
 
 fn env_var(name: &str, default: &str) -> String {
@@ -52,6 +56,7 @@ fn main() {
     let stop_after = Stage::parse(&env_var("STAGE", "vm"))
         .unwrap_or_else(|| fail(2, "STAGE must be parse|codegen|vm"));
     let verbose = env_var("VERBOSE", "0") == "1";
+    let jobs: usize = env_var("JOBS", "1").parse().unwrap_or(1).max(1);
     let replay: Option<usize> = match env::var("REPLAY") {
         Ok(spec) => {
             let (s, i) = spec
@@ -98,9 +103,8 @@ fn main() {
         allow_impldef,
         stop_after,
     };
-    let mut runner = Runner::new(run_config).unwrap_or_else(|e| fail(1, &e.to_string()));
-
-    let summary = if replay.is_some() || verbose {
+    let (summary, workers_spawned) = if replay.is_some() || verbose {
+        let mut runner = Runner::new(run_config).unwrap_or_else(|e| fail(1, &e.to_string()));
         let mut sink = if replay.is_some() {
             None
         } else {
@@ -137,21 +141,19 @@ fn main() {
                 },
             };
             println!("[{i}] {sql}\n     -> {label}");
-            merge(&mut acc, part);
+            acc.merge(part);
         }
-        acc
+        (acc, runner.workers_spawned())
     } else {
         let mut sink = FindingsSink::open(&out_dir).unwrap_or_else(|e| fail(1, &e.to_string()));
-        runner
-            .run_all(seed, statements, Some(&mut sink))
+        run_parallel(&run_config, jobs, seed, statements, Some(&mut sink))
             .unwrap_or_else(|e| fail(1, &e.to_string()))
     };
 
     let (exercised, in_scope) = walker.coverage();
     eprint!("{}", summary.render());
     eprintln!(
-        "grammar coverage: {exercised}/{in_scope} alternatives; workers spawned: {}",
-        runner.workers_spawned()
+        "grammar coverage: {exercised}/{in_scope} alternatives; jobs: {jobs}; workers spawned: {workers_spawned}"
     );
     let unexercised = walker.unexercised();
     if !unexercised.is_empty() && (verbose || env_var("UNEXERCISED", "0") == "1") {
@@ -198,15 +200,4 @@ fn summarize(
         }
     }
     part
-}
-
-fn merge(acc: &mut fuzz_run::RunSummary, part: fuzz_run::RunSummary) {
-    acc.total = acc.total.saturating_add(part.total);
-    acc.ok = acc.ok.saturating_add(part.ok);
-    acc.skipped_impldef = acc.skipped_impldef.saturating_add(part.skipped_impldef);
-    for (k, v) in part.rejected {
-        let n = acc.rejected.entry(k).or_insert(0);
-        *n = n.saturating_add(v);
-    }
-    acc.findings.extend(part.findings);
 }
