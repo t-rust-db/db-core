@@ -2380,30 +2380,50 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_fmt_ef11df55",
+    "id": "codegen_row_dispatch_fmt_930a55e1",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 68,
-    "decision": "match self {\n            DispatchError::NoSuchTable(name) => write!(f, \"no such table: {name}\"),\n            DispatchError::NoSuchIndex(name) => write!(f, \"no such index: {name}\"),\n            DispatchError::TableAlreadyExists(name) => write!(f, \"table {name} already exists\"),\n            DispatchError::IndexAlreadyExists(name) => write!(f, \"index {name} already exists\"),\n            DispatchError::Unrecognized(kw) => {\n                write!(f, \"unsupported or unrecognized statement: {kw:?} ...\")\n            }\n            DispatchError::NoFromClause => write!(f, \"SELECT has no FROM clause\"),\n            DispatchError::Codegen(source) => write!(f, \"{source}\"),\n            DispatchError::ParseFailed(msg) => write!(f, \"{msg}\"),\n        }",
+    "line": 79,
+    "decision": "match self {\n            DispatchError::NoSuchTable(name) => write!(f, \"no such table: {name}\"),\n            DispatchError::NoSuchIndex(name) => write!(f, \"no such index: {name}\"),\n            DispatchError::TableAlreadyExists(name) => write!(f, \"table {name} already exists\"),\n            DispatchError::IndexAlreadyExists(name) => write!(f, \"index {name} already exists\"),\n            DispatchError::ViewAlreadyExists(name) => write!(f, \"view {name} already exists\"),\n            DispatchError::UseDropView(name) => {\n                write!(f, \"use DROP VIEW to delete view {name}\")\n            }\n            DispatchError::Unrecognized(kw) => {\n                write!(f, \"unsupported or unrecognized statement: {kw:?} ...\")\n            }\n            DispatchError::NoFromClause => write!(f, \"SELECT has no FROM clause\"),\n            DispatchError::Codegen(source) => write!(f, \"{source}\"),\n            DispatchError::ParseFailed(msg) => write!(f, \"{msg}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_dispatch_create_table_a4e25b0b",
+    "id": "codegen_row_dispatch_name_taken_5f38c244",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 145,
-    "decision": "match parse_create_table(sql) {\n        ParseOutcome::Accepted(create) => {\n            let exists = schemas\n                .iter()\n                .any(|s| s.name.eq_ignore_ascii_case(&create.name));\n            if exists {\n                if create.if_not_exists {\n                    return Ok(no_op_program());\n                }\n                return Err(DispatchError::TableAlreadyExists(create.name));\n            }\n            Ok(compile_create_table(&create, sql)?)\n        }\n        other => Err(parse_error(other)),\n    }",
+    "line": 164,
+    "decision": "schemas.iter().any(|s| s.name.eq_ignore_ascii_case(name))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_dispatch_name_taken_15eed7de",
+    "file": "src/codegen/row/dispatch.rs",
+    "line": 167,
+    "decision": "views.iter().any(|v| v.name.eq_ignore_ascii_case(name))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_dispatch_dispatch_create_table_9ed5622a",
+    "file": "src/codegen/row/dispatch.rs",
+    "line": 178,
+    "decision": "match parse_create_table(sql) {\n        ParseOutcome::Accepted(create) => {\n            if let Some(err) = name_taken(&create.name, schemas, views) {\n                if create.if_not_exists {\n                    return Ok(no_op_program());\n                }\n                return Err(err);\n            }\n            Ok(compile_create_table(&create, sql)?)\n        }\n        other => Err(parse_error(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_dispatch_create_table_fcd40ece",
+    "id": "codegen_row_dispatch_dispatch_create_table_93fe52df",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 150,
-    "decision": "exists",
+    "line": 180,
+    "decision": "let Some(err) = name_taken(&create.name, schemas, views)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -2412,7 +2432,7 @@
   {
     "id": "codegen_row_dispatch_dispatch_create_table_65730d0b",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 151,
+    "line": 181,
     "decision": "create.if_not_exists",
     "conditions": 1,
     "vectors_required": 2,
@@ -2420,19 +2440,39 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_dispatch_create_view_de8ae0d6",
+    "id": "codegen_row_dispatch_dispatch_create_view_178210a4",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 163,
-    "decision": "match parse_create_view(sql) {\n        ParseOutcome::Accepted(create) => Ok(compile_create_view(&create, sql)?),\n        other => Err(parse_error(other)),\n    }",
+    "line": 197,
+    "decision": "match parse_create_view(sql) {\n        ParseOutcome::Accepted(create) => {\n            if let Some(err) = name_taken(&create.name, schemas, views) {\n                if create.if_not_exists {\n                    return Ok(no_op_program());\n                }\n                return Err(err);\n            }\n            Ok(compile_create_view(&create, sql)?)\n        }\n        other => Err(parse_error(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_dispatch_dispatch_create_view_93fe52df",
+    "file": "src/codegen/row/dispatch.rs",
+    "line": 199,
+    "decision": "let Some(err) = name_taken(&create.name, schemas, views)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_dispatch_dispatch_create_view_65730d0b",
+    "file": "src/codegen/row/dispatch.rs",
+    "line": 200,
+    "decision": "create.if_not_exists",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_dispatch_dispatch_create_index_0fe5bdbc",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 170,
+    "line": 212,
     "decision": "match parse_create_index(sql) {\n        ParseOutcome::Accepted(ci) => {\n            let schema = schemas\n                .iter()\n                .find(|s| s.name.eq_ignore_ascii_case(&ci.table))\n                .ok_or_else(|| DispatchError::NoSuchTable(ci.table.clone()))?;\n            let exists = schemas\n                .iter()\n                .any(|s| s.name.eq_ignore_ascii_case(&ci.name))\n                || schemas\n                    .iter()\n                    .flat_map(|s| &s.indexes)\n                    .any(|idx| idx.name.eq_ignore_ascii_case(&ci.name));\n            if exists {\n                if ci.if_not_exists {\n                    return Ok(no_op_program());\n                }\n                return Err(DispatchError::IndexAlreadyExists(ci.name));\n            }\n            Ok(compile_create_index(&ci, schema, sql)?)\n        }\n        other => Err(parse_error(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2442,7 +2482,7 @@
   {
     "id": "codegen_row_dispatch_dispatch_create_index_fcd40ece",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 183,
+    "line": 225,
     "decision": "exists",
     "conditions": 1,
     "vectors_required": 2,
@@ -2452,7 +2492,7 @@
   {
     "id": "codegen_row_dispatch_dispatch_create_index_2c9b55cf",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 184,
+    "line": 226,
     "decision": "ci.if_not_exists",
     "conditions": 1,
     "vectors_required": 2,
@@ -2460,19 +2500,49 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_dispatch_drop_table_7d8b840d",
+    "id": "codegen_row_dispatch_dispatch_drop_table_d99d285c",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 196,
-    "decision": "match parse_drop_table(sql) {\n        ParseOutcome::Accepted(drop) => {\n            let schema = schemas\n                .iter()\n                .find(|s| s.name.eq_ignore_ascii_case(&drop.name))\n                .ok_or_else(|| DispatchError::NoSuchTable(drop.name.clone()))?;\n            Ok(compile_drop_table(&drop, schema)?)\n        }\n        other => Err(parse_error(other)),\n    }",
+    "line": 242,
+    "decision": "match parse_drop_table(sql) {\n        ParseOutcome::Accepted(drop) => {\n            if let Some(schema) = schemas\n                .iter()\n                .find(|s| s.name.eq_ignore_ascii_case(&drop.name))\n            {\n                return Ok(compile_drop_table(&drop, schema)?);\n            }\n            // sqlite3 checks the kind before `IF EXISTS`: dropping a view\n            // with DROP TABLE is an error even with IF EXISTS.\n            if views\n                .iter()\n                .any(|v| v.name.eq_ignore_ascii_case(&drop.name))\n            {\n                return Err(DispatchError::UseDropView(drop.name));\n            }\n            if drop.if_exists {\n                return Ok(no_op_program());\n            }\n            Err(DispatchError::NoSuchTable(drop.name))\n        }\n        other => Err(parse_error(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_dispatch_dispatch_drop_table_3252cc05",
+    "file": "src/codegen/row/dispatch.rs",
+    "line": 244,
+    "decision": "let Some(schema) = schemas\n                .iter()\n                .find(|s| s.name.eq_ignore_ascii_case(&drop.name))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_dispatch_dispatch_drop_table_80fa410f",
+    "file": "src/codegen/row/dispatch.rs",
+    "line": 252,
+    "decision": "views\n                .iter()\n                .any(|v| v.name.eq_ignore_ascii_case(&drop.name))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_dispatch_dispatch_drop_table_a695cd50",
+    "file": "src/codegen/row/dispatch.rs",
+    "line": 258,
+    "decision": "drop.if_exists",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_dispatch_dispatch_drop_index_35e23d93",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 209,
+    "line": 268,
     "decision": "match parse_drop_index(sql) {\n        ParseOutcome::Accepted(di) => {\n            let root_page = schemas\n                .iter()\n                .flat_map(|s| &s.indexes)\n                .find(|idx| idx.name.eq_ignore_ascii_case(&di.name))\n                .map(|idx| idx.root_page)\n                .ok_or_else(|| DispatchError::NoSuchIndex(di.name.clone()))?;\n            Ok(compile_drop_index(&di, root_page)?)\n        }\n        other => Err(parse_error(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2480,10 +2550,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_0fbce5f1",
+    "id": "codegen_row_dispatch_compile_statement_a3524f37",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 262,
-    "decision": "match head {\n        \"BEGIN\" => match parse_begin(sql) {\n            ParseOutcome::Accepted(begin) => Ok(compile_begin(&begin)),\n            other => Err(parse_error(other)),\n        },\n        \"COMMIT\" | \"END\" => match parse_commit(sql) {\n            ParseOutcome::Accepted(commit) => Ok(compile_commit(&commit)),\n            other => Err(parse_error(other)),\n        },\n        \"ROLLBACK\" => match parse_rollback(sql) {\n            ParseOutcome::Accepted(rollback) => Ok(compile_rollback(&rollback)),\n            other => Err(parse_error(other)),\n        },\n        \"PRAGMA\" => match parse_pragma(sql) {\n            ParseOutcome::Accepted(pragma) => Ok(compile_pragma(&pragma)),\n            other => Err(parse_error(other)),\n        },\n        \"ANALYZE\" => match parse_analyze(sql) {\n            ParseOutcome::Accepted(analyze) => {\n                let targets: Vec<&TableSchema> = match &analyze.target {\n                    None => schemas.iter().collect(),\n                    Some(name) => {\n                        if let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))\n                        {\n                            vec![schema]\n                        } else if schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))\n                        {\n                            // Real SQLite also accepts `ANALYZE index-name`\n                            // (analyzing just that index's owning table) —\n                            // syntactically valid, but out of this MVP's\n                            // scope (spec 011/Req 1), so `Unsupported`\n                            // rather than the `NoSuchTable` a genuinely\n                            // unknown name gets below.\n                            return Err(CodegenError::Unsupported {\n                                reason: format!(\n                                    \"ANALYZE of a single index ({name:?}) is not yet supported\"\n                                ),\n                            }\n                            .into());\n                        } else {\n                            return Err(DispatchError::NoSuchTable(name.clone()));\n                        }\n                    }\n                };\n                Ok(compile_analyze(&targets)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        // db-core addition (#219): sqlite-rs dispatches SELECT from its\n        // CLI binary (`src/bin/sqlite-rs/query.rs::compile_select_program`),\n        // which db-core has no counterpart for -- so that function's pure\n        // half lives here as [`compile_select_statement`] /\n        // [`explain_select_statement`], and `compile_statement` covers the\n        // whole statement vocabulary as a library entry point. `WITH` is a\n        // `SELECT`'s CTE prefix (only `Select` carries a `with_clause`).\n        \"SELECT\" | \"WITH\" => match parse_select(sql) {\n            ParseOutcome::Accepted(select) => {\n                compile_select_statement(&select, schemas, views, &HashMap::new())\n            }\n            other => Err(parse_error(other)),\n        },\n        \"EXPLAIN\" => match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                // #524: `EXPLAIN QUERY PLAN` renders the join planner's\n                // EQP output, which only exists for a `SELECT` — parsing\n                // now accepts `EXPLAIN UPDATE`/`EXPLAIN DELETE` (bare\n                // `EXPLAIN`'s opcode dump), but there's no equivalent\n                // \"query plan\" summary for a write statement to render.\n                let select = match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                };\n                let rows = explain_select_statement(select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        },\n        \"INSERT\" => match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"UPDATE\" => match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(&update, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"DELETE\" => match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(&delete, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"CREATE\" if second == \"TABLE\" => dispatch_create_table(sql, schemas),\n        \"CREATE\" if second == \"VIEW\" => dispatch_create_view(sql),\n        \"CREATE\" if is_create_index => dispatch_create_index(sql, schemas),\n        \"DROP\" if second == \"TABLE\" => dispatch_drop_table(sql, schemas),\n        \"DROP\" if second == \"INDEX\" => dispatch_drop_index(sql, schemas),\n        // Reports the statement's actual leading word (uppercased, as\n        // before), not `canonical`'s `\"\"` sentinel — this is a cold\n        // path, so the one allocation is free.\n        _ => Err(DispatchError::Unrecognized(first_word.to_ascii_uppercase())),\n    }",
+    "line": 321,
+    "decision": "match head {\n        \"BEGIN\" => match parse_begin(sql) {\n            ParseOutcome::Accepted(begin) => Ok(compile_begin(&begin)),\n            other => Err(parse_error(other)),\n        },\n        \"COMMIT\" | \"END\" => match parse_commit(sql) {\n            ParseOutcome::Accepted(commit) => Ok(compile_commit(&commit)),\n            other => Err(parse_error(other)),\n        },\n        \"ROLLBACK\" => match parse_rollback(sql) {\n            ParseOutcome::Accepted(rollback) => Ok(compile_rollback(&rollback)),\n            other => Err(parse_error(other)),\n        },\n        \"PRAGMA\" => match parse_pragma(sql) {\n            ParseOutcome::Accepted(pragma) => Ok(compile_pragma(&pragma)),\n            other => Err(parse_error(other)),\n        },\n        \"ANALYZE\" => match parse_analyze(sql) {\n            ParseOutcome::Accepted(analyze) => {\n                let targets: Vec<&TableSchema> = match &analyze.target {\n                    None => schemas.iter().collect(),\n                    Some(name) => {\n                        if let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))\n                        {\n                            vec![schema]\n                        } else if schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))\n                        {\n                            // Real SQLite also accepts `ANALYZE index-name`\n                            // (analyzing just that index's owning table) —\n                            // syntactically valid, but out of this MVP's\n                            // scope (spec 011/Req 1), so `Unsupported`\n                            // rather than the `NoSuchTable` a genuinely\n                            // unknown name gets below.\n                            return Err(CodegenError::Unsupported {\n                                reason: format!(\n                                    \"ANALYZE of a single index ({name:?}) is not yet supported\"\n                                ),\n                            }\n                            .into());\n                        } else {\n                            return Err(DispatchError::NoSuchTable(name.clone()));\n                        }\n                    }\n                };\n                Ok(compile_analyze(&targets)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        // db-core addition (#219): sqlite-rs dispatches SELECT from its\n        // CLI binary (`src/bin/sqlite-rs/query.rs::compile_select_program`),\n        // which db-core has no counterpart for -- so that function's pure\n        // half lives here as [`compile_select_statement`] /\n        // [`explain_select_statement`], and `compile_statement` covers the\n        // whole statement vocabulary as a library entry point. `WITH` is a\n        // `SELECT`'s CTE prefix (only `Select` carries a `with_clause`).\n        \"SELECT\" | \"WITH\" => match parse_select(sql) {\n            ParseOutcome::Accepted(select) => {\n                compile_select_statement(&select, schemas, views, &HashMap::new())\n            }\n            other => Err(parse_error(other)),\n        },\n        \"EXPLAIN\" => match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                // #524: `EXPLAIN QUERY PLAN` renders the join planner's\n                // EQP output, which only exists for a `SELECT` — parsing\n                // now accepts `EXPLAIN UPDATE`/`EXPLAIN DELETE` (bare\n                // `EXPLAIN`'s opcode dump), but there's no equivalent\n                // \"query plan\" summary for a write statement to render.\n                let select = match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                };\n                let rows = explain_select_statement(select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        },\n        \"INSERT\" => match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"UPDATE\" => match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(&update, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"DELETE\" => match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(&delete, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"CREATE\" if second == \"TABLE\" => dispatch_create_table(sql, schemas, views),\n        \"CREATE\" if second == \"VIEW\" => dispatch_create_view(sql, schemas, views),\n        \"CREATE\" if is_create_index => dispatch_create_index(sql, schemas),\n        \"DROP\" if second == \"TABLE\" => dispatch_drop_table(sql, schemas, views),\n        \"DROP\" if second == \"INDEX\" => dispatch_drop_index(sql, schemas),\n        // Reports the statement's actual leading word (uppercased, as\n        // before), not `canonical`'s `\"\"` sentinel — this is a cold\n        // path, so the one allocation is free.\n        _ => Err(DispatchError::Unrecognized(first_word.to_ascii_uppercase())),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -2492,7 +2562,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_4ca02b2c",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 424,
+    "line": 483,
     "decision": "second == \"TABLE\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -2502,7 +2572,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_fc01ca5d",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 425,
+    "line": 484,
     "decision": "second == \"VIEW\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -2512,7 +2582,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_cbbea3d0",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 426,
+    "line": 485,
     "decision": "is_create_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -2522,7 +2592,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_4ca02b2c_2",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 427,
+    "line": 486,
     "decision": "second == \"TABLE\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -2532,7 +2602,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_65522442",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 428,
+    "line": 487,
     "decision": "second == \"INDEX\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -2542,7 +2612,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_fccee1e4",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 263,
+    "line": 322,
     "decision": "match parse_begin(sql) {\n            ParseOutcome::Accepted(begin) => Ok(compile_begin(&begin)),\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2552,7 +2622,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_9440c3d0",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 267,
+    "line": 326,
     "decision": "match parse_commit(sql) {\n            ParseOutcome::Accepted(commit) => Ok(compile_commit(&commit)),\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2562,7 +2632,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_48535814",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 271,
+    "line": 330,
     "decision": "match parse_rollback(sql) {\n            ParseOutcome::Accepted(rollback) => Ok(compile_rollback(&rollback)),\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2572,7 +2642,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_519398bc",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 275,
+    "line": 334,
     "decision": "match parse_pragma(sql) {\n            ParseOutcome::Accepted(pragma) => Ok(compile_pragma(&pragma)),\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2582,7 +2652,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_2659dd00",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 279,
+    "line": 338,
     "decision": "match parse_analyze(sql) {\n            ParseOutcome::Accepted(analyze) => {\n                let targets: Vec<&TableSchema> = match &analyze.target {\n                    None => schemas.iter().collect(),\n                    Some(name) => {\n                        if let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))\n                        {\n                            vec![schema]\n                        } else if schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))\n                        {\n                            // Real SQLite also accepts `ANALYZE index-name`\n                            // (analyzing just that index's owning table) —\n                            // syntactically valid, but out of this MVP's\n                            // scope (spec 011/Req 1), so `Unsupported`\n                            // rather than the `NoSuchTable` a genuinely\n                            // unknown name gets below.\n                            return Err(CodegenError::Unsupported {\n                                reason: format!(\n                                    \"ANALYZE of a single index ({name:?}) is not yet supported\"\n                                ),\n                            }\n                            .into());\n                        } else {\n                            return Err(DispatchError::NoSuchTable(name.clone()));\n                        }\n                    }\n                };\n                Ok(compile_analyze(&targets)?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2592,7 +2662,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_4fda7dd8",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 281,
+    "line": 340,
     "decision": "match &analyze.target {\n                    None => schemas.iter().collect(),\n                    Some(name) => {\n                        if let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))\n                        {\n                            vec![schema]\n                        } else if schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))\n                        {\n                            // Real SQLite also accepts `ANALYZE index-name`\n                            // (analyzing just that index's owning table) —\n                            // syntactically valid, but out of this MVP's\n                            // scope (spec 011/Req 1), so `Unsupported`\n                            // rather than the `NoSuchTable` a genuinely\n                            // unknown name gets below.\n                            return Err(CodegenError::Unsupported {\n                                reason: format!(\n                                    \"ANALYZE of a single index ({name:?}) is not yet supported\"\n                                ),\n                            }\n                            .into());\n                        } else {\n                            return Err(DispatchError::NoSuchTable(name.clone()));\n                        }\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2602,7 +2672,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_b3563fad",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 284,
+    "line": 343,
     "decision": "let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2612,7 +2682,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_5ce78ec3",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 288,
+    "line": 347,
     "decision": "schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2622,7 +2692,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_5e8ca7ba",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 321,
+    "line": 380,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => {\n                compile_select_statement(&select, schemas, views, &HashMap::new())\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2632,7 +2702,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_ad467fea",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 327,
+    "line": 386,
     "decision": "match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                // #524: `EXPLAIN QUERY PLAN` renders the join planner's\n                // EQP output, which only exists for a `SELECT` — parsing\n                // now accepts `EXPLAIN UPDATE`/`EXPLAIN DELETE` (bare\n                // `EXPLAIN`'s opcode dump), but there's no equivalent\n                // \"query plan\" summary for a write statement to render.\n                let select = match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                };\n                let rows = explain_select_statement(select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2642,7 +2712,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_1f2f1191",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 329,
+    "line": 388,
     "decision": "!explain.query_plan",
     "conditions": 1,
     "vectors_required": 2,
@@ -2652,7 +2722,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_94701bcb",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 340,
+    "line": 399,
     "decision": "match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2662,7 +2732,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_128e6b37",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 356,
+    "line": 415,
     "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2672,7 +2742,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_99895de6",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 359,
+    "line": 418,
     "decision": "match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2682,7 +2752,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_8144d3a5",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 386,
+    "line": 445,
     "decision": "is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))",
     "conditions": 2,
     "vectors_required": 3,
@@ -2692,7 +2762,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_df111e5c",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 410,
+    "line": 469,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(&update, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2702,7 +2772,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_32a68754",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 417,
+    "line": 476,
     "decision": "match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(&delete, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2712,7 +2782,7 @@
   {
     "id": "codegen_row_dispatch_compile_select_statement_13fa7590",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 472,
+    "line": 531,
     "decision": "!select.compound.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2722,7 +2792,7 @@
   {
     "id": "codegen_row_dispatch_compile_select_statement_8a16b420",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 481,
+    "line": 540,
     "decision": "from.joins.is_empty()",
     "conditions": 1,
     "vectors_required": 2,

@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.119.1] - 2026-09-21
+
+### Fixed
+
+- **Tables and views share one namespace; `DROP TABLE` refuses views** (#551, PR #556): `CREATE TABLE`/`CREATE VIEW` now check both catalogs and report the existing object's kind as sqlite3 does (`table t already exists` / `view v already exists`), `IF NOT EXISTS` is a no-op across both kinds, `DROP TABLE` on a view says `use DROP VIEW to delete view v` (also with `IF EXISTS`), and `DROP TABLE IF EXISTS` on an unknown name is a no-op instead of `no such table`. Before, a view created over an existing table made the second `DROP TABLE` free a root page another catalog row still owned (`2nd reference to page 2`), and once `sqlite_master` spilled onto that page the catalog became unreadable. Found by `make fuzz-sql`: 16 corruption findings in 5000 statements at seed 1, 0 after. New `DispatchError::{ViewAlreadyExists, UseDropView}`.
+
 ## [0.119.0] - 2026-09-21
 
 ### Added

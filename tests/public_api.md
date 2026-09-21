@@ -226,6 +226,8 @@ pub db_core::codegen::row::dispatch::DispatchError::NoSuchTable(alloc::string::S
 pub db_core::codegen::row::dispatch::DispatchError::ParseFailed(alloc::string::String)
 pub db_core::codegen::row::dispatch::DispatchError::TableAlreadyExists(alloc::string::String)
 pub db_core::codegen::row::dispatch::DispatchError::Unrecognized(alloc::string::String)
+pub db_core::codegen::row::dispatch::DispatchError::UseDropView(alloc::string::String)
+pub db_core::codegen::row::dispatch::DispatchError::ViewAlreadyExists(alloc::string::String)
 impl core::convert::From<db_core::codegen::row::select::CodegenError> for db_core::codegen::row::dispatch::DispatchError
 pub fn db_core::codegen::row::dispatch::DispatchError::from(db_core::codegen::row::select::CodegenError) -> Self
 impl core::error::Error for db_core::codegen::row::dispatch::DispatchError
@@ -417,6 +419,8 @@ pub db_core::codegen::row::DispatchError::NoSuchTable(alloc::string::String)
 pub db_core::codegen::row::DispatchError::ParseFailed(alloc::string::String)
 pub db_core::codegen::row::DispatchError::TableAlreadyExists(alloc::string::String)
 pub db_core::codegen::row::DispatchError::Unrecognized(alloc::string::String)
+pub db_core::codegen::row::DispatchError::UseDropView(alloc::string::String)
+pub db_core::codegen::row::DispatchError::ViewAlreadyExists(alloc::string::String)
 impl core::convert::From<db_core::codegen::row::select::CodegenError> for db_core::codegen::row::dispatch::DispatchError
 pub fn db_core::codegen::row::dispatch::DispatchError::from(db_core::codegen::row::select::CodegenError) -> Self
 impl core::error::Error for db_core::codegen::row::dispatch::DispatchError
