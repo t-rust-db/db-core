@@ -216,6 +216,16 @@ fn run_all_counts_rejections_per_stage_and_skips_impldef() {
     assert_eq!(summary.rejected[&(Stage::Parse, Rejection::Invalid)], 1);
     assert_eq!(summary.rejected[&(Stage::Codegen, Rejection::Compile)], 1);
     assert!(summary.findings.is_empty());
+    assert_eq!(summary.rejected_total(), 2);
+    let report = summary.render();
+    assert!(
+        report.contains("ok: 1  rejected: 2  skipped(impldef): 1"),
+        "{report}"
+    );
+    assert!(
+        report.contains("findings: 0  panic: 0  hang: 0  corruption: 0"),
+        "{report}"
+    );
     assert!(Runner::is_impldef("select current_timestamp"));
     assert!(!Runner::is_impldef("SELECT 1"));
 }

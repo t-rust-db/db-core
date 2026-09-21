@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.120.0] - 2026-09-21
+
+### Changed
+
+- **`make fuzz-sql` report counts rejections in the headline and findings per class** (#543, PR #558): `statements / ok / rejected / skipped`, then the per-stage rejection table, then `findings / panic / hang / corruption`, so panics are counted on their own line. `RunSummary::rejected_total()` and `findings_of(class)` back the new lines.
+
+## [0.120.0] - 2026-09-21
+
+### Changed
+
+- **`make fuzz-sql` report counts rejections in the headline and findings per class** (#543, PR #558): `statements / ok / rejected / skipped`, then the per-stage rejection table, then `findings / panic / hang / corruption`, so panics are counted on their own line. `RunSummary::rejected_total()` and `findings_of(class)` back the new lines.
+
 ## [0.119.2] - 2026-09-21
 
 ### Fixed
