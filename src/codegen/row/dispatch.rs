@@ -271,9 +271,14 @@ fn dispatch_drop_index(sql: &str, schemas: &[TableSchema]) -> Result<Program, Di
                 .iter()
                 .flat_map(|s| &s.indexes)
                 .find(|idx| idx.name.eq_ignore_ascii_case(&di.name))
-                .map(|idx| idx.root_page)
-                .ok_or_else(|| DispatchError::NoSuchIndex(di.name.clone()))?;
-            Ok(compile_drop_index(&di, root_page)?)
+                .map(|idx| idx.root_page);
+            match root_page {
+                Some(root_page) => Ok(compile_drop_index(&di, root_page)?),
+                // sqlite3: `DROP INDEX IF EXISTS` on an unknown name is a
+                // no-op, not `no such index` (found by make fuzz-sql).
+                None if di.if_exists => Ok(no_op_program()),
+                None => Err(DispatchError::NoSuchIndex(di.name)),
+            }
         }
         other => Err(parse_error(other)),
     }
@@ -805,6 +810,14 @@ mod already_exists_tests {
             "{:?}",
             drop.p4
         );
+    }
+
+    #[test]
+    fn drop_index_if_exists_on_unknown_name_is_a_no_op() {
+        let program = compile_statement("DROP INDEX IF EXISTS nope", &schemas(), &views()).unwrap();
+        assert_eq!(opcodes(&program), vec![Opcode::Init, Opcode::Halt]);
+        let err = compile_statement("DROP INDEX nope", &schemas(), &views()).unwrap_err();
+        assert_eq!(err.to_string(), "no such index: nope");
     }
 
     #[test]
