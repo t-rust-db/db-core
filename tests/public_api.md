@@ -24,9 +24,9 @@ impl db_core::clock::Clock for db_core::clock::FakeClock
 pub fn db_core::clock::FakeClock::now_ns(&self) -> i64
 pub struct db_core::clock::SystemClock
 impl core::clone::Clone for db_core::clock::SystemClock
-pub fn db_core::clock::SystemClock::clone(&self) -> db_core::clock::SystemClock
+pub fn db_core::clock::SystemClock::clone(&self) -> Self
 impl core::default::Default for db_core::clock::SystemClock
-pub fn db_core::clock::SystemClock::default() -> db_core::clock::SystemClock
+pub fn db_core::clock::SystemClock::default() -> Self
 impl core::fmt::Debug for db_core::clock::SystemClock
 pub fn db_core::clock::SystemClock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::clock::SystemClock
@@ -65,10 +65,10 @@ pub db_core::codegen::batch::BuildSourceKind::InMemory
 pub db_core::codegen::batch::BuildSourceKind::RowTable
 pub db_core::codegen::batch::BuildSourceKind::Stream
 impl core::clone::Clone for db_core::codegen::batch::BuildSourceKind
-pub fn db_core::codegen::batch::BuildSourceKind::clone(&self) -> db_core::codegen::batch::BuildSourceKind
+pub fn db_core::codegen::batch::BuildSourceKind::clone(&self) -> Self
 impl core::cmp::Eq for db_core::codegen::batch::BuildSourceKind
 impl core::cmp::PartialEq for db_core::codegen::batch::BuildSourceKind
-pub fn db_core::codegen::batch::BuildSourceKind::eq(&self, &db_core::codegen::batch::BuildSourceKind) -> bool
+pub fn db_core::codegen::batch::BuildSourceKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::batch::BuildSourceKind
 pub fn db_core::codegen::batch::BuildSourceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::codegen::batch::BuildSourceKind
@@ -83,9 +83,9 @@ pub db_core::codegen::batch::PlanError::UnsupportedJoinKind(db_core::parser::ast
 pub db_core::codegen::batch::PlanError::UnsupportedSelectItem(alloc::string::String)
 pub db_core::codegen::batch::PlanError::UnsupportedSemiJoin(alloc::string::String)
 impl core::clone::Clone for db_core::codegen::batch::PlanError
-pub fn db_core::codegen::batch::PlanError::clone(&self) -> db_core::codegen::batch::PlanError
+pub fn db_core::codegen::batch::PlanError::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::batch::PlanError
-pub fn db_core::codegen::batch::PlanError::eq(&self, &db_core::codegen::batch::PlanError) -> bool
+pub fn db_core::codegen::batch::PlanError::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::codegen::batch::PlanError> for db_core::codegen::batch::emit::EmitError
 pub fn db_core::codegen::batch::emit::EmitError::from(db_core::codegen::batch::PlanError) -> Self
 impl core::convert::From<db_core::codegen::batch::PlanError> for db_core::codegen::stream::StreamPlanError
@@ -111,10 +111,10 @@ impl db_core::codegen::batch::WindowFunc
 pub fn db_core::codegen::batch::WindowFunc::from_name(&str) -> core::option::Option<Self>
 pub fn db_core::codegen::batch::WindowFunc::is_niladic(self) -> bool
 impl core::clone::Clone for db_core::codegen::batch::WindowFunc
-pub fn db_core::codegen::batch::WindowFunc::clone(&self) -> db_core::codegen::batch::WindowFunc
+pub fn db_core::codegen::batch::WindowFunc::clone(&self) -> Self
 impl core::cmp::Eq for db_core::codegen::batch::WindowFunc
 impl core::cmp::PartialEq for db_core::codegen::batch::WindowFunc
-pub fn db_core::codegen::batch::WindowFunc::eq(&self, &db_core::codegen::batch::WindowFunc) -> bool
+pub fn db_core::codegen::batch::WindowFunc::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::batch::WindowFunc
 pub fn db_core::codegen::batch::WindowFunc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::codegen::batch::WindowFunc
@@ -126,9 +126,9 @@ pub db_core::codegen::batch::OpcodeRow::is_finalize: bool
 pub db_core::codegen::batch::OpcodeRow::opcode: &'static str
 pub db_core::codegen::batch::OpcodeRow::operands: alloc::string::String
 impl core::clone::Clone for db_core::codegen::batch::OpcodeRow
-pub fn db_core::codegen::batch::OpcodeRow::clone(&self) -> db_core::codegen::batch::OpcodeRow
+pub fn db_core::codegen::batch::OpcodeRow::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::batch::OpcodeRow
-pub fn db_core::codegen::batch::OpcodeRow::eq(&self, &db_core::codegen::batch::OpcodeRow) -> bool
+pub fn db_core::codegen::batch::OpcodeRow::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::batch::OpcodeRow
 pub fn db_core::codegen::batch::OpcodeRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::batch::OpcodeRow
@@ -136,9 +136,9 @@ pub struct db_core::codegen::batch::OpcodeSection
 pub db_core::codegen::batch::OpcodeSection::label: alloc::string::String
 pub db_core::codegen::batch::OpcodeSection::rows: alloc::vec::Vec<db_core::codegen::batch::OpcodeRow>
 impl core::clone::Clone for db_core::codegen::batch::OpcodeSection
-pub fn db_core::codegen::batch::OpcodeSection::clone(&self) -> db_core::codegen::batch::OpcodeSection
+pub fn db_core::codegen::batch::OpcodeSection::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::batch::OpcodeSection
-pub fn db_core::codegen::batch::OpcodeSection::eq(&self, &db_core::codegen::batch::OpcodeSection) -> bool
+pub fn db_core::codegen::batch::OpcodeSection::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::batch::OpcodeSection
 pub fn db_core::codegen::batch::OpcodeSection::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::batch::OpcodeSection
@@ -147,9 +147,9 @@ pub db_core::codegen::batch::PlanNode::detail: alloc::string::String
 pub db_core::codegen::batch::PlanNode::id: u32
 pub db_core::codegen::batch::PlanNode::parent: u32
 impl core::clone::Clone for db_core::codegen::batch::PlanNode
-pub fn db_core::codegen::batch::PlanNode::clone(&self) -> db_core::codegen::batch::PlanNode
+pub fn db_core::codegen::batch::PlanNode::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::batch::PlanNode
-pub fn db_core::codegen::batch::PlanNode::eq(&self, &db_core::codegen::batch::PlanNode) -> bool
+pub fn db_core::codegen::batch::PlanNode::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::batch::PlanNode
 pub fn db_core::codegen::batch::PlanNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::batch::PlanNode
@@ -158,9 +158,9 @@ pub db_core::codegen::batch::SemiJoinProgram::body: db_core::vm::batch::Program
 pub db_core::codegen::batch::SemiJoinProgram::key_column: alloc::string::String
 pub db_core::codegen::batch::SemiJoinProgram::subquery: alloc::boxed::Box<db_core::parser::ast::Select>
 impl core::clone::Clone for db_core::codegen::batch::SemiJoinProgram
-pub fn db_core::codegen::batch::SemiJoinProgram::clone(&self) -> db_core::codegen::batch::SemiJoinProgram
+pub fn db_core::codegen::batch::SemiJoinProgram::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::batch::SemiJoinProgram
-pub fn db_core::codegen::batch::SemiJoinProgram::eq(&self, &db_core::codegen::batch::SemiJoinProgram) -> bool
+pub fn db_core::codegen::batch::SemiJoinProgram::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::batch::SemiJoinProgram
 pub fn db_core::codegen::batch::SemiJoinProgram::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::batch::SemiJoinProgram
@@ -169,10 +169,10 @@ pub db_core::codegen::batch::TableStats::row_groups: usize
 pub db_core::codegen::batch::TableStats::rows: i64
 pub db_core::codegen::batch::TableStats::source: core::option::Option<alloc::string::String>
 impl core::clone::Clone for db_core::codegen::batch::TableStats
-pub fn db_core::codegen::batch::TableStats::clone(&self) -> db_core::codegen::batch::TableStats
+pub fn db_core::codegen::batch::TableStats::clone(&self) -> Self
 impl core::cmp::Eq for db_core::codegen::batch::TableStats
 impl core::cmp::PartialEq for db_core::codegen::batch::TableStats
-pub fn db_core::codegen::batch::TableStats::eq(&self, &db_core::codegen::batch::TableStats) -> bool
+pub fn db_core::codegen::batch::TableStats::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::batch::TableStats
 pub fn db_core::codegen::batch::TableStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::batch::TableStats
@@ -184,9 +184,9 @@ pub db_core::codegen::batch::WindowSpec::offset: core::option::Option<i64>
 pub db_core::codegen::batch::WindowSpec::order_by: alloc::vec::Vec<(alloc::string::String, bool)>
 pub db_core::codegen::batch::WindowSpec::partition_by: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for db_core::codegen::batch::WindowSpec
-pub fn db_core::codegen::batch::WindowSpec::clone(&self) -> db_core::codegen::batch::WindowSpec
+pub fn db_core::codegen::batch::WindowSpec::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::batch::WindowSpec
-pub fn db_core::codegen::batch::WindowSpec::eq(&self, &db_core::codegen::batch::WindowSpec) -> bool
+pub fn db_core::codegen::batch::WindowSpec::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::batch::WindowSpec
 pub fn db_core::codegen::batch::WindowSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::batch::WindowSpec
@@ -244,9 +244,9 @@ pub fn db_core::codegen::row::insert::compile_insert(&db_core::parser::ast::Inse
 pub mod db_core::codegen::row::planner
 pub struct db_core::codegen::row::planner::IndexSamples
 impl core::clone::Clone for db_core::codegen::row::planner::IndexSamples
-pub fn db_core::codegen::row::planner::IndexSamples::clone(&self) -> db_core::codegen::row::planner::IndexSamples
+pub fn db_core::codegen::row::planner::IndexSamples::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::row::planner::IndexSamples
-pub fn db_core::codegen::row::planner::IndexSamples::eq(&self, &db_core::codegen::row::planner::IndexSamples) -> bool
+pub fn db_core::codegen::row::planner::IndexSamples::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::row::planner::IndexSamples
 pub fn db_core::codegen::row::planner::IndexSamples::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::IndexSamples
@@ -254,10 +254,10 @@ pub struct db_core::codegen::row::planner::PlanCost
 pub db_core::codegen::row::planner::PlanCost::estimated_io: u64
 pub db_core::codegen::row::planner::PlanCost::estimated_rows: u64
 impl core::clone::Clone for db_core::codegen::row::planner::PlanCost
-pub fn db_core::codegen::row::planner::PlanCost::clone(&self) -> db_core::codegen::row::planner::PlanCost
+pub fn db_core::codegen::row::planner::PlanCost::clone(&self) -> Self
 impl core::cmp::Eq for db_core::codegen::row::planner::PlanCost
 impl core::cmp::PartialEq for db_core::codegen::row::planner::PlanCost
-pub fn db_core::codegen::row::planner::PlanCost::eq(&self, &db_core::codegen::row::planner::PlanCost) -> bool
+pub fn db_core::codegen::row::planner::PlanCost::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::row::planner::PlanCost
 pub fn db_core::codegen::row::planner::PlanCost::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::codegen::row::planner::PlanCost
@@ -266,9 +266,9 @@ pub struct db_core::codegen::row::planner::RangeBound
 pub db_core::codegen::row::planner::RangeBound::inclusive: bool
 pub db_core::codegen::row::planner::RangeBound::value: core::option::Option<db_core::value::Value>
 impl core::clone::Clone for db_core::codegen::row::planner::RangeBound
-pub fn db_core::codegen::row::planner::RangeBound::clone(&self) -> db_core::codegen::row::planner::RangeBound
+pub fn db_core::codegen::row::planner::RangeBound::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::row::planner::RangeBound
-pub fn db_core::codegen::row::planner::RangeBound::eq(&self, &db_core::codegen::row::planner::RangeBound) -> bool
+pub fn db_core::codegen::row::planner::RangeBound::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::row::planner::RangeBound
 pub fn db_core::codegen::row::planner::RangeBound::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::RangeBound
@@ -278,9 +278,9 @@ pub db_core::codegen::row::planner::Stat4Sample::n_dlt: alloc::vec::Vec<u64>
 pub db_core::codegen::row::planner::Stat4Sample::n_eq: alloc::vec::Vec<u64>
 pub db_core::codegen::row::planner::Stat4Sample::n_lt: alloc::vec::Vec<u64>
 impl core::clone::Clone for db_core::codegen::row::planner::Stat4Sample
-pub fn db_core::codegen::row::planner::Stat4Sample::clone(&self) -> db_core::codegen::row::planner::Stat4Sample
+pub fn db_core::codegen::row::planner::Stat4Sample::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::row::planner::Stat4Sample
-pub fn db_core::codegen::row::planner::Stat4Sample::eq(&self, &db_core::codegen::row::planner::Stat4Sample) -> bool
+pub fn db_core::codegen::row::planner::Stat4Sample::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::row::planner::Stat4Sample
 pub fn db_core::codegen::row::planner::Stat4Sample::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::Stat4Sample
@@ -293,11 +293,11 @@ pub fn db_core::codegen::row::planner::Stats::index_stats(&self, &str) -> core::
 pub fn db_core::codegen::row::planner::Stats::table_rows(&self) -> core::option::Option<u64>
 pub fn db_core::codegen::row::planner::Stats::with_stat4_samples(self, &str, alloc::vec::Vec<db_core::codegen::row::planner::Stat4Sample>) -> Self
 impl core::clone::Clone for db_core::codegen::row::planner::Stats
-pub fn db_core::codegen::row::planner::Stats::clone(&self) -> db_core::codegen::row::planner::Stats
+pub fn db_core::codegen::row::planner::Stats::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::row::planner::Stats
-pub fn db_core::codegen::row::planner::Stats::eq(&self, &db_core::codegen::row::planner::Stats) -> bool
+pub fn db_core::codegen::row::planner::Stats::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::codegen::row::planner::Stats
-pub fn db_core::codegen::row::planner::Stats::default() -> db_core::codegen::row::planner::Stats
+pub fn db_core::codegen::row::planner::Stats::default() -> Self
 impl core::fmt::Debug for db_core::codegen::row::planner::Stats
 pub fn db_core::codegen::row::planner::Stats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::Stats
@@ -333,7 +333,7 @@ pub db_core::codegen::row::select::CodegenError::Unsupported
 pub db_core::codegen::row::select::CodegenError::Unsupported::reason: alloc::string::String
 impl core::cmp::Eq for db_core::codegen::row::select::CodegenError
 impl core::cmp::PartialEq for db_core::codegen::row::select::CodegenError
-pub fn db_core::codegen::row::select::CodegenError::eq(&self, &db_core::codegen::row::select::CodegenError) -> bool
+pub fn db_core::codegen::row::select::CodegenError::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::codegen::row::select::CodegenError> for db_core::codegen::row::dispatch::DispatchError
 pub fn db_core::codegen::row::dispatch::DispatchError::from(db_core::codegen::row::select::CodegenError) -> Self
 impl core::error::Error for db_core::codegen::row::select::CodegenError
@@ -348,10 +348,10 @@ pub db_core::codegen::row::select::EqpRow::id: i32
 pub db_core::codegen::row::select::EqpRow::notused: i32
 pub db_core::codegen::row::select::EqpRow::parent: i32
 impl core::clone::Clone for db_core::codegen::row::EqpRow
-pub fn db_core::codegen::row::EqpRow::clone(&self) -> db_core::codegen::row::EqpRow
+pub fn db_core::codegen::row::EqpRow::clone(&self) -> Self
 impl core::cmp::Eq for db_core::codegen::row::EqpRow
 impl core::cmp::PartialEq for db_core::codegen::row::EqpRow
-pub fn db_core::codegen::row::EqpRow::eq(&self, &db_core::codegen::row::EqpRow) -> bool
+pub fn db_core::codegen::row::EqpRow::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::row::EqpRow
 pub fn db_core::codegen::row::EqpRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::row::EqpRow
@@ -399,7 +399,7 @@ pub db_core::codegen::row::CodegenError::Unsupported
 pub db_core::codegen::row::CodegenError::Unsupported::reason: alloc::string::String
 impl core::cmp::Eq for db_core::codegen::row::select::CodegenError
 impl core::cmp::PartialEq for db_core::codegen::row::select::CodegenError
-pub fn db_core::codegen::row::select::CodegenError::eq(&self, &db_core::codegen::row::select::CodegenError) -> bool
+pub fn db_core::codegen::row::select::CodegenError::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::codegen::row::select::CodegenError> for db_core::codegen::row::dispatch::DispatchError
 pub fn db_core::codegen::row::dispatch::DispatchError::from(db_core::codegen::row::select::CodegenError) -> Self
 impl core::error::Error for db_core::codegen::row::select::CodegenError
@@ -430,10 +430,10 @@ pub db_core::codegen::row::EqpRow::id: i32
 pub db_core::codegen::row::EqpRow::notused: i32
 pub db_core::codegen::row::EqpRow::parent: i32
 impl core::clone::Clone for db_core::codegen::row::EqpRow
-pub fn db_core::codegen::row::EqpRow::clone(&self) -> db_core::codegen::row::EqpRow
+pub fn db_core::codegen::row::EqpRow::clone(&self) -> Self
 impl core::cmp::Eq for db_core::codegen::row::EqpRow
 impl core::cmp::PartialEq for db_core::codegen::row::EqpRow
-pub fn db_core::codegen::row::EqpRow::eq(&self, &db_core::codegen::row::EqpRow) -> bool
+pub fn db_core::codegen::row::EqpRow::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::row::EqpRow
 pub fn db_core::codegen::row::EqpRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::row::EqpRow
@@ -443,12 +443,12 @@ pub db_core::codegen::row::IndexSchema::name: alloc::string::String
 pub db_core::codegen::row::IndexSchema::root_page: u32
 pub db_core::codegen::row::IndexSchema::unique: bool
 impl core::clone::Clone for db_core::schema::IndexSchema
-pub fn db_core::schema::IndexSchema::clone(&self) -> db_core::schema::IndexSchema
+pub fn db_core::schema::IndexSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::IndexSchema
 impl core::cmp::PartialEq for db_core::schema::IndexSchema
-pub fn db_core::schema::IndexSchema::eq(&self, &db_core::schema::IndexSchema) -> bool
+pub fn db_core::schema::IndexSchema::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::IndexSchema
-pub fn db_core::schema::IndexSchema::default() -> db_core::schema::IndexSchema
+pub fn db_core::schema::IndexSchema::default() -> Self
 impl core::fmt::Debug for db_core::schema::IndexSchema
 pub fn db_core::schema::IndexSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::IndexSchema
@@ -457,12 +457,12 @@ pub db_core::codegen::row::IndexedColumn::collation: db_core::value::Collation
 pub db_core::codegen::row::IndexedColumn::desc: bool
 pub db_core::codegen::row::IndexedColumn::name: alloc::string::String
 impl core::clone::Clone for db_core::schema::IndexedColumn
-pub fn db_core::schema::IndexedColumn::clone(&self) -> db_core::schema::IndexedColumn
+pub fn db_core::schema::IndexedColumn::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::IndexedColumn
 impl core::cmp::PartialEq for db_core::schema::IndexedColumn
-pub fn db_core::schema::IndexedColumn::eq(&self, &db_core::schema::IndexedColumn) -> bool
+pub fn db_core::schema::IndexedColumn::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::IndexedColumn
-pub fn db_core::schema::IndexedColumn::default() -> db_core::schema::IndexedColumn
+pub fn db_core::schema::IndexedColumn::default() -> Self
 impl core::fmt::Debug for db_core::schema::IndexedColumn
 pub fn db_core::schema::IndexedColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::IndexedColumn
@@ -485,12 +485,12 @@ pub db_core::codegen::row::TableSchema::without_rowid: bool
 impl db_core::schema::TableSchema
 pub fn db_core::schema::TableSchema::with_computed_rowid_alias(self) -> Self
 impl core::clone::Clone for db_core::schema::TableSchema
-pub fn db_core::schema::TableSchema::clone(&self) -> db_core::schema::TableSchema
+pub fn db_core::schema::TableSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::TableSchema
 impl core::cmp::PartialEq for db_core::schema::TableSchema
-pub fn db_core::schema::TableSchema::eq(&self, &db_core::schema::TableSchema) -> bool
+pub fn db_core::schema::TableSchema::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::TableSchema
-pub fn db_core::schema::TableSchema::default() -> db_core::schema::TableSchema
+pub fn db_core::schema::TableSchema::default() -> Self
 impl core::fmt::Debug for db_core::schema::TableSchema
 pub fn db_core::schema::TableSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::TableSchema
@@ -498,12 +498,12 @@ pub struct db_core::codegen::row::ViewSchema
 pub db_core::codegen::row::ViewSchema::name: alloc::string::String
 pub db_core::codegen::row::ViewSchema::sql: alloc::string::String
 impl core::clone::Clone for db_core::schema::ViewSchema
-pub fn db_core::schema::ViewSchema::clone(&self) -> db_core::schema::ViewSchema
+pub fn db_core::schema::ViewSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::ViewSchema
 impl core::cmp::PartialEq for db_core::schema::ViewSchema
-pub fn db_core::schema::ViewSchema::eq(&self, &db_core::schema::ViewSchema) -> bool
+pub fn db_core::schema::ViewSchema::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::ViewSchema
-pub fn db_core::schema::ViewSchema::default() -> db_core::schema::ViewSchema
+pub fn db_core::schema::ViewSchema::default() -> Self
 impl core::fmt::Debug for db_core::schema::ViewSchema
 pub fn db_core::schema::ViewSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::ViewSchema
@@ -547,9 +547,9 @@ pub db_core::codegen::stream::Scope::Bytes(u64)
 pub db_core::codegen::stream::Scope::Lines(u64)
 pub db_core::codegen::stream::Scope::Time(core::time::Duration)
 impl core::clone::Clone for db_core::vm::stream::Scope
-pub fn db_core::vm::stream::Scope::clone(&self) -> db_core::vm::stream::Scope
+pub fn db_core::vm::stream::Scope::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::stream::Scope
-pub fn db_core::vm::stream::Scope::eq(&self, &db_core::vm::stream::Scope) -> bool
+pub fn db_core::vm::stream::Scope::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::stream::Scope
 pub fn db_core::vm::stream::Scope::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::stream::Scope
@@ -563,9 +563,9 @@ pub db_core::codegen::stream::StreamPlanError::Rejected
 pub db_core::codegen::stream::StreamPlanError::Rejected::message: alloc::string::String
 pub db_core::codegen::stream::StreamPlanError::Rejected::span: db_core::parser::Span
 impl core::clone::Clone for db_core::codegen::stream::StreamPlanError
-pub fn db_core::codegen::stream::StreamPlanError::clone(&self) -> db_core::codegen::stream::StreamPlanError
+pub fn db_core::codegen::stream::StreamPlanError::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::stream::StreamPlanError
-pub fn db_core::codegen::stream::StreamPlanError::eq(&self, &db_core::codegen::stream::StreamPlanError) -> bool
+pub fn db_core::codegen::stream::StreamPlanError::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::codegen::batch::PlanError> for db_core::codegen::stream::StreamPlanError
 pub fn db_core::codegen::stream::StreamPlanError::from(db_core::codegen::batch::PlanError) -> Self
 impl core::error::Error for db_core::codegen::stream::StreamPlanError
@@ -615,7 +615,7 @@ pub struct db_core::engine::cross_mode::RowTableSegment
 impl db_core::engine::cross_mode::RowTableSegment
 pub fn db_core::engine::cross_mode::RowTableSegment::new(db_core::vm::batch::Batch) -> Self
 impl core::clone::Clone for db_core::engine::cross_mode::RowTableSegment
-pub fn db_core::engine::cross_mode::RowTableSegment::clone(&self) -> db_core::engine::cross_mode::RowTableSegment
+pub fn db_core::engine::cross_mode::RowTableSegment::clone(&self) -> Self
 impl core::fmt::Debug for db_core::engine::cross_mode::RowTableSegment
 pub fn db_core::engine::cross_mode::RowTableSegment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::vm::batch::Segment for db_core::engine::cross_mode::RowTableSegment
@@ -627,7 +627,7 @@ pub struct db_core::engine::cross_mode::RowTableSource
 impl db_core::engine::cross_mode::RowTableSource
 pub fn db_core::engine::cross_mode::RowTableSource::new(db_core::vm::batch::Batch) -> Self
 impl core::default::Default for db_core::engine::cross_mode::RowTableSource
-pub fn db_core::engine::cross_mode::RowTableSource::default() -> db_core::engine::cross_mode::RowTableSource
+pub fn db_core::engine::cross_mode::RowTableSource::default() -> Self
 impl core::fmt::Debug for db_core::engine::cross_mode::RowTableSource
 pub fn db_core::engine::cross_mode::RowTableSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::vm::batch::Source for db_core::engine::cross_mode::RowTableSource
@@ -640,7 +640,7 @@ impl db_core::engine::predicate::CompiledPredicate
 pub fn db_core::engine::predicate::CompiledPredicate::compile(&str, &[alloc::string::String]) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::predicate::CompiledPredicate::eval(&self, &[db_core::engine::Cell], &[alloc::string::String]) -> core::result::Result<bool, db_core::engine::EngineError>
 impl core::clone::Clone for db_core::engine::predicate::CompiledPredicate
-pub fn db_core::engine::predicate::CompiledPredicate::clone(&self) -> db_core::engine::predicate::CompiledPredicate
+pub fn db_core::engine::predicate::CompiledPredicate::clone(&self) -> Self
 impl core::fmt::Debug for db_core::engine::predicate::CompiledPredicate
 pub fn db_core::engine::predicate::CompiledPredicate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod db_core::engine::resolve
@@ -782,10 +782,10 @@ pub struct db_core::engine::row::stats::PlanCost
 pub db_core::engine::row::stats::PlanCost::estimated_io: u64
 pub db_core::engine::row::stats::PlanCost::estimated_rows: u64
 impl core::clone::Clone for db_core::codegen::row::planner::PlanCost
-pub fn db_core::codegen::row::planner::PlanCost::clone(&self) -> db_core::codegen::row::planner::PlanCost
+pub fn db_core::codegen::row::planner::PlanCost::clone(&self) -> Self
 impl core::cmp::Eq for db_core::codegen::row::planner::PlanCost
 impl core::cmp::PartialEq for db_core::codegen::row::planner::PlanCost
-pub fn db_core::codegen::row::planner::PlanCost::eq(&self, &db_core::codegen::row::planner::PlanCost) -> bool
+pub fn db_core::codegen::row::planner::PlanCost::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::row::planner::PlanCost
 pub fn db_core::codegen::row::planner::PlanCost::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::codegen::row::planner::PlanCost
@@ -796,9 +796,9 @@ pub db_core::engine::row::stats::Stat4Sample::n_dlt: alloc::vec::Vec<u64>
 pub db_core::engine::row::stats::Stat4Sample::n_eq: alloc::vec::Vec<u64>
 pub db_core::engine::row::stats::Stat4Sample::n_lt: alloc::vec::Vec<u64>
 impl core::clone::Clone for db_core::codegen::row::planner::Stat4Sample
-pub fn db_core::codegen::row::planner::Stat4Sample::clone(&self) -> db_core::codegen::row::planner::Stat4Sample
+pub fn db_core::codegen::row::planner::Stat4Sample::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::row::planner::Stat4Sample
-pub fn db_core::codegen::row::planner::Stat4Sample::eq(&self, &db_core::codegen::row::planner::Stat4Sample) -> bool
+pub fn db_core::codegen::row::planner::Stat4Sample::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::row::planner::Stat4Sample
 pub fn db_core::codegen::row::planner::Stat4Sample::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::Stat4Sample
@@ -811,11 +811,11 @@ pub fn db_core::codegen::row::planner::Stats::index_stats(&self, &str) -> core::
 pub fn db_core::codegen::row::planner::Stats::table_rows(&self) -> core::option::Option<u64>
 pub fn db_core::codegen::row::planner::Stats::with_stat4_samples(self, &str, alloc::vec::Vec<db_core::codegen::row::planner::Stat4Sample>) -> Self
 impl core::clone::Clone for db_core::codegen::row::planner::Stats
-pub fn db_core::codegen::row::planner::Stats::clone(&self) -> db_core::codegen::row::planner::Stats
+pub fn db_core::codegen::row::planner::Stats::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::codegen::row::planner::Stats
-pub fn db_core::codegen::row::planner::Stats::eq(&self, &db_core::codegen::row::planner::Stats) -> bool
+pub fn db_core::codegen::row::planner::Stats::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::codegen::row::planner::Stats
-pub fn db_core::codegen::row::planner::Stats::default() -> db_core::codegen::row::planner::Stats
+pub fn db_core::codegen::row::planner::Stats::default() -> Self
 impl core::fmt::Debug for db_core::codegen::row::planner::Stats
 pub fn db_core::codegen::row::planner::Stats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::row::planner::Stats
@@ -849,9 +849,9 @@ pub fn db_core::engine::stream::StandingQuery::sql(&self) -> &str
 pub struct db_core::engine::stream::StandingQueryEvent
 pub db_core::engine::stream::StandingQueryEvent::result: db_core::engine::QueryResult
 impl core::clone::Clone for db_core::engine::stream::StandingQueryEvent
-pub fn db_core::engine::stream::StandingQueryEvent::clone(&self) -> db_core::engine::stream::StandingQueryEvent
+pub fn db_core::engine::stream::StandingQueryEvent::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::engine::stream::StandingQueryEvent
-pub fn db_core::engine::stream::StandingQueryEvent::eq(&self, &db_core::engine::stream::StandingQueryEvent) -> bool
+pub fn db_core::engine::stream::StandingQueryEvent::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::engine::stream::StandingQueryEvent
 pub fn db_core::engine::stream::StandingQueryEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::engine::stream::StandingQueryEvent
@@ -892,9 +892,9 @@ pub db_core::engine::Cell::Null
 pub db_core::engine::Cell::Real(f64)
 pub db_core::engine::Cell::Text(alloc::string::String)
 impl core::clone::Clone for db_core::engine::Cell
-pub fn db_core::engine::Cell::clone(&self) -> db_core::engine::Cell
+pub fn db_core::engine::Cell::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::engine::Cell
-pub fn db_core::engine::Cell::eq(&self, &db_core::engine::Cell) -> bool
+pub fn db_core::engine::Cell::eq(&self, &Self) -> bool
 impl core::convert::From<&db_core::value::Value> for db_core::engine::Cell
 pub fn db_core::engine::Cell::from(&db_core::value::Value) -> Self
 impl core::convert::From<db_core::engine::Cell> for db_core::vm::batch::Value
@@ -915,10 +915,10 @@ pub db_core::engine::ErrorKind::Open
 pub db_core::engine::ErrorKind::Parse
 pub db_core::engine::ErrorKind::Unsupported
 impl core::clone::Clone for db_core::engine::ErrorKind
-pub fn db_core::engine::ErrorKind::clone(&self) -> db_core::engine::ErrorKind
+pub fn db_core::engine::ErrorKind::clone(&self) -> Self
 impl core::cmp::Eq for db_core::engine::ErrorKind
 impl core::cmp::PartialEq for db_core::engine::ErrorKind
-pub fn db_core::engine::ErrorKind::eq(&self, &db_core::engine::ErrorKind) -> bool
+pub fn db_core::engine::ErrorKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::engine::ErrorKind
 pub fn db_core::engine::ErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::engine::ErrorKind
@@ -937,10 +937,10 @@ pub db_core::engine::FileStats::Stream
 pub db_core::engine::FileStats::Stream::bytes_parsed: u64
 pub db_core::engine::FileStats::Stream::lines: u64
 impl core::clone::Clone for db_core::engine::FileStats
-pub fn db_core::engine::FileStats::clone(&self) -> db_core::engine::FileStats
+pub fn db_core::engine::FileStats::clone(&self) -> Self
 impl core::cmp::Eq for db_core::engine::FileStats
 impl core::cmp::PartialEq for db_core::engine::FileStats
-pub fn db_core::engine::FileStats::eq(&self, &db_core::engine::FileStats) -> bool
+pub fn db_core::engine::FileStats::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::engine::FileStats
 pub fn db_core::engine::FileStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::engine::FileStats
@@ -951,10 +951,10 @@ pub db_core::engine::Mode::Cross
 pub db_core::engine::Mode::Row
 pub db_core::engine::Mode::Stream
 impl core::clone::Clone for db_core::engine::Mode
-pub fn db_core::engine::Mode::clone(&self) -> db_core::engine::Mode
+pub fn db_core::engine::Mode::clone(&self) -> Self
 impl core::cmp::Eq for db_core::engine::Mode
 impl core::cmp::PartialEq for db_core::engine::Mode
-pub fn db_core::engine::Mode::eq(&self, &db_core::engine::Mode) -> bool
+pub fn db_core::engine::Mode::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::engine::Mode
 pub fn db_core::engine::Mode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::engine::Mode
@@ -965,10 +965,10 @@ pub struct db_core::engine::ColumnInfo
 pub db_core::engine::ColumnInfo::name: alloc::string::String
 pub db_core::engine::ColumnInfo::type_name: alloc::string::String
 impl core::clone::Clone for db_core::engine::ColumnInfo
-pub fn db_core::engine::ColumnInfo::clone(&self) -> db_core::engine::ColumnInfo
+pub fn db_core::engine::ColumnInfo::clone(&self) -> Self
 impl core::cmp::Eq for db_core::engine::ColumnInfo
 impl core::cmp::PartialEq for db_core::engine::ColumnInfo
-pub fn db_core::engine::ColumnInfo::eq(&self, &db_core::engine::ColumnInfo) -> bool
+pub fn db_core::engine::ColumnInfo::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::engine::ColumnInfo
 pub fn db_core::engine::ColumnInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::engine::ColumnInfo
@@ -977,7 +977,7 @@ impl db_core::engine::predicate::CompiledPredicate
 pub fn db_core::engine::predicate::CompiledPredicate::compile(&str, &[alloc::string::String]) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::predicate::CompiledPredicate::eval(&self, &[db_core::engine::Cell], &[alloc::string::String]) -> core::result::Result<bool, db_core::engine::EngineError>
 impl core::clone::Clone for db_core::engine::predicate::CompiledPredicate
-pub fn db_core::engine::predicate::CompiledPredicate::clone(&self) -> db_core::engine::predicate::CompiledPredicate
+pub fn db_core::engine::predicate::CompiledPredicate::clone(&self) -> Self
 impl core::fmt::Debug for db_core::engine::predicate::CompiledPredicate
 pub fn db_core::engine::predicate::CompiledPredicate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::engine::EngineError
@@ -986,10 +986,10 @@ pub db_core::engine::EngineError::message: alloc::string::String
 impl db_core::engine::EngineError
 pub fn db_core::engine::EngineError::new(db_core::engine::ErrorKind, impl core::fmt::Display) -> Self
 impl core::clone::Clone for db_core::engine::EngineError
-pub fn db_core::engine::EngineError::clone(&self) -> db_core::engine::EngineError
+pub fn db_core::engine::EngineError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::engine::EngineError
 impl core::cmp::PartialEq for db_core::engine::EngineError
-pub fn db_core::engine::EngineError::eq(&self, &db_core::engine::EngineError) -> bool
+pub fn db_core::engine::EngineError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::engine::EngineError
 impl core::fmt::Debug for db_core::engine::EngineError
 pub fn db_core::engine::EngineError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -1003,10 +1003,10 @@ pub db_core::engine::OpcodeRow::is_finalize: bool
 pub db_core::engine::OpcodeRow::opcode: alloc::string::String
 pub db_core::engine::OpcodeRow::operands: alloc::string::String
 impl core::clone::Clone for db_core::engine::OpcodeRow
-pub fn db_core::engine::OpcodeRow::clone(&self) -> db_core::engine::OpcodeRow
+pub fn db_core::engine::OpcodeRow::clone(&self) -> Self
 impl core::cmp::Eq for db_core::engine::OpcodeRow
 impl core::cmp::PartialEq for db_core::engine::OpcodeRow
-pub fn db_core::engine::OpcodeRow::eq(&self, &db_core::engine::OpcodeRow) -> bool
+pub fn db_core::engine::OpcodeRow::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::engine::OpcodeRow
 pub fn db_core::engine::OpcodeRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::engine::OpcodeRow
@@ -1015,10 +1015,10 @@ pub db_core::engine::OpcodeSection::label: alloc::string::String
 pub db_core::engine::OpcodeSection::lane: &'static str
 pub db_core::engine::OpcodeSection::rows: alloc::vec::Vec<db_core::engine::OpcodeRow>
 impl core::clone::Clone for db_core::engine::OpcodeSection
-pub fn db_core::engine::OpcodeSection::clone(&self) -> db_core::engine::OpcodeSection
+pub fn db_core::engine::OpcodeSection::clone(&self) -> Self
 impl core::cmp::Eq for db_core::engine::OpcodeSection
 impl core::cmp::PartialEq for db_core::engine::OpcodeSection
-pub fn db_core::engine::OpcodeSection::eq(&self, &db_core::engine::OpcodeSection) -> bool
+pub fn db_core::engine::OpcodeSection::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::engine::OpcodeSection
 pub fn db_core::engine::OpcodeSection::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::engine::OpcodeSection
@@ -1027,10 +1027,10 @@ pub db_core::engine::PlanRow::detail: alloc::string::String
 pub db_core::engine::PlanRow::id: i64
 pub db_core::engine::PlanRow::parent: i64
 impl core::clone::Clone for db_core::engine::PlanRow
-pub fn db_core::engine::PlanRow::clone(&self) -> db_core::engine::PlanRow
+pub fn db_core::engine::PlanRow::clone(&self) -> Self
 impl core::cmp::Eq for db_core::engine::PlanRow
 impl core::cmp::PartialEq for db_core::engine::PlanRow
-pub fn db_core::engine::PlanRow::eq(&self, &db_core::engine::PlanRow) -> bool
+pub fn db_core::engine::PlanRow::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::engine::PlanRow
 pub fn db_core::engine::PlanRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::engine::PlanRow
@@ -1041,11 +1041,11 @@ pub db_core::engine::QueryResult::scope_report: core::option::Option<db_core::en
 impl db_core::engine::QueryResult
 pub fn db_core::engine::QueryResult::is_empty(&self) -> bool
 impl core::clone::Clone for db_core::engine::QueryResult
-pub fn db_core::engine::QueryResult::clone(&self) -> db_core::engine::QueryResult
+pub fn db_core::engine::QueryResult::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::engine::QueryResult
-pub fn db_core::engine::QueryResult::eq(&self, &db_core::engine::QueryResult) -> bool
+pub fn db_core::engine::QueryResult::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::engine::QueryResult
-pub fn db_core::engine::QueryResult::default() -> db_core::engine::QueryResult
+pub fn db_core::engine::QueryResult::default() -> Self
 impl core::fmt::Debug for db_core::engine::QueryResult
 pub fn db_core::engine::QueryResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::engine::QueryResult
@@ -1057,9 +1057,9 @@ pub db_core::engine::ScopeReport::lines: u64
 pub db_core::engine::ScopeReport::scope_available: db_core::vm::stream::Scope
 pub db_core::engine::ScopeReport::scope_requested: db_core::vm::stream::Scope
 impl core::clone::Clone for db_core::engine::ScopeReport
-pub fn db_core::engine::ScopeReport::clone(&self) -> db_core::engine::ScopeReport
+pub fn db_core::engine::ScopeReport::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::engine::ScopeReport
-pub fn db_core::engine::ScopeReport::eq(&self, &db_core::engine::ScopeReport) -> bool
+pub fn db_core::engine::ScopeReport::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::engine::ScopeReport
 pub fn db_core::engine::ScopeReport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::engine::ScopeReport
@@ -1068,10 +1068,10 @@ pub struct db_core::engine::TableInfo
 pub db_core::engine::TableInfo::columns: alloc::vec::Vec<db_core::engine::ColumnInfo>
 pub db_core::engine::TableInfo::name: alloc::string::String
 impl core::clone::Clone for db_core::engine::TableInfo
-pub fn db_core::engine::TableInfo::clone(&self) -> db_core::engine::TableInfo
+pub fn db_core::engine::TableInfo::clone(&self) -> Self
 impl core::cmp::Eq for db_core::engine::TableInfo
 impl core::cmp::PartialEq for db_core::engine::TableInfo
-pub fn db_core::engine::TableInfo::eq(&self, &db_core::engine::TableInfo) -> bool
+pub fn db_core::engine::TableInfo::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::engine::TableInfo
 pub fn db_core::engine::TableInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::engine::TableInfo
@@ -1127,10 +1127,10 @@ pub db_core::functions::FunctionError::Unknown
 pub db_core::functions::FunctionError::Unknown::arity: usize
 pub db_core::functions::FunctionError::Unknown::name: alloc::string::String
 impl core::clone::Clone for db_core::functions::FunctionError
-pub fn db_core::functions::FunctionError::clone(&self) -> db_core::functions::FunctionError
+pub fn db_core::functions::FunctionError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::functions::FunctionError
 impl core::cmp::PartialEq for db_core::functions::FunctionError
-pub fn db_core::functions::FunctionError::eq(&self, &db_core::functions::FunctionError) -> bool
+pub fn db_core::functions::FunctionError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::functions::FunctionError
 impl core::fmt::Debug for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -1153,9 +1153,9 @@ pub db_core::json_path::JsonValue::Null
 pub db_core::json_path::JsonValue::Object(alloc::vec::Vec<(&'a str, db_core::json_path::JsonValue<'a>)>)
 pub db_core::json_path::JsonValue::Str(&'a str)
 impl<'a> core::clone::Clone for db_core::json_path::JsonValue<'a>
-pub fn db_core::json_path::JsonValue<'a>::clone(&self) -> db_core::json_path::JsonValue<'a>
+pub fn db_core::json_path::JsonValue<'a>::clone(&self) -> Self
 impl<'a> core::cmp::PartialEq for db_core::json_path::JsonValue<'a>
-pub fn db_core::json_path::JsonValue<'a>::eq(&self, &db_core::json_path::JsonValue<'a>) -> bool
+pub fn db_core::json_path::JsonValue<'a>::eq(&self, &Self) -> bool
 impl<'a> core::fmt::Debug for db_core::json_path::JsonValue<'a>
 pub fn db_core::json_path::JsonValue<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::StructuralPartialEq for db_core::json_path::JsonValue<'a>
@@ -1186,10 +1186,10 @@ pub db_core::parser::ast::BinaryOp::Shl
 pub db_core::parser::ast::BinaryOp::Shr
 pub db_core::parser::ast::BinaryOp::Sub
 impl core::clone::Clone for db_core::parser::ast::BinaryOp
-pub fn db_core::parser::ast::BinaryOp::clone(&self) -> db_core::parser::ast::BinaryOp
+pub fn db_core::parser::ast::BinaryOp::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::ast::BinaryOp
 impl core::cmp::PartialEq for db_core::parser::ast::BinaryOp
-pub fn db_core::parser::ast::BinaryOp::eq(&self, &db_core::parser::ast::BinaryOp) -> bool
+pub fn db_core::parser::ast::BinaryOp::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::BinaryOp
 pub fn db_core::parser::ast::BinaryOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::ast::BinaryOp
@@ -1207,9 +1207,9 @@ pub db_core::parser::ast::ColumnConstraint::PrimaryKey::autoincrement: bool
 pub db_core::parser::ast::ColumnConstraint::PrimaryKey::desc: core::option::Option<bool>
 pub db_core::parser::ast::ColumnConstraint::Unique
 impl core::clone::Clone for db_core::parser::ast::ColumnConstraint
-pub fn db_core::parser::ast::ColumnConstraint::clone(&self) -> db_core::parser::ast::ColumnConstraint
+pub fn db_core::parser::ast::ColumnConstraint::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::ColumnConstraint
-pub fn db_core::parser::ast::ColumnConstraint::eq(&self, &db_core::parser::ast::ColumnConstraint) -> bool
+pub fn db_core::parser::ast::ColumnConstraint::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::ColumnConstraint
 pub fn db_core::parser::ast::ColumnConstraint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::ColumnConstraint
@@ -1219,10 +1219,10 @@ pub enum db_core::parser::ast::CompoundOp
 pub db_core::parser::ast::CompoundOp::Union
 pub db_core::parser::ast::CompoundOp::UnionAll
 impl core::clone::Clone for db_core::parser::ast::CompoundOp
-pub fn db_core::parser::ast::CompoundOp::clone(&self) -> db_core::parser::ast::CompoundOp
+pub fn db_core::parser::ast::CompoundOp::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::ast::CompoundOp
 impl core::cmp::PartialEq for db_core::parser::ast::CompoundOp
-pub fn db_core::parser::ast::CompoundOp::eq(&self, &db_core::parser::ast::CompoundOp) -> bool
+pub fn db_core::parser::ast::CompoundOp::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::CompoundOp
 pub fn db_core::parser::ast::CompoundOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::ast::CompoundOp
@@ -1234,10 +1234,10 @@ pub db_core::parser::ast::ConflictAction::Ignore
 pub db_core::parser::ast::ConflictAction::Replace
 pub db_core::parser::ast::ConflictAction::Rollback
 impl core::clone::Clone for db_core::parser::ast::ConflictAction
-pub fn db_core::parser::ast::ConflictAction::clone(&self) -> db_core::parser::ast::ConflictAction
+pub fn db_core::parser::ast::ConflictAction::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::ast::ConflictAction
 impl core::cmp::PartialEq for db_core::parser::ast::ConflictAction
-pub fn db_core::parser::ast::ConflictAction::eq(&self, &db_core::parser::ast::ConflictAction) -> bool
+pub fn db_core::parser::ast::ConflictAction::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::ConflictAction
 pub fn db_core::parser::ast::ConflictAction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::ast::ConflictAction
@@ -1246,9 +1246,9 @@ pub enum db_core::parser::ast::DefaultValue
 pub db_core::parser::ast::DefaultValue::Literal(db_core::parser::ast::Expr)
 pub db_core::parser::ast::DefaultValue::Paren(db_core::parser::ast::Expr)
 impl core::clone::Clone for db_core::parser::ast::DefaultValue
-pub fn db_core::parser::ast::DefaultValue::clone(&self) -> db_core::parser::ast::DefaultValue
+pub fn db_core::parser::ast::DefaultValue::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::DefaultValue
-pub fn db_core::parser::ast::DefaultValue::eq(&self, &db_core::parser::ast::DefaultValue) -> bool
+pub fn db_core::parser::ast::DefaultValue::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::DefaultValue
 pub fn db_core::parser::ast::DefaultValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::DefaultValue
@@ -1258,10 +1258,10 @@ pub enum db_core::parser::ast::Distinctness
 pub db_core::parser::ast::Distinctness::All
 pub db_core::parser::ast::Distinctness::Distinct
 impl core::clone::Clone for db_core::parser::ast::Distinctness
-pub fn db_core::parser::ast::Distinctness::clone(&self) -> db_core::parser::ast::Distinctness
+pub fn db_core::parser::ast::Distinctness::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::ast::Distinctness
 impl core::cmp::PartialEq for db_core::parser::ast::Distinctness
-pub fn db_core::parser::ast::Distinctness::eq(&self, &db_core::parser::ast::Distinctness) -> bool
+pub fn db_core::parser::ast::Distinctness::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Distinctness
 pub fn db_core::parser::ast::Distinctness::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::ast::Distinctness
@@ -1271,9 +1271,9 @@ pub db_core::parser::ast::ExplainBody::Delete(alloc::boxed::Box<db_core::parser:
 pub db_core::parser::ast::ExplainBody::Select(alloc::boxed::Box<db_core::parser::ast::Select>)
 pub db_core::parser::ast::ExplainBody::Update(alloc::boxed::Box<db_core::parser::ast::Update>)
 impl core::clone::Clone for db_core::parser::ast::ExplainBody
-pub fn db_core::parser::ast::ExplainBody::clone(&self) -> db_core::parser::ast::ExplainBody
+pub fn db_core::parser::ast::ExplainBody::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::ExplainBody
-pub fn db_core::parser::ast::ExplainBody::eq(&self, &db_core::parser::ast::ExplainBody) -> bool
+pub fn db_core::parser::ast::ExplainBody::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::ExplainBody
 pub fn db_core::parser::ast::ExplainBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::ExplainBody
@@ -1342,9 +1342,9 @@ pub db_core::parser::ast::ExprKind::Unary
 pub db_core::parser::ast::ExprKind::Unary::expr: alloc::boxed::Box<db_core::parser::ast::Expr>
 pub db_core::parser::ast::ExprKind::Unary::op: db_core::parser::ast::UnaryOp
 impl core::clone::Clone for db_core::parser::ast::ExprKind
-pub fn db_core::parser::ast::ExprKind::clone(&self) -> db_core::parser::ast::ExprKind
+pub fn db_core::parser::ast::ExprKind::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::ExprKind
-pub fn db_core::parser::ast::ExprKind::eq(&self, &db_core::parser::ast::ExprKind) -> bool
+pub fn db_core::parser::ast::ExprKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::ExprKind
 pub fn db_core::parser::ast::ExprKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::ExprKind
@@ -1352,9 +1352,9 @@ pub enum db_core::parser::ast::FunctionArgs
 pub db_core::parser::ast::FunctionArgs::List(alloc::vec::Vec<db_core::parser::ast::Expr>)
 pub db_core::parser::ast::FunctionArgs::Star
 impl core::clone::Clone for db_core::parser::ast::FunctionArgs
-pub fn db_core::parser::ast::FunctionArgs::clone(&self) -> db_core::parser::ast::FunctionArgs
+pub fn db_core::parser::ast::FunctionArgs::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::FunctionArgs
-pub fn db_core::parser::ast::FunctionArgs::eq(&self, &db_core::parser::ast::FunctionArgs) -> bool
+pub fn db_core::parser::ast::FunctionArgs::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::FunctionArgs
 pub fn db_core::parser::ast::FunctionArgs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::FunctionArgs
@@ -1363,9 +1363,9 @@ pub db_core::parser::ast::InsertSource::DefaultValues
 pub db_core::parser::ast::InsertSource::Select(alloc::boxed::Box<db_core::parser::ast::Select>)
 pub db_core::parser::ast::InsertSource::Values(alloc::vec::Vec<alloc::vec::Vec<db_core::parser::ast::Expr>>)
 impl core::clone::Clone for db_core::parser::ast::InsertSource
-pub fn db_core::parser::ast::InsertSource::clone(&self) -> db_core::parser::ast::InsertSource
+pub fn db_core::parser::ast::InsertSource::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::InsertSource
-pub fn db_core::parser::ast::InsertSource::eq(&self, &db_core::parser::ast::InsertSource) -> bool
+pub fn db_core::parser::ast::InsertSource::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::InsertSource
 pub fn db_core::parser::ast::InsertSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::InsertSource
@@ -1373,9 +1373,9 @@ pub enum db_core::parser::ast::JoinConstraint
 pub db_core::parser::ast::JoinConstraint::On(db_core::parser::ast::Expr)
 pub db_core::parser::ast::JoinConstraint::Using(alloc::vec::Vec<alloc::string::String>)
 impl core::clone::Clone for db_core::parser::ast::JoinConstraint
-pub fn db_core::parser::ast::JoinConstraint::clone(&self) -> db_core::parser::ast::JoinConstraint
+pub fn db_core::parser::ast::JoinConstraint::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::JoinConstraint
-pub fn db_core::parser::ast::JoinConstraint::eq(&self, &db_core::parser::ast::JoinConstraint) -> bool
+pub fn db_core::parser::ast::JoinConstraint::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::JoinConstraint
 pub fn db_core::parser::ast::JoinConstraint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::JoinConstraint
@@ -1386,10 +1386,10 @@ pub db_core::parser::ast::JoinOp::Inner
 pub db_core::parser::ast::JoinOp::Left
 pub db_core::parser::ast::JoinOp::Right
 impl core::clone::Clone for db_core::parser::ast::JoinOp
-pub fn db_core::parser::ast::JoinOp::clone(&self) -> db_core::parser::ast::JoinOp
+pub fn db_core::parser::ast::JoinOp::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::ast::JoinOp
 impl core::cmp::PartialEq for db_core::parser::ast::JoinOp
-pub fn db_core::parser::ast::JoinOp::eq(&self, &db_core::parser::ast::JoinOp) -> bool
+pub fn db_core::parser::ast::JoinOp::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::JoinOp
 pub fn db_core::parser::ast::JoinOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::ast::JoinOp
@@ -1403,9 +1403,9 @@ pub db_core::parser::ast::Literal::Null
 pub db_core::parser::ast::Literal::Str(alloc::string::String)
 pub db_core::parser::ast::Literal::True
 impl core::clone::Clone for db_core::parser::ast::Literal
-pub fn db_core::parser::ast::Literal::clone(&self) -> db_core::parser::ast::Literal
+pub fn db_core::parser::ast::Literal::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Literal
-pub fn db_core::parser::ast::Literal::eq(&self, &db_core::parser::ast::Literal) -> bool
+pub fn db_core::parser::ast::Literal::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Literal
 pub fn db_core::parser::ast::Literal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::Literal
@@ -1418,9 +1418,9 @@ pub db_core::parser::ast::ParamKind::Colon(alloc::string::String)
 pub db_core::parser::ast::ParamKind::Dollar(alloc::string::String)
 pub db_core::parser::ast::ParamKind::Numbered(u32)
 impl core::clone::Clone for db_core::parser::ast::ParamKind
-pub fn db_core::parser::ast::ParamKind::clone(&self) -> db_core::parser::ast::ParamKind
+pub fn db_core::parser::ast::ParamKind::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::ParamKind
-pub fn db_core::parser::ast::ParamKind::eq(&self, &db_core::parser::ast::ParamKind) -> bool
+pub fn db_core::parser::ast::ParamKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::ParamKind
 pub fn db_core::parser::ast::ParamKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::ParamKind
@@ -1439,9 +1439,9 @@ pub db_core::parser::ast::Pragma::Synchronous::span: db_core::parser::Span
 impl db_core::parser::ast::Pragma
 pub fn db_core::parser::ast::Pragma::span(&self) -> db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::Pragma
-pub fn db_core::parser::ast::Pragma::clone(&self) -> db_core::parser::ast::Pragma
+pub fn db_core::parser::ast::Pragma::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Pragma
-pub fn db_core::parser::ast::Pragma::eq(&self, &db_core::parser::ast::Pragma) -> bool
+pub fn db_core::parser::ast::Pragma::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Pragma
 pub fn db_core::parser::ast::Pragma::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Pragma
@@ -1449,10 +1449,10 @@ pub enum db_core::parser::ast::PragmaJournalMode
 pub db_core::parser::ast::PragmaJournalMode::Delete
 pub db_core::parser::ast::PragmaJournalMode::Wal
 impl core::clone::Clone for db_core::parser::ast::PragmaJournalMode
-pub fn db_core::parser::ast::PragmaJournalMode::clone(&self) -> db_core::parser::ast::PragmaJournalMode
+pub fn db_core::parser::ast::PragmaJournalMode::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::ast::PragmaJournalMode
 impl core::cmp::PartialEq for db_core::parser::ast::PragmaJournalMode
-pub fn db_core::parser::ast::PragmaJournalMode::eq(&self, &db_core::parser::ast::PragmaJournalMode) -> bool
+pub fn db_core::parser::ast::PragmaJournalMode::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::PragmaJournalMode
 pub fn db_core::parser::ast::PragmaJournalMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::ast::PragmaJournalMode
@@ -1462,10 +1462,10 @@ pub db_core::parser::ast::PragmaSynchronous::Full
 pub db_core::parser::ast::PragmaSynchronous::Normal
 pub db_core::parser::ast::PragmaSynchronous::Off
 impl core::clone::Clone for db_core::parser::ast::PragmaSynchronous
-pub fn db_core::parser::ast::PragmaSynchronous::clone(&self) -> db_core::parser::ast::PragmaSynchronous
+pub fn db_core::parser::ast::PragmaSynchronous::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::ast::PragmaSynchronous
 impl core::cmp::PartialEq for db_core::parser::ast::PragmaSynchronous
-pub fn db_core::parser::ast::PragmaSynchronous::eq(&self, &db_core::parser::ast::PragmaSynchronous) -> bool
+pub fn db_core::parser::ast::PragmaSynchronous::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::PragmaSynchronous
 pub fn db_core::parser::ast::PragmaSynchronous::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::ast::PragmaSynchronous
@@ -1478,9 +1478,9 @@ pub db_core::parser::ast::ResultColumn::Star
 pub db_core::parser::ast::ResultColumn::TableStar
 pub db_core::parser::ast::ResultColumn::TableStar::table: alloc::string::String
 impl core::clone::Clone for db_core::parser::ast::ResultColumn
-pub fn db_core::parser::ast::ResultColumn::clone(&self) -> db_core::parser::ast::ResultColumn
+pub fn db_core::parser::ast::ResultColumn::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::ResultColumn
-pub fn db_core::parser::ast::ResultColumn::eq(&self, &db_core::parser::ast::ResultColumn) -> bool
+pub fn db_core::parser::ast::ResultColumn::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::ResultColumn
 pub fn db_core::parser::ast::ResultColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::ResultColumn
@@ -1494,10 +1494,10 @@ pub db_core::parser::ast::ScopeUnit::Lines
 pub db_core::parser::ast::ScopeUnit::Minutes
 pub db_core::parser::ast::ScopeUnit::Seconds
 impl core::clone::Clone for db_core::parser::ast::ScopeUnit
-pub fn db_core::parser::ast::ScopeUnit::clone(&self) -> db_core::parser::ast::ScopeUnit
+pub fn db_core::parser::ast::ScopeUnit::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::ast::ScopeUnit
 impl core::cmp::PartialEq for db_core::parser::ast::ScopeUnit
-pub fn db_core::parser::ast::ScopeUnit::eq(&self, &db_core::parser::ast::ScopeUnit) -> bool
+pub fn db_core::parser::ast::ScopeUnit::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::ScopeUnit
 pub fn db_core::parser::ast::ScopeUnit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::ScopeUnit
@@ -1512,9 +1512,9 @@ pub db_core::parser::ast::TableConstraint::Check::name: core::option::Option<all
 pub db_core::parser::ast::TableConstraint::PrimaryKey(alloc::vec::Vec<db_core::parser::ast::IndexedColumn>)
 pub db_core::parser::ast::TableConstraint::Unique(alloc::vec::Vec<db_core::parser::ast::IndexedColumn>)
 impl core::clone::Clone for db_core::parser::ast::TableConstraint
-pub fn db_core::parser::ast::TableConstraint::clone(&self) -> db_core::parser::ast::TableConstraint
+pub fn db_core::parser::ast::TableConstraint::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::TableConstraint
-pub fn db_core::parser::ast::TableConstraint::eq(&self, &db_core::parser::ast::TableConstraint) -> bool
+pub fn db_core::parser::ast::TableConstraint::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::TableConstraint
 pub fn db_core::parser::ast::TableConstraint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::TableConstraint
@@ -1524,9 +1524,9 @@ pub enum db_core::parser::ast::TableRefKind
 pub db_core::parser::ast::TableRefKind::Name(alloc::string::String)
 pub db_core::parser::ast::TableRefKind::Subquery(alloc::boxed::Box<db_core::parser::ast::Select>)
 impl core::clone::Clone for db_core::parser::ast::TableRefKind
-pub fn db_core::parser::ast::TableRefKind::clone(&self) -> db_core::parser::ast::TableRefKind
+pub fn db_core::parser::ast::TableRefKind::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::TableRefKind
-pub fn db_core::parser::ast::TableRefKind::eq(&self, &db_core::parser::ast::TableRefKind) -> bool
+pub fn db_core::parser::ast::TableRefKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::TableRefKind
 pub fn db_core::parser::ast::TableRefKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::TableRefKind
@@ -1535,10 +1535,10 @@ pub db_core::parser::ast::TransactionMode::Deferred
 pub db_core::parser::ast::TransactionMode::Exclusive
 pub db_core::parser::ast::TransactionMode::Immediate
 impl core::clone::Clone for db_core::parser::ast::TransactionMode
-pub fn db_core::parser::ast::TransactionMode::clone(&self) -> db_core::parser::ast::TransactionMode
+pub fn db_core::parser::ast::TransactionMode::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::ast::TransactionMode
 impl core::cmp::PartialEq for db_core::parser::ast::TransactionMode
-pub fn db_core::parser::ast::TransactionMode::eq(&self, &db_core::parser::ast::TransactionMode) -> bool
+pub fn db_core::parser::ast::TransactionMode::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::TransactionMode
 pub fn db_core::parser::ast::TransactionMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::TransactionMode
@@ -1551,10 +1551,10 @@ pub db_core::parser::ast::UnaryOp::Minus
 pub db_core::parser::ast::UnaryOp::Not
 pub db_core::parser::ast::UnaryOp::Plus
 impl core::clone::Clone for db_core::parser::ast::UnaryOp
-pub fn db_core::parser::ast::UnaryOp::clone(&self) -> db_core::parser::ast::UnaryOp
+pub fn db_core::parser::ast::UnaryOp::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::ast::UnaryOp
 impl core::cmp::PartialEq for db_core::parser::ast::UnaryOp
-pub fn db_core::parser::ast::UnaryOp::eq(&self, &db_core::parser::ast::UnaryOp) -> bool
+pub fn db_core::parser::ast::UnaryOp::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::UnaryOp
 pub fn db_core::parser::ast::UnaryOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::ast::UnaryOp
@@ -1563,9 +1563,9 @@ pub struct db_core::parser::ast::Analyze
 pub db_core::parser::ast::Analyze::span: db_core::parser::Span
 pub db_core::parser::ast::Analyze::target: core::option::Option<alloc::string::String>
 impl core::clone::Clone for db_core::parser::ast::Analyze
-pub fn db_core::parser::ast::Analyze::clone(&self) -> db_core::parser::ast::Analyze
+pub fn db_core::parser::ast::Analyze::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Analyze
-pub fn db_core::parser::ast::Analyze::eq(&self, &db_core::parser::ast::Analyze) -> bool
+pub fn db_core::parser::ast::Analyze::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Analyze
 pub fn db_core::parser::ast::Analyze::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Analyze
@@ -1573,9 +1573,9 @@ pub struct db_core::parser::ast::Assignment
 pub db_core::parser::ast::Assignment::columns: alloc::vec::Vec<alloc::string::String>
 pub db_core::parser::ast::Assignment::value: db_core::parser::ast::Expr
 impl core::clone::Clone for db_core::parser::ast::Assignment
-pub fn db_core::parser::ast::Assignment::clone(&self) -> db_core::parser::ast::Assignment
+pub fn db_core::parser::ast::Assignment::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Assignment
-pub fn db_core::parser::ast::Assignment::eq(&self, &db_core::parser::ast::Assignment) -> bool
+pub fn db_core::parser::ast::Assignment::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Assignment
 pub fn db_core::parser::ast::Assignment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Assignment
@@ -1583,9 +1583,9 @@ pub struct db_core::parser::ast::Begin
 pub db_core::parser::ast::Begin::mode: core::option::Option<db_core::parser::ast::TransactionMode>
 pub db_core::parser::ast::Begin::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::Begin
-pub fn db_core::parser::ast::Begin::clone(&self) -> db_core::parser::ast::Begin
+pub fn db_core::parser::ast::Begin::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Begin
-pub fn db_core::parser::ast::Begin::eq(&self, &db_core::parser::ast::Begin) -> bool
+pub fn db_core::parser::ast::Begin::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Begin
 pub fn db_core::parser::ast::Begin::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::Begin
@@ -1596,9 +1596,9 @@ pub db_core::parser::ast::ColumnDef::constraints: alloc::vec::Vec<db_core::parse
 pub db_core::parser::ast::ColumnDef::name: alloc::string::String
 pub db_core::parser::ast::ColumnDef::type_name: core::option::Option<alloc::string::String>
 impl core::clone::Clone for db_core::parser::ast::ColumnDef
-pub fn db_core::parser::ast::ColumnDef::clone(&self) -> db_core::parser::ast::ColumnDef
+pub fn db_core::parser::ast::ColumnDef::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::ColumnDef
-pub fn db_core::parser::ast::ColumnDef::eq(&self, &db_core::parser::ast::ColumnDef) -> bool
+pub fn db_core::parser::ast::ColumnDef::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::ColumnDef
 pub fn db_core::parser::ast::ColumnDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::ColumnDef
@@ -1607,9 +1607,9 @@ impl core::marker::StructuralPartialEq for db_core::parser::ast::ColumnDef
 pub struct db_core::parser::ast::Commit
 pub db_core::parser::ast::Commit::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::Commit
-pub fn db_core::parser::ast::Commit::clone(&self) -> db_core::parser::ast::Commit
+pub fn db_core::parser::ast::Commit::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Commit
-pub fn db_core::parser::ast::Commit::eq(&self, &db_core::parser::ast::Commit) -> bool
+pub fn db_core::parser::ast::Commit::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Commit
 pub fn db_core::parser::ast::Commit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::Commit
@@ -1621,9 +1621,9 @@ pub db_core::parser::ast::CommonTableExpr::name: alloc::string::String
 pub db_core::parser::ast::CommonTableExpr::query: alloc::boxed::Box<db_core::parser::ast::Select>
 pub db_core::parser::ast::CommonTableExpr::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::CommonTableExpr
-pub fn db_core::parser::ast::CommonTableExpr::clone(&self) -> db_core::parser::ast::CommonTableExpr
+pub fn db_core::parser::ast::CommonTableExpr::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::CommonTableExpr
-pub fn db_core::parser::ast::CommonTableExpr::eq(&self, &db_core::parser::ast::CommonTableExpr) -> bool
+pub fn db_core::parser::ast::CommonTableExpr::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::CommonTableExpr
 pub fn db_core::parser::ast::CommonTableExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::CommonTableExpr
@@ -1639,9 +1639,9 @@ pub db_core::parser::ast::CompoundSelect::op: db_core::parser::ast::CompoundOp
 pub db_core::parser::ast::CompoundSelect::span: db_core::parser::Span
 pub db_core::parser::ast::CompoundSelect::where_clause: core::option::Option<db_core::parser::ast::Expr>
 impl core::clone::Clone for db_core::parser::ast::CompoundSelect
-pub fn db_core::parser::ast::CompoundSelect::clone(&self) -> db_core::parser::ast::CompoundSelect
+pub fn db_core::parser::ast::CompoundSelect::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::CompoundSelect
-pub fn db_core::parser::ast::CompoundSelect::eq(&self, &db_core::parser::ast::CompoundSelect) -> bool
+pub fn db_core::parser::ast::CompoundSelect::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::CompoundSelect
 pub fn db_core::parser::ast::CompoundSelect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::CompoundSelect
@@ -1656,9 +1656,9 @@ pub db_core::parser::ast::CreateIndex::table: alloc::string::String
 pub db_core::parser::ast::CreateIndex::unique: bool
 pub db_core::parser::ast::CreateIndex::where_clause: core::option::Option<db_core::parser::ast::Expr>
 impl core::clone::Clone for db_core::parser::ast::CreateIndex
-pub fn db_core::parser::ast::CreateIndex::clone(&self) -> db_core::parser::ast::CreateIndex
+pub fn db_core::parser::ast::CreateIndex::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::CreateIndex
-pub fn db_core::parser::ast::CreateIndex::eq(&self, &db_core::parser::ast::CreateIndex) -> bool
+pub fn db_core::parser::ast::CreateIndex::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::CreateIndex
 pub fn db_core::parser::ast::CreateIndex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::CreateIndex
@@ -1673,9 +1673,9 @@ pub db_core::parser::ast::CreateTable::span: db_core::parser::Span
 pub db_core::parser::ast::CreateTable::strict: bool
 pub db_core::parser::ast::CreateTable::without_rowid: bool
 impl core::clone::Clone for db_core::parser::ast::CreateTable
-pub fn db_core::parser::ast::CreateTable::clone(&self) -> db_core::parser::ast::CreateTable
+pub fn db_core::parser::ast::CreateTable::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::CreateTable
-pub fn db_core::parser::ast::CreateTable::eq(&self, &db_core::parser::ast::CreateTable) -> bool
+pub fn db_core::parser::ast::CreateTable::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::CreateTable
 pub fn db_core::parser::ast::CreateTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::CreateTable
@@ -1688,9 +1688,9 @@ pub db_core::parser::ast::CreateView::name: alloc::string::String
 pub db_core::parser::ast::CreateView::query: alloc::boxed::Box<db_core::parser::ast::Select>
 pub db_core::parser::ast::CreateView::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::CreateView
-pub fn db_core::parser::ast::CreateView::clone(&self) -> db_core::parser::ast::CreateView
+pub fn db_core::parser::ast::CreateView::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::CreateView
-pub fn db_core::parser::ast::CreateView::eq(&self, &db_core::parser::ast::CreateView) -> bool
+pub fn db_core::parser::ast::CreateView::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::CreateView
 pub fn db_core::parser::ast::CreateView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::CreateView
@@ -1701,9 +1701,9 @@ pub db_core::parser::ast::Delete::span: db_core::parser::Span
 pub db_core::parser::ast::Delete::table: alloc::string::String
 pub db_core::parser::ast::Delete::where_clause: core::option::Option<db_core::parser::ast::Expr>
 impl core::clone::Clone for db_core::parser::ast::Delete
-pub fn db_core::parser::ast::Delete::clone(&self) -> db_core::parser::ast::Delete
+pub fn db_core::parser::ast::Delete::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Delete
-pub fn db_core::parser::ast::Delete::eq(&self, &db_core::parser::ast::Delete) -> bool
+pub fn db_core::parser::ast::Delete::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Delete
 pub fn db_core::parser::ast::Delete::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::Delete
@@ -1714,9 +1714,9 @@ pub db_core::parser::ast::DropIndex::if_exists: bool
 pub db_core::parser::ast::DropIndex::name: alloc::string::String
 pub db_core::parser::ast::DropIndex::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::DropIndex
-pub fn db_core::parser::ast::DropIndex::clone(&self) -> db_core::parser::ast::DropIndex
+pub fn db_core::parser::ast::DropIndex::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::DropIndex
-pub fn db_core::parser::ast::DropIndex::eq(&self, &db_core::parser::ast::DropIndex) -> bool
+pub fn db_core::parser::ast::DropIndex::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::DropIndex
 pub fn db_core::parser::ast::DropIndex::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::DropIndex
@@ -1727,9 +1727,9 @@ pub db_core::parser::ast::DropTable::if_exists: bool
 pub db_core::parser::ast::DropTable::name: alloc::string::String
 pub db_core::parser::ast::DropTable::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::DropTable
-pub fn db_core::parser::ast::DropTable::clone(&self) -> db_core::parser::ast::DropTable
+pub fn db_core::parser::ast::DropTable::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::DropTable
-pub fn db_core::parser::ast::DropTable::eq(&self, &db_core::parser::ast::DropTable) -> bool
+pub fn db_core::parser::ast::DropTable::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::DropTable
 pub fn db_core::parser::ast::DropTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::DropTable
@@ -1740,9 +1740,9 @@ pub db_core::parser::ast::DropView::if_exists: bool
 pub db_core::parser::ast::DropView::name: alloc::string::String
 pub db_core::parser::ast::DropView::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::DropView
-pub fn db_core::parser::ast::DropView::clone(&self) -> db_core::parser::ast::DropView
+pub fn db_core::parser::ast::DropView::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::DropView
-pub fn db_core::parser::ast::DropView::eq(&self, &db_core::parser::ast::DropView) -> bool
+pub fn db_core::parser::ast::DropView::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::DropView
 pub fn db_core::parser::ast::DropView::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::DropView
@@ -1752,9 +1752,9 @@ pub struct db_core::parser::ast::Explain
 pub db_core::parser::ast::Explain::body: db_core::parser::ast::ExplainBody
 pub db_core::parser::ast::Explain::query_plan: bool
 impl core::clone::Clone for db_core::parser::ast::Explain
-pub fn db_core::parser::ast::Explain::clone(&self) -> db_core::parser::ast::Explain
+pub fn db_core::parser::ast::Explain::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Explain
-pub fn db_core::parser::ast::Explain::eq(&self, &db_core::parser::ast::Explain) -> bool
+pub fn db_core::parser::ast::Explain::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Explain
 pub fn db_core::parser::ast::Explain::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Explain
@@ -1762,9 +1762,9 @@ pub struct db_core::parser::ast::Expr
 pub db_core::parser::ast::Expr::kind: db_core::parser::ast::ExprKind
 pub db_core::parser::ast::Expr::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::Expr
-pub fn db_core::parser::ast::Expr::clone(&self) -> db_core::parser::ast::Expr
+pub fn db_core::parser::ast::Expr::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Expr
-pub fn db_core::parser::ast::Expr::eq(&self, &db_core::parser::ast::Expr) -> bool
+pub fn db_core::parser::ast::Expr::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Expr
 pub fn db_core::parser::ast::Expr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::Expr
@@ -1774,9 +1774,9 @@ pub struct db_core::parser::ast::FromClause
 pub db_core::parser::ast::FromClause::first: db_core::parser::ast::TableRef
 pub db_core::parser::ast::FromClause::joins: alloc::vec::Vec<db_core::parser::ast::Join>
 impl core::clone::Clone for db_core::parser::ast::FromClause
-pub fn db_core::parser::ast::FromClause::clone(&self) -> db_core::parser::ast::FromClause
+pub fn db_core::parser::ast::FromClause::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::FromClause
-pub fn db_core::parser::ast::FromClause::eq(&self, &db_core::parser::ast::FromClause) -> bool
+pub fn db_core::parser::ast::FromClause::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::FromClause
 pub fn db_core::parser::ast::FromClause::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::FromClause
@@ -1787,9 +1787,9 @@ pub db_core::parser::ast::FunctionTail::filter: core::option::Option<db_core::pa
 pub db_core::parser::ast::FunctionTail::over: core::option::Option<db_core::parser::ast::WindowDef>
 pub db_core::parser::ast::FunctionTail::range: core::option::Option<db_core::parser::ast::ScopeBound>
 impl core::clone::Clone for db_core::parser::ast::FunctionTail
-pub fn db_core::parser::ast::FunctionTail::clone(&self) -> db_core::parser::ast::FunctionTail
+pub fn db_core::parser::ast::FunctionTail::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::FunctionTail
-pub fn db_core::parser::ast::FunctionTail::eq(&self, &db_core::parser::ast::FunctionTail) -> bool
+pub fn db_core::parser::ast::FunctionTail::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::FunctionTail
 pub fn db_core::parser::ast::FunctionTail::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::FunctionTail
@@ -1797,9 +1797,9 @@ pub struct db_core::parser::ast::IndexedColumn
 pub db_core::parser::ast::IndexedColumn::desc: core::option::Option<bool>
 pub db_core::parser::ast::IndexedColumn::expr: db_core::parser::ast::Expr
 impl core::clone::Clone for db_core::parser::ast::IndexedColumn
-pub fn db_core::parser::ast::IndexedColumn::clone(&self) -> db_core::parser::ast::IndexedColumn
+pub fn db_core::parser::ast::IndexedColumn::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::IndexedColumn
-pub fn db_core::parser::ast::IndexedColumn::eq(&self, &db_core::parser::ast::IndexedColumn) -> bool
+pub fn db_core::parser::ast::IndexedColumn::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::IndexedColumn
 pub fn db_core::parser::ast::IndexedColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::IndexedColumn
@@ -1812,9 +1812,9 @@ pub db_core::parser::ast::Insert::source: db_core::parser::ast::InsertSource
 pub db_core::parser::ast::Insert::span: db_core::parser::Span
 pub db_core::parser::ast::Insert::table: alloc::string::String
 impl core::clone::Clone for db_core::parser::ast::Insert
-pub fn db_core::parser::ast::Insert::clone(&self) -> db_core::parser::ast::Insert
+pub fn db_core::parser::ast::Insert::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Insert
-pub fn db_core::parser::ast::Insert::eq(&self, &db_core::parser::ast::Insert) -> bool
+pub fn db_core::parser::ast::Insert::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Insert
 pub fn db_core::parser::ast::Insert::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::Insert
@@ -1826,9 +1826,9 @@ pub db_core::parser::ast::Join::natural: bool
 pub db_core::parser::ast::Join::op: db_core::parser::ast::JoinOp
 pub db_core::parser::ast::Join::table: db_core::parser::ast::TableRef
 impl core::clone::Clone for db_core::parser::ast::Join
-pub fn db_core::parser::ast::Join::clone(&self) -> db_core::parser::ast::Join
+pub fn db_core::parser::ast::Join::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Join
-pub fn db_core::parser::ast::Join::eq(&self, &db_core::parser::ast::Join) -> bool
+pub fn db_core::parser::ast::Join::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Join
 pub fn db_core::parser::ast::Join::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::Join
@@ -1838,9 +1838,9 @@ pub struct db_core::parser::ast::Limit
 pub db_core::parser::ast::Limit::limit: db_core::parser::ast::Expr
 pub db_core::parser::ast::Limit::offset: core::option::Option<db_core::parser::ast::Expr>
 impl core::clone::Clone for db_core::parser::ast::Limit
-pub fn db_core::parser::ast::Limit::clone(&self) -> db_core::parser::ast::Limit
+pub fn db_core::parser::ast::Limit::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Limit
-pub fn db_core::parser::ast::Limit::eq(&self, &db_core::parser::ast::Limit) -> bool
+pub fn db_core::parser::ast::Limit::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Limit
 pub fn db_core::parser::ast::Limit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Limit
@@ -1849,9 +1849,9 @@ pub db_core::parser::ast::OrderingTerm::desc: core::option::Option<bool>
 pub db_core::parser::ast::OrderingTerm::expr: db_core::parser::ast::Expr
 pub db_core::parser::ast::OrderingTerm::nulls_last: core::option::Option<bool>
 impl core::clone::Clone for db_core::parser::ast::OrderingTerm
-pub fn db_core::parser::ast::OrderingTerm::clone(&self) -> db_core::parser::ast::OrderingTerm
+pub fn db_core::parser::ast::OrderingTerm::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::OrderingTerm
-pub fn db_core::parser::ast::OrderingTerm::eq(&self, &db_core::parser::ast::OrderingTerm) -> bool
+pub fn db_core::parser::ast::OrderingTerm::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::OrderingTerm
 pub fn db_core::parser::ast::OrderingTerm::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::OrderingTerm
@@ -1860,9 +1860,9 @@ impl core::marker::StructuralPartialEq for db_core::parser::ast::OrderingTerm
 pub struct db_core::parser::ast::Rollback
 pub db_core::parser::ast::Rollback::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::Rollback
-pub fn db_core::parser::ast::Rollback::clone(&self) -> db_core::parser::ast::Rollback
+pub fn db_core::parser::ast::Rollback::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Rollback
-pub fn db_core::parser::ast::Rollback::eq(&self, &db_core::parser::ast::Rollback) -> bool
+pub fn db_core::parser::ast::Rollback::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Rollback
 pub fn db_core::parser::ast::Rollback::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::Rollback
@@ -1873,9 +1873,9 @@ pub db_core::parser::ast::ScopeBound::amount: u64
 pub db_core::parser::ast::ScopeBound::span: db_core::parser::Span
 pub db_core::parser::ast::ScopeBound::unit: db_core::parser::ast::ScopeUnit
 impl core::clone::Clone for db_core::parser::ast::ScopeBound
-pub fn db_core::parser::ast::ScopeBound::clone(&self) -> db_core::parser::ast::ScopeBound
+pub fn db_core::parser::ast::ScopeBound::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::ScopeBound
-pub fn db_core::parser::ast::ScopeBound::eq(&self, &db_core::parser::ast::ScopeBound) -> bool
+pub fn db_core::parser::ast::ScopeBound::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::ScopeBound
 pub fn db_core::parser::ast::ScopeBound::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::ScopeBound
@@ -1883,9 +1883,9 @@ pub struct db_core::parser::ast::ScopeClause
 pub db_core::parser::ast::ScopeClause::since: core::option::Option<db_core::parser::ast::ScopeBound>
 pub db_core::parser::ast::ScopeClause::until: core::option::Option<db_core::parser::ast::ScopeBound>
 impl core::clone::Clone for db_core::parser::ast::ScopeClause
-pub fn db_core::parser::ast::ScopeClause::clone(&self) -> db_core::parser::ast::ScopeClause
+pub fn db_core::parser::ast::ScopeClause::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::ScopeClause
-pub fn db_core::parser::ast::ScopeClause::eq(&self, &db_core::parser::ast::ScopeClause) -> bool
+pub fn db_core::parser::ast::ScopeClause::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::ScopeClause
 pub fn db_core::parser::ast::ScopeClause::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::ScopeClause
@@ -1903,9 +1903,9 @@ pub db_core::parser::ast::Select::span: db_core::parser::Span
 pub db_core::parser::ast::Select::where_clause: core::option::Option<db_core::parser::ast::Expr>
 pub db_core::parser::ast::Select::with_clause: core::option::Option<db_core::parser::ast::WithClause>
 impl core::clone::Clone for db_core::parser::ast::Select
-pub fn db_core::parser::ast::Select::clone(&self) -> db_core::parser::ast::Select
+pub fn db_core::parser::ast::Select::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Select
-pub fn db_core::parser::ast::Select::eq(&self, &db_core::parser::ast::Select) -> bool
+pub fn db_core::parser::ast::Select::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Select
 pub fn db_core::parser::ast::Select::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::Select
@@ -1920,9 +1920,9 @@ pub db_core::parser::ast::TableRef::span: db_core::parser::Span
 impl db_core::parser::ast::TableRef
 pub fn db_core::parser::ast::TableRef::name(&self) -> core::option::Option<&str>
 impl core::clone::Clone for db_core::parser::ast::TableRef
-pub fn db_core::parser::ast::TableRef::clone(&self) -> db_core::parser::ast::TableRef
+pub fn db_core::parser::ast::TableRef::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::TableRef
-pub fn db_core::parser::ast::TableRef::eq(&self, &db_core::parser::ast::TableRef) -> bool
+pub fn db_core::parser::ast::TableRef::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::TableRef
 pub fn db_core::parser::ast::TableRef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::TableRef
@@ -1935,9 +1935,9 @@ pub db_core::parser::ast::Update::span: db_core::parser::Span
 pub db_core::parser::ast::Update::table: alloc::string::String
 pub db_core::parser::ast::Update::where_clause: core::option::Option<db_core::parser::ast::Expr>
 impl core::clone::Clone for db_core::parser::ast::Update
-pub fn db_core::parser::ast::Update::clone(&self) -> db_core::parser::ast::Update
+pub fn db_core::parser::ast::Update::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Update
-pub fn db_core::parser::ast::Update::eq(&self, &db_core::parser::ast::Update) -> bool
+pub fn db_core::parser::ast::Update::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Update
 pub fn db_core::parser::ast::Update::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Update
@@ -1945,9 +1945,9 @@ pub struct db_core::parser::ast::WindowDef
 pub db_core::parser::ast::WindowDef::order_by: alloc::vec::Vec<db_core::parser::ast::OrderingTerm>
 pub db_core::parser::ast::WindowDef::partition_by: alloc::vec::Vec<db_core::parser::ast::Expr>
 impl core::clone::Clone for db_core::parser::ast::WindowDef
-pub fn db_core::parser::ast::WindowDef::clone(&self) -> db_core::parser::ast::WindowDef
+pub fn db_core::parser::ast::WindowDef::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::WindowDef
-pub fn db_core::parser::ast::WindowDef::eq(&self, &db_core::parser::ast::WindowDef) -> bool
+pub fn db_core::parser::ast::WindowDef::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::WindowDef
 pub fn db_core::parser::ast::WindowDef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::WindowDef
@@ -1957,9 +1957,9 @@ pub struct db_core::parser::ast::WithClause
 pub db_core::parser::ast::WithClause::ctes: alloc::vec::Vec<db_core::parser::ast::CommonTableExpr>
 pub db_core::parser::ast::WithClause::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::WithClause
-pub fn db_core::parser::ast::WithClause::clone(&self) -> db_core::parser::ast::WithClause
+pub fn db_core::parser::ast::WithClause::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::WithClause
-pub fn db_core::parser::ast::WithClause::eq(&self, &db_core::parser::ast::WithClause) -> bool
+pub fn db_core::parser::ast::WithClause::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::WithClause
 pub fn db_core::parser::ast::WithClause::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::parser::ast::WithClause
@@ -1971,10 +1971,10 @@ pub db_core::parser::column::Explain::None
 pub db_core::parser::column::Explain::Opcodes
 pub db_core::parser::column::Explain::QueryPlan
 impl core::clone::Clone for db_core::parser::column::Explain
-pub fn db_core::parser::column::Explain::clone(&self) -> db_core::parser::column::Explain
+pub fn db_core::parser::column::Explain::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::column::Explain
 impl core::cmp::PartialEq for db_core::parser::column::Explain
-pub fn db_core::parser::column::Explain::eq(&self, &db_core::parser::column::Explain) -> bool
+pub fn db_core::parser::column::Explain::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::column::Explain
 pub fn db_core::parser::column::Explain::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::column::Explain
@@ -1988,7 +1988,7 @@ pub db_core::parser::column::ParseError::UnexpectedEof::span: db_core::parser::S
 impl db_core::parser::column::ParseError
 pub fn db_core::parser::column::ParseError::span(&self) -> db_core::parser::Span
 impl core::cmp::PartialEq for db_core::parser::column::ParseError
-pub fn db_core::parser::column::ParseError::eq(&self, &db_core::parser::column::ParseError) -> bool
+pub fn db_core::parser::column::ParseError::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::parser::column::ParseError> for db_core::codegen::batch::emit::EmitError
 pub fn db_core::codegen::batch::emit::EmitError::from(db_core::parser::column::ParseError) -> Self
 impl core::error::Error for db_core::parser::column::ParseError
@@ -2011,9 +2011,9 @@ pub db_core::parser::row::error::ParseOutcome::Unsupported
 pub db_core::parser::row::error::ParseOutcome::Unsupported::message: alloc::string::String
 pub db_core::parser::row::error::ParseOutcome::Unsupported::span: db_core::parser::Span
 impl<T: core::clone::Clone> core::clone::Clone for db_core::parser::row::error::ParseOutcome<T>
-pub fn db_core::parser::row::error::ParseOutcome<T>::clone(&self) -> db_core::parser::row::error::ParseOutcome<T>
+pub fn db_core::parser::row::error::ParseOutcome<T>::clone(&self) -> Self
 impl<T: core::cmp::PartialEq> core::cmp::PartialEq for db_core::parser::row::error::ParseOutcome<T>
-pub fn db_core::parser::row::error::ParseOutcome<T>::eq(&self, &db_core::parser::row::error::ParseOutcome<T>) -> bool
+pub fn db_core::parser::row::error::ParseOutcome<T>::eq(&self, &Self) -> bool
 impl<T: core::cmp::PartialEq> core::marker::StructuralPartialEq for db_core::parser::row::error::ParseOutcome<T>
 impl<T: core::fmt::Debug> core::fmt::Debug for db_core::parser::row::error::ParseOutcome<T>
 pub fn db_core::parser::row::error::ParseOutcome<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -2190,10 +2190,10 @@ pub db_core::parser::row::tokenizer::Keyword::WINDOW
 pub db_core::parser::row::tokenizer::Keyword::WITH
 pub db_core::parser::row::tokenizer::Keyword::WITHOUT
 impl core::clone::Clone for db_core::parser::row::tokenizer::Keyword
-pub fn db_core::parser::row::tokenizer::Keyword::clone(&self) -> db_core::parser::row::tokenizer::Keyword
+pub fn db_core::parser::row::tokenizer::Keyword::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::row::tokenizer::Keyword
 impl core::cmp::PartialEq for db_core::parser::row::tokenizer::Keyword
-pub fn db_core::parser::row::tokenizer::Keyword::eq(&self, &db_core::parser::row::tokenizer::Keyword) -> bool
+pub fn db_core::parser::row::tokenizer::Keyword::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::row::tokenizer::Keyword
 pub fn db_core::parser::row::tokenizer::Keyword::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::row::tokenizer::Keyword
@@ -2205,10 +2205,10 @@ pub db_core::parser::row::tokenizer::Param::Colon(alloc::string::String)
 pub db_core::parser::row::tokenizer::Param::Dollar(alloc::string::String)
 pub db_core::parser::row::tokenizer::Param::Numbered(u32)
 impl core::clone::Clone for db_core::parser::row::tokenizer::Param
-pub fn db_core::parser::row::tokenizer::Param::clone(&self) -> db_core::parser::row::tokenizer::Param
+pub fn db_core::parser::row::tokenizer::Param::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::row::tokenizer::Param
 impl core::cmp::PartialEq for db_core::parser::row::tokenizer::Param
-pub fn db_core::parser::row::tokenizer::Param::eq(&self, &db_core::parser::row::tokenizer::Param) -> bool
+pub fn db_core::parser::row::tokenizer::Param::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::row::tokenizer::Param
 pub fn db_core::parser::row::tokenizer::Param::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::row::tokenizer::Param
@@ -2250,9 +2250,9 @@ pub db_core::parser::row::tokenizer::TokenKind::Star
 pub db_core::parser::row::tokenizer::TokenKind::String(alloc::string::String)
 pub db_core::parser::row::tokenizer::TokenKind::True
 impl core::clone::Clone for db_core::parser::row::tokenizer::TokenKind
-pub fn db_core::parser::row::tokenizer::TokenKind::clone(&self) -> db_core::parser::row::tokenizer::TokenKind
+pub fn db_core::parser::row::tokenizer::TokenKind::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::row::tokenizer::TokenKind
-pub fn db_core::parser::row::tokenizer::TokenKind::eq(&self, &db_core::parser::row::tokenizer::TokenKind) -> bool
+pub fn db_core::parser::row::tokenizer::TokenKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::row::tokenizer::TokenKind
 pub fn db_core::parser::row::tokenizer::TokenKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::row::tokenizer::TokenKind
@@ -2260,9 +2260,9 @@ pub struct db_core::parser::row::tokenizer::Token
 pub db_core::parser::row::tokenizer::Token::kind: db_core::parser::row::tokenizer::TokenKind
 pub db_core::parser::row::tokenizer::Token::span: db_core::parser::Span
 impl core::clone::Clone for db_core::parser::row::tokenizer::Token
-pub fn db_core::parser::row::tokenizer::Token::clone(&self) -> db_core::parser::row::tokenizer::Token
+pub fn db_core::parser::row::tokenizer::Token::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::row::tokenizer::Token
-pub fn db_core::parser::row::tokenizer::Token::eq(&self, &db_core::parser::row::tokenizer::Token) -> bool
+pub fn db_core::parser::row::tokenizer::Token::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::row::tokenizer::Token
 pub fn db_core::parser::row::tokenizer::Token::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::row::tokenizer::Token
@@ -2285,9 +2285,9 @@ pub db_core::parser::row::ParseOutcome::Unsupported
 pub db_core::parser::row::ParseOutcome::Unsupported::message: alloc::string::String
 pub db_core::parser::row::ParseOutcome::Unsupported::span: db_core::parser::Span
 impl<T: core::clone::Clone> core::clone::Clone for db_core::parser::row::error::ParseOutcome<T>
-pub fn db_core::parser::row::error::ParseOutcome<T>::clone(&self) -> db_core::parser::row::error::ParseOutcome<T>
+pub fn db_core::parser::row::error::ParseOutcome<T>::clone(&self) -> Self
 impl<T: core::cmp::PartialEq> core::cmp::PartialEq for db_core::parser::row::error::ParseOutcome<T>
-pub fn db_core::parser::row::error::ParseOutcome<T>::eq(&self, &db_core::parser::row::error::ParseOutcome<T>) -> bool
+pub fn db_core::parser::row::error::ParseOutcome<T>::eq(&self, &Self) -> bool
 impl<T: core::cmp::PartialEq> core::marker::StructuralPartialEq for db_core::parser::row::error::ParseOutcome<T>
 impl<T: core::fmt::Debug> core::fmt::Debug for db_core::parser::row::error::ParseOutcome<T>
 pub fn db_core::parser::row::error::ParseOutcome<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -2315,10 +2315,10 @@ pub db_core::parser::Explain::None
 pub db_core::parser::Explain::Opcodes
 pub db_core::parser::Explain::QueryPlan
 impl core::clone::Clone for db_core::parser::column::Explain
-pub fn db_core::parser::column::Explain::clone(&self) -> db_core::parser::column::Explain
+pub fn db_core::parser::column::Explain::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::column::Explain
 impl core::cmp::PartialEq for db_core::parser::column::Explain
-pub fn db_core::parser::column::Explain::eq(&self, &db_core::parser::column::Explain) -> bool
+pub fn db_core::parser::column::Explain::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::column::Explain
 pub fn db_core::parser::column::Explain::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::column::Explain
@@ -2332,7 +2332,7 @@ pub db_core::parser::ParseError::UnexpectedEof::span: db_core::parser::Span
 impl db_core::parser::column::ParseError
 pub fn db_core::parser::column::ParseError::span(&self) -> db_core::parser::Span
 impl core::cmp::PartialEq for db_core::parser::column::ParseError
-pub fn db_core::parser::column::ParseError::eq(&self, &db_core::parser::column::ParseError) -> bool
+pub fn db_core::parser::column::ParseError::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::parser::column::ParseError> for db_core::codegen::batch::emit::EmitError
 pub fn db_core::codegen::batch::emit::EmitError::from(db_core::parser::column::ParseError) -> Self
 impl core::error::Error for db_core::parser::column::ParseError
@@ -2350,12 +2350,12 @@ impl db_core::parser::Span
 pub const db_core::parser::Span::UNKNOWN: db_core::parser::Span
 pub fn db_core::parser::Span::is_unknown(&self) -> bool
 impl core::clone::Clone for db_core::parser::Span
-pub fn db_core::parser::Span::clone(&self) -> db_core::parser::Span
+pub fn db_core::parser::Span::clone(&self) -> Self
 impl core::cmp::Eq for db_core::parser::Span
 impl core::cmp::PartialEq for db_core::parser::Span
-pub fn db_core::parser::Span::eq(&self, &db_core::parser::Span) -> bool
+pub fn db_core::parser::Span::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::parser::Span
-pub fn db_core::parser::Span::default() -> db_core::parser::Span
+pub fn db_core::parser::Span::default() -> Self
 impl core::fmt::Debug for db_core::parser::Span
 pub fn db_core::parser::Span::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::Span
@@ -2370,12 +2370,12 @@ pub db_core::schema::IndexSchema::name: alloc::string::String
 pub db_core::schema::IndexSchema::root_page: u32
 pub db_core::schema::IndexSchema::unique: bool
 impl core::clone::Clone for db_core::schema::IndexSchema
-pub fn db_core::schema::IndexSchema::clone(&self) -> db_core::schema::IndexSchema
+pub fn db_core::schema::IndexSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::IndexSchema
 impl core::cmp::PartialEq for db_core::schema::IndexSchema
-pub fn db_core::schema::IndexSchema::eq(&self, &db_core::schema::IndexSchema) -> bool
+pub fn db_core::schema::IndexSchema::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::IndexSchema
-pub fn db_core::schema::IndexSchema::default() -> db_core::schema::IndexSchema
+pub fn db_core::schema::IndexSchema::default() -> Self
 impl core::fmt::Debug for db_core::schema::IndexSchema
 pub fn db_core::schema::IndexSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::IndexSchema
@@ -2384,12 +2384,12 @@ pub db_core::schema::IndexedColumn::collation: db_core::value::Collation
 pub db_core::schema::IndexedColumn::desc: bool
 pub db_core::schema::IndexedColumn::name: alloc::string::String
 impl core::clone::Clone for db_core::schema::IndexedColumn
-pub fn db_core::schema::IndexedColumn::clone(&self) -> db_core::schema::IndexedColumn
+pub fn db_core::schema::IndexedColumn::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::IndexedColumn
 impl core::cmp::PartialEq for db_core::schema::IndexedColumn
-pub fn db_core::schema::IndexedColumn::eq(&self, &db_core::schema::IndexedColumn) -> bool
+pub fn db_core::schema::IndexedColumn::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::IndexedColumn
-pub fn db_core::schema::IndexedColumn::default() -> db_core::schema::IndexedColumn
+pub fn db_core::schema::IndexedColumn::default() -> Self
 impl core::fmt::Debug for db_core::schema::IndexedColumn
 pub fn db_core::schema::IndexedColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::IndexedColumn
@@ -2408,12 +2408,12 @@ pub db_core::schema::TableSchema::without_rowid: bool
 impl db_core::schema::TableSchema
 pub fn db_core::schema::TableSchema::with_computed_rowid_alias(self) -> Self
 impl core::clone::Clone for db_core::schema::TableSchema
-pub fn db_core::schema::TableSchema::clone(&self) -> db_core::schema::TableSchema
+pub fn db_core::schema::TableSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::TableSchema
 impl core::cmp::PartialEq for db_core::schema::TableSchema
-pub fn db_core::schema::TableSchema::eq(&self, &db_core::schema::TableSchema) -> bool
+pub fn db_core::schema::TableSchema::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::TableSchema
-pub fn db_core::schema::TableSchema::default() -> db_core::schema::TableSchema
+pub fn db_core::schema::TableSchema::default() -> Self
 impl core::fmt::Debug for db_core::schema::TableSchema
 pub fn db_core::schema::TableSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::TableSchema
@@ -2421,12 +2421,12 @@ pub struct db_core::schema::ViewSchema
 pub db_core::schema::ViewSchema::name: alloc::string::String
 pub db_core::schema::ViewSchema::sql: alloc::string::String
 impl core::clone::Clone for db_core::schema::ViewSchema
-pub fn db_core::schema::ViewSchema::clone(&self) -> db_core::schema::ViewSchema
+pub fn db_core::schema::ViewSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::ViewSchema
 impl core::cmp::PartialEq for db_core::schema::ViewSchema
-pub fn db_core::schema::ViewSchema::eq(&self, &db_core::schema::ViewSchema) -> bool
+pub fn db_core::schema::ViewSchema::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::ViewSchema
-pub fn db_core::schema::ViewSchema::default() -> db_core::schema::ViewSchema
+pub fn db_core::schema::ViewSchema::default() -> Self
 impl core::fmt::Debug for db_core::schema::ViewSchema
 pub fn db_core::schema::ViewSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::ViewSchema
@@ -2448,7 +2448,7 @@ impl db_core::storage::column::memory::MemoryVfs
 pub fn db_core::storage::column::memory::MemoryVfs::insert(&self, impl core::convert::Into<std::path::PathBuf>, impl core::convert::Into<alloc::vec::Vec<u8>>)
 pub fn db_core::storage::column::memory::MemoryVfs::new() -> Self
 impl core::default::Default for db_core::storage::column::memory::MemoryVfs
-pub fn db_core::storage::column::memory::MemoryVfs::default() -> db_core::storage::column::memory::MemoryVfs
+pub fn db_core::storage::column::memory::MemoryVfs::default() -> Self
 impl db_core::storage::column::vfs::Vfs for db_core::storage::column::memory::MemoryVfs
 pub type db_core::storage::column::memory::MemoryVfs::File = db_core::storage::column::memory::MemoryFile
 pub fn db_core::storage::column::memory::MemoryVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
@@ -2508,10 +2508,10 @@ pub db_core::storage::column::parquet::decimal::Decimal::unscaled: i128
 impl db_core::storage::column::parquet::decimal::Decimal
 pub fn db_core::storage::column::parquet::decimal::Decimal::to_f64(&self) -> f64
 impl core::clone::Clone for db_core::storage::column::parquet::decimal::Decimal
-pub fn db_core::storage::column::parquet::decimal::Decimal::clone(&self) -> db_core::storage::column::parquet::decimal::Decimal
+pub fn db_core::storage::column::parquet::decimal::Decimal::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::column::parquet::decimal::Decimal
 impl core::cmp::PartialEq for db_core::storage::column::parquet::decimal::Decimal
-pub fn db_core::storage::column::parquet::decimal::Decimal::eq(&self, &db_core::storage::column::parquet::decimal::Decimal) -> bool
+pub fn db_core::storage::column::parquet::decimal::Decimal::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::decimal::Decimal
 pub fn db_core::storage::column::parquet::decimal::Decimal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::column::parquet::decimal::Decimal
@@ -2543,10 +2543,10 @@ pub db_core::storage::column::parquet::footer::Codec::Snappy
 pub db_core::storage::column::parquet::footer::Codec::Uncompressed
 pub db_core::storage::column::parquet::footer::Codec::Zstd
 impl core::clone::Clone for db_core::storage::column::parquet::footer::Codec
-pub fn db_core::storage::column::parquet::footer::Codec::clone(&self) -> db_core::storage::column::parquet::footer::Codec
+pub fn db_core::storage::column::parquet::footer::Codec::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::column::parquet::footer::Codec
 impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::Codec
-pub fn db_core::storage::column::parquet::footer::Codec::eq(&self, &db_core::storage::column::parquet::footer::Codec) -> bool
+pub fn db_core::storage::column::parquet::footer::Codec::eq(&self, &Self) -> bool
 impl core::convert::From<i32> for db_core::storage::column::parquet::footer::Codec
 pub fn db_core::storage::column::parquet::footer::Codec::from(i32) -> Self
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::Codec
@@ -2559,10 +2559,10 @@ pub db_core::storage::column::parquet::footer::ConvertedType::Other(i32)
 pub db_core::storage::column::parquet::footer::ConvertedType::TimestampMicros
 pub db_core::storage::column::parquet::footer::ConvertedType::TimestampMillis
 impl core::clone::Clone for db_core::storage::column::parquet::footer::ConvertedType
-pub fn db_core::storage::column::parquet::footer::ConvertedType::clone(&self) -> db_core::storage::column::parquet::footer::ConvertedType
+pub fn db_core::storage::column::parquet::footer::ConvertedType::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::column::parquet::footer::ConvertedType
 impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::ConvertedType
-pub fn db_core::storage::column::parquet::footer::ConvertedType::eq(&self, &db_core::storage::column::parquet::footer::ConvertedType) -> bool
+pub fn db_core::storage::column::parquet::footer::ConvertedType::eq(&self, &Self) -> bool
 impl core::convert::From<i32> for db_core::storage::column::parquet::footer::ConvertedType
 pub fn db_core::storage::column::parquet::footer::ConvertedType::from(i32) -> Self
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::ConvertedType
@@ -2593,10 +2593,10 @@ pub db_core::storage::column::parquet::footer::PhysicalType::Int64
 pub db_core::storage::column::parquet::footer::PhysicalType::Int96
 pub db_core::storage::column::parquet::footer::PhysicalType::Unknown(i32)
 impl core::clone::Clone for db_core::storage::column::parquet::footer::PhysicalType
-pub fn db_core::storage::column::parquet::footer::PhysicalType::clone(&self) -> db_core::storage::column::parquet::footer::PhysicalType
+pub fn db_core::storage::column::parquet::footer::PhysicalType::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::column::parquet::footer::PhysicalType
 impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::PhysicalType
-pub fn db_core::storage::column::parquet::footer::PhysicalType::eq(&self, &db_core::storage::column::parquet::footer::PhysicalType) -> bool
+pub fn db_core::storage::column::parquet::footer::PhysicalType::eq(&self, &Self) -> bool
 impl core::convert::From<i32> for db_core::storage::column::parquet::footer::PhysicalType
 pub fn db_core::storage::column::parquet::footer::PhysicalType::from(i32) -> Self
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::PhysicalType
@@ -2609,10 +2609,10 @@ pub db_core::storage::column::parquet::footer::Repetition::Repeated
 pub db_core::storage::column::parquet::footer::Repetition::Required
 pub db_core::storage::column::parquet::footer::Repetition::Unknown(i32)
 impl core::clone::Clone for db_core::storage::column::parquet::footer::Repetition
-pub fn db_core::storage::column::parquet::footer::Repetition::clone(&self) -> db_core::storage::column::parquet::footer::Repetition
+pub fn db_core::storage::column::parquet::footer::Repetition::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::column::parquet::footer::Repetition
 impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::Repetition
-pub fn db_core::storage::column::parquet::footer::Repetition::eq(&self, &db_core::storage::column::parquet::footer::Repetition) -> bool
+pub fn db_core::storage::column::parquet::footer::Repetition::eq(&self, &Self) -> bool
 impl core::convert::From<i32> for db_core::storage::column::parquet::footer::Repetition
 pub fn db_core::storage::column::parquet::footer::Repetition::from(i32) -> Self
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::Repetition
@@ -2623,9 +2623,9 @@ pub struct db_core::storage::column::parquet::footer::ColumnChunk
 pub db_core::storage::column::parquet::footer::ColumnChunk::file_offset: i64
 pub db_core::storage::column::parquet::footer::ColumnChunk::meta_data: core::option::Option<db_core::storage::column::parquet::footer::ColumnMetaData>
 impl core::clone::Clone for db_core::storage::column::parquet::footer::ColumnChunk
-pub fn db_core::storage::column::parquet::footer::ColumnChunk::clone(&self) -> db_core::storage::column::parquet::footer::ColumnChunk
+pub fn db_core::storage::column::parquet::footer::ColumnChunk::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::ColumnChunk
-pub fn db_core::storage::column::parquet::footer::ColumnChunk::eq(&self, &db_core::storage::column::parquet::footer::ColumnChunk) -> bool
+pub fn db_core::storage::column::parquet::footer::ColumnChunk::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::ColumnChunk
 pub fn db_core::storage::column::parquet::footer::ColumnChunk::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::ColumnChunk
@@ -2640,9 +2640,9 @@ pub db_core::storage::column::parquet::footer::ColumnMetaData::statistics: core:
 pub db_core::storage::column::parquet::footer::ColumnMetaData::total_compressed_size: i64
 pub db_core::storage::column::parquet::footer::ColumnMetaData::total_uncompressed_size: i64
 impl core::clone::Clone for db_core::storage::column::parquet::footer::ColumnMetaData
-pub fn db_core::storage::column::parquet::footer::ColumnMetaData::clone(&self) -> db_core::storage::column::parquet::footer::ColumnMetaData
+pub fn db_core::storage::column::parquet::footer::ColumnMetaData::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::ColumnMetaData
-pub fn db_core::storage::column::parquet::footer::ColumnMetaData::eq(&self, &db_core::storage::column::parquet::footer::ColumnMetaData) -> bool
+pub fn db_core::storage::column::parquet::footer::ColumnMetaData::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::ColumnMetaData
 pub fn db_core::storage::column::parquet::footer::ColumnMetaData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::ColumnMetaData
@@ -2653,9 +2653,9 @@ pub db_core::storage::column::parquet::footer::FileMetaData::row_groups: alloc::
 pub db_core::storage::column::parquet::footer::FileMetaData::schema: alloc::vec::Vec<db_core::storage::column::parquet::footer::SchemaElement>
 pub db_core::storage::column::parquet::footer::FileMetaData::version: i32
 impl core::clone::Clone for db_core::storage::column::parquet::footer::FileMetaData
-pub fn db_core::storage::column::parquet::footer::FileMetaData::clone(&self) -> db_core::storage::column::parquet::footer::FileMetaData
+pub fn db_core::storage::column::parquet::footer::FileMetaData::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::FileMetaData
-pub fn db_core::storage::column::parquet::footer::FileMetaData::eq(&self, &db_core::storage::column::parquet::footer::FileMetaData) -> bool
+pub fn db_core::storage::column::parquet::footer::FileMetaData::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::FileMetaData
 pub fn db_core::storage::column::parquet::footer::FileMetaData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::FileMetaData
@@ -2664,9 +2664,9 @@ pub db_core::storage::column::parquet::footer::RowGroup::columns: alloc::vec::Ve
 pub db_core::storage::column::parquet::footer::RowGroup::num_rows: i64
 pub db_core::storage::column::parquet::footer::RowGroup::total_byte_size: i64
 impl core::clone::Clone for db_core::storage::column::parquet::footer::RowGroup
-pub fn db_core::storage::column::parquet::footer::RowGroup::clone(&self) -> db_core::storage::column::parquet::footer::RowGroup
+pub fn db_core::storage::column::parquet::footer::RowGroup::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::RowGroup
-pub fn db_core::storage::column::parquet::footer::RowGroup::eq(&self, &db_core::storage::column::parquet::footer::RowGroup) -> bool
+pub fn db_core::storage::column::parquet::footer::RowGroup::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::RowGroup
 pub fn db_core::storage::column::parquet::footer::RowGroup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::RowGroup
@@ -2680,9 +2680,9 @@ pub db_core::storage::column::parquet::footer::SchemaElement::repetition: core::
 pub db_core::storage::column::parquet::footer::SchemaElement::scale: core::option::Option<i32>
 pub db_core::storage::column::parquet::footer::SchemaElement::type_length: core::option::Option<i32>
 impl core::clone::Clone for db_core::storage::column::parquet::footer::SchemaElement
-pub fn db_core::storage::column::parquet::footer::SchemaElement::clone(&self) -> db_core::storage::column::parquet::footer::SchemaElement
+pub fn db_core::storage::column::parquet::footer::SchemaElement::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::SchemaElement
-pub fn db_core::storage::column::parquet::footer::SchemaElement::eq(&self, &db_core::storage::column::parquet::footer::SchemaElement) -> bool
+pub fn db_core::storage::column::parquet::footer::SchemaElement::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::SchemaElement
 pub fn db_core::storage::column::parquet::footer::SchemaElement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::SchemaElement
@@ -2692,11 +2692,11 @@ pub db_core::storage::column::parquet::footer::Statistics::max: core::option::Op
 pub db_core::storage::column::parquet::footer::Statistics::min: core::option::Option<alloc::vec::Vec<u8>>
 pub db_core::storage::column::parquet::footer::Statistics::null_count: core::option::Option<i64>
 impl core::clone::Clone for db_core::storage::column::parquet::footer::Statistics
-pub fn db_core::storage::column::parquet::footer::Statistics::clone(&self) -> db_core::storage::column::parquet::footer::Statistics
+pub fn db_core::storage::column::parquet::footer::Statistics::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::Statistics
-pub fn db_core::storage::column::parquet::footer::Statistics::eq(&self, &db_core::storage::column::parquet::footer::Statistics) -> bool
+pub fn db_core::storage::column::parquet::footer::Statistics::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::storage::column::parquet::footer::Statistics
-pub fn db_core::storage::column::parquet::footer::Statistics::default() -> db_core::storage::column::parquet::footer::Statistics
+pub fn db_core::storage::column::parquet::footer::Statistics::default() -> Self
 impl core::fmt::Debug for db_core::storage::column::parquet::footer::Statistics
 pub fn db_core::storage::column::parquet::footer::Statistics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::Statistics
@@ -2720,9 +2720,9 @@ pub db_core::storage::column::parquet::nested::NestedValue::Null
 pub db_core::storage::column::parquet::nested::NestedValue::Scalar(db_core::storage::column::parquet::reader::LeafScalar)
 pub db_core::storage::column::parquet::nested::NestedValue::Struct(alloc::vec::Vec<(alloc::string::String, db_core::storage::column::parquet::nested::NestedValue)>)
 impl core::clone::Clone for db_core::storage::column::parquet::nested::NestedValue
-pub fn db_core::storage::column::parquet::nested::NestedValue::clone(&self) -> db_core::storage::column::parquet::nested::NestedValue
+pub fn db_core::storage::column::parquet::nested::NestedValue::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::nested::NestedValue
-pub fn db_core::storage::column::parquet::nested::NestedValue::eq(&self, &db_core::storage::column::parquet::nested::NestedValue) -> bool
+pub fn db_core::storage::column::parquet::nested::NestedValue::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::nested::NestedValue
 pub fn db_core::storage::column::parquet::nested::NestedValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::nested::NestedValue
@@ -2731,9 +2731,9 @@ pub db_core::storage::column::parquet::nested::LeafEntries::def_levels: alloc::v
 pub db_core::storage::column::parquet::nested::LeafEntries::rep_levels: alloc::vec::Vec<u32>
 pub db_core::storage::column::parquet::nested::LeafEntries::values: alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::LeafScalar>>
 impl core::clone::Clone for db_core::storage::column::parquet::nested::LeafEntries
-pub fn db_core::storage::column::parquet::nested::LeafEntries::clone(&self) -> db_core::storage::column::parquet::nested::LeafEntries
+pub fn db_core::storage::column::parquet::nested::LeafEntries::clone(&self) -> Self
 impl core::default::Default for db_core::storage::column::parquet::nested::LeafEntries
-pub fn db_core::storage::column::parquet::nested::LeafEntries::default() -> db_core::storage::column::parquet::nested::LeafEntries
+pub fn db_core::storage::column::parquet::nested::LeafEntries::default() -> Self
 impl core::fmt::Debug for db_core::storage::column::parquet::nested::LeafEntries
 pub fn db_core::storage::column::parquet::nested::LeafEntries::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::storage::column::parquet::nested::reconstruct_row_group(&db_core::storage::column::parquet::schema_tree::SchemaNode, usize, &db_core::storage::column::parquet::nested::LeafData) -> db_core::storage::column::parquet::nested::Result<alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<db_core::storage::column::parquet::nested::NestedValue>)>>
@@ -2748,10 +2748,10 @@ pub db_core::storage::column::parquet::page::Encoding::PlainDictionary
 pub db_core::storage::column::parquet::page::Encoding::Rle
 pub db_core::storage::column::parquet::page::Encoding::RleDictionary
 impl core::clone::Clone for db_core::storage::column::parquet::page::Encoding
-pub fn db_core::storage::column::parquet::page::Encoding::clone(&self) -> db_core::storage::column::parquet::page::Encoding
+pub fn db_core::storage::column::parquet::page::Encoding::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::column::parquet::page::Encoding
 impl core::cmp::PartialEq for db_core::storage::column::parquet::page::Encoding
-pub fn db_core::storage::column::parquet::page::Encoding::eq(&self, &db_core::storage::column::parquet::page::Encoding) -> bool
+pub fn db_core::storage::column::parquet::page::Encoding::eq(&self, &Self) -> bool
 impl core::convert::From<i32> for db_core::storage::column::parquet::page::Encoding
 pub fn db_core::storage::column::parquet::page::Encoding::from(i32) -> Self
 impl core::fmt::Debug for db_core::storage::column::parquet::page::Encoding
@@ -2775,9 +2775,9 @@ pub enum db_core::storage::column::parquet::page::PageType
 pub db_core::storage::column::parquet::page::PageType::Data(db_core::storage::column::parquet::page::DataPageHeader)
 pub db_core::storage::column::parquet::page::PageType::Dictionary(db_core::storage::column::parquet::page::DictionaryPageHeader)
 impl core::clone::Clone for db_core::storage::column::parquet::page::PageType
-pub fn db_core::storage::column::parquet::page::PageType::clone(&self) -> db_core::storage::column::parquet::page::PageType
+pub fn db_core::storage::column::parquet::page::PageType::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::page::PageType
-pub fn db_core::storage::column::parquet::page::PageType::eq(&self, &db_core::storage::column::parquet::page::PageType) -> bool
+pub fn db_core::storage::column::parquet::page::PageType::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::page::PageType
 pub fn db_core::storage::column::parquet::page::PageType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::page::PageType
@@ -2787,9 +2787,9 @@ pub db_core::storage::column::parquet::page::DataPageHeader::encoding: db_core::
 pub db_core::storage::column::parquet::page::DataPageHeader::num_values: i32
 pub db_core::storage::column::parquet::page::DataPageHeader::repetition_level_encoding: db_core::storage::column::parquet::page::Encoding
 impl core::clone::Clone for db_core::storage::column::parquet::page::DataPageHeader
-pub fn db_core::storage::column::parquet::page::DataPageHeader::clone(&self) -> db_core::storage::column::parquet::page::DataPageHeader
+pub fn db_core::storage::column::parquet::page::DataPageHeader::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::page::DataPageHeader
-pub fn db_core::storage::column::parquet::page::DataPageHeader::eq(&self, &db_core::storage::column::parquet::page::DataPageHeader) -> bool
+pub fn db_core::storage::column::parquet::page::DataPageHeader::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::page::DataPageHeader
 pub fn db_core::storage::column::parquet::page::DataPageHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::page::DataPageHeader
@@ -2797,9 +2797,9 @@ pub struct db_core::storage::column::parquet::page::DictionaryPageHeader
 pub db_core::storage::column::parquet::page::DictionaryPageHeader::encoding: db_core::storage::column::parquet::page::Encoding
 pub db_core::storage::column::parquet::page::DictionaryPageHeader::num_values: i32
 impl core::clone::Clone for db_core::storage::column::parquet::page::DictionaryPageHeader
-pub fn db_core::storage::column::parquet::page::DictionaryPageHeader::clone(&self) -> db_core::storage::column::parquet::page::DictionaryPageHeader
+pub fn db_core::storage::column::parquet::page::DictionaryPageHeader::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::page::DictionaryPageHeader
-pub fn db_core::storage::column::parquet::page::DictionaryPageHeader::eq(&self, &db_core::storage::column::parquet::page::DictionaryPageHeader) -> bool
+pub fn db_core::storage::column::parquet::page::DictionaryPageHeader::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::page::DictionaryPageHeader
 pub fn db_core::storage::column::parquet::page::DictionaryPageHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::page::DictionaryPageHeader
@@ -2808,9 +2808,9 @@ pub db_core::storage::column::parquet::page::PageHeader::compressed_page_size: i
 pub db_core::storage::column::parquet::page::PageHeader::page_type: db_core::storage::column::parquet::page::PageType
 pub db_core::storage::column::parquet::page::PageHeader::uncompressed_page_size: i32
 impl core::clone::Clone for db_core::storage::column::parquet::page::PageHeader
-pub fn db_core::storage::column::parquet::page::PageHeader::clone(&self) -> db_core::storage::column::parquet::page::PageHeader
+pub fn db_core::storage::column::parquet::page::PageHeader::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::page::PageHeader
-pub fn db_core::storage::column::parquet::page::PageHeader::eq(&self, &db_core::storage::column::parquet::page::PageHeader) -> bool
+pub fn db_core::storage::column::parquet::page::PageHeader::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::page::PageHeader
 pub fn db_core::storage::column::parquet::page::PageHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::page::PageHeader
@@ -2901,9 +2901,9 @@ pub db_core::storage::column::parquet::reader::LeafScalar::Int32(i32)
 pub db_core::storage::column::parquet::reader::LeafScalar::Int64(i64)
 pub db_core::storage::column::parquet::reader::LeafScalar::Str(alloc::string::String)
 impl core::clone::Clone for db_core::storage::column::parquet::reader::LeafScalar
-pub fn db_core::storage::column::parquet::reader::LeafScalar::clone(&self) -> db_core::storage::column::parquet::reader::LeafScalar
+pub fn db_core::storage::column::parquet::reader::LeafScalar::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::reader::LeafScalar
-pub fn db_core::storage::column::parquet::reader::LeafScalar::eq(&self, &db_core::storage::column::parquet::reader::LeafScalar) -> bool
+pub fn db_core::storage::column::parquet::reader::LeafScalar::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::reader::LeafScalar
 pub fn db_core::storage::column::parquet::reader::LeafScalar::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::reader::LeafScalar
@@ -2927,10 +2927,10 @@ pub struct db_core::storage::column::parquet::reader::Int96
 pub db_core::storage::column::parquet::reader::Int96::julian_day: i32
 pub db_core::storage::column::parquet::reader::Int96::time_nanos: i64
 impl core::clone::Clone for db_core::storage::column::parquet::reader::Int96
-pub fn db_core::storage::column::parquet::reader::Int96::clone(&self) -> db_core::storage::column::parquet::reader::Int96
+pub fn db_core::storage::column::parquet::reader::Int96::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::column::parquet::reader::Int96
 impl core::cmp::PartialEq for db_core::storage::column::parquet::reader::Int96
-pub fn db_core::storage::column::parquet::reader::Int96::eq(&self, &db_core::storage::column::parquet::reader::Int96) -> bool
+pub fn db_core::storage::column::parquet::reader::Int96::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::reader::Int96
 pub fn db_core::storage::column::parquet::reader::Int96::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::column::parquet::reader::Int96
@@ -2976,7 +2976,7 @@ impl db_core::storage::column::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::column::parquet::schema_tree::SchemaNode::is_leaf(&self) -> bool
 pub fn db_core::storage::column::parquet::schema_tree::SchemaNode::leaves(&self) -> alloc::vec::Vec<&db_core::storage::column::parquet::schema_tree::SchemaNode>
 impl core::clone::Clone for db_core::storage::column::parquet::schema_tree::SchemaNode
-pub fn db_core::storage::column::parquet::schema_tree::SchemaNode::clone(&self) -> db_core::storage::column::parquet::schema_tree::SchemaNode
+pub fn db_core::storage::column::parquet::schema_tree::SchemaNode::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::column::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::column::parquet::schema_tree::SchemaNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::storage::column::parquet::schema_tree::build_schema_tree(&[db_core::storage::column::parquet::footer::SchemaElement]) -> db_core::storage::column::parquet::schema_tree::SchemaNode
@@ -3016,9 +3016,9 @@ pub fn db_core::storage::column::parquet::thrift::Value::as_str(&self) -> core::
 pub fn db_core::storage::column::parquet::thrift::Value::as_struct(&self) -> core::option::Option<&[(i16, db_core::storage::column::parquet::thrift::Value)]>
 pub fn db_core::storage::column::parquet::thrift::Value::field(&self, i16) -> core::option::Option<&db_core::storage::column::parquet::thrift::Value>
 impl core::clone::Clone for db_core::storage::column::parquet::thrift::Value
-pub fn db_core::storage::column::parquet::thrift::Value::clone(&self) -> db_core::storage::column::parquet::thrift::Value
+pub fn db_core::storage::column::parquet::thrift::Value::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::column::parquet::thrift::Value
-pub fn db_core::storage::column::parquet::thrift::Value::eq(&self, &db_core::storage::column::parquet::thrift::Value) -> bool
+pub fn db_core::storage::column::parquet::thrift::Value::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::column::parquet::thrift::Value
 pub fn db_core::storage::column::parquet::thrift::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::thrift::Value
@@ -3111,7 +3111,7 @@ pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
 pub struct db_core::storage::column::posix::PosixVfs
 impl core::default::Default for db_core::storage::column::posix::PosixVfs
-pub fn db_core::storage::column::posix::PosixVfs::default() -> db_core::storage::column::posix::PosixVfs
+pub fn db_core::storage::column::posix::PosixVfs::default() -> Self
 impl db_core::storage::column::vfs::Vfs for db_core::storage::column::posix::PosixVfs
 pub type db_core::storage::column::posix::PosixVfs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::column::posix::PosixVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
@@ -3192,7 +3192,7 @@ impl db_core::storage::column::memory::MemoryVfs
 pub fn db_core::storage::column::memory::MemoryVfs::insert(&self, impl core::convert::Into<std::path::PathBuf>, impl core::convert::Into<alloc::vec::Vec<u8>>)
 pub fn db_core::storage::column::memory::MemoryVfs::new() -> Self
 impl core::default::Default for db_core::storage::column::memory::MemoryVfs
-pub fn db_core::storage::column::memory::MemoryVfs::default() -> db_core::storage::column::memory::MemoryVfs
+pub fn db_core::storage::column::memory::MemoryVfs::default() -> Self
 impl db_core::storage::column::vfs::Vfs for db_core::storage::column::memory::MemoryVfs
 pub type db_core::storage::column::memory::MemoryVfs::File = db_core::storage::column::memory::MemoryFile
 pub fn db_core::storage::column::memory::MemoryVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
@@ -3208,7 +3208,7 @@ pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_gro
 pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub struct db_core::storage::column::PosixVfs
 impl core::default::Default for db_core::storage::column::posix::PosixVfs
-pub fn db_core::storage::column::posix::PosixVfs::default() -> db_core::storage::column::posix::PosixVfs
+pub fn db_core::storage::column::posix::PosixVfs::default() -> Self
 impl db_core::storage::column::vfs::Vfs for db_core::storage::column::posix::PosixVfs
 pub type db_core::storage::column::posix::PosixVfs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::column::posix::PosixVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
@@ -3334,10 +3334,10 @@ pub db_core::storage::row::btree::Payload::Local::page: alloc::rc::Rc<[u8]>
 pub db_core::storage::row::btree::Payload::Local::start: usize
 pub db_core::storage::row::btree::Payload::Owned(alloc::vec::Vec<u8>)
 impl core::clone::Clone for db_core::storage::row::btree::Payload
-pub fn db_core::storage::row::btree::Payload::clone(&self) -> db_core::storage::row::btree::Payload
+pub fn db_core::storage::row::btree::Payload::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::btree::Payload
 impl core::cmp::PartialEq for db_core::storage::row::btree::Payload
-pub fn db_core::storage::row::btree::Payload::eq(&self, &db_core::storage::row::btree::Payload) -> bool
+pub fn db_core::storage::row::btree::Payload::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::btree::Payload
 pub fn db_core::storage::row::btree::Payload::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::row::btree::Payload
@@ -3355,10 +3355,10 @@ pub fn db_core::storage::row::btree::IndexCursor<P>::seek(&mut self, &[db_core::
 pub struct db_core::storage::row::btree::IndexRow
 pub db_core::storage::row::btree::IndexRow::payload: db_core::storage::row::btree::Payload
 impl core::clone::Clone for db_core::storage::row::btree::IndexRow
-pub fn db_core::storage::row::btree::IndexRow::clone(&self) -> db_core::storage::row::btree::IndexRow
+pub fn db_core::storage::row::btree::IndexRow::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::btree::IndexRow
 impl core::cmp::PartialEq for db_core::storage::row::btree::IndexRow
-pub fn db_core::storage::row::btree::IndexRow::eq(&self, &db_core::storage::row::btree::IndexRow) -> bool
+pub fn db_core::storage::row::btree::IndexRow::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::btree::IndexRow
 pub fn db_core::storage::row::btree::IndexRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::row::btree::IndexRow
@@ -3369,7 +3369,7 @@ pub db_core::storage::row::btree::MasterEntry::rootpage: u32
 pub db_core::storage::row::btree::MasterEntry::sql: alloc::string::String
 pub db_core::storage::row::btree::MasterEntry::tbl_name: alloc::string::String
 impl core::clone::Clone for db_core::storage::row::btree::MasterEntry
-pub fn db_core::storage::row::btree::MasterEntry::clone(&self) -> db_core::storage::row::btree::MasterEntry
+pub fn db_core::storage::row::btree::MasterEntry::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::row::btree::MasterEntry
 pub fn db_core::storage::row::btree::MasterEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::row::btree::TableCursor<P: db_core::storage::row::vfs::PageSource>
@@ -3390,10 +3390,10 @@ pub struct db_core::storage::row::btree::TableRow
 pub db_core::storage::row::btree::TableRow::payload: db_core::storage::row::btree::Payload
 pub db_core::storage::row::btree::TableRow::rowid: i64
 impl core::clone::Clone for db_core::storage::row::btree::TableRow
-pub fn db_core::storage::row::btree::TableRow::clone(&self) -> db_core::storage::row::btree::TableRow
+pub fn db_core::storage::row::btree::TableRow::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::btree::TableRow
 impl core::cmp::PartialEq for db_core::storage::row::btree::TableRow
-pub fn db_core::storage::row::btree::TableRow::eq(&self, &db_core::storage::row::btree::TableRow) -> bool
+pub fn db_core::storage::row::btree::TableRow::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::btree::TableRow
 pub fn db_core::storage::row::btree::TableRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::row::btree::TableRow
@@ -3443,7 +3443,7 @@ pub db_core::storage::row::header::HeaderError::TooShort
 pub db_core::storage::row::header::HeaderError::TooShort::len: usize
 impl core::cmp::Eq for db_core::storage::row::header::HeaderError
 impl core::cmp::PartialEq for db_core::storage::row::header::HeaderError
-pub fn db_core::storage::row::header::HeaderError::eq(&self, &db_core::storage::row::header::HeaderError) -> bool
+pub fn db_core::storage::row::header::HeaderError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::storage::row::header::HeaderError
 impl core::fmt::Debug for db_core::storage::row::header::HeaderError
 pub fn db_core::storage::row::header::HeaderError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -3454,10 +3454,10 @@ pub enum db_core::storage::row::header::JournalMode
 pub db_core::storage::row::header::JournalMode::Legacy
 pub db_core::storage::row::header::JournalMode::Wal
 impl core::clone::Clone for db_core::storage::row::header::JournalMode
-pub fn db_core::storage::row::header::JournalMode::clone(&self) -> db_core::storage::row::header::JournalMode
+pub fn db_core::storage::row::header::JournalMode::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::header::JournalMode
 impl core::cmp::PartialEq for db_core::storage::row::header::JournalMode
-pub fn db_core::storage::row::header::JournalMode::eq(&self, &db_core::storage::row::header::JournalMode) -> bool
+pub fn db_core::storage::row::header::JournalMode::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::header::JournalMode
 pub fn db_core::storage::row::header::JournalMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::header::JournalMode
@@ -3467,12 +3467,12 @@ pub db_core::storage::row::header::SynchronousMode::Full = 2
 pub db_core::storage::row::header::SynchronousMode::Normal = 1
 pub db_core::storage::row::header::SynchronousMode::Off = 0
 impl core::clone::Clone for db_core::storage::row::header::SynchronousMode
-pub fn db_core::storage::row::header::SynchronousMode::clone(&self) -> db_core::storage::row::header::SynchronousMode
+pub fn db_core::storage::row::header::SynchronousMode::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::header::SynchronousMode
 impl core::cmp::PartialEq for db_core::storage::row::header::SynchronousMode
-pub fn db_core::storage::row::header::SynchronousMode::eq(&self, &db_core::storage::row::header::SynchronousMode) -> bool
+pub fn db_core::storage::row::header::SynchronousMode::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::storage::row::header::SynchronousMode
-pub fn db_core::storage::row::header::SynchronousMode::default() -> db_core::storage::row::header::SynchronousMode
+pub fn db_core::storage::row::header::SynchronousMode::default() -> Self
 impl core::fmt::Debug for db_core::storage::row::header::SynchronousMode
 pub fn db_core::storage::row::header::SynchronousMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::header::SynchronousMode
@@ -3481,10 +3481,10 @@ pub enum db_core::storage::row::header::VersionField
 pub db_core::storage::row::header::VersionField::Read
 pub db_core::storage::row::header::VersionField::Write
 impl core::clone::Clone for db_core::storage::row::header::VersionField
-pub fn db_core::storage::row::header::VersionField::clone(&self) -> db_core::storage::row::header::VersionField
+pub fn db_core::storage::row::header::VersionField::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::header::VersionField
 impl core::cmp::PartialEq for db_core::storage::row::header::VersionField
-pub fn db_core::storage::row::header::VersionField::eq(&self, &db_core::storage::row::header::VersionField) -> bool
+pub fn db_core::storage::row::header::VersionField::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::header::VersionField
 pub fn db_core::storage::row::header::VersionField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::header::VersionField
@@ -3509,10 +3509,10 @@ pub fn db_core::storage::row::header::DatabaseHeader::new_empty_page1(u32) -> al
 pub fn db_core::storage::row::header::DatabaseHeader::parse(&[u8]) -> core::result::Result<Self, db_core::storage::row::header::HeaderError>
 pub fn db_core::storage::row::header::DatabaseHeader::usable_page_size(&self) -> u32
 impl core::clone::Clone for db_core::storage::row::header::DatabaseHeader
-pub fn db_core::storage::row::header::DatabaseHeader::clone(&self) -> db_core::storage::row::header::DatabaseHeader
+pub fn db_core::storage::row::header::DatabaseHeader::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::header::DatabaseHeader
 impl core::cmp::PartialEq for db_core::storage::row::header::DatabaseHeader
-pub fn db_core::storage::row::header::DatabaseHeader::eq(&self, &db_core::storage::row::header::DatabaseHeader) -> bool
+pub fn db_core::storage::row::header::DatabaseHeader::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::header::DatabaseHeader
 pub fn db_core::storage::row::header::DatabaseHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::header::DatabaseHeader
@@ -3528,10 +3528,10 @@ pub db_core::storage::row::pager::checkpoint::CheckpointResult::backfilled_frame
 pub db_core::storage::row::pager::checkpoint::CheckpointResult::checkpoint_complete: bool
 pub db_core::storage::row::pager::checkpoint::CheckpointResult::total_frames: u32
 impl core::clone::Clone for db_core::storage::row::pager::checkpoint::CheckpointResult
-pub fn db_core::storage::row::pager::checkpoint::CheckpointResult::clone(&self) -> db_core::storage::row::pager::checkpoint::CheckpointResult
+pub fn db_core::storage::row::pager::checkpoint::CheckpointResult::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::pager::checkpoint::CheckpointResult
 impl core::cmp::PartialEq for db_core::storage::row::pager::checkpoint::CheckpointResult
-pub fn db_core::storage::row::pager::checkpoint::CheckpointResult::eq(&self, &db_core::storage::row::pager::checkpoint::CheckpointResult) -> bool
+pub fn db_core::storage::row::pager::checkpoint::CheckpointResult::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::pager::checkpoint::CheckpointResult
 pub fn db_core::storage::row::pager::checkpoint::CheckpointResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::pager::checkpoint::CheckpointResult
@@ -3544,7 +3544,7 @@ pub db_core::storage::row::pager::freelist::FreelistError::PageTooShort::len: us
 pub db_core::storage::row::pager::freelist::FreelistError::PageTooShort::offset: usize
 impl core::cmp::Eq for db_core::storage::row::pager::freelist::FreelistError
 impl core::cmp::PartialEq for db_core::storage::row::pager::freelist::FreelistError
-pub fn db_core::storage::row::pager::freelist::FreelistError::eq(&self, &db_core::storage::row::pager::freelist::FreelistError) -> bool
+pub fn db_core::storage::row::pager::freelist::FreelistError::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::storage::row::pager::freelist::FreelistError> for db_core::storage::row::pager::PagerError
 pub fn db_core::storage::row::pager::PagerError::from(db_core::storage::row::pager::freelist::FreelistError) -> Self
 impl core::error::Error for db_core::storage::row::pager::freelist::FreelistError
@@ -3560,10 +3560,10 @@ impl db_core::storage::row::pager::freelist::TrunkPage
 pub fn db_core::storage::row::pager::freelist::TrunkPage::parse(&[u8]) -> core::result::Result<Self, db_core::storage::row::pager::freelist::FreelistError>
 pub fn db_core::storage::row::pager::freelist::TrunkPage::write(&self, &mut [u8]) -> core::result::Result<(), db_core::storage::row::pager::freelist::FreelistError>
 impl core::clone::Clone for db_core::storage::row::pager::freelist::TrunkPage
-pub fn db_core::storage::row::pager::freelist::TrunkPage::clone(&self) -> db_core::storage::row::pager::freelist::TrunkPage
+pub fn db_core::storage::row::pager::freelist::TrunkPage::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::pager::freelist::TrunkPage
 impl core::cmp::PartialEq for db_core::storage::row::pager::freelist::TrunkPage
-pub fn db_core::storage::row::pager::freelist::TrunkPage::eq(&self, &db_core::storage::row::pager::freelist::TrunkPage) -> bool
+pub fn db_core::storage::row::pager::freelist::TrunkPage::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::pager::freelist::TrunkPage
 pub fn db_core::storage::row::pager::freelist::TrunkPage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::row::pager::freelist::TrunkPage
@@ -3593,10 +3593,10 @@ impl db_core::storage::row::pager::journal::JournalHeader
 pub fn db_core::storage::row::pager::journal::JournalHeader::parse(&[u8]) -> core::result::Result<Self, db_core::storage::row::pager::journal::JournalError>
 pub fn db_core::storage::row::pager::journal::JournalHeader::serialize(&self, [u8; 8]) -> [u8; 28]
 impl core::clone::Clone for db_core::storage::row::pager::journal::JournalHeader
-pub fn db_core::storage::row::pager::journal::JournalHeader::clone(&self) -> db_core::storage::row::pager::journal::JournalHeader
+pub fn db_core::storage::row::pager::journal::JournalHeader::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::pager::journal::JournalHeader
 impl core::cmp::PartialEq for db_core::storage::row::pager::journal::JournalHeader
-pub fn db_core::storage::row::pager::journal::JournalHeader::eq(&self, &db_core::storage::row::pager::journal::JournalHeader) -> bool
+pub fn db_core::storage::row::pager::journal::JournalHeader::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::pager::journal::JournalHeader
 pub fn db_core::storage::row::pager::journal::JournalHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::pager::journal::JournalHeader
@@ -3641,17 +3641,17 @@ pub fn db_core::storage::row::pager::wal::WalHeader::new(bool, u32, u32, u32, u3
 pub fn db_core::storage::row::pager::wal::WalHeader::parse(&[u8]) -> core::result::Result<Self, db_core::storage::row::pager::wal::WalError>
 pub fn db_core::storage::row::pager::wal::WalHeader::serialize(&self) -> [u8; 32]
 impl core::clone::Clone for db_core::storage::row::pager::wal::WalHeader
-pub fn db_core::storage::row::pager::wal::WalHeader::clone(&self) -> db_core::storage::row::pager::wal::WalHeader
+pub fn db_core::storage::row::pager::wal::WalHeader::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::pager::wal::WalHeader
 impl core::cmp::PartialEq for db_core::storage::row::pager::wal::WalHeader
-pub fn db_core::storage::row::pager::wal::WalHeader::eq(&self, &db_core::storage::row::pager::wal::WalHeader) -> bool
+pub fn db_core::storage::row::pager::wal::WalHeader::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::pager::wal::WalHeader
 pub fn db_core::storage::row::pager::wal::WalHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::pager::wal::WalHeader
 impl core::marker::StructuralPartialEq for db_core::storage::row::pager::wal::WalHeader
 pub struct db_core::storage::row::pager::wal::WalResumeHint
 impl core::clone::Clone for db_core::storage::row::pager::wal::WalResumeHint
-pub fn db_core::storage::row::pager::wal::WalResumeHint::clone(&self) -> db_core::storage::row::pager::wal::WalResumeHint
+pub fn db_core::storage::row::pager::wal::WalResumeHint::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::row::pager::wal::WalResumeHint
 pub fn db_core::storage::row::pager::wal::WalResumeHint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::pager::wal::WalResumeHint
@@ -3715,10 +3715,10 @@ impl db_core::storage::row::pager::freelist::TrunkPage
 pub fn db_core::storage::row::pager::freelist::TrunkPage::parse(&[u8]) -> core::result::Result<Self, db_core::storage::row::pager::freelist::FreelistError>
 pub fn db_core::storage::row::pager::freelist::TrunkPage::write(&self, &mut [u8]) -> core::result::Result<(), db_core::storage::row::pager::freelist::FreelistError>
 impl core::clone::Clone for db_core::storage::row::pager::freelist::TrunkPage
-pub fn db_core::storage::row::pager::freelist::TrunkPage::clone(&self) -> db_core::storage::row::pager::freelist::TrunkPage
+pub fn db_core::storage::row::pager::freelist::TrunkPage::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::pager::freelist::TrunkPage
 impl core::cmp::PartialEq for db_core::storage::row::pager::freelist::TrunkPage
-pub fn db_core::storage::row::pager::freelist::TrunkPage::eq(&self, &db_core::storage::row::pager::freelist::TrunkPage) -> bool
+pub fn db_core::storage::row::pager::freelist::TrunkPage::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::pager::freelist::TrunkPage
 pub fn db_core::storage::row::pager::freelist::TrunkPage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::row::pager::freelist::TrunkPage
@@ -3728,12 +3728,12 @@ pub db_core::storage::row::record::Collation::Binary
 pub db_core::storage::row::record::Collation::NoCase
 pub db_core::storage::row::record::Collation::RTrim
 impl core::clone::Clone for db_core::value::Collation
-pub fn db_core::value::Collation::clone(&self) -> db_core::value::Collation
+pub fn db_core::value::Collation::clone(&self) -> Self
 impl core::cmp::Eq for db_core::value::Collation
 impl core::cmp::PartialEq for db_core::value::Collation
-pub fn db_core::value::Collation::eq(&self, &db_core::value::Collation) -> bool
+pub fn db_core::value::Collation::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::value::Collation
-pub fn db_core::value::Collation::default() -> db_core::value::Collation
+pub fn db_core::value::Collation::default() -> Self
 impl core::fmt::Debug for db_core::value::Collation
 pub fn db_core::value::Collation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::value::Collation
@@ -3753,7 +3753,7 @@ pub db_core::storage::row::record::RecordError::UnexpectedEof
 pub db_core::storage::row::record::RecordError::UnexpectedEof::offset: usize
 impl core::cmp::Eq for db_core::storage::row::record::RecordError
 impl core::cmp::PartialEq for db_core::storage::row::record::RecordError
-pub fn db_core::storage::row::record::RecordError::eq(&self, &db_core::storage::row::record::RecordError) -> bool
+pub fn db_core::storage::row::record::RecordError::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::storage::row::record::RecordError> for db_core::storage::row::btree::BtreeError
 pub fn db_core::storage::row::btree::BtreeError::from(db_core::storage::row::record::RecordError) -> Self
 impl core::convert::From<db_core::storage::row::record::RecordError> for db_core::storage::row::schema::DdlError
@@ -3769,10 +3769,10 @@ pub db_core::storage::row::record::TextEncoding::Utf16Be
 pub db_core::storage::row::record::TextEncoding::Utf16Le
 pub db_core::storage::row::record::TextEncoding::Utf8
 impl core::clone::Clone for db_core::value::TextEncoding
-pub fn db_core::value::TextEncoding::clone(&self) -> db_core::value::TextEncoding
+pub fn db_core::value::TextEncoding::clone(&self) -> Self
 impl core::cmp::Eq for db_core::value::TextEncoding
 impl core::cmp::PartialEq for db_core::value::TextEncoding
-pub fn db_core::value::TextEncoding::eq(&self, &db_core::value::TextEncoding) -> bool
+pub fn db_core::value::TextEncoding::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::value::TextEncoding
 pub fn db_core::value::TextEncoding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::value::TextEncoding
@@ -3784,9 +3784,9 @@ pub db_core::storage::row::record::Value::Null
 pub db_core::storage::row::record::Value::Real(f64)
 pub db_core::storage::row::record::Value::Text(alloc::rc::Rc<str>)
 impl core::clone::Clone for db_core::value::Value
-pub fn db_core::value::Value::clone(&self) -> db_core::value::Value
+pub fn db_core::value::Value::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::value::Value
-pub fn db_core::value::Value::eq(&self, &db_core::value::Value) -> bool
+pub fn db_core::value::Value::eq(&self, &Self) -> bool
 impl core::convert::From<&db_core::value::Value> for db_core::engine::Cell
 pub fn db_core::engine::Cell::from(&db_core::value::Value) -> Self
 impl core::convert::From<db_core::value::Value> for db_core::engine::Cell
@@ -3826,12 +3826,12 @@ pub db_core::storage::row::schema::IndexSchema::name: alloc::string::String
 pub db_core::storage::row::schema::IndexSchema::root_page: u32
 pub db_core::storage::row::schema::IndexSchema::unique: bool
 impl core::clone::Clone for db_core::schema::IndexSchema
-pub fn db_core::schema::IndexSchema::clone(&self) -> db_core::schema::IndexSchema
+pub fn db_core::schema::IndexSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::IndexSchema
 impl core::cmp::PartialEq for db_core::schema::IndexSchema
-pub fn db_core::schema::IndexSchema::eq(&self, &db_core::schema::IndexSchema) -> bool
+pub fn db_core::schema::IndexSchema::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::IndexSchema
-pub fn db_core::schema::IndexSchema::default() -> db_core::schema::IndexSchema
+pub fn db_core::schema::IndexSchema::default() -> Self
 impl core::fmt::Debug for db_core::schema::IndexSchema
 pub fn db_core::schema::IndexSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::IndexSchema
@@ -3840,12 +3840,12 @@ pub db_core::storage::row::schema::IndexedColumn::collation: db_core::value::Col
 pub db_core::storage::row::schema::IndexedColumn::desc: bool
 pub db_core::storage::row::schema::IndexedColumn::name: alloc::string::String
 impl core::clone::Clone for db_core::schema::IndexedColumn
-pub fn db_core::schema::IndexedColumn::clone(&self) -> db_core::schema::IndexedColumn
+pub fn db_core::schema::IndexedColumn::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::IndexedColumn
 impl core::cmp::PartialEq for db_core::schema::IndexedColumn
-pub fn db_core::schema::IndexedColumn::eq(&self, &db_core::schema::IndexedColumn) -> bool
+pub fn db_core::schema::IndexedColumn::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::IndexedColumn
-pub fn db_core::schema::IndexedColumn::default() -> db_core::schema::IndexedColumn
+pub fn db_core::schema::IndexedColumn::default() -> Self
 impl core::fmt::Debug for db_core::schema::IndexedColumn
 pub fn db_core::schema::IndexedColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::IndexedColumn
@@ -3864,12 +3864,12 @@ pub db_core::storage::row::schema::TableSchema::without_rowid: bool
 impl db_core::schema::TableSchema
 pub fn db_core::schema::TableSchema::with_computed_rowid_alias(self) -> Self
 impl core::clone::Clone for db_core::schema::TableSchema
-pub fn db_core::schema::TableSchema::clone(&self) -> db_core::schema::TableSchema
+pub fn db_core::schema::TableSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::TableSchema
 impl core::cmp::PartialEq for db_core::schema::TableSchema
-pub fn db_core::schema::TableSchema::eq(&self, &db_core::schema::TableSchema) -> bool
+pub fn db_core::schema::TableSchema::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::TableSchema
-pub fn db_core::schema::TableSchema::default() -> db_core::schema::TableSchema
+pub fn db_core::schema::TableSchema::default() -> Self
 impl core::fmt::Debug for db_core::schema::TableSchema
 pub fn db_core::schema::TableSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::TableSchema
@@ -3877,12 +3877,12 @@ pub struct db_core::storage::row::schema::ViewSchema
 pub db_core::storage::row::schema::ViewSchema::name: alloc::string::String
 pub db_core::storage::row::schema::ViewSchema::sql: alloc::string::String
 impl core::clone::Clone for db_core::schema::ViewSchema
-pub fn db_core::schema::ViewSchema::clone(&self) -> db_core::schema::ViewSchema
+pub fn db_core::schema::ViewSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::ViewSchema
 impl core::cmp::PartialEq for db_core::schema::ViewSchema
-pub fn db_core::schema::ViewSchema::eq(&self, &db_core::schema::ViewSchema) -> bool
+pub fn db_core::schema::ViewSchema::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::schema::ViewSchema
-pub fn db_core::schema::ViewSchema::default() -> db_core::schema::ViewSchema
+pub fn db_core::schema::ViewSchema::default() -> Self
 impl core::fmt::Debug for db_core::schema::ViewSchema
 pub fn db_core::schema::ViewSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::ViewSchema
@@ -3905,7 +3905,7 @@ pub db_core::storage::row::vfs::fcntl::flock::l_start: db_core::storage::row::vf
 pub db_core::storage::row::vfs::fcntl::flock::l_type: i16
 pub db_core::storage::row::vfs::fcntl::flock::l_whence: i16
 impl core::clone::Clone for db_core::storage::row::vfs::fcntl::flock
-pub fn db_core::storage::row::vfs::fcntl::flock::clone(&self) -> db_core::storage::row::vfs::fcntl::flock
+pub fn db_core::storage::row::vfs::fcntl::flock::clone(&self) -> Self
 impl core::marker::Copy for db_core::storage::row::vfs::fcntl::flock
 pub const db_core::storage::row::vfs::fcntl::EACCES: std::os::raw::c_int
 pub const db_core::storage::row::vfs::fcntl::EAGAIN: std::os::raw::c_int
@@ -3926,14 +3926,14 @@ pub db_core::storage::row::vfs::lock::LockLevel::Reserved
 pub db_core::storage::row::vfs::lock::LockLevel::Shared
 pub db_core::storage::row::vfs::lock::LockLevel::Unlocked
 impl core::clone::Clone for db_core::storage::row::vfs::lock::LockLevel
-pub fn db_core::storage::row::vfs::lock::LockLevel::clone(&self) -> db_core::storage::row::vfs::lock::LockLevel
+pub fn db_core::storage::row::vfs::lock::LockLevel::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::vfs::lock::LockLevel
 impl core::cmp::Ord for db_core::storage::row::vfs::lock::LockLevel
-pub fn db_core::storage::row::vfs::lock::LockLevel::cmp(&self, &db_core::storage::row::vfs::lock::LockLevel) -> core::cmp::Ordering
+pub fn db_core::storage::row::vfs::lock::LockLevel::cmp(&self, &Self) -> core::cmp::Ordering
 impl core::cmp::PartialEq for db_core::storage::row::vfs::lock::LockLevel
-pub fn db_core::storage::row::vfs::lock::LockLevel::eq(&self, &db_core::storage::row::vfs::lock::LockLevel) -> bool
+pub fn db_core::storage::row::vfs::lock::LockLevel::eq(&self, &Self) -> bool
 impl core::cmp::PartialOrd for db_core::storage::row::vfs::lock::LockLevel
-pub fn db_core::storage::row::vfs::lock::LockLevel::partial_cmp(&self, &db_core::storage::row::vfs::lock::LockLevel) -> core::option::Option<core::cmp::Ordering>
+pub fn db_core::storage::row::vfs::lock::LockLevel::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
 impl core::fmt::Debug for db_core::storage::row::vfs::lock::LockLevel
 pub fn db_core::storage::row::vfs::lock::LockLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::vfs::lock::LockLevel
@@ -3972,14 +3972,14 @@ pub db_core::storage::row::vfs::LockLevel::Reserved
 pub db_core::storage::row::vfs::LockLevel::Shared
 pub db_core::storage::row::vfs::LockLevel::Unlocked
 impl core::clone::Clone for db_core::storage::row::vfs::lock::LockLevel
-pub fn db_core::storage::row::vfs::lock::LockLevel::clone(&self) -> db_core::storage::row::vfs::lock::LockLevel
+pub fn db_core::storage::row::vfs::lock::LockLevel::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::vfs::lock::LockLevel
 impl core::cmp::Ord for db_core::storage::row::vfs::lock::LockLevel
-pub fn db_core::storage::row::vfs::lock::LockLevel::cmp(&self, &db_core::storage::row::vfs::lock::LockLevel) -> core::cmp::Ordering
+pub fn db_core::storage::row::vfs::lock::LockLevel::cmp(&self, &Self) -> core::cmp::Ordering
 impl core::cmp::PartialEq for db_core::storage::row::vfs::lock::LockLevel
-pub fn db_core::storage::row::vfs::lock::LockLevel::eq(&self, &db_core::storage::row::vfs::lock::LockLevel) -> bool
+pub fn db_core::storage::row::vfs::lock::LockLevel::eq(&self, &Self) -> bool
 impl core::cmp::PartialOrd for db_core::storage::row::vfs::lock::LockLevel
-pub fn db_core::storage::row::vfs::lock::LockLevel::partial_cmp(&self, &db_core::storage::row::vfs::lock::LockLevel) -> core::option::Option<core::cmp::Ordering>
+pub fn db_core::storage::row::vfs::lock::LockLevel::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
 impl core::fmt::Debug for db_core::storage::row::vfs::lock::LockLevel
 pub fn db_core::storage::row::vfs::lock::LockLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::vfs::lock::LockLevel
@@ -4083,10 +4083,10 @@ pub struct db_core::storage::row::vfs::FileStat
 pub db_core::storage::row::vfs::FileStat::identity: u64
 pub db_core::storage::row::vfs::FileStat::size: u64
 impl core::clone::Clone for db_core::storage::row::vfs::FileStat
-pub fn db_core::storage::row::vfs::FileStat::clone(&self) -> db_core::storage::row::vfs::FileStat
+pub fn db_core::storage::row::vfs::FileStat::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::row::vfs::FileStat
 impl core::cmp::PartialEq for db_core::storage::row::vfs::FileStat
-pub fn db_core::storage::row::vfs::FileStat::eq(&self, &db_core::storage::row::vfs::FileStat) -> bool
+pub fn db_core::storage::row::vfs::FileStat::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::row::vfs::FileStat
 pub fn db_core::storage::row::vfs::FileStat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::vfs::FileStat
@@ -4098,9 +4098,9 @@ pub fn db_core::storage::row::vfs::MemoryVfs::new() -> Self
 pub fn db_core::storage::row::vfs::MemoryVfs::open_calls(&self) -> usize
 pub fn db_core::storage::row::vfs::MemoryVfs::sync_calls(&self) -> usize
 impl core::clone::Clone for db_core::storage::row::vfs::MemoryVfs
-pub fn db_core::storage::row::vfs::MemoryVfs::clone(&self) -> db_core::storage::row::vfs::MemoryVfs
+pub fn db_core::storage::row::vfs::MemoryVfs::clone(&self) -> Self
 impl core::default::Default for db_core::storage::row::vfs::MemoryVfs
-pub fn db_core::storage::row::vfs::MemoryVfs::default() -> db_core::storage::row::vfs::MemoryVfs
+pub fn db_core::storage::row::vfs::MemoryVfs::default() -> Self
 impl core::fmt::Debug for db_core::storage::row::vfs::MemoryVfs
 pub fn db_core::storage::row::vfs::MemoryVfs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::storage::row::vfs::Vfs for db_core::storage::row::vfs::MemoryVfs
@@ -4120,9 +4120,9 @@ pub fn db_core::storage::row::vfs::MemoryVfs::read_wal_backfill(&self, &std::pat
 pub fn db_core::storage::row::vfs::MemoryVfs::stat(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileStat>>
 pub struct db_core::storage::row::vfs::UnixVfs
 impl core::clone::Clone for db_core::storage::row::vfs::UnixVfs
-pub fn db_core::storage::row::vfs::UnixVfs::clone(&self) -> db_core::storage::row::vfs::UnixVfs
+pub fn db_core::storage::row::vfs::UnixVfs::clone(&self) -> Self
 impl core::default::Default for db_core::storage::row::vfs::UnixVfs
-pub fn db_core::storage::row::vfs::UnixVfs::default() -> db_core::storage::row::vfs::UnixVfs
+pub fn db_core::storage::row::vfs::UnixVfs::default() -> Self
 impl core::fmt::Debug for db_core::storage::row::vfs::UnixVfs
 pub fn db_core::storage::row::vfs::UnixVfs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::vfs::UnixVfs
@@ -4233,7 +4233,7 @@ pub db_core::storage::stream::adapter::ColumnRequest::name: alloc::string::Strin
 impl db_core::storage::stream::adapter::ColumnRequest
 pub fn db_core::storage::stream::adapter::ColumnRequest::bare(&str) -> Self
 impl core::clone::Clone for db_core::storage::stream::adapter::ColumnRequest
-pub fn db_core::storage::stream::adapter::ColumnRequest::clone(&self) -> db_core::storage::stream::adapter::ColumnRequest
+pub fn db_core::storage::stream::adapter::ColumnRequest::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::adapter::ColumnRequest
 pub fn db_core::storage::stream::adapter::ColumnRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::adapter::StreamSegment
@@ -4241,7 +4241,7 @@ impl db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::new(alloc::sync::Arc<db_core::storage::stream::segment::Segment>, alloc::vec::Vec<db_core::storage::stream::adapter::ColumnRequest>) -> Self
 pub fn db_core::storage::stream::adapter::StreamSegment::segment(&self) -> &alloc::sync::Arc<db_core::storage::stream::segment::Segment>
 impl core::clone::Clone for db_core::storage::stream::adapter::StreamSegment
-pub fn db_core::storage::stream::adapter::StreamSegment::clone(&self) -> db_core::storage::stream::adapter::StreamSegment
+pub fn db_core::storage::stream::adapter::StreamSegment::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::vm::batch::Segment for db_core::storage::stream::adapter::StreamSegment
@@ -4271,10 +4271,10 @@ pub db_core::storage::stream::alias::Promotion::Pid
 pub db_core::storage::stream::alias::Promotion::Service
 pub db_core::storage::stream::alias::Promotion::Timestamp
 impl core::clone::Clone for db_core::storage::stream::alias::Promotion
-pub fn db_core::storage::stream::alias::Promotion::clone(&self) -> db_core::storage::stream::alias::Promotion
+pub fn db_core::storage::stream::alias::Promotion::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::alias::Promotion
 impl core::cmp::PartialEq for db_core::storage::stream::alias::Promotion
-pub fn db_core::storage::stream::alias::Promotion::eq(&self, &db_core::storage::stream::alias::Promotion) -> bool
+pub fn db_core::storage::stream::alias::Promotion::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::alias::Promotion
 pub fn db_core::storage::stream::alias::Promotion::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::alias::Promotion
@@ -4313,10 +4313,10 @@ impl db_core::storage::stream::batch::Facility
 pub const fn db_core::storage::stream::batch::Facility::as_str(self) -> &'static str
 pub fn db_core::storage::stream::batch::Facility::from_code(u8) -> core::option::Option<Self>
 impl core::clone::Clone for db_core::storage::stream::batch::Facility
-pub fn db_core::storage::stream::batch::Facility::clone(&self) -> db_core::storage::stream::batch::Facility
+pub fn db_core::storage::stream::batch::Facility::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::batch::Facility
 impl core::cmp::PartialEq for db_core::storage::stream::batch::Facility
-pub fn db_core::storage::stream::batch::Facility::eq(&self, &db_core::storage::stream::batch::Facility) -> bool
+pub fn db_core::storage::stream::batch::Facility::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::batch::Facility
 pub fn db_core::storage::stream::batch::Facility::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::storage::stream::batch::Facility
@@ -4335,7 +4335,7 @@ impl<'a> db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::is_empty(&self) -> bool
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::len(&self) -> usize
 impl<'a> core::clone::Clone for db_core::storage::stream::batch::FieldColumn<'a>
-pub fn db_core::storage::stream::batch::FieldColumn<'a>::clone(&self) -> db_core::storage::stream::batch::FieldColumn<'a>
+pub fn db_core::storage::stream::batch::FieldColumn<'a>::clone(&self) -> Self
 impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[repr(u8)] pub enum db_core::storage::stream::batch::Severity
@@ -4351,14 +4351,14 @@ pub const fn db_core::storage::stream::batch::Severity::from_number(i64) -> core
 pub fn db_core::storage::stream::batch::Severity::from_syslog(u8) -> core::option::Option<Self>
 pub fn db_core::storage::stream::batch::Severity::parse(&str) -> core::option::Option<Self>
 impl core::clone::Clone for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::clone(&self) -> db_core::storage::stream::batch::Severity
+pub fn db_core::storage::stream::batch::Severity::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::batch::Severity
 impl core::cmp::Ord for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::cmp(&self, &db_core::storage::stream::batch::Severity) -> core::cmp::Ordering
+pub fn db_core::storage::stream::batch::Severity::cmp(&self, &Self) -> core::cmp::Ordering
 impl core::cmp::PartialEq for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::eq(&self, &db_core::storage::stream::batch::Severity) -> bool
+pub fn db_core::storage::stream::batch::Severity::eq(&self, &Self) -> bool
 impl core::cmp::PartialOrd for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::partial_cmp(&self, &db_core::storage::stream::batch::Severity) -> core::option::Option<core::cmp::Ordering>
+pub fn db_core::storage::stream::batch::Severity::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
 impl core::fmt::Debug for db_core::storage::stream::batch::Severity
 pub fn db_core::storage::stream::batch::Severity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::storage::stream::batch::Severity
@@ -4372,10 +4372,10 @@ pub db_core::storage::stream::batch::SourceKind::Journal
 pub db_core::storage::stream::batch::SourceKind::Kubernetes
 pub db_core::storage::stream::batch::SourceKind::Stdin
 impl core::clone::Clone for db_core::storage::stream::batch::SourceKind
-pub fn db_core::storage::stream::batch::SourceKind::clone(&self) -> db_core::storage::stream::batch::SourceKind
+pub fn db_core::storage::stream::batch::SourceKind::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::batch::SourceKind
 impl core::cmp::PartialEq for db_core::storage::stream::batch::SourceKind
-pub fn db_core::storage::stream::batch::SourceKind::eq(&self, &db_core::storage::stream::batch::SourceKind) -> bool
+pub fn db_core::storage::stream::batch::SourceKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::batch::SourceKind
 pub fn db_core::storage::stream::batch::SourceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::storage::stream::batch::SourceKind
@@ -4393,7 +4393,7 @@ pub fn db_core::storage::stream::batch::FieldStore<'a>::set_bool(&mut self, &str
 pub fn db_core::storage::stream::batch::FieldStore<'a>::set_float(&mut self, &str, usize, f64)
 pub fn db_core::storage::stream::batch::FieldStore<'a>::set_int(&mut self, &str, usize, i64)
 impl<'a> core::default::Default for db_core::storage::stream::batch::FieldStore<'a>
-pub fn db_core::storage::stream::batch::FieldStore<'a>::default() -> db_core::storage::stream::batch::FieldStore<'a>
+pub fn db_core::storage::stream::batch::FieldStore<'a>::default() -> Self
 impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldStore<'a>
 pub fn db_core::storage::stream::batch::FieldStore<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::batch::LogBatch<'a>
@@ -4432,9 +4432,9 @@ pub db_core::storage::stream::batch::Resource::service_hash: u64
 impl db_core::storage::stream::batch::Resource
 pub fn db_core::storage::stream::batch::Resource::with_hostname(&str) -> Self
 impl core::clone::Clone for db_core::storage::stream::batch::Resource
-pub fn db_core::storage::stream::batch::Resource::clone(&self) -> db_core::storage::stream::batch::Resource
+pub fn db_core::storage::stream::batch::Resource::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::batch::Resource
-pub fn db_core::storage::stream::batch::Resource::default() -> db_core::storage::stream::batch::Resource
+pub fn db_core::storage::stream::batch::Resource::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::batch::Resource
 pub fn db_core::storage::stream::batch::Resource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::batch::Source
@@ -4444,7 +4444,7 @@ pub db_core::storage::stream::batch::Source::path_hash: u64
 impl db_core::storage::stream::batch::Source
 pub fn db_core::storage::stream::batch::Source::new(db_core::storage::stream::batch::SourceKind, &str) -> Self
 impl core::clone::Clone for db_core::storage::stream::batch::Source
-pub fn db_core::storage::stream::batch::Source::clone(&self) -> db_core::storage::stream::batch::Source
+pub fn db_core::storage::stream::batch::Source::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::batch::Source
 pub fn db_core::storage::stream::batch::Source::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const db_core::storage::stream::batch::BATCH_SIZE: usize
@@ -4466,9 +4466,9 @@ impl db_core::storage::stream::clf::ClfParser
 pub fn db_core::storage::stream::clf::ClfParser::new() -> Self
 pub fn db_core::storage::stream::clf::ClfParser::parse_batch<'a>(&self, db_core::storage::stream::batch::Source, &'a [u8], usize) -> (db_core::storage::stream::batch::LogBatch<'a>, usize)
 impl core::clone::Clone for db_core::storage::stream::clf::ClfParser
-pub fn db_core::storage::stream::clf::ClfParser::clone(&self) -> db_core::storage::stream::clf::ClfParser
+pub fn db_core::storage::stream::clf::ClfParser::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::clf::ClfParser
-pub fn db_core::storage::stream::clf::ClfParser::default() -> db_core::storage::stream::clf::ClfParser
+pub fn db_core::storage::stream::clf::ClfParser::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::clf::ClfParser
 pub fn db_core::storage::stream::clf::ClfParser::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::storage::stream::batch::LineParser for db_core::storage::stream::clf::ClfParser
@@ -4483,7 +4483,7 @@ pub db_core::storage::stream::detect::DetectedParser::Syslog(db_core::storage::s
 impl db_core::storage::stream::detect::DetectedParser
 pub fn db_core::storage::stream::detect::DetectedParser::for_format(db_core::storage::stream::detect::Format) -> Self
 impl core::clone::Clone for db_core::storage::stream::detect::DetectedParser
-pub fn db_core::storage::stream::detect::DetectedParser::clone(&self) -> db_core::storage::stream::detect::DetectedParser
+pub fn db_core::storage::stream::detect::DetectedParser::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::detect::DetectedParser
 pub fn db_core::storage::stream::detect::DetectedParser::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::storage::stream::batch::LineParser for db_core::storage::stream::detect::DetectedParser
@@ -4497,10 +4497,10 @@ pub db_core::storage::stream::detect::Format::Syslog
 impl db_core::storage::stream::detect::Format
 pub const fn db_core::storage::stream::detect::Format::as_str(self) -> &'static str
 impl core::clone::Clone for db_core::storage::stream::detect::Format
-pub fn db_core::storage::stream::detect::Format::clone(&self) -> db_core::storage::stream::detect::Format
+pub fn db_core::storage::stream::detect::Format::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::detect::Format
 impl core::cmp::PartialEq for db_core::storage::stream::detect::Format
-pub fn db_core::storage::stream::detect::Format::eq(&self, &db_core::storage::stream::detect::Format) -> bool
+pub fn db_core::storage::stream::detect::Format::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::detect::Format
 pub fn db_core::storage::stream::detect::Format::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::detect::Format
@@ -4510,10 +4510,10 @@ pub db_core::storage::stream::detect::Detection::container: core::option::Option
 pub db_core::storage::stream::detect::Detection::format: db_core::storage::stream::detect::Format
 pub db_core::storage::stream::detect::Detection::locked: bool
 impl core::clone::Clone for db_core::storage::stream::detect::Detection
-pub fn db_core::storage::stream::detect::Detection::clone(&self) -> db_core::storage::stream::detect::Detection
+pub fn db_core::storage::stream::detect::Detection::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::detect::Detection
 impl core::cmp::PartialEq for db_core::storage::stream::detect::Detection
-pub fn db_core::storage::stream::detect::Detection::eq(&self, &db_core::storage::stream::detect::Detection) -> bool
+pub fn db_core::storage::stream::detect::Detection::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::detect::Detection
 pub fn db_core::storage::stream::detect::Detection::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::detect::Detection
@@ -4538,7 +4538,7 @@ pub db_core::storage::stream::file::Block::file_off: u64
 impl db_core::storage::stream::file::Block
 pub fn db_core::storage::stream::file::Block::end_off(&self) -> u64
 impl core::clone::Clone for db_core::storage::stream::file::Block
-pub fn db_core::storage::stream::file::Block::clone(&self) -> db_core::storage::stream::file::Block
+pub fn db_core::storage::stream::file::Block::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::file::Block
 pub fn db_core::storage::stream::file::Block::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::file::LogFile
@@ -4565,9 +4565,9 @@ pub db_core::storage::stream::json::JsonValue::Null
 pub db_core::storage::stream::json::JsonValue::Object(alloc::vec::Vec<(&'a str, db_core::json_path::JsonValue<'a>)>)
 pub db_core::storage::stream::json::JsonValue::Str(&'a str)
 impl<'a> core::clone::Clone for db_core::json_path::JsonValue<'a>
-pub fn db_core::json_path::JsonValue<'a>::clone(&self) -> db_core::json_path::JsonValue<'a>
+pub fn db_core::json_path::JsonValue<'a>::clone(&self) -> Self
 impl<'a> core::cmp::PartialEq for db_core::json_path::JsonValue<'a>
-pub fn db_core::json_path::JsonValue<'a>::eq(&self, &db_core::json_path::JsonValue<'a>) -> bool
+pub fn db_core::json_path::JsonValue<'a>::eq(&self, &Self) -> bool
 impl<'a> core::fmt::Debug for db_core::json_path::JsonValue<'a>
 pub fn db_core::json_path::JsonValue<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::StructuralPartialEq for db_core::json_path::JsonValue<'a>
@@ -4580,9 +4580,9 @@ pub fn db_core::storage::stream::jsonl::JsonlParser::looks_like_json_object(&[u8
 pub fn db_core::storage::stream::jsonl::JsonlParser::new() -> Self
 pub fn db_core::storage::stream::jsonl::JsonlParser::parse_batch<'a>(&self, db_core::storage::stream::batch::Source, &'a [u8], usize) -> (db_core::storage::stream::batch::LogBatch<'a>, usize)
 impl core::clone::Clone for db_core::storage::stream::jsonl::JsonlParser
-pub fn db_core::storage::stream::jsonl::JsonlParser::clone(&self) -> db_core::storage::stream::jsonl::JsonlParser
+pub fn db_core::storage::stream::jsonl::JsonlParser::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::jsonl::JsonlParser
-pub fn db_core::storage::stream::jsonl::JsonlParser::default() -> db_core::storage::stream::jsonl::JsonlParser
+pub fn db_core::storage::stream::jsonl::JsonlParser::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::jsonl::JsonlParser
 pub fn db_core::storage::stream::jsonl::JsonlParser::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::jsonl::JsonlParser
@@ -4595,9 +4595,9 @@ pub fn db_core::storage::stream::logfmt::LogfmtParser::looks_like_logfmt(&[u8]) 
 pub fn db_core::storage::stream::logfmt::LogfmtParser::new() -> Self
 pub fn db_core::storage::stream::logfmt::LogfmtParser::parse_batch<'a>(&self, db_core::storage::stream::batch::Source, &'a [u8], usize) -> (db_core::storage::stream::batch::LogBatch<'a>, usize)
 impl core::clone::Clone for db_core::storage::stream::logfmt::LogfmtParser
-pub fn db_core::storage::stream::logfmt::LogfmtParser::clone(&self) -> db_core::storage::stream::logfmt::LogfmtParser
+pub fn db_core::storage::stream::logfmt::LogfmtParser::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::logfmt::LogfmtParser
-pub fn db_core::storage::stream::logfmt::LogfmtParser::default() -> db_core::storage::stream::logfmt::LogfmtParser
+pub fn db_core::storage::stream::logfmt::LogfmtParser::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::logfmt::LogfmtParser
 pub fn db_core::storage::stream::logfmt::LogfmtParser::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::logfmt::LogfmtParser
@@ -4609,7 +4609,7 @@ pub db_core::storage::stream::ring::EvictedSummary::minmax_event: core::option::
 pub db_core::storage::stream::ring::EvictedSummary::minmax_observed: core::option::Option<db_core::storage::stream::segment::MinMax>
 pub db_core::storage::stream::ring::EvictedSummary::summary: db_core::storage::stream::segment::SegmentSummary
 impl core::clone::Clone for db_core::storage::stream::ring::EvictedSummary
-pub fn db_core::storage::stream::ring::EvictedSummary::clone(&self) -> db_core::storage::stream::ring::EvictedSummary
+pub fn db_core::storage::stream::ring::EvictedSummary::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::ring::EvictedSummary
 pub fn db_core::storage::stream::ring::EvictedSummary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::ring::Ring
@@ -4648,7 +4648,7 @@ pub fn db_core::storage::stream::segment::OwnedColumn::dict_contains(&self, &str
 pub fn db_core::storage::stream::segment::OwnedColumn::is_empty(&self) -> bool
 pub fn db_core::storage::stream::segment::OwnedColumn::len(&self) -> usize
 impl core::clone::Clone for db_core::storage::stream::segment::OwnedColumn
-pub fn db_core::storage::stream::segment::OwnedColumn::clone(&self) -> db_core::storage::stream::segment::OwnedColumn
+pub fn db_core::storage::stream::segment::OwnedColumn::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::segment::OwnedColumn
 pub fn db_core::storage::stream::segment::OwnedColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::segment::ColumnSummary
@@ -4657,11 +4657,11 @@ pub db_core::storage::stream::segment::ColumnSummary::max: f64
 pub db_core::storage::stream::segment::ColumnSummary::min: f64
 pub db_core::storage::stream::segment::ColumnSummary::sum: f64
 impl core::clone::Clone for db_core::storage::stream::segment::ColumnSummary
-pub fn db_core::storage::stream::segment::ColumnSummary::clone(&self) -> db_core::storage::stream::segment::ColumnSummary
+pub fn db_core::storage::stream::segment::ColumnSummary::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::stream::segment::ColumnSummary
-pub fn db_core::storage::stream::segment::ColumnSummary::eq(&self, &db_core::storage::stream::segment::ColumnSummary) -> bool
+pub fn db_core::storage::stream::segment::ColumnSummary::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::storage::stream::segment::ColumnSummary
-pub fn db_core::storage::stream::segment::ColumnSummary::default() -> db_core::storage::stream::segment::ColumnSummary
+pub fn db_core::storage::stream::segment::ColumnSummary::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::segment::ColumnSummary
 pub fn db_core::storage::stream::segment::ColumnSummary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::segment::ColumnSummary
@@ -4697,9 +4697,9 @@ pub db_core::storage::stream::segment::SegmentSummary::rows: u64
 impl db_core::storage::stream::segment::SegmentSummary
 pub fn db_core::storage::stream::segment::SegmentSummary::column(&self, &str) -> core::option::Option<&db_core::storage::stream::segment::ColumnSummary>
 impl core::clone::Clone for db_core::storage::stream::segment::SegmentSummary
-pub fn db_core::storage::stream::segment::SegmentSummary::clone(&self) -> db_core::storage::stream::segment::SegmentSummary
+pub fn db_core::storage::stream::segment::SegmentSummary::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::segment::SegmentSummary
-pub fn db_core::storage::stream::segment::SegmentSummary::default() -> db_core::storage::stream::segment::SegmentSummary
+pub fn db_core::storage::stream::segment::SegmentSummary::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::segment::SegmentSummary
 pub fn db_core::storage::stream::segment::SegmentSummary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const db_core::storage::stream::segment::SEGMENT_MAX_ROWS: usize
@@ -4712,7 +4712,7 @@ pub fn db_core::storage::stream::syslog::SyslogParser::new() -> Self
 pub fn db_core::storage::stream::syslog::SyslogParser::parse_batch<'a>(&self, db_core::storage::stream::batch::Source, &'a [u8], usize) -> (db_core::storage::stream::batch::LogBatch<'a>, usize)
 pub const fn db_core::storage::stream::syslog::SyslogParser::with_year(i32) -> Self
 impl core::clone::Clone for db_core::storage::stream::syslog::SyslogParser
-pub fn db_core::storage::stream::syslog::SyslogParser::clone(&self) -> db_core::storage::stream::syslog::SyslogParser
+pub fn db_core::storage::stream::syslog::SyslogParser::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::syslog::SyslogParser
 pub fn db_core::storage::stream::syslog::SyslogParser::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::syslog::SyslogParser
@@ -4733,7 +4733,7 @@ pub db_core::storage::stream::DetectedParser::Syslog(db_core::storage::stream::s
 impl db_core::storage::stream::detect::DetectedParser
 pub fn db_core::storage::stream::detect::DetectedParser::for_format(db_core::storage::stream::detect::Format) -> Self
 impl core::clone::Clone for db_core::storage::stream::detect::DetectedParser
-pub fn db_core::storage::stream::detect::DetectedParser::clone(&self) -> db_core::storage::stream::detect::DetectedParser
+pub fn db_core::storage::stream::detect::DetectedParser::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::detect::DetectedParser
 pub fn db_core::storage::stream::detect::DetectedParser::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::storage::stream::batch::LineParser for db_core::storage::stream::detect::DetectedParser
@@ -4763,10 +4763,10 @@ impl db_core::storage::stream::batch::Facility
 pub const fn db_core::storage::stream::batch::Facility::as_str(self) -> &'static str
 pub fn db_core::storage::stream::batch::Facility::from_code(u8) -> core::option::Option<Self>
 impl core::clone::Clone for db_core::storage::stream::batch::Facility
-pub fn db_core::storage::stream::batch::Facility::clone(&self) -> db_core::storage::stream::batch::Facility
+pub fn db_core::storage::stream::batch::Facility::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::batch::Facility
 impl core::cmp::PartialEq for db_core::storage::stream::batch::Facility
-pub fn db_core::storage::stream::batch::Facility::eq(&self, &db_core::storage::stream::batch::Facility) -> bool
+pub fn db_core::storage::stream::batch::Facility::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::batch::Facility
 pub fn db_core::storage::stream::batch::Facility::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::storage::stream::batch::Facility
@@ -4785,7 +4785,7 @@ impl<'a> db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::is_empty(&self) -> bool
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::len(&self) -> usize
 impl<'a> core::clone::Clone for db_core::storage::stream::batch::FieldColumn<'a>
-pub fn db_core::storage::stream::batch::FieldColumn<'a>::clone(&self) -> db_core::storage::stream::batch::FieldColumn<'a>
+pub fn db_core::storage::stream::batch::FieldColumn<'a>::clone(&self) -> Self
 impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum db_core::storage::stream::Format
@@ -4797,10 +4797,10 @@ pub db_core::storage::stream::Format::Syslog
 impl db_core::storage::stream::detect::Format
 pub const fn db_core::storage::stream::detect::Format::as_str(self) -> &'static str
 impl core::clone::Clone for db_core::storage::stream::detect::Format
-pub fn db_core::storage::stream::detect::Format::clone(&self) -> db_core::storage::stream::detect::Format
+pub fn db_core::storage::stream::detect::Format::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::detect::Format
 impl core::cmp::PartialEq for db_core::storage::stream::detect::Format
-pub fn db_core::storage::stream::detect::Format::eq(&self, &db_core::storage::stream::detect::Format) -> bool
+pub fn db_core::storage::stream::detect::Format::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::detect::Format
 pub fn db_core::storage::stream::detect::Format::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::detect::Format
@@ -4818,7 +4818,7 @@ pub fn db_core::storage::stream::segment::OwnedColumn::dict_contains(&self, &str
 pub fn db_core::storage::stream::segment::OwnedColumn::is_empty(&self) -> bool
 pub fn db_core::storage::stream::segment::OwnedColumn::len(&self) -> usize
 impl core::clone::Clone for db_core::storage::stream::segment::OwnedColumn
-pub fn db_core::storage::stream::segment::OwnedColumn::clone(&self) -> db_core::storage::stream::segment::OwnedColumn
+pub fn db_core::storage::stream::segment::OwnedColumn::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::segment::OwnedColumn
 pub fn db_core::storage::stream::segment::OwnedColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum db_core::storage::stream::Refresh
@@ -4840,14 +4840,14 @@ pub const fn db_core::storage::stream::batch::Severity::from_number(i64) -> core
 pub fn db_core::storage::stream::batch::Severity::from_syslog(u8) -> core::option::Option<Self>
 pub fn db_core::storage::stream::batch::Severity::parse(&str) -> core::option::Option<Self>
 impl core::clone::Clone for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::clone(&self) -> db_core::storage::stream::batch::Severity
+pub fn db_core::storage::stream::batch::Severity::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::batch::Severity
 impl core::cmp::Ord for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::cmp(&self, &db_core::storage::stream::batch::Severity) -> core::cmp::Ordering
+pub fn db_core::storage::stream::batch::Severity::cmp(&self, &Self) -> core::cmp::Ordering
 impl core::cmp::PartialEq for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::eq(&self, &db_core::storage::stream::batch::Severity) -> bool
+pub fn db_core::storage::stream::batch::Severity::eq(&self, &Self) -> bool
 impl core::cmp::PartialOrd for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::partial_cmp(&self, &db_core::storage::stream::batch::Severity) -> core::option::Option<core::cmp::Ordering>
+pub fn db_core::storage::stream::batch::Severity::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
 impl core::fmt::Debug for db_core::storage::stream::batch::Severity
 pub fn db_core::storage::stream::batch::Severity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::storage::stream::batch::Severity
@@ -4861,10 +4861,10 @@ pub db_core::storage::stream::SourceKind::Journal
 pub db_core::storage::stream::SourceKind::Kubernetes
 pub db_core::storage::stream::SourceKind::Stdin
 impl core::clone::Clone for db_core::storage::stream::batch::SourceKind
-pub fn db_core::storage::stream::batch::SourceKind::clone(&self) -> db_core::storage::stream::batch::SourceKind
+pub fn db_core::storage::stream::batch::SourceKind::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::batch::SourceKind
 impl core::cmp::PartialEq for db_core::storage::stream::batch::SourceKind
-pub fn db_core::storage::stream::batch::SourceKind::eq(&self, &db_core::storage::stream::batch::SourceKind) -> bool
+pub fn db_core::storage::stream::batch::SourceKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::batch::SourceKind
 pub fn db_core::storage::stream::batch::SourceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::storage::stream::batch::SourceKind
@@ -4877,7 +4877,7 @@ pub db_core::storage::stream::Block::file_off: u64
 impl db_core::storage::stream::file::Block
 pub fn db_core::storage::stream::file::Block::end_off(&self) -> u64
 impl core::clone::Clone for db_core::storage::stream::file::Block
-pub fn db_core::storage::stream::file::Block::clone(&self) -> db_core::storage::stream::file::Block
+pub fn db_core::storage::stream::file::Block::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::file::Block
 pub fn db_core::storage::stream::file::Block::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::ClfParser
@@ -4885,9 +4885,9 @@ impl db_core::storage::stream::clf::ClfParser
 pub fn db_core::storage::stream::clf::ClfParser::new() -> Self
 pub fn db_core::storage::stream::clf::ClfParser::parse_batch<'a>(&self, db_core::storage::stream::batch::Source, &'a [u8], usize) -> (db_core::storage::stream::batch::LogBatch<'a>, usize)
 impl core::clone::Clone for db_core::storage::stream::clf::ClfParser
-pub fn db_core::storage::stream::clf::ClfParser::clone(&self) -> db_core::storage::stream::clf::ClfParser
+pub fn db_core::storage::stream::clf::ClfParser::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::clf::ClfParser
-pub fn db_core::storage::stream::clf::ClfParser::default() -> db_core::storage::stream::clf::ClfParser
+pub fn db_core::storage::stream::clf::ClfParser::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::clf::ClfParser
 pub fn db_core::storage::stream::clf::ClfParser::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::storage::stream::batch::LineParser for db_core::storage::stream::clf::ClfParser
@@ -4898,7 +4898,7 @@ pub db_core::storage::stream::ColumnRequest::name: alloc::string::String
 impl db_core::storage::stream::adapter::ColumnRequest
 pub fn db_core::storage::stream::adapter::ColumnRequest::bare(&str) -> Self
 impl core::clone::Clone for db_core::storage::stream::adapter::ColumnRequest
-pub fn db_core::storage::stream::adapter::ColumnRequest::clone(&self) -> db_core::storage::stream::adapter::ColumnRequest
+pub fn db_core::storage::stream::adapter::ColumnRequest::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::adapter::ColumnRequest
 pub fn db_core::storage::stream::adapter::ColumnRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::ColumnSummary
@@ -4907,11 +4907,11 @@ pub db_core::storage::stream::ColumnSummary::max: f64
 pub db_core::storage::stream::ColumnSummary::min: f64
 pub db_core::storage::stream::ColumnSummary::sum: f64
 impl core::clone::Clone for db_core::storage::stream::segment::ColumnSummary
-pub fn db_core::storage::stream::segment::ColumnSummary::clone(&self) -> db_core::storage::stream::segment::ColumnSummary
+pub fn db_core::storage::stream::segment::ColumnSummary::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::stream::segment::ColumnSummary
-pub fn db_core::storage::stream::segment::ColumnSummary::eq(&self, &db_core::storage::stream::segment::ColumnSummary) -> bool
+pub fn db_core::storage::stream::segment::ColumnSummary::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::storage::stream::segment::ColumnSummary
-pub fn db_core::storage::stream::segment::ColumnSummary::default() -> db_core::storage::stream::segment::ColumnSummary
+pub fn db_core::storage::stream::segment::ColumnSummary::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::segment::ColumnSummary
 pub fn db_core::storage::stream::segment::ColumnSummary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::segment::ColumnSummary
@@ -4921,10 +4921,10 @@ pub db_core::storage::stream::Detection::container: core::option::Option<&'stati
 pub db_core::storage::stream::Detection::format: db_core::storage::stream::detect::Format
 pub db_core::storage::stream::Detection::locked: bool
 impl core::clone::Clone for db_core::storage::stream::detect::Detection
-pub fn db_core::storage::stream::detect::Detection::clone(&self) -> db_core::storage::stream::detect::Detection
+pub fn db_core::storage::stream::detect::Detection::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::detect::Detection
 impl core::cmp::PartialEq for db_core::storage::stream::detect::Detection
-pub fn db_core::storage::stream::detect::Detection::eq(&self, &db_core::storage::stream::detect::Detection) -> bool
+pub fn db_core::storage::stream::detect::Detection::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::detect::Detection
 pub fn db_core::storage::stream::detect::Detection::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::detect::Detection
@@ -4934,7 +4934,7 @@ pub db_core::storage::stream::EvictedSummary::minmax_event: core::option::Option
 pub db_core::storage::stream::EvictedSummary::minmax_observed: core::option::Option<db_core::storage::stream::segment::MinMax>
 pub db_core::storage::stream::EvictedSummary::summary: db_core::storage::stream::segment::SegmentSummary
 impl core::clone::Clone for db_core::storage::stream::ring::EvictedSummary
-pub fn db_core::storage::stream::ring::EvictedSummary::clone(&self) -> db_core::storage::stream::ring::EvictedSummary
+pub fn db_core::storage::stream::ring::EvictedSummary::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::ring::EvictedSummary
 pub fn db_core::storage::stream::ring::EvictedSummary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::FieldStore<'a>
@@ -4948,7 +4948,7 @@ pub fn db_core::storage::stream::batch::FieldStore<'a>::set_bool(&mut self, &str
 pub fn db_core::storage::stream::batch::FieldStore<'a>::set_float(&mut self, &str, usize, f64)
 pub fn db_core::storage::stream::batch::FieldStore<'a>::set_int(&mut self, &str, usize, i64)
 impl<'a> core::default::Default for db_core::storage::stream::batch::FieldStore<'a>
-pub fn db_core::storage::stream::batch::FieldStore<'a>::default() -> db_core::storage::stream::batch::FieldStore<'a>
+pub fn db_core::storage::stream::batch::FieldStore<'a>::default() -> Self
 impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldStore<'a>
 pub fn db_core::storage::stream::batch::FieldStore<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::JsonlParser
@@ -4957,9 +4957,9 @@ pub fn db_core::storage::stream::jsonl::JsonlParser::looks_like_json_object(&[u8
 pub fn db_core::storage::stream::jsonl::JsonlParser::new() -> Self
 pub fn db_core::storage::stream::jsonl::JsonlParser::parse_batch<'a>(&self, db_core::storage::stream::batch::Source, &'a [u8], usize) -> (db_core::storage::stream::batch::LogBatch<'a>, usize)
 impl core::clone::Clone for db_core::storage::stream::jsonl::JsonlParser
-pub fn db_core::storage::stream::jsonl::JsonlParser::clone(&self) -> db_core::storage::stream::jsonl::JsonlParser
+pub fn db_core::storage::stream::jsonl::JsonlParser::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::jsonl::JsonlParser
-pub fn db_core::storage::stream::jsonl::JsonlParser::default() -> db_core::storage::stream::jsonl::JsonlParser
+pub fn db_core::storage::stream::jsonl::JsonlParser::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::jsonl::JsonlParser
 pub fn db_core::storage::stream::jsonl::JsonlParser::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::jsonl::JsonlParser
@@ -5011,9 +5011,9 @@ pub fn db_core::storage::stream::logfmt::LogfmtParser::looks_like_logfmt(&[u8]) 
 pub fn db_core::storage::stream::logfmt::LogfmtParser::new() -> Self
 pub fn db_core::storage::stream::logfmt::LogfmtParser::parse_batch<'a>(&self, db_core::storage::stream::batch::Source, &'a [u8], usize) -> (db_core::storage::stream::batch::LogBatch<'a>, usize)
 impl core::clone::Clone for db_core::storage::stream::logfmt::LogfmtParser
-pub fn db_core::storage::stream::logfmt::LogfmtParser::clone(&self) -> db_core::storage::stream::logfmt::LogfmtParser
+pub fn db_core::storage::stream::logfmt::LogfmtParser::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::logfmt::LogfmtParser
-pub fn db_core::storage::stream::logfmt::LogfmtParser::default() -> db_core::storage::stream::logfmt::LogfmtParser
+pub fn db_core::storage::stream::logfmt::LogfmtParser::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::logfmt::LogfmtParser
 pub fn db_core::storage::stream::logfmt::LogfmtParser::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::logfmt::LogfmtParser
@@ -5028,9 +5028,9 @@ pub db_core::storage::stream::Resource::service_hash: u64
 impl db_core::storage::stream::batch::Resource
 pub fn db_core::storage::stream::batch::Resource::with_hostname(&str) -> Self
 impl core::clone::Clone for db_core::storage::stream::batch::Resource
-pub fn db_core::storage::stream::batch::Resource::clone(&self) -> db_core::storage::stream::batch::Resource
+pub fn db_core::storage::stream::batch::Resource::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::batch::Resource
-pub fn db_core::storage::stream::batch::Resource::default() -> db_core::storage::stream::batch::Resource
+pub fn db_core::storage::stream::batch::Resource::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::batch::Resource
 pub fn db_core::storage::stream::batch::Resource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::Ring
@@ -5085,9 +5085,9 @@ pub db_core::storage::stream::SegmentSummary::rows: u64
 impl db_core::storage::stream::segment::SegmentSummary
 pub fn db_core::storage::stream::segment::SegmentSummary::column(&self, &str) -> core::option::Option<&db_core::storage::stream::segment::ColumnSummary>
 impl core::clone::Clone for db_core::storage::stream::segment::SegmentSummary
-pub fn db_core::storage::stream::segment::SegmentSummary::clone(&self) -> db_core::storage::stream::segment::SegmentSummary
+pub fn db_core::storage::stream::segment::SegmentSummary::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::segment::SegmentSummary
-pub fn db_core::storage::stream::segment::SegmentSummary::default() -> db_core::storage::stream::segment::SegmentSummary
+pub fn db_core::storage::stream::segment::SegmentSummary::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::segment::SegmentSummary
 pub fn db_core::storage::stream::segment::SegmentSummary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::Source
@@ -5097,7 +5097,7 @@ pub db_core::storage::stream::Source::path_hash: u64
 impl db_core::storage::stream::batch::Source
 pub fn db_core::storage::stream::batch::Source::new(db_core::storage::stream::batch::SourceKind, &str) -> Self
 impl core::clone::Clone for db_core::storage::stream::batch::Source
-pub fn db_core::storage::stream::batch::Source::clone(&self) -> db_core::storage::stream::batch::Source
+pub fn db_core::storage::stream::batch::Source::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::batch::Source
 pub fn db_core::storage::stream::batch::Source::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::StreamSegment
@@ -5105,7 +5105,7 @@ impl db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::new(alloc::sync::Arc<db_core::storage::stream::segment::Segment>, alloc::vec::Vec<db_core::storage::stream::adapter::ColumnRequest>) -> Self
 pub fn db_core::storage::stream::adapter::StreamSegment::segment(&self) -> &alloc::sync::Arc<db_core::storage::stream::segment::Segment>
 impl core::clone::Clone for db_core::storage::stream::adapter::StreamSegment
-pub fn db_core::storage::stream::adapter::StreamSegment::clone(&self) -> db_core::storage::stream::adapter::StreamSegment
+pub fn db_core::storage::stream::adapter::StreamSegment::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::adapter::StreamSegment
 pub fn db_core::storage::stream::adapter::StreamSegment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::vm::batch::Segment for db_core::storage::stream::adapter::StreamSegment
@@ -5119,7 +5119,7 @@ pub fn db_core::storage::stream::syslog::SyslogParser::new() -> Self
 pub fn db_core::storage::stream::syslog::SyslogParser::parse_batch<'a>(&self, db_core::storage::stream::batch::Source, &'a [u8], usize) -> (db_core::storage::stream::batch::LogBatch<'a>, usize)
 pub const fn db_core::storage::stream::syslog::SyslogParser::with_year(i32) -> Self
 impl core::clone::Clone for db_core::storage::stream::syslog::SyslogParser
-pub fn db_core::storage::stream::syslog::SyslogParser::clone(&self) -> db_core::storage::stream::syslog::SyslogParser
+pub fn db_core::storage::stream::syslog::SyslogParser::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::syslog::SyslogParser
 pub fn db_core::storage::stream::syslog::SyslogParser::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::syslog::SyslogParser
@@ -5168,10 +5168,10 @@ impl db_core::storage::stream::batch::Facility
 pub const fn db_core::storage::stream::batch::Facility::as_str(self) -> &'static str
 pub fn db_core::storage::stream::batch::Facility::from_code(u8) -> core::option::Option<Self>
 impl core::clone::Clone for db_core::storage::stream::batch::Facility
-pub fn db_core::storage::stream::batch::Facility::clone(&self) -> db_core::storage::stream::batch::Facility
+pub fn db_core::storage::stream::batch::Facility::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::batch::Facility
 impl core::cmp::PartialEq for db_core::storage::stream::batch::Facility
-pub fn db_core::storage::stream::batch::Facility::eq(&self, &db_core::storage::stream::batch::Facility) -> bool
+pub fn db_core::storage::stream::batch::Facility::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::batch::Facility
 pub fn db_core::storage::stream::batch::Facility::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::storage::stream::batch::Facility
@@ -5190,7 +5190,7 @@ impl<'a> db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::is_empty(&self) -> bool
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::len(&self) -> usize
 impl<'a> core::clone::Clone for db_core::storage::stream::batch::FieldColumn<'a>
-pub fn db_core::storage::stream::batch::FieldColumn<'a>::clone(&self) -> db_core::storage::stream::batch::FieldColumn<'a>
+pub fn db_core::storage::stream::batch::FieldColumn<'a>::clone(&self) -> Self
 impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum db_core::storage::FileError
@@ -5248,14 +5248,14 @@ pub const fn db_core::storage::stream::batch::Severity::from_number(i64) -> core
 pub fn db_core::storage::stream::batch::Severity::from_syslog(u8) -> core::option::Option<Self>
 pub fn db_core::storage::stream::batch::Severity::parse(&str) -> core::option::Option<Self>
 impl core::clone::Clone for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::clone(&self) -> db_core::storage::stream::batch::Severity
+pub fn db_core::storage::stream::batch::Severity::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::batch::Severity
 impl core::cmp::Ord for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::cmp(&self, &db_core::storage::stream::batch::Severity) -> core::cmp::Ordering
+pub fn db_core::storage::stream::batch::Severity::cmp(&self, &Self) -> core::cmp::Ordering
 impl core::cmp::PartialEq for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::eq(&self, &db_core::storage::stream::batch::Severity) -> bool
+pub fn db_core::storage::stream::batch::Severity::eq(&self, &Self) -> bool
 impl core::cmp::PartialOrd for db_core::storage::stream::batch::Severity
-pub fn db_core::storage::stream::batch::Severity::partial_cmp(&self, &db_core::storage::stream::batch::Severity) -> core::option::Option<core::cmp::Ordering>
+pub fn db_core::storage::stream::batch::Severity::partial_cmp(&self, &Self) -> core::option::Option<core::cmp::Ordering>
 impl core::fmt::Debug for db_core::storage::stream::batch::Severity
 pub fn db_core::storage::stream::batch::Severity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::storage::stream::batch::Severity
@@ -5269,10 +5269,10 @@ pub db_core::storage::SourceKind::Journal
 pub db_core::storage::SourceKind::Kubernetes
 pub db_core::storage::SourceKind::Stdin
 impl core::clone::Clone for db_core::storage::stream::batch::SourceKind
-pub fn db_core::storage::stream::batch::SourceKind::clone(&self) -> db_core::storage::stream::batch::SourceKind
+pub fn db_core::storage::stream::batch::SourceKind::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::stream::batch::SourceKind
 impl core::cmp::PartialEq for db_core::storage::stream::batch::SourceKind
-pub fn db_core::storage::stream::batch::SourceKind::eq(&self, &db_core::storage::stream::batch::SourceKind) -> bool
+pub fn db_core::storage::stream::batch::SourceKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::stream::batch::SourceKind
 pub fn db_core::storage::stream::batch::SourceKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::storage::stream::batch::SourceKind
@@ -5290,7 +5290,7 @@ pub fn db_core::storage::stream::batch::FieldStore<'a>::set_bool(&mut self, &str
 pub fn db_core::storage::stream::batch::FieldStore<'a>::set_float(&mut self, &str, usize, f64)
 pub fn db_core::storage::stream::batch::FieldStore<'a>::set_int(&mut self, &str, usize, i64)
 impl<'a> core::default::Default for db_core::storage::stream::batch::FieldStore<'a>
-pub fn db_core::storage::stream::batch::FieldStore<'a>::default() -> db_core::storage::stream::batch::FieldStore<'a>
+pub fn db_core::storage::stream::batch::FieldStore<'a>::default() -> Self
 impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldStore<'a>
 pub fn db_core::storage::stream::batch::FieldStore<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::LogBatch<'a>
@@ -5325,7 +5325,7 @@ impl db_core::storage::column::memory::MemoryVfs
 pub fn db_core::storage::column::memory::MemoryVfs::insert(&self, impl core::convert::Into<std::path::PathBuf>, impl core::convert::Into<alloc::vec::Vec<u8>>)
 pub fn db_core::storage::column::memory::MemoryVfs::new() -> Self
 impl core::default::Default for db_core::storage::column::memory::MemoryVfs
-pub fn db_core::storage::column::memory::MemoryVfs::default() -> db_core::storage::column::memory::MemoryVfs
+pub fn db_core::storage::column::memory::MemoryVfs::default() -> Self
 impl db_core::storage::column::vfs::Vfs for db_core::storage::column::memory::MemoryVfs
 pub type db_core::storage::column::memory::MemoryVfs::File = db_core::storage::column::memory::MemoryFile
 pub fn db_core::storage::column::memory::MemoryVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
@@ -5341,7 +5341,7 @@ pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_gro
 pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub struct db_core::storage::PosixVfs
 impl core::default::Default for db_core::storage::column::posix::PosixVfs
-pub fn db_core::storage::column::posix::PosixVfs::default() -> db_core::storage::column::posix::PosixVfs
+pub fn db_core::storage::column::posix::PosixVfs::default() -> Self
 impl db_core::storage::column::vfs::Vfs for db_core::storage::column::posix::PosixVfs
 pub type db_core::storage::column::posix::PosixVfs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::column::posix::PosixVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
@@ -5354,9 +5354,9 @@ pub db_core::storage::Resource::service_hash: u64
 impl db_core::storage::stream::batch::Resource
 pub fn db_core::storage::stream::batch::Resource::with_hostname(&str) -> Self
 impl core::clone::Clone for db_core::storage::stream::batch::Resource
-pub fn db_core::storage::stream::batch::Resource::clone(&self) -> db_core::storage::stream::batch::Resource
+pub fn db_core::storage::stream::batch::Resource::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::batch::Resource
-pub fn db_core::storage::stream::batch::Resource::default() -> db_core::storage::stream::batch::Resource
+pub fn db_core::storage::stream::batch::Resource::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::batch::Resource
 pub fn db_core::storage::stream::batch::Resource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::RowGroupReader<'a, 'm>
@@ -5393,7 +5393,7 @@ pub db_core::storage::Source::path_hash: u64
 impl db_core::storage::stream::batch::Source
 pub fn db_core::storage::stream::batch::Source::new(db_core::storage::stream::batch::SourceKind, &str) -> Self
 impl core::clone::Clone for db_core::storage::stream::batch::Source
-pub fn db_core::storage::stream::batch::Source::clone(&self) -> db_core::storage::stream::batch::Source
+pub fn db_core::storage::stream::batch::Source::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::batch::Source
 pub fn db_core::storage::stream::batch::Source::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::SyslogParser
@@ -5402,7 +5402,7 @@ pub fn db_core::storage::stream::syslog::SyslogParser::new() -> Self
 pub fn db_core::storage::stream::syslog::SyslogParser::parse_batch<'a>(&self, db_core::storage::stream::batch::Source, &'a [u8], usize) -> (db_core::storage::stream::batch::LogBatch<'a>, usize)
 pub const fn db_core::storage::stream::syslog::SyslogParser::with_year(i32) -> Self
 impl core::clone::Clone for db_core::storage::stream::syslog::SyslogParser
-pub fn db_core::storage::stream::syslog::SyslogParser::clone(&self) -> db_core::storage::stream::syslog::SyslogParser
+pub fn db_core::storage::stream::syslog::SyslogParser::clone(&self) -> Self
 impl core::default::Default for db_core::storage::stream::syslog::SyslogParser
 pub fn db_core::storage::stream::syslog::SyslogParser::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::syslog::SyslogParser
@@ -5437,9 +5437,9 @@ pub db_core::types::Literal::Float(f64)
 pub db_core::types::Literal::Int(i64)
 pub db_core::types::Literal::Str(alloc::string::String)
 impl core::clone::Clone for db_core::types::Literal
-pub fn db_core::types::Literal::clone(&self) -> db_core::types::Literal
+pub fn db_core::types::Literal::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::types::Literal
-pub fn db_core::types::Literal::eq(&self, &db_core::types::Literal) -> bool
+pub fn db_core::types::Literal::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::types::Literal> for db_core::types::Value
 pub fn db_core::types::Value::from(db_core::types::Literal) -> Self
 impl core::fmt::Debug for db_core::types::Literal
@@ -5451,9 +5451,9 @@ pub db_core::types::Value::Int(i64)
 pub db_core::types::Value::Null
 pub db_core::types::Value::Str(alloc::string::String)
 impl core::clone::Clone for db_core::types::Value
-pub fn db_core::types::Value::clone(&self) -> db_core::types::Value
+pub fn db_core::types::Value::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::types::Value
-pub fn db_core::types::Value::eq(&self, &db_core::types::Value) -> bool
+pub fn db_core::types::Value::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::types::Literal> for db_core::types::Value
 pub fn db_core::types::Value::from(db_core::types::Literal) -> Self
 impl core::fmt::Debug for db_core::types::Value
@@ -5465,12 +5465,12 @@ pub db_core::value::Collation::Binary
 pub db_core::value::Collation::NoCase
 pub db_core::value::Collation::RTrim
 impl core::clone::Clone for db_core::value::Collation
-pub fn db_core::value::Collation::clone(&self) -> db_core::value::Collation
+pub fn db_core::value::Collation::clone(&self) -> Self
 impl core::cmp::Eq for db_core::value::Collation
 impl core::cmp::PartialEq for db_core::value::Collation
-pub fn db_core::value::Collation::eq(&self, &db_core::value::Collation) -> bool
+pub fn db_core::value::Collation::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::value::Collation
-pub fn db_core::value::Collation::default() -> db_core::value::Collation
+pub fn db_core::value::Collation::default() -> Self
 impl core::fmt::Debug for db_core::value::Collation
 pub fn db_core::value::Collation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::value::Collation
@@ -5480,10 +5480,10 @@ pub db_core::value::TextEncoding::Utf16Be
 pub db_core::value::TextEncoding::Utf16Le
 pub db_core::value::TextEncoding::Utf8
 impl core::clone::Clone for db_core::value::TextEncoding
-pub fn db_core::value::TextEncoding::clone(&self) -> db_core::value::TextEncoding
+pub fn db_core::value::TextEncoding::clone(&self) -> Self
 impl core::cmp::Eq for db_core::value::TextEncoding
 impl core::cmp::PartialEq for db_core::value::TextEncoding
-pub fn db_core::value::TextEncoding::eq(&self, &db_core::value::TextEncoding) -> bool
+pub fn db_core::value::TextEncoding::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::value::TextEncoding
 pub fn db_core::value::TextEncoding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::value::TextEncoding
@@ -5495,9 +5495,9 @@ pub db_core::value::Value::Null
 pub db_core::value::Value::Real(f64)
 pub db_core::value::Value::Text(alloc::rc::Rc<str>)
 impl core::clone::Clone for db_core::value::Value
-pub fn db_core::value::Value::clone(&self) -> db_core::value::Value
+pub fn db_core::value::Value::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::value::Value
-pub fn db_core::value::Value::eq(&self, &db_core::value::Value) -> bool
+pub fn db_core::value::Value::eq(&self, &Self) -> bool
 impl core::convert::From<&db_core::value::Value> for db_core::engine::Cell
 pub fn db_core::engine::Cell::from(&db_core::value::Value) -> Self
 impl core::convert::From<db_core::value::Value> for db_core::engine::Cell
@@ -5519,10 +5519,10 @@ impl db_core::vm::batch::AggFunc
 pub fn db_core::vm::batch::AggFunc::from_name(&str) -> core::option::Option<Self>
 pub fn db_core::vm::batch::AggFunc::name(self) -> &'static str
 impl core::clone::Clone for db_core::vm::batch::AggFunc
-pub fn db_core::vm::batch::AggFunc::clone(&self) -> db_core::vm::batch::AggFunc
+pub fn db_core::vm::batch::AggFunc::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::batch::AggFunc
 impl core::cmp::PartialEq for db_core::vm::batch::AggFunc
-pub fn db_core::vm::batch::AggFunc::eq(&self, &db_core::vm::batch::AggFunc) -> bool
+pub fn db_core::vm::batch::AggFunc::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::AggFunc
 pub fn db_core::vm::batch::AggFunc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::AggFunc
@@ -5532,9 +5532,9 @@ pub db_core::vm::batch::AggOperand::Avg(usize, usize)
 pub db_core::vm::batch::AggOperand::Literal(f64)
 pub db_core::vm::batch::AggOperand::Slot(usize)
 impl core::clone::Clone for db_core::vm::batch::AggOperand
-pub fn db_core::vm::batch::AggOperand::clone(&self) -> db_core::vm::batch::AggOperand
+pub fn db_core::vm::batch::AggOperand::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::AggOperand
-pub fn db_core::vm::batch::AggOperand::eq(&self, &db_core::vm::batch::AggOperand) -> bool
+pub fn db_core::vm::batch::AggOperand::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::AggOperand
 pub fn db_core::vm::batch::AggOperand::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::AggOperand
@@ -5549,9 +5549,9 @@ pub db_core::vm::batch::AggPart::Max
 pub db_core::vm::batch::AggPart::Min
 pub db_core::vm::batch::AggPart::Sum
 impl core::clone::Clone for db_core::vm::batch::AggPart
-pub fn db_core::vm::batch::AggPart::clone(&self) -> db_core::vm::batch::AggPart
+pub fn db_core::vm::batch::AggPart::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::AggPart
-pub fn db_core::vm::batch::AggPart::eq(&self, &db_core::vm::batch::AggPart) -> bool
+pub fn db_core::vm::batch::AggPart::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::AggPart
 pub fn db_core::vm::batch::AggPart::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::AggPart
@@ -5580,9 +5580,9 @@ pub fn db_core::vm::column::Column::is_empty(&self) -> bool
 pub fn db_core::vm::column::Column::is_null(&self, usize) -> bool
 pub fn db_core::vm::column::Column::len(&self) -> usize
 impl core::clone::Clone for db_core::vm::column::Column
-pub fn db_core::vm::column::Column::clone(&self) -> db_core::vm::column::Column
+pub fn db_core::vm::column::Column::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::column::Column
-pub fn db_core::vm::column::Column::eq(&self, &db_core::vm::column::Column) -> bool
+pub fn db_core::vm::column::Column::eq(&self, &Self) -> bool
 impl core::convert::From<alloc::vec::Vec<db_core::vm::batch::Value>> for db_core::vm::column::Column
 pub fn db_core::vm::column::Column::from(alloc::vec::Vec<db_core::vm::batch::Value>) -> Self
 impl core::fmt::Debug for db_core::vm::column::Column
@@ -5594,10 +5594,10 @@ pub db_core::vm::batch::HiddenPart::Max
 pub db_core::vm::batch::HiddenPart::Min
 pub db_core::vm::batch::HiddenPart::Sum
 impl core::clone::Clone for db_core::vm::batch::HiddenPart
-pub fn db_core::vm::batch::HiddenPart::clone(&self) -> db_core::vm::batch::HiddenPart
+pub fn db_core::vm::batch::HiddenPart::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::batch::HiddenPart
 impl core::cmp::PartialEq for db_core::vm::batch::HiddenPart
-pub fn db_core::vm::batch::HiddenPart::eq(&self, &db_core::vm::batch::HiddenPart) -> bool
+pub fn db_core::vm::batch::HiddenPart::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::HiddenPart
 pub fn db_core::vm::batch::HiddenPart::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::HiddenPart
@@ -5610,10 +5610,10 @@ pub db_core::vm::batch::JoinKind::Left
 pub db_core::vm::batch::JoinKind::Right
 pub db_core::vm::batch::JoinKind::Semi
 impl core::clone::Clone for db_core::vm::batch::JoinKind
-pub fn db_core::vm::batch::JoinKind::clone(&self) -> db_core::vm::batch::JoinKind
+pub fn db_core::vm::batch::JoinKind::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::batch::JoinKind
 impl core::cmp::PartialEq for db_core::vm::batch::JoinKind
-pub fn db_core::vm::batch::JoinKind::eq(&self, &db_core::vm::batch::JoinKind) -> bool
+pub fn db_core::vm::batch::JoinKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::JoinKind
 pub fn db_core::vm::batch::JoinKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::JoinKind
@@ -5642,10 +5642,10 @@ pub db_core::vm::batch::MapOp::Not
 pub db_core::vm::batch::MapOp::Or
 pub db_core::vm::batch::MapOp::Sub
 impl core::clone::Clone for db_core::vm::batch::MapOp
-pub fn db_core::vm::batch::MapOp::clone(&self) -> db_core::vm::batch::MapOp
+pub fn db_core::vm::batch::MapOp::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::batch::MapOp
 impl core::cmp::PartialEq for db_core::vm::batch::MapOp
-pub fn db_core::vm::batch::MapOp::eq(&self, &db_core::vm::batch::MapOp) -> bool
+pub fn db_core::vm::batch::MapOp::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::MapOp
 pub fn db_core::vm::batch::MapOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::MapOp
@@ -5718,9 +5718,9 @@ pub db_core::vm::batch::Opcode::Window::partition_by: alloc::borrow::Cow<'static
 impl db_core::vm::batch::Opcode
 pub fn db_core::vm::batch::Opcode::name(&self) -> &'static str
 impl core::clone::Clone for db_core::vm::batch::Opcode
-pub fn db_core::vm::batch::Opcode::clone(&self) -> db_core::vm::batch::Opcode
+pub fn db_core::vm::batch::Opcode::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::Opcode
-pub fn db_core::vm::batch::Opcode::eq(&self, &db_core::vm::batch::Opcode) -> bool
+pub fn db_core::vm::batch::Opcode::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::Opcode
 pub fn db_core::vm::batch::Opcode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::Opcode
@@ -5734,9 +5734,9 @@ pub db_core::vm::batch::ScanSource::Stream::columns: alloc::borrow::Cow<'static,
 pub db_core::vm::batch::ScanSource::Stream::handle: usize
 pub db_core::vm::batch::ScanSource::Stream::scope: core::option::Option<db_core::vm::stream::Scope>
 impl core::clone::Clone for db_core::vm::batch::ScanSource
-pub fn db_core::vm::batch::ScanSource::clone(&self) -> db_core::vm::batch::ScanSource
+pub fn db_core::vm::batch::ScanSource::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::ScanSource
-pub fn db_core::vm::batch::ScanSource::eq(&self, &db_core::vm::batch::ScanSource) -> bool
+pub fn db_core::vm::batch::ScanSource::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::ScanSource
 pub fn db_core::vm::batch::ScanSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::ScanSource
@@ -5749,9 +5749,9 @@ pub db_core::vm::batch::Value::Str(alloc::borrow::Cow<'static, str>)
 impl db_core::vm::batch::Value
 pub fn db_core::vm::batch::Value::as_f64(&self) -> core::option::Option<f64>
 impl core::clone::Clone for db_core::vm::batch::Value
-pub fn db_core::vm::batch::Value::clone(&self) -> db_core::vm::batch::Value
+pub fn db_core::vm::batch::Value::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::Value
-pub fn db_core::vm::batch::Value::eq(&self, &db_core::vm::batch::Value) -> bool
+pub fn db_core::vm::batch::Value::eq(&self, &Self) -> bool
 impl core::convert::From<db_core::engine::Cell> for db_core::vm::batch::Value
 pub fn db_core::vm::batch::Value::from(db_core::engine::Cell) -> Self
 impl core::convert::From<db_core::vm::batch::Value> for db_core::engine::Cell
@@ -5765,10 +5765,10 @@ pub enum db_core::vm::batch::ValueSource
 pub db_core::vm::batch::ValueSource::Payload(usize)
 pub db_core::vm::batch::ValueSource::Probe(usize)
 impl core::clone::Clone for db_core::vm::batch::ValueSource
-pub fn db_core::vm::batch::ValueSource::clone(&self) -> db_core::vm::batch::ValueSource
+pub fn db_core::vm::batch::ValueSource::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::batch::ValueSource
 impl core::cmp::PartialEq for db_core::vm::batch::ValueSource
-pub fn db_core::vm::batch::ValueSource::eq(&self, &db_core::vm::batch::ValueSource) -> bool
+pub fn db_core::vm::batch::ValueSource::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::ValueSource
 pub fn db_core::vm::batch::ValueSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::ValueSource
@@ -5802,7 +5802,7 @@ pub db_core::vm::batch::VmError::UnsupportedOp
 pub db_core::vm::batch::VmError::UnsupportedOp::op: alloc::string::String
 pub db_core::vm::batch::VmError::UnsupportedOp::opcode: &'static str
 impl core::cmp::PartialEq for db_core::vm::batch::VmError
-pub fn db_core::vm::batch::VmError::eq(&self, &db_core::vm::batch::VmError) -> bool
+pub fn db_core::vm::batch::VmError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::batch::VmError
 impl core::fmt::Debug for db_core::vm::batch::VmError
 pub fn db_core::vm::batch::VmError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -5821,10 +5821,10 @@ pub db_core::vm::batch::WindowFunc::Rank
 pub db_core::vm::batch::WindowFunc::RowNumber
 pub db_core::vm::batch::WindowFunc::Sum
 impl core::clone::Clone for db_core::vm::batch::WindowFunc
-pub fn db_core::vm::batch::WindowFunc::clone(&self) -> db_core::vm::batch::WindowFunc
+pub fn db_core::vm::batch::WindowFunc::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::batch::WindowFunc
 impl core::cmp::PartialEq for db_core::vm::batch::WindowFunc
-pub fn db_core::vm::batch::WindowFunc::eq(&self, &db_core::vm::batch::WindowFunc) -> bool
+pub fn db_core::vm::batch::WindowFunc::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::WindowFunc
 pub fn db_core::vm::batch::WindowFunc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::WindowFunc
@@ -5838,11 +5838,11 @@ pub fn db_core::vm::batch::Batch::new(usize) -> Self
 pub fn db_core::vm::batch::Batch::with_column(self, impl core::convert::Into<alloc::string::String>, alloc::vec::Vec<db_core::vm::batch::Value>) -> Self
 pub fn db_core::vm::batch::Batch::with_typed_column(self, impl core::convert::Into<alloc::string::String>, db_core::vm::column::Column) -> Self
 impl core::clone::Clone for db_core::vm::batch::Batch
-pub fn db_core::vm::batch::Batch::clone(&self) -> db_core::vm::batch::Batch
+pub fn db_core::vm::batch::Batch::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::Batch
-pub fn db_core::vm::batch::Batch::eq(&self, &db_core::vm::batch::Batch) -> bool
+pub fn db_core::vm::batch::Batch::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::vm::batch::Batch
-pub fn db_core::vm::batch::Batch::default() -> db_core::vm::batch::Batch
+pub fn db_core::vm::batch::Batch::default() -> Self
 impl core::fmt::Debug for db_core::vm::batch::Batch
 pub fn db_core::vm::batch::Batch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::Batch
@@ -5856,10 +5856,10 @@ pub fn db_core::vm::column::Bitmap::len(&self) -> usize
 pub fn db_core::vm::column::Bitmap::new(usize, bool) -> Self
 pub fn db_core::vm::column::Bitmap::set(&mut self, usize, bool)
 impl core::clone::Clone for db_core::vm::column::Bitmap
-pub fn db_core::vm::column::Bitmap::clone(&self) -> db_core::vm::column::Bitmap
+pub fn db_core::vm::column::Bitmap::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::column::Bitmap
 impl core::cmp::PartialEq for db_core::vm::column::Bitmap
-pub fn db_core::vm::column::Bitmap::eq(&self, &db_core::vm::column::Bitmap) -> bool
+pub fn db_core::vm::column::Bitmap::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::column::Bitmap
 pub fn db_core::vm::column::Bitmap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::column::Bitmap
@@ -5870,17 +5870,17 @@ impl db_core::vm::batch::Instruction
 pub fn db_core::vm::batch::Instruction::new(db_core::vm::batch::Opcode) -> Self
 pub fn db_core::vm::batch::Instruction::with_comment(db_core::vm::batch::Opcode, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::clone::Clone for db_core::vm::batch::Instruction
-pub fn db_core::vm::batch::Instruction::clone(&self) -> db_core::vm::batch::Instruction
+pub fn db_core::vm::batch::Instruction::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::Instruction
-pub fn db_core::vm::batch::Instruction::eq(&self, &db_core::vm::batch::Instruction) -> bool
+pub fn db_core::vm::batch::Instruction::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::Instruction
 pub fn db_core::vm::batch::Instruction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::Instruction
 pub struct db_core::vm::batch::JoinTables(_)
 impl core::clone::Clone for db_core::vm::batch::JoinTables
-pub fn db_core::vm::batch::JoinTables::clone(&self) -> db_core::vm::batch::JoinTables
+pub fn db_core::vm::batch::JoinTables::clone(&self) -> Self
 impl core::default::Default for db_core::vm::batch::JoinTables
-pub fn db_core::vm::batch::JoinTables::default() -> db_core::vm::batch::JoinTables
+pub fn db_core::vm::batch::JoinTables::default() -> Self
 impl core::fmt::Debug for db_core::vm::batch::JoinTables
 pub fn db_core::vm::batch::JoinTables::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::vm::batch::Program
@@ -5898,11 +5898,11 @@ pub fn db_core::vm::batch::Program::predicate_columns(&self) -> alloc::vec::Vec<
 pub fn db_core::vm::batch::Program::projection_only_columns(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn db_core::vm::batch::Program::split_finalize(&self) -> (alloc::vec::Vec<db_core::vm::batch::Opcode>, core::option::Option<&db_core::vm::batch::Opcode>, core::option::Option<&db_core::vm::batch::Opcode>, core::option::Option<&db_core::vm::batch::Opcode>)
 impl core::clone::Clone for db_core::vm::batch::Program
-pub fn db_core::vm::batch::Program::clone(&self) -> db_core::vm::batch::Program
+pub fn db_core::vm::batch::Program::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::Program
-pub fn db_core::vm::batch::Program::eq(&self, &db_core::vm::batch::Program) -> bool
+pub fn db_core::vm::batch::Program::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::vm::batch::Program
-pub fn db_core::vm::batch::Program::default() -> db_core::vm::batch::Program
+pub fn db_core::vm::batch::Program::default() -> Self
 impl core::fmt::Debug for db_core::vm::batch::Program
 pub fn db_core::vm::batch::Program::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::Program
@@ -5924,9 +5924,9 @@ pub fn db_core::vm::batch::QueryOutput::push_chunk(&mut self, db_core::vm::batch
 pub fn db_core::vm::batch::QueryOutput::rows(&self) -> impl core::iter::traits::iterator::Iterator<Item = alloc::vec::Vec<db_core::vm::batch::Value>> + '_
 pub fn db_core::vm::batch::QueryOutput::truncate(&mut self, usize)
 impl core::clone::Clone for db_core::vm::batch::QueryOutput
-pub fn db_core::vm::batch::QueryOutput::clone(&self) -> db_core::vm::batch::QueryOutput
+pub fn db_core::vm::batch::QueryOutput::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::QueryOutput
-pub fn db_core::vm::batch::QueryOutput::eq(&self, &db_core::vm::batch::QueryOutput) -> bool
+pub fn db_core::vm::batch::QueryOutput::eq(&self, &Self) -> bool
 impl core::cmp::PartialEq<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>> for db_core::vm::batch::QueryOutput
 pub fn db_core::vm::batch::QueryOutput::eq(&self, &alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> bool
 impl core::convert::From<alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>> for db_core::vm::batch::QueryOutput
@@ -5934,7 +5934,7 @@ pub fn db_core::vm::batch::QueryOutput::from(alloc::vec::Vec<alloc::vec::Vec<db_
 impl core::convert::From<db_core::vm::batch::QueryOutput> for alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>
 pub fn alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>::from(db_core::vm::batch::QueryOutput) -> Self
 impl core::default::Default for db_core::vm::batch::QueryOutput
-pub fn db_core::vm::batch::QueryOutput::default() -> db_core::vm::batch::QueryOutput
+pub fn db_core::vm::batch::QueryOutput::default() -> Self
 impl core::fmt::Debug for db_core::vm::batch::QueryOutput
 pub fn db_core::vm::batch::QueryOutput::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::QueryOutput
@@ -5943,7 +5943,7 @@ pub db_core::vm::batch::TopN::col: usize
 pub db_core::vm::batch::TopN::descending: bool
 pub db_core::vm::batch::TopN::limit: usize
 impl core::clone::Clone for db_core::vm::batch::TopN
-pub fn db_core::vm::batch::TopN::clone(&self) -> db_core::vm::batch::TopN
+pub fn db_core::vm::batch::TopN::clone(&self) -> Self
 impl core::fmt::Debug for db_core::vm::batch::TopN
 pub fn db_core::vm::batch::TopN::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::TopN
@@ -5961,7 +5961,7 @@ pub fn db_core::vm::batch::Vm::take_register(&mut self, usize) -> db_core::vm::b
 pub fn db_core::vm::batch::Vm::typed_register(&self, usize) -> core::option::Option<&db_core::vm::column::Column>
 pub fn db_core::vm::batch::Vm::with_join_tables(db_core::vm::batch::JoinTables) -> Self
 impl core::default::Default for db_core::vm::batch::Vm
-pub fn db_core::vm::batch::Vm::default() -> db_core::vm::batch::Vm
+pub fn db_core::vm::batch::Vm::default() -> Self
 impl core::fmt::Debug for db_core::vm::batch::Vm
 pub fn db_core::vm::batch::Vm::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const db_core::vm::batch::BATCH_SIZE: usize
@@ -6023,9 +6023,9 @@ pub fn db_core::vm::column::Column::is_empty(&self) -> bool
 pub fn db_core::vm::column::Column::is_null(&self, usize) -> bool
 pub fn db_core::vm::column::Column::len(&self) -> usize
 impl core::clone::Clone for db_core::vm::column::Column
-pub fn db_core::vm::column::Column::clone(&self) -> db_core::vm::column::Column
+pub fn db_core::vm::column::Column::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::column::Column
-pub fn db_core::vm::column::Column::eq(&self, &db_core::vm::column::Column) -> bool
+pub fn db_core::vm::column::Column::eq(&self, &Self) -> bool
 impl core::convert::From<alloc::vec::Vec<db_core::vm::batch::Value>> for db_core::vm::column::Column
 pub fn db_core::vm::column::Column::from(alloc::vec::Vec<db_core::vm::batch::Value>) -> Self
 impl core::fmt::Debug for db_core::vm::column::Column
@@ -6041,10 +6041,10 @@ pub fn db_core::vm::column::Bitmap::len(&self) -> usize
 pub fn db_core::vm::column::Bitmap::new(usize, bool) -> Self
 pub fn db_core::vm::column::Bitmap::set(&mut self, usize, bool)
 impl core::clone::Clone for db_core::vm::column::Bitmap
-pub fn db_core::vm::column::Bitmap::clone(&self) -> db_core::vm::column::Bitmap
+pub fn db_core::vm::column::Bitmap::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::column::Bitmap
 impl core::cmp::PartialEq for db_core::vm::column::Bitmap
-pub fn db_core::vm::column::Bitmap::eq(&self, &db_core::vm::column::Bitmap) -> bool
+pub fn db_core::vm::column::Bitmap::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::column::Bitmap
 pub fn db_core::vm::column::Bitmap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::column::Bitmap
@@ -6061,9 +6061,9 @@ pub db_core::vm::engine::JoinBuildSide::payload_dst: alloc::vec::Vec<usize>
 pub db_core::vm::engine::JoinBuildSide::right_columns: alloc::vec::Vec<alloc::string::String>
 pub db_core::vm::engine::JoinBuildSide::table_name: alloc::string::String
 impl core::clone::Clone for db_core::vm::engine::JoinBuildSide
-pub fn db_core::vm::engine::JoinBuildSide::clone(&self) -> db_core::vm::engine::JoinBuildSide
+pub fn db_core::vm::engine::JoinBuildSide::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::engine::JoinBuildSide
-pub fn db_core::vm::engine::JoinBuildSide::eq(&self, &db_core::vm::engine::JoinBuildSide) -> bool
+pub fn db_core::vm::engine::JoinBuildSide::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::engine::JoinBuildSide
 pub fn db_core::vm::engine::JoinBuildSide::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::engine::JoinBuildSide
@@ -6076,9 +6076,9 @@ pub db_core::vm::engine::JoinProgram::payload_dst: alloc::vec::Vec<usize>
 pub db_core::vm::engine::JoinProgram::probe: db_core::vm::batch::Program
 pub db_core::vm::engine::JoinProgram::right_columns: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for db_core::vm::engine::JoinProgram
-pub fn db_core::vm::engine::JoinProgram::clone(&self) -> db_core::vm::engine::JoinProgram
+pub fn db_core::vm::engine::JoinProgram::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::engine::JoinProgram
-pub fn db_core::vm::engine::JoinProgram::eq(&self, &db_core::vm::engine::JoinProgram) -> bool
+pub fn db_core::vm::engine::JoinProgram::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::engine::JoinProgram
 pub fn db_core::vm::engine::JoinProgram::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::engine::JoinProgram
@@ -6088,9 +6088,9 @@ pub db_core::vm::engine::MultiJoinProgram::builds: alloc::vec::Vec<db_core::vm::
 pub db_core::vm::engine::MultiJoinProgram::left_columns: alloc::vec::Vec<alloc::string::String>
 pub db_core::vm::engine::MultiJoinProgram::probe: db_core::vm::batch::Program
 impl core::clone::Clone for db_core::vm::engine::MultiJoinProgram
-pub fn db_core::vm::engine::MultiJoinProgram::clone(&self) -> db_core::vm::engine::MultiJoinProgram
+pub fn db_core::vm::engine::MultiJoinProgram::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::engine::MultiJoinProgram
-pub fn db_core::vm::engine::MultiJoinProgram::eq(&self, &db_core::vm::engine::MultiJoinProgram) -> bool
+pub fn db_core::vm::engine::MultiJoinProgram::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::engine::MultiJoinProgram
 pub fn db_core::vm::engine::MultiJoinProgram::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::engine::MultiJoinProgram
@@ -6121,10 +6121,10 @@ pub db_core::vm::join::JoinKind::Left
 pub db_core::vm::join::JoinKind::Right
 pub db_core::vm::join::JoinKind::Semi
 impl core::clone::Clone for db_core::vm::batch::JoinKind
-pub fn db_core::vm::batch::JoinKind::clone(&self) -> db_core::vm::batch::JoinKind
+pub fn db_core::vm::batch::JoinKind::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::batch::JoinKind
 impl core::cmp::PartialEq for db_core::vm::batch::JoinKind
-pub fn db_core::vm::batch::JoinKind::eq(&self, &db_core::vm::batch::JoinKind) -> bool
+pub fn db_core::vm::batch::JoinKind::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::batch::JoinKind
 pub fn db_core::vm::batch::JoinKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::batch::JoinKind
@@ -6161,10 +6161,10 @@ pub fn db_core::vm::row::affinity::Affinity::from_p4_byte(u8) -> db_core::vm::ro
 pub fn db_core::vm::row::affinity::Affinity::is_numeric(self) -> bool
 pub fn db_core::vm::row::affinity::Affinity::to_p4_byte(self) -> u8
 impl core::clone::Clone for db_core::vm::row::affinity::Affinity
-pub fn db_core::vm::row::affinity::Affinity::clone(&self) -> db_core::vm::row::affinity::Affinity
+pub fn db_core::vm::row::affinity::Affinity::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::affinity::Affinity
 impl core::cmp::PartialEq for db_core::vm::row::affinity::Affinity
-pub fn db_core::vm::row::affinity::Affinity::eq(&self, &db_core::vm::row::affinity::Affinity) -> bool
+pub fn db_core::vm::row::affinity::Affinity::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::affinity::Affinity
 pub fn db_core::vm::row::affinity::Affinity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::row::affinity::Affinity
@@ -6188,9 +6188,9 @@ pub db_core::vm::row::aggregate::AggState::Sum::real_total: f64
 pub db_core::vm::row::aggregate::AggState::Sum::saw_any: bool
 pub db_core::vm::row::aggregate::AggState::Sum::saw_real: bool
 impl core::clone::Clone for db_core::vm::row::aggregate::AggState
-pub fn db_core::vm::row::aggregate::AggState::clone(&self) -> db_core::vm::row::aggregate::AggState
+pub fn db_core::vm::row::aggregate::AggState::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::aggregate::AggState
-pub fn db_core::vm::row::aggregate::AggState::eq(&self, &db_core::vm::row::aggregate::AggState) -> bool
+pub fn db_core::vm::row::aggregate::AggState::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::aggregate::AggState
 pub fn db_core::vm::row::aggregate::AggState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::aggregate::AggState
@@ -6199,10 +6199,10 @@ pub db_core::vm::row::aggregate::AggregateError::IntegerOverflow
 pub db_core::vm::row::aggregate::AggregateError::Unknown
 pub db_core::vm::row::aggregate::AggregateError::Unknown::name: alloc::string::String
 impl core::clone::Clone for db_core::vm::row::aggregate::AggregateError
-pub fn db_core::vm::row::aggregate::AggregateError::clone(&self) -> db_core::vm::row::aggregate::AggregateError
+pub fn db_core::vm::row::aggregate::AggregateError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::aggregate::AggregateError
 impl core::cmp::PartialEq for db_core::vm::row::aggregate::AggregateError
-pub fn db_core::vm::row::aggregate::AggregateError::eq(&self, &db_core::vm::row::aggregate::AggregateError) -> bool
+pub fn db_core::vm::row::aggregate::AggregateError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::row::aggregate::AggregateError
 impl core::fmt::Debug for db_core::vm::row::aggregate::AggregateError
 pub fn db_core::vm::row::aggregate::AggregateError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -6234,7 +6234,7 @@ pub struct db_core::vm::row::cursor::AutoIndexCursor
 impl db_core::vm::row::cursor::AutoIndexCursor
 pub fn db_core::vm::row::cursor::AutoIndexCursor::new() -> Self
 impl core::default::Default for db_core::vm::row::cursor::AutoIndexCursor
-pub fn db_core::vm::row::cursor::AutoIndexCursor::default() -> db_core::vm::row::cursor::AutoIndexCursor
+pub fn db_core::vm::row::cursor::AutoIndexCursor::default() -> Self
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::AutoIndexCursor
 pub fn db_core::vm::row::cursor::AutoIndexCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::auto_index_next(&mut self) -> bool
@@ -6468,7 +6468,7 @@ pub struct db_core::vm::row::cursor::PseudoCursor
 impl db_core::vm::row::cursor::PseudoCursor
 pub fn db_core::vm::row::cursor::PseudoCursor::new(&[u8]) -> core::result::Result<Self, db_core::vm::row::record::RecordError>
 impl core::default::Default for db_core::vm::row::cursor::PseudoCursor
-pub fn db_core::vm::row::cursor::PseudoCursor::default() -> db_core::vm::row::cursor::PseudoCursor
+pub fn db_core::vm::row::cursor::PseudoCursor::default() -> Self
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::PseudoCursor
 pub fn db_core::vm::row::cursor::PseudoCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::auto_index_next(&mut self) -> bool
@@ -6944,10 +6944,10 @@ pub fn db_core::vm::row::cursor_conformance::assert_seek_misses_an_absent_rowid<
 pub mod db_core::vm::row::cursor_factory
 pub struct db_core::vm::row::cursor_factory::CursorFactoryError(pub alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::cursor_factory::CursorFactoryError
-pub fn db_core::vm::row::cursor_factory::CursorFactoryError::clone(&self) -> db_core::vm::row::cursor_factory::CursorFactoryError
+pub fn db_core::vm::row::cursor_factory::CursorFactoryError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::cursor_factory::CursorFactoryError
 impl core::cmp::PartialEq for db_core::vm::row::cursor_factory::CursorFactoryError
-pub fn db_core::vm::row::cursor_factory::CursorFactoryError::eq(&self, &db_core::vm::row::cursor_factory::CursorFactoryError) -> bool
+pub fn db_core::vm::row::cursor_factory::CursorFactoryError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::row::cursor_factory::CursorFactoryError
 impl core::fmt::Debug for db_core::vm::row::cursor_factory::CursorFactoryError
 pub fn db_core::vm::row::cursor_factory::CursorFactoryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -6973,9 +6973,9 @@ pub db_core::vm::row::explain::ExplainRow::p3: i32
 pub db_core::vm::row::explain::ExplainRow::p4: alloc::string::String
 pub db_core::vm::row::explain::ExplainRow::p5: u16
 impl core::clone::Clone for db_core::vm::row::explain::ExplainRow
-pub fn db_core::vm::row::explain::ExplainRow::clone(&self) -> db_core::vm::row::explain::ExplainRow
+pub fn db_core::vm::row::explain::ExplainRow::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::explain::ExplainRow
-pub fn db_core::vm::row::explain::ExplainRow::eq(&self, &db_core::vm::row::explain::ExplainRow) -> bool
+pub fn db_core::vm::row::explain::ExplainRow::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::explain::ExplainRow
 pub fn db_core::vm::row::explain::ExplainRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::explain::ExplainRow
@@ -6987,10 +6987,10 @@ pub db_core::vm::row::functions::FunctionError::Unknown
 pub db_core::vm::row::functions::FunctionError::Unknown::arity: usize
 pub db_core::vm::row::functions::FunctionError::Unknown::name: alloc::string::String
 impl core::clone::Clone for db_core::functions::FunctionError
-pub fn db_core::functions::FunctionError::clone(&self) -> db_core::functions::FunctionError
+pub fn db_core::functions::FunctionError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::functions::FunctionError
 impl core::cmp::PartialEq for db_core::functions::FunctionError
-pub fn db_core::functions::FunctionError::eq(&self, &db_core::functions::FunctionError) -> bool
+pub fn db_core::functions::FunctionError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::functions::FunctionError
 impl core::fmt::Debug for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -7124,10 +7124,10 @@ pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Op
 impl db_core::vm::row::program::Opcode
 pub fn db_core::vm::row::program::Opcode::register_operands(self) -> db_core::vm::row::program::RegisterOperands
 impl core::clone::Clone for db_core::vm::row::program::Opcode
-pub fn db_core::vm::row::program::Opcode::clone(&self) -> db_core::vm::row::program::Opcode
+pub fn db_core::vm::row::program::Opcode::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::program::Opcode
 impl core::cmp::PartialEq for db_core::vm::row::program::Opcode
-pub fn db_core::vm::row::program::Opcode::eq(&self, &db_core::vm::row::program::Opcode) -> bool
+pub fn db_core::vm::row::program::Opcode::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::Opcode
 pub fn db_core::vm::row::program::Opcode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::vm::row::program::Opcode
@@ -7175,9 +7175,9 @@ pub db_core::vm::row::program::P4::SeekKey(alloc::vec::Vec<db_core::value::Colla
 pub db_core::vm::row::program::P4::SortKey(alloc::vec::Vec<db_core::vm::row::program::SortKeyColumn>)
 pub db_core::vm::row::program::P4::Str(alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::program::P4
-pub fn db_core::vm::row::program::P4::clone(&self) -> db_core::vm::row::program::P4
+pub fn db_core::vm::row::program::P4::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::P4
-pub fn db_core::vm::row::program::P4::eq(&self, &db_core::vm::row::program::P4) -> bool
+pub fn db_core::vm::row::program::P4::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::P4
 pub fn db_core::vm::row::program::P4::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::P4
@@ -7185,9 +7185,9 @@ pub struct db_core::vm::row::program::AnalyzeIndexTarget
 pub db_core::vm::row::program::AnalyzeIndexTarget::index_name: alloc::string::String
 pub db_core::vm::row::program::AnalyzeIndexTarget::root_page: u32
 impl core::clone::Clone for db_core::vm::row::program::AnalyzeIndexTarget
-pub fn db_core::vm::row::program::AnalyzeIndexTarget::clone(&self) -> db_core::vm::row::program::AnalyzeIndexTarget
+pub fn db_core::vm::row::program::AnalyzeIndexTarget::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::AnalyzeIndexTarget
-pub fn db_core::vm::row::program::AnalyzeIndexTarget::eq(&self, &db_core::vm::row::program::AnalyzeIndexTarget) -> bool
+pub fn db_core::vm::row::program::AnalyzeIndexTarget::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::AnalyzeIndexTarget
 pub fn db_core::vm::row::program::AnalyzeIndexTarget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::AnalyzeIndexTarget
@@ -7196,9 +7196,9 @@ pub db_core::vm::row::program::AnalyzeTarget::indexes: alloc::vec::Vec<db_core::
 pub db_core::vm::row::program::AnalyzeTarget::table_name: alloc::string::String
 pub db_core::vm::row::program::AnalyzeTarget::table_root_page: u32
 impl core::clone::Clone for db_core::vm::row::program::AnalyzeTarget
-pub fn db_core::vm::row::program::AnalyzeTarget::clone(&self) -> db_core::vm::row::program::AnalyzeTarget
+pub fn db_core::vm::row::program::AnalyzeTarget::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::AnalyzeTarget
-pub fn db_core::vm::row::program::AnalyzeTarget::eq(&self, &db_core::vm::row::program::AnalyzeTarget) -> bool
+pub fn db_core::vm::row::program::AnalyzeTarget::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::AnalyzeTarget
 pub fn db_core::vm::row::program::AnalyzeTarget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::AnalyzeTarget
@@ -7207,10 +7207,10 @@ pub db_core::vm::row::program::GroupKeyColumn::affinity: u8
 pub db_core::vm::row::program::GroupKeyColumn::collation: db_core::value::Collation
 pub db_core::vm::row::program::GroupKeyColumn::index: usize
 impl core::clone::Clone for db_core::vm::row::program::GroupKeyColumn
-pub fn db_core::vm::row::program::GroupKeyColumn::clone(&self) -> db_core::vm::row::program::GroupKeyColumn
+pub fn db_core::vm::row::program::GroupKeyColumn::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::program::GroupKeyColumn
 impl core::cmp::PartialEq for db_core::vm::row::program::GroupKeyColumn
-pub fn db_core::vm::row::program::GroupKeyColumn::eq(&self, &db_core::vm::row::program::GroupKeyColumn) -> bool
+pub fn db_core::vm::row::program::GroupKeyColumn::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::GroupKeyColumn
 pub fn db_core::vm::row::program::GroupKeyColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::row::program::GroupKeyColumn
@@ -7230,9 +7230,9 @@ pub fn db_core::vm::row::program::Instruction::new(db_core::vm::row::program::Op
 pub fn db_core::vm::row::program::Instruction::with_comment(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn db_core::vm::row::program::Instruction::with_p4(db_core::vm::row::program::Opcode, i32, i32, i32, db_core::vm::row::program::P4) -> Self
 impl core::clone::Clone for db_core::vm::row::program::Instruction
-pub fn db_core::vm::row::program::Instruction::clone(&self) -> db_core::vm::row::program::Instruction
+pub fn db_core::vm::row::program::Instruction::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::Instruction
-pub fn db_core::vm::row::program::Instruction::eq(&self, &db_core::vm::row::program::Instruction) -> bool
+pub fn db_core::vm::row::program::Instruction::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::Instruction
 pub fn db_core::vm::row::program::Instruction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::Instruction
@@ -7247,11 +7247,11 @@ pub fn db_core::vm::row::program::Program::new(alloc::vec::Vec<db_core::vm::row:
 pub fn db_core::vm::row::program::Program::push(&mut self, db_core::vm::row::program::Instruction) -> &mut Self
 pub fn db_core::vm::row::program::Program::with_param_names(self, alloc::vec::Vec<core::option::Option<alloc::string::String>>) -> Self
 impl core::clone::Clone for db_core::vm::row::program::Program
-pub fn db_core::vm::row::program::Program::clone(&self) -> db_core::vm::row::program::Program
+pub fn db_core::vm::row::program::Program::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::Program
-pub fn db_core::vm::row::program::Program::eq(&self, &db_core::vm::row::program::Program) -> bool
+pub fn db_core::vm::row::program::Program::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::vm::row::program::Program
-pub fn db_core::vm::row::program::Program::default() -> db_core::vm::row::program::Program
+pub fn db_core::vm::row::program::Program::default() -> Self
 impl core::fmt::Debug for db_core::vm::row::program::Program
 pub fn db_core::vm::row::program::Program::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::Program
@@ -7260,10 +7260,10 @@ pub db_core::vm::row::program::RegisterOperands::p1: bool
 pub db_core::vm::row::program::RegisterOperands::p2: bool
 pub db_core::vm::row::program::RegisterOperands::p3: bool
 impl core::clone::Clone for db_core::vm::row::program::RegisterOperands
-pub fn db_core::vm::row::program::RegisterOperands::clone(&self) -> db_core::vm::row::program::RegisterOperands
+pub fn db_core::vm::row::program::RegisterOperands::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::program::RegisterOperands
 impl core::cmp::PartialEq for db_core::vm::row::program::RegisterOperands
-pub fn db_core::vm::row::program::RegisterOperands::eq(&self, &db_core::vm::row::program::RegisterOperands) -> bool
+pub fn db_core::vm::row::program::RegisterOperands::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::RegisterOperands
 pub fn db_core::vm::row::program::RegisterOperands::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::row::program::RegisterOperands
@@ -7274,10 +7274,10 @@ pub db_core::vm::row::program::SortKeyColumn::descending: bool
 pub db_core::vm::row::program::SortKeyColumn::index: usize
 pub db_core::vm::row::program::SortKeyColumn::nulls_first: bool
 impl core::clone::Clone for db_core::vm::row::program::SortKeyColumn
-pub fn db_core::vm::row::program::SortKeyColumn::clone(&self) -> db_core::vm::row::program::SortKeyColumn
+pub fn db_core::vm::row::program::SortKeyColumn::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::program::SortKeyColumn
 impl core::cmp::PartialEq for db_core::vm::row::program::SortKeyColumn
-pub fn db_core::vm::row::program::SortKeyColumn::eq(&self, &db_core::vm::row::program::SortKeyColumn) -> bool
+pub fn db_core::vm::row::program::SortKeyColumn::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::SortKeyColumn
 pub fn db_core::vm::row::program::SortKeyColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::row::program::SortKeyColumn
@@ -7306,10 +7306,10 @@ pub db_core::vm::row::record::RecordError::TrailingData::trailing: usize
 pub db_core::vm::row::record::RecordError::UnexpectedEof
 pub db_core::vm::row::record::RecordError::UnexpectedEof::offset: usize
 impl core::clone::Clone for db_core::vm::row::record::RecordError
-pub fn db_core::vm::row::record::RecordError::clone(&self) -> db_core::vm::row::record::RecordError
+pub fn db_core::vm::row::record::RecordError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::record::RecordError
 impl core::cmp::PartialEq for db_core::vm::row::record::RecordError
-pub fn db_core::vm::row::record::RecordError::eq(&self, &db_core::vm::row::record::RecordError) -> bool
+pub fn db_core::vm::row::record::RecordError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::row::record::RecordError
 impl core::fmt::Debug for db_core::vm::row::record::RecordError
 pub fn db_core::vm::row::record::RecordError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -7322,10 +7322,10 @@ pub fn db_core::vm::row::record::encode_record(&[db_core::value::Value], db_core
 pub mod db_core::vm::row::schema_storage
 pub struct db_core::vm::row::schema_storage::SchemaStorageError(pub alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::schema_storage::SchemaStorageError
-pub fn db_core::vm::row::schema_storage::SchemaStorageError::clone(&self) -> db_core::vm::row::schema_storage::SchemaStorageError
+pub fn db_core::vm::row::schema_storage::SchemaStorageError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::schema_storage::SchemaStorageError
 impl core::cmp::PartialEq for db_core::vm::row::schema_storage::SchemaStorageError
-pub fn db_core::vm::row::schema_storage::SchemaStorageError::eq(&self, &db_core::vm::row::schema_storage::SchemaStorageError) -> bool
+pub fn db_core::vm::row::schema_storage::SchemaStorageError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::row::schema_storage::SchemaStorageError
 impl core::fmt::Debug for db_core::vm::row::schema_storage::SchemaStorageError
 pub fn db_core::vm::row::schema_storage::SchemaStorageError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -7355,10 +7355,10 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::write_stat1(&mut self,
 pub mod db_core::vm::row::transaction
 pub struct db_core::vm::row::transaction::TransactionError(pub alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::transaction::TransactionError
-pub fn db_core::vm::row::transaction::TransactionError::clone(&self) -> db_core::vm::row::transaction::TransactionError
+pub fn db_core::vm::row::transaction::TransactionError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::transaction::TransactionError
 impl core::cmp::PartialEq for db_core::vm::row::transaction::TransactionError
-pub fn db_core::vm::row::transaction::TransactionError::eq(&self, &db_core::vm::row::transaction::TransactionError) -> bool
+pub fn db_core::vm::row::transaction::TransactionError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::row::transaction::TransactionError
 impl core::fmt::Debug for db_core::vm::row::transaction::TransactionError
 pub fn db_core::vm::row::transaction::TransactionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -7434,9 +7434,9 @@ pub db_core::vm::row::vm::Step::Halt::message: core::option::Option<alloc::strin
 pub db_core::vm::row::vm::Step::Jump(usize)
 pub db_core::vm::row::vm::Step::Next
 impl core::clone::Clone for db_core::vm::row::vm::Step
-pub fn db_core::vm::row::vm::Step::clone(&self) -> db_core::vm::row::vm::Step
+pub fn db_core::vm::row::vm::Step::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::vm::Step
-pub fn db_core::vm::row::vm::Step::eq(&self, &db_core::vm::row::vm::Step) -> bool
+pub fn db_core::vm::row::vm::Step::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::vm::Step
 pub fn db_core::vm::row::vm::Step::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::vm::Step
@@ -7472,10 +7472,10 @@ pub fn db_core::vm::row::affinity::Affinity::from_p4_byte(u8) -> db_core::vm::ro
 pub fn db_core::vm::row::affinity::Affinity::is_numeric(self) -> bool
 pub fn db_core::vm::row::affinity::Affinity::to_p4_byte(self) -> u8
 impl core::clone::Clone for db_core::vm::row::affinity::Affinity
-pub fn db_core::vm::row::affinity::Affinity::clone(&self) -> db_core::vm::row::affinity::Affinity
+pub fn db_core::vm::row::affinity::Affinity::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::affinity::Affinity
 impl core::cmp::PartialEq for db_core::vm::row::affinity::Affinity
-pub fn db_core::vm::row::affinity::Affinity::eq(&self, &db_core::vm::row::affinity::Affinity) -> bool
+pub fn db_core::vm::row::affinity::Affinity::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::affinity::Affinity
 pub fn db_core::vm::row::affinity::Affinity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::row::affinity::Affinity
@@ -7495,9 +7495,9 @@ pub db_core::vm::row::AggState::Sum::real_total: f64
 pub db_core::vm::row::AggState::Sum::saw_any: bool
 pub db_core::vm::row::AggState::Sum::saw_real: bool
 impl core::clone::Clone for db_core::vm::row::aggregate::AggState
-pub fn db_core::vm::row::aggregate::AggState::clone(&self) -> db_core::vm::row::aggregate::AggState
+pub fn db_core::vm::row::aggregate::AggState::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::aggregate::AggState
-pub fn db_core::vm::row::aggregate::AggState::eq(&self, &db_core::vm::row::aggregate::AggState) -> bool
+pub fn db_core::vm::row::aggregate::AggState::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::aggregate::AggState
 pub fn db_core::vm::row::aggregate::AggState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::aggregate::AggState
@@ -7506,10 +7506,10 @@ pub db_core::vm::row::AggregateError::IntegerOverflow
 pub db_core::vm::row::AggregateError::Unknown
 pub db_core::vm::row::AggregateError::Unknown::name: alloc::string::String
 impl core::clone::Clone for db_core::vm::row::aggregate::AggregateError
-pub fn db_core::vm::row::aggregate::AggregateError::clone(&self) -> db_core::vm::row::aggregate::AggregateError
+pub fn db_core::vm::row::aggregate::AggregateError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::aggregate::AggregateError
 impl core::cmp::PartialEq for db_core::vm::row::aggregate::AggregateError
-pub fn db_core::vm::row::aggregate::AggregateError::eq(&self, &db_core::vm::row::aggregate::AggregateError) -> bool
+pub fn db_core::vm::row::aggregate::AggregateError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::row::aggregate::AggregateError
 impl core::fmt::Debug for db_core::vm::row::aggregate::AggregateError
 pub fn db_core::vm::row::aggregate::AggregateError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -7567,10 +7567,10 @@ pub db_core::vm::row::FunctionError::Unknown
 pub db_core::vm::row::FunctionError::Unknown::arity: usize
 pub db_core::vm::row::FunctionError::Unknown::name: alloc::string::String
 impl core::clone::Clone for db_core::functions::FunctionError
-pub fn db_core::functions::FunctionError::clone(&self) -> db_core::functions::FunctionError
+pub fn db_core::functions::FunctionError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::functions::FunctionError
 impl core::cmp::PartialEq for db_core::functions::FunctionError
-pub fn db_core::functions::FunctionError::eq(&self, &db_core::functions::FunctionError) -> bool
+pub fn db_core::functions::FunctionError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::functions::FunctionError
 impl core::fmt::Debug for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -7692,10 +7692,10 @@ pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Op
 impl db_core::vm::row::program::Opcode
 pub fn db_core::vm::row::program::Opcode::register_operands(self) -> db_core::vm::row::program::RegisterOperands
 impl core::clone::Clone for db_core::vm::row::program::Opcode
-pub fn db_core::vm::row::program::Opcode::clone(&self) -> db_core::vm::row::program::Opcode
+pub fn db_core::vm::row::program::Opcode::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::program::Opcode
 impl core::cmp::PartialEq for db_core::vm::row::program::Opcode
-pub fn db_core::vm::row::program::Opcode::eq(&self, &db_core::vm::row::program::Opcode) -> bool
+pub fn db_core::vm::row::program::Opcode::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::Opcode
 pub fn db_core::vm::row::program::Opcode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::hash::Hash for db_core::vm::row::program::Opcode
@@ -7743,9 +7743,9 @@ pub db_core::vm::row::P4::SeekKey(alloc::vec::Vec<db_core::value::Collation>)
 pub db_core::vm::row::P4::SortKey(alloc::vec::Vec<db_core::vm::row::program::SortKeyColumn>)
 pub db_core::vm::row::P4::Str(alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::program::P4
-pub fn db_core::vm::row::program::P4::clone(&self) -> db_core::vm::row::program::P4
+pub fn db_core::vm::row::program::P4::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::P4
-pub fn db_core::vm::row::program::P4::eq(&self, &db_core::vm::row::program::P4) -> bool
+pub fn db_core::vm::row::program::P4::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::P4
 pub fn db_core::vm::row::program::P4::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::P4
@@ -7763,10 +7763,10 @@ pub db_core::vm::row::RecordError::TrailingData::trailing: usize
 pub db_core::vm::row::RecordError::UnexpectedEof
 pub db_core::vm::row::RecordError::UnexpectedEof::offset: usize
 impl core::clone::Clone for db_core::vm::row::record::RecordError
-pub fn db_core::vm::row::record::RecordError::clone(&self) -> db_core::vm::row::record::RecordError
+pub fn db_core::vm::row::record::RecordError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::record::RecordError
 impl core::cmp::PartialEq for db_core::vm::row::record::RecordError
-pub fn db_core::vm::row::record::RecordError::eq(&self, &db_core::vm::row::record::RecordError) -> bool
+pub fn db_core::vm::row::record::RecordError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::row::record::RecordError
 impl core::fmt::Debug for db_core::vm::row::record::RecordError
 pub fn db_core::vm::row::record::RecordError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -7780,9 +7780,9 @@ pub db_core::vm::row::Step::Halt::message: core::option::Option<alloc::string::S
 pub db_core::vm::row::Step::Jump(usize)
 pub db_core::vm::row::Step::Next
 impl core::clone::Clone for db_core::vm::row::vm::Step
-pub fn db_core::vm::row::vm::Step::clone(&self) -> db_core::vm::row::vm::Step
+pub fn db_core::vm::row::vm::Step::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::vm::Step
-pub fn db_core::vm::row::vm::Step::eq(&self, &db_core::vm::row::vm::Step) -> bool
+pub fn db_core::vm::row::vm::Step::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::vm::Step
 pub fn db_core::vm::row::vm::Step::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::vm::Step
@@ -7790,9 +7790,9 @@ pub struct db_core::vm::row::AnalyzeIndexTarget
 pub db_core::vm::row::AnalyzeIndexTarget::index_name: alloc::string::String
 pub db_core::vm::row::AnalyzeIndexTarget::root_page: u32
 impl core::clone::Clone for db_core::vm::row::program::AnalyzeIndexTarget
-pub fn db_core::vm::row::program::AnalyzeIndexTarget::clone(&self) -> db_core::vm::row::program::AnalyzeIndexTarget
+pub fn db_core::vm::row::program::AnalyzeIndexTarget::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::AnalyzeIndexTarget
-pub fn db_core::vm::row::program::AnalyzeIndexTarget::eq(&self, &db_core::vm::row::program::AnalyzeIndexTarget) -> bool
+pub fn db_core::vm::row::program::AnalyzeIndexTarget::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::AnalyzeIndexTarget
 pub fn db_core::vm::row::program::AnalyzeIndexTarget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::AnalyzeIndexTarget
@@ -7801,9 +7801,9 @@ pub db_core::vm::row::AnalyzeTarget::indexes: alloc::vec::Vec<db_core::vm::row::
 pub db_core::vm::row::AnalyzeTarget::table_name: alloc::string::String
 pub db_core::vm::row::AnalyzeTarget::table_root_page: u32
 impl core::clone::Clone for db_core::vm::row::program::AnalyzeTarget
-pub fn db_core::vm::row::program::AnalyzeTarget::clone(&self) -> db_core::vm::row::program::AnalyzeTarget
+pub fn db_core::vm::row::program::AnalyzeTarget::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::AnalyzeTarget
-pub fn db_core::vm::row::program::AnalyzeTarget::eq(&self, &db_core::vm::row::program::AnalyzeTarget) -> bool
+pub fn db_core::vm::row::program::AnalyzeTarget::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::AnalyzeTarget
 pub fn db_core::vm::row::program::AnalyzeTarget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::AnalyzeTarget
@@ -7811,7 +7811,7 @@ pub struct db_core::vm::row::AutoIndexCursor
 impl db_core::vm::row::cursor::AutoIndexCursor
 pub fn db_core::vm::row::cursor::AutoIndexCursor::new() -> Self
 impl core::default::Default for db_core::vm::row::cursor::AutoIndexCursor
-pub fn db_core::vm::row::cursor::AutoIndexCursor::default() -> db_core::vm::row::cursor::AutoIndexCursor
+pub fn db_core::vm::row::cursor::AutoIndexCursor::default() -> Self
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::AutoIndexCursor
 pub fn db_core::vm::row::cursor::AutoIndexCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::auto_index_next(&mut self) -> bool
@@ -7849,10 +7849,10 @@ pub fn db_core::vm::row::cursor::AutoIndexCursor::sorter_insert(&mut self, alloc
 pub fn db_core::vm::row::cursor::AutoIndexCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::CursorFactoryError(pub alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::cursor_factory::CursorFactoryError
-pub fn db_core::vm::row::cursor_factory::CursorFactoryError::clone(&self) -> db_core::vm::row::cursor_factory::CursorFactoryError
+pub fn db_core::vm::row::cursor_factory::CursorFactoryError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::cursor_factory::CursorFactoryError
 impl core::cmp::PartialEq for db_core::vm::row::cursor_factory::CursorFactoryError
-pub fn db_core::vm::row::cursor_factory::CursorFactoryError::eq(&self, &db_core::vm::row::cursor_factory::CursorFactoryError) -> bool
+pub fn db_core::vm::row::cursor_factory::CursorFactoryError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::row::cursor_factory::CursorFactoryError
 impl core::fmt::Debug for db_core::vm::row::cursor_factory::CursorFactoryError
 pub fn db_core::vm::row::cursor_factory::CursorFactoryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -7949,9 +7949,9 @@ pub db_core::vm::row::ExplainRow::p3: i32
 pub db_core::vm::row::ExplainRow::p4: alloc::string::String
 pub db_core::vm::row::ExplainRow::p5: u16
 impl core::clone::Clone for db_core::vm::row::explain::ExplainRow
-pub fn db_core::vm::row::explain::ExplainRow::clone(&self) -> db_core::vm::row::explain::ExplainRow
+pub fn db_core::vm::row::explain::ExplainRow::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::explain::ExplainRow
-pub fn db_core::vm::row::explain::ExplainRow::eq(&self, &db_core::vm::row::explain::ExplainRow) -> bool
+pub fn db_core::vm::row::explain::ExplainRow::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::explain::ExplainRow
 pub fn db_core::vm::row::explain::ExplainRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::explain::ExplainRow
@@ -7960,10 +7960,10 @@ pub db_core::vm::row::GroupKeyColumn::affinity: u8
 pub db_core::vm::row::GroupKeyColumn::collation: db_core::value::Collation
 pub db_core::vm::row::GroupKeyColumn::index: usize
 impl core::clone::Clone for db_core::vm::row::program::GroupKeyColumn
-pub fn db_core::vm::row::program::GroupKeyColumn::clone(&self) -> db_core::vm::row::program::GroupKeyColumn
+pub fn db_core::vm::row::program::GroupKeyColumn::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::program::GroupKeyColumn
 impl core::cmp::PartialEq for db_core::vm::row::program::GroupKeyColumn
-pub fn db_core::vm::row::program::GroupKeyColumn::eq(&self, &db_core::vm::row::program::GroupKeyColumn) -> bool
+pub fn db_core::vm::row::program::GroupKeyColumn::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::GroupKeyColumn
 pub fn db_core::vm::row::program::GroupKeyColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::row::program::GroupKeyColumn
@@ -8097,9 +8097,9 @@ pub fn db_core::vm::row::program::Instruction::new(db_core::vm::row::program::Op
 pub fn db_core::vm::row::program::Instruction::with_comment(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn db_core::vm::row::program::Instruction::with_p4(db_core::vm::row::program::Opcode, i32, i32, i32, db_core::vm::row::program::P4) -> Self
 impl core::clone::Clone for db_core::vm::row::program::Instruction
-pub fn db_core::vm::row::program::Instruction::clone(&self) -> db_core::vm::row::program::Instruction
+pub fn db_core::vm::row::program::Instruction::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::Instruction
-pub fn db_core::vm::row::program::Instruction::eq(&self, &db_core::vm::row::program::Instruction) -> bool
+pub fn db_core::vm::row::program::Instruction::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::Instruction
 pub fn db_core::vm::row::program::Instruction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::Instruction
@@ -8114,11 +8114,11 @@ pub fn db_core::vm::row::program::Program::new(alloc::vec::Vec<db_core::vm::row:
 pub fn db_core::vm::row::program::Program::push(&mut self, db_core::vm::row::program::Instruction) -> &mut Self
 pub fn db_core::vm::row::program::Program::with_param_names(self, alloc::vec::Vec<core::option::Option<alloc::string::String>>) -> Self
 impl core::clone::Clone for db_core::vm::row::program::Program
-pub fn db_core::vm::row::program::Program::clone(&self) -> db_core::vm::row::program::Program
+pub fn db_core::vm::row::program::Program::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::Program
-pub fn db_core::vm::row::program::Program::eq(&self, &db_core::vm::row::program::Program) -> bool
+pub fn db_core::vm::row::program::Program::eq(&self, &Self) -> bool
 impl core::default::Default for db_core::vm::row::program::Program
-pub fn db_core::vm::row::program::Program::default() -> db_core::vm::row::program::Program
+pub fn db_core::vm::row::program::Program::default() -> Self
 impl core::fmt::Debug for db_core::vm::row::program::Program
 pub fn db_core::vm::row::program::Program::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::Program
@@ -8126,7 +8126,7 @@ pub struct db_core::vm::row::PseudoCursor
 impl db_core::vm::row::cursor::PseudoCursor
 pub fn db_core::vm::row::cursor::PseudoCursor::new(&[u8]) -> core::result::Result<Self, db_core::vm::row::record::RecordError>
 impl core::default::Default for db_core::vm::row::cursor::PseudoCursor
-pub fn db_core::vm::row::cursor::PseudoCursor::default() -> db_core::vm::row::cursor::PseudoCursor
+pub fn db_core::vm::row::cursor::PseudoCursor::default() -> Self
 impl db_core::vm::row::cursor::Cursor for db_core::vm::row::cursor::PseudoCursor
 pub fn db_core::vm::row::cursor::PseudoCursor::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
 pub fn db_core::vm::row::cursor::PseudoCursor::auto_index_next(&mut self) -> bool
@@ -8164,10 +8164,10 @@ pub fn db_core::vm::row::cursor::PseudoCursor::sorter_insert(&mut self, alloc::r
 pub fn db_core::vm::row::cursor::PseudoCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::SchemaStorageError(pub alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::schema_storage::SchemaStorageError
-pub fn db_core::vm::row::schema_storage::SchemaStorageError::clone(&self) -> db_core::vm::row::schema_storage::SchemaStorageError
+pub fn db_core::vm::row::schema_storage::SchemaStorageError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::schema_storage::SchemaStorageError
 impl core::cmp::PartialEq for db_core::vm::row::schema_storage::SchemaStorageError
-pub fn db_core::vm::row::schema_storage::SchemaStorageError::eq(&self, &db_core::vm::row::schema_storage::SchemaStorageError) -> bool
+pub fn db_core::vm::row::schema_storage::SchemaStorageError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::row::schema_storage::SchemaStorageError
 impl core::fmt::Debug for db_core::vm::row::schema_storage::SchemaStorageError
 pub fn db_core::vm::row::schema_storage::SchemaStorageError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -8180,10 +8180,10 @@ pub db_core::vm::row::SortKeyColumn::descending: bool
 pub db_core::vm::row::SortKeyColumn::index: usize
 pub db_core::vm::row::SortKeyColumn::nulls_first: bool
 impl core::clone::Clone for db_core::vm::row::program::SortKeyColumn
-pub fn db_core::vm::row::program::SortKeyColumn::clone(&self) -> db_core::vm::row::program::SortKeyColumn
+pub fn db_core::vm::row::program::SortKeyColumn::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::program::SortKeyColumn
 impl core::cmp::PartialEq for db_core::vm::row::program::SortKeyColumn
-pub fn db_core::vm::row::program::SortKeyColumn::eq(&self, &db_core::vm::row::program::SortKeyColumn) -> bool
+pub fn db_core::vm::row::program::SortKeyColumn::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::program::SortKeyColumn
 pub fn db_core::vm::row::program::SortKeyColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::row::program::SortKeyColumn
@@ -8228,10 +8228,10 @@ pub fn db_core::vm::row::cursor::SorterCursor::sorter_insert(&mut self, alloc::r
 pub fn db_core::vm::row::cursor::SorterCursor::update_payload(&mut self, i64, &alloc::rc::Rc<[u8]>) -> core::option::Option<bool>
 pub struct db_core::vm::row::TransactionError(pub alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::transaction::TransactionError
-pub fn db_core::vm::row::transaction::TransactionError::clone(&self) -> db_core::vm::row::transaction::TransactionError
+pub fn db_core::vm::row::transaction::TransactionError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::transaction::TransactionError
 impl core::cmp::PartialEq for db_core::vm::row::transaction::TransactionError
-pub fn db_core::vm::row::transaction::TransactionError::eq(&self, &db_core::vm::row::transaction::TransactionError) -> bool
+pub fn db_core::vm::row::transaction::TransactionError::eq(&self, &Self) -> bool
 impl core::error::Error for db_core::vm::row::transaction::TransactionError
 impl core::fmt::Debug for db_core::vm::row::transaction::TransactionError
 pub fn db_core::vm::row::transaction::TransactionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -8715,9 +8715,9 @@ pub db_core::vm::stream::EmitMode::Threshold
 pub db_core::vm::stream::EmitMode::Threshold::op: db_core::parser::ast::BinaryOp
 pub db_core::vm::stream::EmitMode::Threshold::threshold: f64
 impl core::clone::Clone for db_core::vm::stream::EmitMode
-pub fn db_core::vm::stream::EmitMode::clone(&self) -> db_core::vm::stream::EmitMode
+pub fn db_core::vm::stream::EmitMode::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::stream::EmitMode
-pub fn db_core::vm::stream::EmitMode::eq(&self, &db_core::vm::stream::EmitMode) -> bool
+pub fn db_core::vm::stream::EmitMode::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::stream::EmitMode
 pub fn db_core::vm::stream::EmitMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::stream::EmitMode
@@ -8729,9 +8729,9 @@ pub db_core::vm::stream::IndexPred::TimeRange
 pub db_core::vm::stream::IndexPred::TimeRange::hi: i64
 pub db_core::vm::stream::IndexPred::TimeRange::lo: i64
 impl core::clone::Clone for db_core::vm::stream::IndexPred
-pub fn db_core::vm::stream::IndexPred::clone(&self) -> db_core::vm::stream::IndexPred
+pub fn db_core::vm::stream::IndexPred::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::stream::IndexPred
-pub fn db_core::vm::stream::IndexPred::eq(&self, &db_core::vm::stream::IndexPred) -> bool
+pub fn db_core::vm::stream::IndexPred::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::stream::IndexPred
 pub fn db_core::vm::stream::IndexPred::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::stream::IndexPred
@@ -8745,10 +8745,10 @@ pub db_core::vm::stream::RangeAggFunc::Sum
 impl db_core::vm::stream::RangeAggFunc
 pub fn db_core::vm::stream::RangeAggFunc::from_name(&str) -> core::option::Option<Self>
 impl core::clone::Clone for db_core::vm::stream::RangeAggFunc
-pub fn db_core::vm::stream::RangeAggFunc::clone(&self) -> db_core::vm::stream::RangeAggFunc
+pub fn db_core::vm::stream::RangeAggFunc::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::stream::RangeAggFunc
 impl core::cmp::PartialEq for db_core::vm::stream::RangeAggFunc
-pub fn db_core::vm::stream::RangeAggFunc::eq(&self, &db_core::vm::stream::RangeAggFunc) -> bool
+pub fn db_core::vm::stream::RangeAggFunc::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::stream::RangeAggFunc
 pub fn db_core::vm::stream::RangeAggFunc::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::stream::RangeAggFunc
@@ -8759,9 +8759,9 @@ pub db_core::vm::stream::Scope::Bytes(u64)
 pub db_core::vm::stream::Scope::Lines(u64)
 pub db_core::vm::stream::Scope::Time(core::time::Duration)
 impl core::clone::Clone for db_core::vm::stream::Scope
-pub fn db_core::vm::stream::Scope::clone(&self) -> db_core::vm::stream::Scope
+pub fn db_core::vm::stream::Scope::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::stream::Scope
-pub fn db_core::vm::stream::Scope::eq(&self, &db_core::vm::stream::Scope) -> bool
+pub fn db_core::vm::stream::Scope::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::stream::Scope
 pub fn db_core::vm::stream::Scope::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::stream::Scope
@@ -8771,9 +8771,9 @@ pub db_core::vm::stream::Epilogue::func: db_core::vm::stream::RangeAggFunc
 pub db_core::vm::stream::Epilogue::watermark: db_core::vm::stream::Watermark
 pub db_core::vm::stream::Epilogue::window: db_core::vm::stream::Window
 impl core::clone::Clone for db_core::vm::stream::Epilogue
-pub fn db_core::vm::stream::Epilogue::clone(&self) -> db_core::vm::stream::Epilogue
+pub fn db_core::vm::stream::Epilogue::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::stream::Epilogue
-pub fn db_core::vm::stream::Epilogue::eq(&self, &db_core::vm::stream::Epilogue) -> bool
+pub fn db_core::vm::stream::Epilogue::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::stream::Epilogue
 pub fn db_core::vm::stream::Epilogue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::stream::Epilogue
@@ -8783,25 +8783,25 @@ pub db_core::vm::stream::Program::body: db_core::vm::batch::Program
 pub db_core::vm::stream::Program::epilogue: core::option::Option<db_core::vm::stream::Epilogue>
 pub db_core::vm::stream::Program::prune: db_core::vm::stream::Prune
 impl core::clone::Clone for db_core::vm::stream::Program
-pub fn db_core::vm::stream::Program::clone(&self) -> db_core::vm::stream::Program
+pub fn db_core::vm::stream::Program::clone(&self) -> Self
 impl core::fmt::Debug for db_core::vm::stream::Program
 pub fn db_core::vm::stream::Program::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::vm::stream::Prune
 pub db_core::vm::stream::Prune::preds: alloc::vec::Vec<db_core::vm::stream::IndexPred>
 pub db_core::vm::stream::Prune::scope: db_core::vm::stream::Scope
 impl core::clone::Clone for db_core::vm::stream::Prune
-pub fn db_core::vm::stream::Prune::clone(&self) -> db_core::vm::stream::Prune
+pub fn db_core::vm::stream::Prune::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::stream::Prune
-pub fn db_core::vm::stream::Prune::eq(&self, &db_core::vm::stream::Prune) -> bool
+pub fn db_core::vm::stream::Prune::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::stream::Prune
 pub fn db_core::vm::stream::Prune::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::stream::Prune
 pub struct db_core::vm::stream::Watermark
 pub db_core::vm::stream::Watermark::grace: core::time::Duration
 impl core::clone::Clone for db_core::vm::stream::Watermark
-pub fn db_core::vm::stream::Watermark::clone(&self) -> db_core::vm::stream::Watermark
+pub fn db_core::vm::stream::Watermark::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::stream::Watermark
-pub fn db_core::vm::stream::Watermark::eq(&self, &db_core::vm::stream::Watermark) -> bool
+pub fn db_core::vm::stream::Watermark::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::stream::Watermark
 pub fn db_core::vm::stream::Watermark::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::stream::Watermark
@@ -8810,9 +8810,9 @@ pub struct db_core::vm::stream::Window
 pub db_core::vm::stream::Window::size: core::time::Duration
 pub db_core::vm::stream::Window::step: core::time::Duration
 impl core::clone::Clone for db_core::vm::stream::Window
-pub fn db_core::vm::stream::Window::clone(&self) -> db_core::vm::stream::Window
+pub fn db_core::vm::stream::Window::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::stream::Window
-pub fn db_core::vm::stream::Window::eq(&self, &db_core::vm::stream::Window) -> bool
+pub fn db_core::vm::stream::Window::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::stream::Window
 pub fn db_core::vm::stream::Window::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::stream::Window
