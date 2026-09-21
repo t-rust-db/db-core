@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version
+.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version fuzz-sql
 
 help: ## Show this help
 	@echo ""
@@ -46,6 +46,22 @@ SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
 
 test-spike: ## Run only the throwaway experiments under tests/spike/
 	cargo test -p db-core --all-features $(SPIKE_TESTS)
+
+# === Fuzz (db-core#544 -- grammar-driven SQL fuzzing epic #543) ===
+
+# Generation only for now (db-core#544): well-formed statements from
+# src/parser/grammar.ebnf via a seeded, bounded-depth walk, plus a
+# coverage report. No execution or oracle comparison yet -- that lands
+# with the totality runner (#545) and the differential runner (#546),
+# at which point this target grows into the real `make fuzz-sql
+# TARGET=row N=100000` described in #543's acceptance criteria.
+TARGET ?= row
+N ?= 20
+SEED ?= 1
+MAX_DEPTH ?= 16
+
+fuzz-sql: ## Generate N statements for TARGET=row|column|stream from grammar.ebnf (SEED=, MAX_DEPTH=)
+	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) cargo run -q -p fuzz-gen --bin gen
 
 # Scanned file set for `test-mcdc`: all of `src/`, not a curated subset --
 # no obligation is exempted by file selection (ADR 0015, tier 3).
