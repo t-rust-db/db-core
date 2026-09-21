@@ -13,7 +13,11 @@ pub struct Rng(u64);
 impl Rng {
     pub fn new(seed: u64) -> Self {
         // xorshift64 is undefined at seed 0.
-        Rng(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
+        Rng(if seed == 0 {
+            0x9E37_79B9_7F4A_7C15
+        } else {
+            seed
+        })
     }
 
     fn next_u64(&mut self) -> u64 {
@@ -50,7 +54,9 @@ impl VBlockScope {
     fn allows(&self, tags: &[String]) -> bool {
         match self {
             VBlockScope::All => true,
-            VBlockScope::Landed(landed) => tags.is_empty() || tags.iter().any(|t| landed.contains(t)),
+            VBlockScope::Landed(landed) => {
+                tags.is_empty() || tags.iter().any(|t| landed.contains(t))
+            }
         }
     }
 }
@@ -153,7 +159,12 @@ impl<'g> Walker<'g> {
             .collect()
     }
 
-    fn expand_rule(&mut self, name: &str, depth: usize, out: &mut Vec<String>) -> Result<(), WalkError> {
+    fn expand_rule(
+        &mut self,
+        name: &str,
+        depth: usize,
+        out: &mut Vec<String>,
+    ) -> Result<(), WalkError> {
         // `max_depth` only biases alternative choice toward termination; a
         // grammar with a rule that has no zero-complexity (terminal-only)
         // base case at all would otherwise recurse forever. This hard cap
@@ -191,7 +202,9 @@ impl<'g> Walker<'g> {
                 .min_by_key(|&i| {
                     rule.alternatives
                         .get(i)
-                        .and_then(|seq| sequence_min_height(seq, &self.min_heights, self.grammar, self.section))
+                        .and_then(|seq| {
+                            sequence_min_height(seq, &self.min_heights, self.grammar, self.section)
+                        })
                         .unwrap_or(usize::MAX)
                 })
                 .unwrap_or(0)
@@ -203,7 +216,9 @@ impl<'g> Walker<'g> {
         self.visited.insert((name.to_string(), chosen_idx));
 
         let Some(sequence) = rule.alternatives.get(chosen_idx) else {
-            return Err(WalkError(format!("internal: alternative {chosen_idx} missing for rule '{name}'")));
+            return Err(WalkError(format!(
+                "internal: alternative {chosen_idx} missing for rule '{name}'"
+            )));
         };
         let sequence = sequence.clone();
         for term in &sequence {
@@ -212,7 +227,12 @@ impl<'g> Walker<'g> {
         Ok(())
     }
 
-    fn expand_term(&mut self, term: &Term, depth: usize, out: &mut Vec<String>) -> Result<(), WalkError> {
+    fn expand_term(
+        &mut self,
+        term: &Term,
+        depth: usize,
+        out: &mut Vec<String>,
+    ) -> Result<(), WalkError> {
         match term {
             Term::Terminal(text) => {
                 out.push(text.clone());
@@ -248,13 +268,20 @@ impl<'g> Walker<'g> {
         }
     }
 
-    fn expand_alternation(&mut self, alts: &Alternation, depth: usize, out: &mut Vec<String>) -> Result<(), WalkError> {
+    fn expand_alternation(
+        &mut self,
+        alts: &Alternation,
+        depth: usize,
+        out: &mut Vec<String>,
+    ) -> Result<(), WalkError> {
         if alts.is_empty() {
             return Ok(());
         }
         let idx = self.rng.gen_range(alts.len());
         let Some(sequence) = alts.get(idx) else {
-            return Err(WalkError("internal: alternation index out of range".to_string()));
+            return Err(WalkError(
+                "internal: alternation index out of range".to_string(),
+            ));
         };
         let sequence = sequence.clone();
         for term in &sequence {
@@ -309,8 +336,16 @@ fn alternation_min_height(
 /// repeatedly tries to compute each still-unknown rule's minimum height
 /// from what's already known, until a full pass makes no more progress.
 /// Terminates because heights only ever decrease into a finite range.
-fn compute_min_heights(grammar: &Grammar, section: Section, scope: &VBlockScope) -> std::collections::HashMap<String, usize> {
-    let rules: Vec<&Rule> = grammar.section(section).values().chain(grammar.shared.values()).collect();
+fn compute_min_heights(
+    grammar: &Grammar,
+    section: Section,
+    scope: &VBlockScope,
+) -> std::collections::HashMap<String, usize> {
+    let rules: Vec<&Rule> = grammar
+        .section(section)
+        .values()
+        .chain(grammar.shared.values())
+        .collect();
     let mut heights: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
     loop {

@@ -140,8 +140,8 @@ fn tokenize(src: &str) -> Result<Vec<Token>, GrammarError> {
                             Some('*') if chars.peek() == Some(&')') && prev != Some('(') => {
                                 let mut probe = chars.clone();
                                 probe.next(); // the ')' we're about to consume
-                                let followed_by_boundary =
-                                    probe.peek().is_none() || probe.peek().is_some_and(|c| c.is_whitespace());
+                                let followed_by_boundary = probe.peek().is_none()
+                                    || probe.peek().is_some_and(|c| c.is_whitespace());
                                 if followed_by_boundary {
                                     chars.next();
                                     break;
@@ -313,7 +313,10 @@ impl Parser {
     /// Parses `sequence { "|" sequence }`. When `top_level` is true,
     /// trailing `(* Vn *)` comments right after each sequence are
     /// collected as that alternative's v-tags.
-    fn parse_alternation(&mut self, top_level: bool) -> Result<(Alternation, Vec<Vec<String>>), GrammarError> {
+    fn parse_alternation(
+        &mut self,
+        top_level: bool,
+    ) -> Result<(Alternation, Vec<Vec<String>>), GrammarError> {
         let mut sequences = Vec::new();
         let mut tags = Vec::new();
         loop {
@@ -343,8 +346,9 @@ impl Parser {
         // otherwise it's trailing (a `(* Vn *)` tag, or ordinary prose
         // before the next `|`/`;`/closer), and must be left for
         // `parse_alternation` to collect or the caller to see.
-        while let Some(Token::Ident(_) | Token::Str(_) | Token::LParen | Token::LBracket | Token::LBrace) =
-            self.peek_significant()
+        while let Some(
+            Token::Ident(_) | Token::Str(_) | Token::LParen | Token::LBracket | Token::LBrace,
+        ) = self.peek_significant()
         {
             self.skip_comments();
             match self.peek() {
@@ -463,8 +467,11 @@ fn section_body_start(src: &str, banner: &str) -> Result<usize, GrammarError> {
 
 /// The byte offset of `banner`'s text within `src`.
 fn banner_offset(src: &str, banner: &str) -> Result<usize, GrammarError> {
-    src.find(banner)
-        .ok_or_else(|| err(format!("section banner {banner:?} not found in grammar file")))
+    src.find(banner).ok_or_else(|| {
+        err(format!(
+            "section banner {banner:?} not found in grammar file"
+        ))
+    })
 }
 
 /// The byte offset where the `(* ... *)` comment block *containing*

@@ -20,7 +20,9 @@ fn parse_target(raw: &str) -> Result<(Section, &'static str), String> {
         "row" => Ok((Section::Sqlite, "sql-stmt")),
         "column" => Ok((Section::Column, "sql-stmt")),
         "stream" => Ok((Section::Sqlite, "expr")),
-        other => Err(format!("unknown TARGET '{other}' (expected row|column|stream)")),
+        other => Err(format!(
+            "unknown TARGET '{other}' (expected row|column|stream)"
+        )),
     }
 }
 
@@ -50,7 +52,10 @@ fn main() {
     // No externally-tracked "landed V-blocks" list exists yet -- runs
     // everything in scope until a later ticket wires `VBlockScope::
     // Landed` in from CI config (db-core#544's WalkerConfig doc comment).
-    let config = WalkerConfig { max_depth, scope: VBlockScope::All };
+    let config = WalkerConfig {
+        max_depth,
+        scope: VBlockScope::All,
+    };
     let mut walker = Walker::new(&grammar, section, seed, config);
 
     for i in 0..n {
@@ -61,6 +66,10 @@ fn main() {
     }
 
     let (exercised, in_scope) = walker.coverage();
-    let pct = if in_scope == 0 { 0.0 } else { 100.0 * exercised as f64 / in_scope as f64 };
+    let pct = if in_scope == 0 {
+        0.0
+    } else {
+        100.0 * exercised as f64 / in_scope as f64
+    };
     eprintln!("\ncoverage: {exercised}/{in_scope} alternatives ({pct:.1}%)");
 }
