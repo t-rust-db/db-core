@@ -1,0 +1,13 @@
+[package]
+name = "fuzz-gen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "EBNF rule-graph parser and seeded generator over db-core's src/parser/grammar.ebnf (#544)"
+
+[lib]
+name = "fuzz_gen"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
