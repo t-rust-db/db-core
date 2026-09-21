@@ -13222,7 +13222,7 @@
   {
     "id": "engine_row_run_statement_e2cf0641",
     "file": "src/engine/row.rs",
-    "line": 251,
+    "line": 252,
     "decision": "vm.autocommit()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13232,7 +13232,7 @@
   {
     "id": "engine_row_compile_one_59c7b064",
     "file": "src/engine/row.rs",
-    "line": 294,
+    "line": 298,
     "decision": "Self::is_select(stmt)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13242,7 +13242,7 @@
   {
     "id": "engine_row_run_query_bb8ec835",
     "file": "src/engine/row.rs",
-    "line": 336,
+    "line": 340,
     "decision": "Self::is_select(&stmt)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13252,7 +13252,7 @@
   {
     "id": "engine_row_run_query_eb834927",
     "file": "src/engine/row.rs",
-    "line": 343,
+    "line": 347,
     "decision": "Self::is_schema_changing(&stmt)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13262,7 +13262,7 @@
   {
     "id": "engine_row_run_query_73f69e09",
     "file": "src/engine/row.rs",
-    "line": 346,
+    "line": 350,
     "decision": "!result.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13272,7 +13272,7 @@
   {
     "id": "engine_row_explain_plan_88ef8800",
     "file": "src/engine/row.rs",
-    "line": 355,
+    "line": 359,
     "decision": "!Self::is_select(&stmt)",
     "conditions": 1,
     "vectors_required": 2,
