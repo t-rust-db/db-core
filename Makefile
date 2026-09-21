@@ -66,9 +66,10 @@ MAX_DEPTH ?= 16
 TIMEOUT_MS ?= 2000
 OUT ?= target/fuzz
 STAGE ?= vm
+JOBS ?= 1
 
-fuzz-sql: ## Totality-fuzz TARGET=row: N statements from grammar.ebnf through parse/codegen/vm (STAGE=parse|codegen|vm, SEED=, MAX_DEPTH=, TIMEOUT_MS=, OUT=, REPLAY=seed:idx)
-	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) TIMEOUT_MS=$(TIMEOUT_MS) OUT=$(OUT) STAGE=$(STAGE) cargo run -q -p fuzz-run --bin run
+fuzz-sql: ## Totality-fuzz TARGET=row: N statements from grammar.ebnf through parse/codegen/vm (STAGE=parse|codegen|vm, JOBS=n, SEED=, MAX_DEPTH=, TIMEOUT_MS=, OUT=, REPLAY=seed:idx)
+	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) TIMEOUT_MS=$(TIMEOUT_MS) OUT=$(OUT) STAGE=$(STAGE) JOBS=$(JOBS) cargo run -q -p fuzz-run --bin run
 
 fuzz-gen: ## Generate N statements for TARGET=row|column|stream from grammar.ebnf without running them (SEED=, MAX_DEPTH=)
 	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) cargo run -q -p fuzz-gen --bin gen

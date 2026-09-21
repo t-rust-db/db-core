@@ -19,7 +19,8 @@ pub mod stage;
 pub use dialect::RowDialect;
 pub use findings::{Finding, FindingsSink};
 pub use runner::{
-    catalog_of, install_panic_capture, probe, RunConfig, RunError, RunSummary, Runner, TempDb,
+    catalog_of, install_panic_capture, probe, run_parallel, RunConfig, RunError, RunSummary,
+    Runner, TempDb,
 };
 pub use stage::{Outcome, Rejection, Stage};
 
