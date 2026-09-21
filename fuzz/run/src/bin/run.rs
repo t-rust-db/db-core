@@ -11,6 +11,7 @@
 //!   STAGE=parse|codegen|vm  last probe to run (default vm: the whole chain)
 //!   ALLOW_IMPLDEF=1         also run RANDOM()/CURRENT_* statements
 //!   VERBOSE=1               print every statement and its outcome
+//!   UNEXERCISED=1           list in-scope grammar alternatives never chosen
 //!
 //! Exit codes: 0 clean, 3 findings recorded, 2 bad arguments, 1 setup
 //! failure.
@@ -152,6 +153,13 @@ fn main() {
         "grammar coverage: {exercised}/{in_scope} alternatives; workers spawned: {}",
         runner.workers_spawned()
     );
+    let unexercised = walker.unexercised();
+    if !unexercised.is_empty() && (verbose || env_var("UNEXERCISED", "0") == "1") {
+        eprintln!("unexercised alternatives:");
+        for (rule, idx, text) in &unexercised {
+            eprintln!("  {rule}[{idx}] ::= {text}");
+        }
+    }
     if !summary.findings.is_empty() {
         if replay.is_none() {
             eprintln!("findings written under {}", out_dir.display());

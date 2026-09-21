@@ -119,6 +119,12 @@ pub struct Walker<'g> {
     config: WalkerConfig,
     rng: Rng,
     visited: HashSet<CoverageKey>,
+    /// Rules the dialect hook answered for, so their grammar alternatives
+    /// were never walked; excluded from the coverage denominator.
+    substituted: HashSet<String>,
+    /// Entry rules `generate` has been called with; the denominator only
+    /// counts alternatives reachable from these.
+    entries: HashSet<String>,
     /// Minimum number of expansion steps needed to reach an all-terminal
     /// derivation for each rule name, computed once up front by fixpoint
     /// relaxation (`None` for a rule with no terminal-reachable
@@ -138,6 +144,8 @@ impl<'g> Walker<'g> {
             config,
             rng: Rng::new(seed),
             visited: HashSet::new(),
+            substituted: HashSet::new(),
+            entries: HashSet::new(),
             min_heights,
         }
     }
@@ -145,6 +153,7 @@ impl<'g> Walker<'g> {
     /// Generates a whitespace-joined token string from `entry_rule`.
     pub fn generate(&mut self, entry_rule: &str) -> Result<String, WalkError> {
         let mut out = Vec::new();
+        self.entries.insert(entry_rule.to_string());
         self.expand_rule(entry_rule, 0, &mut out)?;
         Ok(out.join(" "))
     }
@@ -155,21 +164,84 @@ impl<'g> Walker<'g> {
         self.min_heights.get(name).copied()
     }
 
-    /// `rules exercised / rules in scope` for this walker's section, as
-    /// tracked by every `generate` call made so far.
+    /// `alternatives exercised / alternatives in scope`, where "in scope"
+    /// means: allowed by the V-block scope, belonging to a rule reachable
+    /// from an entry rule `generate` was called with, and not answered by
+    /// the dialect hook (a substituted rule's grammar alternatives are
+    /// by design never walked, so they are neither hits nor misses).
     pub fn coverage(&self) -> (usize, usize) {
-        let exercised = self.visited.len();
-        let in_scope = self.in_scope_alternative_count();
-        (exercised, in_scope)
+        let denominator: usize = self
+            .countable_rules()
+            .map(|rule| self.in_scope_indices(rule).len())
+            .sum();
+        (self.visited.len(), denominator)
     }
 
-    fn in_scope_alternative_count(&self) -> usize {
+    /// Every countable `(rule, alternative-index, alternative text)` this
+    /// walker has never chosen, sorted by rule name -- the epic's
+    /// "unexercised rules listed" line of the coverage report.
+    pub fn unexercised(&self) -> Vec<(String, usize, String)> {
+        let mut out: Vec<(String, usize, String)> = self
+            .countable_rules()
+            .flat_map(|rule| {
+                self.in_scope_indices(rule)
+                    .into_iter()
+                    .filter(|i| !self.visited.contains(&(rule.name.clone(), *i)))
+                    .map(|i| {
+                        let text = rule
+                            .alternatives
+                            .get(i)
+                            .map(|seq| render_sequence(seq))
+                            .unwrap_or_default();
+                        (rule.name.clone(), i, text)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Rules reachable from the entry rules, minus dialect-substituted
+    /// ones. Falls back to every rule of the section when `generate` has
+    /// not been called yet.
+    fn countable_rules(&self) -> impl Iterator<Item = &'g Rule> + '_ {
+        let reachable = self.reachable_rules();
         self.grammar
             .section(self.section)
             .values()
             .chain(self.grammar.shared.values())
-            .map(|rule| self.in_scope_indices(rule).len())
-            .sum()
+            .filter(move |rule| {
+                reachable
+                    .as_ref()
+                    .is_none_or(|set| set.contains(&rule.name))
+                    && !self.substituted.contains(&rule.name)
+            })
+    }
+
+    /// Rule names reachable from the entry rules through in-scope
+    /// alternatives, not descending into substituted rules. `None` when
+    /// no entry rule is known yet.
+    fn reachable_rules(&self) -> Option<HashSet<String>> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut stack: Vec<String> = self.entries.iter().cloned().collect();
+        while let Some(name) = stack.pop() {
+            if !seen.insert(name.clone()) || self.substituted.contains(&name) {
+                continue;
+            }
+            let Some(rule) = self.grammar.resolve(self.section, &name) else {
+                continue;
+            };
+            for i in self.in_scope_indices(rule) {
+                if let Some(seq) = rule.alternatives.get(i) {
+                    collect_references(seq, &mut stack);
+                }
+            }
+        }
+        Some(seen)
     }
 
     fn in_scope_indices(&self, rule: &Rule) -> Vec<usize> {
@@ -200,6 +272,7 @@ impl<'g> Walker<'g> {
         }
         if let Some(dialect) = self.config.dialect.as_mut() {
             if let Some(text) = dialect.substitute(name, &mut self.rng) {
+                self.substituted.insert(name.to_string());
                 out.push(text);
                 return Ok(());
             }
@@ -317,6 +390,42 @@ impl<'g> Walker<'g> {
         }
         Ok(())
     }
+}
+
+/// Pushes every rule name referenced anywhere in `seq`.
+fn collect_references(seq: &[Term], out: &mut Vec<String>) {
+    for term in seq {
+        match term {
+            Term::Terminal(_) => {}
+            Term::NonTerminal(name) => out.push(name.clone()),
+            Term::Group(alts) | Term::Optional(alts) | Term::Repetition(alts) => {
+                for s in alts {
+                    collect_references(s, out);
+                }
+            }
+        }
+    }
+}
+
+/// One alternative as EBNF-ish text, for the unexercised report.
+fn render_sequence(seq: &[Term]) -> String {
+    seq.iter()
+        .map(|t| match t {
+            Term::Terminal(text) => format!("\"{text}\""),
+            Term::NonTerminal(name) => name.clone(),
+            Term::Group(alts) => format!("( {} )", render_alternation(alts)),
+            Term::Optional(alts) => format!("[ {} ]", render_alternation(alts)),
+            Term::Repetition(alts) => format!("{{ {} }}", render_alternation(alts)),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn render_alternation(alts: &Alternation) -> String {
+    alts.iter()
+        .map(|seq| render_sequence(seq))
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 /// Steps needed to reach an all-terminal derivation of `seq`, given each
