@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.118.0] - 2026-09-21
+
+### Added
+
+- **`make fuzz-sql STAGE=parse|codegen|vm`** (#543, PR #554): stops the totality probe chain after the requested stage, for parser-only or codegen-only fuzz runs. A statement that clears the last requested stage counts as ok; the `quick_check` health probe only runs when the VM stage is in the chain. Default `vm` is unchanged.
+
 ## [0.117.0] - 2026-09-21
 
 ### Added

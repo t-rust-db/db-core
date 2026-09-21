@@ -8,6 +8,7 @@
 //!   TIMEOUT_MS              per-statement budget (default 2000)
 //!   OUT                     findings directory (default target/fuzz)
 //!   REPLAY=<seed>:<index>   regenerate exactly that statement and run it
+//!   STAGE=parse|codegen|vm  last probe to run (default vm: the whole chain)
 //!   ALLOW_IMPLDEF=1         also run RANDOM()/CURRENT_* statements
 //!   VERBOSE=1               print every statement and its outcome
 //!
@@ -19,7 +20,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use fuzz_gen::{load_db_core_grammar, Section, VBlockScope, Walker, WalkerConfig};
-use fuzz_run::{catalog_of, fixture_path, FindingsSink, Outcome, RowDialect, RunConfig, Runner};
+use fuzz_run::{
+    catalog_of, fixture_path, FindingsSink, Outcome, RowDialect, RunConfig, Runner, Stage,
+};
 
 fn env_var(name: &str, default: &str) -> String {
     env::var(name).unwrap_or_else(|_| default.to_string())
@@ -45,6 +48,8 @@ fn main() {
     let timeout_ms: u64 = env_var("TIMEOUT_MS", "2000").parse().unwrap_or(2000);
     let out_dir = PathBuf::from(env_var("OUT", "target/fuzz"));
     let allow_impldef = env_var("ALLOW_IMPLDEF", "0") == "1";
+    let stop_after = Stage::parse(&env_var("STAGE", "vm"))
+        .unwrap_or_else(|| fail(2, "STAGE must be parse|codegen|vm"));
     let verbose = env_var("VERBOSE", "0") == "1";
     let replay: Option<usize> = match env::var("REPLAY") {
         Ok(spec) => {
@@ -90,6 +95,7 @@ fn main() {
         fixture,
         timeout: Duration::from_millis(timeout_ms),
         allow_impldef,
+        stop_after,
     };
     let mut runner = Runner::new(run_config).unwrap_or_else(|e| fail(1, &e.to_string()));
 

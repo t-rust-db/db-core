@@ -23,6 +23,16 @@ pub enum Stage {
 }
 
 impl Stage {
+    /// Parses the `STAGE=` knob value.
+    pub fn parse(raw: &str) -> Option<Stage> {
+        match raw {
+            "parse" => Some(Stage::Parse),
+            "codegen" => Some(Stage::Codegen),
+            "vm" => Some(Stage::Vm),
+            _ => None,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Stage::Parse => "parse",

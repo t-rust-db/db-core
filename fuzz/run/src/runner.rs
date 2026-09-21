@@ -46,6 +46,11 @@ pub struct RunConfig {
     /// oracle comparison never sees them. Totality alone would not need
     /// this; it is here so runs are reproducible row-for-row (#546).
     pub allow_impldef: bool,
+    /// Last probe to run. `Stage::Vm` (the default) runs the whole chain;
+    /// `Stage::Parse` fuzzes the parser alone, `Stage::Codegen` stops
+    /// after compile-only. A statement that clears the last requested
+    /// stage counts as `Ok`.
+    pub stop_after: Stage,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -208,7 +213,7 @@ struct Worker {
 }
 
 impl Worker {
-    fn spawn(fixture: PathBuf, label: usize) -> Result<Self, RunError> {
+    fn spawn(fixture: PathBuf, label: usize, stop_after: Stage) -> Result<Self, RunError> {
         let (jobs, job_rx) = mpsc::channel::<String>();
         let (progress_tx, progress) = mpsc::channel::<Progress>();
         // The engine is `!Send`, so it is opened inside the thread; the
@@ -243,15 +248,18 @@ impl Worker {
                 // engine, for corruption repro scripts.
                 let mut history: Vec<String> = Vec::new();
                 while let Ok(sql) = job_rx.recv() {
-                    let mut outcome = run_stages(&mut engine, &sql, &progress_tx, &mut history);
-                    if matches!(
-                        outcome,
-                        Outcome::Ok
-                            | Outcome::Rejected {
-                                stage: Stage::Vm,
-                                ..
-                            }
-                    ) {
+                    let mut outcome =
+                        run_stages(&mut engine, &sql, &progress_tx, &mut history, stop_after);
+                    if stop_after == Stage::Vm
+                        && matches!(
+                            outcome,
+                            Outcome::Ok
+                                | Outcome::Rejected {
+                                    stage: Stage::Vm,
+                                    ..
+                                }
+                        )
+                    {
                         if let Err(message) = health_check(&mut engine) {
                             outcome = Outcome::Corrupted {
                                 message,
@@ -345,14 +353,21 @@ fn run_stages(
     sql: &str,
     progress: &Sender<Progress>,
     history: &mut Vec<String>,
+    stop_after: Stage,
 ) -> Outcome {
     progress.send(Progress::Entering(Stage::Parse)).ok();
     if let Err(outcome) = probe(Stage::Parse, || parse_stage(sql)) {
         return outcome;
     }
+    if stop_after == Stage::Parse {
+        return Outcome::Ok;
+    }
     progress.send(Progress::Entering(Stage::Codegen)).ok();
     if let Err(outcome) = probe(Stage::Codegen, || codegen_stage(engine, sql)) {
         return outcome;
+    }
+    if stop_after == Stage::Codegen {
+        return Outcome::Ok;
     }
     progress.send(Progress::Entering(Stage::Vm)).ok();
     history.push(sql.to_string());
@@ -374,7 +389,7 @@ pub struct Runner {
 impl Runner {
     pub fn new(config: RunConfig) -> Result<Self, RunError> {
         install_panic_capture();
-        let worker = Worker::spawn(config.fixture.clone(), 0)?;
+        let worker = Worker::spawn(config.fixture.clone(), 0, config.stop_after)?;
         Ok(Runner {
             config,
             worker,
@@ -416,7 +431,11 @@ impl Runner {
     }
 
     fn respawn(&mut self) -> Result<(), RunError> {
-        self.worker = Worker::spawn(self.config.fixture.clone(), self.spawned)?;
+        self.worker = Worker::spawn(
+            self.config.fixture.clone(),
+            self.spawned,
+            self.config.stop_after,
+        )?;
         self.spawned = self.spawned.saturating_add(1);
         Ok(())
     }
