@@ -178,3 +178,56 @@ fn dialect_hook_intercepts_rules_before_grammar_expansion() {
     // Untouched rules still expand normally: keywords survive.
     assert!(joined.contains("SELECT") || joined.contains("CREATE") || joined.contains("DROP"));
 }
+
+#[test]
+fn coverage_denominator_counts_reachable_non_substituted_alternatives_only() {
+    let g = grammar();
+    // Without a dialect: every alternative reachable from `sql-stmt`,
+    // which excludes SHARED rules only the column section references
+    // (`comparison-op` is one).
+    let mut plain = Walker::new(&g, Section::Sqlite, 1, WalkerConfig::default());
+    for _ in 0..2000 {
+        plain.generate("sql-stmt").unwrap();
+    }
+    let (_, plain_total) = plain.coverage();
+    assert!(
+        !plain
+            .unexercised()
+            .iter()
+            .any(|(r, _, _)| r == "comparison-op"),
+        "comparison-op is unreachable from sql-stmt and must not count"
+    );
+    // With a dialect answering table-name/column-name/identifier/NUMBER:
+    // those rules' alternatives leave the denominator instead of being
+    // reported as never exercised.
+    let config = WalkerConfig {
+        max_depth: 16,
+        scope: VBlockScope::All,
+        dialect: Some(Box::new(Shout)),
+    };
+    let mut dialect = Walker::new(&g, Section::Sqlite, 1, config);
+    for _ in 0..2000 {
+        dialect.generate("sql-stmt").unwrap();
+    }
+    let (_, dialect_total) = dialect.coverage();
+    assert!(
+        dialect_total < plain_total,
+        "{dialect_total} vs {plain_total}"
+    );
+    let unexercised = dialect.unexercised();
+    for (rule, _, _) in &unexercised {
+        assert!(
+            !matches!(
+                rule.as_str(),
+                "table-name" | "column-name" | "identifier" | "NUMBER"
+            ),
+            "substituted rule {rule} must not be reported"
+        );
+    }
+    // Reported entries render as EBNF-ish text.
+    let mut w = Walker::new(&g, Section::Sqlite, 1, WalkerConfig::default());
+    w.generate("sql-stmt").unwrap();
+    let first = w.unexercised();
+    assert!(!first.is_empty());
+    assert!(first.iter().all(|(_, _, text)| !text.is_empty()));
+}
