@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.119.0] - 2026-09-21
+
+### Added
+
+- **Honest grammar coverage in `make fuzz-sql`, plus `UNEXERCISED=1`** (#543, PR #555): the coverage denominator counts only alternatives reachable from the entry rule (SHARED rules the row section never references, such as `comparison-op`, no longer count) and skips rules the dialect hook answered for. `Walker::unexercised()` lists what remains as EBNF-ish text; the run binary prints it under `UNEXERCISED=1` or `VERBOSE=1`. 117/117 with the dialect at 20k statements, 128/128 generation-only.
+
 ## [0.118.0] - 2026-09-21
 
 ### Added
