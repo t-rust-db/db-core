@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.119.2] - 2026-09-21
+
+### Fixed
+
+- **`DROP INDEX IF EXISTS` on an unknown name is a no-op** (PR #557) instead of `no such index`, matching sqlite3 and the `DROP TABLE IF EXISTS` fix in 0.119.1. Surfaced by reading `make fuzz-sql VERBOSE=1` rejection messages.
+
 ## [0.119.1] - 2026-09-21
 
 ### Fixed
