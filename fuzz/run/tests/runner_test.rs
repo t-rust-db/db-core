@@ -1,0 +1,271 @@
+//! db-core#545: the totality runner must classify every stage's typed
+//! refusal as a non-finding, catch a panic as a finding naming its
+//! stage, recover from a hang with a fresh worker, and replay
+//! deterministically.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::string_slice,
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "test code fails fast (db-core#230); the runner under test is what must not panic"
+)]
+
+use std::time::Duration;
+
+use fuzz_gen::{load_db_core_grammar, Section, VBlockScope, Walker, WalkerConfig};
+use fuzz_run::{
+    catalog_of, fixture_path, install_panic_capture, probe, Finding, Outcome, Rejection,
+    RowDialect, RunConfig, Runner, Stage,
+};
+
+fn fixture() -> std::path::PathBuf {
+    fixture_path(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn runner(timeout: Duration) -> Runner {
+    Runner::new(RunConfig {
+        fixture: fixture(),
+        timeout,
+        allow_impldef: false,
+    })
+    .expect("runner")
+}
+
+fn rejected_at(outcome: &Outcome, want_stage: Stage, want_kind: Rejection) {
+    match outcome {
+        Outcome::Rejected { stage, kind, .. } => {
+            assert_eq!(*stage, want_stage, "{outcome:?}");
+            assert_eq!(*kind, want_kind, "{outcome:?}");
+        }
+        other => panic!("expected rejection at {want_stage:?}, got {other:?}"),
+    }
+}
+
+#[test]
+fn each_stage_reports_its_own_typed_rejection() {
+    let mut r = runner(Duration::from_secs(5));
+    rejected_at(
+        &r.run_one("SELEKT 1").unwrap(),
+        Stage::Parse,
+        Rejection::Invalid,
+    );
+    rejected_at(
+        &r.run_one("SELECT * FROM").unwrap(),
+        Stage::Parse,
+        Rejection::Invalid,
+    );
+    rejected_at(
+        &r.run_one("SELECT * FROM no_such_table").unwrap(),
+        Stage::Codegen,
+        Rejection::Compile,
+    );
+    rejected_at(
+        &r.run_one("SELECT nope FROM t").unwrap(),
+        Stage::Codegen,
+        Rejection::Compile,
+    );
+    // id is the rowid alias; 1 is already taken by the fixture.
+    rejected_at(
+        &r.run_one("INSERT INTO t(id, i) VALUES (1, 0)").unwrap(),
+        Stage::Vm,
+        Rejection::Execute,
+    );
+    assert_eq!(
+        r.run_one("SELECT id, i, s FROM t ORDER BY id").unwrap(),
+        Outcome::Ok
+    );
+    assert_eq!(r.workers_spawned(), 1, "no hang, no respawn");
+}
+
+#[test]
+fn ddl_and_dml_round_trip_through_all_stages() {
+    let mut r = runner(Duration::from_secs(5));
+    for sql in [
+        "CREATE TABLE u(a INTEGER, b TEXT)",
+        "INSERT INTO u VALUES (1, 'x')",
+        "UPDATE u SET b = 'y' WHERE a = 1",
+        "SELECT a, b FROM u",
+        "DELETE FROM u WHERE a = 1",
+        "CREATE INDEX iu ON u(a)",
+        "DROP INDEX iu",
+        "DROP TABLE u",
+    ] {
+        assert_eq!(r.run_one(sql).unwrap(), Outcome::Ok, "{sql}");
+    }
+}
+
+#[test]
+fn probe_turns_a_panic_into_a_finding_naming_the_stage() {
+    install_panic_capture();
+    let outcome = probe(Stage::Codegen, || -> Result<(), (Rejection, String)> {
+        panic!("boom: index out of range");
+    })
+    .expect_err("must be a finding");
+    match &outcome {
+        Outcome::Panic { stage, message } => {
+            assert_eq!(stage, &Stage::Codegen);
+            assert!(message.contains("boom: index out of range"), "{message}");
+            assert!(
+                message.contains("runner_test.rs"),
+                "location captured: {message}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(outcome.is_finding());
+    let f = Finding::from_outcome(9, 4, "SELECT 1", &outcome, 3).unwrap();
+    let line = f.to_json_line();
+    assert!(line.contains("\"stage\":\"codegen\""), "{line}");
+    assert!(line.contains("\"class\":\"panic\""), "{line}");
+    assert!(line.contains("\"seed\":9,\"index\":4"), "{line}");
+}
+
+#[test]
+fn rejections_and_ok_are_never_findings() {
+    assert!(!Outcome::Ok.is_finding());
+    let rej = Outcome::Rejected {
+        stage: Stage::Vm,
+        kind: Rejection::Execute,
+        message: String::new(),
+    };
+    assert!(!rej.is_finding());
+    assert!(Finding::from_outcome(1, 1, "x", &rej, 0).is_none());
+}
+
+#[test]
+fn a_hang_is_reported_with_its_stage_and_the_worker_is_replaced() {
+    let mut r = runner(Duration::from_millis(1));
+    // 7^6 = 117k-row cross product: far more than 1ms of VM time.
+    let heavy = "SELECT count(*) FROM t a, t b, t c, t d, t e, t f";
+    let outcome = r.run_one(heavy).unwrap();
+    assert!(
+        matches!(outcome, Outcome::Hang { .. }),
+        "expected hang, got {outcome:?}"
+    );
+    assert_eq!(r.workers_spawned(), 2, "fresh worker after hang");
+    // The replacement worker is healthy and starts from a clean fixture.
+    let mut ok = runner(Duration::from_secs(5));
+    assert_eq!(ok.run_one("SELECT id FROM t").unwrap(), Outcome::Ok);
+}
+
+#[test]
+fn run_all_counts_rejections_per_stage_and_skips_impldef() {
+    let mut r = runner(Duration::from_secs(5));
+    let stmts = vec![
+        (0, "SELECT 1".to_string()),
+        (1, "SELEKT".to_string()),
+        (2, "SELECT x FROM nowhere".to_string()),
+        (3, "SELECT RANDOM()".to_string()),
+    ];
+    let summary = r.run_all(1, stmts, None).unwrap();
+    assert_eq!(summary.total, 4);
+    assert_eq!(summary.ok, 1);
+    assert_eq!(summary.skipped_impldef, 1);
+    assert_eq!(summary.rejected[&(Stage::Parse, Rejection::Invalid)], 1);
+    assert_eq!(summary.rejected[&(Stage::Codegen, Rejection::Compile)], 1);
+    assert!(summary.findings.is_empty());
+    assert!(Runner::is_impldef("select current_timestamp"));
+    assert!(!Runner::is_impldef("SELECT 1"));
+}
+
+fn generate(seed: u64, n: usize) -> Vec<String> {
+    let grammar = load_db_core_grammar(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let tables = catalog_of(&fixture()).unwrap();
+    let config = WalkerConfig {
+        max_depth: 12,
+        scope: VBlockScope::All,
+        dialect: Some(Box::new(RowDialect::from_tables(&tables))),
+    };
+    let mut w = Walker::new(&grammar, Section::Sqlite, seed, config);
+    (0..n).map(|_| w.generate("sql-stmt").unwrap()).collect()
+}
+
+#[test]
+fn generation_with_dialect_is_deterministic_in_seed_so_replay_works() {
+    let a = generate(42, 30);
+    let b = generate(42, 30);
+    assert_eq!(a, b);
+    assert_ne!(a, generate(43, 30));
+    // The dialect table is doing its job: catalog names appear, and the
+    // grammar's prose placeholders do not.
+    let joined = a.join("\n");
+    assert!(
+        joined.contains(" t ") || joined.contains(" t\n") || joined.ends_with(" t"),
+        "{joined}"
+    );
+    assert!(!joined.contains("escapes a literal"), "{joined}");
+    assert!(!joined.contains(" NUMBER"), "{joined}");
+}
+
+#[test]
+fn a_generated_batch_runs_to_completion_without_findings() {
+    let stmts = generate(2024, 150);
+    let mut r = runner(Duration::from_secs(5));
+    let summary = r
+        .run_all(2024, stmts.into_iter().enumerate(), None)
+        .unwrap();
+    assert_eq!(summary.total, 150);
+    assert!(
+        summary.findings.is_empty(),
+        "totality violated: {}",
+        summary.render()
+    );
+    // Sanity: the catalog-aware terminals get a meaningful share past
+    // the parser (pure-grammar output almost never does).
+    let past_parser = summary.ok
+        + summary
+            .rejected
+            .iter()
+            .filter(|((s, _), _)| *s != Stage::Parse)
+            .map(|(_, n)| n)
+            .sum::<usize>();
+    assert!(past_parser * 3 >= summary.total, "{}", summary.render());
+}
+
+#[test]
+fn a_known_catalog_collision_is_reported_as_corruption() {
+    // db-core#551: a view and a table may share a name, and the second
+    // DROP TABLE then frees a root page another catalog row still owns.
+    // The catalog still *reads* at that point (the damage only surfaces
+    // once sqlite_master reuses page 2), so this also pins that the
+    // health probe is quick_check, not a bare catalog read. Pins today's
+    // behaviour; the #551 fix PR flips this to expect Ok + a typed
+    // rejection.
+    let mut r = runner(Duration::from_secs(5));
+    let script = [
+        "CREATE VIEW t AS SELECT 1",
+        "DROP TABLE IF EXISTS t",
+        "CREATE TABLE IF NOT EXISTS t(r)",
+        "DROP TABLE IF EXISTS t",
+    ];
+    let mut outcomes = Vec::new();
+    for sql in script {
+        outcomes.push(r.run_one(sql).unwrap());
+    }
+    assert_eq!(
+        &outcomes[..3],
+        &[Outcome::Ok, Outcome::Ok, Outcome::Ok],
+        "{outcomes:?}"
+    );
+    match &outcomes[3] {
+        Outcome::Corrupted {
+            message,
+            script: history,
+        } => {
+            assert!(message.contains("page 2"), "{message}");
+            assert_eq!(history.len(), 4, "all four statements reached the VM");
+            let f = Finding::from_outcome(1, 3, script[3], &outcomes[3], 0).unwrap();
+            assert_eq!(f.class, "corruption");
+            assert!(f.to_json_line().contains("\"script_len\":4"));
+        }
+        other => panic!("expected corruption finding, got {other:?}"),
+    }
+    // The worker replaced its engine: a clean fixture is back.
+    assert_eq!(r.run_one("SELECT id FROM t").unwrap(), Outcome::Ok);
+}

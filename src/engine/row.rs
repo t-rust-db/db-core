@@ -236,7 +236,8 @@ impl RowEngine {
                 .into_iter()
                 .map(|r| r.into_iter().map(Cell::from).collect())
                 .collect(),
-            ..Default::default()
+            #[cfg(feature = "vm-stream")]
+            scope_report: None,
         })
     }
 
@@ -263,7 +264,8 @@ impl RowEngine {
                 .into_iter()
                 .map(|r| r.into_iter().map(Cell::from).collect())
                 .collect(),
-            ..Default::default()
+            #[cfg(feature = "vm-stream")]
+            scope_report: None,
         })
     }
 
@@ -273,6 +275,7 @@ impl RowEngine {
     /// through `vm::row` -- deliberately outside this module's tree (ADR
     /// 0000 §(c): the SQLite side never names `vm::batch`), so it takes
     /// only mode-agnostic types (`schema::TableSchema`) from here.
+    #[cfg(any(feature = "vm-batch", test))]
     pub(crate) fn table_schema(&self, table: &str) -> Result<TableSchema, EngineError> {
         let (schemas, _views) = self.catalog()?;
         schemas
@@ -284,6 +287,7 @@ impl RowEngine {
     /// Runs `f` with this engine's shared pager and header -- the only
     /// storage access `engine::cross_mode`'s adapter needs for a read-only
     /// whole-table scan.
+    #[cfg(any(feature = "vm-batch", test))]
     pub(crate) fn with_storage<T>(&self, f: impl FnOnce(&Pager, &DatabaseHeader) -> T) -> T {
         let pager = self.pager.borrow();
         f(&pager, &self.header)

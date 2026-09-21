@@ -140,8 +140,41 @@ fn stream_expr_entry_walks_with_landed_vblock_scope() {
     let config = WalkerConfig {
         max_depth: 32,
         scope: VBlockScope::Landed(landed),
+        dialect: None,
     };
     let mut walker = Walker::new(&g, Section::Sqlite, 99, config);
     let stmt = walker.generate("expr").expect("walk with landed scope ok");
     assert!(!stmt.is_empty());
+}
+
+struct Shout;
+
+impl fuzz_gen::Dialect for Shout {
+    fn substitute(&mut self, rule: &str, _rng: &mut fuzz_gen::Rng) -> Option<String> {
+        match rule {
+            "table-name" => Some("TBL".to_string()),
+            "column-name" | "identifier" => Some("COL".to_string()),
+            "NUMBER" => Some("42".to_string()),
+            _ => None,
+        }
+    }
+}
+
+#[test]
+fn dialect_hook_intercepts_rules_before_grammar_expansion() {
+    let g = grammar();
+    let config = WalkerConfig {
+        max_depth: 12,
+        scope: VBlockScope::All,
+        dialect: Some(Box::new(Shout)),
+    };
+    let mut walker = Walker::new(&g, Section::Sqlite, 5, config);
+    let out: Vec<String> = (0..40)
+        .map(|_| walker.generate("sql-stmt").unwrap())
+        .collect();
+    let joined = out.join("\n");
+    assert!(joined.contains("TBL") || joined.contains("COL"), "{joined}");
+    assert!(!joined.contains(" NUMBER"), "{joined}");
+    // Untouched rules still expand normally: keywords survive.
+    assert!(joined.contains("SELECT") || joined.contains("CREATE") || joined.contains("DROP"));
 }

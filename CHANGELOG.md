@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.117.0] - 2026-09-21
+
+### Added
+
+- **`make fuzz-sql`: per-stage totality runner for the ROW frontend (`fuzz-run` crate)** (#545, PR #553; second increment of fuzzing epic #543): `fuzz-gen` gains a `Dialect` substitution hook so `table-name`/`column-name`/`identifier`/`STRING`/`NUMBER`/`BLOB`/`type-name` are drawn from the opened fixture's live catalog (`tests/fixtures/btrees/select_parity.db`) and typed literal pools instead of grammar prose. The new `fuzz/run` workspace member runs every generated statement through three probes in order -- `parser::row`, then `codegen::row` compile-only via `Engine::explain_opcodes`, then `vm::row` -- each under `catch_unwind` in a worker thread with a per-statement timeout, so a panic names the layer at fault. Typed rejections are counted per stage; findings are panic, hang, or corruption (catalog unreadable or `PRAGMA quick_check` not `ok` after a VM-reaching statement), the latter carrying the engine's full statement history as a self-contained `.sql` repro. `make fuzz-sql N= SEED= MAX_DEPTH= TIMEOUT_MS= OUT= REPLAY=seed:idx` exits 3 on findings; `make fuzz-gen` keeps the generation-only view. First runs filed #551 (view/table name collisions corrupt the file on `DROP TABLE`) and #552 (`DROP VIEW` rejected at codegen).
+
+### Fixed
+
+- **db-core builds warning- and clippy-clean with `engine-row` alone**: `RowEngine::table_schema`/`with_storage` are gated on `vm-batch` (their only non-test consumer is `engine::cross_mode`), and `QueryResult` literals spell the `vm-stream`-only field under `cfg` instead of `..Default::default()`.
+
 ## [0.116.0] - 2026-09-21
 
 ### Added

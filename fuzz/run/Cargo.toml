@@ -1,0 +1,17 @@
+[package]
+name = "fuzz-run"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Totality runner for grammar-generated SQL against db-core's ROW frontend, classified per stage (#545)"
+
+[lib]
+name = "fuzz_run"
+path = "src/lib.rs"
+
+[dependencies]
+fuzz-gen = { path = "../gen" }
+db-core = { path = "../..", default-features = false, features = ["engine-row"] }
+
+[lints]
+workspace = true
