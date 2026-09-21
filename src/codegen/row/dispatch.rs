@@ -49,6 +49,17 @@ pub enum DispatchError {
     /// schema catalog (and it didn't say `IF NOT EXISTS`).
     IndexAlreadyExists(String),
 
+    /// A `CREATE TABLE`/`CREATE VIEW` named a view already present in the
+    /// catalog (and it didn't say `IF NOT EXISTS`). Tables and views share
+    /// one namespace in `sqlite_master`; the message names the *existing*
+    /// object's kind, as sqlite3's `sqlite3StartTable` does (db-core#551).
+    ViewAlreadyExists(String),
+
+    /// `DROP TABLE` named a view. sqlite3: `use DROP VIEW to delete view x`
+    /// (db-core#551 -- resolving the name by type is what keeps the table's
+    /// root page and the view's catalog row from being confused).
+    UseDropView(String),
+
     /// The leading keyword(s) didn't match any statement kind this
     /// dispatcher knows how to parse/compile.
     Unrecognized(String),
@@ -70,6 +81,10 @@ impl std::fmt::Display for DispatchError {
             DispatchError::NoSuchIndex(name) => write!(f, "no such index: {name}"),
             DispatchError::TableAlreadyExists(name) => write!(f, "table {name} already exists"),
             DispatchError::IndexAlreadyExists(name) => write!(f, "index {name} already exists"),
+            DispatchError::ViewAlreadyExists(name) => write!(f, "view {name} already exists"),
+            DispatchError::UseDropView(name) => {
+                write!(f, "use DROP VIEW to delete view {name}")
+            }
             DispatchError::Unrecognized(kw) => {
                 write!(f, "unsupported or unrecognized statement: {kw:?} ...")
             }
@@ -141,17 +156,32 @@ fn parse_error<T: std::fmt::Debug>(other: ParseOutcome<T>) -> DispatchError {
 // puts the `match` on its own line in its own item, so the two decisions
 // (the calling arm's guard, this function's `match`) can never collide.
 
-fn dispatch_create_table(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+/// Tables and views share one namespace in `sqlite_master`. `Some(err)`
+/// when `name` is already taken, with the error naming the kind of the
+/// object that exists (sqlite3's `%s %T already exists`), `None` when it
+/// is free (db-core#551).
+fn name_taken(name: &str, schemas: &[TableSchema], views: &[ViewSchema]) -> Option<DispatchError> {
+    if schemas.iter().any(|s| s.name.eq_ignore_ascii_case(name)) {
+        return Some(DispatchError::TableAlreadyExists(name.to_string()));
+    }
+    if views.iter().any(|v| v.name.eq_ignore_ascii_case(name)) {
+        return Some(DispatchError::ViewAlreadyExists(name.to_string()));
+    }
+    None
+}
+
+fn dispatch_create_table(
+    sql: &str,
+    schemas: &[TableSchema],
+    views: &[ViewSchema],
+) -> Result<Program, DispatchError> {
     match parse_create_table(sql) {
         ParseOutcome::Accepted(create) => {
-            let exists = schemas
-                .iter()
-                .any(|s| s.name.eq_ignore_ascii_case(&create.name));
-            if exists {
+            if let Some(err) = name_taken(&create.name, schemas, views) {
                 if create.if_not_exists {
                     return Ok(no_op_program());
                 }
-                return Err(DispatchError::TableAlreadyExists(create.name));
+                return Err(err);
             }
             Ok(compile_create_table(&create, sql)?)
         }
@@ -159,9 +189,21 @@ fn dispatch_create_table(sql: &str, schemas: &[TableSchema]) -> Result<Program, 
     }
 }
 
-fn dispatch_create_view(sql: &str) -> Result<Program, DispatchError> {
+fn dispatch_create_view(
+    sql: &str,
+    schemas: &[TableSchema],
+    views: &[ViewSchema],
+) -> Result<Program, DispatchError> {
     match parse_create_view(sql) {
-        ParseOutcome::Accepted(create) => Ok(compile_create_view(&create, sql)?),
+        ParseOutcome::Accepted(create) => {
+            if let Some(err) = name_taken(&create.name, schemas, views) {
+                if create.if_not_exists {
+                    return Ok(no_op_program());
+                }
+                return Err(err);
+            }
+            Ok(compile_create_view(&create, sql)?)
+        }
         other => Err(parse_error(other)),
     }
 }
@@ -192,14 +234,31 @@ fn dispatch_create_index(sql: &str, schemas: &[TableSchema]) -> Result<Program, 
     }
 }
 
-fn dispatch_drop_table(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+fn dispatch_drop_table(
+    sql: &str,
+    schemas: &[TableSchema],
+    views: &[ViewSchema],
+) -> Result<Program, DispatchError> {
     match parse_drop_table(sql) {
         ParseOutcome::Accepted(drop) => {
-            let schema = schemas
+            if let Some(schema) = schemas
                 .iter()
                 .find(|s| s.name.eq_ignore_ascii_case(&drop.name))
-                .ok_or_else(|| DispatchError::NoSuchTable(drop.name.clone()))?;
-            Ok(compile_drop_table(&drop, schema)?)
+            {
+                return Ok(compile_drop_table(&drop, schema)?);
+            }
+            // sqlite3 checks the kind before `IF EXISTS`: dropping a view
+            // with DROP TABLE is an error even with IF EXISTS.
+            if views
+                .iter()
+                .any(|v| v.name.eq_ignore_ascii_case(&drop.name))
+            {
+                return Err(DispatchError::UseDropView(drop.name));
+            }
+            if drop.if_exists {
+                return Ok(no_op_program());
+            }
+            Err(DispatchError::NoSuchTable(drop.name))
         }
         other => Err(parse_error(other)),
     }
@@ -421,10 +480,10 @@ pub fn compile_statement(
             }
             other => Err(parse_error(other)),
         },
-        "CREATE" if second == "TABLE" => dispatch_create_table(sql, schemas),
-        "CREATE" if second == "VIEW" => dispatch_create_view(sql),
+        "CREATE" if second == "TABLE" => dispatch_create_table(sql, schemas, views),
+        "CREATE" if second == "VIEW" => dispatch_create_view(sql, schemas, views),
         "CREATE" if is_create_index => dispatch_create_index(sql, schemas),
-        "DROP" if second == "TABLE" => dispatch_drop_table(sql, schemas),
+        "DROP" if second == "TABLE" => dispatch_drop_table(sql, schemas, views),
         "DROP" if second == "INDEX" => dispatch_drop_index(sql, schemas),
         // Reports the statement's actual leading word (uppercased, as
         // before), not `canonical`'s `""` sentinel — this is a cold
@@ -634,7 +693,7 @@ mod already_exists_tests {
     //! succeed; `IF NOT EXISTS` must keep succeeding as a no-op.
 
     use crate::codegen::row::dispatch::{compile_statement, DispatchError};
-    use crate::codegen::row::{IndexSchema, TableSchema};
+    use crate::codegen::row::{IndexSchema, TableSchema, ViewSchema};
     use crate::vm::row::Opcode;
 
     fn schemas() -> Vec<TableSchema> {
@@ -652,6 +711,100 @@ mod already_exists_tests {
             }],
             ..Default::default()
         }]
+    }
+
+    fn views() -> Vec<ViewSchema> {
+        vec![ViewSchema {
+            name: "v".to_string(),
+            sql: "CREATE VIEW v AS SELECT a FROM t".to_string(),
+        }]
+    }
+
+    fn opcodes(program: &crate::vm::row::Program) -> Vec<Opcode> {
+        program.instructions.iter().map(|i| i.opcode).collect()
+    }
+
+    // db-core#551: tables and views share one namespace.
+
+    #[test]
+    fn create_view_over_existing_table_fails_naming_the_table() {
+        let err = compile_statement("CREATE VIEW t AS SELECT 1", &schemas(), &views()).unwrap_err();
+        assert!(matches!(&err, DispatchError::TableAlreadyExists(name) if name == "t"));
+        assert_eq!(err.to_string(), "table t already exists");
+    }
+
+    #[test]
+    fn create_view_over_existing_view_fails_naming_the_view() {
+        let err = compile_statement("CREATE VIEW v AS SELECT 1", &schemas(), &views()).unwrap_err();
+        assert!(matches!(&err, DispatchError::ViewAlreadyExists(name) if name == "v"));
+        assert_eq!(err.to_string(), "view v already exists");
+    }
+
+    #[test]
+    fn create_view_if_not_exists_over_existing_name_is_a_no_op() {
+        for sql in [
+            "CREATE VIEW IF NOT EXISTS t AS SELECT 1",
+            "CREATE VIEW IF NOT EXISTS v AS SELECT 1",
+        ] {
+            let program = compile_statement(sql, &schemas(), &views()).unwrap();
+            assert_eq!(opcodes(&program), vec![Opcode::Init, Opcode::Halt], "{sql}");
+        }
+    }
+
+    #[test]
+    fn create_table_over_existing_view_fails_naming_the_view() {
+        let err = compile_statement("CREATE TABLE v(z INTEGER)", &schemas(), &views()).unwrap_err();
+        assert!(matches!(&err, DispatchError::ViewAlreadyExists(name) if name == "v"));
+        assert_eq!(err.to_string(), "view v already exists");
+        let program = compile_statement(
+            "CREATE TABLE IF NOT EXISTS v(z INTEGER)",
+            &schemas(),
+            &views(),
+        )
+        .unwrap();
+        assert_eq!(opcodes(&program), vec![Opcode::Init, Opcode::Halt]);
+    }
+
+    #[test]
+    fn drop_table_on_a_view_says_use_drop_view_even_with_if_exists() {
+        for sql in ["DROP TABLE v", "DROP TABLE IF EXISTS v"] {
+            let err = compile_statement(sql, &schemas(), &views()).unwrap_err();
+            assert!(
+                matches!(&err, DispatchError::UseDropView(name) if name == "v"),
+                "{sql}"
+            );
+            assert_eq!(err.to_string(), "use DROP VIEW to delete view v");
+        }
+    }
+
+    #[test]
+    fn drop_table_if_exists_on_unknown_name_is_a_no_op() {
+        let program = compile_statement("DROP TABLE IF EXISTS nope", &schemas(), &views()).unwrap();
+        assert_eq!(opcodes(&program), vec![Opcode::Init, Opcode::Halt]);
+        let err = compile_statement("DROP TABLE nope", &schemas(), &views()).unwrap_err();
+        assert_eq!(err.to_string(), "no such table: nope");
+    }
+
+    #[test]
+    fn drop_table_resolves_the_table_when_a_view_shares_its_name() {
+        // A pre-#551 file may already hold both; the table's root page
+        // must be the one freed.
+        let mut both = views();
+        both.push(ViewSchema {
+            name: "t".to_string(),
+            sql: "CREATE VIEW t AS SELECT 1".to_string(),
+        });
+        let program = compile_statement("DROP TABLE t", &schemas(), &both).unwrap();
+        let drop = program
+            .instructions
+            .iter()
+            .find(|i| i.opcode == Opcode::DropTable)
+            .expect("DropTable emitted");
+        assert!(
+            matches!(&drop.p4, crate::vm::row::P4::DropTable { root_page: 2, .. }),
+            "{:?}",
+            drop.p4
+        );
     }
 
     #[test]

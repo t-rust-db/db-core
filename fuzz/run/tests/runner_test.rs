@@ -275,43 +275,44 @@ fn a_generated_batch_runs_to_completion_without_findings() {
 }
 
 #[test]
-fn a_known_catalog_collision_is_reported_as_corruption() {
-    // db-core#551: a view and a table may share a name, and the second
-    // DROP TABLE then frees a root page another catalog row still owns.
-    // The catalog still *reads* at that point (the damage only surfaces
-    // once sqlite_master reuses page 2), so this also pins that the
-    // health probe is quick_check, not a bare catalog read. Pins today's
-    // behaviour; the #551 fix PR flips this to expect Ok + a typed
-    // rejection.
+fn view_table_name_collisions_are_rejected_not_corrupting() {
+    // db-core#551 regression. Before the fix, `CREATE VIEW t` over table
+    // `t` succeeded and the second DROP TABLE freed a root page another
+    // catalog row still owned -- reported by this runner as a
+    // `corruption` finding. Now the collision is a typed rejection and
+    // the rest of the script runs clean.
     let mut r = runner(Duration::from_secs(5));
-    let script = [
-        "CREATE VIEW t AS SELECT 1",
+    let first = r.run_one("CREATE VIEW t AS SELECT 1").unwrap();
+    match &first {
+        Outcome::Rejected {
+            stage: Stage::Codegen,
+            kind: Rejection::Compile,
+            message,
+        } => assert!(message.contains("table t already exists"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    for sql in [
+        "CREATE VIEW IF NOT EXISTS t AS SELECT 1",
         "DROP TABLE IF EXISTS t",
         "CREATE TABLE IF NOT EXISTS t(r)",
         "DROP TABLE IF EXISTS t",
-    ];
-    let mut outcomes = Vec::new();
-    for sql in script {
-        outcomes.push(r.run_one(sql).unwrap());
+        "DROP TABLE IF EXISTS t",
+        "CREATE VIEW v AS SELECT 1",
+    ] {
+        assert_eq!(r.run_one(sql).unwrap(), Outcome::Ok, "{sql}");
+    }
+    match r.run_one("DROP TABLE v").unwrap() {
+        Outcome::Rejected { message, .. } => {
+            assert!(
+                message.contains("use DROP VIEW to delete view v"),
+                "{message}"
+            )
+        }
+        other => panic!("{other:?}"),
     }
     assert_eq!(
-        &outcomes[..3],
-        &[Outcome::Ok, Outcome::Ok, Outcome::Ok],
-        "{outcomes:?}"
+        r.workers_spawned(),
+        1,
+        "no corruption, no engine replacement"
     );
-    match &outcomes[3] {
-        Outcome::Corrupted {
-            message,
-            script: history,
-        } => {
-            assert!(message.contains("page 2"), "{message}");
-            assert_eq!(history.len(), 4, "all four statements reached the VM");
-            let f = Finding::from_outcome(1, 3, script[3], &outcomes[3], 0).unwrap();
-            assert_eq!(f.class, "corruption");
-            assert!(f.to_json_line().contains("\"script_len\":4"));
-        }
-        other => panic!("expected corruption finding, got {other:?}"),
-    }
-    // The worker replaced its engine: a clean fixture is back.
-    assert_eq!(r.run_one("SELECT id FROM t").unwrap(), Outcome::Ok);
 }
