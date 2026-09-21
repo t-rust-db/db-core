@@ -61,10 +61,31 @@ impl VBlockScope {
     }
 }
 
-#[derive(Debug)]
+/// Terminal/rule substitution hook: lets a runner swap the grammar's
+/// bare lexical productions (`table-name`, `column-name`, `identifier`,
+/// `STRING`, `NUMBER`, `BLOB`, `type-name`, ...) for values drawn from a
+/// real catalog, so generated statements name tables that exist and
+/// carry typed literals instead of the grammar's informal prose
+/// (db-core#545). Consulted for every rule reference before the grammar
+/// itself; `None` falls through to the ordinary expansion.
+pub trait Dialect {
+    fn substitute(&mut self, rule: &str, rng: &mut Rng) -> Option<String>;
+}
+
 pub struct WalkerConfig {
     pub max_depth: usize,
     pub scope: VBlockScope,
+    pub dialect: Option<Box<dyn Dialect>>,
+}
+
+impl std::fmt::Debug for WalkerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WalkerConfig")
+            .field("max_depth", &self.max_depth)
+            .field("scope", &self.scope)
+            .field("dialect", &self.dialect.as_ref().map(|_| "<dialect>"))
+            .finish()
+    }
 }
 
 impl Default for WalkerConfig {
@@ -72,6 +93,7 @@ impl Default for WalkerConfig {
         WalkerConfig {
             max_depth: 16,
             scope: VBlockScope::default(),
+            dialect: None,
         }
     }
 }
@@ -175,6 +197,12 @@ impl<'g> Walker<'g> {
             return Err(WalkError(format!(
                 "depth limit exceeded expanding '{name}': grammar may have no terminal base case reachable from here"
             )));
+        }
+        if let Some(dialect) = self.config.dialect.as_mut() {
+            if let Some(text) = dialect.substitute(name, &mut self.rng) {
+                out.push(text);
+                return Ok(());
+            }
         }
         let Some(rule) = self.grammar.resolve(self.section, name) else {
             // Not a defined rule: treat as an implicit tokenizer primitive

@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version fuzz-sql
+.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version fuzz-sql fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -47,20 +47,28 @@ SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \
 test-spike: ## Run only the throwaway experiments under tests/spike/
 	cargo test -p db-core --all-features $(SPIKE_TESTS)
 
-# === Fuzz (db-core#544 -- grammar-driven SQL fuzzing epic #543) ===
-
-# Generation only for now (db-core#544): well-formed statements from
-# src/parser/grammar.ebnf via a seeded, bounded-depth walk, plus a
-# coverage report. No execution or oracle comparison yet -- that lands
-# with the totality runner (#545) and the differential runner (#546),
-# at which point this target grows into the real `make fuzz-sql
-# TARGET=row N=100000` described in #543's acceptance criteria.
+# === Fuzz (db-core#545 -- grammar-driven SQL fuzzing epic #543) ===
+#
+# `fuzz-sql` is the totality probe: generate N statements from
+# src/parser/grammar.ebnf with catalog-aware terminals, run each through
+# parser::row -> codegen::row -> vm::row (each stage under catch_unwind,
+# TIMEOUT_MS per statement) and record only panics/hangs as findings
+# under OUT (findings.jsonl + one .sql per hit). Typed rejections at any
+# stage are the expected outcome and are counted, not reported. Exit 3
+# when findings were recorded. REPLAY=<seed>:<index> re-runs one hit.
+# Oracle comparison (#546) and column/stream targets (#547) come next.
+# `fuzz-gen` is the generation-only view from #544.
 TARGET ?= row
-N ?= 20
+N ?= 1000
 SEED ?= 1
 MAX_DEPTH ?= 16
+TIMEOUT_MS ?= 2000
+OUT ?= target/fuzz
 
-fuzz-sql: ## Generate N statements for TARGET=row|column|stream from grammar.ebnf (SEED=, MAX_DEPTH=)
+fuzz-sql: ## Totality-fuzz TARGET=row: N statements from grammar.ebnf through parse/codegen/vm (SEED=, MAX_DEPTH=, TIMEOUT_MS=, OUT=, REPLAY=seed:idx)
+	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) TIMEOUT_MS=$(TIMEOUT_MS) OUT=$(OUT) cargo run -q -p fuzz-run --bin run
+
+fuzz-gen: ## Generate N statements for TARGET=row|column|stream from grammar.ebnf without running them (SEED=, MAX_DEPTH=)
 	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) cargo run -q -p fuzz-gen --bin gen
 
 # Scanned file set for `test-mcdc`: all of `src/`, not a curated subset --

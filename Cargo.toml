@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "fuzz/gen"]
+members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"

@@ -10,7 +10,7 @@ pub mod ebnf;
 pub mod walker;
 
 pub use ebnf::{Grammar, GrammarError, Section};
-pub use walker::{VBlockScope, WalkError, Walker, WalkerConfig};
+pub use walker::{Dialect, Rng, VBlockScope, WalkError, Walker, WalkerConfig};
 
 /// Parses db-core's own `src/parser/grammar.ebnf` from its canonical
 /// location relative to `manifest_dir` (pass `env!("CARGO_MANIFEST_DIR")`

@@ -55,6 +55,7 @@ fn main() {
     let config = WalkerConfig {
         max_depth,
         scope: VBlockScope::All,
+        dialect: None,
     };
     let mut walker = Walker::new(&grammar, section, seed, config);
 
