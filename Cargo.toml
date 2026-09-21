@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "fuzz/gen"]
+
 [package]
 name = "db-core"
 version = "0.115.1"
@@ -363,14 +366,19 @@ engine-column = ["storage-column", "parser-column", "vm-batch", "codegen-batch"]
 # to `codegen::batch` for the residual query).
 engine-stream = ["storage-stream", "parser-column", "codegen-stream"]
 
-# sqlite-rs's lint bar (#82).
-[lints.rust]
+[lints]
+workspace = true
+
+# sqlite-rs's lint bar (#82). Shared via [workspace.lints] (below) so the
+# `fuzz/gen` workspace member opts into the same bar with `[lints]
+# workspace = true` rather than duplicating it.
+[workspace.lints.rust]
 # `deny` rather than `forbid`: storage::column::mmap and
 # storage::row::vfs::fcntl each carry one documented, audited
 # `#[allow(unsafe_code)]` carve-out (ADR 0016).
 unsafe_code = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 let_underscore_must_use = "deny"
 unwrap_used = "deny"
 expect_used = "deny"
