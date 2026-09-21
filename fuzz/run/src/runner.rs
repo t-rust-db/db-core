@@ -64,13 +64,23 @@ pub struct RunSummary {
 }
 
 impl RunSummary {
+    /// Total typed rejections across all stages.
+    pub fn rejected_total(&self) -> usize {
+        self.rejected.values().fold(0, |a, n| a.saturating_add(*n))
+    }
+
+    /// Findings of one class (`"panic"`, `"hang"`, `"corruption"`).
+    pub fn findings_of(&self, class: &str) -> usize {
+        self.findings.iter().filter(|f| f.class == class).count()
+    }
+
     pub fn render(&self) -> String {
         let mut s = format!(
-            "statements: {}  ok: {}  skipped(impldef): {}  findings: {}\n",
+            "statements: {}  ok: {}  rejected: {}  skipped(impldef): {}\n",
             self.total,
             self.ok,
-            self.skipped_impldef,
-            self.findings.len()
+            self.rejected_total(),
+            self.skipped_impldef
         );
         for ((stage, kind), n) in &self.rejected {
             s.push_str(&format!(
@@ -79,6 +89,13 @@ impl RunSummary {
                 kind.as_str()
             ));
         }
+        s.push_str(&format!(
+            "findings: {}  panic: {}  hang: {}  corruption: {}\n",
+            self.findings.len(),
+            self.findings_of("panic"),
+            self.findings_of("hang"),
+            self.findings_of("corruption")
+        ));
         for f in &self.findings {
             s.push_str(&format!(
                 "  FINDING {} in {} [seed {} #{}]{}: {}\n",
