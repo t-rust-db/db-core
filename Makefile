@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version fuzz-sql fuzz-gen
+.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -67,9 +67,15 @@ TIMEOUT_MS ?= 2000
 OUT ?= target/fuzz
 STAGE ?= vm
 JOBS ?= 1
+# The pinned oracle (parse.y / fixtures: 3.53.4). Homebrew's sqlite is
+# preferred over the system one when present; ORACLE_BIN= overrides.
+ORACLE_BIN ?= $(shell test -x /opt/homebrew/opt/sqlite/bin/sqlite3 && echo /opt/homebrew/opt/sqlite/bin/sqlite3 || echo sqlite3)
 
 fuzz-sql: ## Totality-fuzz TARGET=row: N statements from grammar.ebnf through parse/codegen/vm (STAGE=parse|codegen|vm, JOBS=n, SEED=, MAX_DEPTH=, TIMEOUT_MS=, OUT=, REPLAY=seed:idx)
 	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) TIMEOUT_MS=$(TIMEOUT_MS) OUT=$(OUT) STAGE=$(STAGE) JOBS=$(JOBS) cargo run -q -p fuzz-run --bin run
+
+fuzz-diff: ## Differential-fuzz TARGET=row against the pinned sqlite3 oracle: fuzz-sql knobs + ORACLE_BIN=, REDUCE=0 (exit 4 on mismatches, 3 on panics)
+	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) TIMEOUT_MS=$(TIMEOUT_MS) OUT=$(OUT) STAGE=$(STAGE) JOBS=$(JOBS) ORACLE=1 ORACLE_BIN=$(ORACLE_BIN) cargo run -q -p fuzz-run --bin run
 
 fuzz-gen: ## Generate N statements for TARGET=row|column|stream from grammar.ebnf without running them (SEED=, MAX_DEPTH=)
 	TARGET=$(TARGET) N=$(N) SEED=$(SEED) MAX_DEPTH=$(MAX_DEPTH) cargo run -q -p fuzz-gen --bin gen

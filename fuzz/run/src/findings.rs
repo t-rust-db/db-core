@@ -9,6 +9,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use crate::compare::{render_diff, Comparison};
 use crate::stage::{Outcome, Stage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +33,11 @@ pub struct Finding {
     /// needs the same `JOBS`.
     pub lane: usize,
     pub jobs: usize,
+    /// For oracle verdicts: the rendered ours-vs-oracle diff. Empty
+    /// otherwise.
+    pub detail: String,
+    /// ddmin-reduced `script`, when the reducer ran. Empty otherwise.
+    pub reduced: Vec<String>,
 }
 
 impl Finding {
@@ -62,12 +68,44 @@ impl Finding {
             elapsed_ms,
             lane: 0,
             jobs: 1,
+            detail: String::new(),
+            reduced: Vec::new(),
         })
+    }
+
+    /// A differential finding (`wrong-answer`, `gap`, `over-permissive`,
+    /// `oracle-hang`). `script` is left empty here; the worker's applied
+    /// history is attached by the caller when it has it.
+    pub fn from_comparison(
+        seed: u64,
+        index: usize,
+        sql: &str,
+        cmp: &Comparison,
+        elapsed_ms: u128,
+    ) -> Self {
+        Finding {
+            seed,
+            index,
+            stage: Stage::Vm,
+            class: cmp.verdict.as_str(),
+            message: cmp
+                .oracle_message
+                .clone()
+                .or_else(|| cmp.ours_message.clone())
+                .unwrap_or_default(),
+            sql: sql.to_string(),
+            script: cmp.script.clone(),
+            elapsed_ms,
+            lane: 0,
+            jobs: 1,
+            detail: render_diff(cmp, 8),
+            reduced: Vec::new(),
+        }
     }
 
     pub fn to_json_line(&self) -> String {
         format!(
-            "{{\"seed\":{},\"index\":{},\"stage\":\"{}\",\"class\":\"{}\",\"message\":\"{}\",\"sql\":\"{}\",\"script_len\":{},\"elapsed_ms\":{},\"lane\":{},\"jobs\":{}}}",
+            "{{\"seed\":{},\"index\":{},\"stage\":\"{}\",\"class\":\"{}\",\"message\":\"{}\",\"sql\":\"{}\",\"script_len\":{},\"elapsed_ms\":{},\"lane\":{},\"jobs\":{},\"reduced_len\":{},\"detail\":\"{}\"}}",
             self.seed,
             self.index,
             self.stage.as_str(),
@@ -77,7 +115,9 @@ impl Finding {
             self.script.len(),
             self.elapsed_ms,
             self.lane,
-            self.jobs
+            self.jobs,
+            self.reduced.len(),
+            json_escape(&self.detail)
         )
     }
 }
@@ -118,12 +158,36 @@ impl FindingsSink {
         })
     }
 
+    /// Writes `report.md` next to `findings.jsonl` (overwritten per run).
+    pub fn write_report(&self, text: &str) -> io::Result<PathBuf> {
+        let path = self.out_dir.join("report.md");
+        fs::write(&path, text)?;
+        Ok(path)
+    }
+
     pub fn record(&mut self, finding: &Finding) -> io::Result<PathBuf> {
         writeln!(self.jsonl, "{}", finding.to_json_line())?;
+        self.write_sql(finding)
+    }
+
+    /// Rewrites only the `.sql` file (after reduction); the `.jsonl`
+    /// line already written stays as is.
+    pub fn write_sql(&self, finding: &Finding) -> io::Result<PathBuf> {
         let sql_path = self
             .out_dir
             .join(format!("{}-{}.sql", finding.seed, finding.index));
-        let body = if finding.script.is_empty() {
+        let body = if !finding.reduced.is_empty() {
+            let mut b = format!(
+                "-- ddmin-reduced from {} to {} statements; the last is the trigger\n",
+                finding.script.len(),
+                finding.reduced.len()
+            );
+            for s in &finding.reduced {
+                b.push_str(s);
+                b.push_str(";\n");
+            }
+            b
+        } else if finding.script.is_empty() {
             format!("{};\n", finding.sql)
         } else {
             let mut b =
@@ -146,6 +210,10 @@ impl FindingsSink {
                     String::new()
                 } else {
                     format!("-- {}\n", finding.message.replace('\n', "\n-- "))
+                } + &if finding.detail.is_empty() {
+                    String::new()
+                } else {
+                    format!("-- {}\n", finding.detail.trim_end().replace('\n', "\n-- "))
                 },
                 body
             ),

@@ -3,7 +3,7 @@
 
 use db_core::codegen::row::leading_keywords;
 use db_core::engine::row::RowEngine;
-use db_core::engine::{Engine, EngineError, ErrorKind};
+use db_core::engine::{Engine, EngineError, ErrorKind, QueryResult};
 use db_core::parser::row::{
     parse_analyze, parse_begin, parse_commit, parse_create_index, parse_create_table,
     parse_create_view, parse_delete, parse_drop_index, parse_drop_table, parse_drop_view,
@@ -178,9 +178,6 @@ pub fn codegen_stage(engine: &RowEngine, sql: &str) -> Result<(), (Rejection, St
 
 /// Stage 3: execute for real. Stages 1-2 already returned normally, so a
 /// panic here belongs to the VM (or the storage layer beneath it).
-pub fn vm_stage(engine: &mut RowEngine, sql: &str) -> Result<(), (Rejection, String)> {
-    engine
-        .run_query(sql)
-        .map(|_| ())
-        .map_err(|e| classify_engine_error(&e))
+pub fn vm_stage(engine: &mut RowEngine, sql: &str) -> Result<QueryResult, (Rejection, String)> {
+    engine.run_query(sql).map_err(|e| classify_engine_error(&e))
 }

@@ -13,11 +13,16 @@
 //!                           (default 1; statements dealt round-robin;
 //!                           ignored under VERBOSE/REPLAY)
 //!   ALLOW_IMPLDEF=1         also run RANDOM()/CURRENT_* statements
+//!   ORACLE=1                also run each statement on sqlite3 and compare
+//!   ORACLE_BIN=path         the sqlite3 binary (default sqlite3; 3.53.4 expected)
+//!   ALLOW_ORACLE_VERSION=1  accept another sqlite3 version
+//!   REDUCE=0                skip ddmin reduction of repro scripts (JOBS=1 only)
 //!   VERBOSE=1               print every statement and its outcome
 //!   UNEXERCISED=1           list in-scope grammar alternatives never chosen
 //!
-//! Exit codes: 0 clean, 3 findings recorded, 2 bad arguments, 1 setup
-//! failure.
+//! Exit codes: 0 clean, 3 totality findings (panic/hang/corruption),
+//! 4 only differential findings (wrong-answer/gap/over-permissive), 2 bad
+//! arguments, 1 setup failure.
 
 use std::env;
 use std::path::PathBuf;
@@ -25,8 +30,8 @@ use std::time::Duration;
 
 use fuzz_gen::{load_db_core_grammar, Section, VBlockScope, Walker, WalkerConfig};
 use fuzz_run::{
-    catalog_of, fixture_path, run_parallel, FindingsSink, Outcome, RowDialect, RunConfig, Runner,
-    Stage,
+    catalog_of, fixture_path, reduce_finding, run_parallel, FindingsSink, OracleConfig, Outcome,
+    RowDialect, RunConfig, Runner, Stage,
 };
 
 fn env_var(name: &str, default: &str) -> String {
@@ -57,6 +62,15 @@ fn main() {
         .unwrap_or_else(|| fail(2, "STAGE must be parse|codegen|vm"));
     let verbose = env_var("VERBOSE", "0") == "1";
     let jobs: usize = env_var("JOBS", "1").parse().unwrap_or(1).max(1);
+    let oracle = if env_var("ORACLE", "0") == "1" {
+        Some(OracleConfig {
+            bin: env_var("ORACLE_BIN", "sqlite3"),
+            allow_version_mismatch: env_var("ALLOW_ORACLE_VERSION", "0") == "1",
+        })
+    } else {
+        None
+    };
+    let reduce = env_var("REDUCE", "1") != "0";
     let replay: Option<usize> = match env::var("REPLAY") {
         Ok(spec) => {
             let (s, i) = spec
@@ -102,9 +116,11 @@ fn main() {
         timeout: Duration::from_millis(timeout_ms),
         allow_impldef,
         stop_after,
+        oracle,
     };
     let (summary, workers_spawned) = if replay.is_some() || verbose {
-        let mut runner = Runner::new(run_config).unwrap_or_else(|e| fail(1, &e.to_string()));
+        let mut runner =
+            Runner::new(run_config.clone()).unwrap_or_else(|e| fail(1, &e.to_string()));
         let mut sink = if replay.is_some() {
             None
         } else {
@@ -112,19 +128,38 @@ fn main() {
         };
         let mut acc = fuzz_run::RunSummary::default();
         for (i, sql) in statements {
-            let outcome = if allow_impldef || !Runner::is_impldef(&sql) {
-                Some(
-                    runner
-                        .run_one(&sql)
-                        .unwrap_or_else(|e| fail(1, &e.to_string())),
-                )
+            let (outcome, cmp) = if allow_impldef || !Runner::is_impldef(&sql) {
+                let (o, c) = runner
+                    .run_one_compared(&sql)
+                    .unwrap_or_else(|e| fail(1, &e.to_string()));
+                (Some(o), c)
             } else {
-                None
+                (None, None)
             };
-            let part = summarize(seed, i, &sql, outcome.as_ref(), sink.as_mut());
+            let mut part = summarize(seed, i, &sql, outcome.as_ref(), sink.as_mut());
+            if let Some(c) = &cmp {
+                part.verdicts.insert(c.verdict, 1);
+                if c.verdict.is_finding() {
+                    let f = fuzz_run::Finding::from_comparison(seed, i, &sql, c, 0);
+                    if let Some(sink) = sink.as_mut() {
+                        sink.record(&f)
+                            .unwrap_or_else(|e| fail(1, &format!("writing finding: {e}")));
+                    }
+                    part.findings.push(f);
+                }
+            }
+            let verdict = cmp
+                .as_ref()
+                .map(|c| format!(" [{}]", c.verdict.as_str()))
+                .unwrap_or_default();
             let label = match part.findings.first() {
-                Some(f) => format!("FINDING {} in {}: {}", f.class, f.stage.as_str(), f.message),
-                None if part.ok == 1 => "ok".to_string(),
+                Some(f) => format!(
+                    "FINDING {} in {}: {}{verdict}",
+                    f.class,
+                    f.stage.as_str(),
+                    f.message
+                ),
+                None if part.ok == 1 => format!("ok{verdict}"),
                 None if part.skipped_impldef == 1 => "skipped (impldef)".to_string(),
                 None => match &outcome {
                     Some(Outcome::Rejected {
@@ -143,12 +178,48 @@ fn main() {
             println!("[{i}] {sql}\n     -> {label}");
             acc.merge(part);
         }
+        acc.oracle_version = runner.oracle_version().map(str::to_string);
         (acc, runner.workers_spawned())
     } else {
         let mut sink = FindingsSink::open(&out_dir).unwrap_or_else(|e| fail(1, &e.to_string()));
         run_parallel(&run_config, jobs, seed, statements, Some(&mut sink))
             .unwrap_or_else(|e| fail(1, &e.to_string()))
     };
+
+    let mut summary = summary;
+    if reduce && jobs == 1 && replay.is_none() {
+        let reducible = ["wrong-answer", "over-permissive", "gap", "corruption"];
+        let sink = FindingsSink::open(&out_dir).unwrap_or_else(|e| fail(1, &e.to_string()));
+        // One reduction per (class, statement shape): the other members
+        // of a group are the same bug with different literals.
+        let firsts: Vec<usize> = summary
+            .deduped()
+            .into_iter()
+            .map(|(_, _, f)| f.index)
+            .collect();
+        for f in &mut summary.findings {
+            if firsts.contains(&f.index) && reducible.contains(&f.class) && f.script.len() > 1 {
+                let (reduced, probes) = reduce_finding(&run_config, f, 200);
+                if !reduced.is_empty() && reduced.len() < f.script.len() {
+                    eprintln!(
+                        "reduced seed {} #{}: {} -> {} statements ({probes} probes)",
+                        f.seed,
+                        f.index,
+                        f.script.len(),
+                        reduced.len()
+                    );
+                    f.reduced = reduced;
+                    sink.write_sql(f)
+                        .unwrap_or_else(|e| fail(1, &format!("rewriting finding: {e}")));
+                }
+            }
+        }
+    }
+    if replay.is_none() {
+        let sink = FindingsSink::open(&out_dir).unwrap_or_else(|e| fail(1, &e.to_string()));
+        sink.write_report(&report(seed, n, max_depth, &summary))
+            .unwrap_or_else(|e| fail(1, &format!("writing report: {e}")));
+    }
 
     let (exercised, in_scope) = walker.coverage();
     eprint!("{}", summary.render());
@@ -166,8 +237,57 @@ fn main() {
         if replay.is_none() {
             eprintln!("findings written under {}", out_dir.display());
         }
-        std::process::exit(3);
+        let totality = summary
+            .findings_of("panic")
+            .saturating_add(summary.findings_of("hang"))
+            .saturating_add(summary.findings_of("corruption"));
+        std::process::exit(if totality > 0 { 3 } else { 4 });
     }
+}
+
+/// `report.md`: the run's parameters, the summary block, and one section
+/// per finding with its diff and repro file.
+fn report(seed: u64, n: usize, max_depth: usize, summary: &fuzz_run::RunSummary) -> String {
+    let mut r = format!(
+        "# fuzz-sql report\n\nseed {seed}, N {n}, max depth {max_depth}{}\n\n```\n{}```\n",
+        summary
+            .oracle_version
+            .as_deref()
+            .map(|v| format!(", oracle sqlite {v}"))
+            .unwrap_or_default(),
+        summary.render()
+    );
+    for (_, count, f) in summary.deduped() {
+        r.push_str(&format!(
+            "\n## {} in {} -- seed {} #{}{} (`{}-{}.sql`)\n\n```sql\n{}\n```\n",
+            f.class,
+            f.stage.as_str(),
+            f.seed,
+            f.index,
+            if count > 1 {
+                format!(", {count} occurrences")
+            } else {
+                String::new()
+            },
+            f.seed,
+            f.index,
+            f.sql
+        ));
+        if !f.message.is_empty() {
+            r.push_str(&format!("\n{}\n", f.message));
+        }
+        if !f.detail.is_empty() {
+            r.push_str(&format!("\n```\n{}```\n", f.detail));
+        }
+        if !f.reduced.is_empty() {
+            r.push_str(&format!(
+                "\nreduced to {} of {} statements\n",
+                f.reduced.len(),
+                f.script.len()
+            ));
+        }
+    }
+    r
 }
 
 /// One-statement summary for the verbose/replay path (the batch path

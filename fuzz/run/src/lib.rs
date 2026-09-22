@@ -11,16 +11,22 @@
 //! a panic in stage *k* implies stages `< k` already returned normally on
 //! the same input, so the finding names the layer at fault.
 
+pub mod compare;
 pub mod dialect;
 pub mod findings;
+pub mod oracle;
+pub mod reduce;
 pub mod runner;
 pub mod stage;
 
+pub use compare::{compare, render_cell, render_rows, row_order, Comparison, RowOrder, Verdict};
 pub use dialect::RowDialect;
 pub use findings::{Finding, FindingsSink};
+pub use oracle::{OracleConfig, OracleOutcome, Sqlite3Cli, EXPECTED_SQLITE_VERSION};
+pub use reduce::ddmin;
 pub use runner::{
-    catalog_of, install_panic_capture, probe, run_parallel, RunConfig, RunError, RunSummary,
-    Runner, TempDb,
+    catalog_of, install_panic_capture, probe, reduce_finding, reproduces, run_parallel, RunConfig,
+    RunError, RunSummary, Runner, TempDb,
 };
 pub use stage::{Outcome, Rejection, Stage};
 
