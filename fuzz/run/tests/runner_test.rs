@@ -34,6 +34,7 @@ fn runner(timeout: Duration) -> Runner {
         timeout,
         allow_impldef: false,
         stop_after: Stage::Vm,
+        oracle: None,
     })
     .expect("runner")
 }
@@ -44,6 +45,7 @@ fn runner_until(stop_after: Stage) -> Runner {
         timeout: Duration::from_secs(5),
         allow_impldef: false,
         stop_after,
+        oracle: None,
     })
     .expect("runner")
 }
@@ -335,6 +337,7 @@ fn parallel_lanes_cover_every_statement_and_tag_findings_with_their_lane() {
         timeout: Duration::from_secs(5),
         allow_impldef: false,
         stop_after: Stage::Vm,
+        oracle: None,
     };
     let (summary, spawned) = run_parallel(&config, 4, 77, stmts.clone(), None).unwrap();
     assert_eq!(summary.total, 120);
@@ -358,7 +361,7 @@ fn parallel_lanes_cover_every_statement_and_tag_findings_with_their_lane() {
     f.lane = 2;
     f.jobs = 4;
     assert!(
-        f.to_json_line().ends_with("\"lane\":2,\"jobs\":4}"),
+        f.to_json_line().contains("\"lane\":2,\"jobs\":4,"),
         "{}",
         f.to_json_line()
     );

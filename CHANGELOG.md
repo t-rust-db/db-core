@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.122.0] - 2026-09-22
+
+### Added
+
+- **`make fuzz-diff`: differential fuzzing against the pinned sqlite3 oracle** (#546, PR #560; Phase 1b of epic #543): every VM-reaching statement also runs on a persistent `sqlite3` shell per lane (own fixture copy, `.mode quote`, sentinel-delimited, version asserted against 3.53.4 via `ORACLE_BIN=`) and the two outcomes are joined into a verdict: pass, wrong-answer, float-drift (reals within 1e-12 relative), gap (we reject, oracle runs), unsupported (counted only), over-permissive (we run, oracle rejects), both-reject, oracle-hang. Rows compare sorted without `ORDER BY`, by count under `LIMIT` without `ORDER BY`; reals on both sides normalize through `format_real`. When exactly one side applies a state-changing statement both sides reset to the fixture (a new epoch), since replay cannot resync them. Findings dedupe by `(class, leading keywords, normalized message)`, a statement-level ddmin reducer rewrites one `.sql` repro per group, and `report.md` summarizes the run. Exit 4 for differential findings only. First 2000-statement run filed #561 (`PRAGMA journal_mode` returns no row), #562 (DDL sqlite3 rejects), #563 (`INSERT ... (cols) DEFAULT VALUES`, `PRAGMA synchronous` in a transaction), #564 (`EXPLAIN` over non-SELECT).
+
 ## [0.121.0] - 2026-09-21
 
 ### Added

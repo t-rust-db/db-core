@@ -21,9 +21,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use db_core::engine::row::RowEngine;
-use db_core::engine::{Cell, Engine, TableInfo};
+use db_core::engine::{Cell, Engine, QueryResult, TableInfo};
 
+use crate::compare::{compare, Comparison, Verdict, VerdictCounts};
 use crate::findings::{Finding, FindingsSink};
+use crate::oracle::{OracleConfig, OracleFailure, Sqlite3Cli};
 use crate::stage::{codegen_stage, parse_stage, vm_stage, Outcome, Rejection, Stage};
 
 #[derive(Debug)]
@@ -51,6 +53,9 @@ pub struct RunConfig {
     /// after compile-only. A statement that clears the last requested
     /// stage counts as `Ok`.
     pub stop_after: Stage,
+    /// When set, every VM-reaching statement also runs on a sqlite3
+    /// oracle and the two results are compared (#546).
+    pub oracle: Option<OracleConfig>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -61,6 +66,9 @@ pub struct RunSummary {
     /// `(stage, rejection)` -> count.
     pub rejected: BTreeMap<(Stage, Rejection), usize>,
     pub findings: Vec<Finding>,
+    /// Differential verdicts (empty without an oracle).
+    pub verdicts: VerdictCounts,
+    pub oracle_version: Option<String>,
 }
 
 impl RunSummary {
@@ -79,6 +87,35 @@ impl RunSummary {
             *n = n.saturating_add(v);
         }
         self.findings.extend(other.findings);
+        for (k, v) in other.verdicts {
+            let n = self.verdicts.entry(k).or_insert(0);
+            *n = n.saturating_add(v);
+        }
+        if self.oracle_version.is_none() {
+            self.oracle_version = other.oracle_version;
+        }
+    }
+
+    /// Findings grouped by [`finding_shape`]: `(shape, count, first)`,
+    /// in first-seen order. The report shows one line per shape and the
+    /// reducer runs once per shape.
+    pub fn deduped(&self) -> Vec<(String, usize, &Finding)> {
+        let mut order: Vec<String> = Vec::new();
+        let mut groups: BTreeMap<String, (usize, &Finding)> = BTreeMap::new();
+        for f in &self.findings {
+            let key = format!("{} | {}", f.class, finding_shape(&f.sql, &f.message));
+            match groups.get_mut(&key) {
+                Some(entry) => entry.0 = entry.0.saturating_add(1),
+                None => {
+                    groups.insert(key.clone(), (1, f));
+                    order.push(key);
+                }
+            }
+        }
+        order
+            .into_iter()
+            .filter_map(|k| groups.get(&k).map(|(n, f)| (k, *n, *f)))
+            .collect()
     }
 
     /// Findings of one class (`"panic"`, `"hang"`, `"corruption"`).
@@ -101,6 +138,15 @@ impl RunSummary {
                 kind.as_str()
             ));
         }
+        if !self.verdicts.is_empty() {
+            s.push_str(&format!(
+                "oracle: sqlite {}\n",
+                self.oracle_version.as_deref().unwrap_or("?")
+            ));
+            for (v, n) in &self.verdicts {
+                s.push_str(&format!("  verdict {:<15} {n}\n", v.as_str()));
+            }
+        }
         s.push_str(&format!(
             "findings: {}  panic: {}  hang: {}  corruption: {}\n",
             self.findings.len(),
@@ -108,23 +154,103 @@ impl RunSummary {
             self.findings_of("hang"),
             self.findings_of("corruption")
         ));
-        for f in &self.findings {
+        if !self.verdicts.is_empty() {
             s.push_str(&format!(
-                "  FINDING {} in {} [seed {} #{}]{}: {}\n",
+                "  wrong-answer: {}  gap: {}  over-permissive: {}  oracle-hang: {}\n",
+                self.findings_of("wrong-answer"),
+                self.findings_of("gap"),
+                self.findings_of("over-permissive"),
+                self.findings_of("oracle-hang")
+            ));
+        }
+        for (_, count, f) in self.deduped() {
+            s.push_str(&format!(
+                "  FINDING {} in {} [seed {} #{}]{}{}: {}\n",
                 f.class,
                 f.stage.as_str(),
                 f.seed,
                 f.index,
+                if count > 1 {
+                    format!(" x{count}")
+                } else {
+                    String::new()
+                },
                 if f.script.is_empty() {
                     String::new()
                 } else {
                     format!(" (after {} statements)", f.script.len())
                 },
-                f.sql
+                f.sql.chars().take(120).collect::<String>()
             ));
         }
         s
     }
+}
+
+/// A finding's shape for dedupe: the statement's leading keywords (up to
+/// the first name or literal) plus its message with numbers, quoted
+/// names and literals normalized. Generated DDL bodies are random, so
+/// keying on the whole statement would never group anything; the head
+/// plus the error text is what a human buckets by.
+pub fn finding_shape(sql: &str, message: &str) -> String {
+    let mut head: Vec<&str> = Vec::new();
+    for tok in sql.split_whitespace().take(6) {
+        let is_keyword = tok.chars().all(|c| c.is_ascii_uppercase() || c == '_');
+        if !is_keyword {
+            break;
+        }
+        head.push(tok);
+    }
+    if head.is_empty() {
+        if let Some(first) = sql.split_whitespace().next() {
+            head.push(first);
+        }
+    }
+    format!("{} | {}", head.join(" "), normalize_message(message))
+}
+
+/// Numbers -> `N`, `'...'`/`"..."`-quoted names and literals -> `'S'`,
+/// `line N, column N` positions dropped, whitespace collapsed.
+pub fn normalize_message(message: &str) -> String {
+    let mut out = String::new();
+    let mut chars = message.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' | '`' => {
+                out.push_str("'S'");
+                for n in chars.by_ref() {
+                    if n == c {
+                        break;
+                    }
+                }
+            }
+            c if c.is_ascii_digit() => {
+                if !out.ends_with('N') {
+                    out.push('N');
+                }
+                while chars
+                    .peek()
+                    .is_some_and(|n| n.is_ascii_alphanumeric() || *n == '.')
+                {
+                    chars.next();
+                }
+            }
+            c if c.is_whitespace() => {
+                if !out.ends_with(' ') {
+                    out.push(' ');
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out.replace("(line N, column N)", "")
+        .replace("near line N:", "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(100)
+        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -239,21 +365,29 @@ pub fn catalog_of(fixture: &Path) -> Result<Vec<TableInfo>, RunError> {
 
 enum Progress {
     Entering(Stage),
-    Done(Outcome),
+    Done(Outcome, Option<Comparison>),
 }
 
 struct Worker {
     jobs: Sender<String>,
     progress: Receiver<Progress>,
+    oracle_version: Option<String>,
 }
 
 impl Worker {
-    fn spawn(fixture: PathBuf, label: usize, stop_after: Stage) -> Result<Self, RunError> {
+    fn spawn(
+        fixture: PathBuf,
+        label: usize,
+        stop_after: Stage,
+        oracle_config: Option<OracleConfig>,
+        timeout: Duration,
+    ) -> Result<Self, RunError> {
         let (jobs, job_rx) = mpsc::channel::<String>();
         let (progress_tx, progress) = mpsc::channel::<Progress>();
         // The engine is `!Send`, so it is opened inside the thread; the
-        // first message back reports whether that worked.
-        let (ready_tx, ready_rx) = mpsc::channel::<Result<(), RunError>>();
+        // first message back reports whether that worked (and the
+        // oracle's version, when there is one).
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<Option<String>, RunError>>();
         thread::Builder::new()
             .name(format!("fuzz-worker-{label}"))
             .spawn(move || {
@@ -274,7 +408,22 @@ impl Worker {
                         return;
                     }
                 };
-                if ready_tx.send(Ok(())).is_err() {
+                // The oracle gets its own fixture copy: two writers on one
+                // SQLite file would be a locking hazard.
+                let mut oracle: Option<OracleLane> = match &oracle_config {
+                    Some(cfg) => match OracleLane::open(cfg, &fixture, label, timeout) {
+                        Ok(o) => Some(o),
+                        Err(e) => {
+                            ready_tx.send(Err(e)).ok();
+                            return;
+                        }
+                    },
+                    None => None,
+                };
+                if ready_tx
+                    .send(Ok(oracle.as_ref().map(|o| o.cli.version().to_string())))
+                    .is_err()
+                {
                     return;
                 }
                 // `db` must outlive the engine: keep it in the closure.
@@ -282,8 +431,12 @@ impl Worker {
                 // Every statement that reached the VM on the current
                 // engine, for corruption repro scripts.
                 let mut history: Vec<String> = Vec::new();
+                // Every statement the engine ran to completion (`Ok`):
+                // what the oracle must have applied too, replayed into a
+                // fresh oracle whenever the two diverge on state.
+                let mut applied: Vec<String> = Vec::new();
                 while let Ok(sql) = job_rx.recv() {
-                    let mut outcome =
+                    let (mut outcome, our_rows) =
                         run_stages(&mut engine, &sql, &progress_tx, &mut history, stop_after);
                     if stop_after == Stage::Vm
                         && matches!(
@@ -302,8 +455,31 @@ impl Worker {
                             };
                         }
                     }
-                    if matches!(outcome, Outcome::Panic { .. } | Outcome::Corrupted { .. }) {
+                    // Oracle comparison, only when the whole chain ran.
+                    let comparison = match (&mut oracle, stop_after) {
+                        (Some(lane), Stage::Vm) if !outcome.is_finding() => {
+                            let cmp = lane.compare_one(&sql, &outcome, our_rows.as_ref(), &applied);
+                            if matches!(outcome, Outcome::Ok) {
+                                applied.push(sql.clone());
+                            }
+                            Some(cmp)
+                        }
+                        _ => {
+                            if matches!(outcome, Outcome::Ok) {
+                                applied.push(sql.clone());
+                            }
+                            None
+                        }
+                    };
+                    let desynced = comparison.as_ref().is_some_and(|cmp| !in_sync(cmp, &sql));
+                    if desynced
+                        || matches!(outcome, Outcome::Panic { .. } | Outcome::Corrupted { .. })
+                    {
                         history.clear();
+                        applied.clear();
+                        if let Some(lane) = oracle.as_mut() {
+                            lane.reset().ok();
+                        }
                         // State after a caught panic is suspect: start
                         // over from a clean fixture copy.
                         match TempDb::copy_of(&fixture, &format!("w{label}r")).and_then(|fresh| {
@@ -320,17 +496,117 @@ impl Worker {
                             Err(_) => break,
                         }
                     }
-                    if progress_tx.send(Progress::Done(outcome)).is_err() {
+                    if progress_tx
+                        .send(Progress::Done(outcome, comparison))
+                        .is_err()
+                    {
                         break;
                     }
                 }
             })
             .map_err(|e| RunError(format!("spawning worker: {e}")))?;
-        ready_rx
+        let oracle_version = ready_rx
             .recv()
             .map_err(|_| RunError("worker exited before opening its fixture".to_string()))??;
-        Ok(Worker { jobs, progress })
+        Ok(Worker {
+            jobs,
+            progress,
+            oracle_version,
+        })
     }
+}
+
+/// One lane's oracle: the sqlite3 shell plus the fixture copy it runs on.
+struct OracleLane {
+    cli: Sqlite3Cli,
+    db: TempDb,
+    config: OracleConfig,
+    fixture: PathBuf,
+    label: usize,
+    timeout: Duration,
+}
+
+impl OracleLane {
+    fn open(
+        config: &OracleConfig,
+        fixture: &Path,
+        label: usize,
+        timeout: Duration,
+    ) -> Result<Self, RunError> {
+        let db = TempDb::copy_of(fixture, &format!("o{label}"))?;
+        let cli = Sqlite3Cli::spawn(config, db.path(), timeout)?;
+        Ok(OracleLane {
+            cli,
+            db,
+            config: config.clone(),
+            fixture: fixture.to_path_buf(),
+            label,
+            timeout,
+        })
+    }
+
+    /// Fresh fixture copy + fresh shell: back to the fixture state.
+    fn reset(&mut self) -> Result<(), RunError> {
+        let db = TempDb::copy_of(&self.fixture, &format!("o{}r", self.label))?;
+        let cli = Sqlite3Cli::spawn(&self.config, db.path(), self.timeout)?;
+        self.cli = cli;
+        self.db = db;
+        Ok(())
+    }
+
+    fn compare_one(
+        &mut self,
+        sql: &str,
+        outcome: &Outcome,
+        our_rows: Option<&QueryResult>,
+        applied: &[String],
+    ) -> Comparison {
+        let oracle_outcome = match self.cli.exec(sql) {
+            Ok(o) => o,
+            Err(OracleFailure::Hang) | Err(OracleFailure::Broken(_)) => {
+                let mut cmp = compare(sql, outcome, our_rows, None);
+                cmp.verdict = Verdict::OracleHang;
+                cmp.script = applied.to_vec();
+                cmp.script.push(sql.to_string());
+                return cmp;
+            }
+        };
+        let mut cmp = compare(sql, outcome, our_rows, Some(&oracle_outcome));
+        if cmp.verdict.is_finding() {
+            cmp.script = applied.to_vec();
+            cmp.script.push(sql.to_string());
+        }
+        cmp
+    }
+}
+
+/// After this statement, do the engine and the oracle still hold the
+/// same state? False when exactly one side ran a state-changing
+/// statement (or the oracle hung mid-statement). Replaying our history
+/// into a fresh oracle cannot repair that -- the oracle would refuse the
+/// same statement again -- so the worker resets *both* sides to the
+/// fixture instead and the next statement starts a new epoch.
+fn in_sync(cmp: &Comparison, sql: &str) -> bool {
+    let diverged = matches!(
+        cmp.verdict,
+        Verdict::Gap | Verdict::Unsupported | Verdict::OverPermissive | Verdict::OracleHang
+    );
+    !(diverged && changes_state(sql))
+}
+
+/// Statements whose acceptance on one side but not the other leaves
+/// state behind: everything that is not a read.
+fn changes_state(sql: &str) -> bool {
+    let head = sql
+        .trim_start()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .next()
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    !matches!(
+        head.as_str(),
+        "SELECT" | "WITH" | "EXPLAIN" | "PRAGMA" | "ANALYZE"
+    )
 }
 
 /// Post-statement health probe: the catalog must still read and
@@ -362,9 +638,9 @@ fn health_check(engine: &mut RowEngine) -> Result<(), String> {
 /// Runs one stage's closure under `catch_unwind`, mapping a panic to
 /// `Outcome::Panic` and a typed refusal to `Outcome::Rejected`; `Ok(())`
 /// means proceed to the next stage.
-pub fn probe<F>(stage: Stage, f: F) -> Result<(), Outcome>
+pub fn probe<T, F>(stage: Stage, f: F) -> Result<T, Outcome>
 where
-    F: FnOnce() -> Result<(), (Rejection, String)>,
+    F: FnOnce() -> Result<T, (Rejection, String)>,
 {
     CAPTURING.with(|c| c.set(true));
     let caught = panic::catch_unwind(AssertUnwindSafe(f));
@@ -379,7 +655,7 @@ where
             kind,
             message,
         }),
-        Ok(Ok(())) => Ok(()),
+        Ok(Ok(value)) => Ok(value),
     }
 }
 
@@ -389,26 +665,26 @@ fn run_stages(
     progress: &Sender<Progress>,
     history: &mut Vec<String>,
     stop_after: Stage,
-) -> Outcome {
+) -> (Outcome, Option<QueryResult>) {
     progress.send(Progress::Entering(Stage::Parse)).ok();
     if let Err(outcome) = probe(Stage::Parse, || parse_stage(sql)) {
-        return outcome;
+        return (outcome, None);
     }
     if stop_after == Stage::Parse {
-        return Outcome::Ok;
+        return (Outcome::Ok, None);
     }
     progress.send(Progress::Entering(Stage::Codegen)).ok();
     if let Err(outcome) = probe(Stage::Codegen, || codegen_stage(engine, sql)) {
-        return outcome;
+        return (outcome, None);
     }
     if stop_after == Stage::Codegen {
-        return Outcome::Ok;
+        return (Outcome::Ok, None);
     }
     progress.send(Progress::Entering(Stage::Vm)).ok();
     history.push(sql.to_string());
     match probe(Stage::Vm, || vm_stage(engine, sql)) {
-        Err(outcome) => outcome,
-        Ok(()) => Outcome::Ok,
+        Err(outcome) => (outcome, None),
+        Ok(rows) => (Outcome::Ok, Some(rows)),
     }
 }
 
@@ -424,7 +700,13 @@ pub struct Runner {
 impl Runner {
     pub fn new(config: RunConfig) -> Result<Self, RunError> {
         install_panic_capture();
-        let worker = Worker::spawn(config.fixture.clone(), 0, config.stop_after)?;
+        let worker = Worker::spawn(
+            config.fixture.clone(),
+            0,
+            config.stop_after,
+            config.oracle.clone(),
+            config.timeout,
+        )?;
         Ok(Runner {
             config,
             worker,
@@ -435,6 +717,20 @@ impl Runner {
     /// Runs one statement through all stages; on a hang, abandons the
     /// worker and starts a fresh one before returning.
     pub fn run_one(&mut self, sql: &str) -> Result<Outcome, RunError> {
+        self.run_one_compared(sql).map(|(o, _)| o)
+    }
+
+    /// The oracle's version, when this runner has one.
+    pub fn oracle_version(&self) -> Option<&str> {
+        self.worker.oracle_version.as_deref()
+    }
+
+    /// Like [`Runner::run_one`], also returning the oracle comparison when
+    /// the runner has an oracle and the whole chain ran.
+    pub fn run_one_compared(
+        &mut self,
+        sql: &str,
+    ) -> Result<(Outcome, Option<Comparison>), RunError> {
         if self.worker.jobs.send(sql.to_string()).is_err() {
             self.respawn()?;
             self.worker
@@ -448,10 +744,10 @@ impl Runner {
             let remaining = self.config.timeout.saturating_sub(started.elapsed());
             match self.worker.progress.recv_timeout(remaining) {
                 Ok(Progress::Entering(s)) => stage = s,
-                Ok(Progress::Done(outcome)) => return Ok(outcome),
+                Ok(Progress::Done(outcome, cmp)) => return Ok((outcome, cmp)),
                 Err(RecvTimeoutError::Timeout) => {
                     self.respawn()?;
-                    return Ok(Outcome::Hang { stage });
+                    return Ok((Outcome::Hang { stage }, None));
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     // Worker died without reporting (e.g. failed to
@@ -470,6 +766,8 @@ impl Runner {
             self.config.fixture.clone(),
             self.spawned,
             self.config.stop_after,
+            self.config.oracle.clone(),
+            self.config.timeout,
         )?;
         self.spawned = self.spawned.saturating_add(1);
         Ok(())
@@ -496,7 +794,10 @@ impl Runner {
     where
         I: IntoIterator<Item = (usize, String)>,
     {
-        let mut summary = RunSummary::default();
+        let mut summary = RunSummary {
+            oracle_version: self.oracle_version().map(str::to_string),
+            ..RunSummary::default()
+        };
         for (index, sql) in statements {
             summary.total = summary.total.saturating_add(1);
             if !self.config.allow_impldef && Self::is_impldef(&sql) {
@@ -504,8 +805,20 @@ impl Runner {
                 continue;
             }
             let started = Instant::now();
-            let outcome = self.run_one(&sql)?;
+            let (outcome, comparison) = self.run_one_compared(&sql)?;
             let elapsed_ms = started.elapsed().as_millis();
+            if let Some(cmp) = &comparison {
+                let n = summary.verdicts.entry(cmp.verdict).or_insert(0);
+                *n = n.saturating_add(1);
+                if cmp.verdict.is_finding() {
+                    let f = Finding::from_comparison(seed, index, &sql, cmp, elapsed_ms);
+                    if let Some(sink) = sink.as_deref_mut() {
+                        sink.record(&f)
+                            .map_err(|e| RunError(format!("writing finding: {e}")))?;
+                    }
+                    summary.findings.push(f);
+                }
+            }
             match &outcome {
                 Outcome::Ok => summary.ok = summary.ok.saturating_add(1),
                 Outcome::Rejected { stage, kind, .. } => {
@@ -592,4 +905,51 @@ pub fn run_parallel(
         }
     }
     Ok((merged, spawned))
+}
+
+/// Replays `script` on a fresh runner and reports whether its last
+/// statement reproduces `class` (a finding class: `wrong-answer`,
+/// `over-permissive`, `gap`, `corruption`, `panic`).
+pub fn reproduces(config: &RunConfig, script: &[String], class: &str) -> bool {
+    let Ok(mut runner) = Runner::new(config.clone()) else {
+        return false;
+    };
+    let mut last: Option<(Outcome, Option<Comparison>)> = None;
+    for sql in script {
+        match runner.run_one_compared(sql) {
+            Ok(pair) => last = Some(pair),
+            Err(_) => return false,
+        }
+    }
+    match last {
+        Some((outcome, cmp)) => {
+            let outcome_class = match &outcome {
+                Outcome::Panic { .. } => Some("panic"),
+                Outcome::Hang { .. } => Some("hang"),
+                Outcome::Corrupted { .. } => Some("corruption"),
+                Outcome::Ok | Outcome::Rejected { .. } => None,
+            };
+            outcome_class == Some(class)
+                || cmp.as_ref().is_some_and(|c| c.verdict.as_str() == class)
+        }
+        None => false,
+    }
+}
+
+/// ddmin over a finding's script (sequential runners, one per probe).
+/// Returns the reduced script and probes spent; the input script when
+/// it does not reproduce at all (e.g. it depended on a parallel deal).
+pub fn reduce_finding(
+    config: &RunConfig,
+    finding: &Finding,
+    max_probes: usize,
+) -> (Vec<String>, usize) {
+    if finding.script.is_empty() || !reproduces(config, &finding.script, finding.class) {
+        return (Vec::new(), 0);
+    }
+    crate::reduce::ddmin(
+        &finding.script,
+        |cand| reproduces(config, cand, finding.class),
+        max_probes,
+    )
 }
