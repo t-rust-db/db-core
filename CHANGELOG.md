@@ -4,6 +4,20 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.123.0] - 2026-10-11
+
+### Added
+
+- **Parquet writer for flat schemas: `storage::parquet::writer`, feature `storage-column-write`** (#566, first story of the write-path epic #570; ADR 0029). `ParquetWriter` takes column batches (`ColumnValues`: boolean, int32, int64, float, double, UTF-8 string, UTC timestamp in microseconds; `required` or `optional`) and writes a row group per `row_group_rows`, then the footer on `finish()`. Each column chunk is one DATA_PAGE v1, preceded by a PLAIN dictionary page when at most half the values are distinct and the dictionary fits `dictionary_max_bytes`; definition levels and dictionary indices use the RLE/bit-packed hybrid. Pages are uncompressed or Snappy, with a hand-rolled compressor, so there is no new runtime dependency. Every chunk carries `min_value`/`max_value`/`null_count` in the type-defined orders (NaN skipped, zero bounds widened to -0.0/+0.0), and the footer declares a `TypeDefinedOrder` per column. The metadata goes through a Thrift compact encoder over the reader's `Value` tree. All writer code is under the full lint bar and in the qualified subset, with no exemption.
+- **Tests:**
+  - unit tests per module, plus seeded random round trips of each encoder through the reader's decoders
+  - `tests/parquet_writer.rs`: write, then `ParquetFile::open`, comparing values and checking that every chunk's statistics bound its values, including a proptest over random schemas, data, codecs and row-group sizes (`proptest` is a new dev-dependency)
+  - `make check-parquet-write-oracle`, a new CI job: DuckDB 1.5.6 and pyarrow 25.0.1, pinned and run through uv, read the files back and agree on types, every value and per-row-group statistics; neither enters the crate's dependency closure
+
+### Changed
+
+- **Breaking: the Parquet reader moved from `storage::column::parquet` to `storage::parquet`** (#566), next to the writer. `storage::column` still re-exports `ParquetFile`, `FileError`, `RowGroupReader` and `DictionaryIndices`. The reader's lint allowances (`arithmetic_side_effects`, `indexing_slicing`, `missing_docs`) now apply per reader module, not to everything under `parquet`, and `MVL_LIMIT_EXCLUDE` names the reader files instead of `parquet/*`, so new files there are gated by default. The reader's lint burn-down is #578.
+
 ## [0.122.0] - 2026-09-22
 
 ### Added
