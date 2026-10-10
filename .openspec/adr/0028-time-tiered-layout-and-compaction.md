@@ -52,20 +52,31 @@ times differ by seconds, so pruning is nearly as tight.
 ### Three levels
 
 ```
-L0  hot   pages + WAL          bounded by hot_memory_budget, not by the clock
-L1  hour  date=D/hour=H/        one file per hour (several if > max_file_size)
-L2  day   date=D/               1–N files ≤ max_file_size, in time order
+events/
+├── manifest.json, LOCK, wal/          ADR 0027
+├── tmp/                               every output is built here, then renamed into place
+├── staging/date=D/hour=H/*.parquet    L1 partial: spills of the open hour
+├── live/date=D/hour=H/*.parquet       L1: one closed hour, 1+ files ≤ max_file_size
+└── archive/date=D/*.parquet           L2: one closed day, 1–N files ≤ max_file_size; final
 ```
 
-Each manifest file entry gains `level` (1 or 2) and its partition.
+| Level | Area | Holds | Bounded by |
+|---|---|---|---|
+| L0 | memory + `wal/` | the open hour's unflushed pages | `hot_memory_budget`, not the clock |
+| L1 partial | `staging/` | the open hour's spills | the hour |
+| L1 | `live/` | closed hours of open days | the day |
+| L2 | `archive/` | closed days | `retention` |
 
-- **L0 → L1 (flush).** At hour close the hour's pages are flushed as one
-  L1 file. If `hot_memory_budget` is exceeded mid-hour, the oldest pages
-  are flushed early as a **partial** L1 file for the current hour. Pages
+Each manifest file entry gains `level`, `area` and its partition.
+
+- **L0 → staging (spill).** If `hot_memory_budget` is exceeded mid-hour,
+  the oldest pages are flushed as a partial file into `staging/`. Pages
   never straddle an hour boundary: the head page seals at the boundary.
-- **L1 → L1 (hour merge).** A closed hour with more than one partial file
-  is merged into one hour file (decode + re-encode, so row groups reach
-  size).
+- **L0 + staging → live (hour close).** At hour close the hour's
+  remaining pages and its partial files (if any) are written as one
+  closed hour — decode + re-encode, so row groups reach size — and
+  published into `live/` in one step. Without spills this is a plain
+  flush.
 - **L1 → L2 (day merge).** A closed day's hour files are concatenated in
   LSN order into day files. Row groups never straddle an hour and are
   capped at `row_group_max_rows`, so "last hour of yesterday" still
@@ -95,13 +106,30 @@ Arrival order inside an hour is not preserved in Parquet; results that
 need it `ORDER BY observed_ts`. LSN ownership is per file, so sorting
 rows within a file does not affect ADR 0027's invariant.
 
+### Publishing: one rename per output
+
+Every output — a spill, a closed hour, a closed day — is written under
+`tmp/` (outside every area, so no glob ever matches a half-written
+output) and published with **one** rename: a single file, or for an
+output of several files (an hour or day above `max_file_size`) its
+directory, `tmp/<id>/` → `live/date=D/hour=H/` or `archive/date=D/`. A
+directory listing therefore sees a closed hour or a closed day either
+whole or not at all. Once published, a `live/` hour directory and an
+`archive/` day directory are never modified, only removed whole.
+
+**Invariant: `archive/` is final.** No compaction takes an `archive/`
+file as input; only retention removes it, a whole day at a time. Inputs
+and outputs of every compaction are in different areas: `staging/` →
+`live/` at hour close, `live/` → `archive/` at day close.
+
 ### The compactor
 
 A background **compactor thread in the writer process** — the only
 process that may change the manifest (ADR 0027). Compaction is a flush
 whose input is files instead of pages:
 
-1. Write the output via tmp + `fsync` + rename.
+1. Write the output under `tmp/`, `fsync`, publish it with one rename
+   (above), `fsync` the parent directory.
 2. **Commit:** one manifest swap removes the inputs and adds the output,
    with the output's `lsn_lo`/`lsn_hi` = the inputs' union. No snapshot
    sees those rows twice or not at all.
@@ -112,6 +140,64 @@ whose input is files instead of pages:
 The compactor reads one row group at a time; its memory is bounded by
 `row_group_max_rows`, independent of file size. Recovery deletes
 unreferenced outputs exactly as ADR 0027 deletes unreferenced flushes.
+
+### Reading with external tools (DuckDB)
+
+db-core readers go through the manifest and never read anything twice
+(ADR 0027). A tool that globs files instead sees no snapshot, and while a
+compaction's inputs wait out `delete_grace` next to its output, a glob
+that covers both areas reads those rows twice. No order of renames and
+deletes avoids that: a glob that is not a snapshot gets either
+duplicates (output first) or gaps (inputs first). The layout therefore
+decides what external tools may read:
+
+- **Supported, exact: `archive/` only.** Archive files are final and each
+  day is published whole, so this glob can never duplicate or tear a day:
+
+  ```sql
+  CREATE VIEW events AS
+  SELECT * FROM read_parquet('events/archive/*/*.parquet',
+                             hive_partitioning = true,
+                             union_by_name = true);   -- Tier-3 columns differ per file
+  ```
+
+  It covers closed days. Live and recent queries go through db-core
+  (column-rs, loglume, the embedding application), which also sees
+  `live/`, `staging/` and the WAL.
+
+- **Best-effort: `archive/` + `live/`, archive wins per day.** Adds
+  today's closed hours, dropping `live/` rows for any day already in
+  `archive/`, which removes the `delete_grace` window:
+
+  ```sql
+  CREATE VIEW events_fresh AS
+  WITH a AS (SELECT * FROM read_parquet('events/archive/*/*.parquet',
+                                        hive_partitioning = true, union_by_name = true)),
+       l AS (SELECT * FROM read_parquet('events/live/*/*/*.parquet',
+                                        hive_partitioning = true, union_by_name = true))
+  SELECT * FROM a
+  UNION ALL BY NAME
+  SELECT * FROM l WHERE date NOT IN (SELECT DISTINCT date FROM a);
+  ```
+
+  DuckDB lists the two globs separately, so a query that runs across the
+  instant a day-merge commits can still read that day twice or not at
+  all (once per day). Not for counts that must be exact.
+
+- **Never: `staging/`.** Partial files are merged and removed every hour.
+
+A retention delete during a long external query surfaces as a
+missing-file error, not a wrong answer.
+
+**Future extension (Option A, not decided):** exact fresh reads for
+DuckDB via a Delta Lake log (`_delta_log/`) generated from the manifest —
+a flush as `add`, a compaction as `remove` + `add`, read with
+`delta_scan`. `manifest.json` stays the source of truth and the Delta log
+a derived, rebuildable view, so there is still one commit point. Open
+before adopting it: Delta's table-wide schema vs. our per-file schemas
+and type widening, its fixed partition columns vs. `live/` (date, hour)
+and `archive/` (date), and log checkpoints. Deferred together with the
+broader table-format study (ADR 0027).
 
 ### Retention
 

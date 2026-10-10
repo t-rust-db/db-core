@@ -105,8 +105,9 @@ A flush takes the oldest sealed pages P₁…Pₖ (a contiguous LSN range) and
 writes them as one Parquet file. Which pages, and where the file goes,
 is ADR 0028's business; the commit is this one:
 
-1. Encode P₁…Pₖ to `<path>.tmp`; `fsync` the file.
-2. Rename to `<path>`; `fsync` the directory.
+1. Encode P₁…Pₖ under `<table>/tmp/`; `fsync`.
+2. Publish with one rename — a file, or the directory of a multi-file
+   output (ADR 0028) — and `fsync` the parent directory.
 3. **Commit:** write `manifest.json.tmp` with the new file entry and
    `flushed_lsn = Pₖ.lsn_hi`; `fsync`; rename over `manifest.json`;
    `fsync` the directory.
@@ -126,8 +127,9 @@ on open.
 ### Recovery
 
 1. Read `manifest.json` → files, `flushed_lsn`.
-2. Delete any `*.tmp`, and any Parquet file under the table not listed in
-   the manifest (written before step 3; its rows are still in the WAL).
+2. Empty `tmp/`, and delete any Parquet file under the table not listed
+   in the manifest (published before step 3; its rows are still in the
+   WAL).
 3. Replay `wal/*.wal` frames with `lsn > flushed_lsn` into pages; stop at
    the first frame whose CRC fails and truncate there.
 4. `next_lsn = max(replayed, flushed_lsn) + 1`.
@@ -234,11 +236,10 @@ Feature split and client packaging: ADR 0029.
 - No separate hot store: the most recent records are queryable through
   the same engine and SQL as history, the moment they are accepted.
 - One writer per table. Readers in-process and in other db-core
-  processes go through the manifest. Tools that glob the Parquet files
-  directly (DuckDB `read_parquet('events/**/*.parquet')`) see only
-  complete files (tmp + rename) and only flushed data, and during ADR
-  0028's `delete_grace` they also see a compaction's inputs next to its
-  output — duplicates. Correct external reads need the manifest.
+  processes go through the manifest and never read a row twice. Tools
+  that glob files (DuckDB) have no snapshot; ADR 0028 confines them to
+  `archive/`, which is exact, and records a Delta Lake log derived from
+  the manifest as the future extension for exact fresh reads.
 - The writer is new code with an external oracle: every file it writes
   must round-trip through db-core's reader and through DuckDB
   `read_parquet` (benchmark parity suite).
