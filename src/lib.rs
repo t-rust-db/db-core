@@ -84,4 +84,7 @@ pub mod vm;
 
 pub mod storage;
 
+#[cfg(test)]
+mod test_rng;
+
 pub mod engine;

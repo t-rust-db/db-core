@@ -291,6 +291,7 @@ default = [
     "storage-row",
     "storage-column",
     "storage-column-write",
+    "ingest",
     "storage-stream",
     "engine-row",
     "engine-column",
@@ -356,6 +357,9 @@ storage-column = ["dep:memmap2", "dep:ruzstd"]
 # Parquet writer (#566, ADR 0029): `storage::parquet::writer`. No extra
 # dependency; Snappy is hand-rolled, like the reader's decompressor.
 storage-column-write = ["storage-column"]
+# Record ingestion (ADR 0027-0029): the WAL (#571); manifest, flush and the
+# Table API follow (#572, #574). Std only.
+ingest = ["storage-column-write"]
 storage-stream = ["vm-stream"]
 # Test-support helpers (e.g. `storage::row::btree::test_minimal_db`)
 # for consumers' own test suites -- enable from `[dev-dependencies]`

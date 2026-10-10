@@ -137,6 +137,16 @@ on open.
 Recovery is idempotent; its cost is bounded by how much un-flushed WAL
 ADR 0028's memory budget allows.
 
+**Amendment (#571): only a torn tail is truncated.** A segment file is
+complete and fsynced before the next one is created, so a crash can only
+tear the end of the last file. Step 3 therefore truncates only when the
+bad frame (incomplete or failing its CRC) is in the last file and no
+valid frame follows it. Anything else — a bad frame in an earlier file, a
+bad frame followed by valid ones, an LSN gap, or a missing file — is
+damage to data that may already have been acknowledged as durable;
+truncating there would drop it silently, so opening fails with
+`WalError::Corrupt` instead and leaves the files untouched.
+
 ### Reads: one snapshot, one segment list
 
 A query takes one `Arc<Snapshot>` = { manifest files, sealed pages with

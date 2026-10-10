@@ -1,0 +1,195 @@
+//! WAL replay on open (ADR 0027 §Recovery, as amended for #571).
+//!
+//! Segment files are `wal/<lsn_lo:020>.wal`, each holding consecutive
+//! frames from `lsn_lo` on. Replay:
+//!
+//! 1. deletes every file whose frames are all at or below `flushed_lsn`;
+//! 2. reads the rest in order, requiring consecutive LSNs within and across
+//!    files, and returns the frames above `flushed_lsn`;
+//! 3. at a frame that is incomplete or fails its checksum: if it is in the
+//!    last file and no valid frame follows it, it is the torn tail of a
+//!    crash, and the file is truncated there; anything else is corruption
+//!    of data that may have been acknowledged, and opening fails rather
+//!    than silently dropping it.
+//!
+//! An empty last file (a crash between creating it and writing to it) is
+//! removed. Replaying twice gives the same result.
+
+use std::fs::{self, OpenOptions};
+use std::path::{Path, PathBuf};
+
+use super::frame::{self, Frame, HEADER_LEN};
+use super::wal::WalError;
+
+/// One WAL segment file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Segment {
+    pub(crate) lsn_lo: u64,
+    pub(crate) path: PathBuf,
+}
+
+/// What replay found.
+#[derive(Debug)]
+pub(crate) struct Replay {
+    /// Frames above `flushed_lsn`, in LSN order.
+    pub(crate) records: Vec<super::wal::Record>,
+    /// The highest LSN on disk or flushed: the next append gets this + 1.
+    pub(crate) last_lsn: u64,
+    /// The segment files left, oldest first.
+    pub(crate) segments: Vec<Segment>,
+}
+
+/// `<lsn_lo:020>.wal`.
+pub(crate) fn segment_name(lsn_lo: u64) -> String {
+    format!("{lsn_lo:020}.wal")
+}
+
+fn parse_name(name: &str) -> Option<u64> {
+    let digits = name.strip_suffix(".wal")?;
+    if digits.len() != 20 {
+        return None;
+    }
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn corrupt(path: &Path, offset: usize, reason: String) -> WalError {
+    WalError::Corrupt {
+        file: path.to_path_buf(),
+        offset: u64::try_from(offset).unwrap_or(u64::MAX),
+        reason,
+    }
+}
+
+fn list(dir: &Path) -> Result<Vec<Segment>, WalError> {
+    let mut segments = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if let Some(lsn_lo) = entry.file_name().to_str().and_then(parse_name) {
+            segments.push(Segment {
+                lsn_lo,
+                path: entry.path(),
+            });
+        }
+    }
+    segments.sort_by_key(|s| s.lsn_lo);
+    Ok(segments)
+}
+
+/// Whether a valid frame with an LSN above `prev` starts anywhere after
+/// `from`. Candidate offsets are filtered by a plausible LSN before the
+/// checksum is computed, so the scan is cheap.
+fn valid_frame_after(buf: &[u8], from: usize, prev: u64) -> bool {
+    let room = u64::try_from(buf.len().saturating_sub(from) / HEADER_LEN).unwrap_or(u64::MAX);
+    let highest = prev.saturating_add(room).saturating_add(1);
+    let start = from.saturating_add(1);
+    (start..buf.len()).any(|at| {
+        let lsn = at
+            .checked_add(8)
+            .and_then(|o| buf.get(o..o.checked_add(8)?))
+            .and_then(|b| <[u8; 8]>::try_from(b).ok())
+            .map(u64::from_le_bytes);
+        match lsn {
+            Some(lsn) if lsn > prev && lsn <= highest => {
+                matches!(frame::decode(buf, at), Frame::Complete { .. })
+            }
+            _ => false,
+        }
+    })
+}
+
+/// Replays `dir` (created if missing) from `flushed_lsn`.
+pub(crate) fn replay(dir: &Path, flushed_lsn: u64) -> Result<Replay, WalError> {
+    fs::create_dir_all(dir)?;
+    let all = list(dir)?;
+    let mut kept = Vec::new();
+    for (i, segment) in all.iter().enumerate() {
+        let next_lo = all.get(i.saturating_add(1)).map(|n| n.lsn_lo);
+        match next_lo {
+            Some(next) if next.saturating_sub(1) <= flushed_lsn => fs::remove_file(&segment.path)?,
+            _ => kept.push(segment.clone()),
+        }
+    }
+
+    let mut records = Vec::new();
+    let mut prev: Option<u64> = None;
+    let mut segments = Vec::new();
+    let count = kept.len();
+    for (i, segment) in kept.into_iter().enumerate() {
+        let is_last = i.saturating_add(1) == count;
+        // The first file may start at or below flushed_lsn + 1 (partly
+        // flushed); every later one exactly where the previous ended.
+        let expected_lo = match prev {
+            Some(p) => p.saturating_add(1),
+            None => segment.lsn_lo.min(flushed_lsn.saturating_add(1)),
+        };
+        if segment.lsn_lo != expected_lo {
+            let reason = format!(
+                "starts at LSN {}, expected {expected_lo} (flushed_lsn {flushed_lsn}): frames are missing",
+                segment.lsn_lo
+            );
+            return Err(corrupt(&segment.path, 0, reason));
+        }
+        let buf = fs::read(&segment.path)?;
+        let mut last = segment.lsn_lo.saturating_sub(1);
+        let mut at = 0usize;
+        while at < buf.len() {
+            match frame::decode(&buf, at) {
+                Frame::Complete {
+                    lsn,
+                    payload_start,
+                    end,
+                } => {
+                    if lsn != last.saturating_add(1) {
+                        return Err(corrupt(
+                            &segment.path,
+                            at,
+                            format!("LSN {lsn} follows {last}"),
+                        ));
+                    }
+                    if lsn > flushed_lsn {
+                        let payload = buf.get(payload_start..end).unwrap_or_default();
+                        records.push((lsn, payload.to_vec()));
+                    }
+                    last = lsn;
+                    at = end;
+                }
+                Frame::Incomplete | Frame::BadChecksum => {
+                    if !is_last {
+                        let reason =
+                            "bad frame in a segment that was complete before the next one started";
+                        return Err(corrupt(&segment.path, at, reason.to_string()));
+                    }
+                    if valid_frame_after(&buf, at, last) {
+                        let reason = "bad frame followed by valid frames";
+                        return Err(corrupt(&segment.path, at, reason.to_string()));
+                    }
+                    truncate(&segment.path, at)?;
+                    break;
+                }
+            }
+        }
+        if at == 0 {
+            // Nothing valid in it: necessarily the last file (a non-last
+            // one fails above), created by a crash before its first write.
+            fs::remove_file(&segment.path)?;
+        } else {
+            segments.push(segment);
+        }
+        prev = Some(last);
+    }
+    Ok(Replay {
+        records,
+        last_lsn: prev.unwrap_or(0).max(flushed_lsn),
+        segments,
+    })
+}
+
+fn truncate(path: &Path, len: usize) -> Result<(), WalError> {
+    let file = OpenOptions::new().write(true).open(path)?;
+    file.set_len(u64::try_from(len).unwrap_or(u64::MAX))?;
+    file.sync_all()?;
+    Ok(())
+}

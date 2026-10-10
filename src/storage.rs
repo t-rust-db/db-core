@@ -21,6 +21,9 @@ pub mod column;
 #[cfg(feature = "storage-column")]
 pub mod parquet;
 
+#[cfg(feature = "ingest")]
+pub mod ingest;
+
 #[cfg(feature = "storage-column")]
 pub use column::{
     DictionaryIndices, FileError, MemoryVfs, MmapRegion, ParquetFile, PosixVfs, RowGroupReader,

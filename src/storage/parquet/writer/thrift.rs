@@ -200,7 +200,7 @@ fn zigzag_i64(v: i64) -> u64 {
 mod tests {
     use super::*;
     use crate::storage::parquet::thrift::decode_struct;
-    use crate::storage::parquet::writer::tests::Rng;
+    use crate::test_rng::Rng;
 
     fn round_trip(fields: Vec<(i16, Value)>) {
         let bytes = encode_struct(&fields).unwrap();

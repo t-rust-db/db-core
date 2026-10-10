@@ -125,7 +125,7 @@ mod tests {
     fn decompress(data: &[u8], size: usize) -> compression::Result<Vec<u8>> {
         compression::decompress(Codec::Snappy, data, size).map(|c| c.into_owned())
     }
-    use crate::storage::parquet::writer::tests::Rng;
+    use crate::test_rng::Rng;
 
     fn round_trip(input: &[u8]) -> Vec<u8> {
         let compressed = compress(input);
