@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -373,3 +373,22 @@ perf-profile: ## Sampling profile of one bench (BENCH=parser|codegen|vm_opcodes)
 
 version: ## Print the crate's current version
 	@sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1
+
+# A release is the annotated tag `vX.Y.Z` on main once the `chore: release`
+# commit (version bump + CHANGELOG entry) has landed. Tagging was manual and
+# stopped after v0.114.7 (#569); this target refuses anything but a clean main
+# in sync with origin/main whose Cargo.toml version has a CHANGELOG entry and
+# no tag yet. The tag message is the entry's first bold bullet.
+release: ## Tag the Cargo.toml version (vX.Y.Z) on main and push the tag -- needs clean main in sync with origin and a CHANGELOG entry
+	@v="$$($(MAKE) -s version)"; tag="v$$v"; \
+	branch="$$(git branch --show-current)"; \
+	[ "$$branch" = "main" ] || { echo "release: on '$$branch', must be on main" >&2; exit 1; }; \
+	[ -z "$$(git status --porcelain)" ] || { echo "release: working tree not clean" >&2; exit 1; }; \
+	git fetch -q origin main --tags; \
+	[ "$$(git rev-parse HEAD)" = "$$(git rev-parse origin/main)" ] || { echo "release: main is not in sync with origin/main (pull or push first)" >&2; exit 1; }; \
+	grep -q "^## \[$$v\]" CHANGELOG.md || { echo "release: CHANGELOG.md has no '## [$$v]' entry" >&2; exit 1; }; \
+	! git rev-parse -q --verify "refs/tags/$$tag" >/dev/null || { echo "release: tag $$tag already exists locally" >&2; exit 1; }; \
+	[ -z "$$(git ls-remote --tags origin "refs/tags/$$tag")" ] || { echo "release: tag $$tag already exists on origin" >&2; exit 1; }; \
+	title="$$(sed -n "/^## \[$$v\]/,/^## \[/s/^- \*\*\(.*\)\*\*.*/\1/p" CHANGELOG.md | head -1 | sed 's/\*\*.*//' | tr -d '`')"; \
+	git tag -a "$$tag" -m "$$tag$${title:+: $$title}" && git push origin "$$tag" && \
+	echo "release: tagged and pushed $$tag ($$(git rev-parse --short HEAD))"
