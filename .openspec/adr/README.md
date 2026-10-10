@@ -57,3 +57,7 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0023](0023-key-restricted-materialization.md) — Cross-mode joins: measure before building key-restricted lookup materialization
 - [0024](0024-cross-mode-scan-source-opcode.md) — Cross-mode joins: compile the build side into `vm::batch` via a `ScanSource` opcode, unifying cross-mode `explain_opcodes` with single-engine queries
 - [0025](0025-audit-model-for-batch-and-stream-kernels.md) — Audit model for `vm::batch`/`vm::stream`: the kernel, not the opcode, is the audit unit; segment-split invariance as the headline obligation
+- [0026](0026-late-materialization.md) — Late materialization: two-phase segment decode
+- [0027](0027-write-path-wal-and-flush.md) — Write path: record WAL, three watermarks (visible/durable/flushed), atomic flush to Parquet via a manifest
+- [0028](0028-time-tiered-layout-and-compaction.md) — Time-tiered layout (hot → hour → day) partitioned by arrival time, sort key inside row groups, in-process compactor
+- [0029](0029-ingest-packaging.md) — Packaging the write path: `storage-column-write`/`ingest-read`/`ingest` features, `column-ingest` binary, readers in the `tools` workspace
