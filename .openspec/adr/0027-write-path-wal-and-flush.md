@@ -152,6 +152,24 @@ a snapshot, so the union has no duplicates and no gaps. The default read
 level is `visible_lsn`; a query option restricts it to `durable_lsn` for
 callers that must not see a record a crash could still erase.
 
+### Readers in other processes
+
+The head page lives only in the writer's memory, but everything durable
+is on disk, so another process (column-rs, loglume, db-studio) reads a
+table without a server, IPC or the `LOCK`:
+
+1. Read `manifest.json` → files, `flushed_lsn`.
+2. Read `wal/*.wal` frames with `lsn > flushed_lsn`, in file order, up to
+   the first frame whose CRC fails (the durable tail, possibly still
+   being written).
+3. If a WAL file named in step 2 has disappeared — a flush committed in
+   between — start again at step 1.
+
+Such a reader sees up to `durable_lsn`; only an in-process reader sees
+`visible_lsn`. With `Ack::Memory` writes, other processes trail by one
+group-commit interval. The snapshot this builds is the same type the
+writer uses, so clients consume one API (ADR 0029).
+
 Files have different schemas (Tier-3 fields come and go). A column
 missing from a segment reads as NULL; today `engine/column.rs` reports a
 missing column as `VmError::SegmentLoad`, which changes for this mode.
@@ -173,6 +191,27 @@ Type mapping from `OwnedColumn`: `Int` → INT64, `Float` → DOUBLE, `Bool`
 → BOOLEAN, `Str` → BYTE_ARRAY (UTF8), `Dict` → dictionary-encoded
 BYTE_ARRAY; `timestamp`/`observed_ts` → INT64 `TIMESTAMP(NANOS)`.
 
+### Logfile mode: the source file is the WAL
+
+When the input is a log file another process appends to (ADR 0018's
+`LogFile` tail), that file is already durable; copying every line into
+our WAL would write it twice. In this mode:
+
+- the LSN is the byte offset of the line in the source file, and the
+  manifest records `source = { path, file identity }` with
+  `flushed_lsn` as an offset;
+- there is no `wal/` directory and no `Ack` (nothing to wait for);
+- recovery resumes the tail at `flushed_lsn`;
+- **rotation forces a flush**: a changed file identity or `len <
+  head_off` (already detected for truncation) flushes the hot tier before
+  following the new file, which starts a new LSN epoch recorded in the
+  manifest. Rows in the hot tier are lost only if the rotated file is
+  deleted before that flush completes.
+
+Other-process readers see only flushed data in this mode (the source
+file is not in the manifest's format); in-process readers see everything
+tailed.
+
 ### Engine seam
 
 The table is opened as `Mode::Batch` (ADR 0017) on a directory that
@@ -180,6 +219,8 @@ contains `manifest.json`; no new mode. Writing is the Rust `append` API
 above; SQL `INSERT` is out of scope.
 
 ## Structure
+
+Feature split and client packaging: ADR 0029.
 
 - `src/storage/column/parquet/write/` — the writer.
 - `src/storage/ingest/` — `wal.rs` (frames, group commit), `table.rs`
@@ -192,9 +233,12 @@ above; SQL `INSERT` is out of scope.
 
 - No separate hot store: the most recent records are queryable through
   the same engine and SQL as history, the moment they are accepted.
-- One writer per table. Many readers in-process via snapshots; external
-  readers (DuckDB) can read the Parquet files directly but see only
-  flushed data, and only complete files (tmp + rename).
+- One writer per table. Readers in-process and in other db-core
+  processes go through the manifest. Tools that glob the Parquet files
+  directly (DuckDB `read_parquet('events/**/*.parquet')`) see only
+  complete files (tmp + rename) and only flushed data, and during ADR
+  0028's `delete_grace` they also see a compaction's inputs next to its
+  output — duplicates. Correct external reads need the manifest.
 - The writer is new code with an external oracle: every file it writes
   must round-trip through db-core's reader and through DuckDB
   `read_parquet` (benchmark parity suite).
@@ -202,8 +246,12 @@ above; SQL `INSERT` is out of scope.
   recovers to the same row set; torn WAL tail; segment-split invariance
   (ADR 0025) across the page/row-group boundary; the manifest invariant.
 - Out of scope: deletes and corrections, SQL `INSERT`, multi-table
-  transactions, more than one writer.
-- An external log file can be ingested by the same machinery with the
-  file itself as the WAL and the byte offset as the LSN — no second
-  copy, no fsync of ours; ADR 0018's tail becomes the ingest thread's
-  input. Not part of v1.
+  transactions, more than one writer, and a standard table format for
+  the manifest (Delta Lake, Iceberg, DuckLake) — deferred for separate
+  study. `manifest.json` is db-core's own format; replacing it later
+  changes the commit point's encoding, not the protocol above.
+- Field names follow ADR 0018 and map one-to-one onto the OpenTelemetry
+  Logs data model (`timestamp` ↔ `Timestamp`, `observed_ts` ↔
+  `ObservedTimestamp`, `severity` ↔ `SeverityNumber`, `message` ↔
+  `Body`, Tier-3 ↔ `Attributes`, `source`/`resource` ↔ `Resource`), so
+  OTel input needs aliasing only.

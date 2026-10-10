@@ -60,3 +60,4 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0026](0026-late-materialization.md) — Late materialization: two-phase segment decode
 - [0027](0027-write-path-wal-and-flush.md) — Write path: record WAL, three watermarks (visible/durable/flushed), atomic flush to Parquet via a manifest
 - [0028](0028-time-tiered-layout-and-compaction.md) — Time-tiered layout (hot → hour → day) partitioned by arrival time, sort key inside row groups, in-process compactor
+- [0029](0029-ingest-packaging.md) — Packaging the write path: `storage-column-write`/`ingest-read`/`ingest` features, `column-ingest` binary, readers in the `tools` workspace
