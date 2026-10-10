@@ -84,16 +84,17 @@ cannot diverge.
 ### Clients live in one `tools` workspace
 
 `t-rust-db/tools` is a Cargo workspace holding db-cli, column-rs,
-column-ingest, loglume and db-studio, imported with history (one
-subdirectory per former repo). One `Cargo.lock`, one db-core pin, one
-`[patch]` at the root, one CI. Each crate keeps its own version, changelog
-and tags (`column-rs-v…`); `cargo install --git
-https://github.com/t-rust-db/tools <crate>` installs one binary.
+sqlite-rs, loglume, trigrep and db-studio, imported with history (one
+subdirectory per former repo, tools#1); column-ingest is added there. One
+`Cargo.lock`, one db-core pin, one `[patch]` at the root, CI at the root.
+Each crate keeps its own version, changelog, tags (`column-rs-v…`) and
+gates (sqlite-rs keeps its assurance and supply-chain workflow);
+`cargo install --git https://github.com/t-rust-db/tools <crate>` installs
+one binary.
 
 Staying separate: db-core (own audit and release cadence, ADR 0015/0025),
-sqlite-rs (SQLite compatibility product with its own oracle; may join
-later), trigrep (different domain), rainfrog-oracle (fork), benchmark and
-examples (deliberately decoupled from client releases).
+rainfrog-oracle (fork), benchmark and examples (deliberately decoupled
+from client releases).
 
 ### Readers: a table is a file or a snapshot
 
