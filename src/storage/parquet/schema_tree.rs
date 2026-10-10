@@ -3,7 +3,7 @@
 //! encoding rule: +1 definition level per optional-or-repeated ancestor,
 //! +1 repetition level per repeated ancestor).
 
-use crate::storage::column::parquet::footer::{Repetition, SchemaElement};
+use crate::storage::parquet::footer::{Repetition, SchemaElement};
 
 #[derive(Debug, Clone)]
 pub struct SchemaNode {
@@ -108,7 +108,7 @@ fn build_node(
 )]
 mod tests {
     use super::*;
-    use crate::storage::column::parquet::footer::PhysicalType;
+    use crate::storage::parquet::footer::PhysicalType;
 
     fn group(name: &str, repetition: Repetition, num_children: i32) -> SchemaElement {
         SchemaElement {

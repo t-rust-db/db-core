@@ -10,7 +10,7 @@
 //! failure here is returned as an `Err`, never substituted with a batch of
 //! NULLs (column-rs#27 wants the latter for its own loader).
 
-use super::parquet::{footer::PhysicalType, FileError, RowGroupReader};
+use crate::storage::parquet::{footer::PhysicalType, FileError, RowGroupReader};
 use crate::vm::batch::{Bitmap, Column};
 use crate::vm::column::build_str_column;
 
@@ -572,7 +572,7 @@ mod tests {
             body.extend_from_slice(&v.to_le_bytes());
         }
         let file_bytes = build_single_column_file(1 /* INT32 */, &body, values.len() as i32);
-        let file = super::super::parquet::ParquetFile::open(&file_bytes).unwrap();
+        let file = crate::storage::parquet::ParquetFile::open(&file_bytes).unwrap();
         let rg = file.row_group(0).unwrap();
         let Decoded::Column(column) = decode_column_full(&rg, 0, PhysicalType::Int32).unwrap();
         match column {
@@ -594,7 +594,7 @@ mod tests {
             body.extend_from_slice(&v.to_le_bytes());
         }
         let file_bytes = build_single_column_file(4 /* FLOAT */, &body, values.len() as i32);
-        let file = super::super::parquet::ParquetFile::open(&file_bytes).unwrap();
+        let file = crate::storage::parquet::ParquetFile::open(&file_bytes).unwrap();
         let rg = file.row_group(0).unwrap();
         let Decoded::Column(column) = decode_column_full(&rg, 0, PhysicalType::Float).unwrap();
         match column {
@@ -619,7 +619,7 @@ mod tests {
         }
         let file_bytes =
             build_single_column_file(0 /* BOOLEAN */, &[byte], values.len() as i32);
-        let file = super::super::parquet::ParquetFile::open(&file_bytes).unwrap();
+        let file = crate::storage::parquet::ParquetFile::open(&file_bytes).unwrap();
         let rg = file.row_group(0).unwrap();
         let Decoded::Column(column) = decode_column_full(&rg, 0, PhysicalType::Boolean).unwrap();
         match column {
@@ -642,7 +642,7 @@ mod tests {
             int_body.extend_from_slice(&v.to_le_bytes());
         }
         let int_file_bytes = build_single_column_file(1, &int_body, int_values.len() as i32);
-        let int_file = super::super::parquet::ParquetFile::open(&int_file_bytes).unwrap();
+        let int_file = crate::storage::parquet::ParquetFile::open(&int_file_bytes).unwrap();
         let int_rg = int_file.row_group(0).unwrap();
         let positions = [0u32, 2, 3];
         let Decoded::Column(int_at) =
@@ -659,7 +659,7 @@ mod tests {
             }
         }
         let bool_file_bytes = build_single_column_file(0, &[byte], bool_values.len() as i32);
-        let bool_file = super::super::parquet::ParquetFile::open(&bool_file_bytes).unwrap();
+        let bool_file = crate::storage::parquet::ParquetFile::open(&bool_file_bytes).unwrap();
         let bool_rg = bool_file.row_group(0).unwrap();
         let Decoded::Column(bool_at) =
             decode_column_at(&bool_rg, 0, PhysicalType::Boolean, &positions).unwrap();
@@ -685,7 +685,7 @@ mod tests {
             body.extend_from_slice(&v.to_le_bytes());
         }
         let file_bytes = build_single_column_file(5 /* DOUBLE */, &body, values.len() as i32);
-        let file = super::super::parquet::ParquetFile::open(&file_bytes).unwrap();
+        let file = crate::storage::parquet::ParquetFile::open(&file_bytes).unwrap();
         let rg = file.row_group(0).unwrap();
 
         let Decoded::Column(full) = decode_column_full(&rg, 0, PhysicalType::Double).unwrap();

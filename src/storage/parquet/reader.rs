@@ -6,8 +6,8 @@
 //! scope for this reader). Definition levels use the RLE/Bit-Packed Hybrid
 //! format with a 4-byte little-endian length prefix.
 
-use crate::storage::column::parquet::encoding::{self, EncodingError};
-use crate::storage::column::parquet::page::{DataPageHeader, Encoding};
+use crate::storage::parquet::encoding::{self, EncodingError};
+use crate::storage::parquet::page::{DataPageHeader, Encoding};
 use std::fmt;
 
 #[derive(Debug)]
@@ -18,7 +18,7 @@ pub enum ReadError {
     InvalidValueCount(i32),
     InvalidUtf8,
     DictionaryIndexOutOfRange(u32),
-    UnsupportedNestedPhysicalType(crate::storage::column::parquet::footer::PhysicalType),
+    UnsupportedNestedPhysicalType(crate::storage::parquet::footer::PhysicalType),
 }
 
 impl fmt::Display for ReadError {
@@ -126,10 +126,10 @@ pub enum LeafScalar {
 /// is bit-packed rather than byte-aligned.
 pub fn read_plain_scalar(
     buf: &mut &[u8],
-    physical_type: crate::storage::column::parquet::footer::PhysicalType,
+    physical_type: crate::storage::parquet::footer::PhysicalType,
     bit_pos: &mut usize,
 ) -> Result<LeafScalar> {
-    use crate::storage::column::parquet::footer::PhysicalType;
+    use crate::storage::parquet::footer::PhysicalType;
     match physical_type {
         PhysicalType::Int32 => Ok(LeafScalar::Int32(read_plain_i32(buf)?)),
         PhysicalType::Int64 => Ok(LeafScalar::Int64(read_plain_i64(buf)?)),
@@ -798,8 +798,8 @@ pub fn read_int96_column_dictionary(
 )]
 mod tests {
     use super::*;
-    use crate::storage::column::parquet::footer::PhysicalType;
-    use crate::storage::column::parquet::page::Encoding;
+    use crate::storage::parquet::footer::PhysicalType;
+    use crate::storage::parquet::page::Encoding;
 
     #[test]
     fn read_error_display_covers_every_variant() {
@@ -886,13 +886,13 @@ mod tests {
         out
     }
 
-    // storage_column_parquet_reader_encode_def_levels_62d37561: `idx < n && levels[idx] == 1` in the test-only
+    // storage_parquet_reader_encode_def_levels_62d37561: `idx < n && levels[idx] == 1` in the test-only
     // encode_def_levels helper's bit-packing loop. All three exercised by
     // one 3-level input: idx=0 (both true), idx=1 (idx < n true, level !=
     // 1), idx=3..7 (idx < n false, past the level list into padding).
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_column_parquet_reader_encode_def_levels_62d37561__v1_in_range_and_level_one_sets_the_bit(
+    fn mcdc__storage_parquet_reader_encode_def_levels_62d37561__v1_in_range_and_level_one_sets_the_bit(
     ) {
         let encoded = encode_def_levels(&[1, 0, 1]);
         assert_eq!(encoded, vec![2, 0, 0, 0, 3, 0b0000_0101]);
@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_column_parquet_reader_encode_def_levels_62d37561__v2_in_range_but_level_not_one_clears_the_bit(
+    fn mcdc__storage_parquet_reader_encode_def_levels_62d37561__v2_in_range_but_level_not_one_clears_the_bit(
     ) {
         let encoded = encode_def_levels(&[1, 0, 1]);
         assert_eq!(
@@ -917,7 +917,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_column_parquet_reader_encode_def_levels_62d37561__v3_out_of_range_padding_bits_are_clear(
+    fn mcdc__storage_parquet_reader_encode_def_levels_62d37561__v3_out_of_range_padding_bits_are_clear(
     ) {
         let encoded = encode_def_levels(&[1, 0, 1]);
         assert_eq!(
@@ -977,10 +977,10 @@ mod tests {
         assert_eq!(result, vec![Some(1.5), None, Some(2.5)]);
     }
 
-    // storage_column_parquet_reader_read_plain_fixed_944bcff7: `levels.is_empty() || levels.iter().all(|&level| level == max_def_level)`
+    // storage_parquet_reader_read_plain_fixed_944bcff7: `levels.is_empty() || levels.iter().all(|&level| level == max_def_level)`
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_column_parquet_reader_read_plain_fixed_944bcff7__v3_nullable_page_with_a_null_takes_the_row_loop(
+    fn mcdc__storage_parquet_reader_read_plain_fixed_944bcff7__v3_nullable_page_with_a_null_takes_the_row_loop(
     ) {
         let h = header(3);
         let mut page = encode_def_levels(&[1, 0, 1]);
@@ -994,7 +994,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_column_parquet_reader_read_plain_fixed_944bcff7__v2_nullable_page_without_nulls_copies_in_one_pass(
+    fn mcdc__storage_parquet_reader_read_plain_fixed_944bcff7__v2_nullable_page_without_nulls_copies_in_one_pass(
     ) {
         let h = header(2);
         let mut page = encode_def_levels(&[1, 1]);
@@ -1008,7 +1008,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_column_parquet_reader_read_plain_fixed_944bcff7__v1_required_page_has_no_levels_and_appends_no_flags(
+    fn mcdc__storage_parquet_reader_read_plain_fixed_944bcff7__v1_required_page_has_no_levels_and_appends_no_flags(
     ) {
         let h = header(2);
         let mut page = Vec::new();

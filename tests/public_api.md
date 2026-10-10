@@ -2439,8 +2439,8 @@ pub mod db_core::storage::column
 pub mod db_core::storage::column::decode
 pub enum db_core::storage::column::decode::Decoded
 pub db_core::storage::column::decode::Decoded::Column(db_core::vm::column::Column)
-pub fn db_core::storage::column::decode::decode_column_at(&db_core::storage::column::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::column::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::column::parquet::parquet_file::FileError>
-pub fn db_core::storage::column::decode::decode_column_full(&db_core::storage::column::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::column::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::column::parquet::parquet_file::FileError>
+pub fn db_core::storage::column::decode::decode_column_at(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
+pub fn db_core::storage::column::decode::decode_column_full(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub mod db_core::storage::column::memory
 pub struct db_core::storage::column::memory::MemoryFile
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::memory::MemoryFile
@@ -2458,655 +2458,6 @@ pub type db_core::storage::column::memory::MemoryVfs::File = db_core::storage::c
 pub fn db_core::storage::column::memory::MemoryVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub mod db_core::storage::column::mmap
 pub fn db_core::storage::column::mmap::map_file(&std::fs::File) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
-pub mod db_core::storage::column::parquet
-pub mod db_core::storage::column::parquet::compression
-pub enum db_core::storage::column::parquet::compression::CompressionError
-pub db_core::storage::column::parquet::compression::CompressionError::Snappy(db_core::storage::column::parquet::compression::SnappyError)
-pub db_core::storage::column::parquet::compression::CompressionError::UnsupportedCodec(i32)
-pub db_core::storage::column::parquet::compression::CompressionError::Zstd(db_core::storage::column::parquet::compression::ZstdError)
-impl core::convert::From<db_core::storage::column::parquet::compression::CompressionError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::compression::CompressionError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::compression::SnappyError> for db_core::storage::column::parquet::compression::CompressionError
-pub fn db_core::storage::column::parquet::compression::CompressionError::from(db_core::storage::column::parquet::compression::SnappyError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::compression::ZstdError> for db_core::storage::column::parquet::compression::CompressionError
-pub fn db_core::storage::column::parquet::compression::CompressionError::from(db_core::storage::column::parquet::compression::ZstdError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::compression::CompressionError
-impl core::fmt::Debug for db_core::storage::column::parquet::compression::CompressionError
-pub fn db_core::storage::column::parquet::compression::CompressionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::compression::CompressionError
-pub fn db_core::storage::column::parquet::compression::CompressionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub enum db_core::storage::column::parquet::compression::SnappyError
-pub db_core::storage::column::parquet::compression::SnappyError::InvalidCopyOffset
-pub db_core::storage::column::parquet::compression::SnappyError::InvalidLength(u64)
-pub db_core::storage::column::parquet::compression::SnappyError::InvalidVarint
-pub db_core::storage::column::parquet::compression::SnappyError::SizeMismatch
-pub db_core::storage::column::parquet::compression::SnappyError::SizeMismatch::actual: usize
-pub db_core::storage::column::parquet::compression::SnappyError::SizeMismatch::expected: usize
-pub db_core::storage::column::parquet::compression::SnappyError::UnexpectedEof
-impl core::convert::From<db_core::storage::column::parquet::compression::SnappyError> for db_core::storage::column::parquet::compression::CompressionError
-pub fn db_core::storage::column::parquet::compression::CompressionError::from(db_core::storage::column::parquet::compression::SnappyError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::compression::SnappyError
-impl core::fmt::Debug for db_core::storage::column::parquet::compression::SnappyError
-pub fn db_core::storage::column::parquet::compression::SnappyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::compression::SnappyError
-pub fn db_core::storage::column::parquet::compression::SnappyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub enum db_core::storage::column::parquet::compression::ZstdError
-pub db_core::storage::column::parquet::compression::ZstdError::Frame(alloc::string::String)
-pub db_core::storage::column::parquet::compression::ZstdError::Read(alloc::string::String)
-pub db_core::storage::column::parquet::compression::ZstdError::SizeMismatch
-pub db_core::storage::column::parquet::compression::ZstdError::SizeMismatch::actual: usize
-pub db_core::storage::column::parquet::compression::ZstdError::SizeMismatch::expected: usize
-impl core::convert::From<db_core::storage::column::parquet::compression::ZstdError> for db_core::storage::column::parquet::compression::CompressionError
-pub fn db_core::storage::column::parquet::compression::CompressionError::from(db_core::storage::column::parquet::compression::ZstdError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::compression::ZstdError
-impl core::fmt::Debug for db_core::storage::column::parquet::compression::ZstdError
-pub fn db_core::storage::column::parquet::compression::ZstdError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::compression::ZstdError
-pub fn db_core::storage::column::parquet::compression::ZstdError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub fn db_core::storage::column::parquet::compression::decompress<'a>(db_core::storage::column::parquet::footer::Codec, &'a [u8], usize) -> db_core::storage::column::parquet::compression::Result<alloc::borrow::Cow<'a, [u8]>>
-pub type db_core::storage::column::parquet::compression::Result<T> = core::result::Result<T, db_core::storage::column::parquet::compression::CompressionError>
-pub mod db_core::storage::column::parquet::decimal
-pub struct db_core::storage::column::parquet::decimal::Decimal
-pub db_core::storage::column::parquet::decimal::Decimal::scale: i32
-pub db_core::storage::column::parquet::decimal::Decimal::unscaled: i128
-impl db_core::storage::column::parquet::decimal::Decimal
-pub fn db_core::storage::column::parquet::decimal::Decimal::to_f64(&self) -> f64
-impl core::clone::Clone for db_core::storage::column::parquet::decimal::Decimal
-pub fn db_core::storage::column::parquet::decimal::Decimal::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::column::parquet::decimal::Decimal
-impl core::cmp::PartialEq for db_core::storage::column::parquet::decimal::Decimal
-pub fn db_core::storage::column::parquet::decimal::Decimal::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::decimal::Decimal
-pub fn db_core::storage::column::parquet::decimal::Decimal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::decimal::Decimal
-pub fn db_core::storage::column::parquet::decimal::Decimal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for db_core::storage::column::parquet::decimal::Decimal
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::decimal::Decimal
-pub fn db_core::storage::column::parquet::decimal::from_be_bytes(&[u8]) -> i128
-pub mod db_core::storage::column::parquet::encoding
-pub enum db_core::storage::column::parquet::encoding::EncodingError
-pub db_core::storage::column::parquet::encoding::EncodingError::InvalidLength(u64)
-pub db_core::storage::column::parquet::encoding::EncodingError::InvalidVarint
-pub db_core::storage::column::parquet::encoding::EncodingError::UnexpectedEof
-impl core::convert::From<db_core::storage::column::parquet::encoding::EncodingError> for db_core::storage::column::parquet::reader::ReadError
-pub fn db_core::storage::column::parquet::reader::ReadError::from(db_core::storage::column::parquet::encoding::EncodingError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::encoding::EncodingError
-impl core::fmt::Debug for db_core::storage::column::parquet::encoding::EncodingError
-pub fn db_core::storage::column::parquet::encoding::EncodingError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::encoding::EncodingError
-pub fn db_core::storage::column::parquet::encoding::EncodingError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub fn db_core::storage::column::parquet::encoding::bit_width_for_max_level(u32) -> u32
-pub fn db_core::storage::column::parquet::encoding::decode_delta_binary_packed(&[u8]) -> db_core::storage::column::parquet::encoding::Result<alloc::vec::Vec<i64>>
-pub fn db_core::storage::column::parquet::encoding::decode_hybrid_rle_bitpacked(&[u8], u32, usize) -> db_core::storage::column::parquet::encoding::Result<alloc::vec::Vec<u32>>
-pub fn db_core::storage::column::parquet::encoding::null_mask(&[u32], u32) -> alloc::vec::Vec<bool>
-pub type db_core::storage::column::parquet::encoding::Result<T> = core::result::Result<T, db_core::storage::column::parquet::encoding::EncodingError>
-pub mod db_core::storage::column::parquet::footer
-pub enum db_core::storage::column::parquet::footer::Codec
-pub db_core::storage::column::parquet::footer::Codec::Other(i32)
-pub db_core::storage::column::parquet::footer::Codec::Snappy
-pub db_core::storage::column::parquet::footer::Codec::Uncompressed
-pub db_core::storage::column::parquet::footer::Codec::Zstd
-impl core::clone::Clone for db_core::storage::column::parquet::footer::Codec
-pub fn db_core::storage::column::parquet::footer::Codec::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::column::parquet::footer::Codec
-impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::Codec
-pub fn db_core::storage::column::parquet::footer::Codec::eq(&self, &Self) -> bool
-impl core::convert::From<i32> for db_core::storage::column::parquet::footer::Codec
-pub fn db_core::storage::column::parquet::footer::Codec::from(i32) -> Self
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::Codec
-pub fn db_core::storage::column::parquet::footer::Codec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for db_core::storage::column::parquet::footer::Codec
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::Codec
-pub enum db_core::storage::column::parquet::footer::ConvertedType
-pub db_core::storage::column::parquet::footer::ConvertedType::Decimal
-pub db_core::storage::column::parquet::footer::ConvertedType::Other(i32)
-pub db_core::storage::column::parquet::footer::ConvertedType::TimestampMicros
-pub db_core::storage::column::parquet::footer::ConvertedType::TimestampMillis
-impl core::clone::Clone for db_core::storage::column::parquet::footer::ConvertedType
-pub fn db_core::storage::column::parquet::footer::ConvertedType::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::column::parquet::footer::ConvertedType
-impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::ConvertedType
-pub fn db_core::storage::column::parquet::footer::ConvertedType::eq(&self, &Self) -> bool
-impl core::convert::From<i32> for db_core::storage::column::parquet::footer::ConvertedType
-pub fn db_core::storage::column::parquet::footer::ConvertedType::from(i32) -> Self
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::ConvertedType
-pub fn db_core::storage::column::parquet::footer::ConvertedType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for db_core::storage::column::parquet::footer::ConvertedType
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::ConvertedType
-pub enum db_core::storage::column::parquet::footer::FooterError
-pub db_core::storage::column::parquet::footer::FooterError::BadMagic
-pub db_core::storage::column::parquet::footer::FooterError::FileTooShort
-pub db_core::storage::column::parquet::footer::FooterError::Thrift(db_core::storage::column::parquet::thrift::ThriftError)
-impl core::convert::From<db_core::storage::column::parquet::footer::FooterError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::footer::FooterError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::thrift::ThriftError> for db_core::storage::column::parquet::footer::FooterError
-pub fn db_core::storage::column::parquet::footer::FooterError::from(db_core::storage::column::parquet::thrift::ThriftError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::footer::FooterError
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::FooterError
-pub fn db_core::storage::column::parquet::footer::FooterError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::footer::FooterError
-pub fn db_core::storage::column::parquet::footer::FooterError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub enum db_core::storage::column::parquet::footer::PhysicalType
-pub db_core::storage::column::parquet::footer::PhysicalType::Boolean
-pub db_core::storage::column::parquet::footer::PhysicalType::ByteArray
-pub db_core::storage::column::parquet::footer::PhysicalType::Double
-pub db_core::storage::column::parquet::footer::PhysicalType::FixedLenByteArray
-pub db_core::storage::column::parquet::footer::PhysicalType::Float
-pub db_core::storage::column::parquet::footer::PhysicalType::Int32
-pub db_core::storage::column::parquet::footer::PhysicalType::Int64
-pub db_core::storage::column::parquet::footer::PhysicalType::Int96
-pub db_core::storage::column::parquet::footer::PhysicalType::Unknown(i32)
-impl core::clone::Clone for db_core::storage::column::parquet::footer::PhysicalType
-pub fn db_core::storage::column::parquet::footer::PhysicalType::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::column::parquet::footer::PhysicalType
-impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::PhysicalType
-pub fn db_core::storage::column::parquet::footer::PhysicalType::eq(&self, &Self) -> bool
-impl core::convert::From<i32> for db_core::storage::column::parquet::footer::PhysicalType
-pub fn db_core::storage::column::parquet::footer::PhysicalType::from(i32) -> Self
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::PhysicalType
-pub fn db_core::storage::column::parquet::footer::PhysicalType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for db_core::storage::column::parquet::footer::PhysicalType
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::PhysicalType
-pub enum db_core::storage::column::parquet::footer::Repetition
-pub db_core::storage::column::parquet::footer::Repetition::Optional
-pub db_core::storage::column::parquet::footer::Repetition::Repeated
-pub db_core::storage::column::parquet::footer::Repetition::Required
-pub db_core::storage::column::parquet::footer::Repetition::Unknown(i32)
-impl core::clone::Clone for db_core::storage::column::parquet::footer::Repetition
-pub fn db_core::storage::column::parquet::footer::Repetition::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::column::parquet::footer::Repetition
-impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::Repetition
-pub fn db_core::storage::column::parquet::footer::Repetition::eq(&self, &Self) -> bool
-impl core::convert::From<i32> for db_core::storage::column::parquet::footer::Repetition
-pub fn db_core::storage::column::parquet::footer::Repetition::from(i32) -> Self
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::Repetition
-pub fn db_core::storage::column::parquet::footer::Repetition::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for db_core::storage::column::parquet::footer::Repetition
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::Repetition
-pub struct db_core::storage::column::parquet::footer::ColumnChunk
-pub db_core::storage::column::parquet::footer::ColumnChunk::file_offset: i64
-pub db_core::storage::column::parquet::footer::ColumnChunk::meta_data: core::option::Option<db_core::storage::column::parquet::footer::ColumnMetaData>
-impl core::clone::Clone for db_core::storage::column::parquet::footer::ColumnChunk
-pub fn db_core::storage::column::parquet::footer::ColumnChunk::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::ColumnChunk
-pub fn db_core::storage::column::parquet::footer::ColumnChunk::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::ColumnChunk
-pub fn db_core::storage::column::parquet::footer::ColumnChunk::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::ColumnChunk
-pub struct db_core::storage::column::parquet::footer::ColumnMetaData
-pub db_core::storage::column::parquet::footer::ColumnMetaData::codec: db_core::storage::column::parquet::footer::Codec
-pub db_core::storage::column::parquet::footer::ColumnMetaData::data_page_offset: i64
-pub db_core::storage::column::parquet::footer::ColumnMetaData::dictionary_page_offset: core::option::Option<i64>
-pub db_core::storage::column::parquet::footer::ColumnMetaData::num_values: i64
-pub db_core::storage::column::parquet::footer::ColumnMetaData::path_in_schema: alloc::vec::Vec<alloc::string::String>
-pub db_core::storage::column::parquet::footer::ColumnMetaData::physical_type: db_core::storage::column::parquet::footer::PhysicalType
-pub db_core::storage::column::parquet::footer::ColumnMetaData::statistics: core::option::Option<db_core::storage::column::parquet::footer::Statistics>
-pub db_core::storage::column::parquet::footer::ColumnMetaData::total_compressed_size: i64
-pub db_core::storage::column::parquet::footer::ColumnMetaData::total_uncompressed_size: i64
-impl core::clone::Clone for db_core::storage::column::parquet::footer::ColumnMetaData
-pub fn db_core::storage::column::parquet::footer::ColumnMetaData::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::ColumnMetaData
-pub fn db_core::storage::column::parquet::footer::ColumnMetaData::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::ColumnMetaData
-pub fn db_core::storage::column::parquet::footer::ColumnMetaData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::ColumnMetaData
-pub struct db_core::storage::column::parquet::footer::FileMetaData
-pub db_core::storage::column::parquet::footer::FileMetaData::created_by: core::option::Option<alloc::string::String>
-pub db_core::storage::column::parquet::footer::FileMetaData::num_rows: i64
-pub db_core::storage::column::parquet::footer::FileMetaData::row_groups: alloc::vec::Vec<db_core::storage::column::parquet::footer::RowGroup>
-pub db_core::storage::column::parquet::footer::FileMetaData::schema: alloc::vec::Vec<db_core::storage::column::parquet::footer::SchemaElement>
-pub db_core::storage::column::parquet::footer::FileMetaData::version: i32
-impl core::clone::Clone for db_core::storage::column::parquet::footer::FileMetaData
-pub fn db_core::storage::column::parquet::footer::FileMetaData::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::FileMetaData
-pub fn db_core::storage::column::parquet::footer::FileMetaData::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::FileMetaData
-pub fn db_core::storage::column::parquet::footer::FileMetaData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::FileMetaData
-pub struct db_core::storage::column::parquet::footer::RowGroup
-pub db_core::storage::column::parquet::footer::RowGroup::columns: alloc::vec::Vec<db_core::storage::column::parquet::footer::ColumnChunk>
-pub db_core::storage::column::parquet::footer::RowGroup::num_rows: i64
-pub db_core::storage::column::parquet::footer::RowGroup::total_byte_size: i64
-impl core::clone::Clone for db_core::storage::column::parquet::footer::RowGroup
-pub fn db_core::storage::column::parquet::footer::RowGroup::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::RowGroup
-pub fn db_core::storage::column::parquet::footer::RowGroup::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::RowGroup
-pub fn db_core::storage::column::parquet::footer::RowGroup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::RowGroup
-pub struct db_core::storage::column::parquet::footer::SchemaElement
-pub db_core::storage::column::parquet::footer::SchemaElement::converted_type: core::option::Option<db_core::storage::column::parquet::footer::ConvertedType>
-pub db_core::storage::column::parquet::footer::SchemaElement::name: alloc::string::String
-pub db_core::storage::column::parquet::footer::SchemaElement::num_children: core::option::Option<i32>
-pub db_core::storage::column::parquet::footer::SchemaElement::physical_type: core::option::Option<db_core::storage::column::parquet::footer::PhysicalType>
-pub db_core::storage::column::parquet::footer::SchemaElement::precision: core::option::Option<i32>
-pub db_core::storage::column::parquet::footer::SchemaElement::repetition: core::option::Option<db_core::storage::column::parquet::footer::Repetition>
-pub db_core::storage::column::parquet::footer::SchemaElement::scale: core::option::Option<i32>
-pub db_core::storage::column::parquet::footer::SchemaElement::type_length: core::option::Option<i32>
-impl core::clone::Clone for db_core::storage::column::parquet::footer::SchemaElement
-pub fn db_core::storage::column::parquet::footer::SchemaElement::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::SchemaElement
-pub fn db_core::storage::column::parquet::footer::SchemaElement::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::SchemaElement
-pub fn db_core::storage::column::parquet::footer::SchemaElement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::SchemaElement
-pub struct db_core::storage::column::parquet::footer::Statistics
-pub db_core::storage::column::parquet::footer::Statistics::distinct_count: core::option::Option<i64>
-pub db_core::storage::column::parquet::footer::Statistics::max: core::option::Option<alloc::vec::Vec<u8>>
-pub db_core::storage::column::parquet::footer::Statistics::min: core::option::Option<alloc::vec::Vec<u8>>
-pub db_core::storage::column::parquet::footer::Statistics::null_count: core::option::Option<i64>
-impl core::clone::Clone for db_core::storage::column::parquet::footer::Statistics
-pub fn db_core::storage::column::parquet::footer::Statistics::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::footer::Statistics
-pub fn db_core::storage::column::parquet::footer::Statistics::eq(&self, &Self) -> bool
-impl core::default::Default for db_core::storage::column::parquet::footer::Statistics
-pub fn db_core::storage::column::parquet::footer::Statistics::default() -> Self
-impl core::fmt::Debug for db_core::storage::column::parquet::footer::Statistics
-pub fn db_core::storage::column::parquet::footer::Statistics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::footer::Statistics
-pub fn db_core::storage::column::parquet::footer::parse_footer(&[u8]) -> db_core::storage::column::parquet::footer::Result<db_core::storage::column::parquet::footer::FileMetaData>
-pub type db_core::storage::column::parquet::footer::Result<T> = core::result::Result<T, db_core::storage::column::parquet::footer::FooterError>
-pub mod db_core::storage::column::parquet::nested
-pub enum db_core::storage::column::parquet::nested::NestedError
-pub db_core::storage::column::parquet::nested::NestedError::MissingLeafData(alloc::string::String)
-pub db_core::storage::column::parquet::nested::NestedError::UnsupportedListElement(alloc::string::String)
-pub db_core::storage::column::parquet::nested::NestedError::UnsupportedMapShape(alloc::string::String)
-impl core::convert::From<db_core::storage::column::parquet::nested::NestedError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::nested::NestedError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::nested::NestedError
-impl core::fmt::Debug for db_core::storage::column::parquet::nested::NestedError
-pub fn db_core::storage::column::parquet::nested::NestedError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::nested::NestedError
-pub fn db_core::storage::column::parquet::nested::NestedError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub enum db_core::storage::column::parquet::nested::NestedValue
-pub db_core::storage::column::parquet::nested::NestedValue::List(alloc::vec::Vec<db_core::storage::column::parquet::nested::NestedValue>)
-pub db_core::storage::column::parquet::nested::NestedValue::Null
-pub db_core::storage::column::parquet::nested::NestedValue::Scalar(db_core::storage::column::parquet::reader::LeafScalar)
-pub db_core::storage::column::parquet::nested::NestedValue::Struct(alloc::vec::Vec<(alloc::string::String, db_core::storage::column::parquet::nested::NestedValue)>)
-impl core::clone::Clone for db_core::storage::column::parquet::nested::NestedValue
-pub fn db_core::storage::column::parquet::nested::NestedValue::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::nested::NestedValue
-pub fn db_core::storage::column::parquet::nested::NestedValue::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::nested::NestedValue
-pub fn db_core::storage::column::parquet::nested::NestedValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::nested::NestedValue
-pub struct db_core::storage::column::parquet::nested::LeafEntries
-pub db_core::storage::column::parquet::nested::LeafEntries::def_levels: alloc::vec::Vec<u32>
-pub db_core::storage::column::parquet::nested::LeafEntries::rep_levels: alloc::vec::Vec<u32>
-pub db_core::storage::column::parquet::nested::LeafEntries::values: alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::LeafScalar>>
-impl core::clone::Clone for db_core::storage::column::parquet::nested::LeafEntries
-pub fn db_core::storage::column::parquet::nested::LeafEntries::clone(&self) -> Self
-impl core::default::Default for db_core::storage::column::parquet::nested::LeafEntries
-pub fn db_core::storage::column::parquet::nested::LeafEntries::default() -> Self
-impl core::fmt::Debug for db_core::storage::column::parquet::nested::LeafEntries
-pub fn db_core::storage::column::parquet::nested::LeafEntries::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub fn db_core::storage::column::parquet::nested::reconstruct_row_group(&db_core::storage::column::parquet::schema_tree::SchemaNode, usize, &db_core::storage::column::parquet::nested::LeafData) -> db_core::storage::column::parquet::nested::Result<alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<db_core::storage::column::parquet::nested::NestedValue>)>>
-pub type db_core::storage::column::parquet::nested::LeafData = std::collections::hash::map::HashMap<alloc::string::String, db_core::storage::column::parquet::nested::LeafEntries>
-pub type db_core::storage::column::parquet::nested::Result<T> = core::result::Result<T, db_core::storage::column::parquet::nested::NestedError>
-pub mod db_core::storage::column::parquet::page
-pub enum db_core::storage::column::parquet::page::Encoding
-pub db_core::storage::column::parquet::page::Encoding::DeltaBinaryPacked
-pub db_core::storage::column::parquet::page::Encoding::Other(i32)
-pub db_core::storage::column::parquet::page::Encoding::Plain
-pub db_core::storage::column::parquet::page::Encoding::PlainDictionary
-pub db_core::storage::column::parquet::page::Encoding::Rle
-pub db_core::storage::column::parquet::page::Encoding::RleDictionary
-impl core::clone::Clone for db_core::storage::column::parquet::page::Encoding
-pub fn db_core::storage::column::parquet::page::Encoding::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::column::parquet::page::Encoding
-impl core::cmp::PartialEq for db_core::storage::column::parquet::page::Encoding
-pub fn db_core::storage::column::parquet::page::Encoding::eq(&self, &Self) -> bool
-impl core::convert::From<i32> for db_core::storage::column::parquet::page::Encoding
-pub fn db_core::storage::column::parquet::page::Encoding::from(i32) -> Self
-impl core::fmt::Debug for db_core::storage::column::parquet::page::Encoding
-pub fn db_core::storage::column::parquet::page::Encoding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for db_core::storage::column::parquet::page::Encoding
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::page::Encoding
-pub enum db_core::storage::column::parquet::page::PageError
-pub db_core::storage::column::parquet::page::PageError::MissingDataPageHeader
-pub db_core::storage::column::parquet::page::PageError::Thrift(db_core::storage::column::parquet::thrift::ThriftError)
-pub db_core::storage::column::parquet::page::PageError::UnsupportedPageType(i32)
-impl core::convert::From<db_core::storage::column::parquet::page::PageError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::page::PageError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::thrift::ThriftError> for db_core::storage::column::parquet::page::PageError
-pub fn db_core::storage::column::parquet::page::PageError::from(db_core::storage::column::parquet::thrift::ThriftError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::page::PageError
-impl core::fmt::Debug for db_core::storage::column::parquet::page::PageError
-pub fn db_core::storage::column::parquet::page::PageError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::page::PageError
-pub fn db_core::storage::column::parquet::page::PageError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub enum db_core::storage::column::parquet::page::PageType
-pub db_core::storage::column::parquet::page::PageType::Data(db_core::storage::column::parquet::page::DataPageHeader)
-pub db_core::storage::column::parquet::page::PageType::Dictionary(db_core::storage::column::parquet::page::DictionaryPageHeader)
-impl core::clone::Clone for db_core::storage::column::parquet::page::PageType
-pub fn db_core::storage::column::parquet::page::PageType::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::page::PageType
-pub fn db_core::storage::column::parquet::page::PageType::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::page::PageType
-pub fn db_core::storage::column::parquet::page::PageType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::page::PageType
-pub struct db_core::storage::column::parquet::page::DataPageHeader
-pub db_core::storage::column::parquet::page::DataPageHeader::definition_level_encoding: db_core::storage::column::parquet::page::Encoding
-pub db_core::storage::column::parquet::page::DataPageHeader::encoding: db_core::storage::column::parquet::page::Encoding
-pub db_core::storage::column::parquet::page::DataPageHeader::num_values: i32
-pub db_core::storage::column::parquet::page::DataPageHeader::repetition_level_encoding: db_core::storage::column::parquet::page::Encoding
-impl core::clone::Clone for db_core::storage::column::parquet::page::DataPageHeader
-pub fn db_core::storage::column::parquet::page::DataPageHeader::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::page::DataPageHeader
-pub fn db_core::storage::column::parquet::page::DataPageHeader::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::page::DataPageHeader
-pub fn db_core::storage::column::parquet::page::DataPageHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::page::DataPageHeader
-pub struct db_core::storage::column::parquet::page::DictionaryPageHeader
-pub db_core::storage::column::parquet::page::DictionaryPageHeader::encoding: db_core::storage::column::parquet::page::Encoding
-pub db_core::storage::column::parquet::page::DictionaryPageHeader::num_values: i32
-impl core::clone::Clone for db_core::storage::column::parquet::page::DictionaryPageHeader
-pub fn db_core::storage::column::parquet::page::DictionaryPageHeader::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::page::DictionaryPageHeader
-pub fn db_core::storage::column::parquet::page::DictionaryPageHeader::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::page::DictionaryPageHeader
-pub fn db_core::storage::column::parquet::page::DictionaryPageHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::page::DictionaryPageHeader
-pub struct db_core::storage::column::parquet::page::PageHeader
-pub db_core::storage::column::parquet::page::PageHeader::compressed_page_size: i32
-pub db_core::storage::column::parquet::page::PageHeader::page_type: db_core::storage::column::parquet::page::PageType
-pub db_core::storage::column::parquet::page::PageHeader::uncompressed_page_size: i32
-impl core::clone::Clone for db_core::storage::column::parquet::page::PageHeader
-pub fn db_core::storage::column::parquet::page::PageHeader::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::page::PageHeader
-pub fn db_core::storage::column::parquet::page::PageHeader::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::page::PageHeader
-pub fn db_core::storage::column::parquet::page::PageHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::page::PageHeader
-pub fn db_core::storage::column::parquet::page::decode_page_header(&[u8]) -> db_core::storage::column::parquet::page::Result<(db_core::storage::column::parquet::page::PageHeader, usize)>
-pub type db_core::storage::column::parquet::page::Result<T> = core::result::Result<T, db_core::storage::column::parquet::page::PageError>
-pub mod db_core::storage::column::parquet::parquet_file
-pub enum db_core::storage::column::parquet::parquet_file::FileError
-pub db_core::storage::column::parquet::parquet_file::FileError::ChunkOutOfBounds
-pub db_core::storage::column::parquet::parquet_file::FileError::ColumnIndexOutOfRange(usize)
-pub db_core::storage::column::parquet::parquet_file::FileError::Compression(db_core::storage::column::parquet::compression::CompressionError)
-pub db_core::storage::column::parquet::parquet_file::FileError::Footer(db_core::storage::column::parquet::footer::FooterError)
-pub db_core::storage::column::parquet::parquet_file::FileError::InvalidMetadata
-pub db_core::storage::column::parquet::parquet_file::FileError::InvalidMetadata::field: &'static str
-pub db_core::storage::column::parquet::parquet_file::FileError::InvalidMetadata::value: i64
-pub db_core::storage::column::parquet::parquet_file::FileError::MissingColumnMetadata
-pub db_core::storage::column::parquet::parquet_file::FileError::MissingDecimalScale
-pub db_core::storage::column::parquet::parquet_file::FileError::MissingDictionaryPage
-pub db_core::storage::column::parquet::parquet_file::FileError::MissingTypeLength
-pub db_core::storage::column::parquet::parquet_file::FileError::Nested(db_core::storage::column::parquet::nested::NestedError)
-pub db_core::storage::column::parquet::parquet_file::FileError::Page(db_core::storage::column::parquet::page::PageError)
-pub db_core::storage::column::parquet::parquet_file::FileError::Read(db_core::storage::column::parquet::reader::ReadError)
-pub db_core::storage::column::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
-pub db_core::storage::column::parquet::parquet_file::FileError::UnexpectedDictionaryPage
-pub db_core::storage::column::parquet::parquet_file::FileError::UnsupportedDecimalPhysicalType(db_core::storage::column::parquet::footer::PhysicalType)
-pub db_core::storage::column::parquet::parquet_file::FileError::UnsupportedNestedDictionary
-pub db_core::storage::column::parquet::parquet_file::FileError::UnsupportedNestedEncoding(db_core::storage::column::parquet::page::Encoding)
-pub db_core::storage::column::parquet::parquet_file::FileError::UnsupportedTimestampPhysicalType(db_core::storage::column::parquet::footer::PhysicalType)
-impl core::convert::From<db_core::storage::column::parquet::compression::CompressionError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::compression::CompressionError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::footer::FooterError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::footer::FooterError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::nested::NestedError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::nested::NestedError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::page::PageError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::page::PageError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::reader::ReadError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::reader::ReadError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::parquet_file::FileError
-impl core::fmt::Debug for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub struct db_core::storage::column::parquet::parquet_file::ParquetFile<'a>
-impl<'a> db_core::storage::column::parquet::parquet_file::ParquetFile<'a>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::column::parquet::footer::FileMetaData
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::column::parquet::parquet_file::Result<Self>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::column::parquet::nested::NestedValue>>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
-pub struct db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
-impl<'a, 'm> db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<&db_core::storage::column::parquet::footer::Statistics>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::decimal::Decimal>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_fixed_len_byte_array_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub type db_core::storage::column::parquet::parquet_file::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
-pub type db_core::storage::column::parquet::parquet_file::Result<T> = core::result::Result<T, db_core::storage::column::parquet::parquet_file::FileError>
-pub mod db_core::storage::column::parquet::reader
-pub enum db_core::storage::column::parquet::reader::LeafScalar
-pub db_core::storage::column::parquet::reader::LeafScalar::Bool(bool)
-pub db_core::storage::column::parquet::reader::LeafScalar::Double(f64)
-pub db_core::storage::column::parquet::reader::LeafScalar::Float(f32)
-pub db_core::storage::column::parquet::reader::LeafScalar::Int32(i32)
-pub db_core::storage::column::parquet::reader::LeafScalar::Int64(i64)
-pub db_core::storage::column::parquet::reader::LeafScalar::Str(alloc::string::String)
-impl core::clone::Clone for db_core::storage::column::parquet::reader::LeafScalar
-pub fn db_core::storage::column::parquet::reader::LeafScalar::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::reader::LeafScalar
-pub fn db_core::storage::column::parquet::reader::LeafScalar::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::reader::LeafScalar
-pub fn db_core::storage::column::parquet::reader::LeafScalar::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::reader::LeafScalar
-pub enum db_core::storage::column::parquet::reader::ReadError
-pub db_core::storage::column::parquet::reader::ReadError::DictionaryIndexOutOfRange(u32)
-pub db_core::storage::column::parquet::reader::ReadError::Encoding(db_core::storage::column::parquet::encoding::EncodingError)
-pub db_core::storage::column::parquet::reader::ReadError::InvalidUtf8
-pub db_core::storage::column::parquet::reader::ReadError::InvalidValueCount(i32)
-pub db_core::storage::column::parquet::reader::ReadError::UnexpectedEof
-pub db_core::storage::column::parquet::reader::ReadError::UnsupportedNestedPhysicalType(db_core::storage::column::parquet::footer::PhysicalType)
-impl core::convert::From<db_core::storage::column::parquet::encoding::EncodingError> for db_core::storage::column::parquet::reader::ReadError
-pub fn db_core::storage::column::parquet::reader::ReadError::from(db_core::storage::column::parquet::encoding::EncodingError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::reader::ReadError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::reader::ReadError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::reader::ReadError
-impl core::fmt::Debug for db_core::storage::column::parquet::reader::ReadError
-pub fn db_core::storage::column::parquet::reader::ReadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::reader::ReadError
-pub fn db_core::storage::column::parquet::reader::ReadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub struct db_core::storage::column::parquet::reader::Int96
-pub db_core::storage::column::parquet::reader::Int96::julian_day: i32
-pub db_core::storage::column::parquet::reader::Int96::time_nanos: i64
-impl core::clone::Clone for db_core::storage::column::parquet::reader::Int96
-pub fn db_core::storage::column::parquet::reader::Int96::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::column::parquet::reader::Int96
-impl core::cmp::PartialEq for db_core::storage::column::parquet::reader::Int96
-pub fn db_core::storage::column::parquet::reader::Int96::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::reader::Int96
-pub fn db_core::storage::column::parquet::reader::Int96::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for db_core::storage::column::parquet::reader::Int96
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::reader::Int96
-pub fn db_core::storage::column::parquet::reader::decode_dictionary_boolean(&[u8], i32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<bool>>
-pub fn db_core::storage::column::parquet::reader::decode_dictionary_double(&[u8], i32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<f64>>
-pub fn db_core::storage::column::parquet::reader::decode_dictionary_fixed_len_byte_array(&[u8], i32, usize) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>>
-pub fn db_core::storage::column::parquet::reader::decode_dictionary_float(&[u8], i32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<f32>>
-pub fn db_core::storage::column::parquet::reader::decode_dictionary_int32(&[u8], i32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<i32>>
-pub fn db_core::storage::column::parquet::reader::decode_dictionary_int64(&[u8], i32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<i64>>
-pub fn db_core::storage::column::parquet::reader::decode_dictionary_int96(&[u8], i32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<db_core::storage::column::parquet::reader::Int96>>
-pub fn db_core::storage::column::parquet::reader::decode_dictionary_string(&[u8], i32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<alloc::string::String>>
-pub fn db_core::storage::column::parquet::reader::read_boolean_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
-pub fn db_core::storage::column::parquet::reader::read_boolean_column_dictionary(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, &[bool]) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
-pub fn db_core::storage::column::parquet::reader::read_dictionary_index_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<u32>>>
-pub fn db_core::storage::column::parquet::reader::read_double_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
-pub fn db_core::storage::column::parquet::reader::read_double_column_dictionary(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, &[f64]) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
-pub fn db_core::storage::column::parquet::reader::read_fixed_len_byte_array_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, usize) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
-pub fn db_core::storage::column::parquet::reader::read_fixed_len_byte_array_column_dictionary(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, &[alloc::vec::Vec<u8>]) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
-pub fn db_core::storage::column::parquet::reader::read_float_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f32>>>
-pub fn db_core::storage::column::parquet::reader::read_float_column_dictionary(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, &[f32]) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f32>>>
-pub fn db_core::storage::column::parquet::reader::read_int32_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<i32>>>
-pub fn db_core::storage::column::parquet::reader::read_int32_column_dictionary(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, &[i32]) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<i32>>>
-pub fn db_core::storage::column::parquet::reader::read_int64_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub fn db_core::storage::column::parquet::reader::read_int64_column_dictionary(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, &[i64]) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub fn db_core::storage::column::parquet::reader::read_int96_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
-pub fn db_core::storage::column::parquet::reader::read_int96_column_dictionary(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, &[db_core::storage::column::parquet::reader::Int96]) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
-pub fn db_core::storage::column::parquet::reader::read_plain_fixed<T: core::marker::Copy + core::default::Default, const N: usize>(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, impl core::ops::function::Fn([u8; N]) -> T, &mut alloc::vec::Vec<T>, &mut alloc::vec::Vec<bool>) -> db_core::storage::column::parquet::reader::Result<()>
-pub fn db_core::storage::column::parquet::reader::read_plain_fixed_at<T: core::marker::Copy + core::default::Default, const N: usize>(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, impl core::ops::function::Fn([u8; N]) -> T, &[(u32, usize)], &mut [T], &mut [bool]) -> db_core::storage::column::parquet::reader::Result<()>
-pub fn db_core::storage::column::parquet::reader::read_plain_scalar(&mut &[u8], db_core::storage::column::parquet::footer::PhysicalType, &mut usize) -> db_core::storage::column::parquet::reader::Result<db_core::storage::column::parquet::reader::LeafScalar>
-pub fn db_core::storage::column::parquet::reader::read_string_column(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::reader::read_string_column_dictionary(&[u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, &[alloc::string::String]) -> db_core::storage::column::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::reader::split_rep_def_levels<'a>(&'a [u8], &db_core::storage::column::parquet::page::DataPageHeader, u32, u32) -> db_core::storage::column::parquet::reader::Result<(alloc::vec::Vec<u32>, alloc::vec::Vec<u32>, &'a [u8])>
-pub type db_core::storage::column::parquet::reader::Result<T> = core::result::Result<T, db_core::storage::column::parquet::reader::ReadError>
-pub mod db_core::storage::column::parquet::schema_tree
-pub struct db_core::storage::column::parquet::schema_tree::SchemaNode
-pub db_core::storage::column::parquet::schema_tree::SchemaNode::children: alloc::vec::Vec<db_core::storage::column::parquet::schema_tree::SchemaNode>
-pub db_core::storage::column::parquet::schema_tree::SchemaNode::element: db_core::storage::column::parquet::footer::SchemaElement
-pub db_core::storage::column::parquet::schema_tree::SchemaNode::max_def_level: u32
-pub db_core::storage::column::parquet::schema_tree::SchemaNode::max_rep_level: u32
-pub db_core::storage::column::parquet::schema_tree::SchemaNode::name: alloc::string::String
-impl db_core::storage::column::parquet::schema_tree::SchemaNode
-pub fn db_core::storage::column::parquet::schema_tree::SchemaNode::is_leaf(&self) -> bool
-pub fn db_core::storage::column::parquet::schema_tree::SchemaNode::leaves(&self) -> alloc::vec::Vec<&db_core::storage::column::parquet::schema_tree::SchemaNode>
-impl core::clone::Clone for db_core::storage::column::parquet::schema_tree::SchemaNode
-pub fn db_core::storage::column::parquet::schema_tree::SchemaNode::clone(&self) -> Self
-impl core::fmt::Debug for db_core::storage::column::parquet::schema_tree::SchemaNode
-pub fn db_core::storage::column::parquet::schema_tree::SchemaNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub fn db_core::storage::column::parquet::schema_tree::build_schema_tree(&[db_core::storage::column::parquet::footer::SchemaElement]) -> db_core::storage::column::parquet::schema_tree::SchemaNode
-pub fn db_core::storage::column::parquet::schema_tree::leaf_paths(&db_core::storage::column::parquet::schema_tree::SchemaNode) -> alloc::vec::Vec<alloc::string::String>
-pub mod db_core::storage::column::parquet::thrift
-pub enum db_core::storage::column::parquet::thrift::ThriftError
-pub db_core::storage::column::parquet::thrift::ThriftError::InvalidLength(u64)
-pub db_core::storage::column::parquet::thrift::ThriftError::InvalidVarint
-pub db_core::storage::column::parquet::thrift::ThriftError::UnexpectedEof
-pub db_core::storage::column::parquet::thrift::ThriftError::UnknownType(u8)
-impl core::convert::From<db_core::storage::column::parquet::thrift::ThriftError> for db_core::storage::column::parquet::footer::FooterError
-pub fn db_core::storage::column::parquet::footer::FooterError::from(db_core::storage::column::parquet::thrift::ThriftError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::thrift::ThriftError> for db_core::storage::column::parquet::page::PageError
-pub fn db_core::storage::column::parquet::page::PageError::from(db_core::storage::column::parquet::thrift::ThriftError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::thrift::ThriftError
-impl core::fmt::Debug for db_core::storage::column::parquet::thrift::ThriftError
-pub fn db_core::storage::column::parquet::thrift::ThriftError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::thrift::ThriftError
-pub fn db_core::storage::column::parquet::thrift::ThriftError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub enum db_core::storage::column::parquet::thrift::Value
-pub db_core::storage::column::parquet::thrift::Value::Binary(alloc::vec::Vec<u8>)
-pub db_core::storage::column::parquet::thrift::Value::Bool(bool)
-pub db_core::storage::column::parquet::thrift::Value::Byte(i8)
-pub db_core::storage::column::parquet::thrift::Value::Double(f64)
-pub db_core::storage::column::parquet::thrift::Value::I16(i16)
-pub db_core::storage::column::parquet::thrift::Value::I32(i32)
-pub db_core::storage::column::parquet::thrift::Value::I64(i64)
-pub db_core::storage::column::parquet::thrift::Value::List(alloc::vec::Vec<db_core::storage::column::parquet::thrift::Value>)
-pub db_core::storage::column::parquet::thrift::Value::Map(alloc::vec::Vec<(db_core::storage::column::parquet::thrift::Value, db_core::storage::column::parquet::thrift::Value)>)
-pub db_core::storage::column::parquet::thrift::Value::Struct(alloc::vec::Vec<(i16, db_core::storage::column::parquet::thrift::Value)>)
-impl db_core::storage::column::parquet::thrift::Value
-pub fn db_core::storage::column::parquet::thrift::Value::as_binary(&self) -> core::option::Option<&[u8]>
-pub fn db_core::storage::column::parquet::thrift::Value::as_i32(&self) -> core::option::Option<i32>
-pub fn db_core::storage::column::parquet::thrift::Value::as_i64(&self) -> core::option::Option<i64>
-pub fn db_core::storage::column::parquet::thrift::Value::as_list(&self) -> core::option::Option<&[db_core::storage::column::parquet::thrift::Value]>
-pub fn db_core::storage::column::parquet::thrift::Value::as_str(&self) -> core::option::Option<&str>
-pub fn db_core::storage::column::parquet::thrift::Value::as_struct(&self) -> core::option::Option<&[(i16, db_core::storage::column::parquet::thrift::Value)]>
-pub fn db_core::storage::column::parquet::thrift::Value::field(&self, i16) -> core::option::Option<&db_core::storage::column::parquet::thrift::Value>
-impl core::clone::Clone for db_core::storage::column::parquet::thrift::Value
-pub fn db_core::storage::column::parquet::thrift::Value::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::column::parquet::thrift::Value
-pub fn db_core::storage::column::parquet::thrift::Value::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::column::parquet::thrift::Value
-pub fn db_core::storage::column::parquet::thrift::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::column::parquet::thrift::Value
-pub struct db_core::storage::column::parquet::thrift::Decoder<'a>
-impl<'a> db_core::storage::column::parquet::thrift::Decoder<'a>
-pub fn db_core::storage::column::parquet::thrift::Decoder<'a>::new(&'a [u8]) -> Self
-pub fn db_core::storage::column::parquet::thrift::Decoder<'a>::position(&self) -> usize
-pub fn db_core::storage::column::parquet::thrift::Decoder<'a>::read_struct(&mut self) -> db_core::storage::column::parquet::thrift::Result<alloc::vec::Vec<(i16, db_core::storage::column::parquet::thrift::Value)>>
-pub fn db_core::storage::column::parquet::thrift::decode_struct(&[u8]) -> db_core::storage::column::parquet::thrift::Result<(alloc::vec::Vec<(i16, db_core::storage::column::parquet::thrift::Value)>, usize)>
-pub type db_core::storage::column::parquet::thrift::Result<T> = core::result::Result<T, db_core::storage::column::parquet::thrift::ThriftError>
-pub enum db_core::storage::column::parquet::FileError
-pub db_core::storage::column::parquet::FileError::ChunkOutOfBounds
-pub db_core::storage::column::parquet::FileError::ColumnIndexOutOfRange(usize)
-pub db_core::storage::column::parquet::FileError::Compression(db_core::storage::column::parquet::compression::CompressionError)
-pub db_core::storage::column::parquet::FileError::Footer(db_core::storage::column::parquet::footer::FooterError)
-pub db_core::storage::column::parquet::FileError::InvalidMetadata
-pub db_core::storage::column::parquet::FileError::InvalidMetadata::field: &'static str
-pub db_core::storage::column::parquet::FileError::InvalidMetadata::value: i64
-pub db_core::storage::column::parquet::FileError::MissingColumnMetadata
-pub db_core::storage::column::parquet::FileError::MissingDecimalScale
-pub db_core::storage::column::parquet::FileError::MissingDictionaryPage
-pub db_core::storage::column::parquet::FileError::MissingTypeLength
-pub db_core::storage::column::parquet::FileError::Nested(db_core::storage::column::parquet::nested::NestedError)
-pub db_core::storage::column::parquet::FileError::Page(db_core::storage::column::parquet::page::PageError)
-pub db_core::storage::column::parquet::FileError::Read(db_core::storage::column::parquet::reader::ReadError)
-pub db_core::storage::column::parquet::FileError::RowPositionOutOfRange(u32)
-pub db_core::storage::column::parquet::FileError::UnexpectedDictionaryPage
-pub db_core::storage::column::parquet::FileError::UnsupportedDecimalPhysicalType(db_core::storage::column::parquet::footer::PhysicalType)
-pub db_core::storage::column::parquet::FileError::UnsupportedNestedDictionary
-pub db_core::storage::column::parquet::FileError::UnsupportedNestedEncoding(db_core::storage::column::parquet::page::Encoding)
-pub db_core::storage::column::parquet::FileError::UnsupportedTimestampPhysicalType(db_core::storage::column::parquet::footer::PhysicalType)
-impl core::convert::From<db_core::storage::column::parquet::compression::CompressionError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::compression::CompressionError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::footer::FooterError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::footer::FooterError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::nested::NestedError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::nested::NestedError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::page::PageError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::page::PageError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::reader::ReadError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::reader::ReadError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::parquet_file::FileError
-impl core::fmt::Debug for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub struct db_core::storage::column::parquet::ParquetFile<'a>
-impl<'a> db_core::storage::column::parquet::parquet_file::ParquetFile<'a>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::column::parquet::footer::FileMetaData
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::column::parquet::parquet_file::Result<Self>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::column::parquet::nested::NestedValue>>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
-pub struct db_core::storage::column::parquet::RowGroupReader<'a, 'm>
-impl<'a, 'm> db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<&db_core::storage::column::parquet::footer::Statistics>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::decimal::Decimal>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_fixed_len_byte_array_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub type db_core::storage::column::parquet::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub mod db_core::storage::column::posix
 pub struct db_core::storage::column::posix::PosixFile
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix::PosixFile
@@ -3152,8 +2503,8 @@ pub db_core::storage::column::Decoded::Column(db_core::vm::column::Column)
 pub enum db_core::storage::column::FileError
 pub db_core::storage::column::FileError::ChunkOutOfBounds
 pub db_core::storage::column::FileError::ColumnIndexOutOfRange(usize)
-pub db_core::storage::column::FileError::Compression(db_core::storage::column::parquet::compression::CompressionError)
-pub db_core::storage::column::FileError::Footer(db_core::storage::column::parquet::footer::FooterError)
+pub db_core::storage::column::FileError::Compression(db_core::storage::parquet::compression::CompressionError)
+pub db_core::storage::column::FileError::Footer(db_core::storage::parquet::footer::FooterError)
 pub db_core::storage::column::FileError::InvalidMetadata
 pub db_core::storage::column::FileError::InvalidMetadata::field: &'static str
 pub db_core::storage::column::FileError::InvalidMetadata::value: i64
@@ -3161,30 +2512,30 @@ pub db_core::storage::column::FileError::MissingColumnMetadata
 pub db_core::storage::column::FileError::MissingDecimalScale
 pub db_core::storage::column::FileError::MissingDictionaryPage
 pub db_core::storage::column::FileError::MissingTypeLength
-pub db_core::storage::column::FileError::Nested(db_core::storage::column::parquet::nested::NestedError)
-pub db_core::storage::column::FileError::Page(db_core::storage::column::parquet::page::PageError)
-pub db_core::storage::column::FileError::Read(db_core::storage::column::parquet::reader::ReadError)
+pub db_core::storage::column::FileError::Nested(db_core::storage::parquet::nested::NestedError)
+pub db_core::storage::column::FileError::Page(db_core::storage::parquet::page::PageError)
+pub db_core::storage::column::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::column::FileError::UnexpectedDictionaryPage
-pub db_core::storage::column::FileError::UnsupportedDecimalPhysicalType(db_core::storage::column::parquet::footer::PhysicalType)
+pub db_core::storage::column::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
 pub db_core::storage::column::FileError::UnsupportedNestedDictionary
-pub db_core::storage::column::FileError::UnsupportedNestedEncoding(db_core::storage::column::parquet::page::Encoding)
-pub db_core::storage::column::FileError::UnsupportedTimestampPhysicalType(db_core::storage::column::parquet::footer::PhysicalType)
-impl core::convert::From<db_core::storage::column::parquet::compression::CompressionError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::compression::CompressionError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::footer::FooterError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::footer::FooterError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::nested::NestedError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::nested::NestedError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::page::PageError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::page::PageError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::reader::ReadError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::reader::ReadError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::parquet_file::FileError
-impl core::fmt::Debug for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub db_core::storage::column::FileError::UnsupportedNestedEncoding(db_core::storage::parquet::page::Encoding)
+pub db_core::storage::column::FileError::UnsupportedTimestampPhysicalType(db_core::storage::parquet::footer::PhysicalType)
+impl core::convert::From<db_core::storage::parquet::compression::CompressionError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::compression::CompressionError) -> Self
+impl core::convert::From<db_core::storage::parquet::footer::FooterError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::footer::FooterError) -> Self
+impl core::convert::From<db_core::storage::parquet::nested::NestedError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::nested::NestedError) -> Self
+impl core::convert::From<db_core::storage::parquet::page::PageError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::page::PageError) -> Self
+impl core::convert::From<db_core::storage::parquet::reader::ReadError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::reader::ReadError) -> Self
+impl core::error::Error for db_core::storage::parquet::parquet_file::FileError
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum db_core::storage::column::MmapRegion
 pub db_core::storage::column::MmapRegion::Mapped(memmap2::Mmap)
 pub db_core::storage::column::MmapRegion::Owned(alloc::rcs::arc::Arc<[u8]>)
@@ -3201,15 +2552,15 @@ impl db_core::storage::column::vfs::Vfs for db_core::storage::column::memory::Me
 pub type db_core::storage::column::memory::MemoryVfs::File = db_core::storage::column::memory::MemoryFile
 pub fn db_core::storage::column::memory::MemoryVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub struct db_core::storage::column::ParquetFile<'a>
-impl<'a> db_core::storage::column::parquet::parquet_file::ParquetFile<'a>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::column::parquet::footer::FileMetaData
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::column::parquet::parquet_file::Result<Self>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::column::parquet::nested::NestedValue>>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
+impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::parquet::parquet_file::Result<Self>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub struct db_core::storage::column::PosixVfs
 impl core::default::Default for db_core::storage::column::posix::PosixVfs
 pub fn db_core::storage::column::posix::PosixVfs::default() -> Self
@@ -3217,32 +2568,32 @@ impl db_core::storage::column::vfs::Vfs for db_core::storage::column::posix::Pos
 pub type db_core::storage::column::posix::PosixVfs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::column::posix::PosixVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub struct db_core::storage::column::RowGroupReader<'a, 'm>
-impl<'a, 'm> db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<&db_core::storage::column::parquet::footer::Statistics>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::decimal::Decimal>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_fixed_len_byte_array_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::decimal::Decimal>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_fixed_len_byte_array_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub trait db_core::storage::column::Vfs: core::marker::Send + core::marker::Sync
 pub type db_core::storage::column::Vfs::File: db_core::storage::column::vfs::VfsFile
 pub fn db_core::storage::column::Vfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
@@ -3264,9 +2615,658 @@ impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix:
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
-pub fn db_core::storage::column::decode_column_at(&db_core::storage::column::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::column::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::column::parquet::parquet_file::FileError>
-pub fn db_core::storage::column::decode_column_full(&db_core::storage::column::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::column::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::column::parquet::parquet_file::FileError>
+pub fn db_core::storage::column::decode_column_at(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
+pub fn db_core::storage::column::decode_column_full(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub type db_core::storage::column::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
+pub mod db_core::storage::parquet
+pub mod db_core::storage::parquet::compression
+pub enum db_core::storage::parquet::compression::CompressionError
+pub db_core::storage::parquet::compression::CompressionError::Snappy(db_core::storage::parquet::compression::SnappyError)
+pub db_core::storage::parquet::compression::CompressionError::UnsupportedCodec(i32)
+pub db_core::storage::parquet::compression::CompressionError::Zstd(db_core::storage::parquet::compression::ZstdError)
+impl core::convert::From<db_core::storage::parquet::compression::CompressionError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::compression::CompressionError) -> Self
+impl core::convert::From<db_core::storage::parquet::compression::SnappyError> for db_core::storage::parquet::compression::CompressionError
+pub fn db_core::storage::parquet::compression::CompressionError::from(db_core::storage::parquet::compression::SnappyError) -> Self
+impl core::convert::From<db_core::storage::parquet::compression::ZstdError> for db_core::storage::parquet::compression::CompressionError
+pub fn db_core::storage::parquet::compression::CompressionError::from(db_core::storage::parquet::compression::ZstdError) -> Self
+impl core::error::Error for db_core::storage::parquet::compression::CompressionError
+impl core::fmt::Debug for db_core::storage::parquet::compression::CompressionError
+pub fn db_core::storage::parquet::compression::CompressionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::compression::CompressionError
+pub fn db_core::storage::parquet::compression::CompressionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::parquet::compression::SnappyError
+pub db_core::storage::parquet::compression::SnappyError::InvalidCopyOffset
+pub db_core::storage::parquet::compression::SnappyError::InvalidLength(u64)
+pub db_core::storage::parquet::compression::SnappyError::InvalidVarint
+pub db_core::storage::parquet::compression::SnappyError::SizeMismatch
+pub db_core::storage::parquet::compression::SnappyError::SizeMismatch::actual: usize
+pub db_core::storage::parquet::compression::SnappyError::SizeMismatch::expected: usize
+pub db_core::storage::parquet::compression::SnappyError::UnexpectedEof
+impl core::convert::From<db_core::storage::parquet::compression::SnappyError> for db_core::storage::parquet::compression::CompressionError
+pub fn db_core::storage::parquet::compression::CompressionError::from(db_core::storage::parquet::compression::SnappyError) -> Self
+impl core::error::Error for db_core::storage::parquet::compression::SnappyError
+impl core::fmt::Debug for db_core::storage::parquet::compression::SnappyError
+pub fn db_core::storage::parquet::compression::SnappyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::compression::SnappyError
+pub fn db_core::storage::parquet::compression::SnappyError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::parquet::compression::ZstdError
+pub db_core::storage::parquet::compression::ZstdError::Frame(alloc::string::String)
+pub db_core::storage::parquet::compression::ZstdError::Read(alloc::string::String)
+pub db_core::storage::parquet::compression::ZstdError::SizeMismatch
+pub db_core::storage::parquet::compression::ZstdError::SizeMismatch::actual: usize
+pub db_core::storage::parquet::compression::ZstdError::SizeMismatch::expected: usize
+impl core::convert::From<db_core::storage::parquet::compression::ZstdError> for db_core::storage::parquet::compression::CompressionError
+pub fn db_core::storage::parquet::compression::CompressionError::from(db_core::storage::parquet::compression::ZstdError) -> Self
+impl core::error::Error for db_core::storage::parquet::compression::ZstdError
+impl core::fmt::Debug for db_core::storage::parquet::compression::ZstdError
+pub fn db_core::storage::parquet::compression::ZstdError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::compression::ZstdError
+pub fn db_core::storage::parquet::compression::ZstdError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn db_core::storage::parquet::compression::decompress<'a>(db_core::storage::parquet::footer::Codec, &'a [u8], usize) -> db_core::storage::parquet::compression::Result<alloc::borrow::Cow<'a, [u8]>>
+pub type db_core::storage::parquet::compression::Result<T> = core::result::Result<T, db_core::storage::parquet::compression::CompressionError>
+pub mod db_core::storage::parquet::decimal
+pub struct db_core::storage::parquet::decimal::Decimal
+pub db_core::storage::parquet::decimal::Decimal::scale: i32
+pub db_core::storage::parquet::decimal::Decimal::unscaled: i128
+impl db_core::storage::parquet::decimal::Decimal
+pub fn db_core::storage::parquet::decimal::Decimal::to_f64(&self) -> f64
+impl core::clone::Clone for db_core::storage::parquet::decimal::Decimal
+pub fn db_core::storage::parquet::decimal::Decimal::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::decimal::Decimal
+impl core::cmp::PartialEq for db_core::storage::parquet::decimal::Decimal
+pub fn db_core::storage::parquet::decimal::Decimal::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::decimal::Decimal
+pub fn db_core::storage::parquet::decimal::Decimal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::decimal::Decimal
+pub fn db_core::storage::parquet::decimal::Decimal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::decimal::Decimal
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::decimal::Decimal
+pub fn db_core::storage::parquet::decimal::from_be_bytes(&[u8]) -> i128
+pub mod db_core::storage::parquet::encoding
+pub enum db_core::storage::parquet::encoding::EncodingError
+pub db_core::storage::parquet::encoding::EncodingError::InvalidLength(u64)
+pub db_core::storage::parquet::encoding::EncodingError::InvalidVarint
+pub db_core::storage::parquet::encoding::EncodingError::UnexpectedEof
+impl core::convert::From<db_core::storage::parquet::encoding::EncodingError> for db_core::storage::parquet::reader::ReadError
+pub fn db_core::storage::parquet::reader::ReadError::from(db_core::storage::parquet::encoding::EncodingError) -> Self
+impl core::error::Error for db_core::storage::parquet::encoding::EncodingError
+impl core::fmt::Debug for db_core::storage::parquet::encoding::EncodingError
+pub fn db_core::storage::parquet::encoding::EncodingError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::encoding::EncodingError
+pub fn db_core::storage::parquet::encoding::EncodingError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn db_core::storage::parquet::encoding::bit_width_for_max_level(u32) -> u32
+pub fn db_core::storage::parquet::encoding::decode_delta_binary_packed(&[u8]) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<i64>>
+pub fn db_core::storage::parquet::encoding::decode_hybrid_rle_bitpacked(&[u8], u32, usize) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<u32>>
+pub fn db_core::storage::parquet::encoding::null_mask(&[u32], u32) -> alloc::vec::Vec<bool>
+pub type db_core::storage::parquet::encoding::Result<T> = core::result::Result<T, db_core::storage::parquet::encoding::EncodingError>
+pub mod db_core::storage::parquet::footer
+pub enum db_core::storage::parquet::footer::Codec
+pub db_core::storage::parquet::footer::Codec::Other(i32)
+pub db_core::storage::parquet::footer::Codec::Snappy
+pub db_core::storage::parquet::footer::Codec::Uncompressed
+pub db_core::storage::parquet::footer::Codec::Zstd
+impl core::clone::Clone for db_core::storage::parquet::footer::Codec
+pub fn db_core::storage::parquet::footer::Codec::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::footer::Codec
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::Codec
+pub fn db_core::storage::parquet::footer::Codec::eq(&self, &Self) -> bool
+impl core::convert::From<i32> for db_core::storage::parquet::footer::Codec
+pub fn db_core::storage::parquet::footer::Codec::from(i32) -> Self
+impl core::fmt::Debug for db_core::storage::parquet::footer::Codec
+pub fn db_core::storage::parquet::footer::Codec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::footer::Codec
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::Codec
+pub enum db_core::storage::parquet::footer::ConvertedType
+pub db_core::storage::parquet::footer::ConvertedType::Decimal
+pub db_core::storage::parquet::footer::ConvertedType::Other(i32)
+pub db_core::storage::parquet::footer::ConvertedType::TimestampMicros
+pub db_core::storage::parquet::footer::ConvertedType::TimestampMillis
+impl core::clone::Clone for db_core::storage::parquet::footer::ConvertedType
+pub fn db_core::storage::parquet::footer::ConvertedType::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::footer::ConvertedType
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::ConvertedType
+pub fn db_core::storage::parquet::footer::ConvertedType::eq(&self, &Self) -> bool
+impl core::convert::From<i32> for db_core::storage::parquet::footer::ConvertedType
+pub fn db_core::storage::parquet::footer::ConvertedType::from(i32) -> Self
+impl core::fmt::Debug for db_core::storage::parquet::footer::ConvertedType
+pub fn db_core::storage::parquet::footer::ConvertedType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::footer::ConvertedType
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::ConvertedType
+pub enum db_core::storage::parquet::footer::FooterError
+pub db_core::storage::parquet::footer::FooterError::BadMagic
+pub db_core::storage::parquet::footer::FooterError::FileTooShort
+pub db_core::storage::parquet::footer::FooterError::Thrift(db_core::storage::parquet::thrift::ThriftError)
+impl core::convert::From<db_core::storage::parquet::footer::FooterError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::footer::FooterError) -> Self
+impl core::convert::From<db_core::storage::parquet::thrift::ThriftError> for db_core::storage::parquet::footer::FooterError
+pub fn db_core::storage::parquet::footer::FooterError::from(db_core::storage::parquet::thrift::ThriftError) -> Self
+impl core::error::Error for db_core::storage::parquet::footer::FooterError
+impl core::fmt::Debug for db_core::storage::parquet::footer::FooterError
+pub fn db_core::storage::parquet::footer::FooterError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::footer::FooterError
+pub fn db_core::storage::parquet::footer::FooterError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::parquet::footer::PhysicalType
+pub db_core::storage::parquet::footer::PhysicalType::Boolean
+pub db_core::storage::parquet::footer::PhysicalType::ByteArray
+pub db_core::storage::parquet::footer::PhysicalType::Double
+pub db_core::storage::parquet::footer::PhysicalType::FixedLenByteArray
+pub db_core::storage::parquet::footer::PhysicalType::Float
+pub db_core::storage::parquet::footer::PhysicalType::Int32
+pub db_core::storage::parquet::footer::PhysicalType::Int64
+pub db_core::storage::parquet::footer::PhysicalType::Int96
+pub db_core::storage::parquet::footer::PhysicalType::Unknown(i32)
+impl core::clone::Clone for db_core::storage::parquet::footer::PhysicalType
+pub fn db_core::storage::parquet::footer::PhysicalType::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::footer::PhysicalType
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::PhysicalType
+pub fn db_core::storage::parquet::footer::PhysicalType::eq(&self, &Self) -> bool
+impl core::convert::From<i32> for db_core::storage::parquet::footer::PhysicalType
+pub fn db_core::storage::parquet::footer::PhysicalType::from(i32) -> Self
+impl core::fmt::Debug for db_core::storage::parquet::footer::PhysicalType
+pub fn db_core::storage::parquet::footer::PhysicalType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::footer::PhysicalType
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::PhysicalType
+pub enum db_core::storage::parquet::footer::Repetition
+pub db_core::storage::parquet::footer::Repetition::Optional
+pub db_core::storage::parquet::footer::Repetition::Repeated
+pub db_core::storage::parquet::footer::Repetition::Required
+pub db_core::storage::parquet::footer::Repetition::Unknown(i32)
+impl core::clone::Clone for db_core::storage::parquet::footer::Repetition
+pub fn db_core::storage::parquet::footer::Repetition::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::footer::Repetition
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::Repetition
+pub fn db_core::storage::parquet::footer::Repetition::eq(&self, &Self) -> bool
+impl core::convert::From<i32> for db_core::storage::parquet::footer::Repetition
+pub fn db_core::storage::parquet::footer::Repetition::from(i32) -> Self
+impl core::fmt::Debug for db_core::storage::parquet::footer::Repetition
+pub fn db_core::storage::parquet::footer::Repetition::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::footer::Repetition
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::Repetition
+pub struct db_core::storage::parquet::footer::ColumnChunk
+pub db_core::storage::parquet::footer::ColumnChunk::file_offset: i64
+pub db_core::storage::parquet::footer::ColumnChunk::meta_data: core::option::Option<db_core::storage::parquet::footer::ColumnMetaData>
+impl core::clone::Clone for db_core::storage::parquet::footer::ColumnChunk
+pub fn db_core::storage::parquet::footer::ColumnChunk::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::ColumnChunk
+pub fn db_core::storage::parquet::footer::ColumnChunk::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::footer::ColumnChunk
+pub fn db_core::storage::parquet::footer::ColumnChunk::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::ColumnChunk
+pub struct db_core::storage::parquet::footer::ColumnMetaData
+pub db_core::storage::parquet::footer::ColumnMetaData::codec: db_core::storage::parquet::footer::Codec
+pub db_core::storage::parquet::footer::ColumnMetaData::data_page_offset: i64
+pub db_core::storage::parquet::footer::ColumnMetaData::dictionary_page_offset: core::option::Option<i64>
+pub db_core::storage::parquet::footer::ColumnMetaData::num_values: i64
+pub db_core::storage::parquet::footer::ColumnMetaData::path_in_schema: alloc::vec::Vec<alloc::string::String>
+pub db_core::storage::parquet::footer::ColumnMetaData::physical_type: db_core::storage::parquet::footer::PhysicalType
+pub db_core::storage::parquet::footer::ColumnMetaData::statistics: core::option::Option<db_core::storage::parquet::footer::Statistics>
+pub db_core::storage::parquet::footer::ColumnMetaData::total_compressed_size: i64
+pub db_core::storage::parquet::footer::ColumnMetaData::total_uncompressed_size: i64
+impl core::clone::Clone for db_core::storage::parquet::footer::ColumnMetaData
+pub fn db_core::storage::parquet::footer::ColumnMetaData::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::ColumnMetaData
+pub fn db_core::storage::parquet::footer::ColumnMetaData::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::footer::ColumnMetaData
+pub fn db_core::storage::parquet::footer::ColumnMetaData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::ColumnMetaData
+pub struct db_core::storage::parquet::footer::FileMetaData
+pub db_core::storage::parquet::footer::FileMetaData::created_by: core::option::Option<alloc::string::String>
+pub db_core::storage::parquet::footer::FileMetaData::num_rows: i64
+pub db_core::storage::parquet::footer::FileMetaData::row_groups: alloc::vec::Vec<db_core::storage::parquet::footer::RowGroup>
+pub db_core::storage::parquet::footer::FileMetaData::schema: alloc::vec::Vec<db_core::storage::parquet::footer::SchemaElement>
+pub db_core::storage::parquet::footer::FileMetaData::version: i32
+impl core::clone::Clone for db_core::storage::parquet::footer::FileMetaData
+pub fn db_core::storage::parquet::footer::FileMetaData::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::FileMetaData
+pub fn db_core::storage::parquet::footer::FileMetaData::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::footer::FileMetaData
+pub fn db_core::storage::parquet::footer::FileMetaData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::FileMetaData
+pub struct db_core::storage::parquet::footer::RowGroup
+pub db_core::storage::parquet::footer::RowGroup::columns: alloc::vec::Vec<db_core::storage::parquet::footer::ColumnChunk>
+pub db_core::storage::parquet::footer::RowGroup::num_rows: i64
+pub db_core::storage::parquet::footer::RowGroup::total_byte_size: i64
+impl core::clone::Clone for db_core::storage::parquet::footer::RowGroup
+pub fn db_core::storage::parquet::footer::RowGroup::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::RowGroup
+pub fn db_core::storage::parquet::footer::RowGroup::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::footer::RowGroup
+pub fn db_core::storage::parquet::footer::RowGroup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::RowGroup
+pub struct db_core::storage::parquet::footer::SchemaElement
+pub db_core::storage::parquet::footer::SchemaElement::converted_type: core::option::Option<db_core::storage::parquet::footer::ConvertedType>
+pub db_core::storage::parquet::footer::SchemaElement::name: alloc::string::String
+pub db_core::storage::parquet::footer::SchemaElement::num_children: core::option::Option<i32>
+pub db_core::storage::parquet::footer::SchemaElement::physical_type: core::option::Option<db_core::storage::parquet::footer::PhysicalType>
+pub db_core::storage::parquet::footer::SchemaElement::precision: core::option::Option<i32>
+pub db_core::storage::parquet::footer::SchemaElement::repetition: core::option::Option<db_core::storage::parquet::footer::Repetition>
+pub db_core::storage::parquet::footer::SchemaElement::scale: core::option::Option<i32>
+pub db_core::storage::parquet::footer::SchemaElement::type_length: core::option::Option<i32>
+impl core::clone::Clone for db_core::storage::parquet::footer::SchemaElement
+pub fn db_core::storage::parquet::footer::SchemaElement::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::SchemaElement
+pub fn db_core::storage::parquet::footer::SchemaElement::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::footer::SchemaElement
+pub fn db_core::storage::parquet::footer::SchemaElement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::SchemaElement
+pub struct db_core::storage::parquet::footer::Statistics
+pub db_core::storage::parquet::footer::Statistics::distinct_count: core::option::Option<i64>
+pub db_core::storage::parquet::footer::Statistics::max: core::option::Option<alloc::vec::Vec<u8>>
+pub db_core::storage::parquet::footer::Statistics::min: core::option::Option<alloc::vec::Vec<u8>>
+pub db_core::storage::parquet::footer::Statistics::null_count: core::option::Option<i64>
+impl core::clone::Clone for db_core::storage::parquet::footer::Statistics
+pub fn db_core::storage::parquet::footer::Statistics::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::Statistics
+pub fn db_core::storage::parquet::footer::Statistics::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::parquet::footer::Statistics
+pub fn db_core::storage::parquet::footer::Statistics::default() -> Self
+impl core::fmt::Debug for db_core::storage::parquet::footer::Statistics
+pub fn db_core::storage::parquet::footer::Statistics::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::Statistics
+pub fn db_core::storage::parquet::footer::parse_footer(&[u8]) -> db_core::storage::parquet::footer::Result<db_core::storage::parquet::footer::FileMetaData>
+pub type db_core::storage::parquet::footer::Result<T> = core::result::Result<T, db_core::storage::parquet::footer::FooterError>
+pub mod db_core::storage::parquet::nested
+pub enum db_core::storage::parquet::nested::NestedError
+pub db_core::storage::parquet::nested::NestedError::MissingLeafData(alloc::string::String)
+pub db_core::storage::parquet::nested::NestedError::UnsupportedListElement(alloc::string::String)
+pub db_core::storage::parquet::nested::NestedError::UnsupportedMapShape(alloc::string::String)
+impl core::convert::From<db_core::storage::parquet::nested::NestedError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::nested::NestedError) -> Self
+impl core::error::Error for db_core::storage::parquet::nested::NestedError
+impl core::fmt::Debug for db_core::storage::parquet::nested::NestedError
+pub fn db_core::storage::parquet::nested::NestedError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::nested::NestedError
+pub fn db_core::storage::parquet::nested::NestedError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::parquet::nested::NestedValue
+pub db_core::storage::parquet::nested::NestedValue::List(alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>)
+pub db_core::storage::parquet::nested::NestedValue::Null
+pub db_core::storage::parquet::nested::NestedValue::Scalar(db_core::storage::parquet::reader::LeafScalar)
+pub db_core::storage::parquet::nested::NestedValue::Struct(alloc::vec::Vec<(alloc::string::String, db_core::storage::parquet::nested::NestedValue)>)
+impl core::clone::Clone for db_core::storage::parquet::nested::NestedValue
+pub fn db_core::storage::parquet::nested::NestedValue::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::nested::NestedValue
+pub fn db_core::storage::parquet::nested::NestedValue::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::nested::NestedValue
+pub fn db_core::storage::parquet::nested::NestedValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::nested::NestedValue
+pub struct db_core::storage::parquet::nested::LeafEntries
+pub db_core::storage::parquet::nested::LeafEntries::def_levels: alloc::vec::Vec<u32>
+pub db_core::storage::parquet::nested::LeafEntries::rep_levels: alloc::vec::Vec<u32>
+pub db_core::storage::parquet::nested::LeafEntries::values: alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::LeafScalar>>
+impl core::clone::Clone for db_core::storage::parquet::nested::LeafEntries
+pub fn db_core::storage::parquet::nested::LeafEntries::clone(&self) -> Self
+impl core::default::Default for db_core::storage::parquet::nested::LeafEntries
+pub fn db_core::storage::parquet::nested::LeafEntries::default() -> Self
+impl core::fmt::Debug for db_core::storage::parquet::nested::LeafEntries
+pub fn db_core::storage::parquet::nested::LeafEntries::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn db_core::storage::parquet::nested::reconstruct_row_group(&db_core::storage::parquet::schema_tree::SchemaNode, usize, &db_core::storage::parquet::nested::LeafData) -> db_core::storage::parquet::nested::Result<alloc::vec::Vec<(alloc::string::String, alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>)>>
+pub type db_core::storage::parquet::nested::LeafData = std::collections::hash::map::HashMap<alloc::string::String, db_core::storage::parquet::nested::LeafEntries>
+pub type db_core::storage::parquet::nested::Result<T> = core::result::Result<T, db_core::storage::parquet::nested::NestedError>
+pub mod db_core::storage::parquet::page
+pub enum db_core::storage::parquet::page::Encoding
+pub db_core::storage::parquet::page::Encoding::DeltaBinaryPacked
+pub db_core::storage::parquet::page::Encoding::Other(i32)
+pub db_core::storage::parquet::page::Encoding::Plain
+pub db_core::storage::parquet::page::Encoding::PlainDictionary
+pub db_core::storage::parquet::page::Encoding::Rle
+pub db_core::storage::parquet::page::Encoding::RleDictionary
+impl core::clone::Clone for db_core::storage::parquet::page::Encoding
+pub fn db_core::storage::parquet::page::Encoding::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::page::Encoding
+impl core::cmp::PartialEq for db_core::storage::parquet::page::Encoding
+pub fn db_core::storage::parquet::page::Encoding::eq(&self, &Self) -> bool
+impl core::convert::From<i32> for db_core::storage::parquet::page::Encoding
+pub fn db_core::storage::parquet::page::Encoding::from(i32) -> Self
+impl core::fmt::Debug for db_core::storage::parquet::page::Encoding
+pub fn db_core::storage::parquet::page::Encoding::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::page::Encoding
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::page::Encoding
+pub enum db_core::storage::parquet::page::PageError
+pub db_core::storage::parquet::page::PageError::MissingDataPageHeader
+pub db_core::storage::parquet::page::PageError::Thrift(db_core::storage::parquet::thrift::ThriftError)
+pub db_core::storage::parquet::page::PageError::UnsupportedPageType(i32)
+impl core::convert::From<db_core::storage::parquet::page::PageError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::page::PageError) -> Self
+impl core::convert::From<db_core::storage::parquet::thrift::ThriftError> for db_core::storage::parquet::page::PageError
+pub fn db_core::storage::parquet::page::PageError::from(db_core::storage::parquet::thrift::ThriftError) -> Self
+impl core::error::Error for db_core::storage::parquet::page::PageError
+impl core::fmt::Debug for db_core::storage::parquet::page::PageError
+pub fn db_core::storage::parquet::page::PageError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::page::PageError
+pub fn db_core::storage::parquet::page::PageError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::parquet::page::PageType
+pub db_core::storage::parquet::page::PageType::Data(db_core::storage::parquet::page::DataPageHeader)
+pub db_core::storage::parquet::page::PageType::Dictionary(db_core::storage::parquet::page::DictionaryPageHeader)
+impl core::clone::Clone for db_core::storage::parquet::page::PageType
+pub fn db_core::storage::parquet::page::PageType::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::page::PageType
+pub fn db_core::storage::parquet::page::PageType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::page::PageType
+pub fn db_core::storage::parquet::page::PageType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::page::PageType
+pub struct db_core::storage::parquet::page::DataPageHeader
+pub db_core::storage::parquet::page::DataPageHeader::definition_level_encoding: db_core::storage::parquet::page::Encoding
+pub db_core::storage::parquet::page::DataPageHeader::encoding: db_core::storage::parquet::page::Encoding
+pub db_core::storage::parquet::page::DataPageHeader::num_values: i32
+pub db_core::storage::parquet::page::DataPageHeader::repetition_level_encoding: db_core::storage::parquet::page::Encoding
+impl core::clone::Clone for db_core::storage::parquet::page::DataPageHeader
+pub fn db_core::storage::parquet::page::DataPageHeader::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::page::DataPageHeader
+pub fn db_core::storage::parquet::page::DataPageHeader::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::page::DataPageHeader
+pub fn db_core::storage::parquet::page::DataPageHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::page::DataPageHeader
+pub struct db_core::storage::parquet::page::DictionaryPageHeader
+pub db_core::storage::parquet::page::DictionaryPageHeader::encoding: db_core::storage::parquet::page::Encoding
+pub db_core::storage::parquet::page::DictionaryPageHeader::num_values: i32
+impl core::clone::Clone for db_core::storage::parquet::page::DictionaryPageHeader
+pub fn db_core::storage::parquet::page::DictionaryPageHeader::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::page::DictionaryPageHeader
+pub fn db_core::storage::parquet::page::DictionaryPageHeader::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::page::DictionaryPageHeader
+pub fn db_core::storage::parquet::page::DictionaryPageHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::page::DictionaryPageHeader
+pub struct db_core::storage::parquet::page::PageHeader
+pub db_core::storage::parquet::page::PageHeader::compressed_page_size: i32
+pub db_core::storage::parquet::page::PageHeader::page_type: db_core::storage::parquet::page::PageType
+pub db_core::storage::parquet::page::PageHeader::uncompressed_page_size: i32
+impl core::clone::Clone for db_core::storage::parquet::page::PageHeader
+pub fn db_core::storage::parquet::page::PageHeader::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::page::PageHeader
+pub fn db_core::storage::parquet::page::PageHeader::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::page::PageHeader
+pub fn db_core::storage::parquet::page::PageHeader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::page::PageHeader
+pub fn db_core::storage::parquet::page::decode_page_header(&[u8]) -> db_core::storage::parquet::page::Result<(db_core::storage::parquet::page::PageHeader, usize)>
+pub type db_core::storage::parquet::page::Result<T> = core::result::Result<T, db_core::storage::parquet::page::PageError>
+pub mod db_core::storage::parquet::parquet_file
+pub enum db_core::storage::parquet::parquet_file::FileError
+pub db_core::storage::parquet::parquet_file::FileError::ChunkOutOfBounds
+pub db_core::storage::parquet::parquet_file::FileError::ColumnIndexOutOfRange(usize)
+pub db_core::storage::parquet::parquet_file::FileError::Compression(db_core::storage::parquet::compression::CompressionError)
+pub db_core::storage::parquet::parquet_file::FileError::Footer(db_core::storage::parquet::footer::FooterError)
+pub db_core::storage::parquet::parquet_file::FileError::InvalidMetadata
+pub db_core::storage::parquet::parquet_file::FileError::InvalidMetadata::field: &'static str
+pub db_core::storage::parquet::parquet_file::FileError::InvalidMetadata::value: i64
+pub db_core::storage::parquet::parquet_file::FileError::MissingColumnMetadata
+pub db_core::storage::parquet::parquet_file::FileError::MissingDecimalScale
+pub db_core::storage::parquet::parquet_file::FileError::MissingDictionaryPage
+pub db_core::storage::parquet::parquet_file::FileError::MissingTypeLength
+pub db_core::storage::parquet::parquet_file::FileError::Nested(db_core::storage::parquet::nested::NestedError)
+pub db_core::storage::parquet::parquet_file::FileError::Page(db_core::storage::parquet::page::PageError)
+pub db_core::storage::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
+pub db_core::storage::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::parquet::parquet_file::FileError::UnexpectedDictionaryPage
+pub db_core::storage::parquet::parquet_file::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
+pub db_core::storage::parquet::parquet_file::FileError::UnsupportedNestedDictionary
+pub db_core::storage::parquet::parquet_file::FileError::UnsupportedNestedEncoding(db_core::storage::parquet::page::Encoding)
+pub db_core::storage::parquet::parquet_file::FileError::UnsupportedTimestampPhysicalType(db_core::storage::parquet::footer::PhysicalType)
+impl core::convert::From<db_core::storage::parquet::compression::CompressionError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::compression::CompressionError) -> Self
+impl core::convert::From<db_core::storage::parquet::footer::FooterError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::footer::FooterError) -> Self
+impl core::convert::From<db_core::storage::parquet::nested::NestedError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::nested::NestedError) -> Self
+impl core::convert::From<db_core::storage::parquet::page::PageError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::page::PageError) -> Self
+impl core::convert::From<db_core::storage::parquet::reader::ReadError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::reader::ReadError) -> Self
+impl core::error::Error for db_core::storage::parquet::parquet_file::FileError
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::parquet::parquet_file::ParquetFile<'a>
+impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::parquet::parquet_file::Result<Self>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
+pub struct db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
+impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::decimal::Decimal>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_fixed_len_byte_array_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub type db_core::storage::parquet::parquet_file::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
+pub type db_core::storage::parquet::parquet_file::Result<T> = core::result::Result<T, db_core::storage::parquet::parquet_file::FileError>
+pub mod db_core::storage::parquet::reader
+pub enum db_core::storage::parquet::reader::LeafScalar
+pub db_core::storage::parquet::reader::LeafScalar::Bool(bool)
+pub db_core::storage::parquet::reader::LeafScalar::Double(f64)
+pub db_core::storage::parquet::reader::LeafScalar::Float(f32)
+pub db_core::storage::parquet::reader::LeafScalar::Int32(i32)
+pub db_core::storage::parquet::reader::LeafScalar::Int64(i64)
+pub db_core::storage::parquet::reader::LeafScalar::Str(alloc::string::String)
+impl core::clone::Clone for db_core::storage::parquet::reader::LeafScalar
+pub fn db_core::storage::parquet::reader::LeafScalar::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::reader::LeafScalar
+pub fn db_core::storage::parquet::reader::LeafScalar::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::reader::LeafScalar
+pub fn db_core::storage::parquet::reader::LeafScalar::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::reader::LeafScalar
+pub enum db_core::storage::parquet::reader::ReadError
+pub db_core::storage::parquet::reader::ReadError::DictionaryIndexOutOfRange(u32)
+pub db_core::storage::parquet::reader::ReadError::Encoding(db_core::storage::parquet::encoding::EncodingError)
+pub db_core::storage::parquet::reader::ReadError::InvalidUtf8
+pub db_core::storage::parquet::reader::ReadError::InvalidValueCount(i32)
+pub db_core::storage::parquet::reader::ReadError::UnexpectedEof
+pub db_core::storage::parquet::reader::ReadError::UnsupportedNestedPhysicalType(db_core::storage::parquet::footer::PhysicalType)
+impl core::convert::From<db_core::storage::parquet::encoding::EncodingError> for db_core::storage::parquet::reader::ReadError
+pub fn db_core::storage::parquet::reader::ReadError::from(db_core::storage::parquet::encoding::EncodingError) -> Self
+impl core::convert::From<db_core::storage::parquet::reader::ReadError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::reader::ReadError) -> Self
+impl core::error::Error for db_core::storage::parquet::reader::ReadError
+impl core::fmt::Debug for db_core::storage::parquet::reader::ReadError
+pub fn db_core::storage::parquet::reader::ReadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::reader::ReadError
+pub fn db_core::storage::parquet::reader::ReadError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::parquet::reader::Int96
+pub db_core::storage::parquet::reader::Int96::julian_day: i32
+pub db_core::storage::parquet::reader::Int96::time_nanos: i64
+impl core::clone::Clone for db_core::storage::parquet::reader::Int96
+pub fn db_core::storage::parquet::reader::Int96::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::reader::Int96
+impl core::cmp::PartialEq for db_core::storage::parquet::reader::Int96
+pub fn db_core::storage::parquet::reader::Int96::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::reader::Int96
+pub fn db_core::storage::parquet::reader::Int96::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::reader::Int96
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::reader::Int96
+pub fn db_core::storage::parquet::reader::decode_dictionary_boolean(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<bool>>
+pub fn db_core::storage::parquet::reader::decode_dictionary_double(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<f64>>
+pub fn db_core::storage::parquet::reader::decode_dictionary_fixed_len_byte_array(&[u8], i32, usize) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::parquet::reader::decode_dictionary_float(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<f32>>
+pub fn db_core::storage::parquet::reader::decode_dictionary_int32(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<i32>>
+pub fn db_core::storage::parquet::reader::decode_dictionary_int64(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<i64>>
+pub fn db_core::storage::parquet::reader::decode_dictionary_int96(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<db_core::storage::parquet::reader::Int96>>
+pub fn db_core::storage::parquet::reader::decode_dictionary_string(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::parquet::reader::read_boolean_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::reader::read_boolean_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[bool]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::reader::read_dictionary_index_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<u32>>>
+pub fn db_core::storage::parquet::reader::read_double_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
+pub fn db_core::storage::parquet::reader::read_double_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[f64]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
+pub fn db_core::storage::parquet::reader::read_fixed_len_byte_array_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, usize) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
+pub fn db_core::storage::parquet::reader::read_fixed_len_byte_array_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[alloc::vec::Vec<u8>]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
+pub fn db_core::storage::parquet::reader::read_float_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f32>>>
+pub fn db_core::storage::parquet::reader::read_float_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[f32]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f32>>>
+pub fn db_core::storage::parquet::reader::read_int32_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<i32>>>
+pub fn db_core::storage::parquet::reader::read_int32_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[i32]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<i32>>>
+pub fn db_core::storage::parquet::reader::read_int64_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::reader::read_int64_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[i64]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::reader::read_int96_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::reader::read_int96_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[db_core::storage::parquet::reader::Int96]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::reader::read_plain_fixed<T: core::marker::Copy + core::default::Default, const N: usize>(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, impl core::ops::function::Fn([u8; N]) -> T, &mut alloc::vec::Vec<T>, &mut alloc::vec::Vec<bool>) -> db_core::storage::parquet::reader::Result<()>
+pub fn db_core::storage::parquet::reader::read_plain_fixed_at<T: core::marker::Copy + core::default::Default, const N: usize>(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, impl core::ops::function::Fn([u8; N]) -> T, &[(u32, usize)], &mut [T], &mut [bool]) -> db_core::storage::parquet::reader::Result<()>
+pub fn db_core::storage::parquet::reader::read_plain_scalar(&mut &[u8], db_core::storage::parquet::footer::PhysicalType, &mut usize) -> db_core::storage::parquet::reader::Result<db_core::storage::parquet::reader::LeafScalar>
+pub fn db_core::storage::parquet::reader::read_string_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+pub fn db_core::storage::parquet::reader::read_string_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[alloc::string::String]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+pub fn db_core::storage::parquet::reader::split_rep_def_levels<'a>(&'a [u8], &db_core::storage::parquet::page::DataPageHeader, u32, u32) -> db_core::storage::parquet::reader::Result<(alloc::vec::Vec<u32>, alloc::vec::Vec<u32>, &'a [u8])>
+pub type db_core::storage::parquet::reader::Result<T> = core::result::Result<T, db_core::storage::parquet::reader::ReadError>
+pub mod db_core::storage::parquet::schema_tree
+pub struct db_core::storage::parquet::schema_tree::SchemaNode
+pub db_core::storage::parquet::schema_tree::SchemaNode::children: alloc::vec::Vec<db_core::storage::parquet::schema_tree::SchemaNode>
+pub db_core::storage::parquet::schema_tree::SchemaNode::element: db_core::storage::parquet::footer::SchemaElement
+pub db_core::storage::parquet::schema_tree::SchemaNode::max_def_level: u32
+pub db_core::storage::parquet::schema_tree::SchemaNode::max_rep_level: u32
+pub db_core::storage::parquet::schema_tree::SchemaNode::name: alloc::string::String
+impl db_core::storage::parquet::schema_tree::SchemaNode
+pub fn db_core::storage::parquet::schema_tree::SchemaNode::is_leaf(&self) -> bool
+pub fn db_core::storage::parquet::schema_tree::SchemaNode::leaves(&self) -> alloc::vec::Vec<&db_core::storage::parquet::schema_tree::SchemaNode>
+impl core::clone::Clone for db_core::storage::parquet::schema_tree::SchemaNode
+pub fn db_core::storage::parquet::schema_tree::SchemaNode::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::parquet::schema_tree::SchemaNode
+pub fn db_core::storage::parquet::schema_tree::SchemaNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn db_core::storage::parquet::schema_tree::build_schema_tree(&[db_core::storage::parquet::footer::SchemaElement]) -> db_core::storage::parquet::schema_tree::SchemaNode
+pub fn db_core::storage::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> alloc::vec::Vec<alloc::string::String>
+pub mod db_core::storage::parquet::thrift
+pub enum db_core::storage::parquet::thrift::ThriftError
+pub db_core::storage::parquet::thrift::ThriftError::InvalidLength(u64)
+pub db_core::storage::parquet::thrift::ThriftError::InvalidVarint
+pub db_core::storage::parquet::thrift::ThriftError::UnexpectedEof
+pub db_core::storage::parquet::thrift::ThriftError::UnknownType(u8)
+impl core::convert::From<db_core::storage::parquet::thrift::ThriftError> for db_core::storage::parquet::footer::FooterError
+pub fn db_core::storage::parquet::footer::FooterError::from(db_core::storage::parquet::thrift::ThriftError) -> Self
+impl core::convert::From<db_core::storage::parquet::thrift::ThriftError> for db_core::storage::parquet::page::PageError
+pub fn db_core::storage::parquet::page::PageError::from(db_core::storage::parquet::thrift::ThriftError) -> Self
+impl core::error::Error for db_core::storage::parquet::thrift::ThriftError
+impl core::fmt::Debug for db_core::storage::parquet::thrift::ThriftError
+pub fn db_core::storage::parquet::thrift::ThriftError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::thrift::ThriftError
+pub fn db_core::storage::parquet::thrift::ThriftError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::parquet::thrift::Value
+pub db_core::storage::parquet::thrift::Value::Binary(alloc::vec::Vec<u8>)
+pub db_core::storage::parquet::thrift::Value::Bool(bool)
+pub db_core::storage::parquet::thrift::Value::Byte(i8)
+pub db_core::storage::parquet::thrift::Value::Double(f64)
+pub db_core::storage::parquet::thrift::Value::I16(i16)
+pub db_core::storage::parquet::thrift::Value::I32(i32)
+pub db_core::storage::parquet::thrift::Value::I64(i64)
+pub db_core::storage::parquet::thrift::Value::List(alloc::vec::Vec<db_core::storage::parquet::thrift::Value>)
+pub db_core::storage::parquet::thrift::Value::Map(alloc::vec::Vec<(db_core::storage::parquet::thrift::Value, db_core::storage::parquet::thrift::Value)>)
+pub db_core::storage::parquet::thrift::Value::Struct(alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>)
+impl db_core::storage::parquet::thrift::Value
+pub fn db_core::storage::parquet::thrift::Value::as_binary(&self) -> core::option::Option<&[u8]>
+pub fn db_core::storage::parquet::thrift::Value::as_i32(&self) -> core::option::Option<i32>
+pub fn db_core::storage::parquet::thrift::Value::as_i64(&self) -> core::option::Option<i64>
+pub fn db_core::storage::parquet::thrift::Value::as_list(&self) -> core::option::Option<&[db_core::storage::parquet::thrift::Value]>
+pub fn db_core::storage::parquet::thrift::Value::as_str(&self) -> core::option::Option<&str>
+pub fn db_core::storage::parquet::thrift::Value::as_struct(&self) -> core::option::Option<&[(i16, db_core::storage::parquet::thrift::Value)]>
+pub fn db_core::storage::parquet::thrift::Value::field(&self, i16) -> core::option::Option<&db_core::storage::parquet::thrift::Value>
+impl core::clone::Clone for db_core::storage::parquet::thrift::Value
+pub fn db_core::storage::parquet::thrift::Value::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::thrift::Value
+pub fn db_core::storage::parquet::thrift::Value::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::thrift::Value
+pub fn db_core::storage::parquet::thrift::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::thrift::Value
+pub struct db_core::storage::parquet::thrift::Decoder<'a>
+impl<'a> db_core::storage::parquet::thrift::Decoder<'a>
+pub fn db_core::storage::parquet::thrift::Decoder<'a>::new(&'a [u8]) -> Self
+pub fn db_core::storage::parquet::thrift::Decoder<'a>::position(&self) -> usize
+pub fn db_core::storage::parquet::thrift::Decoder<'a>::read_struct(&mut self) -> db_core::storage::parquet::thrift::Result<alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>>
+pub fn db_core::storage::parquet::thrift::decode_struct(&[u8]) -> db_core::storage::parquet::thrift::Result<(alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>, usize)>
+pub type db_core::storage::parquet::thrift::Result<T> = core::result::Result<T, db_core::storage::parquet::thrift::ThriftError>
+pub enum db_core::storage::parquet::FileError
+pub db_core::storage::parquet::FileError::ChunkOutOfBounds
+pub db_core::storage::parquet::FileError::ColumnIndexOutOfRange(usize)
+pub db_core::storage::parquet::FileError::Compression(db_core::storage::parquet::compression::CompressionError)
+pub db_core::storage::parquet::FileError::Footer(db_core::storage::parquet::footer::FooterError)
+pub db_core::storage::parquet::FileError::InvalidMetadata
+pub db_core::storage::parquet::FileError::InvalidMetadata::field: &'static str
+pub db_core::storage::parquet::FileError::InvalidMetadata::value: i64
+pub db_core::storage::parquet::FileError::MissingColumnMetadata
+pub db_core::storage::parquet::FileError::MissingDecimalScale
+pub db_core::storage::parquet::FileError::MissingDictionaryPage
+pub db_core::storage::parquet::FileError::MissingTypeLength
+pub db_core::storage::parquet::FileError::Nested(db_core::storage::parquet::nested::NestedError)
+pub db_core::storage::parquet::FileError::Page(db_core::storage::parquet::page::PageError)
+pub db_core::storage::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
+pub db_core::storage::parquet::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::parquet::FileError::UnexpectedDictionaryPage
+pub db_core::storage::parquet::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
+pub db_core::storage::parquet::FileError::UnsupportedNestedDictionary
+pub db_core::storage::parquet::FileError::UnsupportedNestedEncoding(db_core::storage::parquet::page::Encoding)
+pub db_core::storage::parquet::FileError::UnsupportedTimestampPhysicalType(db_core::storage::parquet::footer::PhysicalType)
+impl core::convert::From<db_core::storage::parquet::compression::CompressionError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::compression::CompressionError) -> Self
+impl core::convert::From<db_core::storage::parquet::footer::FooterError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::footer::FooterError) -> Self
+impl core::convert::From<db_core::storage::parquet::nested::NestedError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::nested::NestedError) -> Self
+impl core::convert::From<db_core::storage::parquet::page::PageError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::page::PageError) -> Self
+impl core::convert::From<db_core::storage::parquet::reader::ReadError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::reader::ReadError) -> Self
+impl core::error::Error for db_core::storage::parquet::parquet_file::FileError
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::parquet::ParquetFile<'a>
+impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::parquet::parquet_file::Result<Self>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
+pub struct db_core::storage::parquet::RowGroupReader<'a, 'm>
+impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::decimal::Decimal>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_fixed_len_byte_array_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub type db_core::storage::parquet::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub mod db_core::storage::row
 pub mod db_core::storage::row::btree
 pub enum db_core::storage::row::btree::BtreeError
@@ -5200,8 +5200,8 @@ pub fn db_core::storage::stream::batch::FieldColumn<'a>::fmt(&self, &mut core::f
 pub enum db_core::storage::FileError
 pub db_core::storage::FileError::ChunkOutOfBounds
 pub db_core::storage::FileError::ColumnIndexOutOfRange(usize)
-pub db_core::storage::FileError::Compression(db_core::storage::column::parquet::compression::CompressionError)
-pub db_core::storage::FileError::Footer(db_core::storage::column::parquet::footer::FooterError)
+pub db_core::storage::FileError::Compression(db_core::storage::parquet::compression::CompressionError)
+pub db_core::storage::FileError::Footer(db_core::storage::parquet::footer::FooterError)
 pub db_core::storage::FileError::InvalidMetadata
 pub db_core::storage::FileError::InvalidMetadata::field: &'static str
 pub db_core::storage::FileError::InvalidMetadata::value: i64
@@ -5209,30 +5209,30 @@ pub db_core::storage::FileError::MissingColumnMetadata
 pub db_core::storage::FileError::MissingDecimalScale
 pub db_core::storage::FileError::MissingDictionaryPage
 pub db_core::storage::FileError::MissingTypeLength
-pub db_core::storage::FileError::Nested(db_core::storage::column::parquet::nested::NestedError)
-pub db_core::storage::FileError::Page(db_core::storage::column::parquet::page::PageError)
-pub db_core::storage::FileError::Read(db_core::storage::column::parquet::reader::ReadError)
+pub db_core::storage::FileError::Nested(db_core::storage::parquet::nested::NestedError)
+pub db_core::storage::FileError::Page(db_core::storage::parquet::page::PageError)
+pub db_core::storage::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::FileError::UnexpectedDictionaryPage
-pub db_core::storage::FileError::UnsupportedDecimalPhysicalType(db_core::storage::column::parquet::footer::PhysicalType)
+pub db_core::storage::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
 pub db_core::storage::FileError::UnsupportedNestedDictionary
-pub db_core::storage::FileError::UnsupportedNestedEncoding(db_core::storage::column::parquet::page::Encoding)
-pub db_core::storage::FileError::UnsupportedTimestampPhysicalType(db_core::storage::column::parquet::footer::PhysicalType)
-impl core::convert::From<db_core::storage::column::parquet::compression::CompressionError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::compression::CompressionError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::footer::FooterError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::footer::FooterError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::nested::NestedError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::nested::NestedError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::page::PageError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::page::PageError) -> Self
-impl core::convert::From<db_core::storage::column::parquet::reader::ReadError> for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::from(db_core::storage::column::parquet::reader::ReadError) -> Self
-impl core::error::Error for db_core::storage::column::parquet::parquet_file::FileError
-impl core::fmt::Debug for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::column::parquet::parquet_file::FileError
-pub fn db_core::storage::column::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub db_core::storage::FileError::UnsupportedNestedEncoding(db_core::storage::parquet::page::Encoding)
+pub db_core::storage::FileError::UnsupportedTimestampPhysicalType(db_core::storage::parquet::footer::PhysicalType)
+impl core::convert::From<db_core::storage::parquet::compression::CompressionError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::compression::CompressionError) -> Self
+impl core::convert::From<db_core::storage::parquet::footer::FooterError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::footer::FooterError) -> Self
+impl core::convert::From<db_core::storage::parquet::nested::NestedError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::nested::NestedError) -> Self
+impl core::convert::From<db_core::storage::parquet::page::PageError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::page::PageError) -> Self
+impl core::convert::From<db_core::storage::parquet::reader::ReadError> for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::reader::ReadError) -> Self
+impl core::error::Error for db_core::storage::parquet::parquet_file::FileError
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
+pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum db_core::storage::MmapRegion
 pub db_core::storage::MmapRegion::Mapped(memmap2::Mmap)
 pub db_core::storage::MmapRegion::Owned(alloc::rcs::arc::Arc<[u8]>)
@@ -5334,15 +5334,15 @@ impl db_core::storage::column::vfs::Vfs for db_core::storage::column::memory::Me
 pub type db_core::storage::column::memory::MemoryVfs::File = db_core::storage::column::memory::MemoryFile
 pub fn db_core::storage::column::memory::MemoryVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub struct db_core::storage::ParquetFile<'a>
-impl<'a> db_core::storage::column::parquet::parquet_file::ParquetFile<'a>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::column::parquet::footer::FileMetaData
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::column::parquet::parquet_file::Result<Self>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::column::parquet::nested::NestedValue>>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
-pub fn db_core::storage::column::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, '_>>
+impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::parquet::parquet_file::Result<Self>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub struct db_core::storage::PosixVfs
 impl core::default::Default for db_core::storage::column::posix::PosixVfs
 pub fn db_core::storage::column::posix::PosixVfs::default() -> Self
@@ -5364,32 +5364,32 @@ pub fn db_core::storage::stream::batch::Resource::default() -> Self
 impl core::fmt::Debug for db_core::storage::stream::batch::Resource
 pub fn db_core::storage::stream::batch::Resource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::RowGroupReader<'a, 'm>
-impl<'a, 'm> db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<&db_core::storage::column::parquet::footer::Statistics>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<bool>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::decimal::Decimal>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<f64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_fixed_len_byte_array_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<i64>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::column::parquet::reader::Int96>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<core::option::Option<db_core::storage::column::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
-pub fn db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::column::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::decimal::Decimal>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<f64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_fixed_len_byte_array_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_float_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int32_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i32>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub struct db_core::storage::Source
 pub db_core::storage::Source::kind: db_core::storage::stream::batch::SourceKind
 pub db_core::storage::Source::path: alloc::rcs::arc::Arc<str>

@@ -9,7 +9,7 @@ mod zstd;
 pub use snappy::SnappyError;
 pub use zstd::ZstdError;
 
-use crate::storage::column::parquet::footer::Codec;
+use crate::storage::parquet::footer::Codec;
 use std::borrow::Cow;
 use std::fmt;
 

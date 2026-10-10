@@ -17,7 +17,6 @@
 pub mod decode;
 pub mod memory;
 pub mod mmap;
-pub mod parquet;
 pub mod posix;
 pub mod vfs;
 
@@ -27,4 +26,4 @@ pub use memory::MemoryVfs;
 pub use posix::PosixVfs;
 pub use vfs::{MmapRegion, Vfs, VfsFile};
 
-pub use parquet::{DictionaryIndices, FileError, ParquetFile, RowGroupReader};
+pub use crate::storage::parquet::{DictionaryIndices, FileError, ParquetFile, RowGroupReader};

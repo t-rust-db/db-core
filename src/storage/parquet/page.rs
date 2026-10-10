@@ -3,7 +3,7 @@
 //! DICTIONARY_PAGE — the page types produced for PLAIN- and
 //! PLAIN_DICTIONARY/RLE_DICTIONARY-encoded, uncompressed columns.
 
-use crate::storage::column::parquet::thrift::{self, ThriftError, Value};
+use crate::storage::parquet::thrift::{self, ThriftError, Value};
 
 #[derive(Debug)]
 pub enum PageError {

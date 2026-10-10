@@ -249,9 +249,11 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # Storage boundary files (ADR 0016 §Gates, #289): the VFS traits and their
 # implementors (`vfs.rs`, `page_source.rs`, `unix.rs`, `memory.rs`) are an
 # open-implementor `dyn` boundary exactly like `vm/row/cursor*.rs`; the
-# Parquet reader (`parquet/*`) is a zero-copy reader over the mmap and
-# carries the lifetimes that implies -- designated a boundary rather than
-# rewritten to own its buffer; `fcntl.rs` and `mmap.rs` hold the two
+# Parquet reader (`storage/parquet.rs` and its reader files, named one by
+# one) is a zero-copy reader over the mmap and carries the lifetimes that
+# implies -- designated a boundary rather than rewritten to own its buffer.
+# Named, not globbed, so the writer (#566) and any other new file there is
+# in the qualified subset by default; `fcntl.rs` and `mmap.rs` hold the two
 # audited `unsafe` carve-outs. Everything else under `src/storage/row` and
 # `src/storage/column` is in the qualified subset. `src/storage/stream/*`
 # stays excluded while #304/#305 build it (lifted with #305).
@@ -269,7 +271,7 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # lifetime shape as `ParquetFile<'a>` above, moved here from the already-
 # excluded `src/storage/stream/*` so `functions::json_extract` can share
 # it without a second parser.
-MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/column/parquet/* src/storage/column/parquet/compression/* src/storage/stream/* src/engine/stream.rs src/json_path.rs
+MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/parquet.rs src/storage/parquet/compression.rs src/storage/parquet/decimal.rs src/storage/parquet/encoding.rs src/storage/parquet/footer.rs src/storage/parquet/nested.rs src/storage/parquet/page.rs src/storage/parquet/parquet_file.rs src/storage/parquet/reader.rs src/storage/parquet/schema_tree.rs src/storage/parquet/thrift.rs src/storage/parquet/compression/snappy.rs src/storage/parquet/compression/zstd.rs src/storage/stream/* src/engine/stream.rs src/json_path.rs
 
 check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
 	@command -v cargo-mvl-limit >/dev/null 2>&1 || { \

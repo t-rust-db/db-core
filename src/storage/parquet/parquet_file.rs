@@ -1,16 +1,12 @@
 //! Top-level Parquet file reader: parses the footer once, then exposes a
 //! lazy iterator over row groups and their columns.
 
-use crate::storage::column::parquet::compression::{self, CompressionError};
-use crate::storage::column::parquet::footer::{
-    self, FileMetaData, FooterError, Repetition, RowGroup,
-};
-use crate::storage::column::parquet::nested::{
-    self, LeafData, LeafEntries, NestedError, NestedValue,
-};
-use crate::storage::column::parquet::page::{self, Encoding, PageError, PageType};
-use crate::storage::column::parquet::reader::{self, ReadError};
-use crate::storage::column::parquet::schema_tree::{self, SchemaNode};
+use crate::storage::parquet::compression::{self, CompressionError};
+use crate::storage::parquet::footer::{self, FileMetaData, FooterError, Repetition, RowGroup};
+use crate::storage::parquet::nested::{self, LeafData, LeafEntries, NestedError, NestedValue};
+use crate::storage::parquet::page::{self, Encoding, PageError, PageType};
+use crate::storage::parquet::reader::{self, ReadError};
+use crate::storage::parquet::schema_tree::{self, SchemaNode};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -989,11 +985,11 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
 
     /// Read a `DECIMAL`-annotated column (INT32, INT64, or
     /// `FIXED_LEN_BYTE_ARRAY` physical type), preserving exact precision via
-    /// [`crate::storage::column::parquet::decimal::Decimal`] rather than converting to `f64` (#52, #53).
+    /// [`crate::storage::parquet::decimal::Decimal`] rather than converting to `f64` (#52, #53).
     pub fn read_decimal_column(
         &self,
         column_index: usize,
-    ) -> Result<Vec<Option<crate::storage::column::parquet::decimal::Decimal>>> {
+    ) -> Result<Vec<Option<crate::storage::parquet::decimal::Decimal>>> {
         let scale = self.file.decimal_scale(column_index)?;
         match self.column_meta(column_index)?.physical_type {
             footer::PhysicalType::Int32 => {
@@ -1001,7 +997,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                 Ok(raw
                     .into_iter()
                     .map(|v| {
-                        v.map(|v| crate::storage::column::parquet::decimal::Decimal {
+                        v.map(|v| crate::storage::parquet::decimal::Decimal {
                             unscaled: v as i128,
                             scale,
                         })
@@ -1013,7 +1009,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                 Ok(raw
                     .into_iter()
                     .map(|v| {
-                        v.map(|v| crate::storage::column::parquet::decimal::Decimal {
+                        v.map(|v| crate::storage::parquet::decimal::Decimal {
                             unscaled: v as i128,
                             scale,
                         })
@@ -1025,10 +1021,8 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                 Ok(raw
                     .into_iter()
                     .map(|v| {
-                        v.map(|bytes| crate::storage::column::parquet::decimal::Decimal {
-                            unscaled: crate::storage::column::parquet::decimal::from_be_bytes(
-                                &bytes,
-                            ),
+                        v.map(|bytes| crate::storage::parquet::decimal::Decimal {
+                            unscaled: crate::storage::parquet::decimal::from_be_bytes(&bytes),
                             scale,
                         })
                     })
@@ -1601,10 +1595,10 @@ mod tests {
         file
     }
 
-    // storage_column_parquet_parquet_file_read_plain_fixed_column_at_f95568f1: `pos < chunk_bytes.len() && next < wanted.len()`
+    // storage_parquet_parquet_file_read_plain_fixed_column_at_f95568f1: `pos < chunk_bytes.len() && next < wanted.len()`
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_column_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v1_pages_and_wanted_rows_remain_reads_across_pages_in_positions_order(
+    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v1_pages_and_wanted_rows_remain_reads_across_pages_in_positions_order(
     ) {
         let file = three_page_int64_file();
         let parsed = ParquetFile::open(&file).unwrap();
@@ -1625,7 +1619,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_column_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v2_pages_run_out_with_a_row_still_wanted_is_out_of_range(
+    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v2_pages_run_out_with_a_row_still_wanted_is_out_of_range(
     ) {
         let file = three_page_int64_file();
         let parsed = ParquetFile::open(&file).unwrap();
@@ -1641,7 +1635,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_column_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v3_wanted_rows_run_out_first_stops_before_the_remaining_pages(
+    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v3_wanted_rows_run_out_first_stops_before_the_remaining_pages(
     ) {
         let file = three_page_int64_file();
         let parsed = ParquetFile::open(&file).unwrap();
@@ -1728,9 +1722,9 @@ mod tests {
 
         use super::*;
 
-        // storage_column_parquet_parquet_file_read_column_dictionary_indices_1b5585c0: `dictionary.is_none() || !matches!(data_page_header.encoding, PlainDictionary | RleDictionary)`
+        // storage_parquet_parquet_file_read_column_dictionary_indices_1b5585c0: `dictionary.is_none() || !matches!(data_page_header.encoding, PlainDictionary | RleDictionary)`
         #[test]
-        fn mcdc__storage_column_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v1_both_false_returns_the_dictionary(
+        fn mcdc__storage_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v1_both_false_returns_the_dictionary(
         ) {
             let (page_bytes, meta_bytes) =
                 build_int64_dictionary_chunk(&[10, 20, 30], &[2, 0, 1], 4);
@@ -1745,7 +1739,7 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__storage_column_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v2_no_dictionary_page_returns_none(
+        fn mcdc__storage_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v2_no_dictionary_page_returns_none(
         ) {
             // A plain (non-dictionary) chunk: the first Data page arrives
             // with `dictionary` still `None`, so the `||`'s first leaf
@@ -1760,7 +1754,7 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__storage_column_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v3_dictionary_present_but_plain_data_page_returns_none(
+        fn mcdc__storage_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v3_dictionary_present_but_plain_data_page_returns_none(
         ) {
             // A dictionary page followed by a *PLAIN* (not
             // PLAIN_DICTIONARY) data page: `dictionary.is_none()` is
