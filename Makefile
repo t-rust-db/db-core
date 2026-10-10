@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-parquet-write-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -177,11 +177,11 @@ check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see
 # nothing else). `--all-features` hides a missing implication; a consumer
 # enabling one feature finds it. 0.78.0 shipped `storage-row` without
 # `parser-row` this way.
-FEATURES := storage-row storage-column storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
+FEATURES := storage-row storage-column storage-column-write storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
 
 check-features: ## Each Cargo feature builds standalone (cargo check --no-default-features --features X)
 	@for f in $(FEATURES); do \
-		printf '  %-16s' "$$f"; \
+		printf '  %-22s' "$$f"; \
 		if out=$$(cargo check -q --no-default-features --features $$f 2>&1); then echo ok; \
 		else echo FAIL; echo "$$out" | grep -E '^error' | head -5; exit 1; fi; \
 	done
@@ -215,6 +215,29 @@ check-column-profile: ## Charter gate: the column profile carries exactly its na
 # https://duckdb.org/docs/installation).
 check-column-oracle: ## Local-only: column engine query results agree with DuckDB over Parquet fixtures (tools/check_column_oracle.sh)
 	@tools/check_column_oracle.sh
+
+# #566: the Parquet writer's interoperability check -- files it writes
+# (examples/parquet_write_oracle.rs: every type, nulls, edge values, both
+# codecs, dictionary and PLAIN, several row groups) read back by DuckDB and
+# pyarrow, comparing types, every value, and each row group's null count
+# and min/max against bounds computed from the input. Unlike
+# check-column-oracle this runs in CI (its own job): a writer that only our
+# own reader accepts is the failure this exists to catch. The ADR 0000
+# §(f) concern holds -- DuckDB and pyarrow are external supply chains -- so
+# they stay out of the crate's dependency closure entirely, run only in
+# that job through uv, pinned to exact versions here.
+PARQUET_ORACLE_DUCKDB := 1.5.6
+PARQUET_ORACLE_PYARROW := 25.0.1
+
+check-parquet-write-oracle: ## Parquet writer output reads back identically in DuckDB and pyarrow: types, values, statistics (needs uv)
+	@command -v uv >/dev/null 2>&1 || { \
+		echo "uv not found — install from https://docs.astral.sh/uv/"; \
+		exit 1; \
+	}
+	@rm -rf target/parquet-write-oracle
+	@cargo run --quiet --example parquet_write_oracle -- target/parquet-write-oracle
+	@uv run --quiet --no-project --with duckdb==$(PARQUET_ORACLE_DUCKDB) --with pyarrow==$(PARQUET_ORACLE_PYARROW) \
+		python tools/check_parquet_write_oracle.py target/parquet-write-oracle
 
 gen-parquet-fixtures: ## Regenerate the codec-variant Parquet fixtures check-column-oracle reads (tools/gen_parquet_fixtures.sh)
 	@tools/gen_parquet_fixtures.sh

@@ -235,6 +235,10 @@ db-core = { path = ".", features = ["storage-test-support"] }
 # Property tests (#566: writer round trips). Dev-only; no runtime dependency.
 proptest = { version = "1", default-features = false, features = ["std"] }
 
+[[example]]
+name = "parquet_write_oracle"
+required-features = ["storage-column-write"]
+
 [[bin]]
 name = "lock_probe"
 path = "tests/helpers/lock_probe.rs"
