@@ -47,11 +47,45 @@ pub enum Refresh {
     Truncated,
 }
 
+/// Which file a path pointed to when opened: device and inode. A log
+/// rotated by rename-and-recreate keeps its path but gets a new identity,
+/// which is how logfile-mode ingestion (ADR 0027, #571) tells "the file I
+/// was reading" from "a new file at the same path".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileIdentity {
+    /// Device id.
+    pub dev: u64,
+    /// Inode number.
+    pub ino: u64,
+}
+
+impl FileIdentity {
+    #[cfg(unix)]
+    fn from_metadata(meta: &std::fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+        FileIdentity {
+            dev: meta.dev(),
+            ino: meta.ino(),
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn from_metadata(_meta: &std::fs::Metadata) -> Self {
+        FileIdentity { dev: 0, ino: 0 }
+    }
+
+    /// The identity of the file `path` names now.
+    pub fn of(path: &Path) -> io::Result<Self> {
+        Ok(Self::from_metadata(&std::fs::metadata(path)?))
+    }
+}
+
 /// A log file with two line-aligned cursors.
 #[derive(Debug)]
 pub struct LogFile {
     path: PathBuf,
     file: File,
+    identity: FileIdentity,
     /// Earliest loaded byte. Everything in `[tail_off, head_off)` has been
     /// handed out as blocks.
     tail_off: u64,
@@ -66,15 +100,63 @@ impl LogFile {
     /// line. Reads at most one block.
     pub fn open(path: &Path) -> io::Result<Self> {
         let file = File::open(path)?;
+        let identity = FileIdentity::from_metadata(&file.metadata()?);
         let mut lf = Self {
             path: path.to_path_buf(),
             file,
+            identity,
             tail_off: 0,
             head_off: 0,
             bytes_read: 0,
         };
         lf.reposition_at_end()?;
         Ok(lf)
+    }
+
+    /// Open read-only with both cursors at `offset`, so the next
+    /// [`LogFile::refresh`] returns the complete lines from there on: how
+    /// logfile-mode ingestion resumes, `offset` being the end of the last
+    /// line already ingested (a block's [`Block::end_off`]). Fails with
+    /// `InvalidInput` if the file is shorter than `offset` (it was truncated
+    /// or replaced); compare [`LogFile::identity`] with the recorded one to
+    /// tell a rotated file of at least that length.
+    pub fn open_at(path: &Path, offset: u64) -> io::Result<Self> {
+        let file = File::open(path)?;
+        let meta = file.metadata()?;
+        if meta.len() < offset {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{} is {} bytes, shorter than the resume offset {offset}: truncated or rotated",
+                    path.display(),
+                    meta.len()
+                ),
+            ));
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            identity: FileIdentity::from_metadata(&meta),
+            file,
+            tail_off: offset,
+            head_off: offset,
+            bytes_read: 0,
+        })
+    }
+
+    /// The identity of the file this was opened on.
+    #[must_use]
+    pub const fn identity(&self) -> FileIdentity {
+        self.identity
+    }
+
+    /// Whether the path now names a different file than the one open (a
+    /// rename-and-recreate rotation), or nothing at all.
+    pub fn rotated(&self) -> io::Result<bool> {
+        match FileIdentity::of(&self.path) {
+            Ok(now) => Ok(now != self.identity),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(true),
+            Err(e) => Err(e),
+        }
     }
 
     /// The path this file was opened from.
@@ -399,5 +481,53 @@ mod mcdc_vectors {
         // runs and returns no blocks.
         assert!(lf.read_tail(1).unwrap().is_empty());
         assert_eq!(lf.tail_off(), 0);
+    }
+
+    #[test]
+    fn open_at_resumes_after_the_ingested_lines() {
+        let t = tmp("open-at", b"one\ntwo\n");
+        let first = LogFile::open_at(&t.0, 0).unwrap().refresh().unwrap();
+        let crate::storage::stream::Refresh::New(blocks) = first else {
+            panic!("expected lines")
+        };
+        let resume = blocks.last().unwrap().end_off();
+        assert_eq!(resume, 8);
+        let mut f = std::fs::OpenOptions::new().append(true).open(&t.0).unwrap();
+        std::io::Write::write_all(&mut f, b"three\npart").unwrap();
+        let mut lf = LogFile::open_at(&t.0, resume).unwrap();
+        assert_eq!((lf.tail_off(), lf.head_off()), (8, 8));
+        let crate::storage::stream::Refresh::New(blocks) = lf.refresh().unwrap() else {
+            panic!("expected lines")
+        };
+        assert_eq!(lines(&blocks), vec!["three"]);
+        assert_eq!(blocks[0].file_off, 8);
+    }
+
+    #[test]
+    fn open_at_past_the_end_is_refused() {
+        let t = tmp("open-at-short", b"one\n");
+        let err = LogFile::open_at(&t.0, 5).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("shorter than the resume offset 5"));
+    }
+
+    #[test]
+    fn rename_and_recreate_is_a_rotation() {
+        let t = tmp("rotate", b"a\n");
+        let lf = LogFile::open_at(&t.0, 0).unwrap();
+        assert_eq!(
+            lf.identity(),
+            crate::storage::stream::FileIdentity::of(&t.0).unwrap()
+        );
+        assert!(!lf.rotated().unwrap());
+        let mut f = std::fs::OpenOptions::new().append(true).open(&t.0).unwrap();
+        std::io::Write::write_all(&mut f, b"b\n").unwrap();
+        assert!(!lf.rotated().unwrap(), "appending is not rotating");
+        let old = t.0.with_extension("1");
+        std::fs::rename(&t.0, &old).unwrap();
+        assert!(lf.rotated().unwrap(), "gone");
+        std::fs::write(&t.0, b"new\n").unwrap();
+        assert!(lf.rotated().unwrap(), "recreated");
+        std::fs::remove_file(&old).unwrap();
     }
 }
