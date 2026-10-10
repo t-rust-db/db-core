@@ -232,6 +232,8 @@ ruzstd = { version = "0.7", optional = true }
 # Enables the feature for test builds only; the library's own default
 # feature set is unchanged.
 db-core = { path = ".", features = ["storage-test-support"] }
+# Property tests (#566: writer round trips). Dev-only; no runtime dependency.
+proptest = { version = "1", default-features = false, features = ["std"] }
 
 [[bin]]
 name = "lock_probe"
@@ -284,6 +286,7 @@ default = [
     "emit-batch",
     "storage-row",
     "storage-column",
+    "storage-column-write",
     "storage-stream",
     "engine-row",
     "engine-column",
@@ -346,6 +349,9 @@ emit-batch = ["codegen-batch"]
 # (0.78.0 did not compile with `storage-row` alone).
 storage-row = ["parser-row"]
 storage-column = ["dep:memmap2", "dep:ruzstd"]
+# Parquet writer (#566, ADR 0029): `storage::parquet::writer`. No extra
+# dependency; Snappy is hand-rolled, like the reader's decompressor.
+storage-column-write = ["storage-column"]
 storage-stream = ["vm-stream"]
 # Test-support helpers (e.g. `storage::row::btree::test_minimal_db`)
 # for consumers' own test suites -- enable from `[dev-dependencies]`

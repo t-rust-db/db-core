@@ -23630,6 +23630,786 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_writer_empty_ba3dc302",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 116,
+    "decision": "match column_type {\n            ColumnType::Boolean => ColumnValues::Boolean(Vec::new()),\n            ColumnType::Int32 => ColumnValues::Int32(Vec::new()),\n            ColumnType::Int64 => ColumnValues::Int64(Vec::new()),\n            ColumnType::Float => ColumnValues::Float(Vec::new()),\n            ColumnType::Double => ColumnValues::Double(Vec::new()),\n            ColumnType::Utf8 => ColumnValues::Utf8(Vec::new()),\n            ColumnType::TimestampMicros => ColumnValues::TimestampMicros(Vec::new()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_column_type_254bbc6c",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 129,
+    "decision": "match self {\n            ColumnValues::Boolean(_) => ColumnType::Boolean,\n            ColumnValues::Int32(_) => ColumnType::Int32,\n            ColumnValues::Int64(_) => ColumnType::Int64,\n            ColumnValues::Float(_) => ColumnType::Float,\n            ColumnValues::Double(_) => ColumnType::Double,\n            ColumnValues::Utf8(_) => ColumnType::Utf8,\n            ColumnValues::TimestampMicros(_) => ColumnType::TimestampMicros,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_len_c267761b",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 142,
+    "decision": "match self {\n            ColumnValues::Boolean(v) => v.len(),\n            ColumnValues::Int32(v) => v.len(),\n            ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => v.len(),\n            ColumnValues::Float(v) => v.len(),\n            ColumnValues::Double(v) => v.len(),\n            ColumnValues::Utf8(v) => v.len(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_validity_33351053",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 159,
+    "decision": "match self {\n            ColumnValues::Boolean(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Int32(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => {\n                v.iter().map(Option::is_some).collect()\n            }\n            ColumnValues::Float(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Double(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Utf8(v) => v.iter().map(Option::is_some).collect(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_append_734f042b",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 174,
+    "decision": "match (self, other) {\n            (ColumnValues::Boolean(a), ColumnValues::Boolean(b)) => a.extend(b),\n            (ColumnValues::Int32(a), ColumnValues::Int32(b)) => a.extend(b),\n            (ColumnValues::Int64(a), ColumnValues::Int64(b)) => a.extend(b),\n            (ColumnValues::Float(a), ColumnValues::Float(b)) => a.extend(b),\n            (ColumnValues::Double(a), ColumnValues::Double(b)) => a.extend(b),\n            (ColumnValues::Utf8(a), ColumnValues::Utf8(b)) => a.extend(b),\n            (ColumnValues::TimestampMicros(a), ColumnValues::TimestampMicros(b)) => a.extend(b),\n            _ => {}\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_writer_codec_id_66425b35",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 203,
+    "decision": "match self {\n            Compression::Uncompressed => 0,\n            Compression::Snappy => 1,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_fmt_e7dd3a52",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 287,
+    "decision": "match self {\n            WriteError::Io(e) => write!(f, \"parquet write: {e}\"),\n            WriteError::Encode(e) => write!(f, \"parquet metadata: {e}\"),\n            WriteError::InvalidSchema(why) => write!(f, \"invalid parquet schema: {why}\"),\n            WriteError::InvalidOptions(why) => write!(f, \"invalid parquet writer options: {why}\"),\n            WriteError::ColumnCount { expected, found } => {\n                write!(f, \"batch has {found} columns, schema has {expected}\")\n            }\n            WriteError::TypeMismatch { column } => {\n                write!(f, \"column '{column}': values do not match the column type\")\n            }\n            WriteError::LengthMismatch {\n                column,\n                expected,\n                found,\n            } => write!(f, \"column '{column}': {found} values, expected {expected}\"),\n            WriteError::NullInRequired { column } => {\n                write!(f, \"column '{column}' is required but got a null\")\n            }\n            WriteError::TooLarge(what) => write!(f, \"too large for parquet: {what}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_new_c444191f",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 390,
+    "decision": "options.row_group_rows == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_write_columns_2c28f1d8",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 422,
+    "decision": "columns.len() != self.schema.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_write_columns_c59df23b",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 436,
+    "decision": "self.buffered_rows >= self.options.row_group_rows",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_flush_row_group_804daad8",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 445,
+    "decision": "self.buffered_rows == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_validate_schema_6bb6a459",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 502,
+    "decision": "schema.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_validate_schema_007616e2",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 507,
+    "decision": "spec.name.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_validate_schema_99c47859",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 510,
+    "decision": "!seen.insert(spec.name.as_str())",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_check_column_c02bdb5a",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 521,
+    "decision": "values.column_type() != spec.column_type",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_check_column_82d64209",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 526,
+    "decision": "values.len() != rows",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_check_column_f6b52aaf",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 533,
+    "decision": "spec.nullable",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_check_column_2b325c92",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 536,
+    "decision": "values.validity().contains(&false)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_write_chunk_f6b52aaf",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 569,
+    "decision": "spec.nullable",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_write_chunk_2ee3f278",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 583,
+    "decision": "match &encoded.dictionary {\n        Some((dictionary, entries)) => {\n            let offset = sink.position()?;\n            sizes.add(write_page(sink, dictionary, *entries, codec, None)?)?;\n            encodings.push(meta::ENCODING_RLE_DICTIONARY);\n            Some(offset)\n        }\n        None => None,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_write_page_ae330e16",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 654,
+    "decision": "match compression {\n        Compression::Uncompressed => None,\n        Compression::Snappy => Some(snappy::compress(body)),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_write_page_35f4f30f",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 664,
+    "decision": "match data_encoding {\n        Some(encoding) => meta::data_page_header(&sizes, encoding),\n        None => meta::dictionary_page_header(&sizes),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_encode_values_27b91a99",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 684,
+    "decision": "match values {\n        ColumnValues::Boolean(v) => {\n            let present: Vec<bool> = v.iter().flatten().copied().collect();\n            let mut data = Vec::new();\n            encode::plain_bool(&mut data, &present);\n            Ok(plain(data))\n        }\n        ColumnValues::Int32(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&x.to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => {\n            dictionary_or_plain(v, options, |out, x| {\n                out.extend_from_slice(&x.to_le_bytes());\n                Ok(())\n            })\n        }\n        ColumnValues::Float(v) => {\n            let mut data = Vec::new();\n            for x in v.iter().flatten() {\n                data.extend_from_slice(&x.to_le_bytes());\n            }\n            Ok(plain(data))\n        }\n        ColumnValues::Double(v) => {\n            let mut data = Vec::new();\n            for x in v.iter().flatten() {\n                data.extend_from_slice(&x.to_le_bytes());\n            }\n            Ok(plain(data))\n        }\n        ColumnValues::Utf8(v) => dictionary_or_plain(v, options, |out, s| {\n            encode::plain_byte_array(out, s.as_bytes()).ok_or_else(|| too_large(\"string value\"))\n        }),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_dictionary_or_plain_9962985f",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 735,
+    "decision": "options.dictionary",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_dictionary_or_plain_55151dd9",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 736,
+    "decision": "let Some(encoded) = dictionary(&present, options.dictionary_max_bytes, &encode_plain)?",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_dictionary_f7bc3940",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 755,
+    "decision": "present.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_dictionary_d8a022e6",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 762,
+    "decision": "match ids.get(value) {\n            Some(id) => *id,\n            None => {\n                let Ok(id) = u32::try_from(ids.len()) else {\n                    return Ok(None);\n                };\n                encode_plain(&mut dictionary, value)?;\n                if dictionary.len() > max_bytes {\n                    return Ok(None);\n                }\n                ids.insert(value, id);\n                id\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_dictionary_9976cdee",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 769,
+    "decision": "dictionary.len() > max_bytes",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_dictionary_8a36ce7b",
+    "file": "src/storage/parquet/writer.rs",
+    "line": 778,
+    "decision": "ids.len().saturating_mul(2) > present.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_encode_bit_pack_43a60d5c",
+    "file": "src/storage/parquet/writer/encode.rs",
+    "line": 27,
+    "decision": "bits >= 8",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_encode_bit_pack_3963ca8b",
+    "file": "src/storage/parquet/writer/encode.rs",
+    "line": 33,
+    "decision": "bits > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_encode_rle_hybrid_1e538cbc",
+    "file": "src/storage/parquet/writer/encode.rs",
+    "line": 60,
+    "decision": "let Some(&value) = values.get(i)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_encode_rle_hybrid_c3181d12",
+    "file": "src/storage/parquet/writer/encode.rs",
+    "line": 65,
+    "decision": "match run.checked_sub(pad) {\n            Some(rest) if rest >= 8 => {\n                literals.extend(std::iter::repeat_n(value, pad));\n                flush_literals(out, &mut literals, bit_width);\n                write_varint(out, u64::try_from(rest).unwrap_or(u64::MAX).wrapping_shl(1));\n                let bytes = value.to_le_bytes();\n                out.extend_from_slice(bytes.get(..value_bytes).unwrap_or(&bytes));\n                i = i.saturating_add(run);\n            }\n            _ => {\n                literals.push(value);\n                i = i.saturating_add(1);\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_writer_encode_rle_hybrid_05ded02a",
+    "file": "src/storage/parquet/writer/encode.rs",
+    "line": 66,
+    "decision": "rest >= 8",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_encode_flush_literals_5c16ba3f",
+    "file": "src/storage/parquet/writer/encode.rs",
+    "line": 86,
+    "decision": "literals.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_meta_physical_type_0433a7bb",
+    "file": "src/storage/parquet/writer/meta.rs",
+    "line": 82,
+    "decision": "match column_type {\n        ColumnType::Boolean => TYPE_BOOLEAN,\n        ColumnType::Int32 => TYPE_INT32,\n        ColumnType::Int64 | ColumnType::TimestampMicros => TYPE_INT64,\n        ColumnType::Float => TYPE_FLOAT,\n        ColumnType::Double => TYPE_DOUBLE,\n        ColumnType::Utf8 => TYPE_BYTE_ARRAY,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_meta_statistics_d10eba3f",
+    "file": "src/storage/parquet/writer/meta.rs",
+    "line": 97,
+    "decision": "let Some(max) = &stats.max",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_meta_statistics_adb80543",
+    "file": "src/storage/parquet/writer/meta.rs",
+    "line": 100,
+    "decision": "let Some(min) = &stats.min",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_meta_column_chunk_97b8f539",
+    "file": "src/storage/parquet/writer/meta.rs",
+    "line": 138,
+    "decision": "let Some(offset) = layout.dictionary_page_offset",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_meta_schema_element_f6b52aaf",
+    "file": "src/storage/parquet/writer/meta.rs",
+    "line": 169,
+    "decision": "spec.nullable",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_meta_schema_element_7dc4646a",
+    "file": "src/storage/parquet/writer/meta.rs",
+    "line": 179,
+    "decision": "match spec.column_type {\n        ColumnType::Utf8 => {\n            fields.push((6, Value::I32(CONVERTED_UTF8)));\n            // LogicalType.STRING (1): StringType {}\n            fields.push((10, Value::Struct(vec![(1, empty())])));\n        }\n        ColumnType::TimestampMicros => {\n            fields.push((6, Value::I32(CONVERTED_TIMESTAMP_MICROS)));\n            // LogicalType.TIMESTAMP (8): { isAdjustedToUTC: true, unit: MICROS (2) }\n            let unit = Value::Struct(vec![(2, empty())]);\n            let timestamp = Value::Struct(vec![(1, Value::Bool(true)), (2, unit)]);\n            fields.push((10, Value::Struct(vec![(8, timestamp)])));\n        }\n        ColumnType::Boolean\n        | ColumnType::Int32\n        | ColumnType::Int64\n        | ColumnType::Float\n        | ColumnType::Double => {}\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_snappy_compress_b45242e2",
+    "file": "src/storage/parquet/writer/snappy.rs",
+    "line": 27,
+    "decision": "let Some(word) = read_u32(input, i)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_snappy_compress_2f0fb311",
+    "file": "src/storage/parquet/writer/snappy.rs",
+    "line": 31,
+    "decision": "length >= MIN_MATCH",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_snappy_match_length_343684f1",
+    "file": "src/storage/parquet/writer/snappy.rs",
+    "line": 63,
+    "decision": "!(1..=MAX_OFFSET).contains(&offset)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_snappy_emit_literal_0267df45",
+    "file": "src/storage/parquet/writer/snappy.rs",
+    "line": 78,
+    "decision": "match u8::try_from(n) {\n            Ok(small) if small < 60 => out.push(small.wrapping_shl(2)),\n            _ => {\n                let len_bytes = u32::try_from(n).unwrap_or(u32::MAX).to_le_bytes();\n                let used = if n < 256 {\n                    1\n                } else if n < 65_536 {\n                    2\n                } else {\n                    3\n                };\n                let tag = u8::try_from(59usize.saturating_add(used)).unwrap_or(62);\n                out.push(tag.wrapping_shl(2));\n                out.extend_from_slice(len_bytes.get(..used).unwrap_or_default());\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_writer_snappy_emit_literal_0e2f159b",
+    "file": "src/storage/parquet/writer/snappy.rs",
+    "line": 79,
+    "decision": "small < 60",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_snappy_emit_literal_d0cc77f2",
+    "file": "src/storage/parquet/writer/snappy.rs",
+    "line": 82,
+    "decision": "n < 256",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_snappy_emit_literal_1e27881a",
+    "file": "src/storage/parquet/writer/snappy.rs",
+    "line": 84,
+    "decision": "n < 65_536",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_snappy_emit_copy_a8127936",
+    "file": "src/storage/parquet/writer/snappy.rs",
+    "line": 101,
+    "decision": "length >= 68",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_snappy_emit_copy_82f73868",
+    "file": "src/storage/parquet/writer/snappy.rs",
+    "line": 105,
+    "decision": "length > 64",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_snappy_random_inputs_round_trip_d02ea7b7",
+    "file": "src/storage/parquet/writer/snappy.rs",
+    "line": 191,
+    "decision": "match rng.below(4) {\n                    0 => b'a',\n                    1 => b'b',\n                    _ => rng.next() as u8,\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_writer_stats_chunk_stats_eb78bc61",
+    "file": "src/storage/parquet/writer/stats.rs",
+    "line": 21,
+    "decision": "match values {\n        ColumnValues::Boolean(v) => ordered(v.iter().copied(), |b| vec![u8::from(*b)]),\n        ColumnValues::Int32(v) => ordered(v.iter().copied(), |x| x.to_le_bytes().to_vec()),\n        ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => {\n            ordered(v.iter().copied(), |x| x.to_le_bytes().to_vec())\n        }\n        ColumnValues::Float(v) => real(v.iter().copied()),\n        ColumnValues::Double(v) => real(v.iter().copied()),\n        ColumnValues::Utf8(v) => ordered(v.iter().map(Option::as_deref), |s| s.as_bytes().to_vec()),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_stats_ordered_76295b4c",
+    "file": "src/storage/parquet/writer/stats.rs",
+    "line": 40,
+    "decision": "match value {\n            None => null_count = null_count.saturating_add(1),\n            Some(x) => {\n                bounds = Some(match bounds {\n                    None => (x, x),\n                    Some((lo, hi)) => (lo.min(x), hi.max(x)),\n                });\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_stats_ordered_12c5fa71",
+    "file": "src/storage/parquet/writer/stats.rs",
+    "line": 43,
+    "decision": "match bounds {\n                    None => (x, x),\n                    Some((lo, hi)) => (lo.min(x), hi.max(x)),\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_stats_zero_9eb817f7",
+    "file": "src/storage/parquet/writer/stats.rs",
+    "line": 72,
+    "decision": "negative",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_stats_zero_9eb817f7_2",
+    "file": "src/storage/parquet/writer/stats.rs",
+    "line": 88,
+    "decision": "negative",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_stats_real_13c68324",
+    "file": "src/storage/parquet/writer/stats.rs",
+    "line": 107,
+    "decision": "x.widen().is_nan()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_stats_real_0875f033",
+    "file": "src/storage/parquet/writer/stats.rs",
+    "line": 110,
+    "decision": "match bounds {\n            None => (x, x),\n            Some((lo, hi)) => (\n                if x.widen() < lo.widen() { x } else { lo },\n                if x.widen() > hi.widen() { x } else { hi },\n            ),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_stats_real_0d15eaca",
+    "file": "src/storage/parquet/writer/stats.rs",
+    "line": 113,
+    "decision": "x.widen() < lo.widen()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_stats_real_d84df0d3",
+    "file": "src/storage/parquet/writer/stats.rs",
+    "line": 114,
+    "decision": "x.widen() > hi.widen()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_stats_real_0dcdd42d",
+    "file": "src/storage/parquet/writer/stats.rs",
+    "line": 119,
+    "decision": "v.widen() == 0.0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_fmt_ade81dcb",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 33,
+    "decision": "match self {\n            EncodeError::MixedCollection => {\n                write!(f, \"list or map elements of more than one thrift type\")\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_element_type_7527dcd3",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 54,
+    "decision": "match value {\n        Value::Bool(_) => CTYPE_BOOLEAN_TRUE,\n        Value::Byte(_) => CTYPE_BYTE,\n        Value::I16(_) => CTYPE_I16,\n        Value::I32(_) => CTYPE_I32,\n        Value::I64(_) => CTYPE_I64,\n        Value::Double(_) => CTYPE_DOUBLE,\n        Value::Binary(_) => CTYPE_BINARY,\n        Value::List(_) => CTYPE_LIST,\n        Value::Map(_) => CTYPE_MAP,\n        Value::Struct(_) => CTYPE_STRUCT,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_write_struct_55204acf",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 75,
+    "decision": "match value {\n            Value::Bool(true) => CTYPE_BOOLEAN_TRUE,\n            Value::Bool(false) => CTYPE_BOOLEAN_FALSE,\n            other => element_type(other),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_write_struct_8a426d34",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 80,
+    "decision": "match short_delta(last, *id) {\n            Some(delta) => out.push(delta.wrapping_shl(4) | ctype),\n            None => {\n                out.push(ctype);\n                write_varint(out, zigzag_i32(i32::from(*id)));\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_write_struct_4d98d31a",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 88,
+    "decision": "!matches!(value, Value::Bool(_))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_short_delta_db909a4a",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 99,
+    "decision": "(1..=15).contains(&delta)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_write_value_20794c4f",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 107,
+    "decision": "match value {\n        Value::Bool(v) => out.push(if *v {\n            CTYPE_BOOLEAN_TRUE\n        } else {\n            CTYPE_BOOLEAN_FALSE\n        }),\n        Value::Byte(v) => out.extend_from_slice(&v.to_le_bytes()),\n        Value::I16(v) => write_varint(out, zigzag_i32(i32::from(*v))),\n        Value::I32(v) => write_varint(out, zigzag_i32(*v)),\n        Value::I64(v) => write_varint(out, zigzag_i64(*v)),\n        Value::Double(v) => out.extend_from_slice(&v.to_le_bytes()),\n        Value::Binary(bytes) => {\n            write_len(out, bytes.len());\n            out.extend_from_slice(bytes);\n        }\n        Value::List(items) => write_list(out, items)?,\n        Value::Map(entries) => write_map(out, entries)?,\n        Value::Struct(fields) => write_struct(out, fields)?,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_write_value_b34c7ab6",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 108,
+    "decision": "*v",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_common_type_69e3d118",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 135,
+    "decision": "types.all(|t| t == ctype)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_write_list_c57a507f",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 144,
+    "decision": "match u8::try_from(items.len()) {\n        Ok(n) if n < 15 => out.push(n.wrapping_shl(4) | ctype),\n        _ => {\n            out.push(0xf0 | ctype);\n            write_len(out, items.len());\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_writer_thrift_write_list_b09c4ad2",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 145,
+    "decision": "n < 15",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_write_map_10c87a0d",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 159,
+    "decision": "entries.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_write_varint_a5b1bbc4",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 181,
+    "decision": "v == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_random_value_42bcd25d",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 286,
+    "decision": "depth == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_random_value_b9902ad4",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 287,
+    "decision": "match rng.below(kinds) {\n            0 => Value::Bool(rng.next() & 1 == 1),\n            1 => Value::Byte(i8::from_le_bytes([rng.next() as u8])),\n            2 => Value::I16(rng.next() as i16),\n            3 => Value::I32(rng.next() as i32),\n            4 => Value::I64(rng.next() as i64),\n            5 => {\n                let d = f64::from_bits(rng.next());\n                Value::Double(if d.is_nan() { 0.5 } else { d })\n            }\n            6 => Value::Binary((0..rng.below(20)).map(|_| rng.next() as u8).collect()),\n            7 => {\n                let item = random_value(rng, depth - 1);\n                Value::List(std::iter::repeat_n(item, rng.below(20) as usize).collect())\n            }\n            _ => Value::Struct(random_fields(rng, depth - 1)),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_writer_thrift_random_value_79f48df8",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 295,
+    "decision": "d.is_nan()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_writer_thrift_random_fields_9ca45e12",
+    "file": "src/storage/parquet/writer/thrift.rs",
+    "line": 310,
+    "decision": "rng.below(4) == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_btree_deref_32b85bf4",
     "file": "src/storage/row/btree.rs",
     "line": 83,

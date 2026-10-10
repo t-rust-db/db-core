@@ -3193,6 +3193,146 @@ pub fn db_core::storage::parquet::thrift::Decoder<'a>::position(&self) -> usize
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::read_struct(&mut self) -> db_core::storage::parquet::thrift::Result<alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>>
 pub fn db_core::storage::parquet::thrift::decode_struct(&[u8]) -> db_core::storage::parquet::thrift::Result<(alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>, usize)>
 pub type db_core::storage::parquet::thrift::Result<T> = core::result::Result<T, db_core::storage::parquet::thrift::ThriftError>
+pub mod db_core::storage::parquet::writer
+pub enum db_core::storage::parquet::writer::ColumnType
+pub db_core::storage::parquet::writer::ColumnType::Boolean
+pub db_core::storage::parquet::writer::ColumnType::Double
+pub db_core::storage::parquet::writer::ColumnType::Float
+pub db_core::storage::parquet::writer::ColumnType::Int32
+pub db_core::storage::parquet::writer::ColumnType::Int64
+pub db_core::storage::parquet::writer::ColumnType::TimestampMicros
+pub db_core::storage::parquet::writer::ColumnType::Utf8
+impl core::clone::Clone for db_core::storage::parquet::writer::ColumnType
+pub fn db_core::storage::parquet::writer::ColumnType::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::writer::ColumnType
+impl core::cmp::PartialEq for db_core::storage::parquet::writer::ColumnType
+pub fn db_core::storage::parquet::writer::ColumnType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::writer::ColumnType
+pub fn db_core::storage::parquet::writer::ColumnType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::writer::ColumnType
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnType
+pub enum db_core::storage::parquet::writer::ColumnValues
+pub db_core::storage::parquet::writer::ColumnValues::Boolean(alloc::vec::Vec<core::option::Option<bool>>)
+pub db_core::storage::parquet::writer::ColumnValues::Double(alloc::vec::Vec<core::option::Option<f64>>)
+pub db_core::storage::parquet::writer::ColumnValues::Float(alloc::vec::Vec<core::option::Option<f32>>)
+pub db_core::storage::parquet::writer::ColumnValues::Int32(alloc::vec::Vec<core::option::Option<i32>>)
+pub db_core::storage::parquet::writer::ColumnValues::Int64(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::parquet::writer::ColumnValues::TimestampMicros(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::parquet::writer::ColumnValues::Utf8(alloc::vec::Vec<core::option::Option<alloc::string::String>>)
+impl db_core::storage::parquet::writer::ColumnValues
+pub fn db_core::storage::parquet::writer::ColumnValues::column_type(&self) -> db_core::storage::parquet::writer::ColumnType
+pub fn db_core::storage::parquet::writer::ColumnValues::empty(db_core::storage::parquet::writer::ColumnType) -> Self
+pub fn db_core::storage::parquet::writer::ColumnValues::is_empty(&self) -> bool
+pub fn db_core::storage::parquet::writer::ColumnValues::len(&self) -> usize
+impl core::clone::Clone for db_core::storage::parquet::writer::ColumnValues
+pub fn db_core::storage::parquet::writer::ColumnValues::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::writer::ColumnValues
+pub fn db_core::storage::parquet::writer::ColumnValues::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::writer::ColumnValues
+pub fn db_core::storage::parquet::writer::ColumnValues::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnValues
+pub enum db_core::storage::parquet::writer::Compression
+pub db_core::storage::parquet::writer::Compression::Snappy
+pub db_core::storage::parquet::writer::Compression::Uncompressed
+impl core::clone::Clone for db_core::storage::parquet::writer::Compression
+pub fn db_core::storage::parquet::writer::Compression::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::writer::Compression
+impl core::cmp::PartialEq for db_core::storage::parquet::writer::Compression
+pub fn db_core::storage::parquet::writer::Compression::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::writer::Compression
+pub fn db_core::storage::parquet::writer::Compression::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::writer::Compression
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::Compression
+pub enum db_core::storage::parquet::writer::EncodeError
+pub db_core::storage::parquet::writer::EncodeError::MixedCollection
+impl core::clone::Clone for db_core::storage::parquet::writer::EncodeError
+pub fn db_core::storage::parquet::writer::EncodeError::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::writer::EncodeError
+impl core::cmp::PartialEq for db_core::storage::parquet::writer::EncodeError
+pub fn db_core::storage::parquet::writer::EncodeError::eq(&self, &Self) -> bool
+impl core::convert::From<db_core::storage::parquet::writer::EncodeError> for db_core::storage::parquet::writer::WriteError
+pub fn db_core::storage::parquet::writer::WriteError::from(db_core::storage::parquet::writer::EncodeError) -> Self
+impl core::error::Error for db_core::storage::parquet::writer::EncodeError
+impl core::fmt::Debug for db_core::storage::parquet::writer::EncodeError
+pub fn db_core::storage::parquet::writer::EncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::writer::EncodeError
+pub fn db_core::storage::parquet::writer::EncodeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::EncodeError
+pub enum db_core::storage::parquet::writer::WriteError
+pub db_core::storage::parquet::writer::WriteError::ColumnCount
+pub db_core::storage::parquet::writer::WriteError::ColumnCount::expected: usize
+pub db_core::storage::parquet::writer::WriteError::ColumnCount::found: usize
+pub db_core::storage::parquet::writer::WriteError::Encode(db_core::storage::parquet::writer::EncodeError)
+pub db_core::storage::parquet::writer::WriteError::InvalidOptions(alloc::string::String)
+pub db_core::storage::parquet::writer::WriteError::InvalidSchema(alloc::string::String)
+pub db_core::storage::parquet::writer::WriteError::Io(core::io::error::Error)
+pub db_core::storage::parquet::writer::WriteError::LengthMismatch
+pub db_core::storage::parquet::writer::WriteError::LengthMismatch::column: alloc::string::String
+pub db_core::storage::parquet::writer::WriteError::LengthMismatch::expected: usize
+pub db_core::storage::parquet::writer::WriteError::LengthMismatch::found: usize
+pub db_core::storage::parquet::writer::WriteError::NullInRequired
+pub db_core::storage::parquet::writer::WriteError::NullInRequired::column: alloc::string::String
+pub db_core::storage::parquet::writer::WriteError::TooLarge(alloc::string::String)
+pub db_core::storage::parquet::writer::WriteError::TypeMismatch
+pub db_core::storage::parquet::writer::WriteError::TypeMismatch::column: alloc::string::String
+impl core::convert::From<core::io::error::Error> for db_core::storage::parquet::writer::WriteError
+pub fn db_core::storage::parquet::writer::WriteError::from(core::io::error::Error) -> Self
+impl core::convert::From<db_core::storage::parquet::writer::EncodeError> for db_core::storage::parquet::writer::WriteError
+pub fn db_core::storage::parquet::writer::WriteError::from(db_core::storage::parquet::writer::EncodeError) -> Self
+impl core::error::Error for db_core::storage::parquet::writer::WriteError
+impl core::fmt::Debug for db_core::storage::parquet::writer::WriteError
+pub fn db_core::storage::parquet::writer::WriteError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::parquet::writer::WriteError
+pub fn db_core::storage::parquet::writer::WriteError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::parquet::writer::ColumnSpec
+pub db_core::storage::parquet::writer::ColumnSpec::column_type: db_core::storage::parquet::writer::ColumnType
+pub db_core::storage::parquet::writer::ColumnSpec::name: alloc::string::String
+pub db_core::storage::parquet::writer::ColumnSpec::nullable: bool
+impl db_core::storage::parquet::writer::ColumnSpec
+pub fn db_core::storage::parquet::writer::ColumnSpec::new(impl core::convert::Into<alloc::string::String>, db_core::storage::parquet::writer::ColumnType, bool) -> Self
+impl core::clone::Clone for db_core::storage::parquet::writer::ColumnSpec
+pub fn db_core::storage::parquet::writer::ColumnSpec::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::writer::ColumnSpec
+impl core::cmp::PartialEq for db_core::storage::parquet::writer::ColumnSpec
+pub fn db_core::storage::parquet::writer::ColumnSpec::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::writer::ColumnSpec
+pub fn db_core::storage::parquet::writer::ColumnSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnSpec
+pub struct db_core::storage::parquet::writer::FileSummary
+pub db_core::storage::parquet::writer::FileSummary::bytes: u64
+pub db_core::storage::parquet::writer::FileSummary::num_rows: u64
+pub db_core::storage::parquet::writer::FileSummary::row_groups: usize
+impl core::clone::Clone for db_core::storage::parquet::writer::FileSummary
+pub fn db_core::storage::parquet::writer::FileSummary::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::writer::FileSummary
+impl core::cmp::PartialEq for db_core::storage::parquet::writer::FileSummary
+pub fn db_core::storage::parquet::writer::FileSummary::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::writer::FileSummary
+pub fn db_core::storage::parquet::writer::FileSummary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::FileSummary
+pub struct db_core::storage::parquet::writer::ParquetWriter<W: core::io::write::Write>
+impl<W: core::io::write::Write> db_core::storage::parquet::writer::ParquetWriter<W>
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::finish(self) -> core::result::Result<(W, db_core::storage::parquet::writer::FileSummary), db_core::storage::parquet::writer::WriteError>
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::flush_row_group(&mut self) -> core::result::Result<(), db_core::storage::parquet::writer::WriteError>
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::new(W, alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>, db_core::storage::parquet::writer::WriterOptions) -> core::result::Result<Self, db_core::storage::parquet::writer::WriteError>
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::schema(&self) -> &[db_core::storage::parquet::writer::ColumnSpec]
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::write_columns(&mut self, alloc::vec::Vec<db_core::storage::parquet::writer::ColumnValues>) -> core::result::Result<(), db_core::storage::parquet::writer::WriteError>
+pub struct db_core::storage::parquet::writer::WriterOptions
+pub db_core::storage::parquet::writer::WriterOptions::compression: db_core::storage::parquet::writer::Compression
+pub db_core::storage::parquet::writer::WriterOptions::created_by: alloc::string::String
+pub db_core::storage::parquet::writer::WriterOptions::dictionary: bool
+pub db_core::storage::parquet::writer::WriterOptions::dictionary_max_bytes: usize
+pub db_core::storage::parquet::writer::WriterOptions::row_group_rows: usize
+impl core::clone::Clone for db_core::storage::parquet::writer::WriterOptions
+pub fn db_core::storage::parquet::writer::WriterOptions::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::writer::WriterOptions
+impl core::cmp::PartialEq for db_core::storage::parquet::writer::WriterOptions
+pub fn db_core::storage::parquet::writer::WriterOptions::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::parquet::writer::WriterOptions
+pub fn db_core::storage::parquet::writer::WriterOptions::default() -> Self
+impl core::fmt::Debug for db_core::storage::parquet::writer::WriterOptions
+pub fn db_core::storage::parquet::writer::WriterOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::WriterOptions
 pub enum db_core::storage::parquet::FileError
 pub db_core::storage::parquet::FileError::ChunkOutOfBounds
 pub db_core::storage::parquet::FileError::ColumnIndexOutOfRange(usize)

@@ -80,5 +80,7 @@ pub mod schema_tree;
     reason = "reader lint burn-down, see storage::parquet"
 )]
 pub mod thrift;
+#[cfg(feature = "storage-column-write")]
+pub mod writer;
 
 pub use parquet_file::{DictionaryIndices, FileError, ParquetFile, RowGroupReader};
