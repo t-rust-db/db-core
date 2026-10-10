@@ -16,7 +16,7 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 ### Changed
 
-- **Breaking: the Parquet reader moved from `storage::column::parquet` to `storage::parquet`** (#566), next to the writer. `storage::column` still re-exports `ParquetFile`, `FileError`, `RowGroupReader` and `DictionaryIndices`. The reader's lint allowances (`arithmetic_side_effects`, `indexing_slicing`, `missing_docs`) now apply per reader module, not to everything under `parquet`, and `MVL_LIMIT_EXCLUDE` names the reader files instead of `parquet/*`, so new files there are gated by default. The reader's lint burn-down is #578.
+- **The Parquet reader moved from `storage::column::parquet` to `storage::parquet`** (#566), next to the writer. The old path keeps working: `storage::column` re-exports the `parquet` module, as well as `ParquetFile`, `FileError`, `RowGroupReader` and `DictionaryIndices`. The reader's lint allowances (`arithmetic_side_effects`, `indexing_slicing`, `missing_docs`) now apply per reader module, not to everything under `parquet`, and `MVL_LIMIT_EXCLUDE` names the reader files instead of `parquet/*`, so new files there are gated by default. The reader's lint burn-down is #578.
 
 ## [0.122.0] - 2026-09-22
 
