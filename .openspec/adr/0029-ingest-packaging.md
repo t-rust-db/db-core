@@ -86,7 +86,8 @@ cannot diverge.
 `t-rust-db/tools` is a Cargo workspace holding db-cli, column-rs,
 sqlite-rs, loglume, trigrep and db-studio, imported with history (one
 subdirectory per former repo, tools#1); column-ingest is added there. One
-`Cargo.lock`, one db-core pin, one `[patch]` at the root, CI at the root.
+`Cargo.lock`, one db-core pin (a GitHub release tag, no local `[patch]`),
+CI at the root.
 Each crate keeps its own version, changelog, tags (`column-rs-v…`) and
 gates (sqlite-rs keeps its assurance and supply-chain workflow);
 `cargo install --git https://github.com/t-rust-db/tools <crate>` installs
