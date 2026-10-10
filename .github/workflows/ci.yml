@@ -213,10 +213,11 @@ jobs:
   # across 1888 db-core tests. column-rs's `tests/codegen_e2e.rs` is the one
   # guard that emits, compiles the result with rustc against the built
   # `column_rs` rlib, runs it, and diffs against `QueryEngine::execute`.
-  # This job runs it against *this* db-core, through column-rs's own
-  # `[patch] db-core = { path = "../db-core" }` (the sibling layout it and
-  # the benchmark repo already assume), whenever a PR touches the emitter
-  # or the query-output surface -- and always on a push to main.
+  # This job runs it against *this* db-core, through column-rs in the
+  # t-rust-db/tools workspace with a `[patch]` to this checkout added for
+  # the run (tools itself pins a db-core release tag and never patches),
+  # whenever a PR touches the emitter or the query-output surface -- and
+  # always on a push to main.
   emit-compile-guard:
     name: Emit compile guard (column-rs codegen_e2e)
     runs-on: ubuntu-latest
@@ -235,11 +236,11 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           # A breaking change to the query-output surface needs a companion
-          # column-rs branch to compile against; the PR body names it with a
-          # line `column-rs-ref: <branch-or-sha>`. Default: column-rs main.
-          ref="$(printf '%s\n' "$PR_BODY" | sed -nE 's/^[[:space:]]*column-rs-ref:[[:space:]]*([^[:space:]]+).*/\1/p' | head -1)"
-          echo "column_rs_ref=${ref:-main}" >> "$GITHUB_OUTPUT"
-          echo "column-rs ref: ${ref:-main}"
+          # tools branch to compile against; the PR body names it with a
+          # line `tools-ref: <branch-or-sha>`. Default: tools main.
+          ref="$(printf '%s\n' "$PR_BODY" | sed -nE 's/^[[:space:]]*tools-ref:[[:space:]]*([^[:space:]]+).*/\1/p' | head -1)"
+          echo "tools_ref=${ref:-main}" >> "$GITHUB_OUTPUT"
+          echo "tools ref: ${ref:-main}"
           if [ "$EVENT" = "push" ]; then
             echo "hit=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
@@ -255,76 +256,54 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.relevant.outputs.hit == 'true'
         with:
-          repository: t-rust-db/column-rs
-          ref: ${{ steps.relevant.outputs.column_rs_ref }}
-          path: column-rs
-      # column-rs's checked-in `.cargo/config.toml` patches db-core *and*
-      # db-cli to sibling paths (`../db-core`, `../db-cli`) unconditionally
-      # -- a missing patch path is a resolution error, not a fallback to
-      # the git tag (the first run of this job on main failed exactly
-      # there). db-core is this checkout; db-cli is checked out at exactly
-      # the tag column-rs's Cargo.toml pins, so the only thing under test
-      # that differs from a published column-rs build is db-core.
-      - name: Read the db-cli tag column-rs pins
-        if: steps.relevant.outputs.hit == 'true'
-        id: deps
-        working-directory: column-rs
-        run: |
-          tag="$(grep -oE 'db-cli *= *\{[^}]*\}' Cargo.toml | grep -oE 'tag *= *"[^"]+"' | grep -oE '"[^"]+"' | tr -d '"')"
-          [ -n "$tag" ] || { echo "::error::could not read db-cli's tag from column-rs/Cargo.toml"; exit 1; }
-          echo "db-cli tag: $tag"
-          echo "dbcli_tag=$tag" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
-        if: steps.relevant.outputs.hit == 'true'
-        with:
-          repository: t-rust-db/db-cli
-          ref: ${{ steps.deps.outputs.dbcli_tag }}
-          path: db-cli
+          repository: t-rust-db/tools
+          ref: ${{ steps.relevant.outputs.tools_ref }}
+          path: tools
       - uses: dtolnay/rust-toolchain@stable
         if: steps.relevant.outputs.hit == 'true'
       - uses: Swatinem/rust-cache@v2
         if: steps.relevant.outputs.hit == 'true'
         with:
           shared-key: emit-compile-guard
-          workspaces: column-rs
-      # Two things stop the sibling patch from applying, and either one
-      # makes cargo silently fall back to the pinned git tag -- so this
-      # guard would test the *old* db-core (db-core#481: every run from
-      # v0.107.0 to v0.110.0 tested v0.106.1 and nobody could tell):
-      #   1. column-rs's `version = "0.106.1"` requirement is `^0.106.1`,
-      #      which pre-1.0 excludes every later minor; and
-      #   2. column-rs's committed Cargo.lock locks db-core to the tag's
-      #      git rev, which cargo keeps until that package is re-resolved.
+          workspaces: tools
+      # Two things stop a patch from applying, and either one makes cargo
+      # silently fall back to the pinned git tag -- so this guard would
+      # test the *old* db-core (db-core#481: every run from v0.107.0 to
+      # v0.110.0 tested v0.106.1 and nobody could tell):
+      #   1. the workspace's `version = "0.114.7"` requirement is
+      #      `^0.114.7`, which pre-1.0 excludes every later minor; and
+      #   2. the committed Cargo.lock locks db-core to the tag's git rev,
+      #      which cargo keeps until that package is re-resolved.
       # This guard's question is "does column-rs compile and run against
-      # *this* db-core", so neither belongs in its inputs: widen the
-      # requirement in the ephemeral checkout and re-resolve db-core, then
-      # still assert the result is this checkout (a missing sibling patch
-      # path would fail here with cargo's own error).
-      - name: Point column-rs's db-core requirement at this checkout
+      # *this* db-core", so neither belongs in its inputs: in the
+      # ephemeral checkout, widen the requirement, add the patch and
+      # re-resolve db-core, then still assert the result is this checkout.
+      - name: Point the tools workspace's db-core at this checkout
         if: steps.relevant.outputs.hit == 'true'
-        working-directory: column-rs
+        working-directory: tools
         run: |
           set -euo pipefail
-          before="$(grep -oE 'db-core *= *\{[^}]*\}' Cargo.toml | grep -oE 'version *= *"[^"]+"' || true)"
-          sed -i -E 's/(db-core *= *\{[^}]*version *= *")[^"]+"/\1>=0.0.0"/' Cargo.toml
-          echo "column-rs pins db-core ${before:-<no version>} -> widened to >=0.0.0 for this run"
+          before="$(grep -oE '^db-core *= *\{[^}]*\}' Cargo.toml | grep -oE 'version *= *"[^"]+"' || true)"
+          sed -i -E 's/^(db-core *= *\{[^}]*version *= *")[^"]+"/\1>=0.0.0"/' Cargo.toml
+          printf '\n[patch."https://github.com/t-rust-db/db-core"]\ndb-core = { path = "../db-core" }\n' >> Cargo.toml
+          echo "tools pins db-core ${before:-<no version>} -> widened to >=0.0.0 and patched to ../db-core for this run"
           cargo update -p db-core
       - name: Assert column-rs resolved db-core to this checkout
         if: steps.relevant.outputs.hit == 'true'
-        working-directory: column-rs
+        working-directory: tools
         run: |
           set -euo pipefail
-          cargo tree -i db-core --edges normal --prefix none > /tmp/db-core-resolution.txt
+          cargo tree -p column-rs -i db-core --edges normal --prefix none > /tmp/db-core-resolution.txt
           resolved="$(head -1 /tmp/db-core-resolution.txt)"
           echo "db-core resolved to: $resolved"
           case "$resolved" in
             *"$GITHUB_WORKSPACE/db-core"*) ;;
-            *) echo "::error::column-rs resolved db-core to '$resolved', not this checkout even after widening its requirement and re-resolving -- check column-rs's .cargo/config.toml sibling patch path." ; exit 1 ;;
+            *) echo "::error::column-rs resolved db-core to '$resolved', not this checkout even after widening its requirement, patching and re-resolving." ; exit 1 ;;
           esac
       - name: Emit, compile and run generated programs against this db-core
         if: steps.relevant.outputs.hit == 'true'
-        working-directory: column-rs
-        run: cargo test --release --test codegen_e2e
+        working-directory: tools
+        run: cargo test --release -p column-rs --test codegen_e2e
 
   # ADR 0000 §(g), db-core#407: one 85% line-coverage floor over all of
   # db-core (--all-features), crate-wide and per-file, every PR -- no
