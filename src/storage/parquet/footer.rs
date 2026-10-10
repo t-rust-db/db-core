@@ -3,7 +3,7 @@
 //!
 //! File layout: `[data ...][metadata][4-byte metadata length][b"PAR1"]`
 
-use crate::storage::column::parquet::thrift::{self, ThriftError, Value};
+use crate::storage::parquet::thrift::{self, ThriftError, Value};
 use std::fmt;
 
 const MAGIC: &[u8; 4] = b"PAR1";

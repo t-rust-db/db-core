@@ -177,6 +177,23 @@ jobs:
   # unlike every other gate here -- `cargo public-api` shells out to
   # `cargo +nightly rustdoc` itself, so nightly is installed alongside
   # stable rather than as the job's only toolchain.
+  # Parquet writer interoperability (#566): files the writer produces must
+  # read back identically -- types, values, per-row-group statistics -- in
+  # DuckDB and pyarrow, not just in our own reader. Both run here only,
+  # through uv at the exact versions the Makefile pins; neither is a
+  # dependency of the crate (see the Makefile note on ADR 0000 §(f)).
+  parquet-write-oracle:
+    name: Parquet writer interop (DuckDB, pyarrow)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: parquet-write-oracle
+      - uses: astral-sh/setup-uv@v6
+      - run: make check-parquet-write-oracle
+
   public-api:
     name: Public API surface (cargo-public-api)
     runs-on: ubuntu-latest

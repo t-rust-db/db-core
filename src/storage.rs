@@ -2,9 +2,9 @@
 //! feature-gated module per execution mode (`row`/`column`/`stream`,
 //! see `db-core`'s ADR 0006) — today, only `column` is real.
 //!
-//! `column` is the mmap-based `Vfs`/`VfsFile` pair plus the Parquet
-//! reader that consumes it (folded in from the standalone `db-parquet`
-//! repo, `#4`). `src/column/mmap.rs` is the only place in this crate
+//! `column` is the mmap-based `Vfs`/`VfsFile` pair; `parquet` is the
+//! Parquet file format it serves (the reader, folded in from the
+//! standalone `db-parquet` repo, `#4`). `src/column/mmap.rs` is the only place in this crate
 //! that uses `unsafe`; it is required by `memmap2`'s `Mmap::map`
 //! contract and cannot be avoided without hand-rolling a cross-platform
 //! mmap wrapper. Everything else in this crate is safe code.
@@ -17,6 +17,9 @@
 
 #[cfg(feature = "storage-column")]
 pub mod column;
+
+#[cfg(feature = "storage-column")]
+pub mod parquet;
 
 #[cfg(feature = "storage-column")]
 pub use column::{

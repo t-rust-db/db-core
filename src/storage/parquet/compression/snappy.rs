@@ -407,9 +407,9 @@ mod mcdc_vectors {
         op
     }
 
-    // storage_column_parquet_compression_snappy_decompress_116ba85b: `len <= WIDE && pos + WIDE <= data.len() && dst + WIDE <= out.len()`
+    // storage_parquet_compression_snappy_decompress_116ba85b: `len <= WIDE && pos + WIDE <= data.len() && dst + WIDE <= out.len()`
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_116ba85b__v1_short_literal_with_input_and_output_slack_takes_the_wide_path(
+    fn mcdc__storage_parquet_compression_snappy_decompress_116ba85b__v1_short_literal_with_input_and_output_slack_takes_the_wide_path(
     ) {
         // "abc" is followed by a 20-byte literal, so 16 input bytes exist
         // past it and the output has its WIDE slack: the fixed-width copy
@@ -422,7 +422,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_116ba85b__v2_literal_longer_than_wide_takes_the_exact_path(
+    fn mcdc__storage_parquet_compression_snappy_decompress_116ba85b__v2_literal_longer_than_wide_takes_the_exact_path(
     ) {
         let bytes: Vec<u8> = (0..(WIDE as u8 + 4)).collect();
         let data = block(WIDE as u8 + 4, &[&literal(&bytes)]);
@@ -430,7 +430,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_116ba85b__v3_short_literal_at_the_end_of_input_takes_the_exact_path(
+    fn mcdc__storage_parquet_compression_snappy_decompress_116ba85b__v3_short_literal_at_the_end_of_input_takes_the_exact_path(
     ) {
         // Fewer than WIDE input bytes remain after the tag: the wide load
         // would run off `data`, so the exact copy is used.
@@ -439,7 +439,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_116ba85b__v4_short_literal_past_the_output_slack_takes_the_exact_path_and_the_block_is_rejected(
+    fn mcdc__storage_parquet_compression_snappy_decompress_116ba85b__v4_short_literal_past_the_output_slack_takes_the_exact_path_and_the_block_is_rejected(
     ) {
         // Only an over-long block can push `dst` past `declared + WIDE`:
         // 18 declared, then 18 + 4 + 2 + 17 bytes of literals. The 2-byte
@@ -464,9 +464,9 @@ mod mcdc_vectors {
         ));
     }
 
-    // storage_column_parquet_compression_snappy_decompress_d541d5eb: `offset == 0 || offset > dst`
+    // storage_parquet_compression_snappy_decompress_d541d5eb: `offset == 0 || offset > dst`
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_d541d5eb__v1_offset_zero() {
+    fn mcdc__storage_parquet_compression_snappy_decompress_d541d5eb__v1_offset_zero() {
         let data = block(6, &[&literal(b"ab"), &copy2(4, 0)]);
         assert!(matches!(
             decompress(&data, 6).unwrap_err(),
@@ -475,8 +475,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_d541d5eb__v2_offset_before_the_start(
-    ) {
+    fn mcdc__storage_parquet_compression_snappy_decompress_d541d5eb__v2_offset_before_the_start() {
         let data = block(6, &[&literal(b"ab"), &copy2(4, 3)]);
         assert!(matches!(
             decompress(&data, 6).unwrap_err(),
@@ -485,22 +484,21 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_d541d5eb__v3_offset_within_the_output(
-    ) {
+    fn mcdc__storage_parquet_compression_snappy_decompress_d541d5eb__v3_offset_within_the_output() {
         let data = block(4, &[&literal(b"ab"), &copy2(2, 2)]);
         assert_eq!(decompress(&data, 4).unwrap(), b"abab");
     }
 
-    // storage_column_parquet_compression_snappy_decompress_8a5f3137: `len <= WIDE && offset >= len && dst + WIDE <= out.len()`
+    // storage_parquet_compression_snappy_decompress_8a5f3137: `len <= WIDE && offset >= len && dst + WIDE <= out.len()`
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_8a5f3137__v1_short_non_overlapping_copy_with_slack_takes_the_wide_path(
+    fn mcdc__storage_parquet_compression_snappy_decompress_8a5f3137__v1_short_non_overlapping_copy_with_slack_takes_the_wide_path(
     ) {
         let data = block(8, &[&literal(b"abcd"), &copy2(4, 4)]);
         assert_eq!(decompress(&data, 8).unwrap(), b"abcdabcd");
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_8a5f3137__v2_copy_longer_than_wide_takes_copy_within(
+    fn mcdc__storage_parquet_compression_snappy_decompress_8a5f3137__v2_copy_longer_than_wide_takes_copy_within(
     ) {
         let bytes: Vec<u8> = (0..20u8).collect();
         let data = block(40, &[&literal(&bytes), &copy2(20, 20)]);
@@ -510,14 +508,14 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_8a5f3137__v3_overlapping_copy_takes_the_pattern_path(
+    fn mcdc__storage_parquet_compression_snappy_decompress_8a5f3137__v3_overlapping_copy_takes_the_pattern_path(
     ) {
         let data = block(9, &[&literal(b"xyz"), &copy2(6, 3)]);
         assert_eq!(decompress(&data, 9).unwrap(), b"xyzxyzxyz");
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_decompress_8a5f3137__v4_short_copy_past_the_output_slack_takes_the_exact_path_and_the_block_is_rejected(
+    fn mcdc__storage_parquet_compression_snappy_decompress_8a5f3137__v4_short_copy_past_the_output_slack_takes_the_exact_path_and_the_block_is_rejected(
     ) {
         // 8 declared (out = 24): an 8-byte literal, a 4-byte copy at dst 8
         // (8 + 16 <= 24, wide), then a 4-byte copy at dst 12 (12 + 16 >
@@ -533,22 +531,22 @@ mod mcdc_vectors {
         ));
     }
 
-    // storage_column_parquet_compression_snappy_copy_from_offset_d541d5eb: `offset == 0 || offset > dst`
+    // storage_parquet_compression_snappy_copy_from_offset_d541d5eb: `offset == 0 || offset > dst`
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_copy_from_offset_d541d5eb__v1_offset_zero() {
+    fn mcdc__storage_parquet_compression_snappy_copy_from_offset_d541d5eb__v1_offset_zero() {
         let mut out = vec![b'a', b'b', 0];
         assert!(copy_from_offset(&mut out, 2, 0, 1).is_err());
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_copy_from_offset_d541d5eb__v2_offset_beyond_out_len(
+    fn mcdc__storage_parquet_compression_snappy_copy_from_offset_d541d5eb__v2_offset_beyond_out_len(
     ) {
         let mut out = vec![b'a', b'b', 0];
         assert!(copy_from_offset(&mut out, 2, 3, 1).is_err());
     }
 
     #[test]
-    fn mcdc__storage_column_parquet_compression_snappy_copy_from_offset_d541d5eb__v3_offset_within_range_succeeds(
+    fn mcdc__storage_parquet_compression_snappy_copy_from_offset_d541d5eb__v3_offset_within_range_succeeds(
     ) {
         let mut out = vec![b'a', b'b', 0];
         assert!(copy_from_offset(&mut out, 2, 2, 1).is_ok());

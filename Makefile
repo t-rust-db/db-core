@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-parquet-write-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -177,11 +177,11 @@ check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see
 # nothing else). `--all-features` hides a missing implication; a consumer
 # enabling one feature finds it. 0.78.0 shipped `storage-row` without
 # `parser-row` this way.
-FEATURES := storage-row storage-column storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
+FEATURES := storage-row storage-column storage-column-write storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
 
 check-features: ## Each Cargo feature builds standalone (cargo check --no-default-features --features X)
 	@for f in $(FEATURES); do \
-		printf '  %-16s' "$$f"; \
+		printf '  %-22s' "$$f"; \
 		if out=$$(cargo check -q --no-default-features --features $$f 2>&1); then echo ok; \
 		else echo FAIL; echo "$$out" | grep -E '^error' | head -5; exit 1; fi; \
 	done
@@ -216,6 +216,29 @@ check-column-profile: ## Charter gate: the column profile carries exactly its na
 check-column-oracle: ## Local-only: column engine query results agree with DuckDB over Parquet fixtures (tools/check_column_oracle.sh)
 	@tools/check_column_oracle.sh
 
+# #566: the Parquet writer's interoperability check -- files it writes
+# (examples/parquet_write_oracle.rs: every type, nulls, edge values, both
+# codecs, dictionary and PLAIN, several row groups) read back by DuckDB and
+# pyarrow, comparing types, every value, and each row group's null count
+# and min/max against bounds computed from the input. Unlike
+# check-column-oracle this runs in CI (its own job): a writer that only our
+# own reader accepts is the failure this exists to catch. The ADR 0000
+# §(f) concern holds -- DuckDB and pyarrow are external supply chains -- so
+# they stay out of the crate's dependency closure entirely, run only in
+# that job through uv, pinned to exact versions here.
+PARQUET_ORACLE_DUCKDB := 1.5.6
+PARQUET_ORACLE_PYARROW := 25.0.1
+
+check-parquet-write-oracle: ## Parquet writer output reads back identically in DuckDB and pyarrow: types, values, statistics (needs uv)
+	@command -v uv >/dev/null 2>&1 || { \
+		echo "uv not found — install from https://docs.astral.sh/uv/"; \
+		exit 1; \
+	}
+	@rm -rf target/parquet-write-oracle
+	@cargo run --quiet --example parquet_write_oracle -- target/parquet-write-oracle
+	@uv run --quiet --no-project --with duckdb==$(PARQUET_ORACLE_DUCKDB) --with pyarrow==$(PARQUET_ORACLE_PYARROW) \
+		python tools/check_parquet_write_oracle.py target/parquet-write-oracle
+
 gen-parquet-fixtures: ## Regenerate the codec-variant Parquet fixtures check-column-oracle reads (tools/gen_parquet_fixtures.sh)
 	@tools/gen_parquet_fixtures.sh
 
@@ -249,9 +272,11 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # Storage boundary files (ADR 0016 §Gates, #289): the VFS traits and their
 # implementors (`vfs.rs`, `page_source.rs`, `unix.rs`, `memory.rs`) are an
 # open-implementor `dyn` boundary exactly like `vm/row/cursor*.rs`; the
-# Parquet reader (`parquet/*`) is a zero-copy reader over the mmap and
-# carries the lifetimes that implies -- designated a boundary rather than
-# rewritten to own its buffer; `fcntl.rs` and `mmap.rs` hold the two
+# Parquet reader (`storage/parquet.rs` and its reader files, named one by
+# one) is a zero-copy reader over the mmap and carries the lifetimes that
+# implies -- designated a boundary rather than rewritten to own its buffer.
+# Named, not globbed, so the writer (#566) and any other new file there is
+# in the qualified subset by default; `fcntl.rs` and `mmap.rs` hold the two
 # audited `unsafe` carve-outs. Everything else under `src/storage/row` and
 # `src/storage/column` is in the qualified subset. `src/storage/stream/*`
 # stays excluded while #304/#305 build it (lifted with #305).
@@ -269,7 +294,7 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # lifetime shape as `ParquetFile<'a>` above, moved here from the already-
 # excluded `src/storage/stream/*` so `functions::json_extract` can share
 # it without a second parser.
-MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/column/parquet/* src/storage/column/parquet/compression/* src/storage/stream/* src/engine/stream.rs src/json_path.rs
+MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/parquet.rs src/storage/parquet/compression.rs src/storage/parquet/decimal.rs src/storage/parquet/encoding.rs src/storage/parquet/footer.rs src/storage/parquet/nested.rs src/storage/parquet/page.rs src/storage/parquet/parquet_file.rs src/storage/parquet/reader.rs src/storage/parquet/schema_tree.rs src/storage/parquet/thrift.rs src/storage/parquet/compression/snappy.rs src/storage/parquet/compression/zstd.rs src/storage/stream/* src/engine/stream.rs src/json_path.rs
 
 check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
 	@command -v cargo-mvl-limit >/dev/null 2>&1 || { \

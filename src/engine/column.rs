@@ -23,8 +23,8 @@ use std::sync::Arc;
 use crate::codegen::batch::{self as planner, PlanError, TableStats};
 use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, OrderingTerm, ResultColumn, Select};
 use crate::parser::ParseError;
-use crate::storage::column::parquet::footer::PhysicalType;
 use crate::storage::column::{decode_column_at, decode_column_full, Decoded};
+use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs, VfsFile};
 use crate::vm::batch::{Batch, Program, Segment, Value, Vm, VmError};
 use crate::vm::engine;
@@ -855,7 +855,7 @@ mod tests {
     }
 
     /// Minimal Thrift Compact Protocol struct encoder (mirrors
-    /// `storage::column::parquet::footer`'s and `parquet_file`'s own
+    /// `storage::parquet::footer`'s and `parquet_file`'s own
     /// test-only copies -- each test module keeps its own small one rather
     /// than sharing a `pub(crate)` surface just for tests).
     struct StructWriter {
