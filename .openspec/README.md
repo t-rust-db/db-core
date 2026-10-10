@@ -21,7 +21,7 @@ PR/commit (its own maintenance rule).
 
 ## Reference
 
-Modeled on [sqlite-rs's `.openspec/`](../../sqlite-rs/.openspec/README.md)
+Modeled on [sqlite-rs's `.openspec/`](https://github.com/t-rust-db/tools/blob/main/sqlite-rs/.openspec/README.md)
 for directory layout and naming conventions -- that repo's `adr/` and
 `specs/` are the fuller example to follow once `db-core` accumulates its
 own decisions and specs.

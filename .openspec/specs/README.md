@@ -7,7 +7,7 @@ with `**Implementation:**`/`**Tests:**` links back to source.
 ## Naming convention
 
 `NNN-name/spec.md`, numbered starting at `001`. Mirrors
-[sqlite-rs's `specs/`](../../../sqlite-rs/.openspec/specs/) (e.g.
+[sqlite-rs's `specs/`](https://github.com/t-rust-db/tools/tree/main/sqlite-rs/.openspec/specs/) (e.g.
 `002-parser/spec.md`) for format and cross-linking conventions -- see that
 repo's specs for the fuller worked example of the requirement/scenario
 format, and its `README.md` for how it tracks spec-to-implementation

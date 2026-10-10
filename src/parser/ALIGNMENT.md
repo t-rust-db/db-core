@@ -3,7 +3,7 @@
 sqlite-rs started as a separate, pre-existing project
 (github.com/iheitlager/sqlite-rs, developed under a Schuberg
 Philis-owned context) and is being absorbed into `t-rust-db`
-(`t-rust-db/sqlite-rs`). This note records what was checked to avoid
+(`t-rust-db/sqlite-rs`, now `sqlite-rs/` in `t-rust-db/tools`). This note records what was checked to avoid
 collisions between the two codebases' conventions (naming, types,
 copyright headers) as the org boundary between them closes, and what
 was deliberately left unresolved rather than silently decided.
