@@ -63,26 +63,40 @@ fn widen(a: ColumnType, b: ColumnType) -> ColumnType {
     }
 }
 
-/// The file schema for `pages`.
-pub(crate) fn schema(pages: &[Page]) -> Vec<ColumnSpec> {
-    let mut specs: Vec<ColumnSpec> = PREDEFINED
+/// The seven predefined columns, the start of every table schema.
+pub(crate) fn predefined_specs() -> Vec<ColumnSpec> {
+    PREDEFINED
         .iter()
         .map(|(name, t)| ColumnSpec::new(*name, *t, true))
-        .collect();
-    for page in pages {
-        for name in page.segment.field_names() {
-            if PREDEFINED.iter().any(|(p, _)| *p == name) {
-                continue;
-            }
-            let Some(column) = page.segment.field(name) else {
-                continue;
-            };
-            let t = field_type(column);
-            match specs.iter_mut().find(|s| s.name == name) {
-                Some(spec) => spec.column_type = widen(spec.column_type, t),
-                None => specs.push(ColumnSpec::new(name, t, true)),
-            }
+        .collect()
+}
+
+/// Adds field `name` of type `t` to `specs`, widening a field already
+/// there. A name of a predefined column is ignored.
+pub(crate) fn add_field(specs: &mut Vec<ColumnSpec>, name: &str, t: ColumnType) {
+    if PREDEFINED.iter().any(|(p, _)| *p == name) {
+        return;
+    }
+    match specs.iter_mut().find(|s| s.name == name) {
+        Some(spec) => spec.column_type = widen(spec.column_type, t),
+        None => specs.push(ColumnSpec::new(name, t, true)),
+    }
+}
+
+/// Adds every field of `page` to `specs`.
+pub(crate) fn add_page_fields(specs: &mut Vec<ColumnSpec>, page: &Page) {
+    for name in page.segment.field_names() {
+        if let Some(column) = page.segment.field(name) {
+            add_field(specs, name, field_type(column));
         }
+    }
+}
+
+/// The file schema for `pages`.
+pub(crate) fn schema(pages: &[Page]) -> Vec<ColumnSpec> {
+    let mut specs = predefined_specs();
+    for page in pages {
+        add_page_fields(&mut specs, page);
     }
     specs
 }

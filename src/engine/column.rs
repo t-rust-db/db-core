@@ -34,6 +34,9 @@ use super::{
     OpcodeSection, PlanRow, QueryResult, TableInfo,
 };
 
+#[cfg(feature = "ingest")]
+pub mod table;
+
 /// A leaf column of the file: display name, index in the schema, physical type.
 type Leaf = (String, usize, PhysicalType);
 
@@ -82,42 +85,50 @@ impl BatchEngine {
         self.leaves.iter().map(|(n, _, _)| n.clone()).collect()
     }
 
-    /// Parses one `SELECT` for this table: the batch grammar (analytics
-    /// subset, aliases resolved), `*` expanded against the file's columns,
-    /// and the `FROM` table checked against the one table we have.
+    /// Parses one `SELECT` for this table; see [`parse_select`].
     fn parse_for_table(&self, sql: &str) -> Result<Select, EngineError> {
-        let select = planner_parse(sql)?;
-        let from = from_table(&select)?;
-        if !from.eq_ignore_ascii_case(&self.table) {
-            return Err(EngineError::new(
-                ErrorKind::Compile,
-                format!(
-                    "unknown table: {from} (this file is table `{}`)",
-                    self.table
-                ),
-            ));
-        }
-        if let Some(join) = select.from.as_ref().and_then(|f| f.joins.first()) {
-            let right = join.table.name().unwrap_or("<subquery>");
-            return Err(EngineError::new(
-                ErrorKind::Unsupported,
-                format!("JOIN with `{right}`: a single-file engine has one table; use column-rs's multi-table session"),
-            ));
-        }
-        if in_subquery(&select).is_some() {
-            return Err(EngineError::new(
-                ErrorKind::Unsupported,
-                "IN (SELECT ...) needs a second table; a single-file engine has one",
-            ));
-        }
-        if select.columns.iter().any(is_window_column) {
-            return Err(EngineError::new(
-                ErrorKind::Unsupported,
-                "window functions are not available through the single-file engine yet",
-            ));
-        }
-        planner::expand_star(&select, &self.column_names()).map_err(plan_err)
+        parse_select(sql, &self.table, &self.column_names(), "this file")
     }
+}
+
+/// Parses one `SELECT` for the single table `table` with `columns`: the
+/// batch grammar (analytics subset, aliases resolved), `*` expanded
+/// against the columns, and the `FROM` table checked against the one table
+/// there is (`what` names it in the error: "this file", "this directory").
+fn parse_select(
+    sql: &str,
+    table: &str,
+    columns: &[String],
+    what: &str,
+) -> Result<Select, EngineError> {
+    let select = planner_parse(sql)?;
+    let from = from_table(&select)?;
+    if !from.eq_ignore_ascii_case(table) {
+        return Err(EngineError::new(
+            ErrorKind::Compile,
+            format!("unknown table: {from} ({what} is table `{table}`)"),
+        ));
+    }
+    if let Some(join) = select.from.as_ref().and_then(|f| f.joins.first()) {
+        let right = join.table.name().unwrap_or("<subquery>");
+        return Err(EngineError::new(
+            ErrorKind::Unsupported,
+            format!("JOIN with `{right}`: a single-file engine has one table; use column-rs's multi-table session"),
+        ));
+    }
+    if in_subquery(&select).is_some() {
+        return Err(EngineError::new(
+            ErrorKind::Unsupported,
+            "IN (SELECT ...) needs a second table; a single-file engine has one",
+        ));
+    }
+    if select.columns.iter().any(is_window_column) {
+        return Err(EngineError::new(
+            ErrorKind::Unsupported,
+            "window functions are not available through the single-file engine yet",
+        ));
+    }
+    planner::expand_star(&select, columns).map_err(plan_err)
 }
 
 /// Resolve the program's `columns_to_load()` against the file's leaves,
@@ -435,6 +446,52 @@ fn row_group_segments<'f>(
         .collect()
 }
 
+/// A segment of an ingested table (`table.rs`): a flushed row group or a
+/// page. Here, with [`table_row_groups`], because it holds a
+/// [`RowGroupSegment`] and its lifetimes.
+#[cfg(feature = "ingest")]
+enum TableSegment<'a, 'm> {
+    RowGroup {
+        inner: RowGroupSegment<'a, 'm>,
+        fixups: Vec<table::Fixup>,
+    },
+    Page {
+        segment: Arc<crate::storage::stream::segment::Segment>,
+        requests: Vec<table::Request>,
+    },
+}
+
+/// `file`'s row groups as [`TableSegment`]s decoding `columns` and applying
+/// `fixups`. Footer statistics prune and bound the top-N through the
+/// `comparable` leaves only.
+#[cfg(feature = "ingest")]
+fn table_row_groups<'f>(
+    file: &'f ParquetFile<'f>,
+    columns: &[Leaf],
+    comparable: &[Leaf],
+    select: &Select,
+    program: &'f Program,
+    fixups: &[table::Fixup],
+) -> Vec<TableSegment<'f, 'f>> {
+    let bound = order_leaf(&select.order_by, comparable);
+    row_group_segments(
+        file,
+        columns,
+        comparable,
+        select.where_clause.as_ref(),
+        program,
+    )
+    .into_iter()
+    .map(|mut inner| {
+        inner.order_leaf = bound;
+        TableSegment::RowGroup {
+            inner,
+            fixups: fixups.to_vec(),
+        }
+    })
+    .collect()
+}
+
 /// Row-group pruning from footer [`Statistics`](footer::Statistics):
 /// deciding whether a `WHERE` clause can be proven to match no row in a
 /// row group without reading its data pages.
@@ -706,6 +763,55 @@ fn type_name(pt: PhysicalType) -> String {
     .to_string()
 }
 
+/// `EXPLAIN QUERY PLAN` rows for `select` over a table of `stats`.
+fn plan_rows(select: &Select, stats: &TableStats) -> Result<Vec<PlanRow>, EngineError> {
+    let nodes = planner::explain(select, |_| stats.clone()).map_err(plan_err)?;
+    Ok(nodes
+        .into_iter()
+        .map(|n| PlanRow {
+            id: i64::from(n.id),
+            parent: i64::from(n.parent),
+            detail: n.detail,
+        })
+        .collect())
+}
+
+/// `EXPLAIN` sections for `select`.
+fn opcode_sections(select: &Select) -> Result<Vec<OpcodeSection>, EngineError> {
+    let sections = planner::explain_opcodes(select).map_err(plan_err)?;
+    Ok(sections
+        .into_iter()
+        .map(|s| OpcodeSection {
+            label: s.label,
+            lane: "batch",
+            rows: s
+                .rows
+                .into_iter()
+                .map(|r| OpcodeRow {
+                    addr: r.addr,
+                    opcode: r.opcode.to_string(),
+                    operands: r.operands,
+                    comment: r.comment,
+                    is_finalize: r.is_finalize,
+                })
+                .collect(),
+        })
+        .collect())
+}
+
+/// Query output as a [`QueryResult`] with `select`'s column names.
+fn query_result(select: &Select, output: crate::vm::batch::QueryOutput) -> QueryResult {
+    QueryResult {
+        columns: planner::output_column_names(select),
+        rows: output
+            .into_rows()
+            .into_iter()
+            .map(|r| r.into_iter().map(Cell::from).collect())
+            .collect(),
+        ..Default::default()
+    }
+}
+
 impl Engine for BatchEngine {
     fn open(path: &Path) -> Result<Self, EngineError> {
         let data = PosixVfs
@@ -755,15 +861,7 @@ impl Engine for BatchEngine {
         }
         let output = engine::run(&segments, &program)
             .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
-        Ok(QueryResult {
-            columns: planner::output_column_names(&select),
-            rows: output
-                .into_rows()
-                .into_iter()
-                .map(|r| r.into_iter().map(Cell::from).collect())
-                .collect(),
-            ..Default::default()
-        })
+        Ok(query_result(&select, output))
     }
 
     fn explain_plan(&self, sql: &str) -> Result<Vec<PlanRow>, EngineError> {
@@ -774,39 +872,13 @@ impl Engine for BatchEngine {
             rows: self.num_rows,
             source: None,
         };
-        let nodes = planner::explain(&select, |_| stats.clone()).map_err(plan_err)?;
-        Ok(nodes
-            .into_iter()
-            .map(|n| PlanRow {
-                id: i64::from(n.id),
-                parent: i64::from(n.parent),
-                detail: n.detail,
-            })
-            .collect())
+        plan_rows(&select, &stats)
     }
 
     fn explain_opcodes(&self, sql: &str) -> Result<Vec<OpcodeSection>, EngineError> {
         let stmt = single_statement(sql)?;
         let select = self.parse_for_table(&stmt)?;
-        let sections = planner::explain_opcodes(&select).map_err(plan_err)?;
-        Ok(sections
-            .into_iter()
-            .map(|s| OpcodeSection {
-                label: s.label,
-                lane: "batch",
-                rows: s
-                    .rows
-                    .into_iter()
-                    .map(|r| OpcodeRow {
-                        addr: r.addr,
-                        opcode: r.opcode.to_string(),
-                        operands: r.operands,
-                        comment: r.comment,
-                        is_finalize: r.is_finalize,
-                    })
-                    .collect(),
-            })
-            .collect())
+        opcode_sections(&select)
     }
 
     fn stats(&self) -> FileStats {

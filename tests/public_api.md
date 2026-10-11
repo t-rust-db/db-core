@@ -599,6 +599,25 @@ pub mod db_core::compare
 pub fn db_core::compare::compare(&db_core::value::Value, &db_core::value::Value, db_core::value::Collation) -> core::cmp::Ordering
 pub mod db_core::engine
 pub mod db_core::engine::column
+pub mod db_core::engine::column::table
+pub struct db_core::engine::column::table::TableEngine
+impl db_core::engine::column::table::TableEngine
+pub fn db_core::engine::column::table::TableEngine::path(&self) -> &std::path::Path
+pub fn db_core::engine::column::table::TableEngine::refresh(&mut self) -> core::result::Result<(), db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::snapshot(&self) -> &db_core::storage::ingest::snapshot::Snapshot
+pub fn db_core::engine::column::table::TableEngine::table_name(&self) -> &str
+impl core::fmt::Debug for db_core::engine::column::table::TableEngine
+pub fn db_core::engine::column::table::TableEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl db_core::engine::Engine for db_core::engine::column::table::TableEngine
+pub fn db_core::engine::column::table::TableEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::mode(&self) -> db_core::engine::Mode
+pub fn db_core::engine::column::table::TableEngine::open(&std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::run_query(&mut self, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::stats(&self) -> db_core::engine::FileStats
+pub fn db_core::engine::column::table::TableEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::query_snapshot(&db_core::storage::ingest::snapshot::Snapshot, &str, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 pub struct db_core::engine::column::BatchEngine
 impl db_core::engine::column::BatchEngine
 pub fn db_core::engine::column::BatchEngine::path(&self) -> &std::path::Path
@@ -1097,6 +1116,15 @@ pub fn db_core::engine::column::BatchEngine::open(&std::path::Path) -> core::res
 pub fn db_core::engine::column::BatchEngine::run_query(&mut self, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 pub fn db_core::engine::column::BatchEngine::stats(&self) -> db_core::engine::FileStats
 pub fn db_core::engine::column::BatchEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
+impl db_core::engine::Engine for db_core::engine::column::table::TableEngine
+pub fn db_core::engine::column::table::TableEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::explain_plan(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::mode(&self) -> db_core::engine::Mode
+pub fn db_core::engine::column::table::TableEngine::open(&std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::run_query(&mut self, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::stats(&self) -> db_core::engine::FileStats
+pub fn db_core::engine::column::table::TableEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
 impl db_core::engine::Engine for db_core::engine::resolve::CrossModeEngine
 pub fn db_core::engine::resolve::CrossModeEngine::compile_predicate(&self, &str) -> core::result::Result<db_core::engine::predicate::CompiledPredicate, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::CrossModeEngine::explain_opcodes(&self, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::OpcodeSection>, db_core::engine::EngineError>
@@ -3487,6 +3515,20 @@ impl core::clone::Clone for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub mod db_core::storage::ingest::snapshot
+pub struct db_core::storage::ingest::snapshot::Snapshot
+impl db_core::storage::ingest::snapshot::Snapshot
+pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&db_core::storage::ingest::manifest::FileEntry, &[u8])>
+pub fn db_core::storage::ingest::snapshot::Snapshot::last_lsn(&self) -> u64
+pub fn db_core::storage::ingest::snapshot::Snapshot::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
+pub fn db_core::storage::ingest::snapshot::Snapshot::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::snapshot::Snapshot::pages(&self) -> &[db_core::storage::ingest::page::Page]
+pub fn db_core::storage::ingest::snapshot::Snapshot::rows(&self) -> u64
+pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>, db_core::storage::ingest::table::IngestError>
+impl core::fmt::Debug for db_core::storage::ingest::snapshot::Snapshot
+pub fn db_core::storage::ingest::snapshot::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn db_core::storage::ingest::snapshot::cast(db_core::vm::batch::Value, db_core::storage::parquet::writer::ColumnType) -> db_core::vm::batch::Value
+pub fn db_core::storage::ingest::snapshot::physical_type(db_core::storage::parquet::writer::ColumnType) -> db_core::storage::parquet::footer::PhysicalType
 pub mod db_core::storage::ingest::table
 pub enum db_core::storage::ingest::table::IngestError
 pub db_core::storage::ingest::table::IngestError::Corrupt(alloc::string::String)
@@ -3533,6 +3575,7 @@ pub fn db_core::storage::ingest::table::TableWriter::manifest(&self) -> &db_core
 pub fn db_core::storage::ingest::table::TableWriter::open(&std::path::Path, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::sealed_pages(&self) -> &[db_core::storage::ingest::page::Page]
+pub fn db_core::storage::ingest::table::TableWriter::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::table::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::table::TableWriter
 pub fn db_core::storage::ingest::table::TableWriter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -3738,6 +3781,17 @@ impl core::clone::Clone for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::Snapshot
+impl db_core::storage::ingest::snapshot::Snapshot
+pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&db_core::storage::ingest::manifest::FileEntry, &[u8])>
+pub fn db_core::storage::ingest::snapshot::Snapshot::last_lsn(&self) -> u64
+pub fn db_core::storage::ingest::snapshot::Snapshot::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
+pub fn db_core::storage::ingest::snapshot::Snapshot::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::snapshot::Snapshot::pages(&self) -> &[db_core::storage::ingest::page::Page]
+pub fn db_core::storage::ingest::snapshot::Snapshot::rows(&self) -> u64
+pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>, db_core::storage::ingest::table::IngestError>
+impl core::fmt::Debug for db_core::storage::ingest::snapshot::Snapshot
+pub fn db_core::storage::ingest::snapshot::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::TableLock
 impl db_core::storage::ingest::lock::TableLock
 pub fn db_core::storage::ingest::lock::TableLock::acquire(&std::path::Path) -> core::result::Result<Self, db_core::storage::ingest::lock::LockError>
@@ -3765,6 +3819,7 @@ pub fn db_core::storage::ingest::table::TableWriter::manifest(&self) -> &db_core
 pub fn db_core::storage::ingest::table::TableWriter::open(&std::path::Path, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::sealed_pages(&self) -> &[db_core::storage::ingest::page::Page]
+pub fn db_core::storage::ingest::table::TableWriter::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::table::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::table::TableWriter
 pub fn db_core::storage::ingest::table::TableWriter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result

@@ -32,6 +32,7 @@ use super::flush;
 use super::lock::{LockError, TableLock};
 use super::manifest::{FileEntry, Manifest, ManifestError};
 use super::page::{decode_record, encode_record, invalid_line, HeadPage, Page};
+use super::snapshot::Snapshot;
 use super::wal::{Ack, Wal, WalError, WalOptions, Watermarks};
 use crate::storage::parquet::writer::{WriteError, WriterOptions};
 use crate::storage::stream::adapter::now_ns;
@@ -148,7 +149,7 @@ pub struct TableWriter {
     sealed: Vec<Page>,
     last_observed: i64,
     #[cfg(test)]
-    crash_after: Option<u8>,
+    pub(super) crash_after: Option<u8>,
 }
 
 impl TableWriter {
@@ -317,6 +318,18 @@ impl TableWriter {
     /// A copy of the head page, if it holds anything.
     pub fn head_page(&self) -> Option<Page> {
         self.head.snapshot(&self.source, &self.parser)
+    }
+
+    /// A read view of everything appended so far: the committed files and
+    /// every page, the head included.
+    pub fn snapshot(&self) -> Result<Snapshot, IngestError> {
+        let pages = self
+            .sealed
+            .iter()
+            .cloned()
+            .chain(self.head_page())
+            .collect();
+        Snapshot::new(&self.dir, self.manifest.clone(), pages)
     }
 
     /// The table directory.

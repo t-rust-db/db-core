@@ -187,6 +187,73 @@ pub(crate) fn replay(dir: &Path, flushed_lsn: u64) -> Result<Replay, WalError> {
     })
 }
 
+/// Reads the frames above `flushed_lsn` without changing anything: a
+/// reader in another process, while a writer may be appending (#572).
+/// A bad or partial frame in the last file ends the read, since the writer
+/// may be in the middle of writing it; in an earlier file it is
+/// corruption, as in [`replay`]. `None` when the files no longer reach
+/// down to `flushed_lsn + 1` or one vanished during the read: a flush
+/// moved on, and the caller re-reads the manifest.
+pub(crate) fn read_tail(
+    dir: &Path,
+    flushed_lsn: u64,
+) -> Result<Option<Vec<super::wal::Record>>, WalError> {
+    let all = match list(dir) {
+        Ok(all) => all,
+        Err(WalError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Some(Vec::new()))
+        }
+        Err(e) => return Err(e),
+    };
+    let mut records = Vec::new();
+    let mut next = flushed_lsn.saturating_add(1);
+    for (i, segment) in all.iter().enumerate() {
+        let later = all.get(i.saturating_add(1));
+        // Every frame of this file is at or below what we already have.
+        if later.is_some_and(|n| n.lsn_lo <= next) {
+            continue;
+        }
+        if segment.lsn_lo > next {
+            return Ok(None);
+        }
+        let buf = match fs::read(&segment.path) {
+            Ok(buf) => buf,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let mut at = 0usize;
+        while at < buf.len() {
+            let Frame::Complete {
+                lsn,
+                payload_start,
+                end,
+            } = frame::decode(&buf, at)
+            else {
+                if later.is_some() {
+                    let reason =
+                        "bad frame in a segment that was complete before the next one started";
+                    return Err(corrupt(&segment.path, at, reason.to_string()));
+                }
+                break;
+            };
+            if lsn > next {
+                return Err(corrupt(
+                    &segment.path,
+                    at,
+                    format!("LSN {lsn} where {next} was expected"),
+                ));
+            }
+            if lsn == next {
+                let payload = buf.get(payload_start..end).unwrap_or_default();
+                records.push((lsn, payload.to_vec()));
+                next = next.saturating_add(1);
+            }
+            at = end;
+        }
+    }
+    Ok(Some(records))
+}
+
 fn truncate(path: &Path, len: usize) -> Result<(), WalError> {
     let file = OpenOptions::new().write(true).open(path)?;
     file.set_len(u64::try_from(len).unwrap_or(u64::MAX))?;

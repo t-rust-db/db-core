@@ -406,6 +406,87 @@ fn an_empty_last_file_is_removed() {
     assert_eq!(wal.append(b"3", Ack::Durable).unwrap(), 3);
 }
 
+// --- read-only tail (#572) ---------------------------------------------------
+
+#[test]
+fn read_tail_reads_above_flushed_and_changes_nothing() {
+    let t = TempTable::new();
+    write_records(&t, 6, 2); // files 1, 3, 5
+    let before = t.files();
+    for flushed in 0..=6 {
+        let tail = recover::read_tail(&t.wal_dir(), flushed).unwrap().unwrap();
+        assert_eq!(tail, records(6)[flushed as usize..].to_vec(), "{flushed}");
+    }
+    assert_eq!(t.files(), before);
+    // No WAL at all: nothing above flushed.
+    let empty = TempTable::new();
+    assert_eq!(
+        recover::read_tail(&empty.wal_dir(), 0).unwrap(),
+        Some(vec![])
+    );
+}
+
+#[test]
+fn read_tail_stops_at_a_partial_frame_without_truncating() {
+    let t = TempTable::new();
+    write_records(&t, 4, 2);
+    let path = last_file(&t);
+    let full = fs::read(&path).unwrap();
+    let frame_len = full.len() / 2;
+    for cut in 0..full.len() {
+        fs::write(&path, &full[..cut]).unwrap();
+        let tail = recover::read_tail(&t.wal_dir(), 0).unwrap().unwrap();
+        assert_eq!(tail, records(2 + (cut / frame_len) as u64), "cut at {cut}");
+        assert_eq!(fs::read(&path).unwrap().len(), cut, "untouched");
+    }
+}
+
+#[test]
+fn read_tail_reports_a_flush_that_moved_on() {
+    let t = TempTable::new();
+    write_records(&t, 6, 2);
+    // The writer flushed through 4 and unlinked files 1 and 3, but this
+    // reader's manifest says 0.
+    fs::remove_file(t.wal_dir().join(recover::segment_name(1))).unwrap();
+    fs::remove_file(t.wal_dir().join(recover::segment_name(3))).unwrap();
+    assert_eq!(recover::read_tail(&t.wal_dir(), 0).unwrap(), None);
+    assert_eq!(
+        recover::read_tail(&t.wal_dir(), 4).unwrap(),
+        Some(records(6)[4..].to_vec())
+    );
+}
+
+#[test]
+fn read_tail_refuses_real_corruption() {
+    let t = TempTable::new();
+    write_records(&t, 4, 2);
+    let first = t.wal_dir().join(&t.files()[0]);
+    let mut bytes = fs::read(&first).unwrap();
+    let n = bytes.len();
+    bytes[n - 1] ^= 0xff;
+    fs::write(&first, &bytes).unwrap();
+    let err = recover::read_tail(&t.wal_dir(), 0).unwrap_err();
+    assert!(
+        err.to_string().contains("complete before the next"),
+        "{err}"
+    );
+
+    let t = TempTable::new();
+    fs::create_dir_all(t.wal_dir()).unwrap();
+    let mut bytes = Vec::new();
+    frame::encode(&mut bytes, 1, b"a").unwrap();
+    frame::encode(&mut bytes, 3, b"c").unwrap();
+    fs::write(t.wal_dir().join(recover::segment_name(1)), &bytes).unwrap();
+    let err = recover::read_tail(&t.wal_dir(), 0).unwrap_err();
+    assert!(err.to_string().contains("LSN 3 where 2"), "{err}");
+
+    // A WAL path that is not a directory.
+    let t = TempTable::new();
+    fs::create_dir_all(&t.0).unwrap();
+    fs::write(t.wal_dir(), b"x").unwrap();
+    assert!(recover::read_tail(&t.wal_dir(), 0).is_err());
+}
+
 #[test]
 fn error_messages() {
     let corrupt = WalError::Corrupt {

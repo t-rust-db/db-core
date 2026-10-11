@@ -4,6 +4,24 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.126.0] - 2026-10-11
+
+### Added
+
+- **Snapshot reads of ingested tables** (#572 part (b), closing #572; ADR 0027, amended). `Snapshot` is one fixed view of a table: the manifest's files (memory-mapped) plus the records above `flushed_lsn` as pages, every LSN exactly once.
+  - `TableWriter::snapshot()` gives an in-process view up to the last append.
+  - `Snapshot::open(dir)` gives the view from another process, with no lock and nothing written. It reads the manifest, then the WAL above `flushed_lsn` read-only (new `recover::read_tail`). A partial last frame ends the read; if a flush moved on in between, it reads both again.
+- **`engine::column::table`**: `query_snapshot(snapshot, table, sql)` and `TableEngine` (`Mode::Batch`, opened on the table directory, a fresh snapshot per query). The table's columns are the union of every file's and page's columns, widened by the flush rule.
+  - A column a segment lacks reads as NULL; one stored with another type is cast (`snapshot::cast`), so a record reads the same before and after its flush.
+  - Row groups keep footer pruning, top-N bounds and late materialization, through columns stored with the table's type only.
+- **Tests**:
+  - a property test that query results do not depend on where seals and flushes fell, in and out of process
+  - NULL-fill and widening across files and pages, including pruning that would be wrong on a widened column
+  - snapshots across an interrupted flush at every step
+  - read-only WAL tail cases
+  - `tests/table_reader.rs` with `tests/helpers/table_probe.rs`: a reader in another process, while a writer appends, seals and flushes, always reaches the writer's last durable ack and holds every LSN once
+  - Found while testing, filed separately: #584 (the stream parser loses field values when one page mixes types, and flush stores those NULLs) and #585 (batch `GROUP BY` returns group keys first, under the wrong column names, also in `BatchEngine`).
+
 ## [0.125.0] - 2026-10-11
 
 ### Added
