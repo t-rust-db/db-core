@@ -22,9 +22,13 @@ use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
+use db_core::storage::ingest::Ack;
+use db_core::storage::ingest::{TableOptions, TableWriter};
+use db_core::storage::parquet::footer::PhysicalType;
 use db_core::storage::parquet::writer::{
     ColumnSpec, ColumnType, ColumnValues, Compression, ParquetWriter, WriterOptions,
 };
+use db_core::storage::parquet::ParquetFile;
 
 struct Case {
     name: &'static str,
@@ -364,6 +368,95 @@ fn write_case(dir: &Path, case: Case) -> Result<(), String> {
     Ok(())
 }
 
+/// The first file a real ingested table flushes (#572): JSON lines with
+/// fields `n` (int), `lat` (float), `ok` (bool) and `user` (string), some
+/// fields missing, some lines not JSON at all. Values are given for `raw`,
+/// `n` and `user`, which follow from the input alone; for the columns the
+/// parser derives (severity, message...) and the arrival-time
+/// `observed_ts`, the JSON says `null` and the checker requires DuckDB and
+/// pyarrow to agree with each other and with the file's statistics.
+fn ingested_table_case(dir: &Path) -> Result<(), String> {
+    let table = dir.join("ingested_table.dir");
+    fs::remove_dir_all(&table).ok();
+    let mut writer =
+        TableWriter::open(&table, TableOptions::default()).map_err(|e| e.to_string())?;
+    let mut lines = Vec::new();
+    for i in 0..3_000i64 {
+        let line = match i % 5 {
+            0 => format!("plain text line {i}"),
+            1 => format!(r#"{{"n":{i},"user":"u{}"}}"#, i % 7),
+            _ => format!(
+                r#"{{"n":{i},"lat":{i}.25,"ok":{},"user":"u{}"}}"#,
+                i % 2 == 0,
+                i % 7
+            ),
+        };
+        writer
+            .append(line.as_bytes(), Ack::Memory)
+            .map_err(|e| e.to_string())?;
+        lines.push((i, line));
+        if i == 1_999 {
+            writer.flush_all().map_err(|e| e.to_string())?;
+        }
+    }
+    writer.flush_all().map_err(|e| e.to_string())?;
+    let first = writer
+        .manifest()
+        .files
+        .first()
+        .ok_or("no file flushed")?
+        .clone();
+    writer.close().map_err(|e| e.to_string())?;
+    let bytes = fs::read(table.join(&first.path)).map_err(|e| e.to_string())?;
+    let parquet = ParquetFile::open(&bytes).map_err(|e| e.to_string())?;
+    let rows = &lines[..first.rows as usize];
+    let mut out = String::from("{\"columns\":[");
+    for (i, element) in parquet.metadata().schema[1..].iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let type_name = match (element.name.as_str(), element.physical_type) {
+            ("timestamp" | "observed_ts", _) => "timestamp_nanos",
+            (_, Some(PhysicalType::Int32)) => "int32",
+            (_, Some(PhysicalType::Int64)) => "int64",
+            (_, Some(PhysicalType::Double)) => "double",
+            (_, Some(PhysicalType::Boolean)) => "boolean",
+            _ => "utf8",
+        };
+        out.push_str(&format!(
+            "{{\"name\":\"{}\",\"type\":\"{type_name}\",\"nullable\":true,\"values\":",
+            element.name
+        ));
+        let values: Option<ColumnValues> = match element.name.as_str() {
+            "raw" => Some(ColumnValues::Utf8(
+                rows.iter().map(|(_, l)| Some(l.clone())).collect(),
+            )),
+            "n" => Some(ColumnValues::Int64(
+                rows.iter()
+                    .map(|(i, _)| (i % 5 != 0).then_some(*i))
+                    .collect(),
+            )),
+            "user" => Some(ColumnValues::Utf8(
+                rows.iter()
+                    .map(|(i, _)| (i % 5 != 0).then(|| format!("u{}", i % 7)))
+                    .collect(),
+            )),
+            _ => None,
+        };
+        match values {
+            Some(v) => json_values(&mut out, &v),
+            None => out.push_str("null"),
+        }
+        out.push('}');
+    }
+    out.push_str("]}");
+    fs::write(dir.join("ingested_table.parquet"), &bytes).map_err(|e| e.to_string())?;
+    fs::write(dir.join("ingested_table.json"), out).map_err(|e| e.to_string())?;
+    fs::remove_dir_all(&table).ok();
+    println!("ingested_table: {} rows from a flushed table", first.rows);
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let Some(dir) = std::env::args().nth(1) else {
         eprintln!("usage: parquet_write_oracle <out_dir>");
@@ -379,6 +472,10 @@ fn main() -> ExitCode {
             eprintln!("{e}");
             return ExitCode::FAILURE;
         }
+    }
+    if let Err(e) = ingested_table_case(dir) {
+        eprintln!("ingested_table: {e}");
+        return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
 }

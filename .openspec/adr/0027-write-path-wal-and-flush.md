@@ -230,6 +230,27 @@ The table is opened as `Mode::Batch` (ADR 0017) on a directory that
 contains `manifest.json`; no new mode. Writing is the Rust `append` API
 above; SQL `INSERT` is out of scope.
 
+### Where tables differ from DuckDB (#572)
+
+Flushed files are plain Parquet that DuckDB and pyarrow read exactly
+(`make check-parquet-write-oracle` checks types, every value and the
+statistics, for a flushed table too). Where the *table* behaves
+differently from DuckDB, deliberately:
+
+| Aspect | db-core table | DuckDB |
+|---|---|---|
+| Timestamps (`timestamp`, `observed_ts`) | INT64 `TIMESTAMP(NANOS)`, `isAdjustedToUTC = false`, values UTC by convention | Same marking as its own `TIMESTAMP_NS`, read at full precision. A UTC-marked nanosecond column would read as microsecond `TIMESTAMPTZ` (truncated), which is why we don't mark it |
+| Timestamp range | full `i64` | `i64::MAX` and `i64::MIN + 1` are ±infinity; instants in late 1677 cannot be converted (also in files DuckDB writes) |
+| Which rows a reader sees | the manifest's files plus the WAL tail / pages above `flushed_lsn` | reads files only: never the unflushed tail. A glob over `data/` can also catch a file published but not yet committed (between flush steps 2 and 3), which recovery deletes; read the manifest's file list, or `archive/` once ADR 0028 lands |
+| Schema across files | each file has the fields its pages had | needs `read_parquet(..., union_by_name = true)` across files |
+| Field type conflicts | INT and FLOAT widen to DOUBLE; any other mix becomes a string | `read_json` unifies to a common supertype, often `VARCHAR`/`JSON` |
+| Lines that are not JSON in a `json` table | kept as a row (`raw`, `message`), fields NULL | `read_json` fails, or drops them with `ignore_errors` |
+| Nested objects | flattened one level to `a.b`; deeper objects are not columns (still in `raw`) | `STRUCT` columns |
+| Arrays | the JSON text, as a string | `LIST` columns |
+| String values | kept as written, JSON escapes included (ADR 0018's zero-copy parser does not unescape) | unescaped |
+| Reserved names | `timestamp`, `observed_ts`, `severity`, `severity_text`, `facility`, `message`, `raw` are always columns; a JSON key with one of those names is not a separate column (the alias table may promote it, e.g. `msg` → `message`) | every key is a column |
+| `severity` | INT32 (OpenTelemetry SeverityNumber) plus `severity_text` | whatever the source had |
+
 ## Structure
 
 Feature split and client packaging: ADR 0029.

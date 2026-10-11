@@ -110,7 +110,7 @@ class Failures:
 def check_pyarrow(path, columns, fails):
     table = pq.read_table(path)
     meta = pq.ParquetFile(path).metadata
-    expected_rows = len(columns[0]["values"])
+    expected_rows = next(len(c["values"]) for c in columns if c["values"] is not None)
     fails.check(table.num_rows == expected_rows, f"pyarrow: {table.num_rows} rows, expected {expected_rows}")
     for i, col in enumerate(columns):
         name, ctype = col["name"], col["type"]
@@ -121,6 +121,10 @@ def check_pyarrow(path, columns, fails):
         if ctype in ("timestamp_micros", "timestamp_nanos"):
             data = pc.cast(data, pa.int64())
         got = [normalize(ctype, v) for v in data.to_pylist()]
+        if col["values"] is None:
+            # Not derivable from the input (see the example): pyarrow's
+            # reading is the reference DuckDB and the statistics must match.
+            col["values"] = [v for v in data.to_pylist()]
         want = [normalize(ctype, v) for v in col["values"]]
         fails.check(got == want, f"pyarrow {name}: values differ (first at {first_diff(got, want)})")
         start = 0

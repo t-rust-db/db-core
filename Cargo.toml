@@ -237,7 +237,7 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 
 [[example]]
 name = "parquet_write_oracle"
-required-features = ["storage-column-write"]
+required-features = ["ingest"]
 
 [[bin]]
 name = "wal_probe"
