@@ -113,6 +113,41 @@ fn conflicting_field_types_widen() {
     );
 }
 
+/// #584: values of conflicting types in one page are all written, as
+/// strings, and integers and floats in one page widen to DOUBLE.
+#[test]
+fn a_type_conflict_inside_a_page_loses_no_value() {
+    let pages = [page(
+        1,
+        &[
+            r#"{"x":5,"z":2}"#,
+            r#"{"x":"a","z":2.5}"#,
+            r#"{"x":true}"#,
+            r#"{"x":0.5}"#,
+        ],
+    )];
+    let specs = schema(&pages);
+    let type_of = |name: &str| specs.iter().find(|s| s.name == name).unwrap().column_type;
+    assert_eq!(type_of("x"), ColumnType::Utf8);
+    assert_eq!(type_of("z"), ColumnType::Double);
+    let (bytes, _) = write(&pages);
+    let file = ParquetFile::open(&bytes).unwrap();
+    let rg = file.row_group(0).unwrap();
+    assert_eq!(
+        rg.read_string_column(column_index(&file, "x")).unwrap(),
+        vec![
+            Some("5".to_string()),
+            Some("a".to_string()),
+            Some("true".to_string()),
+            Some("0.5".to_string())
+        ]
+    );
+    assert_eq!(
+        rg.read_double_column(column_index(&file, "z")).unwrap(),
+        vec![Some(2.0), Some(2.5), None, None]
+    );
+}
+
 #[test]
 fn a_field_named_like_a_predefined_column_is_left_out() {
     let pages = [page(1, &[r#"{"raw":"shadow","facility":"x"}"#])];

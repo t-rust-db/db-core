@@ -38,8 +38,8 @@ pub mod stream;
 
 #[cfg(feature = "storage-stream")]
 pub use stream::{
-    Facility, FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind,
-    SyslogParser,
+    Facility, FieldColumn, FieldStore, FieldValue, LogBatch, Resource, Severity, Source,
+    SourceKind, SyslogParser,
 };
 
 #[cfg(test)]

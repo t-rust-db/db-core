@@ -9,7 +9,9 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use super::batch::{Facility, FieldColumn, LineParser, LogBatch, Resource, Severity, Source};
+use super::batch::{
+    Facility, FieldColumn, FieldValue, LineParser, LogBatch, Resource, Severity, Source,
+};
 use super::file::Block;
 
 /// Maximum rows per segment; a block with more lines is split.
@@ -39,6 +41,22 @@ pub enum OwnedColumn {
     Float(Vec<Option<f64>>),
     /// Booleans.
     Bool(Vec<Option<bool>>),
+    /// Values of conflicting types, each as parsed (#584); queries read
+    /// them as strings.
+    Mixed(Vec<Option<MixedValue>>),
+}
+
+/// One value of a [`OwnedColumn::Mixed`] column.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MixedValue {
+    /// A string, as a span into the segment bytes.
+    Str(Span),
+    /// An integer.
+    Int(i64),
+    /// A float.
+    Float(f64),
+    /// A boolean.
+    Bool(bool),
 }
 
 impl OwnedColumn {
@@ -51,6 +69,7 @@ impl OwnedColumn {
             Self::Int(v) => v.len(),
             Self::Float(v) => v.len(),
             Self::Bool(v) => v.len(),
+            Self::Mixed(v) => v.len(),
         }
     }
 
@@ -130,7 +149,7 @@ fn summarize_column(col: &OwnedColumn) -> Option<ColumnSummary> {
             count: indices.iter().filter(|i| i.is_some()).count() as u64,
             ..ColumnSummary::default()
         }),
-        OwnedColumn::Str(_) | OwnedColumn::Bool(_) => None,
+        OwnedColumn::Str(_) | OwnedColumn::Bool(_) | OwnedColumn::Mixed(_) => None,
     }
 }
 
@@ -453,7 +472,8 @@ impl Segment {
         self.field_cols.get(i)
     }
 
-    /// Resolve a `Str` span or `Dict` index of `column` at row `i`.
+    /// Resolve a `Str` span or `Dict` index of `column` at row `i` (or a
+    /// `Mixed` column's string value there).
     #[must_use]
     pub fn field_str(&self, name: &str, i: usize) -> Option<&str> {
         match self.field(name)? {
@@ -465,7 +485,11 @@ impl Segment {
                 let span = (*spans.get(i)?)?;
                 std::str::from_utf8(self.slice(span)).ok()
             }
-            _ => None,
+            OwnedColumn::Mixed(values) => match (*values.get(i)?)? {
+                MixedValue::Str(span) => std::str::from_utf8(self.slice(span)).ok(),
+                MixedValue::Int(_) | MixedValue::Float(_) | MixedValue::Bool(_) => None,
+            },
+            OwnedColumn::Int(_) | OwnedColumn::Float(_) | OwnedColumn::Bool(_) => None,
         }
     }
 
@@ -545,6 +569,21 @@ fn own_column(col: &FieldColumn<'_>, bytes: &[u8], rows: usize) -> OwnedColumn {
             let mut v = v.clone();
             v.extend(std::iter::repeat_n(None, pad(v.len())));
             OwnedColumn::Bool(v)
+        }
+        FieldColumn::Mixed(values) => {
+            let mut v: Vec<Option<MixedValue>> = values
+                .iter()
+                .map(|value| {
+                    value.and_then(|value| match value {
+                        FieldValue::Str(s) => span_in(bytes, s.as_bytes()).map(MixedValue::Str),
+                        FieldValue::Int(i) => Some(MixedValue::Int(i)),
+                        FieldValue::Float(f) => Some(MixedValue::Float(f)),
+                        FieldValue::Bool(b) => Some(MixedValue::Bool(b)),
+                    })
+                })
+                .collect();
+            v.extend(std::iter::repeat_n(None, pad(v.len())));
+            OwnedColumn::Mixed(v)
         }
     }
 }

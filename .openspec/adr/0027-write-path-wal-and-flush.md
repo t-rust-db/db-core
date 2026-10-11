@@ -189,7 +189,8 @@ integer as DOUBLE, rounded; once a string widens the table's column to
 text, it reads as the rounded number, where the same integer flushed
 without a float reads exactly. (A whole DOUBLE renders like the integer,
 `1` not `1.0`, so smaller integers are unaffected.) Within one page, a
-type conflict loses values in the parser before any of this (#584).
+type conflict follows the same rules since #584 (ADR 0018), so the
+property test also mixes types inside pages.
 
 ### Readers in other processes
 
@@ -289,7 +290,7 @@ differently from DuckDB, deliberately:
 | Timestamp range | full `i64` | `i64::MAX` and `i64::MIN + 1` are ±infinity; instants in late 1677 cannot be converted (also in files DuckDB writes) |
 | Which rows a reader sees | the manifest's files plus the WAL tail / pages above `flushed_lsn` | reads files only: never the unflushed tail. A glob over `data/` can also catch a file published but not yet committed (between flush steps 2 and 3), which recovery deletes; read the manifest's file list, or `archive/` once ADR 0028 lands |
 | Schema across files | each file has the fields its pages had | needs `read_parquet(..., union_by_name = true)` across files |
-| Field type conflicts | INT and FLOAT widen to DOUBLE; any other mix becomes a string, per file and again across the table at read time. An integer above 2⁵³ in a field that also has floats and strings may read exact or rounded depending on flush timing; a conflict inside one page loses values (#584) | `read_json` unifies to a common supertype, often `VARCHAR`/`JSON` |
+| Field type conflicts | INT and FLOAT widen to DOUBLE; any other mix becomes a string, per file and again across the table at read time. An integer above 2⁵³ in a field that also has floats and strings may read exact or rounded depending on flush timing | `read_json` unifies to a common supertype, often `VARCHAR`/`JSON` |
 | Lines that are not JSON in a `json` table | kept as a row (`raw`, `message`), fields NULL | `read_json` fails, or drops them with `ignore_errors` |
 | Nested objects | flattened one level to `a.b`; deeper objects are not columns (still in `raw`) | `STRUCT` columns |
 | Arrays | the JSON text, as a string | `LIST` columns |

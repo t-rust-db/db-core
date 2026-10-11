@@ -48,7 +48,7 @@ fn field_type(column: &OwnedColumn) -> ColumnType {
         OwnedColumn::Int(_) => ColumnType::Int64,
         OwnedColumn::Float(_) => ColumnType::Double,
         OwnedColumn::Bool(_) => ColumnType::Boolean,
-        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => ColumnType::Utf8,
+        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) | OwnedColumn::Mixed(_) => ColumnType::Utf8,
     }
 }
 

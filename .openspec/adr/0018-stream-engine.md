@@ -111,6 +111,13 @@ JSON Lines (structured, nested), logfmt (structured, flat). Rules:
 - **Typed Tier-3 at ingest.** `FieldStore` accepts `Int`/`Float`/`Bool`
   as well as `Str`; first non-null type wins, conflict degrades to `Str`;
   sparse keys are null-padded.
+  **Amendment (#584):** a conflict no longer drops values. `Int` meeting
+  `Float` widens the column to `Float` (as a flush widens to DOUBLE, ADR
+  0027). Any other conflict makes the column `Mixed`: each value kept
+  as parsed (strings as spans, numbers and booleans typed), and read as
+  `Str`, a typed value rendered as its canonical text (`3`, `2.5`,
+  `true`; a whole float as `2`). Previously the values without a
+  borrowed string form became NULL, and `Int` then `Float` lost both.
 - **Never fabricate Tier-2.** A format without a severity (combined
   log) leaves `severity = None`; the query says `status >= 500`.
 - **Alias promotion** for structured formats (`time|ts|@timestamp…` →

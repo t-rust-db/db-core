@@ -609,7 +609,9 @@ impl StreamEngine {
                         OwnedColumn::Int(_) => "INTEGER",
                         OwnedColumn::Float(_) => "REAL",
                         OwnedColumn::Bool(_) => "BOOLEAN",
-                        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => "TEXT",
+                        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) | OwnedColumn::Mixed(_) => {
+                            "TEXT"
+                        }
                     })
             }
         }
