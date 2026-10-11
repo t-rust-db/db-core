@@ -2,10 +2,23 @@
 //! `<table>/LOCK`, held for as long as the [`TableLock`] lives. The OS
 //! drops the lock when the process dies, so a crashed writer never leaves
 //! a table locked.
+//!
+//! The lock is `flock`-style: it belongs to the open file, and a forked
+//! child shares it until it execs (the fd is close-on-exec). A process
+//! that drops a table and reopens it while another of its threads is
+//! spawning a child can therefore find its own lock briefly still held,
+//! so [`TableLock::acquire`] retries for a short while before reporting
+//! [`LockError::Held`].
 
 use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
 use std::path::Path;
+use std::time::Duration;
+
+/// Attempts before [`LockError::Held`], [`RETRY_PAUSE`] apart: about 50 ms,
+/// orders of magnitude longer than a fork-to-exec window.
+const ATTEMPTS: u32 = 10;
+const RETRY_PAUSE: Duration = Duration::from_millis(5);
 
 /// The lock file's name inside the table directory.
 pub const LOCK_FILE: &str = "LOCK";
@@ -36,11 +49,18 @@ impl TableLock {
             .write(true)
             .open(table.join(LOCK_FILE))
             .map_err(LockError::Io)?;
-        match file.try_lock() {
-            Ok(()) => Ok(TableLock { _file: file }),
-            Err(TryLockError::WouldBlock) => Err(LockError::Held),
-            Err(TryLockError::Error(e)) => Err(LockError::Io(e)),
+        for attempt in 1..=ATTEMPTS {
+            match file.try_lock() {
+                Ok(()) => return Ok(TableLock { _file: file }),
+                Err(TryLockError::WouldBlock) => {
+                    if attempt < ATTEMPTS {
+                        std::thread::sleep(RETRY_PAUSE);
+                    }
+                }
+                Err(TryLockError::Error(e)) => return Err(LockError::Io(e)),
+            }
         }
+        Err(LockError::Held)
     }
 }
 
