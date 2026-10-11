@@ -108,7 +108,7 @@ pub fn materialize(segment: &Segment, columns: &[ColumnRequest]) -> Result<Batch
 }
 
 /// One column of `segment` as `Value`s, or `None` if the name is unknown.
-fn column_values(segment: &Segment, name: &str) -> Option<Vec<Value>> {
+pub(crate) fn column_values(segment: &Segment, name: &str) -> Option<Vec<Value>> {
     let n = segment.len();
     let col = match name {
         "timestamp" => ints(segment.event_ts_ns()),

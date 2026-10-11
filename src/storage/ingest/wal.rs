@@ -195,6 +195,17 @@ impl Wal {
             LockError::Held => WalError::Locked,
             LockError::Io(e) => WalError::Io(e),
         })?;
+        Wal::open_locked(lock, table, flushed_lsn, options)
+    }
+
+    /// [`Wal::open`] for a caller that already holds the table lock (and
+    /// read the manifest under it); the WAL keeps the lock until closed.
+    pub fn open_locked(
+        lock: TableLock,
+        table: &Path,
+        flushed_lsn: u64,
+        options: WalOptions,
+    ) -> Result<(Wal, Vec<Record>), WalError> {
         let dir = table.join(WAL_DIR);
         let replay = recover::replay(&dir, flushed_lsn)?;
         let last = replay.last_lsn;

@@ -1,0 +1,368 @@
+//! `manifest.json` (ADR 0027): the table's only commit point.
+//!
+//! It lists the live Parquet files, each with the LSN range it holds, and
+//! `flushed_lsn`; a file not listed does not exist for readers. Replacing
+//! it is write `manifest.json.tmp`, fsync, rename over `manifest.json`,
+//! fsync the directory, so a reader sees the old or the new manifest,
+//! never a mix.
+//!
+//! **Invariant:** file LSN ranges are disjoint, in order, and together
+//! exactly `[1, flushed_lsn]`. [`Manifest::check`] enforces it on read.
+//!
+//! The format is JSON written and read here (db-core has no serde): one
+//! object with `version`, `format`, `flushed_lsn` and `files`. Numbers are
+//! integers; strings are the table's own generated names and never need
+//! escaping (a backslash in one is refused).
+
+use std::fmt;
+use std::fs::{self, File};
+use std::io::{self, Write};
+use std::path::Path;
+
+use crate::json_path::{parse_object, JsonValue};
+use crate::storage::stream::detect::Format;
+
+/// The manifest's file name inside the table directory.
+pub const MANIFEST_FILE: &str = "manifest.json";
+const MANIFEST_TMP: &str = "manifest.json.tmp";
+const VERSION: i64 = 1;
+
+/// One Parquet file in the table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEntry {
+    /// Path relative to the table directory.
+    pub path: String,
+    /// First LSN in the file.
+    pub lsn_lo: u64,
+    /// Last LSN in the file.
+    pub lsn_hi: u64,
+    /// Rows (one per LSN).
+    pub rows: u64,
+    /// File size in bytes.
+    pub bytes: u64,
+    /// Smallest and largest `observed_ts` (ns), if any row has one.
+    pub observed_ts: Option<(i64, i64)>,
+    /// Smallest and largest `timestamp` (ns), if any row has one.
+    pub timestamp: Option<(i64, i64)>,
+}
+
+/// The table's committed state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Manifest {
+    /// The record format every line is parsed with.
+    pub format: Format,
+    /// Every LSN up to this one is in `files`.
+    pub flushed_lsn: u64,
+    /// The live files, in LSN order.
+    pub files: Vec<FileEntry>,
+}
+
+/// Why a manifest could not be read or is not valid.
+#[derive(Debug)]
+pub enum ManifestError {
+    /// Reading or writing failed.
+    Io(io::Error),
+    /// The text is not a manifest this version understands.
+    Malformed(String),
+    /// The file LSN ranges break the invariant.
+    Invariant(String),
+}
+
+impl fmt::Display for ManifestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ManifestError::Io(e) => write!(f, "manifest: {e}"),
+            ManifestError::Malformed(why) => write!(f, "manifest: malformed: {why}"),
+            ManifestError::Invariant(why) => write!(f, "manifest: invariant broken: {why}"),
+        }
+    }
+}
+
+impl std::error::Error for ManifestError {}
+
+impl From<io::Error> for ManifestError {
+    fn from(e: io::Error) -> Self {
+        ManifestError::Io(e)
+    }
+}
+
+fn malformed(why: &str) -> ManifestError {
+    ManifestError::Malformed(why.to_string())
+}
+
+/// The format a manifest name stands for.
+pub fn format_from_name(name: &str) -> Option<Format> {
+    [
+        Format::Jsonl,
+        Format::Logfmt,
+        Format::Syslog,
+        Format::Clf,
+        Format::Freeform,
+    ]
+    .into_iter()
+    .find(|f| f.as_str() == name)
+}
+
+impl Manifest {
+    /// An empty table in `format`.
+    pub fn new(format: Format) -> Self {
+        Manifest {
+            format,
+            flushed_lsn: 0,
+            files: Vec::new(),
+        }
+    }
+
+    /// Checks the invariant: ranges in order, each `lsn_lo <= lsn_hi` with
+    /// `rows` equal to its length, the first starting at 1, each next one
+    /// right after the previous, the last ending at `flushed_lsn`.
+    pub fn check(&self) -> Result<(), ManifestError> {
+        let mut next: u64 = 1;
+        for file in &self.files {
+            if file.lsn_lo != next {
+                return Err(ManifestError::Invariant(format!(
+                    "{} starts at LSN {}, expected {next}",
+                    file.path, file.lsn_lo
+                )));
+            }
+            let span = file
+                .lsn_hi
+                .checked_sub(file.lsn_lo)
+                .and_then(|d| d.checked_add(1));
+            if span != Some(file.rows) {
+                return Err(ManifestError::Invariant(format!(
+                    "{} holds LSNs {}..={} but {} rows",
+                    file.path, file.lsn_lo, file.lsn_hi, file.rows
+                )));
+            }
+            next = file.lsn_hi.saturating_add(1);
+        }
+        let covered = next.saturating_sub(1);
+        if covered != self.flushed_lsn {
+            return Err(ManifestError::Invariant(format!(
+                "files cover LSNs up to {covered}, flushed_lsn is {}",
+                self.flushed_lsn
+            )));
+        }
+        Ok(())
+    }
+
+    /// The manifest with `file` appended and `flushed_lsn` moved to its end.
+    pub fn with_file(&self, file: FileEntry) -> Manifest {
+        let mut next = self.clone();
+        next.flushed_lsn = file.lsn_hi;
+        next.files.push(file);
+        next
+    }
+
+    /// The JSON text.
+    pub fn to_json(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&format!(
+            "{{\"version\":{VERSION},\"format\":\"{}\",\"flushed_lsn\":{},\"files\":[",
+            self.format.as_str(),
+            self.flushed_lsn
+        ));
+        for (i, file) in self.files.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&format!(
+                "\n{{\"path\":\"{}\",\"lsn_lo\":{},\"lsn_hi\":{},\"rows\":{},\"bytes\":{}",
+                file.path, file.lsn_lo, file.lsn_hi, file.rows, file.bytes
+            ));
+            write_range(&mut out, "observed_ts", file.observed_ts);
+            write_range(&mut out, "timestamp", file.timestamp);
+            out.push('}');
+        }
+        out.push_str("]}\n");
+        out
+    }
+
+    /// Parses and checks manifest text.
+    pub fn parse(text: &str) -> Result<Manifest, ManifestError> {
+        let (root, rest) = parse_object(text).ok_or_else(|| malformed("not a JSON object"))?;
+        if !rest.trim().is_empty() {
+            return Err(malformed("text after the object"));
+        }
+        let fields = owned(&root)?.into_object()?;
+        if int(&fields, "version")? != VERSION {
+            return Err(malformed("unsupported version"));
+        }
+        let format = format_from_name(&string(&fields, "format")?)
+            .ok_or_else(|| malformed("unknown format"))?;
+        let flushed_lsn = unsigned(&fields, "flushed_lsn")?;
+        let Json::Array(files) = field(&fields, "files")? else {
+            return Err(malformed("files is not an array"));
+        };
+        let files = files
+            .into_iter()
+            .map(|f| file_entry(&f.into_object()?))
+            .collect::<Result<Vec<_>, _>>()?;
+        let manifest = Manifest {
+            format,
+            flushed_lsn,
+            files,
+        };
+        manifest.check()?;
+        Ok(manifest)
+    }
+
+    /// Reads `<table>/manifest.json`; `None` if there is none yet.
+    pub fn read(table: &Path) -> Result<Option<Manifest>, ManifestError> {
+        match fs::read_to_string(table.join(MANIFEST_FILE)) {
+            Ok(text) => Manifest::parse(&text).map(Some),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(ManifestError::Io(e)),
+        }
+    }
+
+    /// Atomically replaces `<table>/manifest.json`: the commit point.
+    pub fn write(&self, table: &Path) -> Result<(), ManifestError> {
+        self.check()?;
+        let tmp = table.join(MANIFEST_TMP);
+        {
+            let mut file = File::create(&tmp)?;
+            file.write_all(self.to_json().as_bytes())?;
+            file.sync_all()?;
+        }
+        fs::rename(&tmp, table.join(MANIFEST_FILE))?;
+        File::open(table)?.sync_all()?;
+        Ok(())
+    }
+}
+
+fn write_range(out: &mut String, name: &str, range: Option<(i64, i64)>) {
+    match range {
+        Some((lo, hi)) => out.push_str(&format!(",\"{name}_min\":{lo},\"{name}_max\":{hi}")),
+        None => out.push_str(&format!(",\"{name}_min\":null,\"{name}_max\":null")),
+    }
+}
+
+/// An owned JSON value: the parser's borrowed tree, with arrays (kept as
+/// source text by the parser) parsed into their elements.
+#[derive(Debug, Clone)]
+enum Json {
+    Null,
+    Int(i64),
+    Str(String),
+    Other,
+    Object(Vec<(String, Json)>),
+    Array(Vec<Json>),
+}
+
+impl Json {
+    fn into_object(self) -> Result<Vec<(String, Json)>, ManifestError> {
+        match self {
+            Json::Object(fields) => Ok(fields),
+            _ => Err(malformed("expected an object")),
+        }
+    }
+}
+
+fn owned(value: &JsonValue) -> Result<Json, ManifestError> {
+    Ok(match value {
+        JsonValue::Null => Json::Null,
+        JsonValue::Int(v) => Json::Int(*v),
+        JsonValue::Str(s) => Json::Str((*s).to_string()),
+        JsonValue::Object(fields) => Json::Object(
+            fields
+                .iter()
+                .map(|(k, v)| Ok(((*k).to_string(), owned(v)?)))
+                .collect::<Result<Vec<_>, ManifestError>>()?,
+        ),
+        JsonValue::Array(text) => Json::Array(array_of_objects(text)?),
+        JsonValue::Bool(_) | JsonValue::Float(_) => Json::Other,
+    })
+}
+
+fn field(fields: &[(String, Json)], name: &str) -> Result<Json, ManifestError> {
+    fields
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.clone())
+        .ok_or_else(|| ManifestError::Malformed(format!("missing {name}")))
+}
+
+fn int(fields: &[(String, Json)], name: &str) -> Result<i64, ManifestError> {
+    match field(fields, name)? {
+        Json::Int(v) => Ok(v),
+        _ => Err(ManifestError::Malformed(format!(
+            "{name} is not an integer"
+        ))),
+    }
+}
+
+fn unsigned(fields: &[(String, Json)], name: &str) -> Result<u64, ManifestError> {
+    u64::try_from(int(fields, name)?)
+        .map_err(|_| ManifestError::Malformed(format!("{name} is negative")))
+}
+
+fn string(fields: &[(String, Json)], name: &str) -> Result<String, ManifestError> {
+    match field(fields, name)? {
+        Json::Str(s) if !s.contains('\\') => Ok(s),
+        _ => Err(ManifestError::Malformed(format!(
+            "{name} is not a plain string"
+        ))),
+    }
+}
+
+fn range(fields: &[(String, Json)], name: &str) -> Result<Option<(i64, i64)>, ManifestError> {
+    let lo = field(fields, &format!("{name}_min"))?;
+    let hi = field(fields, &format!("{name}_max"))?;
+    match (lo, hi) {
+        (Json::Int(lo), Json::Int(hi)) => Ok(Some((lo, hi))),
+        (Json::Null, Json::Null) => Ok(None),
+        _ => Err(ManifestError::Malformed(format!("{name} range"))),
+    }
+}
+
+fn file_entry(fields: &[(String, Json)]) -> Result<FileEntry, ManifestError> {
+    Ok(FileEntry {
+        path: string(fields, "path")?,
+        lsn_lo: unsigned(fields, "lsn_lo")?,
+        lsn_hi: unsigned(fields, "lsn_hi")?,
+        rows: unsigned(fields, "rows")?,
+        bytes: unsigned(fields, "bytes")?,
+        observed_ts: range(fields, "observed_ts")?,
+        timestamp: range(fields, "timestamp")?,
+    })
+}
+
+/// The elements of a JSON array of objects, from its source text.
+fn array_of_objects(text: &str) -> Result<Vec<Json>, ManifestError> {
+    let mut rest = text
+        .trim()
+        .strip_prefix('[')
+        .ok_or_else(|| malformed("expected an array"))?
+        .trim_start();
+    let mut items = Vec::new();
+    if let Some(after) = rest.strip_prefix(']') {
+        return end_of_array(after, items);
+    }
+    loop {
+        let (item, after) =
+            parse_object(rest).ok_or_else(|| malformed("an array element is not an object"))?;
+        items.push(owned(&item)?);
+        let after = after.trim_start();
+        if let Some(next) = after.strip_prefix(',') {
+            rest = next.trim_start();
+            continue;
+        }
+        let Some(after) = after.strip_prefix(']') else {
+            return Err(malformed("array: expected , or ]"));
+        };
+        return end_of_array(after, items);
+    }
+}
+
+fn end_of_array(after: &str, items: Vec<Json>) -> Result<Vec<Json>, ManifestError> {
+    if after.trim().is_empty() {
+        Ok(items)
+    } else {
+        Err(malformed("text after an array"))
+    }
+}
+
+#[cfg(test)]
+mod tests;

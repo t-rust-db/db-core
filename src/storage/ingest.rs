@@ -8,10 +8,17 @@
 //! the manifest are #572; the `Table` API is #574.
 
 mod crc32c;
+mod flush;
 mod frame;
 pub mod lock;
+pub mod manifest;
+pub mod page;
 mod recover;
+pub mod table;
 pub mod wal;
 
 pub use lock::{LockError, TableLock, LOCK_FILE};
+pub use manifest::{FileEntry, Manifest, ManifestError, MANIFEST_FILE};
+pub use page::Page;
+pub use table::{IngestError, TableOptions, TableWriter, DATA_DIR, TMP_DIR};
 pub use wal::{Ack, Record, Wal, WalError, WalOptions, Watermarks, WAL_DIR};
