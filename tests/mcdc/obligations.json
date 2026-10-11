@@ -13002,7 +13002,7 @@
   {
     "id": "engine_column_table_tests_random_line_3d4dc5a3",
     "file": "src/engine/column/table/tests.rs",
-    "line": 190,
+    "line": 191,
     "decision": "rng.below(10) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13012,7 +13012,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645",
     "file": "src/engine/column/table/tests.rs",
-    "line": 195,
+    "line": 196,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13022,7 +13022,7 @@
   {
     "id": "engine_column_table_tests_random_line_c832c68e",
     "file": "src/engine/column/table/tests.rs",
-    "line": 198,
+    "line": 199,
     "decision": "rng.below(3) > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13032,7 +13032,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 201,
+    "line": 202,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13042,7 +13042,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_3",
     "file": "src/engine/column/table/tests.rs",
-    "line": 204,
+    "line": 205,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13052,7 +13052,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_4",
     "file": "src/engine/column/table/tests.rs",
-    "line": 207,
+    "line": 208,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13062,7 +13062,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_5",
     "file": "src/engine/column/table/tests.rs",
-    "line": 210,
+    "line": 211,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13072,7 +13072,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_6",
     "file": "src/engine/column/table/tests.rs",
-    "line": 213,
+    "line": 214,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13082,7 +13082,7 @@
   {
     "id": "engine_column_table_tests_random_line_2b0e2d15",
     "file": "src/engine/column/table/tests.rs",
-    "line": 215,
+    "line": 216,
     "decision": "i < switch.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13092,7 +13092,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_7",
     "file": "src/engine/column/table/tests.rs",
-    "line": 221,
+    "line": 222,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13102,7 +13102,7 @@
   {
     "id": "engine_column_table_tests_random_line_2b0e2c42",
     "file": "src/engine/column/table/tests.rs",
-    "line": 223,
+    "line": 224,
     "decision": "i < switch.1",
     "conditions": 1,
     "vectors_required": 2,
@@ -13110,19 +13110,19 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_column_table_tests_query_results_do_not_depend_on_flush_timing_90d7f95e",
+    "id": "engine_column_table_tests_random_line_3db240d1",
     "file": "src/engine/column/table/tests.rs",
-    "line": 268,
-    "decision": "[switch.0, switch.1].contains(&(k as u64))",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
+    "line": 230,
+    "decision": "match rng.below(5) {\n        0 => fields.push(format!(r#\"\"m\":{}\"#, rng.below(9))),\n        1 => fields.push(format!(r#\"\"m\":{}.75\"#, rng.below(9))),\n        2 => fields.push(format!(r#\"\"m\":\"m{}\"\"#, rng.below(9))),\n        3 => fields.push(format!(r#\"\"m\":{}\"#, rng.below(2) == 0)),\n        _ => {}\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
   },
   {
     "id": "engine_column_table_tests_query_results_do_not_depend_on_flush_timing_bc08b02e",
     "file": "src/engine/column/table/tests.rs",
-    "line": 274,
+    "line": 278,
     "decision": "rng.below(seal_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13132,7 +13132,7 @@
   {
     "id": "engine_column_table_tests_query_results_do_not_depend_on_flush_timing_d4525ddd",
     "file": "src/engine/column/table/tests.rs",
-    "line": 277,
+    "line": 281,
     "decision": "rng.below(flush_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13142,7 +13142,7 @@
   {
     "id": "engine_column_table_tests_query_results_do_not_depend_on_flush_timing_a58ed6fd",
     "file": "src/engine/column/table/tests.rs",
-    "line": 281,
+    "line": 285,
     "decision": "[rng.below(40) == 0, last].contains(&true)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14170,20 +14170,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_stream_type_name_fc4694f0",
+    "id": "engine_stream_type_name_6b3ceb6b",
     "file": "src/engine/stream.rs",
     "line": 601,
-    "decision": "match name {\n            \"timestamp\" | \"observed_ts\" | \"severity\" => \"INTEGER\",\n            \"severity_text\" | \"facility\" | \"message\" | \"raw\" => \"TEXT\",\n            other => {\n                self.ring\n                    .segments()\n                    .find_map(|s| s.field(other))\n                    .map_or(\"TEXT\", |c| match c {\n                        OwnedColumn::Int(_) => \"INTEGER\",\n                        OwnedColumn::Float(_) => \"REAL\",\n                        OwnedColumn::Bool(_) => \"BOOLEAN\",\n                        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => \"TEXT\",\n                    })\n            }\n        }",
+    "decision": "match name {\n            \"timestamp\" | \"observed_ts\" | \"severity\" => \"INTEGER\",\n            \"severity_text\" | \"facility\" | \"message\" | \"raw\" => \"TEXT\",\n            other => {\n                self.ring\n                    .segments()\n                    .find_map(|s| s.field(other))\n                    .map_or(\"TEXT\", |c| match c {\n                        OwnedColumn::Int(_) => \"INTEGER\",\n                        OwnedColumn::Float(_) => \"REAL\",\n                        OwnedColumn::Bool(_) => \"BOOLEAN\",\n                        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) | OwnedColumn::Mixed(_) => {\n                            \"TEXT\"\n                        }\n                    })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "engine_stream_type_name_cc86c7b7",
+    "id": "engine_stream_type_name_756e1bdd",
     "file": "src/engine/stream.rs",
     "line": 608,
-    "decision": "match c {\n                        OwnedColumn::Int(_) => \"INTEGER\",\n                        OwnedColumn::Float(_) => \"REAL\",\n                        OwnedColumn::Bool(_) => \"BOOLEAN\",\n                        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => \"TEXT\",\n                    }",
+    "decision": "match c {\n                        OwnedColumn::Int(_) => \"INTEGER\",\n                        OwnedColumn::Float(_) => \"REAL\",\n                        OwnedColumn::Bool(_) => \"BOOLEAN\",\n                        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) | OwnedColumn::Mixed(_) => {\n                            \"TEXT\"\n                        }\n                    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -14192,7 +14192,7 @@
   {
     "id": "engine_stream_new_1fb719e4",
     "file": "src/engine/stream.rs",
-    "line": 676,
+    "line": 678,
     "decision": "let EmitMode::Threshold { op, .. } = &mode",
     "conditions": 1,
     "vectors_required": 2,
@@ -14202,7 +14202,7 @@
   {
     "id": "engine_stream_new_7d7d3711",
     "file": "src/engine/stream.rs",
-    "line": 677,
+    "line": 679,
     "decision": "!is_comparison_op(*op)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14212,7 +14212,7 @@
   {
     "id": "engine_stream_poll_fcd96cc4",
     "file": "src/engine/stream.rs",
-    "line": 732,
+    "line": 734,
     "decision": "match self.mode.clone() {\n            EmitMode::Rows => Ok(Some(StandingQueryEvent { result })),\n            EmitMode::OnChange => Ok(self.poll_on_change(result)),\n            EmitMode::Threshold { op, threshold } => {\n                Ok(self.poll_threshold(engine, op, threshold, result))\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14222,7 +14222,7 @@
   {
     "id": "engine_stream_poll_on_change_61db9430",
     "file": "src/engine/stream.rs",
-    "line": 750,
+    "line": 752,
     "decision": "!changed",
     "conditions": 1,
     "vectors_required": 2,
@@ -14232,7 +14232,7 @@
   {
     "id": "engine_stream_poll_on_change_4606dc4a",
     "file": "src/engine/stream.rs",
-    "line": 754,
+    "line": 756,
     "decision": "result.rows.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -14242,7 +14242,7 @@
   {
     "id": "engine_stream_poll_threshold_6e508dc2",
     "file": "src/engine/stream.rs",
-    "line": 776,
+    "line": 778,
     "decision": "!holds",
     "conditions": 1,
     "vectors_required": 2,
@@ -14252,7 +14252,7 @@
   {
     "id": "engine_stream_poll_threshold_531505eb",
     "file": "src/engine/stream.rs",
-    "line": 785,
+    "line": 787,
     "decision": "held_ns >= for_ns && !self.fired_for_current_hold",
     "conditions": 2,
     "vectors_required": 3,
@@ -14262,7 +14262,7 @@
   {
     "id": "engine_stream_latest_scalar_37f34c29",
     "file": "src/engine/stream.rs",
-    "line": 811,
+    "line": 813,
     "decision": "match cell {\n        Cell::Null => Value::Null,\n        Cell::Int(n) => Value::Int(*n),\n        Cell::Real(x) => Value::Float(*x),\n        Cell::Bool(b) => Value::Bool(*b),\n        Cell::Text(s) => Value::Str(s.clone().into()),\n        Cell::Blob(_) => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14272,7 +14272,7 @@
   {
     "id": "engine_stream_in_subquery_38ffb216",
     "file": "src/engine/stream.rs",
-    "line": 834,
+    "line": 836,
     "decision": "match &select.where_clause {\n        Some(Expr {\n            kind: ExprKind::InSubquery { subquery, .. },\n            ..\n        }) => Some(subquery),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14282,7 +14282,7 @@
   {
     "id": "engine_stream_is_window_column_21d3bda9",
     "file": "src/engine/stream.rs",
-    "line": 844,
+    "line": 846,
     "decision": "match column {\n        ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { tail, .. },\n                    ..\n                },\n            ..\n        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14292,7 +14292,7 @@
   {
     "id": "engine_stream_plan_err_bbf17c28",
     "file": "src/engine/stream.rs",
-    "line": 858,
+    "line": 860,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14302,7 +14302,7 @@
   {
     "id": "engine_stream_stream_err_1678805e",
     "file": "src/engine/stream.rs",
-    "line": 868,
+    "line": 870,
     "decision": "match e {\n        StreamPlanError::Rejected { .. } => EngineError::new(ErrorKind::Unsupported, e),\n        StreamPlanError::InvalidLiteral { .. } => EngineError::new(ErrorKind::Compile, e),\n        StreamPlanError::Batch(inner) => plan_err(inner),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14312,7 +14312,7 @@
   {
     "id": "engine_stream_resolve_scope_0dc91c0c",
     "file": "src/engine/stream.rs",
-    "line": 886,
+    "line": 888,
     "decision": "match since.unit {\n        ScopeUnit::Seconds => Scope::Time(Duration::from_secs(since.amount)),\n        ScopeUnit::Minutes => Scope::Time(Duration::from_secs(since.amount.saturating_mul(60))),\n        ScopeUnit::Hours => Scope::Time(Duration::from_secs(since.amount.saturating_mul(3_600))),\n        ScopeUnit::Days => Scope::Time(Duration::from_secs(since.amount.saturating_mul(86_400))),\n        ScopeUnit::Lines => Scope::Lines(since.amount),\n        ScopeUnit::Bytes => Scope::Bytes(since.amount),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14322,7 +14322,7 @@
   {
     "id": "engine_stream_effective_time_range_1af8cdb6",
     "file": "src/engine/stream.rs",
-    "line": 903,
+    "line": 905,
     "decision": "let Scope::Time(d) = scope",
     "conditions": 1,
     "vectors_required": 2,
@@ -14332,7 +14332,7 @@
   {
     "id": "engine_stream_effective_time_range_57bf47a7",
     "file": "src/engine/stream.rs",
-    "line": 909,
+    "line": 911,
     "decision": "let IndexPred::TimeRange { lo: plo, hi: phi } = pred",
     "conditions": 1,
     "vectors_required": 2,
@@ -14342,7 +14342,7 @@
   {
     "id": "engine_stream_run_range_vector_epilogue_bcac83c3",
     "file": "src/engine/stream.rs",
-    "line": 934,
+    "line": 936,
     "decision": "match r.first() {\n                Some(Value::Int(n)) => *n,\n                _ => 0,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14352,7 +14352,7 @@
   {
     "id": "engine_stream_range_vector_label_d12f9f48",
     "file": "src/engine/stream.rs",
-    "line": 955,
+    "line": 957,
     "decision": "match select.columns.first() {\n        Some(ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { name, args, .. },\n                    ..\n                },\n            ..\n        }) => {\n            let arg = match args {\n                FunctionArgs::Star => \"*\".to_string(),\n                FunctionArgs::List(list) => list\n                    .iter()\n                    .filter_map(|e| match &e.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    })\n                    .next()\n                    .unwrap_or_default(),\n            };\n            format!(\"{}({arg})\", name.to_ascii_uppercase())\n        }\n        _ => \"value\".to_string(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14362,7 +14362,7 @@
   {
     "id": "engine_stream_range_vector_label_6b4abdc3",
     "file": "src/engine/stream.rs",
-    "line": 964,
+    "line": 966,
     "decision": "match args {\n                FunctionArgs::Star => \"*\".to_string(),\n                FunctionArgs::List(list) => list\n                    .iter()\n                    .filter_map(|e| match &e.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    })\n                    .next()\n                    .unwrap_or_default(),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14372,7 +14372,7 @@
   {
     "id": "engine_stream_range_vector_label_74294c50",
     "file": "src/engine/stream.rs",
-    "line": 968,
+    "line": 970,
     "decision": "match &e.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14382,7 +14382,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_7e0ed34f",
     "file": "src/engine/stream.rs",
-    "line": 1005,
+    "line": 1007,
     "decision": "tail\n        .as_deref()\n        .is_some_and(|t| t.filter.is_some() || t.over.is_some())",
     "conditions": 1,
     "vectors_required": 2,
@@ -14392,7 +14392,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_14643cbb",
     "file": "src/engine/stream.rs",
-    "line": 1012,
+    "line": 1014,
     "decision": "matches!(agg, AggFunc::Avg)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14402,7 +14402,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_b27ce420",
     "file": "src/engine/stream.rs",
-    "line": 1015,
+    "line": 1017,
     "decision": "match args {\n        FunctionArgs::Star if matches!(agg, AggFunc::Count) => Some((agg, None)),\n        FunctionArgs::Star => None,\n        FunctionArgs::List(list) => match list.as_slice() {\n            [Expr {\n                kind: ExprKind::Column {\n                    table: None, name, ..\n                },\n                ..\n            }] => Some((agg, Some(name.clone()))),\n            _ => None,\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14412,7 +14412,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_f9ab63a4",
     "file": "src/engine/stream.rs",
-    "line": 1016,
+    "line": 1018,
     "decision": "matches!(agg, AggFunc::Count)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14422,7 +14422,7 @@
   {
     "id": "engine_stream_single_ungrouped_aggregate_addc219d",
     "file": "src/engine/stream.rs",
-    "line": 1018,
+    "line": 1020,
     "decision": "match list.as_slice() {\n            [Expr {\n                kind: ExprKind::Column {\n                    table: None, name, ..\n                },\n                ..\n            }] => Some((agg, Some(name.clone()))),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14432,7 +14432,7 @@
   {
     "id": "engine_stream_fold_summaries_into_30d16295",
     "file": "src/engine/stream.rs",
-    "line": 1051,
+    "line": 1053,
     "decision": "match agg {\n        AggFunc::Count => {\n            let live_n = match live {\n                Some(Value::Int(n)) => n,\n                _ => 0,\n            };\n            let total = summaries\n                .iter()\n                .filter_map(column_summary)\n                .map(|c| c.count)\n                .fold(live_n, |acc, c| {\n                    acc.saturating_add(i64::try_from(c).unwrap_or(i64::MAX))\n                });\n            Value::Int(total)\n        }\n        AggFunc::Sum => {\n            let live_v = live.and_then(|v| v.as_f64()).unwrap_or(0.0);\n            let total = summaries\n                .iter()\n                .filter_map(column_summary)\n                .fold(live_v, |acc, c| acc + c.sum);\n            Value::Float(total)\n        }\n        AggFunc::Min => summaries\n            .iter()\n            .filter_map(column_summary)\n            .filter(|c| c.count > 0)\n            .map(|c| c.min)\n            .fold(live.and_then(|v| v.as_f64()), |acc, v| {\n                Some(acc.map_or(v, |a| a.min(v)))\n            })\n            .map_or(Value::Null, Value::Float),\n        AggFunc::Max => summaries\n            .iter()\n            .filter_map(column_summary)\n            .filter(|c| c.count > 0)\n            .map(|c| c.max)\n            .fold(live.and_then(|v| v.as_f64()), |acc, v| {\n                Some(acc.map_or(v, |a| a.max(v)))\n            })\n            .map_or(Value::Null, Value::Float),\n        // `single_ungrouped_aggregate` never returns `Avg` (its own\n        // finalized sum/count can't be re-merged, see this fn's doc\n        // comment) -- a non-panicking fallback here costs nothing and\n        // keeps this helper safe to call with any `AggFunc` value.\n        AggFunc::Avg => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14442,7 +14442,7 @@
   {
     "id": "engine_stream_fold_summaries_into_3097eb02",
     "file": "src/engine/stream.rs",
-    "line": 1053,
+    "line": 1055,
     "decision": "match live {\n                Some(Value::Int(n)) => n,\n                _ => 0,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22160,10 +22160,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_flush_field_type_83831db1",
+    "id": "storage_ingest_flush_field_type_e37d9aca",
     "file": "src/storage/ingest/flush.rs",
     "line": 47,
-    "decision": "match column {\n        OwnedColumn::Int(_) => ColumnType::Int64,\n        OwnedColumn::Float(_) => ColumnType::Double,\n        OwnedColumn::Bool(_) => ColumnType::Boolean,\n        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => ColumnType::Utf8,\n    }",
+    "decision": "match column {\n        OwnedColumn::Int(_) => ColumnType::Int64,\n        OwnedColumn::Float(_) => ColumnType::Double,\n        OwnedColumn::Bool(_) => ColumnType::Boolean,\n        OwnedColumn::Dict { .. } | OwnedColumn::Str(_) | OwnedColumn::Mixed(_) => ColumnType::Utf8,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -30750,20 +30750,30 @@
     "wildcard_risk": true
   },
   {
-    "id": "storage_stream_adapter_column_values_95d9187f",
+    "id": "storage_stream_adapter_column_values_6eed3f6b",
     "file": "src/storage/stream/adapter.rs",
     "line": 113,
-    "decision": "match name {\n        \"timestamp\" => ints(segment.event_ts_ns()),\n        \"observed_ts\" => ints(segment.observed_ts_ns()),\n        \"severity\" => segment\n            .severity()\n            .iter()\n            .map(|s| s.map_or(Value::Null, |s| Value::Int(i64::from(s as u8))))\n            .collect(),\n        \"severity_text\" => segment\n            .severity()\n            .iter()\n            .map(|s| s.map_or(Value::Null, |s| Value::Str(s.as_str().into())))\n            .collect(),\n        \"facility\" => segment\n            .facility()\n            .iter()\n            .map(|f| f.map_or(Value::Null, |f| Value::Str(f.as_str().into())))\n            .collect(),\n        \"message\" => (0..n)\n            .map(|i| {\n                segment\n                    .message(i)\n                    .map_or(Value::Null, |m| Value::Str(m.to_string().into()))\n            })\n            .collect(),\n        \"raw\" => (0..n)\n            .map(|i| {\n                Value::Str(\n                    String::from_utf8_lossy(segment.raw_line(i))\n                        .into_owned()\n                        .into(),\n                )\n            })\n            .collect(),\n        other => match segment.field(other)? {\n            OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => (0..n)\n                .map(|i| {\n                    segment\n                        .field_str(other, i)\n                        .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                })\n                .collect(),\n            OwnedColumn::Int(v) => ints(v),\n            OwnedColumn::Float(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Float))\n                .collect(),\n            OwnedColumn::Bool(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Bool))\n                .collect(),\n        },\n    }",
+    "decision": "match name {\n        \"timestamp\" => ints(segment.event_ts_ns()),\n        \"observed_ts\" => ints(segment.observed_ts_ns()),\n        \"severity\" => segment\n            .severity()\n            .iter()\n            .map(|s| s.map_or(Value::Null, |s| Value::Int(i64::from(s as u8))))\n            .collect(),\n        \"severity_text\" => segment\n            .severity()\n            .iter()\n            .map(|s| s.map_or(Value::Null, |s| Value::Str(s.as_str().into())))\n            .collect(),\n        \"facility\" => segment\n            .facility()\n            .iter()\n            .map(|f| f.map_or(Value::Null, |f| Value::Str(f.as_str().into())))\n            .collect(),\n        \"message\" => (0..n)\n            .map(|i| {\n                segment\n                    .message(i)\n                    .map_or(Value::Null, |m| Value::Str(m.to_string().into()))\n            })\n            .collect(),\n        \"raw\" => (0..n)\n            .map(|i| {\n                Value::Str(\n                    String::from_utf8_lossy(segment.raw_line(i))\n                        .into_owned()\n                        .into(),\n                )\n            })\n            .collect(),\n        other => match segment.field(other)? {\n            OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => (0..n)\n                .map(|i| {\n                    segment\n                        .field_str(other, i)\n                        .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                })\n                .collect(),\n            OwnedColumn::Int(v) => ints(v),\n            OwnedColumn::Float(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Float))\n                .collect(),\n            OwnedColumn::Bool(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Bool))\n                .collect(),\n            // Conflicting types read as strings (ADR 0018), each typed\n            // value rendered the way a flush renders it into a string\n            // column, so a record reads the same before and after (#584).\n            OwnedColumn::Mixed(values) => values\n                .iter()\n                .enumerate()\n                .map(|(i, value)| {\n                    let typed = match value {\n                        None => return Value::Null,\n                        Some(MixedValue::Str(_)) => {\n                            return segment\n                                .field_str(other, i)\n                                .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                        }\n                        Some(MixedValue::Int(x)) => Value::Int(*x),\n                        Some(MixedValue::Float(x)) => Value::Float(*x),\n                        Some(MixedValue::Bool(x)) => Value::Bool(*x),\n                    };\n                    Value::Str(typed.to_string().into())\n                })\n                .collect(),\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_adapter_column_values_0566ae77",
+    "id": "storage_stream_adapter_column_values_3be7273d",
     "file": "src/storage/stream/adapter.rs",
     "line": 147,
-    "decision": "match segment.field(other)? {\n            OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => (0..n)\n                .map(|i| {\n                    segment\n                        .field_str(other, i)\n                        .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                })\n                .collect(),\n            OwnedColumn::Int(v) => ints(v),\n            OwnedColumn::Float(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Float))\n                .collect(),\n            OwnedColumn::Bool(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Bool))\n                .collect(),\n        }",
+    "decision": "match segment.field(other)? {\n            OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => (0..n)\n                .map(|i| {\n                    segment\n                        .field_str(other, i)\n                        .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                })\n                .collect(),\n            OwnedColumn::Int(v) => ints(v),\n            OwnedColumn::Float(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Float))\n                .collect(),\n            OwnedColumn::Bool(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Bool))\n                .collect(),\n            // Conflicting types read as strings (ADR 0018), each typed\n            // value rendered the way a flush renders it into a string\n            // column, so a record reads the same before and after (#584).\n            OwnedColumn::Mixed(values) => values\n                .iter()\n                .enumerate()\n                .map(|(i, value)| {\n                    let typed = match value {\n                        None => return Value::Null,\n                        Some(MixedValue::Str(_)) => {\n                            return segment\n                                .field_str(other, i)\n                                .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                        }\n                        Some(MixedValue::Int(x)) => Value::Int(*x),\n                        Some(MixedValue::Float(x)) => Value::Float(*x),\n                        Some(MixedValue::Bool(x)) => Value::Bool(*x),\n                    };\n                    Value::Str(typed.to_string().into())\n                })\n                .collect(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_adapter_column_values_1e7b7d68",
+    "file": "src/storage/stream/adapter.rs",
+    "line": 171,
+    "decision": "match value {\n                        None => return Value::Null,\n                        Some(MixedValue::Str(_)) => {\n                            return segment\n                                .field_str(other, i)\n                                .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                        }\n                        Some(MixedValue::Int(x)) => Value::Int(*x),\n                        Some(MixedValue::Float(x)) => Value::Float(*x),\n                        Some(MixedValue::Bool(x)) => Value::Bool(*x),\n                    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -30772,7 +30782,7 @@
   {
     "id": "storage_stream_adapter_next_batch_188f1078",
     "file": "src/storage/stream/adapter.rs",
-    "line": 246,
+    "line": 267,
     "decision": "match self.file.refresh() {\n                Ok(Refresh::New(blocks)) => {\n                    let observed = now_ns();\n                    let mut sealed: Vec<Arc<Segment>> = Vec::new();\n                    for b in &blocks {\n                        for s in Segment::seal_block(b, &self.source, &self.parser, observed) {\n                            sealed.push(Arc::new(s));\n                        }\n                    }\n                    // One batch per call: concatenate the sealed segments.\n                    let total: usize = sealed.iter().map(|s| s.len()).sum();\n                    let mut merged = Batch::new(total);\n                    for req in &self.columns {\n                        let mut values: Vec<Value> = Vec::with_capacity(total);\n                        for s in &sealed {\n                            values.extend(column_values(s, &req.name)?);\n                        }\n                        merged = merged.with_column(req.key.clone(), values);\n                    }\n                    self.last_sealed = sealed;\n                    return Some(merged);\n                }\n                Ok(Refresh::Truncated) => {\n                    // Rotation: keep following the new file from its end.\n                    idle = 0;\n                }\n                Ok(Refresh::NoNew) => {\n                    if let Some(max) = self.max_idle_polls {\n                        if idle >= max {\n                            return None;\n                        }\n                    }\n                    idle = idle.saturating_add(1);\n                    std::thread::sleep(self.poll);\n                }\n                Err(_) => return None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30782,7 +30792,7 @@
   {
     "id": "storage_stream_adapter_next_batch_0f0f4c88",
     "file": "src/storage/stream/adapter.rs",
-    "line": 273,
+    "line": 294,
     "decision": "let Some(max) = self.max_idle_polls",
     "conditions": 1,
     "vectors_required": 2,
@@ -30792,11 +30802,21 @@
   {
     "id": "storage_stream_adapter_next_batch_478e8fd5",
     "file": "src/storage/stream/adapter.rs",
-    "line": 274,
+    "line": 295,
     "decision": "idle >= max",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_adapter_a_mixed_type_field_reads_as_strings_without_losing_values_cf1a8876",
+    "file": "src/storage/stream/adapter.rs",
+    "line": 384,
+    "decision": "match *s {\n                    \"NULL\" => Value::Null,\n                    s => Value::Str(s.to_string().into()),\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
     "wildcard_risk": false
   },
   {
@@ -30930,160 +30950,100 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_batch_push_str_1fb09dba",
+    "id": "storage_stream_batch_is_untyped_7d72d4e2",
     "file": "src/storage/stream/batch.rs",
-    "line": 479,
-    "decision": "match self {\n            Self::Dict { dict, indices } => {\n                if let Some(v) = value {\n                    // Look up or insert into dictionary\n                    let idx = dict.iter().position(|&d| d == v);\n                    let idx = match idx {\n                        Some(i) => i,\n                        None => {\n                            if dict.len() >= DICT_CARDINALITY_THRESHOLD {\n                                // Degrade to Str\n                                let mut strs: Vec<Option<&'a str>> =\n                                    Vec::with_capacity(indices.len().saturating_add(1));\n                                for opt_idx in indices.iter() {\n                                    strs.push(\n                                        opt_idx.and_then(|i| dict.get(usize::from(i)).copied()),\n                                    );\n                                }\n                                strs.push(Some(v));\n                                *self = Self::Str(strs);\n                                return;\n                            }\n                            dict.push(v);\n                            dict.len().saturating_sub(1)\n                        }\n                    };\n                    // Safe: idx < DICT_CARDINALITY_THRESHOLD < u16::MAX\n                    #[allow(clippy::cast_possible_truncation)]\n                    indices.push(Some(idx as u16));\n                } else {\n                    indices.push(None);\n                }\n            }\n            Self::Str(strs) => strs.push(value),\n            Self::Int(v) if Self::all_none(v) => Self::degrade_typed_to_str(v.len(), value, self),\n            Self::Float(v) if Self::all_none(v) => {\n                Self::degrade_typed_to_str(v.len(), value, self);\n            }\n            Self::Bool(v) if Self::all_none(v) => {\n                Self::degrade_typed_to_str(v.len(), value, self);\n            }\n            // No non-null value has been pushed yet (\"first non-null type\n            // wins\" hasn't decided a type): adopt Str now instead of treating\n            // an all-null typed column as an established conflict.\n            Self::Int(v) => Self::degrade_typed_to_str(v.len(), value, self),\n            Self::Float(v) => Self::degrade_typed_to_str(v.len(), value, self),\n            Self::Bool(v) => Self::degrade_typed_to_str(v.len(), value, self),\n        }",
+    "line": 494,
+    "decision": "match self {\n            Self::Dict { dict, .. } => dict.is_empty(),\n            Self::Str(v) => none(v),\n            Self::Int(v) => none(v),\n            Self::Float(v) => none(v),\n            Self::Bool(v) => none(v),\n            Self::Mixed(v) => none(v),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_batch_push_str_0f3d86e1",
+    "id": "storage_stream_batch_adopt_8a17a9ba",
     "file": "src/storage/stream/batch.rs",
-    "line": 512,
-    "decision": "Self::all_none(v)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_stream_batch_push_str_0f3d86e1_2",
-    "file": "src/storage/stream/batch.rs",
-    "line": 513,
-    "decision": "Self::all_none(v)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_stream_batch_push_str_0f3d86e1_3",
-    "file": "src/storage/stream/batch.rs",
-    "line": 516,
-    "decision": "Self::all_none(v)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_stream_batch_push_str_97d92720",
-    "file": "src/storage/stream/batch.rs",
-    "line": 481,
-    "decision": "let Some(v) = value",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_stream_batch_push_str_5a502705",
-    "file": "src/storage/stream/batch.rs",
-    "line": 484,
-    "decision": "match idx {\n                        Some(i) => i,\n                        None => {\n                            if dict.len() >= DICT_CARDINALITY_THRESHOLD {\n                                // Degrade to Str\n                                let mut strs: Vec<Option<&'a str>> =\n                                    Vec::with_capacity(indices.len().saturating_add(1));\n                                for opt_idx in indices.iter() {\n                                    strs.push(\n                                        opt_idx.and_then(|i| dict.get(usize::from(i)).copied()),\n                                    );\n                                }\n                                strs.push(Some(v));\n                                *self = Self::Str(strs);\n                                return;\n                            }\n                            dict.push(v);\n                            dict.len().saturating_sub(1)\n                        }\n                    }",
+    "line": 511,
+    "decision": "match value {\n            FieldValue::Str(s) => Self::Dict {\n                dict: vec![s],\n                indices: nulls_then(rows, 0),\n            },\n            FieldValue::Int(i) => Self::Int(nulls_then(rows, i)),\n            FieldValue::Float(f) => Self::Float(nulls_then(rows, f)),\n            FieldValue::Bool(b) => Self::Bool(nulls_then(rows, b)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_batch_push_str_cd939c11",
+    "id": "storage_stream_batch_to_mixed_c8515637",
     "file": "src/storage/stream/batch.rs",
-    "line": 487,
-    "decision": "dict.len() >= DICT_CARDINALITY_THRESHOLD",
+    "line": 524,
+    "decision": "match self {\n            Self::Str(v) => v.iter().map(|s| s.map(FieldValue::Str)).collect(),\n            Self::Dict { dict, indices } => indices\n                .iter()\n                .map(|i| {\n                    i.and_then(|i| dict.get(usize::from(i)).copied())\n                        .map(FieldValue::Str)\n                })\n                .collect(),\n            Self::Int(v) => v.iter().map(|x| x.map(FieldValue::Int)).collect(),\n            Self::Float(v) => v.iter().map(|x| x.map(FieldValue::Float)).collect(),\n            Self::Bool(v) => v.iter().map(|x| x.map(FieldValue::Bool)).collect(),\n            Self::Mixed(v) => v.clone(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_batch_push_null_91006179",
+    "file": "src/storage/stream/batch.rs",
+    "line": 543,
+    "decision": "match self {\n            Self::Str(v) => v.push(None),\n            Self::Dict { indices, .. } => indices.push(None),\n            Self::Int(v) => v.push(None),\n            Self::Float(v) => v.push(None),\n            Self::Bool(v) => v.push(None),\n            Self::Mixed(v) => v.push(None),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_batch_push_5bc76156",
+    "file": "src/storage/stream/batch.rs",
+    "line": 563,
+    "decision": "self.is_untyped()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_batch_decode_to_str_8c0e1448",
-    "file": "src/storage/stream/batch.rs",
-    "line": 547,
-    "decision": "match self {\n            Self::Str(strs) => strs.clone(),\n            Self::Dict { dict, indices } => indices\n                .iter()\n                .map(|opt| opt.and_then(|i| dict.get(usize::from(i)).copied()))\n                .collect(),\n            Self::Int(_) | Self::Float(_) | Self::Bool(_) => vec![None; self.len()],\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_stream_batch_push_int_e20e91a8",
-    "file": "src/storage/stream/batch.rs",
-    "line": 565,
-    "decision": "match self {\n            Self::Int(v) => v.push(value),\n            Self::Dict { dict, .. } if dict.is_empty() => {\n                let len = self.len();\n                *self = Self::Int({\n                    let mut v = vec![None; len];\n                    v.push(value);\n                    v\n                });\n            }\n            _ => {\n                let mut strs = self.decode_to_str();\n                strs.push(None);\n                *self = Self::Str(strs);\n            }\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": true
-  },
-  {
-    "id": "storage_stream_batch_push_int_9b109d34",
+    "id": "storage_stream_batch_push_cb470499",
     "file": "src/storage/stream/batch.rs",
     "line": 567,
-    "decision": "dict.is_empty()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_stream_batch_push_float_09aba373",
-    "file": "src/storage/stream/batch.rs",
-    "line": 586,
-    "decision": "match self {\n            Self::Float(v) => v.push(value),\n            Self::Dict { dict, .. } if dict.is_empty() => {\n                let len = self.len();\n                *self = Self::Float({\n                    let mut v = vec![None; len];\n                    v.push(value);\n                    v\n                });\n            }\n            _ => {\n                let mut strs = self.decode_to_str();\n                strs.push(None);\n                *self = Self::Str(strs);\n            }\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": true
-  },
-  {
-    "id": "storage_stream_batch_push_float_9b109d34",
-    "file": "src/storage/stream/batch.rs",
-    "line": 588,
-    "decision": "dict.is_empty()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_stream_batch_push_bool_88fa6ea8",
-    "file": "src/storage/stream/batch.rs",
-    "line": 607,
-    "decision": "match self {\n            Self::Bool(v) => v.push(value),\n            Self::Dict { dict, .. } if dict.is_empty() => {\n                let len = self.len();\n                *self = Self::Bool({\n                    let mut v = vec![None; len];\n                    v.push(value);\n                    v\n                });\n            }\n            _ => {\n                let mut strs = self.decode_to_str();\n                strs.push(None);\n                *self = Self::Str(strs);\n            }\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": true
-  },
-  {
-    "id": "storage_stream_batch_push_bool_9b109d34",
-    "file": "src/storage/stream/batch.rs",
-    "line": 609,
-    "decision": "dict.is_empty()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_stream_batch_len_ba1df102",
-    "file": "src/storage/stream/batch.rs",
-    "line": 644,
-    "decision": "match self {\n            Self::Str(v) => v.len(),\n            Self::Dict { indices, .. } => indices.len(),\n            Self::Int(v) => v.len(),\n            Self::Float(v) => v.len(),\n            Self::Bool(v) => v.len(),\n        }",
+    "decision": "match (&mut *self, value) {\n            (Self::Dict { dict, indices }, FieldValue::Str(v)) => {\n                if let Some(i) = dict.iter().position(|&d| d == v) {\n                    // Safe: i < DICT_CARDINALITY_THRESHOLD < u16::MAX\n                    #[allow(clippy::cast_possible_truncation)]\n                    indices.push(Some(i as u16));\n                } else if dict.len() < DICT_CARDINALITY_THRESHOLD {\n                    dict.push(v);\n                    #[allow(clippy::cast_possible_truncation)]\n                    indices.push(Some(dict.len().saturating_sub(1) as u16));\n                } else {\n                    // Degrade to Str.\n                    let mut strs: Vec<Option<&'a str>> = indices\n                        .iter()\n                        .map(|i| i.and_then(|i| dict.get(usize::from(i)).copied()))\n                        .collect();\n                    strs.push(Some(v));\n                    *self = Self::Str(strs);\n                }\n            }\n            (Self::Str(strs), FieldValue::Str(v)) => strs.push(Some(v)),\n            (Self::Int(v), FieldValue::Int(i)) => v.push(Some(i)),\n            (Self::Float(v), FieldValue::Float(f)) => v.push(Some(f)),\n            (Self::Float(v), FieldValue::Int(i)) => v.push(Some(i as f64)),\n            (Self::Int(v), FieldValue::Float(f)) => {\n                let mut floats: Vec<Option<f64>> = v.iter().map(|x| x.map(|i| i as f64)).collect();\n                floats.push(Some(f));\n                *self = Self::Float(floats);\n            }\n            (Self::Bool(v), FieldValue::Bool(b)) => v.push(Some(b)),\n            (Self::Mixed(v), value) => v.push(Some(value)),\n            (_, value) => {\n                let mut mixed = self.to_mixed();\n                mixed.push(Some(value));\n                *self = Self::Mixed(mixed);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_batch_clear_da4db55e",
+    "id": "storage_stream_batch_push_6be84001",
     "file": "src/storage/stream/batch.rs",
-    "line": 661,
-    "decision": "match self {\n            Self::Str(v) => v.clear(),\n            Self::Dict { dict, indices } => {\n                dict.clear();\n                indices.clear();\n            }\n            Self::Int(v) => v.clear(),\n            Self::Float(v) => v.clear(),\n            Self::Bool(v) => v.clear(),\n        }",
+    "line": 569,
+    "decision": "let Some(i) = dict.iter().position(|&d| d == v)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_batch_push_1a01c05f",
+    "file": "src/storage/stream/batch.rs",
+    "line": 573,
+    "decision": "dict.len() < DICT_CARDINALITY_THRESHOLD",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_batch_len_d50584dc",
+    "file": "src/storage/stream/batch.rs",
+    "line": 629,
+    "decision": "match self {\n            Self::Str(v) => v.len(),\n            Self::Dict { indices, .. } => indices.len(),\n            Self::Int(v) => v.len(),\n            Self::Float(v) => v.len(),\n            Self::Bool(v) => v.len(),\n            Self::Mixed(v) => v.len(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_batch_clear_28d9c800",
+    "file": "src/storage/stream/batch.rs",
+    "line": 647,
+    "decision": "match self {\n            Self::Str(v) => v.clear(),\n            Self::Dict { dict, indices } => {\n                dict.clear();\n                indices.clear();\n            }\n            Self::Int(v) => v.clear(),\n            Self::Float(v) => v.clear(),\n            Self::Bool(v) => v.clear(),\n            Self::Mixed(v) => v.clear(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -31092,7 +31052,7 @@
   {
     "id": "storage_stream_batch_set_375c3fd8",
     "file": "src/storage/stream/batch.rs",
-    "line": 709,
+    "line": 696,
     "decision": "col.len() < row",
     "conditions": 1,
     "vectors_required": 2,
@@ -31102,7 +31062,7 @@
   {
     "id": "storage_stream_batch_set_typed_375c3fd8",
     "file": "src/storage/stream/batch.rs",
-    "line": 775,
+    "line": 762,
     "decision": "col.len() < row",
     "conditions": 1,
     "vectors_required": 2,
@@ -31112,7 +31072,7 @@
   {
     "id": "storage_stream_batch_field_store_dict_encoding_a639947f",
     "file": "src/storage/stream/batch.rs",
-    "line": 886,
+    "line": 873,
     "decision": "match col {\n            FieldColumn::Dict { dict, indices } => {\n                assert_eq!(dict.len(), 2); // nginx, postgres\n                assert_eq!(indices.len(), 3);\n            }\n            _ => panic!(\"Expected Dict encoding\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31122,7 +31082,7 @@
   {
     "id": "storage_stream_batch_set_int_creates_typed_column_0e41a16d",
     "file": "src/storage/stream/batch.rs",
-    "line": 901,
+    "line": 888,
     "decision": "match store.get(\"status\").unwrap() {\n            FieldColumn::Int(v) => assert_eq!(v, &[Some(200), Some(500)]),\n            other => panic!(\"Expected Int encoding, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31132,7 +31092,7 @@
   {
     "id": "storage_stream_batch_set_int_pads_nulls_for_skipped_rows_43dd5cbe",
     "file": "src/storage/stream/batch.rs",
-    "line": 912,
+    "line": 899,
     "decision": "match store.get(\"status\").unwrap() {\n            FieldColumn::Int(v) => assert_eq!(v, &[None, None, Some(404)]),\n            other => panic!(\"Expected Int encoding, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31142,7 +31102,7 @@
   {
     "id": "storage_stream_batch_set_float_creates_typed_column_5332f345",
     "file": "src/storage/stream/batch.rs",
-    "line": 924,
+    "line": 911,
     "decision": "match store.get(\"duration\").unwrap() {\n            FieldColumn::Float(v) => assert_eq!(v, &[Some(1.5), Some(2.25)]),\n            other => panic!(\"Expected Float encoding, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31150,20 +31110,60 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_batch_int_column_conflicting_with_string_degrades_to_str_preserving_new_value_153bd076",
+    "id": "storage_stream_batch_column_60d5f337",
     "file": "src/storage/stream/batch.rs",
-    "line": 937,
-    "decision": "match store.get(\"mixed\").unwrap() {\n            FieldColumn::Str(v) => assert_eq!(v, &[None, Some(\"oops\")]),\n            other => panic!(\"Expected Str degrade, got {other:?}\"),\n        }",
+    "line": 921,
+    "decision": "match value {\n                Some(FieldValue::Str(s)) => store.set(\"f\", row, s),\n                Some(FieldValue::Int(i)) => store.set_int(\"f\", row, *i),\n                Some(FieldValue::Float(x)) => store.set_float(\"f\", row, *x),\n                Some(FieldValue::Bool(b)) => store.set_bool(\"f\", row, *b),\n                None => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_batch_string_column_conflicting_with_int_degrades_preserving_existing_strings_55d66c1d",
+    "id": "storage_stream_batch_conflicting_types_keep_every_value_12986760",
     "file": "src/storage/stream/batch.rs",
-    "line": 951,
-    "decision": "match store.get(\"mixed\").unwrap() {\n            FieldColumn::Str(v) => assert_eq!(v, &[Some(\"hello\"), Some(\"world\"), None]),\n            other => panic!(\"Expected Str degrade preserving prior strings, got {other:?}\"),\n        }",
+    "line": 947,
+    "decision": "match column(values) {\n                FieldColumn::Mixed(got) => assert_eq!(got, values, \"{values:?}\"),\n                other => panic!(\"{values:?}: expected Mixed, got {other:?}\"),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_batch_integers_and_floats_widen_to_floats_e8c40a44",
+    "file": "src/storage/stream/batch.rs",
+    "line": 960,
+    "decision": "match column(values) {\n                FieldColumn::Float(got) => {\n                    let expected: Vec<Option<f64>> = values\n                        .iter()\n                        .map(|v| match v {\n                            Some(I(i)) => Some(*i as f64),\n                            Some(F(f)) => Some(*f),\n                            _ => None,\n                        })\n                        .collect();\n                    assert_eq!(got, expected);\n                }\n                other => panic!(\"{values:?}: expected Float, got {other:?}\"),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_batch_integers_and_floats_widen_to_floats_afa494f5",
+    "file": "src/storage/stream/batch.rs",
+    "line": 964,
+    "decision": "match v {\n                            Some(I(i)) => Some(*i as f64),\n                            Some(F(f)) => Some(*f),\n                            _ => None,\n                        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_stream_batch_the_first_non_null_value_decides_the_type_659cfa71",
+    "file": "src/storage/stream/batch.rs",
+    "line": 1008,
+    "decision": "match col {\n            FieldColumn::Int(v) => assert_eq!(v, vec![None, None, None, Some(5)]),\n            other => panic!(\"{other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_batch_a_high_cardinality_string_column_then_a_number_keeps_both_76c7b25b",
+    "file": "src/storage/stream/batch.rs",
+    "line": 1036,
+    "decision": "match column(&values) {\n            FieldColumn::Mixed(got) => assert_eq!(got, values),\n            other => panic!(\"expected Mixed, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -32600,10 +32600,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_segment_len_4ad440f3",
+    "id": "storage_stream_segment_len_60b2ae30",
     "file": "src/storage/stream/segment.rs",
-    "line": 48,
-    "decision": "match self {\n            Self::Dict { indices, .. } => indices.len(),\n            Self::Str(v) => v.len(),\n            Self::Int(v) => v.len(),\n            Self::Float(v) => v.len(),\n            Self::Bool(v) => v.len(),\n        }",
+    "line": 66,
+    "decision": "match self {\n            Self::Dict { indices, .. } => indices.len(),\n            Self::Str(v) => v.len(),\n            Self::Int(v) => v.len(),\n            Self::Float(v) => v.len(),\n            Self::Bool(v) => v.len(),\n            Self::Mixed(v) => v.len(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -32612,7 +32612,7 @@
   {
     "id": "storage_stream_segment_dict_contains_adfd6bd3",
     "file": "src/storage/stream/segment.rs",
-    "line": 67,
+    "line": 86,
     "decision": "match self {\n            Self::Dict { dict, .. } => Some(dict.iter().any(|d| d.as_ref() == value)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32620,10 +32620,10 @@
     "wildcard_risk": true
   },
   {
-    "id": "storage_stream_segment_summarize_column_a823f97c",
+    "id": "storage_stream_segment_summarize_column_c1a5c273",
     "file": "src/storage/stream/segment.rs",
-    "line": 126,
-    "decision": "match col {\n        OwnedColumn::Int(v) => Some(fold_numeric(v.iter().filter_map(|x| x.map(|n| n as f64)))),\n        OwnedColumn::Float(v) => Some(fold_numeric(v.iter().filter_map(|x| *x))),\n        OwnedColumn::Dict { indices, .. } => Some(ColumnSummary {\n            count: indices.iter().filter(|i| i.is_some()).count() as u64,\n            ..ColumnSummary::default()\n        }),\n        OwnedColumn::Str(_) | OwnedColumn::Bool(_) => None,\n    }",
+    "line": 145,
+    "decision": "match col {\n        OwnedColumn::Int(v) => Some(fold_numeric(v.iter().filter_map(|x| x.map(|n| n as f64)))),\n        OwnedColumn::Float(v) => Some(fold_numeric(v.iter().filter_map(|x| *x))),\n        OwnedColumn::Dict { indices, .. } => Some(ColumnSummary {\n            count: indices.iter().filter(|i| i.is_some()).count() as u64,\n            ..ColumnSummary::default()\n        }),\n        OwnedColumn::Str(_) | OwnedColumn::Bool(_) | OwnedColumn::Mixed(_) => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -32632,7 +32632,7 @@
   {
     "id": "storage_stream_segment_fold_numeric_db7f1d82",
     "file": "src/storage/stream/segment.rs",
-    "line": 140,
+    "line": 159,
     "decision": "acc.count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -32642,7 +32642,7 @@
   {
     "id": "storage_stream_segment_seal_block_faf03595",
     "file": "src/storage/stream/segment.rs",
-    "line": 185,
+    "line": 204,
     "decision": "off < block.bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32652,7 +32652,7 @@
   {
     "id": "storage_stream_segment_seal_block_02e1e2c5",
     "file": "src/storage/stream/segment.rs",
-    "line": 188,
+    "line": 207,
     "decision": "consumed == 0 || batch.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -32662,7 +32662,7 @@
   {
     "id": "storage_stream_segment_seal_lines_c1e05daa",
     "file": "src/storage/stream/segment.rs",
-    "line": 219,
+    "line": 238,
     "decision": "!(1..=SEGMENT_MAX_ROWS).contains(&rows)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32672,7 +32672,7 @@
   {
     "id": "storage_stream_segment_seal_lines_09844d49",
     "file": "src/storage/stream/segment.rs",
-    "line": 223,
+    "line": 242,
     "decision": "batch.len() != rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -32682,7 +32682,7 @@
   {
     "id": "storage_stream_segment_seal_lines_7bfb7587",
     "file": "src/storage/stream/segment.rs",
-    "line": 226,
+    "line": 245,
     "decision": "consumed != bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32692,7 +32692,7 @@
   {
     "id": "storage_stream_segment_from_batch_6a149f18",
     "file": "src/storage/stream/segment.rs",
-    "line": 253,
+    "line": 272,
     "decision": "let Some(col) = batch.fields.get(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32702,7 +32702,7 @@
   {
     "id": "storage_stream_segment_end_off_fcbe87d8",
     "file": "src/storage/stream/segment.rs",
-    "line": 362,
+    "line": 381,
     "decision": "match self.lines.last() {\n            Some(&(start, len)) => {\n                let block_end = u64::from(start)\n                    .saturating_add(u64::from(len))\n                    .saturating_add(1);\n                // `start` is relative to `bytes`; the block's file offset is\n                // `file_off - first_line_start`.\n                let first = self.lines.first().map_or(0, |&(s, _)| u64::from(s));\n                self.file_off\n                    .saturating_sub(first)\n                    .saturating_add(block_end)\n            }\n            None => self.file_off,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32712,7 +32712,7 @@
   {
     "id": "storage_stream_segment_overlaps_event_703b3442",
     "file": "src/storage/stream/segment.rs",
-    "line": 438,
+    "line": 457,
     "decision": "match self.minmax_event {\n            Some((lo, hi)) => lo < range.end && hi >= range.start,\n            None => true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32720,19 +32720,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_segment_field_str_885feae4",
+    "id": "storage_stream_segment_field_str_e200e6de",
     "file": "src/storage/stream/segment.rs",
-    "line": 459,
-    "decision": "match self.field(name)? {\n            OwnedColumn::Dict { dict, indices } => {\n                let idx = (*indices.get(i)?)?;\n                dict.get(usize::from(idx)).map(|s| s.as_ref())\n            }\n            OwnedColumn::Str(spans) => {\n                let span = (*spans.get(i)?)?;\n                std::str::from_utf8(self.slice(span)).ok()\n            }\n            _ => None,\n        }",
+    "line": 479,
+    "decision": "match self.field(name)? {\n            OwnedColumn::Dict { dict, indices } => {\n                let idx = (*indices.get(i)?)?;\n                dict.get(usize::from(idx)).map(|s| s.as_ref())\n            }\n            OwnedColumn::Str(spans) => {\n                let span = (*spans.get(i)?)?;\n                std::str::from_utf8(self.slice(span)).ok()\n            }\n            OwnedColumn::Mixed(values) => match (*values.get(i)?)? {\n                MixedValue::Str(span) => std::str::from_utf8(self.slice(span)).ok(),\n                MixedValue::Int(_) | MixedValue::Float(_) | MixedValue::Bool(_) => None,\n            },\n            OwnedColumn::Int(_) | OwnedColumn::Float(_) | OwnedColumn::Bool(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
-    "wildcard_risk": true
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_segment_field_str_8dc12de1",
+    "file": "src/storage/stream/segment.rs",
+    "line": 488,
+    "decision": "match (*values.get(i)?)? {\n                MixedValue::Str(span) => std::str::from_utf8(self.slice(span)).ok(),\n                MixedValue::Int(_) | MixedValue::Float(_) | MixedValue::Bool(_) => None,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
   },
   {
     "id": "storage_stream_segment_span_in_2e85e3d9",
     "file": "src/storage/stream/segment.rs",
-    "line": 497,
+    "line": 521,
     "decision": "end > bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32742,7 +32752,7 @@
   {
     "id": "storage_stream_segment_minmax_36db5895",
     "file": "src/storage/stream/segment.rs",
-    "line": 506,
+    "line": 530,
     "decision": "match acc {\n            None => (*v, *v),\n            Some((lo, hi)) => (lo.min(*v), hi.max(*v)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32750,10 +32760,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_segment_own_column_0746681c",
+    "id": "storage_stream_segment_own_column_dde06080",
     "file": "src/storage/stream/segment.rs",
-    "line": 517,
-    "decision": "match col {\n        FieldColumn::Dict { dict, indices } => {\n            let mut idx = indices.clone();\n            idx.extend(std::iter::repeat_n(None, pad(idx.len())));\n            OwnedColumn::Dict {\n                dict: dict.iter().map(|s| Arc::<str>::from(*s)).collect(),\n                indices: idx,\n            }\n        }\n        FieldColumn::Str(strs) => {\n            let mut spans: Vec<Option<Span>> = strs\n                .iter()\n                .map(|s| s.and_then(|s| span_in(bytes, s.as_bytes())))\n                .collect();\n            spans.extend(std::iter::repeat_n(None, pad(spans.len())));\n            OwnedColumn::Str(spans)\n        }\n        FieldColumn::Int(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Int(v)\n        }\n        FieldColumn::Float(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Float(v)\n        }\n        FieldColumn::Bool(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Bool(v)\n        }\n    }",
+    "line": 541,
+    "decision": "match col {\n        FieldColumn::Dict { dict, indices } => {\n            let mut idx = indices.clone();\n            idx.extend(std::iter::repeat_n(None, pad(idx.len())));\n            OwnedColumn::Dict {\n                dict: dict.iter().map(|s| Arc::<str>::from(*s)).collect(),\n                indices: idx,\n            }\n        }\n        FieldColumn::Str(strs) => {\n            let mut spans: Vec<Option<Span>> = strs\n                .iter()\n                .map(|s| s.and_then(|s| span_in(bytes, s.as_bytes())))\n                .collect();\n            spans.extend(std::iter::repeat_n(None, pad(spans.len())));\n            OwnedColumn::Str(spans)\n        }\n        FieldColumn::Int(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Int(v)\n        }\n        FieldColumn::Float(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Float(v)\n        }\n        FieldColumn::Bool(v) => {\n            let mut v = v.clone();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Bool(v)\n        }\n        FieldColumn::Mixed(values) => {\n            let mut v: Vec<Option<MixedValue>> = values\n                .iter()\n                .map(|value| {\n                    value.and_then(|value| match value {\n                        FieldValue::Str(s) => span_in(bytes, s.as_bytes()).map(MixedValue::Str),\n                        FieldValue::Int(i) => Some(MixedValue::Int(i)),\n                        FieldValue::Float(f) => Some(MixedValue::Float(f)),\n                        FieldValue::Bool(b) => Some(MixedValue::Bool(b)),\n                    })\n                })\n                .collect();\n            v.extend(std::iter::repeat_n(None, pad(v.len())));\n            OwnedColumn::Mixed(v)\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_segment_own_column_a73a3f95",
+    "file": "src/storage/stream/segment.rs",
+    "line": 577,
+    "decision": "match value {\n                        FieldValue::Str(s) => span_in(bytes, s.as_bytes()).map(MixedValue::Str),\n                        FieldValue::Int(i) => Some(MixedValue::Int(i)),\n                        FieldValue::Float(f) => Some(MixedValue::Float(f)),\n                        FieldValue::Bool(b) => Some(MixedValue::Bool(b)),\n                    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
