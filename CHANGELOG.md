@@ -4,6 +4,21 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.124.0] - 2026-10-11
+
+### Added
+
+- **Record WAL: `storage::ingest`, feature `ingest`** (#571, second story of the write-path epic #570; ADR 0027, 0029). `Wal::open(table, flushed_lsn, options)` locks the table, replays `wal/` and starts the WAL thread. `append(record, Ack)` assigns the next LSN and frames `[len u32][crc32c u32][lsn u64][payload]` into a shared buffer; the WAL thread group-commits (one write, one fsync per round), advances `durable` and wakes waiters. `Ack::{Memory, Durable, Flushed}`, and `flushed <= durable <= visible` always holds. Segment files `wal/<lsn_lo:020>.wal` are created on first write (directory fsynced) and closed at `roll()` (exact frame boundary) or the size limit (64 MiB). `mark_flushed` unlinks the segments wholly at or below the flushed LSN. CRC-32C is hand-rolled; there is no new dependency.
+- **Recovery** replays from `flushed_lsn` and requires consecutive LSNs. It truncates only a torn tail: a bad frame in the last file with nothing valid after it. Any other damage (a bad frame in an earlier file, a bad frame followed by valid ones, an LSN gap, a missing file) fails with `WalError::Corrupt` and leaves the files untouched, rather than drop records that may have been acknowledged. ADR 0027 is amended accordingly.
+- **`TableLock`**: one writer per table through `<table>/LOCK`. Acquiring retries for about 50 ms, because a child forked by another thread shares the lock until it execs.
+- **Logfile mode**: `LogFile::open_at(path, offset)` resumes at a byte offset (the LSN in that mode), and `FileIdentity`/`identity()`/`rotated()` detect a rename-and-recreate rotation.
+- **Tests**:
+  - every truncation of a valid log replays its complete prefix
+  - bit flips are detected
+  - group commit: 1,600 appends from 8 threads take far fewer fsyncs
+  - ack levels, roll and unlink, lock exclusion, I/O failure
+  - `tests/wal_crash.rs`: SIGKILL torture that also simulates power loss by cutting the unacked tail; 300 kills with 147 cuts lost no durable ack
+
 ## [0.123.0] - 2026-10-11
 
 ### Added
