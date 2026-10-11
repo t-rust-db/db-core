@@ -203,6 +203,8 @@ pub struct FileMetaData {
     pub num_rows: i64,
     pub row_groups: Vec<RowGroup>,
     pub created_by: Option<String>,
+    /// `key_value_metadata` (field 5): key and optional value, in order.
+    pub key_value_metadata: Vec<(String, Option<String>)>,
 }
 
 /// Locate and decode the `FileMetaData` footer within a full Parquet file
@@ -241,6 +243,19 @@ fn parse_file_meta_data(fields: &[(i16, Value)]) -> FileMetaData {
         .map(|items| items.iter().map(parse_row_group).collect())
         .unwrap_or_default();
     let created_by = get(6).and_then(Value::as_str).map(str::to_string);
+    let key_value_metadata = get(5)
+        .and_then(Value::as_list)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|kv| {
+                    let key = kv.field(1).and_then(Value::as_str)?.to_string();
+                    let value = kv.field(2).and_then(Value::as_str).map(str::to_string);
+                    Some((key, value))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     FileMetaData {
         version,
@@ -248,6 +263,7 @@ fn parse_file_meta_data(fields: &[(i16, Value)]) -> FileMetaData {
         num_rows,
         row_groups,
         created_by,
+        key_value_metadata,
     }
 }
 

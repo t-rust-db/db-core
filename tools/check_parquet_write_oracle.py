@@ -35,6 +35,7 @@ ARROW_TYPES = {
     "double": pa.float64(),
     "utf8": pa.string(),
     "timestamp_micros": pa.timestamp("us", tz="UTC"),
+    "timestamp_nanos": pa.timestamp("ns"),
 }
 
 DUCKDB_TYPES = {
@@ -45,6 +46,7 @@ DUCKDB_TYPES = {
     "double": "DOUBLE",
     "utf8": "VARCHAR",
     "timestamp_micros": "TIMESTAMP WITH TIME ZONE",
+    "timestamp_nanos": "TIMESTAMP_NS",
 }
 
 # How DuckDB's VARCHAR stats_min_value/stats_max_value are cast back.
@@ -56,6 +58,7 @@ DUCKDB_STAT_CAST = {
     "double": "{}::DOUBLE",
     "utf8": "{}",
     "timestamp_micros": "epoch_us({}::TIMESTAMPTZ)",
+    "timestamp_nanos": "epoch_ns({}::TIMESTAMP_NS)",
 }
 
 
@@ -107,7 +110,7 @@ class Failures:
 def check_pyarrow(path, columns, fails):
     table = pq.read_table(path)
     meta = pq.ParquetFile(path).metadata
-    expected_rows = len(columns[0]["values"])
+    expected_rows = next(len(c["values"]) for c in columns if c["values"] is not None)
     fails.check(table.num_rows == expected_rows, f"pyarrow: {table.num_rows} rows, expected {expected_rows}")
     for i, col in enumerate(columns):
         name, ctype = col["name"], col["type"]
@@ -115,9 +118,13 @@ def check_pyarrow(path, columns, fails):
         fails.check(field.type == ARROW_TYPES[ctype], f"pyarrow {name}: type {field.type}")
         fails.check(field.nullable == col["nullable"], f"pyarrow {name}: nullable {field.nullable}")
         data = table.column(name)
-        if ctype == "timestamp_micros":
+        if ctype in ("timestamp_micros", "timestamp_nanos"):
             data = pc.cast(data, pa.int64())
         got = [normalize(ctype, v) for v in data.to_pylist()]
+        if col["values"] is None:
+            # Not derivable from the input (see the example): pyarrow's
+            # reading is the reference DuckDB and the statistics must match.
+            col["values"] = [v for v in data.to_pylist()]
         want = [normalize(ctype, v) for v in col["values"]]
         fails.check(got == want, f"pyarrow {name}: values differ (first at {first_diff(got, want)})")
         start = 0
@@ -150,7 +157,7 @@ def check_duckdb(path, columns, fails):
         name, ctype = col["name"], col["type"]
         q = '"' + name.replace('"', '""') + '"'
         fails.check(types.get(name) == DUCKDB_TYPES[ctype], f"duckdb {name}: type {types.get(name)}")
-        select = f"epoch_us({q})" if ctype == "timestamp_micros" else q
+        select = {"timestamp_micros": f"epoch_us({q})", "timestamp_nanos": f"epoch_ns({q})"}.get(ctype, q)
         got = [normalize(ctype, r[0]) for r in con.execute(f"SELECT {select} FROM read_parquet('{p}')").fetchall()]
         want = [normalize(ctype, v) for v in col["values"]]
         fails.check(got == want, f"duckdb {name}: values differ (first at {first_diff(got, want)})")

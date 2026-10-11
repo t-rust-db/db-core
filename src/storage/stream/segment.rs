@@ -201,6 +201,37 @@ impl Segment {
         out
     }
 
+    /// Seal exactly one segment from `bytes`: line-aligned records, one per
+    /// line, each with its own observed timestamp (`observed_ts_ns[i]` for
+    /// line `i`) rather than one per read. What record ingestion (ADR 0027,
+    /// #572) builds pages with; `file_off` is the page's first LSN. `None`
+    /// when the parser did not return exactly one row per line, or the
+    /// lines exceed [`SEGMENT_MAX_ROWS`].
+    #[must_use]
+    pub fn seal_lines<P: LineParser>(
+        bytes: Arc<[u8]>,
+        file_off: u64,
+        source: &Source,
+        parser: &P,
+        observed_ts_ns: &[i64],
+    ) -> Option<Segment> {
+        let rows = observed_ts_ns.len();
+        if !(1..=SEGMENT_MAX_ROWS).contains(&rows) {
+            return None;
+        }
+        let (mut batch, consumed) = parser.parse_batch(source.clone(), &bytes, rows);
+        if batch.len() != rows {
+            return None;
+        }
+        if consumed != bytes.len() {
+            return None;
+        }
+        for (slot, ts) in batch.observed_ts_ns.iter_mut().zip(observed_ts_ns) {
+            *slot = Some(*ts);
+        }
+        Some(Self::from_batch(&batch, Arc::clone(&bytes), 0, file_off))
+    }
+
     /// Convert a transient batch borrowed from `bytes[base..]` into an owned
     /// segment. Strings that do not point into `bytes` become `None`.
     fn from_batch(batch: &LogBatch<'_>, bytes: Arc<[u8]>, base: usize, file_off: u64) -> Self {
@@ -531,6 +562,32 @@ mod tests {
     }
     fn src() -> Source {
         Source::new(SourceKind::File, "/var/log/t.log")
+    }
+
+    #[test]
+    fn seal_lines_gives_each_row_its_own_observed_ts() {
+        let bytes: Arc<[u8]> = Arc::from(&b"{\"a\":1,\"msg\":\"x\"}\nplain text\n{\"a\":3}\n"[..]);
+        let parser = crate::storage::stream::JsonlParser::new();
+        let s = Segment::seal_lines(Arc::clone(&bytes), 7, &src(), &parser, &[10, 20, 30]).unwrap();
+        assert_eq!(s.len(), 3);
+        assert_eq!(s.file_off(), 7);
+        assert_eq!(s.observed_ts_ns(), &[Some(10), Some(20), Some(30)]);
+        assert_eq!(s.raw_line(1), b"plain text");
+        assert!(s.field("a").is_some());
+    }
+
+    #[test]
+    fn seal_lines_refuses_a_row_count_mismatch() {
+        let parser = crate::storage::stream::JsonlParser::new();
+        let two: Arc<[u8]> = Arc::from(&b"{}\n{}\n"[..]);
+        // One timestamp for two lines: the parser stops after one row.
+        assert!(Segment::seal_lines(Arc::clone(&two), 0, &src(), &parser, &[1]).is_none());
+        // Three timestamps for two lines.
+        assert!(Segment::seal_lines(Arc::clone(&two), 0, &src(), &parser, &[1, 2, 3]).is_none());
+        assert!(Segment::seal_lines(two, 0, &src(), &parser, &[]).is_none());
+        let too_many = vec![0i64; SEGMENT_MAX_ROWS + 1];
+        let lines: Arc<[u8]> = Arc::from("{}\n".repeat(SEGMENT_MAX_ROWS + 1).into_bytes());
+        assert!(Segment::seal_lines(lines, 0, &src(), &parser, &too_many).is_none());
     }
 
     #[test]
