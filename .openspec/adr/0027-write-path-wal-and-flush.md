@@ -164,6 +164,33 @@ a snapshot, so the union has no duplicates and no gaps. The default read
 level is `visible_lsn`; a query option restricts it to `durable_lsn` for
 callers that must not see a record a crash could still erase.
 
+**Amendment (#572): as built.** `TableWriter::snapshot()` returns a
+`Snapshot` (manifest, memory-mapped files, sealed pages plus a copy of
+the head); `engine::column::table::query_snapshot` runs one `SELECT` over
+it. Not yet built: minmax/dictionary pruning and `order_key_bound` for
+pages (they are loaded and filtered), and the `durable_lsn` read option.
+
+The table's columns are the union of every file's and page's columns,
+each field widened over all of them by the flush rule (INT + FLOAT →
+DOUBLE, any other mix → string). Each segment then reads as that schema:
+a column it lacks is NULL, and a column it stores with another type is
+cast by the rule a flush writes by (`snapshot::cast`), so a record reads
+the same before and after its flush. A row group that needs neither is
+the plain `RowGroupSegment`; one that does decodes eagerly and fixes its
+columns up. Footer statistics prune and bound a top-N only through
+columns stored with the table's type: an INT64 file's statistics say
+nothing about the string comparison a widened column gets. A property
+test checks that query results do not depend on where seals and flushes
+fell, in and out of process.
+
+One case is not invariant: a field that sees integers above 2⁵³, floats
+and strings. A flush whose pages had integers and floats stores the
+integer as DOUBLE, rounded; once a string widens the table's column to
+text, it reads as the rounded number, where the same integer flushed
+without a float reads exactly. (A whole DOUBLE renders like the integer,
+`1` not `1.0`, so smaller integers are unaffected.) Within one page, a
+type conflict loses values in the parser before any of this (#584).
+
 ### Readers in other processes
 
 The head page lives only in the writer's memory, but everything durable
@@ -185,6 +212,19 @@ writer uses, so clients consume one API (ADR 0029).
 Files have different schemas (Tier-3 fields come and go). A column
 missing from a segment reads as NULL; today `engine/column.rs` reports a
 missing column as `VmError::SegmentLoad`, which changes for this mode.
+
+**Amendment (#572): as built.** `Snapshot::open(dir)` does steps 1–3
+without the `LOCK` and without changing a file. A bad or partial frame
+ends the read only in the last WAL file (the writer may be writing it);
+in an earlier file it is corruption, as in recovery. It starts again
+when the files no longer reach down to `flushed_lsn + 1` or one vanishes
+mid-read, up to 20 times, then fails. The reader sees at least
+`durable_lsn`, and may see more: a frame written but not yet fsynced is
+read too, and a power cut could still take it back. Missing columns read
+as NULL, as above. `tests/table_reader.rs` reads a table from another
+process while `tests/helpers/table_probe.rs` appends, seals and flushes,
+and checks each read reaches the writer's last durable ack and holds
+every LSN once.
 
 ### Parquet writer: `storage::column::parquet::write`
 
@@ -230,6 +270,12 @@ The table is opened as `Mode::Batch` (ADR 0017) on a directory that
 contains `manifest.json`; no new mode. Writing is the Rust `append` API
 above; SQL `INSERT` is out of scope.
 
+**Amendment (#572):** the engine is `engine::column::table::TableEngine`,
+`Mode::Batch`, opened on the directory; the table is named after it.
+Each `run_query` reads a fresh snapshot. `BatchEngine` stays the
+single-file engine. Joins, `IN (SELECT ...)` and window functions are
+unsupported, as in `BatchEngine`.
+
 ### Where tables differ from DuckDB (#572)
 
 Flushed files are plain Parquet that DuckDB and pyarrow read exactly
@@ -243,7 +289,7 @@ differently from DuckDB, deliberately:
 | Timestamp range | full `i64` | `i64::MAX` and `i64::MIN + 1` are ±infinity; instants in late 1677 cannot be converted (also in files DuckDB writes) |
 | Which rows a reader sees | the manifest's files plus the WAL tail / pages above `flushed_lsn` | reads files only: never the unflushed tail. A glob over `data/` can also catch a file published but not yet committed (between flush steps 2 and 3), which recovery deletes; read the manifest's file list, or `archive/` once ADR 0028 lands |
 | Schema across files | each file has the fields its pages had | needs `read_parquet(..., union_by_name = true)` across files |
-| Field type conflicts | INT and FLOAT widen to DOUBLE; any other mix becomes a string | `read_json` unifies to a common supertype, often `VARCHAR`/`JSON` |
+| Field type conflicts | INT and FLOAT widen to DOUBLE; any other mix becomes a string, per file and again across the table at read time. An integer above 2⁵³ in a field that also has floats and strings may read exact or rounded depending on flush timing; a conflict inside one page loses values (#584) | `read_json` unifies to a common supertype, often `VARCHAR`/`JSON` |
 | Lines that are not JSON in a `json` table | kept as a row (`raw`, `message`), fields NULL | `read_json` fails, or drops them with `ignore_errors` |
 | Nested objects | flattened one level to `a.b`; deeper objects are not columns (still in `raw`) | `STRUCT` columns |
 | Arrays | the JSON text, as a string | `LIST` columns |
@@ -259,8 +305,10 @@ Feature split and client packaging: ADR 0029.
 - `src/storage/ingest/` — `wal.rs` (frames, group commit), `table.rs`
   (writer, ingest thread, watermarks), `manifest.rs` (format, atomic
   replace, invariant check), `recover.rs`, `snapshot.rs`.
-- `src/engine/column.rs` — directory open, NULL-fill for missing columns,
-  snapshot segment list.
+- `src/engine/column/table.rs` — `TableEngine`, `query_snapshot`, the
+  table schema, NULL-fill and casts; `src/engine/column.rs` holds the
+  `TableSegment` enum over row groups and pages (it borrows the
+  `RowGroupSegment` lifetimes, outside the qualified subset).
 
 ## Consequences
 
