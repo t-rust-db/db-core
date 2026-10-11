@@ -185,7 +185,8 @@ fn a_type_widened_after_a_flush_is_cast_and_never_pruned_wrongly() {
 /// A random record: `i` makes `raw` unique; `n` is an integer, `f` a
 /// float, `s` a string, `b` a boolean; `k` is an integer before line
 /// `switch.0` and a string from it on, `g` an integer before `switch.1`
-/// and a float from it on. Each may be missing; some lines are not JSON.
+/// and a float from it on, and `m` any of the four, line by line. Each
+/// may be missing; some lines are not JSON.
 fn random_line(rng: &mut Rng, i: u64, switch: (u64, u64)) -> String {
     if rng.below(10) == 0 {
         return format!("plain text {i}");
@@ -226,15 +227,23 @@ fn random_line(rng: &mut Rng, i: u64, switch: (u64, u64)) -> String {
             format!(r#""g":{g}.5"#)
         });
     }
+    match rng.below(5) {
+        0 => fields.push(format!(r#""m":{}"#, rng.below(9))),
+        1 => fields.push(format!(r#""m":{}.75"#, rng.below(9))),
+        2 => fields.push(format!(r#""m":"m{}""#, rng.below(9))),
+        3 => fields.push(format!(r#""m":{}"#, rng.below(2) == 0)),
+        _ => {}
+    }
     format!("{{{}}}", fields.join(","))
 }
 
-const INVARIANCE_QUERIES: [&str; 8] = [
+const INVARIANCE_QUERIES: [&str; 9] = [
     "SELECT COUNT(*), COUNT(n), SUM(n), MIN(f), MAX(f), COUNT(s), COUNT(b), SUM(g) FROM logs",
-    "SELECT raw, i, n, f, s, b, k, g, severity, severity_text, message, timestamp \
+    "SELECT raw, i, n, f, s, b, k, g, m, severity, severity_text, message, timestamp \
      FROM logs ORDER BY raw",
     "SELECT s, COUNT(*), SUM(f) FROM logs GROUP BY s ORDER BY s",
     "SELECT k, COUNT(*) FROM logs GROUP BY k ORDER BY k",
+    "SELECT m, COUNT(*) FROM logs GROUP BY m ORDER BY m",
     "SELECT raw FROM logs WHERE n > 50 ORDER BY raw",
     "SELECT raw, f FROM logs WHERE f >= 10 ORDER BY raw DESC LIMIT 7",
     "SELECT b, COUNT(*) FROM logs WHERE s IS NULL GROUP BY b ORDER BY b",
@@ -242,9 +251,8 @@ const INVARIANCE_QUERIES: [&str; 8] = [
 ];
 
 /// The same records give the same answers however they were split into
-/// pages and files, and whether read in or out of process. Fields switch
-/// type only at a page boundary: within one page a conflict loses values
-/// in the parser (#584), which no read can recover.
+/// pages and files, and whether read in or out of process, also for fields
+/// whose type changes inside a page (#584).
 #[test]
 fn query_results_do_not_depend_on_flush_timing() {
     let cases = std::env::var("DB_CORE_FLUSH_CASES")
@@ -265,10 +273,6 @@ fn query_results_do_not_depend_on_flush_timing() {
         // Seal and flush at random points, and query at random points too.
         let (seal_odds, flush_odds) = (2 + rng.below(20), 2 + rng.below(30));
         for (k, l) in lines.iter().enumerate() {
-            if [switch.0, switch.1].contains(&(k as u64)) {
-                never.seal_head().unwrap();
-                w.seal_head().unwrap();
-            }
             never.append(l.as_bytes(), Ack::Memory).unwrap();
             w.append(l.as_bytes(), Ack::Memory).unwrap();
             if rng.below(seal_odds) == 0 {

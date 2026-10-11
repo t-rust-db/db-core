@@ -56,7 +56,7 @@ pub mod timestamp;
 pub use adapter::{ColumnRequest, StreamSegment, TailSource, PREDEFINED_COLUMNS};
 
 pub use batch::{
-    Facility, FieldColumn, FieldStore, LogBatch, Resource, Severity, Source, SourceKind,
+    Facility, FieldColumn, FieldStore, FieldValue, LogBatch, Resource, Severity, Source, SourceKind,
 };
 pub use clf::ClfParser;
 pub use detect::{detect, parse_detected, DetectedParser, Detection, Format};
@@ -65,6 +65,6 @@ pub use jsonl::JsonlParser;
 pub use logfmt::LogfmtParser;
 pub use ring::{EvictedSummary, Ring, DEFAULT_SUMMARY_HORIZON_NS};
 pub use segment::{
-    ColumnSummary, MinMax, OwnedColumn, Segment, SegmentSummary, Span, SEGMENT_MAX_ROWS,
+    ColumnSummary, MinMax, MixedValue, OwnedColumn, Segment, SegmentSummary, Span, SEGMENT_MAX_ROWS,
 };
 pub use syslog::SyslogParser;

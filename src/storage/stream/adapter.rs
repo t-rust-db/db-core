@@ -17,7 +17,7 @@
 //! | `facility` | `Str` (`kern`, `auth`, `local0`, …) | `Segment::facility` |
 //! | `message` | `Str` | `Segment::message` |
 //! | `raw` | `Str` (lossy UTF-8) | `Segment::raw_line` |
-//! | any Tier-3 name | `Str`/`Int`/`Float`/`Bool` | `Segment::field` |
+//! | any Tier-3 name | `Str`/`Int`/`Float`/`Bool`; `Str` when its values' types conflict | `Segment::field` |
 //!
 //! `severity` is numeric so that `>=` orders correctly; a planner rewrites
 //! `severity >= 'WARN'` to its code. An unknown column is a load error, never
@@ -28,7 +28,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::detect::DetectedParser;
 use super::file::{LogFile, Refresh};
-use super::segment::{OwnedColumn, Segment};
+use super::segment::{MixedValue, OwnedColumn, Segment};
 use super::Source;
 use crate::vm::batch::{Batch, Segment as VmSegment, Source as VmSource, Value, VmError};
 
@@ -160,6 +160,27 @@ pub(crate) fn column_values(segment: &Segment, name: &str) -> Option<Vec<Value>>
             OwnedColumn::Bool(v) => v
                 .iter()
                 .map(|x| x.map_or(Value::Null, Value::Bool))
+                .collect(),
+            // Conflicting types read as strings (ADR 0018), each typed
+            // value rendered the way a flush renders it into a string
+            // column, so a record reads the same before and after (#584).
+            OwnedColumn::Mixed(values) => values
+                .iter()
+                .enumerate()
+                .map(|(i, value)| {
+                    let typed = match value {
+                        None => return Value::Null,
+                        Some(MixedValue::Str(_)) => {
+                            return segment
+                                .field_str(other, i)
+                                .map_or(Value::Null, |s| Value::Str(s.to_string().into()))
+                        }
+                        Some(MixedValue::Int(x)) => Value::Int(*x),
+                        Some(MixedValue::Float(x)) => Value::Float(*x),
+                        Some(MixedValue::Bool(x)) => Value::Bool(*x),
+                    };
+                    Value::Str(typed.to_string().into())
+                })
                 .collect(),
         },
     };
@@ -328,6 +349,55 @@ mod tests {
         }];
         let b = materialize(&s, &cols).unwrap();
         assert_eq!(b.columns["log.facility"][0], Value::Str("local0".into()));
+    }
+
+    /// #584: a field whose values conflict in type reads as strings,
+    /// every value kept and rendered as a flush renders it.
+    #[test]
+    fn a_mixed_type_field_reads_as_strings_without_losing_values() {
+        let text = concat!(
+            r#"{"x":1,"y":2}"#,
+            "\n",
+            r#"{"x":"a","y":2.5}"#,
+            "\n",
+            r#"{"x":true}"#,
+            "\n",
+            r#"{"x":1.5,"y":3}"#,
+            "\n",
+            r#"{"y":"b"}"#,
+            "\n",
+        );
+        let b = Block {
+            file_off: 0,
+            bytes: Arc::from(text.as_bytes()),
+        };
+        let s = Segment::seal_block(
+            &b,
+            &Source::new(SourceKind::File, "t"),
+            &crate::storage::stream::JsonlParser::new(),
+            7,
+        )
+        .remove(0);
+        let batch = materialize(&s, &[ColumnRequest::bare("x"), ColumnRequest::bare("y")]).unwrap();
+        let strs = |v: &[&str]| -> Vec<Value> {
+            v.iter()
+                .map(|s| match *s {
+                    "NULL" => Value::Null,
+                    s => Value::Str(s.to_string().into()),
+                })
+                .collect()
+        };
+        assert_eq!(
+            *batch.columns["x"],
+            strs(&["1", "a", "true", "1.5", "NULL"])
+        );
+        // y: 2, 2.5 widen to floats, then a string: "2" not "2.0".
+        assert_eq!(*batch.columns["y"], strs(&["2", "2.5", "NULL", "3", "b"]));
+        assert_eq!(s.field_str("x", 1), Some("a"));
+        assert_eq!(s.field_str("x", 0), None, "a typed value has no text");
+        assert_eq!(s.field_str("x", 4), None);
+        assert!(s.field("x").unwrap().dict_contains("a").is_none());
+        assert_eq!(s.field("x").unwrap().len(), 5);
     }
 
     #[test]

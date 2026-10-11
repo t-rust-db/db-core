@@ -5733,6 +5733,7 @@ pub db_core::storage::stream::batch::FieldColumn::Dict::dict: alloc::vec::Vec<&'
 pub db_core::storage::stream::batch::FieldColumn::Dict::indices: alloc::vec::Vec<core::option::Option<u16>>
 pub db_core::storage::stream::batch::FieldColumn::Float(alloc::vec::Vec<core::option::Option<f64>>)
 pub db_core::storage::stream::batch::FieldColumn::Int(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::stream::batch::FieldColumn::Mixed(alloc::vec::Vec<core::option::Option<db_core::storage::stream::batch::FieldValue<'a>>>)
 pub db_core::storage::stream::batch::FieldColumn::Str(alloc::vec::Vec<core::option::Option<&'a str>>)
 impl<'a> db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::is_empty(&self) -> bool
@@ -5741,6 +5742,19 @@ impl<'a> core::clone::Clone for db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::clone(&self) -> Self
 impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::stream::batch::FieldValue<'a>
+pub db_core::storage::stream::batch::FieldValue::Bool(bool)
+pub db_core::storage::stream::batch::FieldValue::Float(f64)
+pub db_core::storage::stream::batch::FieldValue::Int(i64)
+pub db_core::storage::stream::batch::FieldValue::Str(&'a str)
+impl<'a> core::clone::Clone for db_core::storage::stream::batch::FieldValue<'a>
+pub fn db_core::storage::stream::batch::FieldValue<'a>::clone(&self) -> Self
+impl<'a> core::cmp::PartialEq for db_core::storage::stream::batch::FieldValue<'a>
+pub fn db_core::storage::stream::batch::FieldValue<'a>::eq(&self, &Self) -> bool
+impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldValue<'a>
+pub fn db_core::storage::stream::batch::FieldValue<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for db_core::storage::stream::batch::FieldValue<'a>
+impl<'a> core::marker::StructuralPartialEq for db_core::storage::stream::batch::FieldValue<'a>
 #[repr(u8)] pub enum db_core::storage::stream::batch::Severity
 pub db_core::storage::stream::batch::Severity::Debug = 5
 pub db_core::storage::stream::batch::Severity::Error = 17
@@ -6057,6 +6071,19 @@ impl core::fmt::Debug for db_core::storage::stream::ring::Ring
 pub fn db_core::storage::stream::ring::Ring::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const db_core::storage::stream::ring::DEFAULT_SUMMARY_HORIZON_NS: i64
 pub mod db_core::storage::stream::segment
+pub enum db_core::storage::stream::segment::MixedValue
+pub db_core::storage::stream::segment::MixedValue::Bool(bool)
+pub db_core::storage::stream::segment::MixedValue::Float(f64)
+pub db_core::storage::stream::segment::MixedValue::Int(i64)
+pub db_core::storage::stream::segment::MixedValue::Str(db_core::storage::stream::segment::Span)
+impl core::clone::Clone for db_core::storage::stream::segment::MixedValue
+pub fn db_core::storage::stream::segment::MixedValue::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::stream::segment::MixedValue
+pub fn db_core::storage::stream::segment::MixedValue::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::stream::segment::MixedValue
+pub fn db_core::storage::stream::segment::MixedValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::stream::segment::MixedValue
+impl core::marker::StructuralPartialEq for db_core::storage::stream::segment::MixedValue
 pub enum db_core::storage::stream::segment::OwnedColumn
 pub db_core::storage::stream::segment::OwnedColumn::Bool(alloc::vec::Vec<core::option::Option<bool>>)
 pub db_core::storage::stream::segment::OwnedColumn::Dict
@@ -6064,6 +6091,7 @@ pub db_core::storage::stream::segment::OwnedColumn::Dict::dict: alloc::vec::Vec<
 pub db_core::storage::stream::segment::OwnedColumn::Dict::indices: alloc::vec::Vec<core::option::Option<u16>>
 pub db_core::storage::stream::segment::OwnedColumn::Float(alloc::vec::Vec<core::option::Option<f64>>)
 pub db_core::storage::stream::segment::OwnedColumn::Int(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::stream::segment::OwnedColumn::Mixed(alloc::vec::Vec<core::option::Option<db_core::storage::stream::segment::MixedValue>>)
 pub db_core::storage::stream::segment::OwnedColumn::Str(alloc::vec::Vec<core::option::Option<db_core::storage::stream::segment::Span>>)
 impl db_core::storage::stream::segment::OwnedColumn
 pub fn db_core::storage::stream::segment::OwnedColumn::dict_contains(&self, &str) -> core::option::Option<bool>
@@ -6203,6 +6231,7 @@ pub db_core::storage::stream::FieldColumn::Dict::dict: alloc::vec::Vec<&'a str>
 pub db_core::storage::stream::FieldColumn::Dict::indices: alloc::vec::Vec<core::option::Option<u16>>
 pub db_core::storage::stream::FieldColumn::Float(alloc::vec::Vec<core::option::Option<f64>>)
 pub db_core::storage::stream::FieldColumn::Int(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::stream::FieldColumn::Mixed(alloc::vec::Vec<core::option::Option<db_core::storage::stream::batch::FieldValue<'a>>>)
 pub db_core::storage::stream::FieldColumn::Str(alloc::vec::Vec<core::option::Option<&'a str>>)
 impl<'a> db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::is_empty(&self) -> bool
@@ -6211,6 +6240,19 @@ impl<'a> core::clone::Clone for db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::clone(&self) -> Self
 impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::stream::FieldValue<'a>
+pub db_core::storage::stream::FieldValue::Bool(bool)
+pub db_core::storage::stream::FieldValue::Float(f64)
+pub db_core::storage::stream::FieldValue::Int(i64)
+pub db_core::storage::stream::FieldValue::Str(&'a str)
+impl<'a> core::clone::Clone for db_core::storage::stream::batch::FieldValue<'a>
+pub fn db_core::storage::stream::batch::FieldValue<'a>::clone(&self) -> Self
+impl<'a> core::cmp::PartialEq for db_core::storage::stream::batch::FieldValue<'a>
+pub fn db_core::storage::stream::batch::FieldValue<'a>::eq(&self, &Self) -> bool
+impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldValue<'a>
+pub fn db_core::storage::stream::batch::FieldValue<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for db_core::storage::stream::batch::FieldValue<'a>
+impl<'a> core::marker::StructuralPartialEq for db_core::storage::stream::batch::FieldValue<'a>
 pub enum db_core::storage::stream::Format
 pub db_core::storage::stream::Format::Clf
 pub db_core::storage::stream::Format::Freeform
@@ -6228,6 +6270,19 @@ impl core::fmt::Debug for db_core::storage::stream::detect::Format
 pub fn db_core::storage::stream::detect::Format::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::stream::detect::Format
 impl core::marker::StructuralPartialEq for db_core::storage::stream::detect::Format
+pub enum db_core::storage::stream::MixedValue
+pub db_core::storage::stream::MixedValue::Bool(bool)
+pub db_core::storage::stream::MixedValue::Float(f64)
+pub db_core::storage::stream::MixedValue::Int(i64)
+pub db_core::storage::stream::MixedValue::Str(db_core::storage::stream::segment::Span)
+impl core::clone::Clone for db_core::storage::stream::segment::MixedValue
+pub fn db_core::storage::stream::segment::MixedValue::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::stream::segment::MixedValue
+pub fn db_core::storage::stream::segment::MixedValue::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::stream::segment::MixedValue
+pub fn db_core::storage::stream::segment::MixedValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::stream::segment::MixedValue
+impl core::marker::StructuralPartialEq for db_core::storage::stream::segment::MixedValue
 pub enum db_core::storage::stream::OwnedColumn
 pub db_core::storage::stream::OwnedColumn::Bool(alloc::vec::Vec<core::option::Option<bool>>)
 pub db_core::storage::stream::OwnedColumn::Dict
@@ -6235,6 +6290,7 @@ pub db_core::storage::stream::OwnedColumn::Dict::dict: alloc::vec::Vec<alloc::rc
 pub db_core::storage::stream::OwnedColumn::Dict::indices: alloc::vec::Vec<core::option::Option<u16>>
 pub db_core::storage::stream::OwnedColumn::Float(alloc::vec::Vec<core::option::Option<f64>>)
 pub db_core::storage::stream::OwnedColumn::Int(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::stream::OwnedColumn::Mixed(alloc::vec::Vec<core::option::Option<db_core::storage::stream::segment::MixedValue>>)
 pub db_core::storage::stream::OwnedColumn::Str(alloc::vec::Vec<core::option::Option<db_core::storage::stream::segment::Span>>)
 impl db_core::storage::stream::segment::OwnedColumn
 pub fn db_core::storage::stream::segment::OwnedColumn::dict_contains(&self, &str) -> core::option::Option<bool>
@@ -6628,6 +6684,7 @@ pub db_core::storage::FieldColumn::Dict::dict: alloc::vec::Vec<&'a str>
 pub db_core::storage::FieldColumn::Dict::indices: alloc::vec::Vec<core::option::Option<u16>>
 pub db_core::storage::FieldColumn::Float(alloc::vec::Vec<core::option::Option<f64>>)
 pub db_core::storage::FieldColumn::Int(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::FieldColumn::Mixed(alloc::vec::Vec<core::option::Option<db_core::storage::stream::batch::FieldValue<'a>>>)
 pub db_core::storage::FieldColumn::Str(alloc::vec::Vec<core::option::Option<&'a str>>)
 impl<'a> db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::is_empty(&self) -> bool
@@ -6636,6 +6693,19 @@ impl<'a> core::clone::Clone for db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::clone(&self) -> Self
 impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldColumn<'a>
 pub fn db_core::storage::stream::batch::FieldColumn<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::FieldValue<'a>
+pub db_core::storage::FieldValue::Bool(bool)
+pub db_core::storage::FieldValue::Float(f64)
+pub db_core::storage::FieldValue::Int(i64)
+pub db_core::storage::FieldValue::Str(&'a str)
+impl<'a> core::clone::Clone for db_core::storage::stream::batch::FieldValue<'a>
+pub fn db_core::storage::stream::batch::FieldValue<'a>::clone(&self) -> Self
+impl<'a> core::cmp::PartialEq for db_core::storage::stream::batch::FieldValue<'a>
+pub fn db_core::storage::stream::batch::FieldValue<'a>::eq(&self, &Self) -> bool
+impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldValue<'a>
+pub fn db_core::storage::stream::batch::FieldValue<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for db_core::storage::stream::batch::FieldValue<'a>
+impl<'a> core::marker::StructuralPartialEq for db_core::storage::stream::batch::FieldValue<'a>
 pub enum db_core::storage::FileError
 pub db_core::storage::FileError::ChunkOutOfBounds
 pub db_core::storage::FileError::ColumnIndexOutOfRange(usize)

@@ -435,7 +435,21 @@ impl<'a> LogBatch<'a> {
     }
 }
 
-/// Dictionary-encoded or raw string column.
+/// One non-null Tier-3 value as a parser produced it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FieldValue<'a> {
+    /// A string, borrowed from the line.
+    Str(&'a str),
+    /// An integer.
+    Int(i64),
+    /// A float.
+    Float(f64),
+    /// A boolean.
+    Bool(bool),
+}
+
+/// Dictionary-encoded or raw string column, a typed column, or a column of
+/// values of more than one type.
 #[derive(Debug, Clone)]
 pub enum FieldColumn<'a> {
     /// High-cardinality: raw string references.
@@ -453,6 +467,10 @@ pub enum FieldColumn<'a> {
     Float(Vec<Option<f64>>),
     /// Boolean values.
     Bool(Vec<Option<bool>>),
+    /// Values of conflicting types, each kept as it was parsed (#584).
+    /// Queries read the column as strings (ADR 0018: a conflict degrades
+    /// to `Str`).
+    Mixed(Vec<Option<FieldValue<'a>>>),
 }
 
 /// Threshold for switching from Dict to Str encoding.
@@ -467,175 +485,142 @@ impl<'a> FieldColumn<'a> {
         }
     }
 
-    /// Push a string value, handling Dict→Str degradation.
-    ///
-    /// Pushing a string onto an established `Int`/`Float`/`Bool` column is a
-    /// type conflict (ADR-0018: "first non-null type wins; conflict
-    /// degrades to `Str`"). `FieldColumn<'a>`'s `Str`/`Dict` variants only
-    /// hold borrowed `&'a str` data, so a numeric value pushed earlier has no
-    /// string form to recover -- the degrade keeps every prior row as `None`
-    /// and the new (borrowed) string value is preserved.
-    fn push_str(&mut self, value: Option<&'a str>) {
+    /// Whether no non-null value has been pushed: the column's type is not
+    /// decided yet ("first non-null type wins", ADR 0018).
+    fn is_untyped(&self) -> bool {
+        fn none<T>(values: &[Option<T>]) -> bool {
+            values.iter().all(Option::is_none)
+        }
         match self {
-            Self::Dict { dict, indices } => {
-                if let Some(v) = value {
-                    // Look up or insert into dictionary
-                    let idx = dict.iter().position(|&d| d == v);
-                    let idx = match idx {
-                        Some(i) => i,
-                        None => {
-                            if dict.len() >= DICT_CARDINALITY_THRESHOLD {
-                                // Degrade to Str
-                                let mut strs: Vec<Option<&'a str>> =
-                                    Vec::with_capacity(indices.len().saturating_add(1));
-                                for opt_idx in indices.iter() {
-                                    strs.push(
-                                        opt_idx.and_then(|i| dict.get(usize::from(i)).copied()),
-                                    );
-                                }
-                                strs.push(Some(v));
-                                *self = Self::Str(strs);
-                                return;
-                            }
-                            dict.push(v);
-                            dict.len().saturating_sub(1)
-                        }
-                    };
-                    // Safe: idx < DICT_CARDINALITY_THRESHOLD < u16::MAX
-                    #[allow(clippy::cast_possible_truncation)]
-                    indices.push(Some(idx as u16));
-                } else {
-                    indices.push(None);
-                }
-            }
-            Self::Str(strs) => strs.push(value),
-            Self::Int(v) if Self::all_none(v) => Self::degrade_typed_to_str(v.len(), value, self),
-            Self::Float(v) if Self::all_none(v) => {
-                Self::degrade_typed_to_str(v.len(), value, self);
-            }
-            Self::Bool(v) if Self::all_none(v) => {
-                Self::degrade_typed_to_str(v.len(), value, self);
-            }
-            // No non-null value has been pushed yet ("first non-null type
-            // wins" hasn't decided a type): adopt Str now instead of treating
-            // an all-null typed column as an established conflict.
-            Self::Int(v) => Self::degrade_typed_to_str(v.len(), value, self),
-            Self::Float(v) => Self::degrade_typed_to_str(v.len(), value, self),
-            Self::Bool(v) => Self::degrade_typed_to_str(v.len(), value, self),
+            Self::Dict { dict, .. } => dict.is_empty(),
+            Self::Str(v) => none(v),
+            Self::Int(v) => none(v),
+            Self::Float(v) => none(v),
+            Self::Bool(v) => none(v),
+            Self::Mixed(v) => none(v),
         }
     }
 
-    /// Whether every value in a typed column is `None` (no type has been
-    /// established yet by a non-null push).
-    fn all_none<T>(values: &[Option<T>]) -> bool {
-        values.iter().all(Option::is_none)
+    /// A column of `rows` nulls, then `value`, of `value`'s type.
+    fn adopt(rows: usize, value: FieldValue<'a>) -> Self {
+        fn nulls_then<T>(rows: usize, v: T) -> Vec<Option<T>> {
+            let mut out: Vec<Option<T>> = std::iter::repeat_with(|| None).take(rows).collect();
+            out.push(Some(v));
+            out
+        }
+        match value {
+            FieldValue::Str(s) => Self::Dict {
+                dict: vec![s],
+                indices: nulls_then(rows, 0),
+            },
+            FieldValue::Int(i) => Self::Int(nulls_then(rows, i)),
+            FieldValue::Float(f) => Self::Float(nulls_then(rows, f)),
+            FieldValue::Bool(b) => Self::Bool(nulls_then(rows, b)),
+        }
     }
 
-    /// Rewrites an `Int`/`Float`/`Bool` column as `Str`: prior rows become
-    /// `None` (no borrowed string form exists for a numeric value) and
-    /// `value` is appended. Shared by `push_str`'s conflict/no-type arms.
-    fn degrade_typed_to_str(prior_len: usize, value: Option<&'a str>, slot: &mut Self) {
-        let mut strs: Vec<Option<&'a str>> = vec![None; prior_len];
-        strs.push(value);
-        *slot = Self::Str(strs);
-    }
-
-    /// Rewrites a `Dict`/`Str` column into a plain `Str` column (decoding any
-    /// `Dict` indices), for use when a numeric push type-conflicts with
-    /// established string data.
-    fn decode_to_str(&self) -> Vec<Option<&'a str>> {
+    /// Every row as a [`FieldValue`], for a column turning `Mixed`.
+    fn to_mixed(&self) -> Vec<Option<FieldValue<'a>>> {
         match self {
-            Self::Str(strs) => strs.clone(),
+            Self::Str(v) => v.iter().map(|s| s.map(FieldValue::Str)).collect(),
             Self::Dict { dict, indices } => indices
                 .iter()
-                .map(|opt| opt.and_then(|i| dict.get(usize::from(i)).copied()))
+                .map(|i| {
+                    i.and_then(|i| dict.get(usize::from(i)).copied())
+                        .map(FieldValue::Str)
+                })
                 .collect(),
-            Self::Int(_) | Self::Float(_) | Self::Bool(_) => vec![None; self.len()],
+            Self::Int(v) => v.iter().map(|x| x.map(FieldValue::Int)).collect(),
+            Self::Float(v) => v.iter().map(|x| x.map(FieldValue::Float)).collect(),
+            Self::Bool(v) => v.iter().map(|x| x.map(FieldValue::Bool)).collect(),
+            Self::Mixed(v) => v.clone(),
         }
     }
 
-    /// Push an integer value, handling type conflicts (degrade to `Str`).
-    ///
-    /// A column with no established type yet (no non-null value pushed by
-    /// any push method) adopts `Int` (ADR-0018: "first non-null type wins").
-    /// A column already holding real string data degrades to `Str`,
-    /// preserving that data; the incoming int has no borrowed string form,
-    /// so its row becomes `None`.
+    /// Appends a null in the column's current representation (a plain
+    /// `fn`, for use as a function pointer where null-padding is needed).
+    fn push_null(&mut self) {
+        match self {
+            Self::Str(v) => v.push(None),
+            Self::Dict { indices, .. } => indices.push(None),
+            Self::Int(v) => v.push(None),
+            Self::Float(v) => v.push(None),
+            Self::Bool(v) => v.push(None),
+            Self::Mixed(v) => v.push(None),
+        }
+    }
+
+    /// Appends `value` (null when `None`). An untyped column adopts the
+    /// value's type. An integer column meeting a float becomes a float
+    /// column, and a float column takes integers as floats, as a flush
+    /// widens them (ADR 0027). Any other conflict turns the column
+    /// [`Mixed`](Self::Mixed), keeping every value (#584).
+    fn push(&mut self, value: Option<FieldValue<'a>>) {
+        let Some(value) = value else {
+            self.push_null();
+            return;
+        };
+        if self.is_untyped() {
+            *self = Self::adopt(self.len(), value);
+            return;
+        }
+        match (&mut *self, value) {
+            (Self::Dict { dict, indices }, FieldValue::Str(v)) => {
+                if let Some(i) = dict.iter().position(|&d| d == v) {
+                    // Safe: i < DICT_CARDINALITY_THRESHOLD < u16::MAX
+                    #[allow(clippy::cast_possible_truncation)]
+                    indices.push(Some(i as u16));
+                } else if dict.len() < DICT_CARDINALITY_THRESHOLD {
+                    dict.push(v);
+                    #[allow(clippy::cast_possible_truncation)]
+                    indices.push(Some(dict.len().saturating_sub(1) as u16));
+                } else {
+                    // Degrade to Str.
+                    let mut strs: Vec<Option<&'a str>> = indices
+                        .iter()
+                        .map(|i| i.and_then(|i| dict.get(usize::from(i)).copied()))
+                        .collect();
+                    strs.push(Some(v));
+                    *self = Self::Str(strs);
+                }
+            }
+            (Self::Str(strs), FieldValue::Str(v)) => strs.push(Some(v)),
+            (Self::Int(v), FieldValue::Int(i)) => v.push(Some(i)),
+            (Self::Float(v), FieldValue::Float(f)) => v.push(Some(f)),
+            (Self::Float(v), FieldValue::Int(i)) => v.push(Some(i as f64)),
+            (Self::Int(v), FieldValue::Float(f)) => {
+                let mut floats: Vec<Option<f64>> = v.iter().map(|x| x.map(|i| i as f64)).collect();
+                floats.push(Some(f));
+                *self = Self::Float(floats);
+            }
+            (Self::Bool(v), FieldValue::Bool(b)) => v.push(Some(b)),
+            (Self::Mixed(v), value) => v.push(Some(value)),
+            (_, value) => {
+                let mut mixed = self.to_mixed();
+                mixed.push(Some(value));
+                *self = Self::Mixed(mixed);
+            }
+        }
+    }
+
+    /// Push a string value; see [`Self::push`].
+    fn push_str(&mut self, value: Option<&'a str>) {
+        self.push(value.map(FieldValue::Str));
+    }
+
+    /// Push an integer value; see [`Self::push`].
     fn push_int(&mut self, value: Option<i64>) {
-        match self {
-            Self::Int(v) => v.push(value),
-            Self::Dict { dict, .. } if dict.is_empty() => {
-                let len = self.len();
-                *self = Self::Int({
-                    let mut v = vec![None; len];
-                    v.push(value);
-                    v
-                });
-            }
-            _ => {
-                let mut strs = self.decode_to_str();
-                strs.push(None);
-                *self = Self::Str(strs);
-            }
-        }
+        self.push(value.map(FieldValue::Int));
     }
 
-    /// Push a float value, handling type conflicts (degrade to `Str`). See
-    /// [`Self::push_int`] for the conflict-handling rationale.
+    /// Push a float value; see [`Self::push`].
     fn push_float(&mut self, value: Option<f64>) {
-        match self {
-            Self::Float(v) => v.push(value),
-            Self::Dict { dict, .. } if dict.is_empty() => {
-                let len = self.len();
-                *self = Self::Float({
-                    let mut v = vec![None; len];
-                    v.push(value);
-                    v
-                });
-            }
-            _ => {
-                let mut strs = self.decode_to_str();
-                strs.push(None);
-                *self = Self::Str(strs);
-            }
-        }
+        self.push(value.map(FieldValue::Float));
     }
 
-    /// Push a boolean value, handling type conflicts (degrade to `Str`). See
-    /// [`Self::push_int`] for the conflict-handling rationale.
+    /// Push a boolean value; see [`Self::push`].
     fn push_bool(&mut self, value: Option<bool>) {
-        match self {
-            Self::Bool(v) => v.push(value),
-            Self::Dict { dict, .. } if dict.is_empty() => {
-                let len = self.len();
-                *self = Self::Bool({
-                    let mut v = vec![None; len];
-                    v.push(value);
-                    v
-                });
-            }
-            _ => {
-                let mut strs = self.decode_to_str();
-                strs.push(None);
-                *self = Self::Str(strs);
-            }
-        }
-    }
-
-    /// Null-pad via [`Self::push_int`] (a plain `fn`, for use as a function
-    /// pointer where a null-padding closure is needed).
-    fn push_int_null(&mut self) {
-        self.push_int(None);
-    }
-
-    /// Null-pad via [`Self::push_float`]. See [`Self::push_int_null`].
-    fn push_float_null(&mut self) {
-        self.push_float(None);
-    }
-
-    /// Null-pad via [`Self::push_bool`]. See [`Self::push_int_null`].
-    fn push_bool_null(&mut self) {
-        self.push_bool(None);
+        self.push(value.map(FieldValue::Bool));
     }
 
     /// Number of rows.
@@ -647,6 +632,7 @@ impl<'a> FieldColumn<'a> {
             Self::Int(v) => v.len(),
             Self::Float(v) => v.len(),
             Self::Bool(v) => v.len(),
+            Self::Mixed(v) => v.len(),
         }
     }
 
@@ -667,6 +653,7 @@ impl<'a> FieldColumn<'a> {
             Self::Int(v) => v.clear(),
             Self::Float(v) => v.clear(),
             Self::Bool(v) => v.clear(),
+            Self::Mixed(v) => v.clear(),
         }
     }
 }
@@ -720,7 +707,7 @@ impl<'a> FieldStore<'a> {
             name,
             row,
             |col| col.push_int(Some(value)),
-            FieldColumn::push_int_null,
+            FieldColumn::push_null,
         );
     }
 
@@ -731,7 +718,7 @@ impl<'a> FieldStore<'a> {
             name,
             row,
             |col| col.push_float(Some(value)),
-            FieldColumn::push_float_null,
+            FieldColumn::push_null,
         );
     }
 
@@ -742,7 +729,7 @@ impl<'a> FieldStore<'a> {
             name,
             row,
             |col| col.push_bool(Some(value)),
-            FieldColumn::push_bool_null,
+            FieldColumn::push_null,
         );
     }
 
@@ -927,30 +914,128 @@ mod tests {
         }
     }
 
-    #[test]
-    fn int_column_conflicting_with_string_degrades_to_str_preserving_new_value() {
+    /// Pushes `values` (row by row, `None` = no value) into one field.
+    fn column<'a>(values: &[Option<FieldValue<'a>>]) -> FieldColumn<'a> {
         let mut store = FieldStore::new();
-        store.set_int("mixed", 0, 42);
-        // Type conflict: same field later receives a string value.
-        store.set("mixed", 1, "oops");
+        for (row, value) in values.iter().enumerate() {
+            match value {
+                Some(FieldValue::Str(s)) => store.set("f", row, s),
+                Some(FieldValue::Int(i)) => store.set_int("f", row, *i),
+                Some(FieldValue::Float(x)) => store.set_float("f", row, *x),
+                Some(FieldValue::Bool(b)) => store.set_bool("f", row, *b),
+                None => {}
+            }
+        }
+        store.get("f").unwrap().clone()
+    }
 
-        match store.get("mixed").unwrap() {
-            FieldColumn::Str(v) => assert_eq!(v, &[None, Some("oops")]),
-            other => panic!("Expected Str degrade, got {other:?}"),
+    use FieldValue::{Bool as B, Float as F, Int as I, Str as S};
+
+    /// #584: a type conflict keeps every value, in every order.
+    #[test]
+    fn conflicting_types_keep_every_value() {
+        let cases: [&[Option<FieldValue<'_>>]; 7] = [
+            &[Some(I(42)), Some(S("oops"))],
+            &[Some(S("hello")), Some(S("world")), Some(I(7))],
+            &[Some(B(true)), None, Some(S("x"))],
+            &[Some(S("x")), Some(B(false))],
+            &[Some(I(1)), Some(B(true))],
+            &[Some(F(1.5)), Some(S("y")), Some(I(3))],
+            &[Some(B(true)), Some(F(2.5))],
+        ];
+        for values in cases {
+            match column(values) {
+                FieldColumn::Mixed(got) => assert_eq!(got, values, "{values:?}"),
+                other => panic!("{values:?}: expected Mixed, got {other:?}"),
+            }
         }
     }
 
     #[test]
-    fn string_column_conflicting_with_int_degrades_preserving_existing_strings() {
-        let mut store = FieldStore::new();
-        store.set("mixed", 0, "hello");
-        store.set("mixed", 1, "world");
-        // Type conflict: same field later receives an int value.
-        store.set_int("mixed", 2, 7);
+    fn integers_and_floats_widen_to_floats() {
+        for values in [
+            &[Some(I(2)), None, Some(F(2.5))][..],
+            &[Some(F(2.5)), Some(I(2))][..],
+        ] {
+            match column(values) {
+                FieldColumn::Float(got) => {
+                    let expected: Vec<Option<f64>> = values
+                        .iter()
+                        .map(|v| match v {
+                            Some(I(i)) => Some(*i as f64),
+                            Some(F(f)) => Some(*f),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(got, expected);
+                }
+                other => panic!("{values:?}: expected Float, got {other:?}"),
+            }
+        }
+    }
 
-        match store.get("mixed").unwrap() {
-            FieldColumn::Str(v) => assert_eq!(v, &[Some("hello"), Some("world"), None]),
-            other => panic!("Expected Str degrade preserving prior strings, got {other:?}"),
+    #[test]
+    fn a_mixed_column_takes_any_value_and_nulls() {
+        let mut col = column(&[Some(I(1)), Some(S("a"))]);
+        col.push(Some(F(0.5)));
+        col.push(None);
+        col.push(Some(B(false)));
+        assert_eq!(
+            col.to_mixed(),
+            vec![Some(I(1)), Some(S("a")), Some(F(0.5)), None, Some(B(false))]
+        );
+        assert_eq!(col.len(), 5);
+        col.clear();
+        assert!(col.is_empty());
+    }
+
+    #[test]
+    fn the_first_non_null_value_decides_the_type() {
+        // Nulls first, then a value of each type: no conflict.
+        assert!(matches!(
+            column(&[None, Some(S("a"))]),
+            FieldColumn::Dict { .. }
+        ));
+        assert!(matches!(
+            column(&[None, Some(B(true))]),
+            FieldColumn::Bool(_)
+        ));
+        let mut col = FieldColumn::new_str(4);
+        for _ in 0..3 {
+            col.push_null();
+        }
+        col.push(Some(I(5)));
+        match col {
+            FieldColumn::Int(v) => assert_eq!(v, vec![None, None, None, Some(5)]),
+            other => panic!("{other:?}"),
+        }
+        // A typed column of nulls (e.g. padding) is still untyped.
+        let mut col = FieldColumn::Int(vec![None, None]);
+        col.push(Some(S("z")));
+        assert!(matches!(col, FieldColumn::Dict { .. }), "{col:?}");
+        for mut untyped in [
+            FieldColumn::Str(vec![None]),
+            FieldColumn::Float(vec![None]),
+            FieldColumn::Bool(vec![None]),
+            FieldColumn::Mixed(vec![None]),
+        ] {
+            untyped.push(Some(I(1)));
+            assert!(matches!(untyped, FieldColumn::Int(_)), "{untyped:?}");
+        }
+    }
+
+    #[test]
+    fn a_high_cardinality_string_column_then_a_number_keeps_both() {
+        let strings: Vec<String> = (0..=DICT_CARDINALITY_THRESHOLD)
+            .map(|i| format!("v{i}"))
+            .collect();
+        let mut values: Vec<Option<FieldValue<'_>>> =
+            strings.iter().map(|s| Some(S(s.as_str()))).collect();
+        assert!(matches!(column(&values), FieldColumn::Str(_)));
+        values.push(Some(I(9)));
+        match column(&values) {
+            FieldColumn::Mixed(got) => assert_eq!(got, values),
+            other => panic!("expected Mixed, got {other:?}"),
         }
     }
 }

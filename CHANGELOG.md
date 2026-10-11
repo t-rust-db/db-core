@@ -4,6 +4,20 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.127.0] - 2026-10-11
+
+### Fixed
+
+- **A field whose type changes inside one page no longer loses values** (#584; ADR 0018 amended). `FieldColumn` used to degrade a conflicting column to `Str`, which turned every number and boolean into NULL: `{"s":"v1"}` then `{"s":3}` lost the 3, and `{"z":2}` then `{"z":2.5}` lost both. Stream queries never saw those values, and ingested tables (#572) wrote the NULLs to Parquet.
+  - **Integer and float:** an integer column meeting a float now widens to `Float`, as a flush widens to DOUBLE.
+  - **Any other conflict:** the column becomes the new `FieldColumn::Mixed` / `OwnedColumn::Mixed`, which keeps each value as parsed (`FieldValue` / `MixedValue`).
+  - **How it reads:** queries read a mixed column as strings, each typed value rendered the way a flush renders it into a string column (`3`, `2.5`, `true`). So a record reads the same before and after its flush.
+
+### Changed
+
+- **Public API:** `FieldColumn` and `OwnedColumn` gain a `Mixed` variant, and the enums `FieldValue` and `MixedValue` are new. Code that matches every variant must handle `Mixed`.
+- **Tests:** the flush-timing property test now mixes types inside pages, including a field that takes all four types at random.
+
 ## [0.126.0] - 2026-10-11
 
 ### Added
