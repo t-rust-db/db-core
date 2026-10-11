@@ -60,7 +60,7 @@ pub use batch::{
 };
 pub use clf::ClfParser;
 pub use detect::{detect, parse_detected, DetectedParser, Detection, Format};
-pub use file::{Block, LogFile, Refresh, BLOCK_SIZE};
+pub use file::{Block, FileIdentity, LogFile, Refresh, BLOCK_SIZE};
 pub use jsonl::JsonlParser;
 pub use logfmt::LogfmtParser;
 pub use ring::{EvictedSummary, Ring, DEFAULT_SUMMARY_HORIZON_NS};

@@ -3,7 +3,7 @@ members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"
-version = "0.123.0"
+version = "0.124.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -240,6 +240,11 @@ name = "parquet_write_oracle"
 required-features = ["storage-column-write"]
 
 [[bin]]
+name = "wal_probe"
+path = "tests/helpers/wal_probe.rs"
+required-features = ["ingest"]
+
+[[bin]]
 name = "lock_probe"
 path = "tests/helpers/lock_probe.rs"
 required-features = ["storage-row"]
@@ -291,6 +296,7 @@ default = [
     "storage-row",
     "storage-column",
     "storage-column-write",
+    "ingest",
     "storage-stream",
     "engine-row",
     "engine-column",
@@ -356,6 +362,9 @@ storage-column = ["dep:memmap2", "dep:ruzstd"]
 # Parquet writer (#566, ADR 0029): `storage::parquet::writer`. No extra
 # dependency; Snappy is hand-rolled, like the reader's decompressor.
 storage-column-write = ["storage-column"]
+# Record ingestion (ADR 0027-0029): the WAL (#571); manifest, flush and the
+# Table API follow (#572, #574). Std only.
+ingest = ["storage-column-write"]
 storage-stream = ["vm-stream"]
 # Test-support helpers (e.g. `storage::row::btree::test_minimal_db`)
 # for consumers' own test suites -- enable from `[dev-dependencies]`

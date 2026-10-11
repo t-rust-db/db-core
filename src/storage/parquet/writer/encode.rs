@@ -113,7 +113,7 @@ pub(crate) fn plain_byte_array(out: &mut Vec<u8>, value: &[u8]) -> Option<()> {
 mod tests {
     use super::*;
     use crate::storage::parquet::encoding::decode_hybrid_rle_bitpacked;
-    use crate::storage::parquet::writer::tests::Rng;
+    use crate::test_rng::Rng;
 
     fn decode(bytes: &[u8], bit_width: u32, n: usize) -> Vec<u32> {
         decode_hybrid_rle_bitpacked(bytes, bit_width, n).unwrap()

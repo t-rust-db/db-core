@@ -21860,6 +21860,466 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_crc32c_build_table_ebcd475b",
+    "file": "src/storage/ingest/crc32c.rs",
+    "line": 16,
+    "decision": "crc & 1 == 1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_frame_decode_ed3b3d2e",
+    "file": "src/storage/ingest/frame.rs",
+    "line": 74,
+    "decision": "checksum(len, lsn, payload) != u32::from_le_bytes(crc)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_frame_round_trips_a_sequence_13cc5d3d",
+    "file": "src/storage/ingest/frame.rs",
+    "line": 102,
+    "decision": "let Frame::Complete {\n            lsn,\n            payload_start,\n            end,\n        } = decode(&buf, at)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_lock_acquire_e4166c44",
+    "file": "src/storage/ingest/lock.rs",
+    "line": 53,
+    "decision": "match file.try_lock() {\n                Ok(()) => return Ok(TableLock { _file: file }),\n                Err(TryLockError::WouldBlock) => {\n                    if attempt < ATTEMPTS {\n                        std::thread::sleep(RETRY_PAUSE);\n                    }\n                }\n                Err(TryLockError::Error(e)) => return Err(LockError::Io(e)),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_lock_acquire_845447e1",
+    "file": "src/storage/ingest/lock.rs",
+    "line": 56,
+    "decision": "attempt < ATTEMPTS",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_parse_name_4fdffce8",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 49,
+    "decision": "digits.len() != 20",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_parse_name_b900cb82",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 52,
+    "decision": "!digits.bytes().all(|b| b.is_ascii_digit())",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_list_fa0b61ca",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 70,
+    "decision": "let Some(lsn_lo) = entry.file_name().to_str().and_then(parse_name)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_valid_frame_after_4727bf87",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 94,
+    "decision": "match lsn {\n            Some(lsn) if lsn > prev && lsn <= highest => {\n                matches!(frame::decode(buf, at), Frame::Complete { .. })\n            }\n            _ => false,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_recover_valid_frame_after_604f68e4",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 95,
+    "decision": "lsn > prev && lsn <= highest",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_replay_140574fa",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 110,
+    "decision": "match next_lo {\n            Some(next) if next.saturating_sub(1) <= flushed_lsn => fs::remove_file(&segment.path)?,\n            _ => kept.push(segment.clone()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_recover_replay_21d0798d",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 111,
+    "decision": "next.saturating_sub(1) <= flushed_lsn",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_replay_63662ce7",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 124,
+    "decision": "match prev {\n            Some(p) => p.saturating_add(1),\n            None => segment.lsn_lo.min(flushed_lsn.saturating_add(1)),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_replay_5babbac2",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 128,
+    "decision": "segment.lsn_lo != expected_lo",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_replay_7875a2b5",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 138,
+    "decision": "at < buf.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_replay_248650b3",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 139,
+    "decision": "match frame::decode(&buf, at) {\n                Frame::Complete {\n                    lsn,\n                    payload_start,\n                    end,\n                } => {\n                    if lsn != last.saturating_add(1) {\n                        return Err(corrupt(\n                            &segment.path,\n                            at,\n                            format!(\"LSN {lsn} follows {last}\"),\n                        ));\n                    }\n                    if lsn > flushed_lsn {\n                        let payload = buf.get(payload_start..end).unwrap_or_default();\n                        records.push((lsn, payload.to_vec()));\n                    }\n                    last = lsn;\n                    at = end;\n                }\n                Frame::Incomplete | Frame::BadChecksum => {\n                    if !is_last {\n                        let reason =\n                            \"bad frame in a segment that was complete before the next one started\";\n                        return Err(corrupt(&segment.path, at, reason.to_string()));\n                    }\n                    if valid_frame_after(&buf, at, last) {\n                        let reason = \"bad frame followed by valid frames\";\n                        return Err(corrupt(&segment.path, at, reason.to_string()));\n                    }\n                    truncate(&segment.path, at)?;\n                    break;\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_replay_5a1a2413",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 145,
+    "decision": "lsn != last.saturating_add(1)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_replay_a93bc07a",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 152,
+    "decision": "lsn > flushed_lsn",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_replay_03d9ecf2",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 160,
+    "decision": "!is_last",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_replay_d85ccd78",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 165,
+    "decision": "valid_frame_after(&buf, at, last)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_recover_replay_d74ebbeb",
+    "file": "src/storage/ingest/recover.rs",
+    "line": 174,
+    "decision": "at == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_fmt_4bb840fb",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 110,
+    "decision": "match self {\n            WalError::Io(e) => write!(f, \"wal: {e}\"),\n            WalError::Locked => write!(f, \"wal: the table is locked by another writer\"),\n            WalError::Corrupt {\n                file,\n                offset,\n                reason,\n            } => write!(f, \"wal: {} at byte {offset}: {reason}\", file.display()),\n            WalError::TooLarge => write!(f, \"wal: record larger than 4 GiB\"),\n            WalError::Closed => write!(f, \"wal: closed\"),\n            WalError::Failed(why) => write!(f, \"wal: writer stopped: {why}\"),\n            WalError::FlushBeyondDurable { flushed, durable } => {\n                write!(\n                    f,\n                    \"wal: flushed LSN {flushed} is above durable LSN {durable}\"\n                )\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_open_37e2edcb",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 194,
+    "decision": "match e {\n            LockError::Held => WalError::Locked,\n            LockError::Io(e) => WalError::Io(e),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_append_8b601dac",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 233,
+    "decision": "let Some(why) = &state.failed",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_append_d786994a",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 236,
+    "decision": "state.closing",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_append_b6ff6623",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 245,
+    "decision": "match ack {\n            Ack::Memory => Ok(lsn),\n            Ack::Durable => self.wait(state, lsn, |m| m.durable),\n            Ack::Flushed => self.wait(state, lsn, |m| m.flushed),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_wait_481d81b1",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 260,
+    "decision": "mark(&state.marks) >= lsn",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_wait_8b601dac",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 263,
+    "decision": "let Some(why) = &state.failed",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_wait_d786994a",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 266,
+    "decision": "state.closing",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_mark_flushed_8f915493",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 302,
+    "decision": "lsn > state.marks.durable",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_shutdown_5dcfd150",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 350,
+    "decision": "match self.shared.lock()?.failed.take() {\n            Some(why) => Err(WalError::Failed(why)),\n            None => Ok(()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_run_95e35445",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 381,
+    "decision": "match next_round(shared) {\n            Ok(Some(round)) => round,\n            Ok(None) | Err(_) => return,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_run_13631a34",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 385,
+    "decision": "let Err(e) = commit(shared, dir, options, &mut current, round)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_run_cba95c15",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 386,
+    "decision": "let Ok(mut state) = shared.lock()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_next_round_f31a69f1",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 409,
+    "decision": "!state.buffer.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_next_round_2a7d123f",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 412,
+    "decision": "!state.rolls.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_next_round_d786994a",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 415,
+    "decision": "state.closing",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_commit_c6811a91",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 445,
+    "decision": "!piece.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_commit_d7e3c3aa",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 449,
+    "decision": "let Some(next_first) = next_first",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_commit_beee174e",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 455,
+    "decision": "syncs > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_write_piece_832f8d47",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 472,
+    "decision": "match current.take() {\n        Some(open) => open,\n        None => create_segment(shared, dir, first)?,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_write_piece_ade3abe2",
+    "file": "src/storage/ingest/wal.rs",
+    "line": 480,
+    "decision": "open.bytes < options.segment_bytes",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_tests_write_records_dd96ec31",
+    "file": "src/storage/ingest/wal/tests.rs",
+    "line": 58,
+    "decision": "lsn % per_file == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_tests_flushed_ack_waits_for_mark_flushed_9d4e30fd",
+    "file": "src/storage/ingest/wal/tests.rs",
+    "line": 156,
+    "decision": "wal.watermarks().unwrap().durable < 1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_tests_roll_starts_files_and_mark_flushed_unlinks_whole_ones_516da652",
+    "file": "src/storage/ingest/wal/tests.rs",
+    "line": 183,
+    "decision": "matches!(i, 3 | 5)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_wal_tests_closing_wakes_waiters_with_closed_1609cf14",
+    "file": "src/storage/ingest/wal/tests.rs",
+    "line": 226,
+    "decision": "wal.watermarks().unwrap().visible < 1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_compression_fmt_6f8b144c",
     "file": "src/storage/parquet/compression.rs",
     "line": 25,
@@ -30560,9 +31020,39 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_stream_file_open_at_f0a0f7bd",
+    "file": "src/storage/stream/file.rs",
+    "line": 126,
+    "decision": "meta.len() < offset",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_file_rotated_3920298d",
+    "file": "src/storage/stream/file.rs",
+    "line": 155,
+    "decision": "match FileIdentity::of(&self.path) {\n            Ok(now) => Ok(now != self.identity),\n            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(true),\n            Err(e) => Err(e),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_file_rotated_20fc5e15",
+    "file": "src/storage/stream/file.rs",
+    "line": 157,
+    "decision": "e.kind() == io::ErrorKind::NotFound",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_stream_file_read_tail_c82dd615",
     "file": "src/storage/stream/file.rs",
-    "line": 120,
+    "line": 202,
     "decision": "loaded < min_bytes && self.tail_off > 0",
     "conditions": 2,
     "vectors_required": 3,
@@ -30572,7 +31062,7 @@
   {
     "id": "storage_stream_file_read_tail_51dcfb6b",
     "file": "src/storage/stream/file.rs",
-    "line": 127,
+    "line": 209,
     "decision": "start == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -30582,7 +31072,7 @@
   {
     "id": "storage_stream_file_read_tail_7f414a0e",
     "file": "src/storage/stream/file.rs",
-    "line": 130,
+    "line": 212,
     "decision": "match buf.iter().position(|&b| b == b'\\n') {\n                    Some(i) => i.saturating_add(1),\n                    None => buf.len(), // a line longer than a block: skip it\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30592,7 +31082,7 @@
   {
     "id": "storage_stream_file_read_tail_2a4716b9",
     "file": "src/storage/stream/file.rs",
-    "line": 136,
+    "line": 218,
     "decision": "cut > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -30602,7 +31092,7 @@
   {
     "id": "storage_stream_file_read_tail_a6733233",
     "file": "src/storage/stream/file.rs",
-    "line": 140,
+    "line": 222,
     "decision": "!buf.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -30612,7 +31102,7 @@
   {
     "id": "storage_stream_file_refresh_5b0fc89d",
     "file": "src/storage/stream/file.rs",
-    "line": 156,
+    "line": 238,
     "decision": "len < self.head_off",
     "conditions": 1,
     "vectors_required": 2,
@@ -30622,7 +31112,7 @@
   {
     "id": "storage_stream_file_refresh_89e182d2",
     "file": "src/storage/stream/file.rs",
-    "line": 160,
+    "line": 242,
     "decision": "len == self.head_off",
     "conditions": 1,
     "vectors_required": 2,
@@ -30632,7 +31122,7 @@
   {
     "id": "storage_stream_file_refresh_4cfa17b1",
     "file": "src/storage/stream/file.rs",
-    "line": 167,
+    "line": 249,
     "decision": "pos < len",
     "conditions": 1,
     "vectors_required": 2,
@@ -30642,7 +31132,7 @@
   {
     "id": "storage_stream_file_refresh_b959aabf",
     "file": "src/storage/stream/file.rs",
-    "line": 172,
+    "line": 254,
     "decision": "let Some(i) = pending.iter().rposition(|&b| b == b'\\n')",
     "conditions": 1,
     "vectors_required": 2,
@@ -30652,7 +31142,7 @@
   {
     "id": "storage_stream_file_refresh_2616dbdb",
     "file": "src/storage/stream/file.rs",
-    "line": 187,
+    "line": 269,
     "decision": "blocks.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -30662,7 +31152,7 @@
   {
     "id": "storage_stream_file_reposition_at_end_16cafe42",
     "file": "src/storage/stream/file.rs",
-    "line": 200,
+    "line": 282,
     "decision": "match buf.iter().rposition(|&b| b == b'\\n') {\n            Some(i) => start.saturating_add(i as u64).saturating_add(1),\n            None if start == 0 => 0, // no complete line at all\n            None => len,             // a final line longer than a block\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30672,7 +31162,7 @@
   {
     "id": "storage_stream_file_reposition_at_end_51dcfb6b",
     "file": "src/storage/stream/file.rs",
-    "line": 202,
+    "line": 284,
     "decision": "start == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -30682,7 +31172,7 @@
   {
     "id": "storage_stream_file_read_range_efc80517",
     "file": "src/storage/stream/file.rs",
-    "line": 216,
+    "line": 298,
     "decision": "filled < n",
     "conditions": 1,
     "vectors_required": 2,
@@ -30692,7 +31182,7 @@
   {
     "id": "storage_stream_file_read_range_59df551d",
     "file": "src/storage/stream/file.rs",
-    "line": 218,
+    "line": 300,
     "decision": "got == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -30702,7 +31192,7 @@
   {
     "id": "storage_stream_file_lines_bb197296",
     "file": "src/storage/stream/file.rs",
-    "line": 250,
+    "line": 332,
     "decision": "!l.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -30712,7 +31202,7 @@
   {
     "id": "storage_stream_file_refresh_sees_appends_and_holds_partial_lines_b21e0d0b",
     "file": "src/storage/stream/file.rs",
-    "line": 326,
+    "line": 408,
     "decision": "match lf.refresh().unwrap() {\n            Refresh::New(blocks) => assert_eq!(lines(&blocks), vec![\"b\", \"c\"]),\n            other => panic!(\"{other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30722,7 +31212,7 @@
   {
     "id": "storage_stream_file_refresh_sees_appends_and_holds_partial_lines_1e8fc5b0",
     "file": "src/storage/stream/file.rs",
-    "line": 332,
+    "line": 414,
     "decision": "match lf.refresh().unwrap() {\n            Refresh::New(blocks) => assert_eq!(lines(&blocks), vec![\"partial\"]),\n            other => panic!(\"{other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
