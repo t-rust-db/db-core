@@ -23,7 +23,10 @@ use db_core::storage::ingest::{Ack, TableOptions, TableWriter};
 fn main() {
     let table = PathBuf::from(std::env::args().nth(1).expect("usage: table_probe <table>"));
     let mut writer = TableWriter::open(&table, TableOptions::default()).expect("open table");
-    for n in 0u64.. {
+    let mut next = 0u64;
+    loop {
+        let n = next;
+        next += 1;
         let line = format!(r#"{{"i":{n},"level":"info","msg":"record {n}"}}"#);
         let lsn = writer.append(line.as_bytes(), Ack::Durable).unwrap();
         let mut out = std::io::stdout().lock();
