@@ -82,7 +82,7 @@ pub(crate) fn physical_type(column_type: ColumnType) -> i32 {
     match column_type {
         ColumnType::Boolean => TYPE_BOOLEAN,
         ColumnType::Int32 => TYPE_INT32,
-        ColumnType::Int64 | ColumnType::TimestampMicros => TYPE_INT64,
+        ColumnType::Int64 | ColumnType::TimestampMicros | ColumnType::TimestampNanos => TYPE_INT64,
         ColumnType::Float => TYPE_FLOAT,
         ColumnType::Double => TYPE_DOUBLE,
         ColumnType::Utf8 => TYPE_BYTE_ARRAY,
@@ -189,6 +189,16 @@ fn schema_element(spec: &ColumnSpec) -> Value {
             let timestamp = Value::Struct(vec![(1, Value::Bool(true)), (2, unit)]);
             fields.push((10, Value::Struct(vec![(8, timestamp)])));
         }
+        ColumnType::TimestampNanos => {
+            // LogicalType.TIMESTAMP (8): { isAdjustedToUTC: false, unit: NANOS (3) }.
+            // Not UTC-marked, as DuckDB writes TIMESTAMP_NS: DuckDB has no
+            // time-zone-aware nanosecond type and reads a UTC-marked one as
+            // microsecond TIMESTAMPTZ, truncating. The values are UTC by
+            // convention.
+            let unit = Value::Struct(vec![(3, empty())]);
+            let timestamp = Value::Struct(vec![(1, Value::Bool(false)), (2, unit)]);
+            fields.push((10, Value::Struct(vec![(8, timestamp)])));
+        }
         ColumnType::Boolean
         | ColumnType::Int32
         | ColumnType::Int64
@@ -199,14 +209,15 @@ fn schema_element(spec: &ColumnSpec) -> Value {
 }
 
 /// `FileMetaData`: version 1, the flattened schema (a root group named
-/// `schema`, then one leaf per column), row count, row groups, writer
-/// identity, and a `TypeDefinedOrder` per column so readers trust
-/// `min_value`/`max_value`.
+/// `schema`, then one leaf per column), row count, row groups, any
+/// key-value metadata, writer identity, and a `TypeDefinedOrder` per
+/// column so readers trust `min_value`/`max_value`.
 pub(crate) fn file_metadata(
     schema: &[ColumnSpec],
     num_rows: i64,
     row_groups: Vec<Value>,
     created_by: &str,
+    key_value_metadata: &[(String, String)],
 ) -> Vec<(i16, Value)> {
     let num_children = i32::try_from(schema.len()).unwrap_or(i32::MAX);
     let root = Value::Struct(vec![(4, string("schema")), (5, Value::I32(num_children))]);
@@ -218,12 +229,21 @@ pub(crate) fn file_metadata(
         .iter()
         .map(|_| Value::Struct(vec![(1, empty())]))
         .collect();
-    vec![
+    let mut fields = vec![
         (1, Value::I32(1)),
         (2, Value::List(elements)),
         (3, Value::I64(num_rows)),
         (4, Value::List(row_groups)),
-        (6, string(created_by)),
-        (7, Value::List(orders)),
-    ]
+    ];
+    if !key_value_metadata.is_empty() {
+        // KeyValue { 1: key, 2: value }
+        let pairs = key_value_metadata
+            .iter()
+            .map(|(k, v)| Value::Struct(vec![(1, string(k)), (2, string(v))]))
+            .collect();
+        fields.push((5, Value::List(pairs)));
+    }
+    fields.push((6, string(created_by)));
+    fields.push((7, Value::List(orders)));
+    fields
 }

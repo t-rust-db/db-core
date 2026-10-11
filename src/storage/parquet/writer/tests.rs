@@ -13,6 +13,7 @@ fn column_values_helpers() {
         ColumnType::Double,
         ColumnType::Utf8,
         ColumnType::TimestampMicros,
+        ColumnType::TimestampNanos,
     ] {
         let mut v = ColumnValues::empty(t);
         assert_eq!(v.column_type(), t);

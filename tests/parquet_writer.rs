@@ -33,9 +33,9 @@ fn validity(values: &ColumnValues) -> Vec<bool> {
     match values {
         ColumnValues::Boolean(v) => v.iter().map(Option::is_some).collect(),
         ColumnValues::Int32(v) => v.iter().map(Option::is_some).collect(),
-        ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => {
-            v.iter().map(Option::is_some).collect()
-        }
+        ColumnValues::Int64(v)
+        | ColumnValues::TimestampMicros(v)
+        | ColumnValues::TimestampNanos(v) => v.iter().map(Option::is_some).collect(),
         ColumnValues::Float(v) => v.iter().map(Option::is_some).collect(),
         ColumnValues::Double(v) => v.iter().map(Option::is_some).collect(),
         ColumnValues::Utf8(v) => v.iter().map(Option::is_some).collect(),
@@ -51,6 +51,7 @@ fn append(into: &mut ColumnValues, from: ColumnValues) {
         (ColumnValues::Double(a), ColumnValues::Double(b)) => a.extend(b),
         (ColumnValues::Utf8(a), ColumnValues::Utf8(b)) => a.extend(b),
         (ColumnValues::TimestampMicros(a), ColumnValues::TimestampMicros(b)) => a.extend(b),
+        (ColumnValues::TimestampNanos(a), ColumnValues::TimestampNanos(b)) => a.extend(b),
         (a, b) => panic!("append {b:?} to {a:?}"),
     }
 }
@@ -93,6 +94,10 @@ fn read_column(
         ColumnType::Utf8 => ColumnValues::Utf8(rg.read_string_column(column).unwrap()),
         ColumnType::TimestampMicros => {
             ColumnValues::TimestampMicros(rg.read_timestamp_column(column).unwrap())
+        }
+        // The reader has no nanosecond unit; the raw INT64 is the value.
+        ColumnType::TimestampNanos => {
+            ColumnValues::TimestampNanos(rg.read_int64_column(column).unwrap())
         }
     }
 }
@@ -143,11 +148,11 @@ fn check_stats(values: &ColumnValues, stats: &Statistics) {
         ColumnValues::Int32(v) => bounds(v.iter().flatten().copied(), stats, |b| {
             i32::from_le_bytes(b.try_into().unwrap())
         }),
-        ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => {
-            bounds(v.iter().flatten().copied(), stats, |b| {
-                i64::from_le_bytes(b.try_into().unwrap())
-            })
-        }
+        ColumnValues::Int64(v)
+        | ColumnValues::TimestampMicros(v)
+        | ColumnValues::TimestampNanos(v) => bounds(v.iter().flatten().copied(), stats, |b| {
+            i64::from_le_bytes(b.try_into().unwrap())
+        }),
         ColumnValues::Utf8(v) => bounds(
             v.iter().flatten().map(|s| s.as_bytes().to_vec()),
             stats,
@@ -567,6 +572,7 @@ fn column_type_strategy() -> impl Strategy<Value = ColumnType> {
         Just(ColumnType::Double),
         Just(ColumnType::Utf8),
         Just(ColumnType::TimestampMicros),
+        Just(ColumnType::TimestampNanos),
     ]
 }
 
@@ -637,6 +643,9 @@ fn values_strategy(t: ColumnType, nullable: bool, n: usize) -> BoxedStrategy<Col
         .boxed(),
         ColumnType::TimestampMicros => col(any::<i64>(), 0i64..4, nullable, n)
             .prop_map(ColumnValues::TimestampMicros)
+            .boxed(),
+        ColumnType::TimestampNanos => col(any::<i64>(), 0i64..4, nullable, n)
+            .prop_map(ColumnValues::TimestampNanos)
             .boxed(),
     }
 }

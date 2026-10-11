@@ -120,6 +120,7 @@ fn cases() -> Vec<Case> {
                 ColumnSpec::new("f64", ColumnType::Double, true),
                 ColumnSpec::new("s", ColumnType::Utf8, true),
                 ColumnSpec::new("ts", ColumnType::TimestampMicros, true),
+                ColumnSpec::new("ts_ns", ColumnType::TimestampNanos, true),
             ],
             batches: vec![vec![
                 ColumnValues::Int32(vec![
@@ -169,6 +170,19 @@ fn cases() -> Vec<Case> {
                     None,
                     Some(1_760_000_000_000_000),
                     Some(-62_135_596_800_000_000),
+                ]),
+                ColumnValues::TimestampNanos(vec![
+                    Some(0),
+                    Some(-1),
+                    // DuckDB's TIMESTAMP_NS uses i64::MAX and i64::MIN + 1 as
+                    // +/-infinity, and cannot convert instants at the very
+                    // bottom of the range (late 1677) even in files it wrote
+                    // itself: the near-max value and 1678-06-18 are the
+                    // edges every reader agrees on.
+                    Some(i64::MAX - 1),
+                    None,
+                    Some(1_760_000_000_123_456_789),
+                    Some(-9_200_000_000_000_000_000),
                 ]),
             ]],
             options: options(Compression::Snappy, true, 100),
@@ -244,7 +258,9 @@ fn json_values(out: &mut String, values: &ColumnValues) {
         ColumnValues::Int32(v) => list(out, v, |o, x| {
             o.push_str(&format!("{x}"));
         }),
-        ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => list(out, v, |o, x| {
+        ColumnValues::Int64(v)
+        | ColumnValues::TimestampMicros(v)
+        | ColumnValues::TimestampNanos(v) => list(out, v, |o, x| {
             o.push_str(&format!("{x}"));
         }),
         // An f32 widens to f64 exactly; the checker rounds back to f32.
@@ -263,6 +279,7 @@ fn type_name(t: ColumnType) -> &'static str {
         ColumnType::Double => "double",
         ColumnType::Utf8 => "utf8",
         ColumnType::TimestampMicros => "timestamp_micros",
+        ColumnType::TimestampNanos => "timestamp_nanos",
     }
 }
 
@@ -319,6 +336,10 @@ fn concat(a: ColumnValues, b: &ColumnValues) -> ColumnValues {
         (ColumnValues::TimestampMicros(mut a), ColumnValues::TimestampMicros(b)) => {
             a.extend_from_slice(b);
             ColumnValues::TimestampMicros(a)
+        }
+        (ColumnValues::TimestampNanos(mut a), ColumnValues::TimestampNanos(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::TimestampNanos(a)
         }
         (a, _) => a,
     }

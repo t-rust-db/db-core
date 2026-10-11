@@ -66,6 +66,12 @@ pub enum ColumnType {
     Utf8,
     /// INT64 annotated as a UTC timestamp in microseconds.
     TimestampMicros,
+    /// INT64 annotated as a timestamp in nanoseconds, values UTC by
+    /// convention. Marked `isAdjustedToUTC = false`, as DuckDB writes its
+    /// `TIMESTAMP_NS` (DuckDB has no time-zone-aware nanosecond type and
+    /// would read a UTC-marked one as microsecond `TIMESTAMPTZ`). LogicalType
+    /// only: the legacy ConvertedType has no nanosecond unit.
+    TimestampNanos,
 }
 
 /// One column of the schema.
@@ -108,6 +114,9 @@ pub enum ColumnValues {
     /// For a [`ColumnType::TimestampMicros`] column: microseconds since the
     /// Unix epoch, UTC.
     TimestampMicros(Vec<Option<i64>>),
+    /// For a [`ColumnType::TimestampNanos`] column: nanoseconds since the
+    /// Unix epoch, UTC.
+    TimestampNanos(Vec<Option<i64>>),
 }
 
 impl ColumnValues {
@@ -121,6 +130,7 @@ impl ColumnValues {
             ColumnType::Double => ColumnValues::Double(Vec::new()),
             ColumnType::Utf8 => ColumnValues::Utf8(Vec::new()),
             ColumnType::TimestampMicros => ColumnValues::TimestampMicros(Vec::new()),
+            ColumnType::TimestampNanos => ColumnValues::TimestampNanos(Vec::new()),
         }
     }
 
@@ -134,6 +144,7 @@ impl ColumnValues {
             ColumnValues::Double(_) => ColumnType::Double,
             ColumnValues::Utf8(_) => ColumnType::Utf8,
             ColumnValues::TimestampMicros(_) => ColumnType::TimestampMicros,
+            ColumnValues::TimestampNanos(_) => ColumnType::TimestampNanos,
         }
     }
 
@@ -142,7 +153,9 @@ impl ColumnValues {
         match self {
             ColumnValues::Boolean(v) => v.len(),
             ColumnValues::Int32(v) => v.len(),
-            ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => v.len(),
+            ColumnValues::Int64(v)
+            | ColumnValues::TimestampMicros(v)
+            | ColumnValues::TimestampNanos(v) => v.len(),
             ColumnValues::Float(v) => v.len(),
             ColumnValues::Double(v) => v.len(),
             ColumnValues::Utf8(v) => v.len(),
@@ -159,9 +172,9 @@ impl ColumnValues {
         match self {
             ColumnValues::Boolean(v) => v.iter().map(Option::is_some).collect(),
             ColumnValues::Int32(v) => v.iter().map(Option::is_some).collect(),
-            ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => {
-                v.iter().map(Option::is_some).collect()
-            }
+            ColumnValues::Int64(v)
+            | ColumnValues::TimestampMicros(v)
+            | ColumnValues::TimestampNanos(v) => v.iter().map(Option::is_some).collect(),
             ColumnValues::Float(v) => v.iter().map(Option::is_some).collect(),
             ColumnValues::Double(v) => v.iter().map(Option::is_some).collect(),
             ColumnValues::Utf8(v) => v.iter().map(Option::is_some).collect(),
@@ -179,6 +192,7 @@ impl ColumnValues {
             (ColumnValues::Double(a), ColumnValues::Double(b)) => a.extend(b),
             (ColumnValues::Utf8(a), ColumnValues::Utf8(b)) => a.extend(b),
             (ColumnValues::TimestampMicros(a), ColumnValues::TimestampMicros(b)) => a.extend(b),
+            (ColumnValues::TimestampNanos(a), ColumnValues::TimestampNanos(b)) => a.extend(b),
             _ => {}
         }
     }
@@ -224,6 +238,8 @@ pub struct WriterOptions {
     pub dictionary_max_bytes: usize,
     /// The footer's `created_by`.
     pub created_by: String,
+    /// The footer's `key_value_metadata`, in order (none when empty).
+    pub key_value_metadata: Vec<(String, String)>,
 }
 
 impl Default for WriterOptions {
@@ -236,6 +252,7 @@ impl Default for WriterOptions {
             dictionary: true,
             dictionary_max_bytes: 1 << 20,
             created_by: format!("db-core version {}", env!("CARGO_PKG_VERSION")),
+            key_value_metadata: Vec::new(),
         }
     }
 }
@@ -482,6 +499,7 @@ impl<W: Write> ParquetWriter<W> {
             to_i64(self.num_rows, "row count")?,
             std::mem::take(&mut self.row_groups),
             &self.options.created_by,
+            &self.options.key_value_metadata,
         );
         let footer = thrift::encode_struct(&fields)?;
         let footer_len = u32::try_from(footer.len()).map_err(|_| too_large("footer"))?;
@@ -692,12 +710,12 @@ fn encode_values(
             out.extend_from_slice(&x.to_le_bytes());
             Ok(())
         }),
-        ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => {
-            dictionary_or_plain(v, options, |out, x| {
-                out.extend_from_slice(&x.to_le_bytes());
-                Ok(())
-            })
-        }
+        ColumnValues::Int64(v)
+        | ColumnValues::TimestampMicros(v)
+        | ColumnValues::TimestampNanos(v) => dictionary_or_plain(v, options, |out, x| {
+            out.extend_from_slice(&x.to_le_bytes());
+            Ok(())
+        }),
         ColumnValues::Float(v) => {
             let mut data = Vec::new();
             for x in v.iter().flatten() {

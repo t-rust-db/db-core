@@ -21,7 +21,9 @@ pub(crate) fn chunk_stats(values: &ColumnValues) -> ChunkStats {
     match values {
         ColumnValues::Boolean(v) => ordered(v.iter().copied(), |b| vec![u8::from(*b)]),
         ColumnValues::Int32(v) => ordered(v.iter().copied(), |x| x.to_le_bytes().to_vec()),
-        ColumnValues::Int64(v) | ColumnValues::TimestampMicros(v) => {
+        ColumnValues::Int64(v)
+        | ColumnValues::TimestampMicros(v)
+        | ColumnValues::TimestampNanos(v) => {
             ordered(v.iter().copied(), |x| x.to_le_bytes().to_vec())
         }
         ColumnValues::Float(v) => real(v.iter().copied()),
