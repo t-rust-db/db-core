@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.125.0] - 2026-10-11
+
+### Added
+
+- **Flush: ingested records become Parquet files under a manifest** (#572 part (a), third story of the write-path epic #570; ADR 0027). `TableWriter::open(dir, TableOptions)` locks the table, reads `manifest.json`, cleans up (empties `tmp/`, deletes files in `data/` the manifest does not list) and replays the WAL into pages. `append(line, Ack)` logs the record (WAL payload: `observed_ts` i64 LE plus the line) and adds it to the head page; a full head (`SEGMENT_MAX_ROWS`) seals itself, `seal_head()` seals it on demand. `flush()` writes the sealed pages to one file in five steps: write and fsync `tmp/<lsn_lo:020>-<lsn_hi:020>.parquet`, rename into `data/` and fsync the directory, replace `manifest.json` atomically (tmp, fsync, rename, directory fsync; the single commit point), drop the pages, unlink WAL segments at or below `flushed_lsn`. `Ack::Flushed` returns after the commit.
+- **Manifest** (`manifest.json`): the table's format, `flushed_lsn` and the file list with per-file LSN range, rows, bytes and `observed_ts`/`timestamp` bounds. The invariant (files contiguous from LSN 1, one row per LSN, last `lsn_hi == flushed_lsn`) is checked on every read and write.
+- **File layout**: the seven predefined stream columns (`timestamp`, `observed_ts` as nanosecond timestamps, `severity` INT32, `severity_text`, `facility`, `message`, `raw`), then the union of every page's fields in first-seen order. Integer/float conflicts widen to DOUBLE, any other conflict to a string. Each file's key-value metadata records `db-core.lsn_lo`/`db-core.lsn_hi`.
+- **Parquet writer**: `ColumnType::TimestampNanos` (written as DuckDB writes `TIMESTAMP_NS`: `isAdjustedToUTC=false`, no ConvertedType) and `WriterOptions::key_value_metadata`.
+- **`Segment::seal_lines`**: a segment with one row per line and a per-row `observed_ts`.
+- **ADR 0027 "Where tables differ from DuckDB"**: timestamp marking and range, file-only readers miss unflushed rows and a glob over `data/` can catch an uncommitted file (read the manifest's list), files need `union_by_name`, type-conflict widening, non-JSON lines kept as rows, one-level nesting flatten, arrays as JSON text, string values keep their JSON escapes (ADR 0018), reserved predefined names, `severity` as INT32 plus `severity_text`.
+- **Tests**: a crash after each flush step recovers every record exactly once and the table carries on; reopen restores pages with their arrival times; manifest round trip, invariant and malformed-input cases; the write oracle now also has DuckDB and pyarrow read a flushed table.
+
 ## [0.124.0] - 2026-10-11
 
 ### Added
