@@ -35,7 +35,10 @@ fn main() {
             let wal = &wal;
             s.spawn(move || {
                 let letter = char::from(b'a' + t);
-                for n in 0u64.. {
+                let mut next = 0u64;
+                loop {
+                    let n = next;
+                    next += 1;
                     let mut payload = format!("{t}:{n}:");
                     payload.extend(std::iter::repeat_n(letter, (n % 300) as usize));
                     if n % 5 == 4 {
