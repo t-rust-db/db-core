@@ -240,6 +240,11 @@ name = "parquet_write_oracle"
 required-features = ["storage-column-write"]
 
 [[bin]]
+name = "wal_probe"
+path = "tests/helpers/wal_probe.rs"
+required-features = ["ingest"]
+
+[[bin]]
 name = "lock_probe"
 path = "tests/helpers/lock_probe.rs"
 required-features = ["storage-row"]
