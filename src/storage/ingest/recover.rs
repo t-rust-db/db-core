@@ -193,3 +193,36 @@ fn truncate(path: &Path, len: usize) -> Result<(), WalError> {
     file.sync_all()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One junk byte, then a valid frame with LSN `lsn`.
+    fn junk_then_frame(lsn: u64) -> Vec<u8> {
+        let mut buf = vec![0xee];
+        frame::encode(&mut buf, lsn, b"payload").unwrap();
+        buf
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_recover_valid_frame_after_604f68e4__v1_lsn_in_the_plausible_range_is_checked(
+    ) {
+        assert!(valid_frame_after(&junk_then_frame(8), 0, 7));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_recover_valid_frame_after_604f68e4__v2_lsn_not_above_prev_is_skipped() {
+        assert!(!valid_frame_after(&junk_then_frame(8), 0, 8));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_recover_valid_frame_after_604f68e4__v3_lsn_beyond_what_could_fit_is_skipped(
+    ) {
+        // Room for one frame after `prev` = 1: LSN 1000 cannot follow.
+        assert!(!valid_frame_after(&junk_then_frame(1000), 0, 1));
+    }
+}

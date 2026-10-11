@@ -3407,6 +3407,183 @@ pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::erro
 pub fn db_core::storage::column::decode_column_at(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub fn db_core::storage::column::decode_column_full(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub type db_core::storage::column::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
+pub mod db_core::storage::ingest
+pub mod db_core::storage::ingest::lock
+pub enum db_core::storage::ingest::lock::LockError
+pub db_core::storage::ingest::lock::LockError::Held
+pub db_core::storage::ingest::lock::LockError::Io(core::io::error::Error)
+impl core::fmt::Debug for db_core::storage::ingest::lock::LockError
+pub fn db_core::storage::ingest::lock::LockError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::lock::TableLock
+impl db_core::storage::ingest::lock::TableLock
+pub fn db_core::storage::ingest::lock::TableLock::acquire(&std::path::Path) -> core::result::Result<Self, db_core::storage::ingest::lock::LockError>
+impl core::fmt::Debug for db_core::storage::ingest::lock::TableLock
+pub fn db_core::storage::ingest::lock::TableLock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const db_core::storage::ingest::lock::LOCK_FILE: &str
+pub mod db_core::storage::ingest::wal
+pub enum db_core::storage::ingest::wal::Ack
+pub db_core::storage::ingest::wal::Ack::Durable
+pub db_core::storage::ingest::wal::Ack::Flushed
+pub db_core::storage::ingest::wal::Ack::Memory
+impl core::clone::Clone for db_core::storage::ingest::wal::Ack
+pub fn db_core::storage::ingest::wal::Ack::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::wal::Ack
+impl core::cmp::PartialEq for db_core::storage::ingest::wal::Ack
+pub fn db_core::storage::ingest::wal::Ack::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::ingest::wal::Ack
+pub fn db_core::storage::ingest::wal::Ack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::ingest::wal::Ack
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::wal::Ack
+pub enum db_core::storage::ingest::wal::WalError
+pub db_core::storage::ingest::wal::WalError::Closed
+pub db_core::storage::ingest::wal::WalError::Corrupt
+pub db_core::storage::ingest::wal::WalError::Corrupt::file: std::path::PathBuf
+pub db_core::storage::ingest::wal::WalError::Corrupt::offset: u64
+pub db_core::storage::ingest::wal::WalError::Corrupt::reason: alloc::string::String
+pub db_core::storage::ingest::wal::WalError::Failed(alloc::string::String)
+pub db_core::storage::ingest::wal::WalError::FlushBeyondDurable
+pub db_core::storage::ingest::wal::WalError::FlushBeyondDurable::durable: u64
+pub db_core::storage::ingest::wal::WalError::FlushBeyondDurable::flushed: u64
+pub db_core::storage::ingest::wal::WalError::Io(core::io::error::Error)
+pub db_core::storage::ingest::wal::WalError::Locked
+pub db_core::storage::ingest::wal::WalError::TooLarge
+impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::wal::WalError
+pub fn db_core::storage::ingest::wal::WalError::from(core::io::error::Error) -> Self
+impl core::error::Error for db_core::storage::ingest::wal::WalError
+impl core::fmt::Debug for db_core::storage::ingest::wal::WalError
+pub fn db_core::storage::ingest::wal::WalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::ingest::wal::WalError
+pub fn db_core::storage::ingest::wal::WalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::wal::Wal
+impl db_core::storage::ingest::wal::Wal
+pub fn db_core::storage::ingest::wal::Wal::append(&self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::close(self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::dir(&self) -> &std::path::Path
+pub fn db_core::storage::ingest::wal::Wal::mark_flushed(&self, u64) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::open(&std::path::Path, u64, db_core::storage::ingest::wal::WalOptions) -> core::result::Result<(db_core::storage::ingest::wal::Wal, alloc::vec::Vec<db_core::storage::ingest::wal::Record>), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::roll(&self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::wal::WalError>
+impl core::fmt::Debug for db_core::storage::ingest::wal::Wal
+pub fn db_core::storage::ingest::wal::Wal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for db_core::storage::ingest::wal::Wal
+pub fn db_core::storage::ingest::wal::Wal::drop(&mut self)
+pub struct db_core::storage::ingest::wal::WalOptions
+pub db_core::storage::ingest::wal::WalOptions::segment_bytes: u64
+impl core::clone::Clone for db_core::storage::ingest::wal::WalOptions
+pub fn db_core::storage::ingest::wal::WalOptions::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::wal::WalOptions
+impl core::cmp::PartialEq for db_core::storage::ingest::wal::WalOptions
+pub fn db_core::storage::ingest::wal::WalOptions::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::ingest::wal::WalOptions
+pub fn db_core::storage::ingest::wal::WalOptions::default() -> Self
+impl core::fmt::Debug for db_core::storage::ingest::wal::WalOptions
+pub fn db_core::storage::ingest::wal::WalOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::wal::WalOptions
+pub struct db_core::storage::ingest::wal::Watermarks
+pub db_core::storage::ingest::wal::Watermarks::durable: u64
+pub db_core::storage::ingest::wal::Watermarks::flushed: u64
+pub db_core::storage::ingest::wal::Watermarks::visible: u64
+impl core::clone::Clone for db_core::storage::ingest::wal::Watermarks
+pub fn db_core::storage::ingest::wal::Watermarks::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::wal::Watermarks
+impl core::cmp::PartialEq for db_core::storage::ingest::wal::Watermarks
+pub fn db_core::storage::ingest::wal::Watermarks::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::ingest::wal::Watermarks
+pub fn db_core::storage::ingest::wal::Watermarks::default() -> Self
+impl core::fmt::Debug for db_core::storage::ingest::wal::Watermarks
+pub fn db_core::storage::ingest::wal::Watermarks::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::ingest::wal::Watermarks
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::wal::Watermarks
+pub const db_core::storage::ingest::wal::WAL_DIR: &str
+pub type db_core::storage::ingest::wal::Record = (u64, alloc::vec::Vec<u8>)
+pub enum db_core::storage::ingest::Ack
+pub db_core::storage::ingest::Ack::Durable
+pub db_core::storage::ingest::Ack::Flushed
+pub db_core::storage::ingest::Ack::Memory
+impl core::clone::Clone for db_core::storage::ingest::wal::Ack
+pub fn db_core::storage::ingest::wal::Ack::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::wal::Ack
+impl core::cmp::PartialEq for db_core::storage::ingest::wal::Ack
+pub fn db_core::storage::ingest::wal::Ack::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::ingest::wal::Ack
+pub fn db_core::storage::ingest::wal::Ack::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::ingest::wal::Ack
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::wal::Ack
+pub enum db_core::storage::ingest::LockError
+pub db_core::storage::ingest::LockError::Held
+pub db_core::storage::ingest::LockError::Io(core::io::error::Error)
+impl core::fmt::Debug for db_core::storage::ingest::lock::LockError
+pub fn db_core::storage::ingest::lock::LockError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::ingest::WalError
+pub db_core::storage::ingest::WalError::Closed
+pub db_core::storage::ingest::WalError::Corrupt
+pub db_core::storage::ingest::WalError::Corrupt::file: std::path::PathBuf
+pub db_core::storage::ingest::WalError::Corrupt::offset: u64
+pub db_core::storage::ingest::WalError::Corrupt::reason: alloc::string::String
+pub db_core::storage::ingest::WalError::Failed(alloc::string::String)
+pub db_core::storage::ingest::WalError::FlushBeyondDurable
+pub db_core::storage::ingest::WalError::FlushBeyondDurable::durable: u64
+pub db_core::storage::ingest::WalError::FlushBeyondDurable::flushed: u64
+pub db_core::storage::ingest::WalError::Io(core::io::error::Error)
+pub db_core::storage::ingest::WalError::Locked
+pub db_core::storage::ingest::WalError::TooLarge
+impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::wal::WalError
+pub fn db_core::storage::ingest::wal::WalError::from(core::io::error::Error) -> Self
+impl core::error::Error for db_core::storage::ingest::wal::WalError
+impl core::fmt::Debug for db_core::storage::ingest::wal::WalError
+pub fn db_core::storage::ingest::wal::WalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::ingest::wal::WalError
+pub fn db_core::storage::ingest::wal::WalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::TableLock
+impl db_core::storage::ingest::lock::TableLock
+pub fn db_core::storage::ingest::lock::TableLock::acquire(&std::path::Path) -> core::result::Result<Self, db_core::storage::ingest::lock::LockError>
+impl core::fmt::Debug for db_core::storage::ingest::lock::TableLock
+pub fn db_core::storage::ingest::lock::TableLock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::Wal
+impl db_core::storage::ingest::wal::Wal
+pub fn db_core::storage::ingest::wal::Wal::append(&self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::close(self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::dir(&self) -> &std::path::Path
+pub fn db_core::storage::ingest::wal::Wal::mark_flushed(&self, u64) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::open(&std::path::Path, u64, db_core::storage::ingest::wal::WalOptions) -> core::result::Result<(db_core::storage::ingest::wal::Wal, alloc::vec::Vec<db_core::storage::ingest::wal::Record>), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::roll(&self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::wal::Wal::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::wal::WalError>
+impl core::fmt::Debug for db_core::storage::ingest::wal::Wal
+pub fn db_core::storage::ingest::wal::Wal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for db_core::storage::ingest::wal::Wal
+pub fn db_core::storage::ingest::wal::Wal::drop(&mut self)
+pub struct db_core::storage::ingest::WalOptions
+pub db_core::storage::ingest::WalOptions::segment_bytes: u64
+impl core::clone::Clone for db_core::storage::ingest::wal::WalOptions
+pub fn db_core::storage::ingest::wal::WalOptions::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::wal::WalOptions
+impl core::cmp::PartialEq for db_core::storage::ingest::wal::WalOptions
+pub fn db_core::storage::ingest::wal::WalOptions::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::ingest::wal::WalOptions
+pub fn db_core::storage::ingest::wal::WalOptions::default() -> Self
+impl core::fmt::Debug for db_core::storage::ingest::wal::WalOptions
+pub fn db_core::storage::ingest::wal::WalOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::wal::WalOptions
+pub struct db_core::storage::ingest::Watermarks
+pub db_core::storage::ingest::Watermarks::durable: u64
+pub db_core::storage::ingest::Watermarks::flushed: u64
+pub db_core::storage::ingest::Watermarks::visible: u64
+impl core::clone::Clone for db_core::storage::ingest::wal::Watermarks
+pub fn db_core::storage::ingest::wal::Watermarks::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::wal::Watermarks
+impl core::cmp::PartialEq for db_core::storage::ingest::wal::Watermarks
+pub fn db_core::storage::ingest::wal::Watermarks::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::ingest::wal::Watermarks
+pub fn db_core::storage::ingest::wal::Watermarks::default() -> Self
+impl core::fmt::Debug for db_core::storage::ingest::wal::Watermarks
+pub fn db_core::storage::ingest::wal::Watermarks::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::ingest::wal::Watermarks
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::wal::Watermarks
+pub const db_core::storage::ingest::LOCK_FILE: &str
+pub const db_core::storage::ingest::WAL_DIR: &str
+pub type db_core::storage::ingest::Record = (u64, alloc::vec::Vec<u8>)
 pub mod db_core::storage::parquet
 pub mod db_core::storage::parquet::compression
 pub enum db_core::storage::parquet::compression::CompressionError
@@ -5474,16 +5651,35 @@ impl core::clone::Clone for db_core::storage::stream::file::Block
 pub fn db_core::storage::stream::file::Block::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::stream::file::Block
 pub fn db_core::storage::stream::file::Block::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::stream::file::FileIdentity
+pub db_core::storage::stream::file::FileIdentity::dev: u64
+pub db_core::storage::stream::file::FileIdentity::ino: u64
+impl db_core::storage::stream::file::FileIdentity
+pub fn db_core::storage::stream::file::FileIdentity::of(&std::path::Path) -> core::io::error::Result<Self>
+impl core::clone::Clone for db_core::storage::stream::file::FileIdentity
+pub fn db_core::storage::stream::file::FileIdentity::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::stream::file::FileIdentity
+impl core::cmp::PartialEq for db_core::storage::stream::file::FileIdentity
+pub fn db_core::storage::stream::file::FileIdentity::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::stream::file::FileIdentity
+pub fn db_core::storage::stream::file::FileIdentity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for db_core::storage::stream::file::FileIdentity
+pub fn db_core::storage::stream::file::FileIdentity::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for db_core::storage::stream::file::FileIdentity
+impl core::marker::StructuralPartialEq for db_core::storage::stream::file::FileIdentity
 pub struct db_core::storage::stream::file::LogFile
 impl db_core::storage::stream::file::LogFile
 pub const fn db_core::storage::stream::file::LogFile::bytes_read(&self) -> u64
 pub const fn db_core::storage::stream::file::LogFile::head_off(&self) -> u64
+pub const fn db_core::storage::stream::file::LogFile::identity(&self) -> db_core::storage::stream::file::FileIdentity
 pub fn db_core::storage::stream::file::LogFile::is_empty(&self) -> core::io::error::Result<bool>
 pub fn db_core::storage::stream::file::LogFile::len(&self) -> core::io::error::Result<u64>
 pub fn db_core::storage::stream::file::LogFile::open(&std::path::Path) -> core::io::error::Result<Self>
+pub fn db_core::storage::stream::file::LogFile::open_at(&std::path::Path, u64) -> core::io::error::Result<Self>
 pub fn db_core::storage::stream::file::LogFile::path(&self) -> &std::path::Path
 pub fn db_core::storage::stream::file::LogFile::read_tail(&mut self, u64) -> core::io::error::Result<alloc::vec::Vec<db_core::storage::stream::file::Block>>
 pub fn db_core::storage::stream::file::LogFile::refresh(&mut self) -> core::io::error::Result<db_core::storage::stream::file::Refresh>
+pub fn db_core::storage::stream::file::LogFile::rotated(&self) -> core::io::error::Result<bool>
 pub const fn db_core::storage::stream::file::LogFile::tail_off(&self) -> u64
 impl core::fmt::Debug for db_core::storage::stream::file::LogFile
 pub fn db_core::storage::stream::file::LogFile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -5884,6 +6080,22 @@ impl<'a> core::default::Default for db_core::storage::stream::batch::FieldStore<
 pub fn db_core::storage::stream::batch::FieldStore<'a>::default() -> Self
 impl<'a> core::fmt::Debug for db_core::storage::stream::batch::FieldStore<'a>
 pub fn db_core::storage::stream::batch::FieldStore<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::stream::FileIdentity
+pub db_core::storage::stream::FileIdentity::dev: u64
+pub db_core::storage::stream::FileIdentity::ino: u64
+impl db_core::storage::stream::file::FileIdentity
+pub fn db_core::storage::stream::file::FileIdentity::of(&std::path::Path) -> core::io::error::Result<Self>
+impl core::clone::Clone for db_core::storage::stream::file::FileIdentity
+pub fn db_core::storage::stream::file::FileIdentity::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::stream::file::FileIdentity
+impl core::cmp::PartialEq for db_core::storage::stream::file::FileIdentity
+pub fn db_core::storage::stream::file::FileIdentity::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::stream::file::FileIdentity
+pub fn db_core::storage::stream::file::FileIdentity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for db_core::storage::stream::file::FileIdentity
+pub fn db_core::storage::stream::file::FileIdentity::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for db_core::storage::stream::file::FileIdentity
+impl core::marker::StructuralPartialEq for db_core::storage::stream::file::FileIdentity
 pub struct db_core::storage::stream::JsonlParser
 impl db_core::storage::stream::jsonl::JsonlParser
 pub fn db_core::storage::stream::jsonl::JsonlParser::looks_like_json_object(&[u8]) -> bool
@@ -5929,12 +6141,15 @@ pub struct db_core::storage::stream::LogFile
 impl db_core::storage::stream::file::LogFile
 pub const fn db_core::storage::stream::file::LogFile::bytes_read(&self) -> u64
 pub const fn db_core::storage::stream::file::LogFile::head_off(&self) -> u64
+pub const fn db_core::storage::stream::file::LogFile::identity(&self) -> db_core::storage::stream::file::FileIdentity
 pub fn db_core::storage::stream::file::LogFile::is_empty(&self) -> core::io::error::Result<bool>
 pub fn db_core::storage::stream::file::LogFile::len(&self) -> core::io::error::Result<u64>
 pub fn db_core::storage::stream::file::LogFile::open(&std::path::Path) -> core::io::error::Result<Self>
+pub fn db_core::storage::stream::file::LogFile::open_at(&std::path::Path, u64) -> core::io::error::Result<Self>
 pub fn db_core::storage::stream::file::LogFile::path(&self) -> &std::path::Path
 pub fn db_core::storage::stream::file::LogFile::read_tail(&mut self, u64) -> core::io::error::Result<alloc::vec::Vec<db_core::storage::stream::file::Block>>
 pub fn db_core::storage::stream::file::LogFile::refresh(&mut self) -> core::io::error::Result<db_core::storage::stream::file::Refresh>
+pub fn db_core::storage::stream::file::LogFile::rotated(&self) -> core::io::error::Result<bool>
 pub const fn db_core::storage::stream::file::LogFile::tail_off(&self) -> u64
 impl core::fmt::Debug for db_core::storage::stream::file::LogFile
 pub fn db_core::storage::stream::file::LogFile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
