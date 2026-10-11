@@ -49,7 +49,7 @@ fn main() {
                     let mut out = std::io::stdout().lock();
                     writeln!(out, "{lsn}\t{payload}").unwrap();
                     out.flush().unwrap();
-                    if n % 97 == 0 {
+                    if n.is_multiple_of(97) {
                         wal.roll().unwrap();
                     }
                 }
