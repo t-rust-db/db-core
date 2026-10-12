@@ -23,7 +23,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use db_core::storage::ingest::Ack;
-use db_core::storage::ingest::{TableOptions, TableWriter};
+use db_core::storage::ingest::{Layout, TableOptions, TableWriter, TierOptions};
 use db_core::storage::parquet::footer::PhysicalType;
 use db_core::storage::parquet::writer::{
     ColumnSpec, ColumnType, ColumnValues, Compression, ParquetWriter, WriterOptions,
@@ -457,6 +457,87 @@ fn ingested_table_case(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Arrival time for the tiered table: set by `tiered_table_case`.
+static NOW: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn now() -> i64 {
+    NOW.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// A tiered table (ADR 0028, #573) over three closed days and an open
+/// hour, its closed days merged into `archive/`. Writes the table under
+/// `tiered_table/` and the `raw` of every record the archive must hold,
+/// sorted, with its date, to `tiered_table.archive`.
+fn tiered_table_case(dir: &Path) -> Result<(), String> {
+    const HOUR: i64 = 3_600_000_000_000;
+    const DAY: i64 = 24 * HOUR;
+    let table = dir.join("tiered_table");
+    fs::remove_dir_all(&table).ok();
+    let start = 20_737 * DAY; // 2026-10-11
+    NOW.store(start, std::sync::atomic::Ordering::SeqCst);
+    let options = TableOptions {
+        layout: Layout::Tiered(TierOptions {
+            sort_key: vec!["user".to_string()],
+            row_group_max_rows: 100,
+            max_file_size: 64 * 1024,
+            delete_grace_ns: 0,
+        }),
+        clock: now,
+        ..TableOptions::default()
+    };
+    let mut writer = TableWriter::open(&table, options).map_err(|e| e.to_string())?;
+    let mut archived = Vec::new();
+    for i in 0..4_000i64 {
+        // Three days and a bit, a record every ~70 seconds.
+        let at = start + i * 70_000_000_000;
+        NOW.store(at, std::sync::atomic::Ordering::SeqCst);
+        let line = match i % 4 {
+            0 => format!(r#"{{"n":{i},"user":"u{}"}}"#, i % 7),
+            1 => format!(r#"{{"n":{i},"lat":{i}.5,"user":"u{}"}}"#, i % 7),
+            2 => format!(r#"{{"n":"x{i}","ok":true}}"#),
+            _ => format!("plain text line {i}"),
+        };
+        writer
+            .append(line.as_bytes(), Ack::Memory)
+            .map_err(|e| e.to_string())?;
+        let day = at.div_euclid(DAY) - 20_737;
+        if day < 3 {
+            archived.push((format!("2026-10-{}", 11 + day), line));
+        }
+        if i % 500 == 0 {
+            writer.compact().map_err(|e| e.to_string())?;
+        }
+    }
+    NOW.store(
+        start + 3 * DAY + 2 * HOUR,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    writer.compact().map_err(|e| e.to_string())?;
+    writer.compact().map_err(|e| e.to_string())?; // deletes the replaced hours
+    let areas: Vec<&str> = writer
+        .manifest()
+        .files
+        .iter()
+        .map(|f| f.area.as_str())
+        .collect();
+    if !areas.contains(&"archive") || !areas.contains(&"live") {
+        return Err(format!("expected archive and live files, got {areas:?}"));
+    }
+    writer.close().map_err(|e| e.to_string())?;
+    archived.sort_by(|a, b| a.1.cmp(&b.1));
+    let mut out = String::from("[");
+    for (i, (date, raw)) in archived.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!("[{:?},{:?}]", date, raw));
+    }
+    out.push(']');
+    fs::write(dir.join("tiered_table.archive"), out).map_err(|e| e.to_string())?;
+    println!("tiered_table: {} archived rows over 3 days", archived.len());
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let Some(dir) = std::env::args().nth(1) else {
         eprintln!("usage: parquet_write_oracle <out_dir>");
@@ -475,6 +556,10 @@ fn main() -> ExitCode {
     }
     if let Err(e) = ingested_table_case(dir) {
         eprintln!("ingested_table: {e}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = tiered_table_case(dir) {
+        eprintln!("tiered_table: {e}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
