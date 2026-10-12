@@ -59,5 +59,5 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0025](0025-audit-model-for-batch-and-stream-kernels.md) — Audit model for `vm::batch`/`vm::stream`: the kernel, not the opcode, is the audit unit; segment-split invariance as the headline obligation
 - [0026](0026-late-materialization.md) — Late materialization: two-phase segment decode
 - [0027](0027-write-path-wal-and-flush.md) — Write path: record WAL, three watermarks (visible/durable/flushed), atomic flush to Parquet via a manifest
-- [0028](0028-time-tiered-layout-and-compaction.md) — Time-tiered layout (hot → hour → day) partitioned by arrival time, hours sorted by a sort key into row groups, per-table choice next to the flat layout
+- [0028](0028-time-tiered-layout-and-compaction.md) — Time-tiered layout (hot → hour → day) partitioned by arrival time, hours sorted by a sort key into row groups, per-table choice next to the flat layout; secondary access paths (sort key, bloom filters, projections)
 - [0029](0029-ingest-packaging.md) — Packaging the write path: `storage-column-write`/`ingest-read`/`ingest` features, `column-ingest` binary, readers in the `tools` workspace
