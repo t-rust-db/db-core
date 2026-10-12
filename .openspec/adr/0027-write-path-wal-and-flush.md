@@ -288,7 +288,7 @@ differently from DuckDB, deliberately:
 |---|---|---|
 | Timestamps (`timestamp`, `observed_ts`) | INT64 `TIMESTAMP(NANOS)`, `isAdjustedToUTC = false`, values UTC by convention | Same marking as its own `TIMESTAMP_NS`, read at full precision. A UTC-marked nanosecond column would read as microsecond `TIMESTAMPTZ` (truncated), which is why we don't mark it |
 | Timestamp range | full `i64` | `i64::MAX` and `i64::MIN + 1` are ±infinity; instants in late 1677 cannot be converted (also in files DuckDB writes) |
-| Which rows a reader sees | the manifest's files plus the WAL tail / pages above `flushed_lsn` | reads files only: never the unflushed tail. A glob over `data/` can also catch a file published but not yet committed (between flush steps 2 and 3), which recovery deletes; read the manifest's file list, or `archive/` once ADR 0028 lands |
+| Which rows a reader sees | the manifest's files plus the WAL tail / pages above `flushed_lsn` | reads files only: never the unflushed tail. A glob over `data/` can also catch a file published but not yet committed (between flush steps 2 and 3), which recovery deletes; read the manifest's file list, or for a tiered table `archive/` only (ADR 0028), which is exact |
 | Schema across files | each file has the fields its pages had | needs `read_parquet(..., union_by_name = true)` across files |
 | Field type conflicts | INT and FLOAT widen to DOUBLE; any other mix becomes a string, per file and again across the table at read time. An integer above 2⁵³ in a field that also has floats and strings may read exact or rounded depending on flush timing | `read_json` unifies to a common supertype, often `VARCHAR`/`JSON` |
 | Lines that are not JSON in a `json` table | kept as a row (`raw`, `message`), fields NULL | `read_json` fails, or drops them with `ignore_errors` |
@@ -306,6 +306,8 @@ Feature split and client packaging: ADR 0029.
 - `src/storage/ingest/` — `wal.rs` (frames, group commit), `table.rs`
   (writer, ingest thread, watermarks), `manifest.rs` (format, atomic
   replace, invariant check), `recover.rs`, `snapshot.rs`.
+- `src/storage/ingest/layout.rs`, `tier.rs` — ADR 0028's tiered layout:
+  hour outputs, day merges.
 - `src/engine/column/table.rs` — `TableEngine`, `query_snapshot`, the
   table schema, NULL-fill and casts; `src/engine/column.rs` holds the
   `TableSegment` enum over row groups and pages (it borrows the

@@ -1,6 +1,7 @@
 use super::*;
 use crate::engine::Cell;
-use crate::storage::ingest::{Ack, TableOptions, TableWriter};
+use crate::storage::ingest::layout::{DAY_NS, HOUR_NS};
+use crate::storage::ingest::{Ack, Layout, TableOptions, TableWriter, TierOptions};
 use crate::test_rng::Rng;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,16 +20,30 @@ impl TempTable {
     }
 
     fn writer(&self) -> TableWriter {
-        TableWriter::open(&self.0, TableOptions::default()).unwrap()
+        self.writer_with(TableOptions::default())
+    }
+
+    fn writer_with(&self, options: TableOptions) -> TableWriter {
+        TableWriter::open(&self.0, options).unwrap()
     }
 }
 
-impl Drop for TempTable {
-    fn drop(&mut self) {
-        if let Some(root) = self.0.parent() {
-            fs::remove_dir_all(root).ok();
-        }
-    }
+/// The tests' clock: shared, so tests that move it hold [`serial`].
+static NOW: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(20_737 * DAY_NS);
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn clock() -> i64 {
+    NOW.load(Ordering::SeqCst)
+}
+
+fn advance_clock(ns: i64) {
+    NOW.fetch_add(ns, Ordering::SeqCst);
 }
 
 fn append(w: &mut TableWriter, lines: &[&str]) {
@@ -251,14 +266,16 @@ const INVARIANCE_QUERIES: [&str; 9] = [
 ];
 
 /// The same records give the same answers however they were split into
-/// pages and files, and whether read in or out of process, also for fields
-/// whose type changes inside a page (#584).
+/// pages and files, whether read in or out of process, also for fields
+/// whose type changes inside a page (#584), and for tiered tables, whose
+/// hours and days close as the clock moves and are compacted (#573).
 #[test]
 fn query_results_do_not_depend_on_flush_timing() {
     let cases = std::env::var("DB_CORE_FLUSH_CASES")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(12u64);
+    let _serial = serial();
     for seed in 0..cases {
         let mut rng = Rng::new(seed);
         let count = 10 + rng.below(150);
@@ -267,12 +284,39 @@ fn query_results_do_not_depend_on_flush_timing() {
             .map(|i| random_line(&mut rng, i, switch))
             .collect();
         let reference = TempTable::new();
-        let mut never = reference.writer();
+        let mut never = reference.writer_with(TableOptions {
+            clock,
+            ..TableOptions::default()
+        });
+        // Half the seeds tiered: hours close as the clock moves, days
+        // merge into the archive, row groups sorted by a random key.
+        let tiered = rng.below(2) == 0;
+        let sort_keys: [&[&str]; 3] = [&[], &["s"], &["k", "n"]];
+        let layout = if tiered {
+            Layout::Tiered(TierOptions {
+                sort_key: sort_keys[rng.below(3) as usize]
+                    .iter()
+                    .map(|k| k.to_string())
+                    .collect(),
+                row_group_max_rows: 1 + rng.below(40) as usize,
+                max_file_size: if rng.below(2) == 0 { 1 } else { 1 << 30 },
+                delete_grace_ns: rng.below(2) as i64 * HOUR_NS,
+            })
+        } else {
+            Layout::Flat
+        };
         let t = TempTable::new();
-        let mut w = t.writer();
+        let mut w = t.writer_with(TableOptions {
+            layout,
+            clock,
+            ..TableOptions::default()
+        });
         // Seal and flush at random points, and query at random points too.
         let (seal_odds, flush_odds) = (2 + rng.below(20), 2 + rng.below(30));
         for (k, l) in lines.iter().enumerate() {
+            if rng.below(8) == 0 {
+                advance_clock(rng.below(3 * HOUR_NS as u64) as i64);
+            }
             never.append(l.as_bytes(), Ack::Memory).unwrap();
             w.append(l.as_bytes(), Ack::Memory).unwrap();
             if rng.below(seal_odds) == 0 {
@@ -280,6 +324,9 @@ fn query_results_do_not_depend_on_flush_timing() {
             }
             if rng.below(flush_odds) == 0 {
                 w.flush().unwrap();
+            }
+            if rng.below(flush_odds) == 0 {
+                w.compact().unwrap();
             }
             let last = k + 1 == lines.len();
             if [rng.below(40) == 0, last].contains(&true) {
@@ -292,8 +339,22 @@ fn query_results_do_not_depend_on_flush_timing() {
                 }
             }
         }
-        // ...and from another process's point of view, after all flushes.
+        // ...and from another process's point of view, after all flushes
+        // (for a tiered table: two days on, so everything is archived).
+        if tiered {
+            advance_clock(2 * DAY_NS);
+        }
         w.flush_all().unwrap();
+        w.compact().unwrap();
+        if tiered {
+            assert!(
+                w.manifest()
+                    .files
+                    .iter()
+                    .all(|f| f.area == crate::storage::ingest::Area::Archive),
+                "seed {seed}"
+            );
+        }
         let mut engine = TableEngine::open(&t.0).unwrap();
         for sql in INVARIANCE_QUERIES {
             assert_eq!(
@@ -384,7 +445,7 @@ fn a_corrupt_file_is_an_open_error() {
     let t = TempTable::new();
     let mut w = t.writer();
     append(&mut w, &[r#"{"n":1}"#]);
-    let entry = w.flush_all().unwrap().unwrap();
+    let entry = w.flush_all().unwrap().remove(0);
     let mut engine = TableEngine::open(&t.0).unwrap();
     fs::write(t.0.join(&entry.path), b"PAR1 not really").unwrap();
     let snapshot = w.snapshot().unwrap();
@@ -422,4 +483,56 @@ fn take_values_reads_either_column_map() {
         take_values(&mut typed, "t"),
         vec![Value::Int(4), Value::Int(5)]
     );
+}
+
+/// #573 acceptance: with a `sort_key`, each row group of a closed hour
+/// holds a range of the key, so footer statistics skip the row groups a
+/// non-time predicate cannot match; in arrival order they skip none.
+#[test]
+fn a_sort_key_lets_statistics_skip_row_groups() {
+    let _serial = serial();
+    let pruned = |sort_key: &[&str]| {
+        NOW.store(20_737 * DAY_NS, Ordering::SeqCst);
+        let t = TempTable::new();
+        let mut w = t.writer_with(TableOptions {
+            layout: Layout::Tiered(TierOptions {
+                sort_key: sort_key.iter().map(|k| k.to_string()).collect(),
+                row_group_max_rows: 30,
+                ..TierOptions::default()
+            }),
+            clock,
+            ..TableOptions::default()
+        });
+        for i in 0..90 {
+            let kind = ["login", "logout", "error"][i % 3];
+            w.append(
+                format!(r#"{{"i":{i},"kind":"{kind}"}}"#).as_bytes(),
+                Ack::Memory,
+            )
+            .unwrap();
+        }
+        advance_clock(HOUR_NS);
+        let entry = w.flush().unwrap().remove(0);
+        let bytes = fs::read(t.0.join(&entry.path)).unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let select = crate::parser::parse("SELECT i FROM logs WHERE kind = 'logout'").unwrap();
+        let predicate = select.where_clause.unwrap();
+        let leaves = leaf_columns(&file);
+        let by_name = leaves
+            .iter()
+            .map(|(n, i, t)| (n.as_str(), (*i, *t)))
+            .collect();
+        let skipped = file
+            .row_groups()
+            .filter(|rg| super::super::prune::definitely_empty(&predicate, rg, &by_name))
+            .count();
+        // ...and the query still finds every row.
+        assert_eq!(
+            rows(&w, "SELECT COUNT(*) FROM logs WHERE kind = 'logout'"),
+            vec![vec![Cell::Int(30)]]
+        );
+        (file.num_row_groups(), skipped)
+    };
+    assert_eq!(pruned(&["kind"]), (3, 2));
+    assert_eq!(pruned(&[]), (3, 0));
 }

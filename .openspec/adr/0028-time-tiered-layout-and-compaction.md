@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed (#TBD; builds on ADR 0027)
+Accepted (#573; builds on ADR 0027). Part (a) built: layouts, hour close,
+day merge, sort key, deferred deletes; see "As built" at the end.
 
 ## Context
 
@@ -234,3 +235,70 @@ No further levels until a workload measurably needs one.
 - Event-time partitioning, if ever needed, reintroduces late records,
   reopened partitions and a close grace; it is a new decision, not a
   config switch.
+
+## As built (#573, part a)
+
+**Layout is a per-table choice.** `TableOptions.layout` is
+`Layout::Flat`, ADR 0027's one file per flush in `data/` and the default,
+or `Layout::Tiered(TierOptions)`, this ADR. The manifest (version 2)
+records the kind and each file's `area` (`data`, `live`, `archive`);
+version 1 reads as flat. Opening a table with the other kind fails.
+`TierOptions` holds `sort_key`, `row_group_max_rows`, `max_file_size` and
+`delete_grace_ns`. They are options, not TOML, and may change between
+opens. Arrival time comes from `TableOptions.clock`, the system clock by
+default.
+
+**Amendment: the whole hour is sorted, then cut into row groups.**
+Sorting rows *within* a row group cannot change that row group's min/max,
+so it would not let statistics skip row groups on the sort key. It only
+tightens page statistics, which need several pages per chunk and a page
+index. A closed hour is therefore sorted by `sort_key` as a whole, then
+cut into row groups of at most `row_group_max_rows`, so each row group
+holds a range of the key. With `sort_key = ["kind"]`, a test shows
+`WHERE kind = 'logout'` skipping 2 of 3 row groups, and none in arrival
+order. In consequence:
+
+- A closed hour is always **one file** (its LSN range is the hour's).
+  `max_file_size` applies at the day merge, which starts a new file at an
+  hour boundary once a file reaches it. A very busy hour can exceed the
+  size.
+- Row groups are no longer contiguous LSN runs. The day merge checks only
+  that each input holds as many rows as its LSN range.
+- Building the hour holds its rows as values in memory, besides the
+  pages. `staging/` spills (part b) bound both.
+
+**Hours and days close on a call, not a timer.** `flush()` writes every
+closed hour, and seals a head whose hour has passed, so an idle table's
+hour closes on the next call. `compact()` first flushes every closed
+hour, then merges each closed day. Merging a day before its last hour is
+in `live/` would publish its archive directory twice. The compactor
+thread and an idle timer come with #574's ingest thread. `Ack::Flushed`
+is refused on a tiered table until spills exist.
+
+**Deferred deletes are in memory.** Replaced files are deleted by the
+first `flush()`/`compact()` after `delete_grace_ns`. In-process snapshots
+need no tracking, since a mapped file stays readable after it is deleted.
+`Snapshot::open` in another process re-reads the manifest when a listed
+file has vanished. After a crash, reopening deletes every unlisted file
+at once, without the grace period.
+
+**The day merge decodes and re-encodes** one row group at a time,
+widening to the day's schema. The byte-for-byte chunk copy is a later
+optimisation.
+
+**Recovery** removes unlisted files in `data/`, `live/` and `archive/`
+and the directories left empty. A crash after each step of a flush and a
+compaction (write, publish, commit, release) recovers every record once.
+
+**Checked:**
+- DuckDB over `archive/*/*.parquet` (`hive_partitioning`,
+  `union_by_name`) returns exactly the closed days' rows under their
+  `date` (`make check-parquet-write-oracle`, case `tiered_table`).
+- The flush-timing property test runs half its seeds tiered, with a
+  moving clock, random compactions and random sort keys.
+
+**Not yet (part b):**
+- `staging/` spills under `hot_memory_budget`
+- retention
+- the byte-copy merge
+- the compactor thread

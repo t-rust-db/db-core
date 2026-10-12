@@ -66,6 +66,11 @@ impl HeadPage {
         self.observed.len()
     }
 
+    /// The first row's arrival time, if any.
+    pub(crate) fn first_observed(&self) -> Option<i64> {
+        self.observed.first().copied()
+    }
+
     pub(crate) fn is_full(&self) -> bool {
         self.len() >= SEGMENT_MAX_ROWS
     }

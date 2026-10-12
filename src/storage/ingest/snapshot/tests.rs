@@ -136,7 +136,10 @@ fn a_wal_that_never_reaches_the_manifest_is_an_error() {
             .join(super::super::recover::segment_name(1));
     fs::remove_file(first).unwrap();
     let err = Snapshot::open(&t.0).unwrap_err();
-    assert!(err.to_string().contains("does not continue"), "{err}");
+    assert!(
+        err.to_string().contains("does not match the manifest"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -152,7 +155,7 @@ fn a_missing_or_unreadable_file_is_an_error() {
     let t = TempTable::new();
     let mut w = open(&t);
     append(&mut w, 0..3);
-    let entry = w.flush_all().unwrap().unwrap();
+    let entry = w.flush_all().unwrap().remove(0);
     let path = t.0.join(&entry.path);
     fs::write(&path, b"not parquet").unwrap();
     let s = w.snapshot().unwrap();

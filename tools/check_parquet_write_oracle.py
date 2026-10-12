@@ -184,6 +184,26 @@ def check_duckdb(path, columns, fails):
         fails.check(len(stats) == len(groups), f"duckdb {name}: {len(stats)} chunks, {len(groups)} row groups")
 
 
+def check_archive(spec, fails):
+    """#573: DuckDB over a tiered table's `archive/` returns exactly the
+    rows of its closed days, each under its `date` partition."""
+    expected = sorted((date, raw) for date, raw in json.loads(spec.read_text()))
+    table = spec.with_suffix("")
+    glob = (table / "archive" / "*" / "*.parquet").as_posix()
+    con = duckdb.connect()
+    got = con.execute(
+        f"SELECT CAST(date AS VARCHAR), raw FROM read_parquet('{glob}', "
+        "hive_partitioning = true, union_by_name = true) ORDER BY raw"
+    ).fetchall()
+    got = sorted((d, r) for d, r in got)
+    if got != expected:
+        fails.add(f"archive: {len(got)} rows vs {len(expected)} expected; {first_diff(got, expected)}")
+    # The open day is in live/ only, never in the archive.
+    live = (table / "live").as_posix()
+    if not any(Path(live).rglob("*.parquet")):
+        fails.add("live/: expected the open day's hours")
+
+
 def first_diff(a, b):
     for i, (x, y) in enumerate(zip(a, b)):
         if x != y:
@@ -210,9 +230,18 @@ def main():
         for item in fails.items[:20]:
             print(f"    {item}")
         failed += bool(fails.items)
+    archives = sorted(Path(sys.argv[1]).glob("*.archive"))
+    for spec in archives:
+        fails = Failures()
+        check_archive(spec, fails)
+        status = "ok" if not fails.items else f"FAIL ({len(fails.items)})"
+        print(f"  {spec.stem} (archive/): {status}")
+        for item in fails.items[:20]:
+            print(f"    {item}")
+        failed += bool(fails.items)
     if failed:
-        sys.exit(f"{failed} of {len(cases)} cases failed")
-    print(f"all {len(cases)} cases agree with DuckDB and pyarrow")
+        sys.exit(f"{failed} of {len(cases) + len(archives)} cases failed")
+    print(f"all {len(cases) + len(archives)} cases agree with DuckDB and pyarrow")
 
 
 if __name__ == "__main__":

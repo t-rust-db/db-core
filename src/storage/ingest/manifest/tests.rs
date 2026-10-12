@@ -1,8 +1,10 @@
 use super::*;
+use crate::storage::ingest::layout::{Area, LayoutKind};
 
 fn entry(lo: u64, hi: u64) -> FileEntry {
     FileEntry {
         path: format!("data/{lo:020}-{hi:020}.parquet"),
+        area: Area::Data,
         lsn_lo: lo,
         lsn_hi: hi,
         rows: hi - lo + 1,
@@ -13,14 +15,14 @@ fn entry(lo: u64, hi: u64) -> FileEntry {
 }
 
 fn two_files() -> Manifest {
-    Manifest::new(Format::Jsonl)
+    Manifest::new(Format::Jsonl, LayoutKind::Flat)
         .with_file(entry(1, 10))
         .with_file(entry(11, 15))
 }
 
 #[test]
 fn round_trips_through_json() {
-    for m in [Manifest::new(Format::Logfmt), two_files()] {
+    for m in [Manifest::new(Format::Logfmt, LayoutKind::Flat), two_files()] {
         let text = m.to_json();
         assert_eq!(Manifest::parse(&text).unwrap(), m, "{text}");
     }
@@ -45,7 +47,7 @@ fn every_format_has_a_name() {
 fn the_invariant_is_enforced() {
     let cases = [
         (
-            Manifest::new(Format::Jsonl).with_file(entry(2, 5)),
+            Manifest::new(Format::Jsonl, LayoutKind::Flat).with_file(entry(2, 5)),
             "starts at LSN 2, expected 1",
         ),
         (
@@ -78,7 +80,7 @@ fn the_invariant_is_enforced() {
         ),
         (
             {
-                let mut m = Manifest::new(Format::Jsonl);
+                let mut m = Manifest::new(Format::Jsonl, LayoutKind::Flat);
                 m.flushed_lsn = 1;
                 m
             },
@@ -106,7 +108,11 @@ fn malformed_text_is_refused() {
         "".to_string(),
         "[]".to_string(),
         format!("{good} trailing"),
-        good.replace("\"version\":1", "\"version\":2"),
+        good.replace("\"version\":2", "\"version\":3"),
+        good.replace("\"version\":2", "\"version\":0"),
+        good.replace("\"layout\":\"flat\"", "\"layout\":\"round\""),
+        good.replace("\"layout\":\"flat\",", ""),
+        good.replace("\"area\":\"data\"", "\"area\":\"attic\""),
         good.replace("\"format\":\"json\"", "\"format\":\"csv\""),
         good.replace("\"format\":\"json\"", "\"format\":7"),
         good.replace("\"flushed_lsn\":15", "\"flushed_lsn\":-1"),
@@ -127,7 +133,7 @@ fn malformed_text_is_refused() {
             "{text}: {err:?}"
         );
     }
-    let empty_files = Manifest::new(Format::Jsonl)
+    let empty_files = Manifest::new(Format::Jsonl, LayoutKind::Flat)
         .to_json()
         .replace("[]", "[ ] x");
     assert!(Manifest::parse(&empty_files).is_err());
@@ -166,4 +172,62 @@ fn error_messages() {
         "manifest: disk"
     );
     assert_eq!(malformed("x").to_string(), "manifest: malformed: x");
+}
+
+#[test]
+fn version_1_reads_as_a_flat_table() {
+    let v2 = two_files().to_json();
+    let v1 = v2
+        .replace("\"version\":2", "\"version\":1")
+        .replace("\"layout\":\"flat\",", "")
+        .replace("\"area\":\"data\",", "");
+    assert!(!v1.contains("area"), "{v1}");
+    assert_eq!(Manifest::parse(&v1).unwrap(), two_files());
+}
+
+fn tiered(areas: &[Area]) -> Manifest {
+    let mut m = Manifest::new(Format::Jsonl, LayoutKind::Tiered);
+    for (i, area) in areas.iter().enumerate() {
+        let lsn = i as u64 + 1;
+        let mut e = entry(lsn, lsn);
+        e.area = *area;
+        m = m.with_file(e);
+    }
+    m
+}
+
+#[test]
+fn areas_must_fit_the_layout() {
+    tiered(&[Area::Archive, Area::Archive, Area::Live, Area::Live])
+        .check()
+        .unwrap();
+    for (m, message) in [
+        (
+            tiered(&[Area::Live, Area::Archive]),
+            "out of place in a tiered table",
+        ),
+        (
+            tiered(&[Area::Data]),
+            "data/, out of place in a tiered table",
+        ),
+        (
+            {
+                let mut m = two_files();
+                m.files[1].area = Area::Live;
+                m
+            },
+            "out of place in a flat table",
+        ),
+    ] {
+        let err = m.check().unwrap_err();
+        assert!(err.to_string().contains(message), "{err}");
+    }
+    let m = tiered(&[Area::Live, Area::Live, Area::Live]);
+    let mut merged = entry(1, 2);
+    merged.area = Area::Archive;
+    let next = m.replacing(0..2, vec![merged]);
+    next.check().unwrap();
+    assert_eq!(next.files.len(), 2);
+    assert_eq!(next.flushed_lsn, 3);
+    assert_eq!(Manifest::parse(&next.to_json()).unwrap(), next);
 }

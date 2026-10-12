@@ -103,7 +103,7 @@ pub(crate) fn schema(pages: &[Page]) -> Vec<ColumnSpec> {
 
 /// `values` as `column_type`. Called only with the type [`schema`] chose,
 /// so every non-null value converts; a string column renders the others.
-fn convert(values: Vec<Value>, column_type: ColumnType) -> ColumnValues {
+pub(crate) fn convert(values: Vec<Value>, column_type: ColumnType) -> ColumnValues {
     let ints = |v: &Value| match v {
         Value::Int(i) => Some(*i),
         _ => None,
@@ -171,7 +171,7 @@ fn page_columns(page: &Page, specs: &[ColumnSpec]) -> Vec<ColumnValues> {
         .collect()
 }
 
-fn bounds(values: impl Iterator<Item = Option<i64>>) -> Option<(i64, i64)> {
+pub(crate) fn bounds(values: impl Iterator<Item = Option<i64>>) -> Option<(i64, i64)> {
     values.flatten().fold(None, |acc, v| match acc {
         None => Some((v, v)),
         Some((lo, hi)) => Some((lo.min(v), hi.max(v))),
