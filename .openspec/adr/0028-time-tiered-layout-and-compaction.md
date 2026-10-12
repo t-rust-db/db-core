@@ -236,6 +236,26 @@ No further levels until a workload measurably needs one.
   reopened partitions and a close grace; it is a new decision, not a
   config switch.
 
+## Secondary access paths
+
+Time (arrival hour, then day) is the primary access path. A query on
+another column (`WHERE event_type = 'login'`, `WHERE trace_id = ...`)
+has these options, cheapest first:
+
+| # | Approach | Fits | Cost |
+|---|---|---|---|
+| 1 | No secondary path: scan the time window | Queries dominated by "the last N hours" | None |
+| 2 | **Sort key** within each closed hour, plus statistics to skip row groups and files | Low-cardinality columns (`event_type`, `level`, `service`) | About free: the hour is rewritten anyway |
+| 3 | **Bloom filters** per column chunk | High-cardinality equality (`trace_id`, `user_id`), where min/max skips nothing | Writer work plus a few KB per chunk; DuckDB reads them too |
+| 4 | **Secondary index**: a side file mapping value → file and row group | Point lookups over long time ranges | Must change with every hour close, compaction and retention, and be crash-safe: a second commit problem |
+| 5 | **Another primary order**: (a) re-partition the one copy by key within time, or (b) a second copy in another order (a projection) | Workloads where the key matters more than time | (a) An hour becomes several files with interleaved LSNs, which breaks the per-file contiguity invariant. (b) Storage and write cost double per projection, but both copies commit in one manifest swap |
+
+**Decision.**
+- **1 and 2 are the default.** Approach 2 is completed by two small additions, so the sort pays off across many files: each file's manifest entry records min/max of the sort-key columns, so a query skips whole files without opening them; and a row group whose dictionary lacks an equality literal is skipped even when its min/max is wide (the stream engine already prunes segments this way). Tracked in #589.
+- **3** comes when a high-cardinality filter shows up in real queries (#590).
+- **4 and 5b are one decision, deferred** until a measured workload needs it. If it comes, prefer 5b: a projection commits atomically with the table through the manifest, where an index has to be kept in step.
+- **5a is rejected** while time is the main access path. Event-time partitioning stays rejected for the reasons above.
+
 ## As built (#573, part a)
 
 **Layout is a per-table choice.** `TableOptions.layout` is
