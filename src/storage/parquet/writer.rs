@@ -431,6 +431,19 @@ impl<W: Write> ParquetWriter<W> {
         &self.schema
     }
 
+    /// Bytes written so far: every flushed row group, not the rows still
+    /// buffered or the footer.
+    pub fn bytes_written(&self) -> u64 {
+        self.sink.offset
+    }
+
+    /// Replaces the footer's key-value metadata, written on
+    /// [`finish`](Self::finish): for values known only once the rows are
+    /// in.
+    pub fn set_key_value_metadata(&mut self, metadata: Vec<(String, String)>) {
+        self.options.key_value_metadata = metadata;
+    }
+
     /// Appends one batch: a value list per schema column, in schema order,
     /// all of the same length. Writes a row group once
     /// [`WriterOptions::row_group_rows`] rows are buffered. A rejected

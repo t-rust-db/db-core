@@ -11,14 +11,17 @@
 mod crc32c;
 mod flush;
 mod frame;
+pub mod layout;
 pub mod lock;
 pub mod manifest;
 pub mod page;
 mod recover;
 pub mod snapshot;
 pub mod table;
+mod tier;
 pub mod wal;
 
+pub use layout::{Area, Layout, LayoutKind, TierOptions};
 pub use lock::{LockError, TableLock, LOCK_FILE};
 pub use manifest::{FileEntry, Manifest, ManifestError, MANIFEST_FILE};
 pub use page::Page;

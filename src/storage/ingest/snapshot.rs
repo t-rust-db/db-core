@@ -13,7 +13,8 @@
 //!   the writer has written, which is at least `durable` and may be more:
 //!   a frame written but not yet fsynced is read too, and a power cut could
 //!   still take it back. If a flush moves on between the two reads (the WAL
-//!   no longer starts at `flushed_lsn + 1`), it reads both again.
+//!   no longer starts at `flushed_lsn + 1`), or a file the manifest lists
+//!   is gone (a compaction replaced it), it reads both again.
 //!
 //! [`Snapshot::schema`] is the union of every file's and page's columns,
 //! widened as a flush widens them; a reader casts each segment's values
@@ -80,10 +81,17 @@ impl Snapshot {
                 continue;
             };
             let pages = pages_from_records(table, manifest.format, records)?;
-            return Snapshot::new(table, manifest, pages);
+            match Snapshot::new(table, manifest, pages) {
+                // A compaction replaced the file and its grace period is
+                // over: a newer manifest no longer lists it.
+                Err(IngestError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                other => return other,
+            }
         }
         Err(IngestError::Corrupt(format!(
-            "the WAL does not continue from the manifest's flushed_lsn after {ATTEMPTS} reads"
+            "the WAL or a listed file does not match the manifest after {ATTEMPTS} reads"
         )))
     }
 
@@ -193,7 +201,7 @@ pub(crate) fn pages_from_records(
 }
 
 /// The column type a flushed file's field of physical type `pt` has.
-fn column_type(pt: PhysicalType) -> Option<ColumnType> {
+pub(crate) fn column_type(pt: PhysicalType) -> Option<ColumnType> {
     match pt {
         PhysicalType::Boolean => Some(ColumnType::Boolean),
         PhysicalType::Int32 => Some(ColumnType::Int32),

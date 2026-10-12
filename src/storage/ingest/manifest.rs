@@ -10,28 +10,32 @@
 //! exactly `[1, flushed_lsn]`. [`Manifest::check`] enforces it on read.
 //!
 //! The format is JSON written and read here (db-core has no serde): one
-//! object with `version`, `format`, `flushed_lsn` and `files`. Numbers are
-//! integers; strings are the table's own generated names and never need
-//! escaping (a backslash in one is refused).
+//! object with `version`, `format`, `layout`, `flushed_lsn` and `files`,
+//! each file with its `area` (ADR 0028). Numbers are integers; strings are
+//! the table's own generated names and never need escaping (a backslash in
+//! one is refused). Version 1 (#572, before layouts) reads as a flat table.
 
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::Path;
 
+use super::layout::{Area, LayoutKind};
 use crate::json_path::{parse_object, JsonValue};
 use crate::storage::stream::detect::Format;
 
 /// The manifest's file name inside the table directory.
 pub const MANIFEST_FILE: &str = "manifest.json";
 const MANIFEST_TMP: &str = "manifest.json.tmp";
-const VERSION: i64 = 1;
+const VERSION: i64 = 2;
 
 /// One Parquet file in the table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileEntry {
     /// Path relative to the table directory.
     pub path: String,
+    /// The area it is in.
+    pub area: Area,
     /// First LSN in the file.
     pub lsn_lo: u64,
     /// Last LSN in the file.
@@ -51,6 +55,8 @@ pub struct FileEntry {
 pub struct Manifest {
     /// The record format every line is parsed with.
     pub format: Format,
+    /// Where files go.
+    pub layout: LayoutKind,
     /// Every LSN up to this one is in `files`.
     pub flushed_lsn: u64,
     /// The live files, in LSN order.
@@ -104,10 +110,11 @@ pub fn format_from_name(name: &str) -> Option<Format> {
 }
 
 impl Manifest {
-    /// An empty table in `format`.
-    pub fn new(format: Format) -> Self {
+    /// An empty table in `format` with `layout`.
+    pub fn new(format: Format, layout: LayoutKind) -> Self {
         Manifest {
             format,
+            layout,
             flushed_lsn: 0,
             files: Vec::new(),
         }
@@ -115,10 +122,30 @@ impl Manifest {
 
     /// Checks the invariant: ranges in order, each `lsn_lo <= lsn_hi` with
     /// `rows` equal to its length, the first starting at 1, each next one
-    /// right after the previous, the last ending at `flushed_lsn`.
+    /// right after the previous, the last ending at `flushed_lsn`. A flat
+    /// table's files are all in `data/`; a tiered table's in `archive/`,
+    /// then `live/` (closed days come before open ones).
     pub fn check(&self) -> Result<(), ManifestError> {
         let mut next: u64 = 1;
+        let mut seen_live = false;
         for file in &self.files {
+            let allowed = match (self.layout, file.area) {
+                (LayoutKind::Flat, Area::Data) => true,
+                (LayoutKind::Tiered, Area::Live) => {
+                    seen_live = true;
+                    true
+                }
+                (LayoutKind::Tiered, Area::Archive) => !seen_live,
+                _ => false,
+            };
+            if !allowed {
+                return Err(ManifestError::Invariant(format!(
+                    "{} is in {}/, out of place in a {} table",
+                    file.path,
+                    file.area.as_str(),
+                    self.layout.as_str()
+                )));
+            }
             if file.lsn_lo != next {
                 return Err(ManifestError::Invariant(format!(
                     "{} starts at LSN {}, expected {next}",
@@ -155,12 +182,21 @@ impl Manifest {
         next
     }
 
+    /// The manifest with `files[replaced]` swapped for `outputs` (a
+    /// compaction's commit); `flushed_lsn` stays.
+    pub fn replacing(&self, replaced: std::ops::Range<usize>, outputs: Vec<FileEntry>) -> Manifest {
+        let mut next = self.clone();
+        next.files.splice(replaced, outputs);
+        next
+    }
+
     /// The JSON text.
     pub fn to_json(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!(
-            "{{\"version\":{VERSION},\"format\":\"{}\",\"flushed_lsn\":{},\"files\":[",
+            "{{\"version\":{VERSION},\"format\":\"{}\",\"layout\":\"{}\",\"flushed_lsn\":{},\"files\":[",
             self.format.as_str(),
+            self.layout.as_str(),
             self.flushed_lsn
         ));
         for (i, file) in self.files.iter().enumerate() {
@@ -168,8 +204,13 @@ impl Manifest {
                 out.push(',');
             }
             out.push_str(&format!(
-                "\n{{\"path\":\"{}\",\"lsn_lo\":{},\"lsn_hi\":{},\"rows\":{},\"bytes\":{}",
-                file.path, file.lsn_lo, file.lsn_hi, file.rows, file.bytes
+                "\n{{\"path\":\"{}\",\"area\":\"{}\",\"lsn_lo\":{},\"lsn_hi\":{},\"rows\":{},\"bytes\":{}",
+                file.path,
+                file.area.as_str(),
+                file.lsn_lo,
+                file.lsn_hi,
+                file.rows,
+                file.bytes
             ));
             write_range(&mut out, "observed_ts", file.observed_ts);
             write_range(&mut out, "timestamp", file.timestamp);
@@ -186,21 +227,30 @@ impl Manifest {
             return Err(malformed("text after the object"));
         }
         let fields = owned(&root)?.into_object()?;
-        if int(&fields, "version")? != VERSION {
+        let version = int(&fields, "version")?;
+        if !(1..=VERSION).contains(&version) {
             return Err(malformed("unsupported version"));
         }
         let format = format_from_name(&string(&fields, "format")?)
             .ok_or_else(|| malformed("unknown format"))?;
+        // Version 1 had neither layouts nor areas: a flat table.
+        let layout = if version == 1 {
+            LayoutKind::Flat
+        } else {
+            LayoutKind::from_name(&string(&fields, "layout")?)
+                .ok_or_else(|| malformed("unknown layout"))?
+        };
         let flushed_lsn = unsigned(&fields, "flushed_lsn")?;
         let Json::Array(files) = field(&fields, "files")? else {
             return Err(malformed("files is not an array"));
         };
         let files = files
             .into_iter()
-            .map(|f| file_entry(&f.into_object()?))
+            .map(|f| file_entry(&f.into_object()?, version))
             .collect::<Result<Vec<_>, _>>()?;
         let manifest = Manifest {
             format,
+            layout,
             flushed_lsn,
             files,
         };
@@ -317,9 +367,15 @@ fn range(fields: &[(String, Json)], name: &str) -> Result<Option<(i64, i64)>, Ma
     }
 }
 
-fn file_entry(fields: &[(String, Json)]) -> Result<FileEntry, ManifestError> {
+fn file_entry(fields: &[(String, Json)], version: i64) -> Result<FileEntry, ManifestError> {
+    let area = if version == 1 {
+        Area::Data
+    } else {
+        Area::from_name(&string(fields, "area")?).ok_or_else(|| malformed("unknown area"))?
+    };
     Ok(FileEntry {
         path: string(fields, "path")?,
+        area,
         lsn_lo: unsigned(fields, "lsn_lo")?,
         lsn_hi: unsigned(fields, "lsn_hi")?,
         rows: unsigned(fields, "rows")?,

@@ -88,7 +88,7 @@ fn append_seal_flush_and_read_back() {
     let mut w = open(&t);
     let lines = append_lines(&mut w, 0..10);
     assert_eq!(w.head_page().unwrap().segment.len(), 10);
-    let entry = w.flush_all().unwrap().unwrap();
+    let entry = w.flush_all().unwrap().remove(0);
     assert_eq!((entry.lsn_lo, entry.lsn_hi, entry.rows), (1, 10, 10));
     assert_eq!(entry.path, format!("data/{:020}-{:020}.parquet", 1, 10));
     assert!(entry.observed_ts.is_some());
@@ -97,7 +97,7 @@ fn append_seal_flush_and_read_back() {
     assert!(w.sealed_pages().is_empty());
     assert!(w.head_page().is_none());
     assert_eq!(all_rows(&w), lines);
-    assert!(w.flush().unwrap().is_none(), "nothing sealed");
+    assert!(w.flush().unwrap().is_empty(), "nothing sealed");
     assert_clean(&w);
 }
 
