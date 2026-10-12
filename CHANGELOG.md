@@ -4,6 +4,31 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.128.0] - 2026-10-12
+
+### Added
+
+- **Tiered layout for ingested tables** (#573 part (a), ADR 0028 accepted with an as-built amendment). The layout is a per-table choice, fixed at creation: `TableOptions.layout` is `Layout::Flat` (one file per flush in `data/`, the default and unchanged) or `Layout::Tiered(TierOptions)`.
+  - **Hour close:** a tiered table partitions by arrival time, and the head seals at every hour boundary. `flush()` writes each closed hour as one file in `live/date=D/hour=H/`, rows sorted by `sort_key` across the whole hour, then cut into row groups of at most `row_group_max_rows`. So each row group covers a range of the key and footer statistics skip row groups on it.
+  - **Day merge:** `TableWriter::compact()` flushes closed hours, then merges each closed day's hours into `archive/date=D/`, starting a new file at an hour boundary past `max_file_size`. Every output is built under `tmp/`, published with one directory rename, and committed with one manifest swap.
+  - **Deferred deletes:** replaced hour files are deleted after `delete_grace_ns`, for readers that list directories.
+  - **Clock:** `TableOptions.clock` sets arrival time; the system clock by default.
+- **Manifest version 2:** records `layout` and each file's `area`. Version-1 manifests read as flat tables.
+- **Readers:** `Snapshot::open` re-reads the manifest when a listed file has vanished (a compaction replaced it). Recovery removes unlisted files and empty directories in `data/`, `live/` and `archive/`.
+- **Tests:**
+  - an hour/day/archive walk-through
+  - a crash after every flush and compaction step recovers every record once
+  - files split at the size limit
+  - recovery of strays in every area
+  - a sort key letting statistics skip 2 of 3 row groups (0 in arrival order)
+  - the flush-timing property test runs half its seeds tiered, with a moving clock and random compactions
+  - `make check-parquet-write-oracle` has DuckDB read `archive/*/*.parquet` and get exactly the closed days' rows
+
+### Changed
+
+- **Breaking:** `TableWriter::flush()` and `flush_all()` return `Vec<FileEntry>` (a tiered flush can close several hours). `Manifest::new` takes the `LayoutKind`. `FileEntry` gains `area`, and `IngestError` gains `LayoutMismatch` and `Unsupported`. `Ack::Flushed` is refused on a tiered table until `staging/` spills exist (#573 part (b)).
+- `ParquetWriter::bytes_written()` and `set_key_value_metadata()` are new.
+
 ## [0.127.0] - 2026-10-11
 
 ### Fixed
