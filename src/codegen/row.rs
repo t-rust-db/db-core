@@ -23,6 +23,7 @@ pub mod ddl;
 pub mod dispatch;
 pub mod expr;
 pub(crate) mod index_maintenance;
+pub mod names;
 pub mod planner;
 pub mod pragma;
 pub mod select;
@@ -36,6 +37,7 @@ pub use ddl::{
     compile_drop_table,
 };
 pub use dispatch::{compile_statement, leading_keywords, DispatchError};
+pub use names::result_column_names;
 pub use pragma::compile_pragma;
 pub use select::{
     compile_select, compile_select_compound, compile_select_joined, compile_select_with_catalog,

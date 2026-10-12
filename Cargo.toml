@@ -33,6 +33,11 @@ name = "unit_parser_public_api"
 path = "tests/unit/parser_public_api_test.rs"
 
 [[test]]
+name = "unit_sqlite_parity"
+path = "tests/unit/sqlite_parity_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_index_seek"
 path = "tests/unit/index_seek_test.rs"
 required-features = ["engine-row"]

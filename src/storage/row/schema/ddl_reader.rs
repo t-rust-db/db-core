@@ -555,12 +555,46 @@ fn split_top_level_commas(inner: &str) -> Vec<&str> {
 }
 
 fn column_name(def: &str) -> String {
-    def.split_whitespace()
-        .next()
-        .unwrap_or("")
-        .trim_matches(['"', '`', '['].as_ref())
-        .trim_matches([']'].as_ref())
-        .to_string()
+    split_column_name(def).0
+}
+
+/// A column definition's name and the text after it. The name may be
+/// quoted (`"x y"`, `` `x y` ``, `[x y]`, `'x y'`), possibly with spaces
+/// inside and with a doubled quote standing for one (#596: `"x y"` used
+/// to be read as `x`, and its type as `y" TEXT`).
+fn split_column_name(def: &str) -> (String, &str) {
+    let def = def.trim_start();
+    let mut chars = def.char_indices();
+    let close = match chars.next() {
+        Some((_, '"')) => '"',
+        Some((_, '`')) => '`',
+        Some((_, '\'')) => '\'',
+        Some((_, '[')) => ']',
+        _ => {
+            let end = def.find(char::is_whitespace).unwrap_or(def.len());
+            let (name, rest) = def.split_at(end);
+            return (name.to_string(), rest);
+        }
+    };
+    let mut name = String::new();
+    while let Some((i, c)) = chars.next() {
+        if c != close {
+            name.push(c);
+            continue;
+        }
+        // `""` inside `"..."` is one `"` (not for `[...]`).
+        if close != ']'
+            && def
+                .get(i.saturating_add(1)..)
+                .is_some_and(|r| r.starts_with(close))
+        {
+            name.push(c);
+            chars.next();
+            continue;
+        }
+        return (name, def.get(i.saturating_add(1)..).unwrap_or(""));
+    }
+    (name, "")
 }
 
 /// The declared-type text between a column's name and its first
@@ -579,8 +613,9 @@ pub fn column_type(def: &str) -> String {
         "COLLATE",
         "REFERENCES",
     ];
-    def.split_whitespace()
-        .skip(1)
+    split_column_name(def)
+        .1
+        .split_whitespace()
         .take_while(|word| {
             !CONSTRAINT_KEYWORDS.iter().any(|kw| {
                 word.eq_ignore_ascii_case(kw)
@@ -700,6 +735,28 @@ mod tests {
         let t = find(&schemas, "t");
         assert_eq!(t.columns, vec!["k", "v"]);
         assert!(t.without_rowid);
+    }
+
+    #[test]
+    fn quoted_column_names_keep_spaces_and_escapes() {
+        // #596: the name may be quoted, with spaces and doubled quotes.
+        for (def, name, ty) in [
+            (r#""x y" TEXT"#, "x y", "TEXT"),
+            ("`a b` INT NOT NULL", "a b", "INT"),
+            ("[c d] DOUBLE PRECISION", "c d", "DOUBLE PRECISION"),
+            ("'e f'", "e f", ""),
+            (r#""say ""hi""" TEXT"#, r#"say "hi""#, "TEXT"),
+            ("plain INTEGER PRIMARY KEY", "plain", "INTEGER"),
+            ("  padded  VARCHAR(10)", "padded", "VARCHAR(10)"),
+            (r#""unterminated"#, "unterminated", ""),
+            ("[x]]y] INT", "x", "]y] INT"), // brackets have no escape
+        ] {
+            assert_eq!(column_name(def), name, "{def}");
+            assert_eq!(column_type(def), ty, "{def}");
+        }
+        let parsed = parse_create_table(r#"CREATE TABLE t(Abc INT, "x y" TEXT, k)"#).unwrap();
+        assert_eq!(parsed.columns, ["Abc", "x y", "k"]);
+        assert_eq!(parsed.column_types, ["INT", "TEXT", ""]);
     }
 
     #[test]
