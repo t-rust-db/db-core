@@ -929,12 +929,60 @@ mod mcdc_vectors {
             .collect()
     }
 
-    // codegen_row_select_eqp_explain_query_plan_422934c5:
-    // `from.joins.is_empty() && needs_post_group(select)` (#597).
+    // codegen_row_select_eqp_explain_query_plan_6418db63: a joined
+    // aggregate reports its temp b-trees (#608):
+    // `joined && (group_by || has_aggregate)`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_row_select_eqp_explain_query_plan_422934c5__v1_single_table_ordered_aggregate_reports_the_sort(
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_6418db63__v1_a_joined_group_by_reports_it() {
+        let d = eqp_details("SELECT t.a, count(*) FROM t JOIN u ON u.b = t.a GROUP BY t.a");
+        assert!(
+            d.iter().any(|r| r == "USE TEMP B-TREE FOR GROUP BY"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_6418db63__v2_a_single_table_group_by_reports_once(
     ) {
+        let d = eqp_details("SELECT a + b, count(*) FROM t GROUP BY a + b");
+        assert_eq!(
+            d.iter()
+                .filter(|r| *r == "USE TEMP B-TREE FOR GROUP BY")
+                .count(),
+            1,
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_6418db63__v3_a_joined_aggregate_reports_its_order_by(
+    ) {
+        let d = eqp_details("SELECT count(*) FROM t JOIN u ON u.b = t.a ORDER BY 1");
+        assert!(
+            d.iter().any(|r| r == "USE TEMP B-TREE FOR ORDER BY"),
+            "{d:?}"
+        );
+        assert!(
+            !d.iter().any(|r| r == "USE TEMP B-TREE FOR GROUP BY"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_6418db63__v4_a_plain_join_reports_no_aggregate_rows(
+    ) {
+        let d = eqp_details("SELECT DISTINCT t.a FROM t JOIN u ON u.b = t.a");
+        assert!(!d.iter().any(|r| r.starts_with("USE TEMP B-TREE")), "{d:?}");
+    }
+
+    // #597: which plans report the post-group temp b-trees.
+    #[test]
+    #[allow(non_snake_case)]
+    fn post_group_rows_single_table_ordered_aggregate_reports_the_sort() {
         let d = eqp_details("SELECT a, count(*) FROM t GROUP BY a ORDER BY 2");
         assert!(
             d.iter().any(|r| r == "USE TEMP B-TREE FOR ORDER BY"),
@@ -944,8 +992,7 @@ mod mcdc_vectors {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_row_select_eqp_explain_query_plan_422934c5__v2_a_join_reports_no_post_group_rows(
-    ) {
+    fn post_group_rows_a_join_reports_no_post_group_rows() {
         let d = eqp_details("SELECT DISTINCT t.a FROM t JOIN u ON t.b = u.b");
         assert!(
             !d.iter()
@@ -956,8 +1003,7 @@ mod mcdc_vectors {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_row_select_eqp_explain_query_plan_422934c5__v3_an_ordered_plain_scan_is_not_post_group(
-    ) {
+    fn post_group_rows_an_ordered_plain_scan_is_not_post_group() {
         let d = eqp_details("SELECT a FROM t ORDER BY b");
         assert!(
             !d.iter().any(|r| r == "USE TEMP B-TREE FOR DISTINCT"),

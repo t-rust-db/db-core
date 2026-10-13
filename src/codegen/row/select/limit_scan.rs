@@ -1458,8 +1458,7 @@ mod mcdc_vectors {
 
     // --- limit_scan_101: rowid / _rowid_ / oid ----------------------------
     #[test]
-    fn mcdc__codegen_row_select_limit_scan_is_rowid_reference_name_f5cfa314__v1_rowid_is_a_rowid_reference(
-    ) {
+    fn rowid_reference_name_rowid_is_a_rowid_reference() {
         assert!(is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("ROWID")
@@ -1467,8 +1466,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_select_limit_scan_is_rowid_reference_name_f5cfa314__v2_underscore_rowid_is_a_rowid_reference(
-    ) {
+    fn rowid_reference_name_underscore_rowid_is_a_rowid_reference() {
         assert!(is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("_rowid_")
@@ -1476,8 +1474,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_select_limit_scan_is_rowid_reference_name_f5cfa314__v3_oid_is_a_rowid_reference(
-    ) {
+    fn rowid_reference_name_oid_is_a_rowid_reference() {
         assert!(is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("oid")
@@ -1485,8 +1482,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_select_limit_scan_is_rowid_reference_name_f5cfa314__v4_ordinary_column_without_alias_is_not(
-    ) {
+    fn rowid_reference_name_ordinary_column_without_alias_is_not() {
         assert!(!is_rowid_reference(
             &schema("INTEGER", false, false),
             &column_expr("b")
