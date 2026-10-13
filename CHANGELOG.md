@@ -4,6 +4,20 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.128.2] - 2026-10-13
+
+### Fixed
+
+- **Alias-qualified columns in the row engine** (#604). `SELECT a.x FROM t AS a` and columns of an aliased FROM subquery resolved against the table name, not the alias, and were refused.
+- **`rowid`, `oid` and `_rowid_`** (#605) are readable on any rowid table, also when no `INTEGER PRIMARY KEY` aliases them, in plain, sorted and grouped scans. A declared column with one of these names shadows the rowid, as in sqlite3. Silent wrong results fixed along the way: an expression over the `INTEGER PRIMARY KEY` after ORDER BY (`id+1`) and `MAX(id)` under GROUP BY read the wrong value.
+- **FROM subquery without an alias** (#606) is accepted; its columns are named under `(subquery)`.
+- **`GROUP BY k ORDER BY k` sorts once** (#607). When ORDER BY lists the group keys in order, the grouping sort takes its directions and the post-group sort is skipped, as sqlite3 does; EXPLAIN QUERY PLAN no longer shows the extra temp b-tree.
+- **DISTINCT over a joined aggregate** (#608) was refused; it now dedups each group's row before ORDER BY / LIMIT, under each column's collation. EXPLAIN QUERY PLAN reports the GROUP BY, DISTINCT and ORDER BY temp b-trees for joined aggregates.
+
+### Known gaps
+
+GROUP BY on a result alias is refused (#610); a FROM subquery without its own FROM, `(SELECT 1 AS x)`, is refused (#611, pinned in `tests/unit/sqlite_parity_test.rs`); joined-aggregate result columns must be plain columns or aggregates (#612); plain-join DISTINCT ignores collations (#613).
+
 ## [0.128.1] - 2026-10-13
 
 ### Fixed
