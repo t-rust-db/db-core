@@ -153,11 +153,14 @@ fn result_column_names_match_sqlite3() {
 /// Queries sqlite3 answers and the row engine still refuses, with the
 /// headers sqlite3 gives. Each is asserted to still fail: once one runs,
 /// move it into [`result_column_names_match_sqlite3`] and close its issue.
-const KNOWN_GAPS: &[(&str, &[&str], &str)] = &[(
-    "SELECT DISTINCT t.k FROM t JOIN u ON t.k = u.k GROUP BY t.k",
-    &["k"],
-    "#608",
-)];
+const KNOWN_GAPS: &[(&str, &[&str], &str)] = &[
+    ("SELECT x FROM (SELECT 1 AS x) WHERE x = 1", &["x"], "#611"),
+    (
+        "SELECT DISTINCT t.k FROM t JOIN u ON t.k = u.k GROUP BY t.k",
+        &["k"],
+        "#608",
+    ),
+];
 
 #[test]
 fn known_gaps_still_fail() {
@@ -637,6 +640,7 @@ fn rowid_references_match_sqlite3() {
     for sql in [
         "SELECT rowid FROM w",
         "SELECT rowid FROM (SELECT a FROM p) AS q",
+        "SELECT rowid FROM (SELECT a FROM p)",
     ] {
         let err = e.run_query(sql).unwrap_err();
         assert!(err.to_string().contains("rowid"), "{sql}: {err}");
@@ -659,4 +663,29 @@ fn rowid_in_update_and_delete() {
         .map(|r| quote(r))
         .collect();
     assert_eq!(rows, ["1,'x',3", "2,'y',100"]);
+}
+
+/// #606: a FROM subquery without an alias (sqlite3 3.51, `.headers on`).
+#[test]
+fn unaliased_from_subqueries_match_sqlite3() {
+    let db = TempDb::new("unaliased");
+    let mut e = grouped_engine(&db);
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT c, k FROM (SELECT COUNT(*) AS c, k FROM g GROUP BY k) ORDER BY k DESC",
+                "'c','k';1,'c';2,'b';1,'a';1,'A';2,NULL",
+            ),
+            (
+                "SELECT * FROM (SELECT k FROM g WHERE n > 4) ORDER BY 1",
+                "'k';NULL;'a';'c'",
+            ),
+        ],
+    );
+    // Nothing can qualify an unaliased subquery's columns.
+    let err = e
+        .run_query("SELECT a.k FROM (SELECT k FROM g) JOIN (SELECT k AS k2 FROM g) ON k = k2")
+        .unwrap_err();
+    assert!(err.to_string().contains("a.k"), "{err}");
 }

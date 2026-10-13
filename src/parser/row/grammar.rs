@@ -1695,9 +1695,8 @@ impl Parser {
     /// every join's right-hand table. Schema-qualified names,
     /// table-valued functions, and `INDEXED BY`/`NOT INDEXED` stay
     /// explicit `unsupported(..)` errors. A subquery's alias is
-    /// mandatory here (unlike a plain table's) — this codebase's column
-    /// resolution needs a qualifier to refer to the subquery's columns,
-    /// and SQLite itself always names one in practice.
+    /// optional, as in SQLite (#606): without one its columns are only
+    /// reachable unqualified.
     fn table_ref(&mut self) -> PResult<TableRef> {
         if matches!(self.peek().kind, TokenKind::LParen) {
             let start = self.peek().span;
@@ -1710,16 +1709,13 @@ impl Parser {
             let subquery = self.parse_select_stmt()?;
             self.expect_punct(TokenKind::RParen, "')' to close FROM subquery")?;
             let alias = self.opt_alias()?;
-            let Some(alias) = alias else {
-                return self.unsupported("a subquery in FROM requires an alias");
-            };
             let end = self
                 .tokens
                 .get(self.pos.saturating_sub(1))
                 .map_or(start, |t| t.span);
             return Ok(TableRef {
                 kind: TableRefKind::Subquery(Box::new(subquery)),
-                alias: Some(alias),
+                alias,
                 span: join_span(start, end),
             });
         }
