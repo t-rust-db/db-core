@@ -4,6 +4,19 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.129.0] - 2026-10-13
+
+### Changed
+
+- **`Opcode::Combine` gains `output_order`** (#585): the select-list position of each merged column. Code that builds a `Combine` literal must set it (`Vec::new().into()` keeps the merged order). This breaks the public API, hence the minor bump.
+
+### Fixed
+
+- **Batch GROUP BY returns columns in select-list order** (#585). Grouped rows were merged keys-first, so in `SELECT MIN(n), n … GROUP BY n` each header labelled the other column's values. This affected `BatchEngine`, the table engine and the stream engine. ORDER BY on a key listed after an aggregate also sorted by the wrong column.
+- **A grouped aggregate expression returned NULL** for every group (`SELECT k, SUM(x) * 2 … GROUP BY k`): `Combine` read the expression's row count from the key column it had already moved out.
+- **JSON tables store string values decoded** (#583). `{"msg":"a\"b"}` stored `a\"b`; it now stores `a"b`, as DuckDB's `read_json` reads it. Values are decoded at flush, at hour close, and when a query reads an unflushed page, so flush timing never changes an answer. `raw` stays as written, and a line that is not a JSON object keeps its whole text as `message`. A lone surrogate becomes U+FFFD; any other malformed escape is kept as written. `make check-parquet-write-oracle` compares stored fields with DuckDB's `json_extract_string` of each `raw` line. ADR 0027 updated; logfmt and CLF quoting is tracked in #616.
+- **Flaky `run_morsels` rebalancing test** (#580): it asserted wall-clock time and failed under load. It now checks that the other workers drain the queue while one morsel is blocked.
+
 ## [0.128.2] - 2026-10-13
 
 ### Fixed
