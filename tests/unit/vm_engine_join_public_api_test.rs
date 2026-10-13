@@ -123,6 +123,7 @@ fn bounded_scan_limit_recognizes_a_bare_limit_plan_and_declines_others() {
             agg_parts: vec![].into(),
             num_group_keys: 0,
             distinct: false,
+            output_order: Vec::new().into(),
         }),
         Instruction::new(Opcode::Limit { n: 5 }),
     ]);
@@ -133,6 +134,7 @@ fn bounded_scan_limit_recognizes_a_bare_limit_plan_and_declines_others() {
             agg_parts: vec![].into(),
             num_group_keys: 0,
             distinct: false,
+            output_order: Vec::new().into(),
         }),
         Instruction::new(Opcode::Sort {
             col: 0,
@@ -148,6 +150,7 @@ fn bounded_scan_limit_recognizes_a_bare_limit_plan_and_declines_others() {
             agg_parts: vec![].into(),
             num_group_keys: 0,
             distinct: false,
+            output_order: Vec::new().into(),
         }),
         Instruction::new(Opcode::Limit { n: 5 }),
     ]);

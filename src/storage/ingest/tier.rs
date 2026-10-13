@@ -21,7 +21,8 @@ use super::table::IngestError;
 use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::parquet::writer::{ColumnSpec, ParquetWriter, WriterOptions};
 use crate::storage::parquet::ParquetFile;
-use crate::storage::stream::adapter::column_values;
+use crate::storage::stream::adapter::stored_column_values;
+use crate::storage::stream::detect::Format;
 use crate::storage::RowGroupReader;
 use crate::vm::batch::Value;
 
@@ -165,12 +166,12 @@ fn widen_bounds(a: Bounds, b: Bounds) -> Bounds {
     }
 }
 
-/// Every row of `pages`, column `spec`, as the table's values.
-fn page_rows(pages: &[Page], spec: &ColumnSpec) -> Vec<Value> {
+/// Every row of `pages`, column `spec`, as a `format` table stores it.
+fn page_rows(pages: &[Page], spec: &ColumnSpec, format: Format) -> Vec<Value> {
     pages
         .iter()
         .flat_map(|page| {
-            column_values(&page.segment, &spec.name)
+            stored_column_values(&page.segment, &spec.name, format)
                 .unwrap_or_else(|| vec![Value::Null; page.segment.len()])
         })
         .map(|v| cast(v, spec.column_type))
@@ -214,6 +215,7 @@ fn sorted(columns: Vec<Vec<Value>>, specs: &[ColumnSpec], sort_key: &[String]) -
 pub(crate) fn write_hour(
     dir: &Path,
     pages: &[Page],
+    format: Format,
     tier: &TierOptions,
     parquet: &WriterOptions,
 ) -> Result<Vec<Output>, IngestError> {
@@ -222,7 +224,7 @@ pub(crate) fn write_hour(
     };
     let specs = schema(pages);
     let total: usize = pages.iter().map(|p| p.segment.len()).sum();
-    let columns: Vec<Vec<Value>> = specs.iter().map(|s| page_rows(pages, s)).collect();
+    let columns: Vec<Vec<Value>> = specs.iter().map(|s| page_rows(pages, s, format)).collect();
     let columns = sorted(columns, &specs, &tier.sort_key);
     let range_of = |name: &str| {
         specs

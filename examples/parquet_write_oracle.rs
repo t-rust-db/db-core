@@ -370,7 +370,9 @@ fn write_case(dir: &Path, case: Case) -> Result<(), String> {
 
 /// The first file a real ingested table flushes (#572): JSON lines with
 /// fields `n` (int), `lat` (float), `ok` (bool) and `user` (string), some
-/// fields missing, some lines not JSON at all. Values are given for `raw`,
+/// fields missing, some lines not JSON at all. Some `user` and `msg`
+/// strings carry JSON escapes (#583); `json_fields` asks the checker to
+/// compare those columns with DuckDB's own decoding of each `raw` line. Values are given for `raw`,
 /// `n` and `user`, which follow from the input alone; for the columns the
 /// parser derives (severity, message...) and the arrival-time
 /// `observed_ts`, the JSON says `null` and the checker requires DuckDB and
@@ -384,11 +386,14 @@ fn ingested_table_case(dir: &Path) -> Result<(), String> {
     for i in 0..3_000i64 {
         let line = match i % 5 {
             0 => format!("plain text line {i}"),
-            1 => format!(r#"{{"n":{i},"user":"u{}"}}"#, i % 7),
+            1 => format!(
+                r#"{{"n":{i},"user":"{}","msg":"line {i}: \"quoted\"\n\tcaf\u00e9 \ud83d\ude00 C:\\tmp"}}"#,
+                user_json(i)
+            ),
             _ => format!(
-                r#"{{"n":{i},"lat":{i}.25,"ok":{},"user":"u{}"}}"#,
+                r#"{{"n":{i},"lat":{i}.25,"ok":{},"user":"{}"}}"#,
                 i % 2 == 0,
-                i % 7
+                user_json(i)
             ),
         };
         writer
@@ -438,7 +443,7 @@ fn ingested_table_case(dir: &Path) -> Result<(), String> {
             )),
             "user" => Some(ColumnValues::Utf8(
                 rows.iter()
-                    .map(|(i, _)| (i % 5 != 0).then(|| format!("u{}", i % 7)))
+                    .map(|(i, _)| (i % 5 != 0).then(|| user_value(*i)))
                     .collect(),
             )),
             _ => None,
@@ -449,12 +454,28 @@ fn ingested_table_case(dir: &Path) -> Result<(), String> {
         }
         out.push('}');
     }
-    out.push_str("]}");
+    out.push_str("],\"json_fields\":{\"user\":\"user\",\"message\":\"msg\"}}");
     fs::write(dir.join("ingested_table.parquet"), &bytes).map_err(|e| e.to_string())?;
     fs::write(dir.join("ingested_table.json"), out).map_err(|e| e.to_string())?;
     fs::remove_dir_all(&table).ok();
     println!("ingested_table: {} rows from a flushed table", first.rows);
     Ok(())
+}
+
+/// `user` as written in line `i`'s JSON: every seventh carries escapes.
+fn user_json(i: i64) -> String {
+    match i % 7 {
+        3 => r#"q\"3\\\u00e9"#.to_string(),
+        k => format!("u{k}"),
+    }
+}
+
+/// The string [`user_json`] stands for.
+fn user_value(i: i64) -> String {
+    match i % 7 {
+        3 => "q\"3\\é".to_string(),
+        k => format!("u{k}"),
+    }
 }
 
 /// Arrival time for the tiered table: set by `tiered_table_case`.

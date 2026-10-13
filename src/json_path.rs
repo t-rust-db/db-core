@@ -127,6 +127,79 @@ fn parse_string(s: &str) -> Option<(&str, &str)> {
     None
 }
 
+/// The text a JSON string's inner content stands for (#583): decodes
+/// `\" \\ \/ \b \f \n \r \t` and `\uXXXX`, a surrogate pair as one
+/// character. A lone surrogate has no UTF-8 encoding and becomes U+FFFD;
+/// any other malformed escape (`\x`, a short `\u12`, a trailing `\`) is
+/// kept as written. Borrows when there is no backslash. The parser above
+/// stays zero-copy; callers that store or hand out a value decode it.
+pub(crate) fn unescape(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains('\\') {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(at) = rest.find('\\') {
+        out.push_str(rest.get(..at).unwrap_or_default());
+        let tail = rest.get(at..).unwrap_or_default();
+        let (decoded, consumed) = decode_escape(tail).unwrap_or(('\\', 1));
+        out.push(decoded);
+        rest = tail.get(consumed..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    std::borrow::Cow::Owned(out)
+}
+
+/// The character the escape at the start of `tail` (which begins with a
+/// backslash) stands for, and how many bytes it spans; `None` if it is
+/// malformed.
+fn decode_escape(tail: &str) -> Option<(char, usize)> {
+    let simple = match tail.as_bytes().get(1)? {
+        b'"' => '"',
+        b'\\' => '\\',
+        b'/' => '/',
+        b'b' => '\u{8}',
+        b'f' => '\u{c}',
+        b'n' => '\n',
+        b'r' => '\r',
+        b't' => '\t',
+        b'u' => return decode_unicode_escape(tail),
+        _ => return None,
+    };
+    Some((simple, 2))
+}
+
+/// `\uXXXX`, or a `\uD8xx\uDCxx` surrogate pair (12 bytes).
+fn decode_unicode_escape(tail: &str) -> Option<(char, usize)> {
+    let unit = hex4(tail.get(2..6)?)?;
+    if !(0xD800..=0xDFFF).contains(&unit) {
+        return char::from_u32(unit).map(|c| (c, 6));
+    }
+    let low = tail
+        .get(6..8)
+        .filter(|esc| *esc == "\\u")
+        .and_then(|_| hex4(tail.get(8..12)?))
+        .filter(|low| (0xDC00..=0xDFFF).contains(low));
+    match low {
+        Some(low) if unit < 0xDC00 => {
+            let high = unit.checked_sub(0xD800)?;
+            let low = low.checked_sub(0xDC00)?;
+            let code = 0x10000u32.checked_add(high.checked_mul(0x400)?.checked_add(low)?)?;
+            char::from_u32(code).map(|c| (c, 12))
+        }
+        _ => Some((char::REPLACEMENT_CHARACTER, 6)),
+    }
+}
+
+/// The four hex digits of a `\u` escape as a number; callers pass exactly
+/// four bytes. Checked digit by digit: `from_str_radix` would accept `+`.
+fn hex4(digits: &str) -> Option<u32> {
+    if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    u32::from_str_radix(digits, 16).ok()
+}
+
 /// Parse a JSON number (integer or float).
 fn parse_number(s: &str) -> Option<(JsonValue<'_>, &str)> {
     let bytes = s.as_bytes();
@@ -299,6 +372,39 @@ mod tests {
         );
         // A bare minus sign has no digits.
         assert!(parse_value("-").is_none());
+    }
+
+    #[test]
+    fn unescape_decodes_every_json_escape() {
+        assert_eq!(
+            unescape(r#"a\"b\\c\/d\be\ff\ng\rh\ti"#),
+            "a\"b\\c/d\u{8}e\u{c}f\ng\rh\ti"
+        );
+        assert_eq!(unescape(r"caf\u00e9 \u00E9"), "café é");
+        // A surrogate pair is one character.
+        assert_eq!(unescape(r"\ud83d\ude00!"), "😀!");
+        assert_eq!(unescape("é stays"), "é stays");
+    }
+
+    #[test]
+    fn unescape_borrows_without_a_backslash() {
+        assert!(matches!(
+            unescape("plain"),
+            std::borrow::Cow::Borrowed("plain")
+        ));
+    }
+
+    #[test]
+    fn unescape_keeps_malformed_escapes_and_replaces_lone_surrogates() {
+        assert_eq!(unescape(r"a\xb"), r"a\xb");
+        assert_eq!(unescape(r"\u12"), r"\u12");
+        assert_eq!(unescape(r"\u+123"), r"\u+123");
+        assert_eq!(unescape("end\\"), "end\\");
+        // A high surrogate with no low one, a low one on its own, and a
+        // high one followed by something that is not a low surrogate.
+        assert_eq!(unescape(r"\ud83dx"), "\u{fffd}x");
+        assert_eq!(unescape(r"\ude00"), "\u{fffd}");
+        assert_eq!(unescape(r"\ud83d\u0041"), "\u{fffd}A");
     }
 
     #[test]

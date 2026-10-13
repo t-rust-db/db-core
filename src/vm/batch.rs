@@ -535,6 +535,13 @@ pub enum Opcode {
         num_group_keys: usize,
         /// Deduplicate identical output rows (`SELECT DISTINCT`).
         distinct: bool,
+        /// Select-list order of the merged columns (#585): output column
+        /// `i` is merged column `output_order[i]`. Merged rows are always
+        /// keys-first, while the select list may put an aggregate before
+        /// or between keys. Empty when the merged order already is the
+        /// select order. Applied before `DISTINCT`/[`Opcode::Sort`], whose
+        /// column positions are select-list positions.
+        output_order: Cow<'static, [usize]>,
     },
     /// Final `ORDER BY` over the whole (already merged) result: sorts by
     /// output column `col`, `descending` or ascending. A sequential-phase
@@ -906,6 +913,33 @@ impl QueryOutput {
         if let Some(at) = cut {
             self.chunks.truncate(at);
         }
+    }
+}
+
+impl QueryOutput {
+    /// Reorders every chunk's columns so output column `i` is current
+    /// column `order[i]` (#585, `Opcode::Combine`'s `output_order`). An
+    /// empty `order` is the identity. `Arc` clones only, no payload copy.
+    pub(crate) fn project(self, order: &[usize]) -> Result<Self> {
+        if order.is_empty() {
+            return Ok(self);
+        }
+        let mut out = Self::default();
+        for chunk in self.chunks {
+            let projected = order
+                .iter()
+                .map(|&c| chunk.get(c).cloned())
+                .collect::<Option<Chunk>>()
+                .ok_or_else(|| VmError::MalformedProgram {
+                    opcode: "Combine",
+                    reason: format!(
+                        "output_order {order:?} names a column past the merged row's {} columns",
+                        chunk.len()
+                    ),
+                })?;
+            out.push_chunk(projected);
+        }
+        Ok(out)
     }
 }
 
@@ -8958,13 +8992,12 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::{Duration, Instant};
 
-        // More segments than worker threads, with wildly uneven simulated
-        // load: a static per-thread split (segments.len() / num_threads
-        // chunks handed out up front) would let one thread get stuck with
-        // all the expensive segments while others idle -- wall time would
-        // then track the *worst single thread's total*, not the sum spread
-        // evenly. A dynamic pull keeps every thread busy until the queue is
-        // drained, so wall time tracks (total work / thread count) instead.
+        // Rebalancing is asserted as a property, not as wall-clock time
+        // (#580): morsel 0 blocks until every other morsel has finished. A
+        // dynamic pull lets the other workers drain the whole queue while
+        // it waits; a static split would leave morsel 0's worker owning
+        // later morsels that nobody else can run, so the wait would only
+        // end at the deadline.
         let num_threads = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1);
@@ -8972,33 +9005,44 @@ mod tests {
             return; // rebalancing needs >1 worker to be observable
         }
 
-        let costs_ms: Vec<u64> = (0..num_threads * 4)
-            .map(|i| if i % num_threads == 0 { 40 } else { 2 })
-            .collect();
-        let total_ms: u64 = costs_ms.iter().sum();
+        let items: Vec<usize> = (0..num_threads * 4).collect();
+        let others = items.len() - 1;
+        let done = AtomicUsize::new(0);
         let concurrent_peak = AtomicUsize::new(0);
         let concurrent_now = AtomicUsize::new(0);
+        let deadline = Instant::now() + Duration::from_secs(10);
 
-        let start = Instant::now();
-        run_morsels(&costs_ms, |&cost_ms| {
+        let drained_while_blocked = run_morsels(&items, |&i| {
             let n = concurrent_now.fetch_add(1, Ordering::SeqCst) + 1;
             concurrent_peak.fetch_max(n, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(cost_ms));
+            let drained = if i == 0 {
+                while done.load(Ordering::SeqCst) < others {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                done.load(Ordering::SeqCst) == others
+            } else {
+                std::thread::sleep(Duration::from_millis(1));
+                done.fetch_add(1, Ordering::SeqCst);
+                true
+            };
             concurrent_now.fetch_sub(1, Ordering::SeqCst);
+            (i, drained)
         });
-        let elapsed = start.elapsed();
 
-        // A static split (one contiguous chunk per thread, decided before
-        // any work starts) would serialize every "40ms" segment onto
-        // whichever thread(s) statically own that chunk, so a bad split
-        // could take close to the full `total_ms` sum. Dynamic pulling
-        // bounds wall time near `total_ms / num_threads` (plus scheduling
-        // slack) because idle threads immediately grab the next unclaimed
-        // segment instead of sitting on a fixed assignment.
-        let balanced_upper_bound = Duration::from_millis(total_ms / num_threads as u64 + 60);
+        assert_eq!(
+            drained_while_blocked
+                .iter()
+                .map(|(i, _)| *i)
+                .collect::<Vec<_>>(),
+            items,
+            "every morsel runs exactly once, results in input order"
+        );
         assert!(
-            elapsed <= balanced_upper_bound,
-            "expected dynamic rebalancing to finish within {balanced_upper_bound:?}, took {elapsed:?} (total work {total_ms}ms over {num_threads} threads)"
+            drained_while_blocked.iter().all(|(_, drained)| *drained),
+            "the other workers should drain the queue while morsel 0 is blocked"
         );
         assert!(
             concurrent_peak.load(Ordering::SeqCst) > 1,

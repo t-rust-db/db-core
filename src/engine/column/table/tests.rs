@@ -536,3 +536,31 @@ fn a_sort_key_lets_statistics_skip_row_groups() {
     assert_eq!(pruned(&["kind"]), (3, 2));
     assert_eq!(pruned(&[]), (3, 0));
 }
+
+#[test]
+fn json_strings_read_the_same_before_and_after_a_flush() {
+    // #583: a page and the file it flushes to both decode JSON escapes,
+    // so flush timing never changes a query's answer.
+    let t = TempTable::new();
+    let mut w = t.writer();
+    append(
+        &mut w,
+        &[
+            r#"{"n":1,"msg":"a\"b\n","user":"caf\u00e9"}"#,
+            r"plain C:\new line",
+        ],
+    );
+    let sql = "SELECT message, user FROM logs ORDER BY observed_ts";
+    let before = rows(&w, sql);
+    assert_eq!(
+        before,
+        vec![
+            vec![text("a\"b\n"), text("café")],
+            vec![text(r"plain C:\new line"), Cell::Null],
+        ]
+    );
+    w.flush().unwrap();
+    assert_eq!(rows(&w, sql), before);
+    let filtered = rows(&w, "SELECT n FROM logs WHERE user = 'café'");
+    assert_eq!(filtered, vec![vec![Cell::Int(1)]]);
+}

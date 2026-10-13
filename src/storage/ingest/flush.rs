@@ -19,7 +19,8 @@ use super::page::Page;
 use crate::storage::parquet::writer::{
     ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriteError, WriterOptions,
 };
-use crate::storage::stream::adapter::column_values;
+use crate::storage::stream::adapter::stored_column_values;
+use crate::storage::stream::detect::Format;
 use crate::storage::stream::segment::OwnedColumn;
 use crate::vm::batch::Value;
 
@@ -158,14 +159,14 @@ pub(crate) fn convert(values: Vec<Value>, column_type: ColumnType) -> ColumnValu
     }
 }
 
-/// One page's columns in `specs` order.
-fn page_columns(page: &Page, specs: &[ColumnSpec]) -> Vec<ColumnValues> {
+/// One page's columns in `specs` order, as a `format` table stores them.
+fn page_columns(page: &Page, specs: &[ColumnSpec], format: Format) -> Vec<ColumnValues> {
     let rows = page.segment.len();
     specs
         .iter()
         .map(|spec| {
-            let values =
-                column_values(&page.segment, &spec.name).unwrap_or_else(|| vec![Value::Null; rows]);
+            let values = stored_column_values(&page.segment, &spec.name, format)
+                .unwrap_or_else(|| vec![Value::Null; rows]);
             convert(values, spec.column_type)
         })
         .collect()
@@ -178,11 +179,12 @@ pub(crate) fn bounds(values: impl Iterator<Item = Option<i64>>) -> Option<(i64, 
     })
 }
 
-/// Writes `pages` (contiguous, oldest first, at least one) to `path` and
-/// fsyncs it.
+/// Writes `pages` (contiguous, oldest first, at least one) of a `format`
+/// table to `path` and fsyncs it.
 pub(crate) fn write_file(
     path: &Path,
     pages: &[Page],
+    format: Format,
     options: &WriterOptions,
 ) -> Result<FlushedFile, WriteError> {
     let (Some(first), Some(last)) = (pages.first(), pages.last()) else {
@@ -197,7 +199,7 @@ pub(crate) fn write_file(
     let mut writer =
         ParquetWriter::new(BufWriter::new(File::create(path)?), specs.clone(), options)?;
     for page in pages {
-        writer.write_columns(page_columns(page, &specs))?;
+        writer.write_columns(page_columns(page, &specs, format))?;
     }
     let (out, summary) = writer.finish()?;
     let file = out

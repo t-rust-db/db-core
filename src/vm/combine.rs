@@ -638,6 +638,9 @@ fn reorder_by_first_seen(mut acc: Vec<Vec<Value>>, first_seen: &[u64]) -> Vec<Ve
 fn output_columns(parts: &[AggPart], mut acc: Vec<Vec<Value>>) -> Result<Vec<Vec<Value>>> {
     let mut out = Vec::with_capacity(parts.len());
     let mut cursor = 0usize;
+    // Taken up front: the key arm below moves its column out of `acc`, so
+    // `acc[0]` is empty by the time an `Expr` part runs under GROUP BY.
+    let len = acc.first().map_or(0, Vec::len);
     for part in parts {
         match part {
             AggPart::Avg(sum_i, count_i) => {
@@ -659,7 +662,6 @@ fn output_columns(parts: &[AggPart], mut acc: Vec<Vec<Value>>) -> Result<Vec<Vec
             // another part already claimed above, so the cursor doesn't
             // move (#496).
             AggPart::Expr(map_op, lhs, rhs) => {
-                let len = acc.first().map_or(0, Vec::len);
                 let column = (0..len)
                     .map(|r| {
                         eval_agg_expr(*map_op, lhs, rhs, |i| {

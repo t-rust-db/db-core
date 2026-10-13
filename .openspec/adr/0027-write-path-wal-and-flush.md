@@ -294,9 +294,20 @@ differently from DuckDB, deliberately:
 | Lines that are not JSON in a `json` table | kept as a row (`raw`, `message`), fields NULL | `read_json` fails, or drops them with `ignore_errors` |
 | Nested objects | flattened one level to `a.b`; deeper objects are not columns (still in `raw`) | `STRUCT` columns |
 | Arrays | the JSON text, as a string | `LIST` columns |
-| String values | kept as written, JSON escapes included (ADR 0018's zero-copy parser does not unescape) | unescaped |
+| Invalid JSON escapes | a lone surrogate (`\ud83d` with no pair) becomes U+FFFD; any other malformed escape (`\x`, a short `\u12`) is kept as written | the line is invalid JSON: `read_json` fails, or drops it with `ignore_errors` |
+| Keys with escapes | the column is named by the key as written, escapes included | unescaped |
 | Reserved names | `timestamp`, `observed_ts`, `severity`, `severity_text`, `facility`, `message`, `raw` are always columns; a JSON key with one of those names is not a separate column (the alias table may promote it, e.g. `msg` → `message`) | every key is a column |
 | `severity` | INT32 (OpenTelemetry SeverityNumber) plus `severity_text` | whatever the source had |
+
+String values in a `json` table are stored decoded (#583): `{"msg":"a\"b"}`
+stores `a"b`, as `read_json` reads it, and `make check-parquet-write-oracle`
+compares each JSON line's fields with DuckDB's `json_extract_string` of its
+`raw`. ADR 0018's parser stays zero-copy; the decode happens where a value
+leaves a page: at flush and hour close, and when a query reads a page, so
+flush timing never changes an answer. `raw` is the line as written, and a
+line that is not a JSON object keeps its whole text as `message`, unchanged.
+Other formats store strings as written: logfmt keeps `\"` and `\\` inside
+quoted values, and a CLF quoted field ends at its first `"`.
 
 ## Structure
 

@@ -184,6 +184,25 @@ def check_duckdb(path, columns, fails):
         fails.check(len(stats) == len(groups), f"duckdb {name}: {len(stats)} chunks, {len(groups)} row groups")
 
 
+def check_json_fields(path, json_fields, fails):
+    """#583: each named column of a JSON line equals DuckDB's own decoding
+    of that line's key (escapes and all), read from the file's `raw`."""
+    con = duckdb.connect()
+    p = str(path).replace("'", "''")
+    for column, key in json_fields.items():
+        q = '"' + column.replace('"', '""') + '"'
+        mismatches = con.execute(
+            f"SELECT raw, {q} FROM read_parquet('{p}') "
+            f"WHERE json_valid(raw) AND {q} IS DISTINCT FROM json_extract_string(raw, ?)",
+            [f"$.{key}"],
+        ).fetchall()
+        fails.check(not mismatches, f"duckdb json {column}: {len(mismatches)} rows differ from $.{key}, first {mismatches[:1]}")
+        (decoded,) = con.execute(
+            f"SELECT count(*) FROM read_parquet('{p}') WHERE json_valid(raw) AND {q} IS NOT NULL"
+        ).fetchone()
+        fails.check(decoded > 0, f"duckdb json {column}: no JSON rows to compare")
+
+
 def check_archive(spec, fails):
     """#573: DuckDB over a tiered table's `archive/` returns exactly the
     rows of its closed days, each under its `date` partition."""
@@ -220,11 +239,14 @@ def main():
     print(f"duckdb {duckdb.__version__}, pyarrow {pa.__version__}")
     failed = 0
     for case in cases:
-        columns = json.loads(case.read_text())["columns"]
+        spec = json.loads(case.read_text())
+        columns = spec["columns"]
         path = case.with_suffix(".parquet")
         fails = Failures()
         check_pyarrow(path, columns, fails)
         check_duckdb(path, columns, fails)
+        if "json_fields" in spec:
+            check_json_fields(path, spec["json_fields"], fails)
         status = "ok" if not fails.items else f"FAIL ({len(fails.items)})"
         print(f"  {case.stem}: {status}")
         for item in fails.items[:20]:

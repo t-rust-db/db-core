@@ -7332,6 +7332,7 @@ pub db_core::vm::batch::Opcode::Combine
 pub db_core::vm::batch::Opcode::Combine::agg_parts: alloc::borrow::Cow<'static, [db_core::vm::batch::AggPart]>
 pub db_core::vm::batch::Opcode::Combine::distinct: bool
 pub db_core::vm::batch::Opcode::Combine::num_group_keys: usize
+pub db_core::vm::batch::Opcode::Combine::output_order: alloc::borrow::Cow<'static, [usize]>
 pub db_core::vm::batch::Opcode::Emit
 pub db_core::vm::batch::Opcode::Emit::registers: alloc::borrow::Cow<'static, [usize]>
 pub db_core::vm::batch::Opcode::Filter

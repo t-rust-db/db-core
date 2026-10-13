@@ -27,7 +27,8 @@ use super::{
 use crate::storage::ingest::snapshot::{cast, physical_type};
 use crate::storage::ingest::Snapshot;
 use crate::storage::parquet::writer::{ColumnSpec, ColumnType};
-use crate::storage::stream::adapter::column_values;
+use crate::storage::stream::adapter::stored_column_values;
+use crate::storage::stream::detect::Format;
 use crate::storage::stream::segment::Segment as StreamSegment;
 use crate::vm::batch::Batch;
 
@@ -97,10 +98,12 @@ fn load_fixed(
     Ok(Arc::new(batch))
 }
 
-fn load_page(segment: &StreamSegment, requests: &[Request]) -> Batch {
+/// A page's columns as its table stores them, so a record reads the same
+/// before and after it is flushed (#583).
+fn load_page(segment: &StreamSegment, requests: &[Request], format: Format) -> Batch {
     let rows = segment.len();
     requests.iter().fold(Batch::new(rows), |batch, r| {
-        let values = column_values(segment, &r.name).map_or_else(
+        let values = stored_column_values(segment, &r.name, format).map_or_else(
             || vec![Value::Null; rows],
             |values| values.into_iter().map(|v| cast(v, r.column_type)).collect(),
         );
@@ -121,7 +124,11 @@ impl Segment for TableSegment<'_, '_> {
                     .collect();
                 load_fixed(inner, fixups, &all)
             }
-            TableSegment::Page { segment, requests } => Ok(Arc::new(load_page(segment, requests))),
+            TableSegment::Page {
+                segment,
+                requests,
+                format,
+            } => Ok(Arc::new(load_page(segment, requests, *format))),
         }
     }
 
@@ -240,6 +247,7 @@ pub fn query_snapshot(
     segments.extend(snapshot.pages().iter().map(|page| TableSegment::Page {
         segment: Arc::clone(&page.segment),
         requests: requests.clone(),
+        format: snapshot.format(),
     }));
     let output =
         engine::run(&segments, &program).map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
