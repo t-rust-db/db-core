@@ -503,7 +503,11 @@ pub fn explain_query_plan(
     }
     // #597: an aggregate's DISTINCT and ORDER BY each go through a temp
     // b-tree after it, in this order, as sqlite3 reports them.
-    if from.joins.is_empty() && super::post_group::needs_post_group(select) {
+    let post_group = from.joins.is_empty()
+        && bindings
+            .first()
+            .is_some_and(|b| super::post_group::needs_post_group(select, &b.schema));
+    if post_group {
         for (needed, detail) in [
             (
                 select.distinct == Some(Distinctness::Distinct),
@@ -531,7 +535,7 @@ pub fn explain_query_plan(
 /// or for an aggregate with ORDER BY/DISTINCT the one
 /// [`super::post_group::aggregate_query`] builds (#597).
 fn aggregate_select(select: &Select, schema: &TableSchema) -> Result<Select, CodegenError> {
-    if super::post_group::needs_post_group(select) {
+    if super::post_group::needs_post_group(select, schema) {
         Ok(super::post_group::aggregate_query(select, schema)?.0)
     } else {
         Ok(select.clone())

@@ -1211,6 +1211,8 @@ where
     // closure on whichever path actually runs (exactly one of the two
     // branches below), so it's still correct for the single
     // `sorter_open_addr` patch after either one.
+    // #607: groups formed in ORDER BY's order, when it lists the keys.
+    let directions = super::post_group::group_order(select, schema).unwrap_or_default();
     let mut sort_keys = Vec::with_capacity(group_targets.len());
     let mut emit_pass1_row = |em: &mut Emitter, reg: &mut RegAlloc| -> Result<(), CodegenError> {
         let first = compile_row_values_compact(em, reg, schema, &needed_order, cursors.table)?;
@@ -1233,13 +1235,14 @@ where
                     key_index(r, first)?
                 }
             };
+            let descending = directions.get(sort_keys.len()).copied().unwrap_or(false);
             sort_keys.push(SortKeyColumn {
                 index,
-                descending: false,
+                descending,
                 collation: collation_of(expr)
                     .or_else(|| expr_collation(&table_scope, expr))
                     .unwrap_or(Collation::Binary),
-                nulls_first: true,
+                nulls_first: !descending,
             });
         }
 
@@ -1627,13 +1630,17 @@ pub(super) fn group_by_index_ordering(
     else {
         return Ok(None);
     };
+    // #607: in ORDER BY's direction when it lists the keys, so a
+    // descending ORDER BY walks the index backward.
+    let directions = super::post_group::group_order(select, schema).unwrap_or_default();
     let plans: Vec<OrderByPlan> = select
         .group_by
         .iter()
         .zip(&group_targets)
-        .map(|(expr, target)| OrderByPlan {
+        .enumerate()
+        .map(|(i, (expr, target))| OrderByPlan {
             target: target.clone(),
-            descending: false,
+            descending: directions.get(i).copied().unwrap_or(false),
             collation: collation_of(expr).unwrap_or_else(|| match target {
                 OrderByTarget::Column(idx) => schema
                     .column_collations
@@ -1642,7 +1649,7 @@ pub(super) fn group_by_index_ordering(
                     .unwrap_or(Collation::Binary),
                 OrderByTarget::Expr(_) => Collation::Binary,
             }),
-            nulls_first: true,
+            nulls_first: !directions.get(i).copied().unwrap_or(false),
         })
         .collect();
     Ok(super::index_scan::find_ordering_index(schema, &plans))

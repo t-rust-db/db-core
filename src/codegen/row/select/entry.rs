@@ -278,7 +278,7 @@ where
     };
     // #597: ORDER BY / DISTINCT over an aggregate's output: run the
     // aggregate below without them, then sort or dedup its rows.
-    if super::post_group::needs_post_group(select) {
+    if super::post_group::needs_post_group(select, schema) {
         return super::post_group::compile_post_group(
             em, reg, select, schema, cursors, end_label, catalog, stats, sink,
         );

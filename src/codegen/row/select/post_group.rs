@@ -26,11 +26,79 @@ use super::*;
 use std::rc::Rc;
 
 /// Whether `select` aggregates (`GROUP BY`, or an aggregate call) and
-/// then orders or deduplicates the result.
-pub(super) fn needs_post_group(select: &Select) -> bool {
+/// then orders or deduplicates the result. Not when the groups can be
+/// formed in ORDER BY's order to begin with ([`group_order`], #607).
+pub(super) fn needs_post_group(select: &Select, schema: &TableSchema) -> bool {
     let aggregates = !select.group_by.is_empty() || select_has_aggregate(select);
     let distinct = select.distinct == Some(Distinctness::Distinct);
-    aggregates && (!select.order_by.is_empty() || distinct)
+    aggregates && (!select.order_by.is_empty() || distinct) && group_order(select, schema).is_none()
+}
+
+/// #607: each GROUP BY key's direction (`true` = DESC) when ORDER BY
+/// lists exactly the GROUP BY keys, in order, each a plain column
+/// (written out, or by result position or alias) with the default NULLS
+/// placement, and there is no DISTINCT. The groups are then formed in
+/// that order and need no second sort, as in sqlite3. `None` otherwise.
+pub(super) fn group_order(select: &Select, schema: &TableSchema) -> Option<Vec<bool>> {
+    if select.group_by.is_empty()
+        || select.order_by.len() != select.group_by.len()
+        || select.distinct == Some(Distinctness::Distinct)
+    {
+        return None;
+    }
+    select
+        .order_by
+        .iter()
+        .zip(&select.group_by)
+        .map(|(term, key)| {
+            if term.nulls_last.is_some() {
+                return None;
+            }
+            let ordered = ordered_column(&term.expr, select, schema)?;
+            let grouped = bare_column(key, schema)?;
+            (ordered == grouped).then_some(term.desc.unwrap_or(false))
+        })
+        .collect()
+}
+
+/// The schema column a bare (possibly parenthesized) column reference
+/// names.
+fn bare_column(expr: &Expr, schema: &TableSchema) -> Option<usize> {
+    let mut inner = expr;
+    while let ExprKind::Paren(e) = &inner.kind {
+        inner = e;
+    }
+    match &inner.kind {
+        ExprKind::Column { name, .. } => column_index(schema, name),
+        _ => None,
+    }
+}
+
+/// The schema column an ORDER BY term names: by result position, by a
+/// result alias, or directly.
+fn ordered_column(expr: &Expr, select: &Select, schema: &TableSchema) -> Option<usize> {
+    let result_expr = |column: Option<&ResultColumn>| match column {
+        Some(ResultColumn::Expr { expr, .. }) => bare_column(expr, schema),
+        _ => None,
+    };
+    match &expr.kind {
+        ExprKind::Literal(Literal::Integer(n)) => {
+            let position = usize::try_from(*n).ok()?.checked_sub(1)?;
+            result_expr(select.columns.get(position))
+        }
+        ExprKind::Column {
+            table: None, name, ..
+        } => {
+            let aliased = select.columns.iter().find(|c| {
+                matches!(c, ResultColumn::Expr { alias: Some(a), .. } if a.eq_ignore_ascii_case(name))
+            });
+            match aliased {
+                Some(column) => result_expr(Some(column)),
+                None => bare_column(expr, schema),
+            }
+        }
+        _ => bare_column(expr, schema),
+    }
 }
 
 /// The output column an `ORDER BY` term names by position or alias;

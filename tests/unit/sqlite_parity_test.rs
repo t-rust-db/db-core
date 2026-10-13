@@ -390,8 +390,7 @@ fn ordered_aggregates_feed_inserts_and_union_arms() {
 }
 
 /// #597: EXPLAIN QUERY PLAN for ordered and distinct aggregates, as
-/// sqlite3 3.51 reports it. ORDER BY on the GROUP BY keys themselves is
-/// the one difference (an extra sort here, #607), pinned so a fix shows.
+/// sqlite3 3.51 reports it.
 #[test]
 fn aggregate_plans_match_sqlite3() {
     let db = TempDb::new("eqp");
@@ -438,15 +437,10 @@ fn aggregate_plans_match_sqlite3() {
     for (sql, expected) in cases {
         assert_eq!(plan(sql), *expected, "{sql}");
     }
-    // #607: sqlite3 reports only SCAN g / USE TEMP B-TREE FOR GROUP BY.
+    // #607: ORDER BY on the GROUP BY key needs no second sort.
     assert_eq!(
         plan("SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k DESC"),
-        [
-            "SCAN g",
-            "USE TEMP B-TREE FOR GROUP BY",
-            "USE TEMP B-TREE FOR ORDER BY"
-        ],
-        "if this now matches sqlite3, move it into the cases above and close #607"
+        ["SCAN g", "USE TEMP B-TREE FOR GROUP BY"]
     );
 }
 
@@ -688,4 +682,80 @@ fn unaliased_from_subqueries_match_sqlite3() {
         .run_query("SELECT a.k FROM (SELECT k FROM g) JOIN (SELECT k AS k2 FROM g) ON k = k2")
         .unwrap_err();
     assert!(err.to_string().contains("a.k"), "{err}");
+}
+
+/// #607: ORDER BY listing the GROUP BY keys orders the groups as they are
+/// formed, with or without an index on the key (sqlite3 3.51). A
+/// descending order walks the index backward; NULLS FIRST on a
+/// descending key still needs the second sort.
+#[test]
+fn ordering_by_the_group_keys_sorts_once() {
+    let db = TempDb::new("group-order");
+    let mut e = grouped_engine(&db);
+    let cases: &[(&str, &str, &[&str])] = &[
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k DESC",
+            "'c',1;'b',2;'a',1;'A',1;NULL,2",
+            &["SCAN g", "USE TEMP B-TREE FOR GROUP BY"],
+        ),
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY 1",
+            "NULL,2;'A',1;'a',1;'b',2;'c',1",
+            &["SCAN g", "USE TEMP B-TREE FOR GROUP BY"],
+        ),
+        (
+            "SELECT k AS key, SUM(n) FROM g GROUP BY k ORDER BY key DESC LIMIT 3",
+            "'c',9;'b',3;'a',5",
+            &["SCAN g", "USE TEMP B-TREE FOR GROUP BY"],
+        ),
+        (
+            "SELECT k, s, COUNT(*) FROM g GROUP BY k, s ORDER BY k DESC, s DESC",
+            "'c','X',1;'b','y',2;'a','x',1;'A','x',1;NULL,'z',1;NULL,NULL,1",
+            &["SCAN g", "USE TEMP B-TREE FOR GROUP BY"],
+        ),
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k DESC NULLS FIRST",
+            "NULL,2;'c',1;'b',2;'a',1;'A',1",
+            &[
+                "SCAN g",
+                "USE TEMP B-TREE FOR GROUP BY",
+                "USE TEMP B-TREE FOR ORDER BY",
+            ],
+        ),
+    ];
+    let rows = |e: &mut RowEngine, sql: &str| -> String {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"))
+            .rows
+            .iter()
+            .map(|r| quote(r))
+            .collect::<Vec<_>>()
+            .join(";")
+    };
+    let plan = |e: &RowEngine, sql: &str| -> Vec<String> {
+        e.explain_plan(sql)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.detail)
+            .collect()
+    };
+    for (sql, expected, expected_plan) in cases {
+        assert_eq!(rows(&mut e, sql), *expected, "{sql}");
+        assert_eq!(plan(&e, sql), *expected_plan, "{sql}");
+    }
+    // With an index on the key: the same rows, and the groups come off the
+    // index (backward for DESC) with no temp b-tree at all.
+    e.run_query("CREATE INDEX gk ON g(k)").unwrap();
+    for (sql, expected, _) in cases {
+        assert_eq!(rows(&mut e, sql), *expected, "{sql} (indexed)");
+    }
+    let indexed = plan(&e, "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k DESC");
+    assert!(
+        indexed.iter().any(|r| r.contains("INDEX gk")),
+        "{indexed:?}"
+    );
+    assert!(
+        !indexed.iter().any(|r| r.contains("TEMP B-TREE")),
+        "{indexed:?}"
+    );
 }
