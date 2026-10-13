@@ -8,6 +8,7 @@ use super::super::limit_scan::{
     compile_limit_setup, emit_limit_guard, emit_offset_guard, LimitState,
 };
 use super::super::order_by::strip_collate;
+use super::super::projection::emit_dedup_check;
 use super::super::*;
 use super::accum::{collect_aggregates, substitute_aggregates, AggSlot};
 
@@ -61,6 +62,8 @@ pub(crate) fn compile_joined_grouped_scan<F>(
     // aggregates) before it reaches `sink`, instead of `sink` being
     // called directly as each group is flushed.
     order_cursors: Option<(i32, i32)>,
+    // #608: the ephemeral index `SELECT DISTINCT` dedups group rows in.
+    distinct_cursor: Option<i32>,
     end_label: Label,
     implicit_group: bool,
     sink: &mut F,
@@ -68,6 +71,9 @@ pub(crate) fn compile_joined_grouped_scan<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
 {
+    if let Some(cursor) = distinct_cursor {
+        em.emit(Instruction::new(Opcode::OpenEphemeral, cursor, 0, 0));
+    }
     let group_offsets: Vec<usize> = select
         .group_by
         .iter()
@@ -291,6 +297,7 @@ where
         limit.as_ref(),
         end_label,
         order_cursors.map(|(order_sort_cursor, _)| order_sort_cursor),
+        distinct_cursor,
         sink,
     )?;
     em.place(skip_flush);
@@ -344,6 +351,7 @@ where
         limit.as_ref(),
         end_label,
         order_cursors.map(|(order_sort_cursor, _)| order_sort_cursor),
+        distinct_cursor,
         sink,
     )?;
     em.place(skip_tail_flush);
@@ -542,6 +550,7 @@ fn flush_joined_group<F>(
     limit: Option<&LimitState>,
     end_label: Label,
     order_sort_cursor: Option<i32>,
+    distinct_cursor: Option<i32>,
     sink: &mut F,
 ) -> Result<(), CodegenError>
 where
@@ -603,6 +612,28 @@ where
         )?;
     }
 
+    // #608: `SELECT DISTINCT` drops a group whose visible columns
+    // repeat an earlier group's, before it is sorted or counted against
+    // LIMIT (as sqlite3: dedup feeds the ORDER BY sorter).
+    let projected = match distinct_cursor {
+        Some(cursor) => {
+            let (first, count) = project_grouped_result_columns(
+                em,
+                reg,
+                select,
+                full_scope,
+                dedup_star,
+                total_width,
+                agg_slots,
+                flush_cursor,
+            )?;
+            let collations = distinct_collations(select, full_scope, count);
+            emit_dedup_check(em, cursor, first, collations, skip_label);
+            Some((first, count))
+        }
+        None => None,
+    };
+
     if let Some(order_sort_cursor) = order_sort_cursor {
         em.emit(Instruction::new(
             Opcode::SorterInsert,
@@ -621,19 +652,45 @@ where
         emit_limit_guard(em, limit, end_label);
     }
 
-    let (first, count) = project_grouped_result_columns(
-        em,
-        reg,
-        select,
-        full_scope,
-        dedup_star,
-        total_width,
-        agg_slots,
-        flush_cursor,
-    )?;
+    let (first, count) = match projected {
+        Some(projected) => projected,
+        None => project_grouped_result_columns(
+            em,
+            reg,
+            select,
+            full_scope,
+            dedup_star,
+            total_width,
+            agg_slots,
+            flush_cursor,
+        )?,
+    };
     sink(em, reg, first, i32::try_from(count).unwrap_or(0))?;
     em.place(skip_label);
     Ok(())
+}
+
+/// The collations a joined aggregate's `SELECT DISTINCT` compares its
+/// `count` visible columns under (#608): an explicit `COLLATE`, else the
+/// column's declared one, else BINARY. `*` columns compare as BINARY.
+fn distinct_collations(select: &Select, full_scope: &Scope, count: usize) -> Vec<Collation> {
+    let per_column: Vec<Collation> = select
+        .columns
+        .iter()
+        .filter_map(|c| match c {
+            ResultColumn::Expr { expr, .. } => Some(
+                collation_of(expr)
+                    .or_else(|| expr_collation(full_scope, expr))
+                    .unwrap_or(Collation::Binary),
+            ),
+            ResultColumn::Star | ResultColumn::TableStar { .. } => None,
+        })
+        .collect();
+    if per_column.len() == count {
+        per_column
+    } else {
+        vec![Collation::Binary; count]
+    }
 }
 
 /// db-core#219: a synthetic single-cursor schema over one flushed joined

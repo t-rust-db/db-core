@@ -153,14 +153,8 @@ fn result_column_names_match_sqlite3() {
 /// Queries sqlite3 answers and the row engine still refuses, with the
 /// headers sqlite3 gives. Each is asserted to still fail: once one runs,
 /// move it into [`result_column_names_match_sqlite3`] and close its issue.
-const KNOWN_GAPS: &[(&str, &[&str], &str)] = &[
-    ("SELECT x FROM (SELECT 1 AS x) WHERE x = 1", &["x"], "#611"),
-    (
-        "SELECT DISTINCT t.k FROM t JOIN u ON t.k = u.k GROUP BY t.k",
-        &["k"],
-        "#608",
-    ),
-];
+const KNOWN_GAPS: &[(&str, &[&str], &str)] =
+    &[("SELECT x FROM (SELECT 1 AS x) WHERE x = 1", &["x"], "#611")];
 
 #[test]
 fn known_gaps_still_fail() {
@@ -757,5 +751,50 @@ fn ordering_by_the_group_keys_sorts_once() {
     assert!(
         !indexed.iter().any(|r| r.contains("TEMP B-TREE")),
         "{indexed:?}"
+    );
+}
+
+/// #608: DISTINCT over a joined aggregate (sqlite3 3.51, `.headers on`):
+/// a duplicate group row is dropped before ORDER BY and LIMIT see it.
+#[test]
+fn distinct_over_a_joined_aggregate_matches_sqlite3() {
+    let db = TempDb::new("joined-distinct");
+    let mut e = grouped_engine(&db);
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT DISTINCT a.s FROM g a JOIN g b ON a.k = b.k GROUP BY a.k, a.s ORDER BY 1",
+                "'s';'X';'x';'y'",
+            ),
+            (
+                "SELECT DISTINCT COUNT(*) FROM g a JOIN g b ON a.k = b.k GROUP BY a.k ORDER BY 1 DESC",
+                "'COUNT(*)';4;1",
+            ),
+            (
+                "SELECT DISTINCT COUNT(*) FROM g a JOIN g b ON a.k = b.k GROUP BY a.k ORDER BY 1 DESC LIMIT 1",
+                "'COUNT(*)';4",
+            ),
+        ],
+    );
+    // The plan: GROUP BY, DISTINCT and ORDER BY temp b-trees after the
+    // join, as sqlite3 lists them.
+    let plan: Vec<String> = e
+        .explain_plan(
+            "SELECT DISTINCT COUNT(*) FROM g a JOIN g b ON a.k = b.k GROUP BY a.k ORDER BY 1 DESC",
+        )
+        .unwrap()
+        .into_iter()
+        .map(|r| r.detail)
+        .collect();
+    let temp: Vec<&String> = plan.iter().filter(|r| r.contains("TEMP B-TREE")).collect();
+    assert_eq!(
+        temp,
+        [
+            "USE TEMP B-TREE FOR GROUP BY",
+            "USE TEMP B-TREE FOR DISTINCT",
+            "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "{plan:?}"
     );
 }

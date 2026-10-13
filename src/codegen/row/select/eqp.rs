@@ -503,6 +503,27 @@ pub fn explain_query_plan(
     }
     // #597: an aggregate's DISTINCT and ORDER BY each go through a temp
     // b-tree after it, in this order, as sqlite3 reports them.
+    // #608: a joined aggregate always groups through a sorter, then
+    // dedups and re-sorts its group rows.
+    if !from.joins.is_empty() && (!select.group_by.is_empty() || select_has_aggregate(select)) {
+        for (needed, detail) in [
+            (!select.group_by.is_empty(), "USE TEMP B-TREE FOR GROUP BY"),
+            (
+                select.distinct == Some(Distinctness::Distinct),
+                "USE TEMP B-TREE FOR DISTINCT",
+            ),
+            (!select.order_by.is_empty(), "USE TEMP B-TREE FOR ORDER BY"),
+        ] {
+            if needed {
+                rows.push(EqpRow {
+                    id: next_id,
+                    parent: 0,
+                    notused: 0,
+                    detail: detail.to_string(),
+                });
+            }
+        }
+    }
     let post_group = from.joins.is_empty()
         && bindings
             .first()
@@ -1055,8 +1076,10 @@ mod mcdc_vectors {
     #[test]
     fn mcdc__codegen_row_select_eqp_explain_query_plan_5836fc83__v2_joined_group_by_is_not_reported(
     ) {
+        // The single-table GROUP BY row is not added for a join; the
+        // joined aggregate reports its own, once (#608).
         let d = eqp_details("SELECT t.a, count(*) FROM t JOIN u ON u.b = t.a GROUP BY t.a");
-        assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
+        assert_eq!(d.iter().filter(|x| *x == TEMP_BTREE).count(), 1, "{d:?}");
     }
 
     #[test]
