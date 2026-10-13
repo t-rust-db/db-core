@@ -476,3 +476,32 @@ fn engine_is_object_safe_and_usable_through_dyn() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn grouped_columns_come_back_in_select_list_order_under_their_own_headers() {
+    // #585: an aggregate before its key came back keys-first, so each
+    // header labelled the other column's values.
+    let mut e = open();
+    let keys_first = e
+        .run_query(
+            "SELECT region, count(*), min(id) FROM production GROUP BY region ORDER BY region",
+        )
+        .unwrap();
+    let agg_first = e
+        .run_query(
+            "SELECT count(*), region, min(id) FROM production GROUP BY region ORDER BY region",
+        )
+        .unwrap();
+    assert_eq!(agg_first.columns, vec!["COUNT(*)", "region", "MIN(id)"]);
+    let swapped: Vec<Vec<Cell>> = keys_first
+        .rows
+        .iter()
+        .map(|r| vec![r[1].clone(), r[0].clone(), r[2].clone()])
+        .collect();
+    assert_eq!(agg_first.rows, swapped);
+    assert!(
+        matches!(agg_first.rows[0][1], Cell::Text(_)),
+        "{:?}",
+        agg_first.rows[0]
+    );
+}

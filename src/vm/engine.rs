@@ -116,6 +116,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
         agg_parts,
         num_group_keys,
         distinct,
+        output_order,
     }) = combine
     else {
         return run_parallel(segments, &body);
@@ -137,7 +138,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
     // Return the chunked output as-is rather than transposing every
     // surviving row into a `Vec` and back (which is what the reverted
     // first attempt did on exactly this path, the one the issue is about).
-    if is_identity_finalize(agg_parts, *distinct, &order_by, limit) {
+    if is_identity_finalize(agg_parts, *distinct, output_order, &order_by, limit) {
         return run_parallel(segments, &body);
     }
     // #478/#488: aggregates never go through `run_parallel` + a row
@@ -155,6 +156,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
             let output = run_parallel(segments, &body)?;
             combine_chunks(agg_parts, *num_group_keys, output.chunks())?
         };
+        let combined = combined.project(output_order)?;
         if !*distinct && order_by.is_none() && limit.is_none() {
             return Ok(combined);
         }
@@ -171,7 +173,8 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
             },
         )?,
         _ => run_parallel(segments, &body)?,
-    };
+    }
+    .project(output_order)?;
     finalize(
         agg_parts,
         *num_group_keys,
@@ -239,10 +242,15 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
 fn is_identity_finalize(
     agg_parts: &[AggPart],
     distinct: bool,
+    output_order: &[usize],
     order_by: &Option<(usize, bool)>,
     limit: Option<usize>,
 ) -> bool {
-    agg_parts.is_empty() && !distinct && order_by.is_none() && limit.is_none()
+    agg_parts.is_empty()
+        && !distinct
+        && output_order.is_empty()
+        && order_by.is_none()
+        && limit.is_none()
 }
 
 /// Whether [`run_streaming`] can stream `program` at all -- i.e. whether
@@ -258,6 +266,7 @@ pub fn is_streamable(program: &Program) -> bool {
     let Some(Opcode::Combine {
         agg_parts,
         distinct,
+        output_order,
         ..
     }) = combine
     else {
@@ -271,7 +280,7 @@ pub fn is_streamable(program: &Program) -> bool {
         Some(Opcode::Limit { n }) => Some(*n),
         _ => None,
     };
-    is_identity_finalize(agg_parts, *distinct, &order_by, limit)
+    is_identity_finalize(agg_parts, *distinct, output_order, &order_by, limit)
 }
 
 /// Streaming counterpart to [`run`] (#456): hands each segment's chunks to
@@ -297,6 +306,7 @@ pub fn run_streaming<S: Segment>(
     let Some(Opcode::Combine {
         agg_parts,
         distinct,
+        output_order,
         ..
     }) = combine
     else {
@@ -310,7 +320,7 @@ pub fn run_streaming<S: Segment>(
         Some(Opcode::Limit { n }) => Some(*n),
         _ => None,
     };
-    if !is_identity_finalize(agg_parts, *distinct, &order_by, limit) {
+    if !is_identity_finalize(agg_parts, *distinct, output_order, &order_by, limit) {
         let reason = if !agg_parts.is_empty() {
             "query has aggregates".to_string()
         } else if *distinct {
@@ -320,13 +330,10 @@ pub fn run_streaming<S: Segment>(
                 (Some(_), Some(_)) => "query has ORDER BY ... LIMIT".to_string(),
                 (Some(_), None) => "query has ORDER BY".to_string(),
                 (None, Some(_)) => "query has LIMIT".to_string(),
-                // `is_identity_finalize` already rejected `(None, None)`
-                // under `agg_parts.is_empty() && !distinct` -- this arm is
-                // unreachable but still typed, not a panic (db-core#232's
-                // `MalformedProgram` convention).
-                (None, None) => {
-                    "unreachable: no aggregate, DISTINCT, ORDER BY, or LIMIT".to_string()
-                }
+                // Only a non-empty `output_order` is left (#585); codegen
+                // sets one only alongside aggregates, but a hand-built
+                // program can carry one on its own.
+                (None, None) => "query reorders its output columns".to_string(),
             }
         };
         return Err(VmError::NotStreamable { reason });
@@ -893,6 +900,7 @@ mod tests {
                 agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
                 num_group_keys: 1,
                 distinct: false,
+                output_order: Vec::new().into(),
             },
             Opcode::Sort {
                 col: 0,
@@ -942,6 +950,7 @@ mod tests {
                     agg_parts: vec![].into(),
                     num_group_keys: 0,
                     distinct: true,
+                    output_order: Vec::new().into(),
                 },
                 Opcode::Limit { n: 5 },
             ],
@@ -960,6 +969,7 @@ mod tests {
                     agg_parts: vec![AggPart::Sum].into(),
                     num_group_keys: 0,
                     distinct: false,
+                    output_order: Vec::new().into(),
                 },
                 Opcode::Limit { n: 5 },
             ],
@@ -977,6 +987,7 @@ mod tests {
                     agg_parts: vec![].into(),
                     num_group_keys: 0,
                     distinct: false,
+                    output_order: Vec::new().into(),
                 },
                 Opcode::Limit { n: 5 },
             ],
@@ -995,6 +1006,7 @@ mod tests {
                     agg_parts: vec![].into(),
                     num_group_keys: 0,
                     distinct: false,
+                    output_order: Vec::new().into(),
                 },
                 Opcode::Limit { n: 5 },
             ],
@@ -1030,6 +1042,7 @@ mod tests {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
                 distinct: false,
+                output_order: Vec::new().into(),
             }),
             Instruction::new(Opcode::Limit { n: 3 }),
         ]);
@@ -1059,6 +1072,7 @@ mod tests {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
                 distinct: true,
+                output_order: Vec::new().into(),
             }),
             Instruction::new(Opcode::Sort {
                 col: 0,
@@ -1094,6 +1108,7 @@ mod tests {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
                 distinct: true,
+                output_order: Vec::new().into(),
             }),
             Instruction::new(Opcode::Sort {
                 col: 0,
@@ -1117,6 +1132,7 @@ mod tests {
                 agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
                 num_group_keys: 1,
                 distinct: true,
+                output_order: Vec::new().into(),
             },
             Opcode::Sort {
                 col: 0,
@@ -1148,6 +1164,7 @@ mod tests {
                 agg_parts: vec![].into(),
                 num_group_keys: 0,
                 distinct: false,
+                output_order: Vec::new().into(),
             }),
             Instruction::new(Opcode::Sort {
                 col: 0,
@@ -1183,6 +1200,7 @@ mod tests {
             agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
             num_group_keys: 1,
             distinct: false,
+            output_order: Vec::new().into(),
         }]);
         assert_eq!(program.columns_to_load(), vec!["k", "v"]);
         let (body, combine, sort, limit) = program.split_finalize();
@@ -1214,6 +1232,7 @@ mod tests {
                     agg_parts: vec![].into(),
                     num_group_keys: 0,
                     distinct: false,
+                    output_order: Vec::new().into(),
                 },
                 Opcode::Sort {
                     col: 0,
@@ -1246,6 +1265,7 @@ mod tests {
             agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
             num_group_keys: 1,
             distinct,
+            output_order: Vec::new().into(),
         }
     }
 
@@ -1358,6 +1378,7 @@ mod preaggregation_tests {
                 agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
                 num_group_keys: 1,
                 distinct: false,
+                output_order: Vec::new().into(),
             }),
         ])
     }

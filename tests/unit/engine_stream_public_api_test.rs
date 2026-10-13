@@ -527,3 +527,31 @@ fn json_extract_returns_null_for_missing_key_or_malformed_json() {
     assert!(got.iter().any(|r| r[0] == Cell::Null));
     assert_eq!(got.len(), 1000);
 }
+
+#[test]
+fn group_by_with_the_count_first_keeps_select_list_order() {
+    // #585: the stream engine shares the batch planner, so its grouped
+    // output was keys-first under select-list headers too.
+    let mut e = open();
+    let result = e
+        .run_query("SELECT count(*), facility FROM log GROUP BY facility ORDER BY facility")
+        .unwrap();
+    assert_eq!(result.columns, vec!["COUNT(*)", "facility"]);
+    let mut expected: BTreeMap<&str, i64> = BTreeMap::new();
+    for (facility, _) in oracle() {
+        *expected.entry(facility).or_default() += 1;
+    }
+    let got: Vec<(String, i64)> = result
+        .rows
+        .iter()
+        .map(|r| match (&r[0], &r[1]) {
+            (Cell::Int(n), Cell::Text(f)) => (f.clone(), *n),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    let want: Vec<(String, i64)> = expected
+        .into_iter()
+        .map(|(f, n)| (f.to_string(), n))
+        .collect();
+    assert_eq!(got, want);
+}

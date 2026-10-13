@@ -727,6 +727,7 @@ fn bench_engine_combine(r: &mut common::Report) {
             agg_parts: vec![AggPart::GroupKey, AggPart::Sum].into(),
             num_group_keys: 1,
             distinct: false,
+            output_order: Vec::new().into(),
         }),
     ]);
     r.bench(

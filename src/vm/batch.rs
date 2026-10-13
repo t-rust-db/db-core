@@ -535,6 +535,13 @@ pub enum Opcode {
         num_group_keys: usize,
         /// Deduplicate identical output rows (`SELECT DISTINCT`).
         distinct: bool,
+        /// Select-list order of the merged columns (#585): output column
+        /// `i` is merged column `output_order[i]`. Merged rows are always
+        /// keys-first, while the select list may put an aggregate before
+        /// or between keys. Empty when the merged order already is the
+        /// select order. Applied before `DISTINCT`/[`Opcode::Sort`], whose
+        /// column positions are select-list positions.
+        output_order: Cow<'static, [usize]>,
     },
     /// Final `ORDER BY` over the whole (already merged) result: sorts by
     /// output column `col`, `descending` or ascending. A sequential-phase
@@ -906,6 +913,33 @@ impl QueryOutput {
         if let Some(at) = cut {
             self.chunks.truncate(at);
         }
+    }
+}
+
+impl QueryOutput {
+    /// Reorders every chunk's columns so output column `i` is current
+    /// column `order[i]` (#585, `Opcode::Combine`'s `output_order`). An
+    /// empty `order` is the identity. `Arc` clones only, no payload copy.
+    pub(crate) fn project(self, order: &[usize]) -> Result<Self> {
+        if order.is_empty() {
+            return Ok(self);
+        }
+        let mut out = Self::default();
+        for chunk in self.chunks {
+            let projected = order
+                .iter()
+                .map(|&c| chunk.get(c).cloned())
+                .collect::<Option<Chunk>>()
+                .ok_or_else(|| VmError::MalformedProgram {
+                    opcode: "Combine",
+                    reason: format!(
+                        "output_order {order:?} names a column past the merged row's {} columns",
+                        chunk.len()
+                    ),
+                })?;
+            out.push_chunk(projected);
+        }
+        Ok(out)
     }
 }
 

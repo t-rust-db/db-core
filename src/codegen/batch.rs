@@ -1450,6 +1450,7 @@ pub fn compile(select: &Select) -> Result<Program> {
             agg_parts: agg_parts.into(),
             num_group_keys: group_by.len(),
             distinct: matches!(select.distinct, Some(Distinctness::Distinct)),
+            output_order: grouped_output_order(&items, group_by.len()).into(),
         },
         combine_comment,
     );
@@ -2219,6 +2220,7 @@ pub fn compile_window(select: &Select) -> Result<Program> {
             agg_parts: Vec::new().into(),
             num_group_keys: 0,
             distinct: matches!(select.distinct, Some(Distinctness::Distinct)),
+            output_order: Vec::new().into(),
         },
         "concatenate segments".to_string(),
     ));
@@ -2257,6 +2259,37 @@ fn map_window_func(func: WindowFunc) -> crate::vm::batch::WindowFunc {
         WindowFunc::Avg => Vm::Avg,
         WindowFunc::Count => Vm::Count,
     }
+}
+
+/// `Opcode::Combine`'s `output_order` for a grouped `SELECT` (#585):
+/// merged rows are keys-first, then one column per aggregate item in
+/// select order, so a key item takes the next key position and an
+/// aggregate item the next position after the keys. The parser already
+/// requires the non-aggregate items to be exactly the `GROUP BY` keys in
+/// `GROUP BY` order. Empty when that is the identity (keys listed first),
+/// when there is no `GROUP BY`, or for any item shape this mapping does
+/// not cover, which keeps the merged order.
+fn grouped_output_order(items: &[Item], num_group_keys: usize) -> Vec<usize> {
+    if num_group_keys == 0 {
+        return Vec::new();
+    }
+    let mut next_key = 0usize;
+    let mut next_agg = num_group_keys;
+    let mut order = Vec::with_capacity(items.len());
+    for item in items {
+        let slot = match item {
+            Item::Column(_) | Item::Expr(_) => &mut next_key,
+            Item::Agg(..) | Item::AggExpr(_) => &mut next_agg,
+            Item::Star | Item::Window(_) => return Vec::new(),
+        };
+        order.push(*slot);
+        *slot = slot.saturating_add(1);
+    }
+    let identity = order.iter().enumerate().all(|(i, &c)| i == c);
+    if next_key != num_group_keys || identity {
+        return Vec::new();
+    }
+    order
 }
 
 /// Resolves an `ORDER BY` reference to its position in the `SELECT`
@@ -2659,7 +2692,16 @@ fn render_operands(op: &Opcode) -> String {
             agg_parts,
             num_group_keys,
             distinct,
-        } => format!("agg_parts={agg_parts:?} num_group_keys={num_group_keys} distinct={distinct}"),
+            output_order,
+        } => {
+            let operands =
+                format!("agg_parts={agg_parts:?} num_group_keys={num_group_keys} distinct={distinct}");
+            if output_order.is_empty() {
+                operands
+            } else {
+                format!("{operands} output_order={output_order:?}")
+            }
+        }
         Opcode::Sort { col, descending } => format!("col={col} descending={descending}"),
         Opcode::Limit { n } => format!("n={n}"),
         Opcode::Call { dst, name, args } => format!("dst={dst} name={name} args={args:?}"),
@@ -3256,6 +3298,7 @@ mod tests {
                 agg_parts: Vec::new().into(),
                 num_group_keys: 0,
                 distinct: false,
+                output_order: Vec::new().into(),
             }
         );
         assert_eq!(tail[0].comment.as_deref(), Some("concatenate segments"));
@@ -3289,6 +3332,7 @@ mod tests {
                 agg_parts: vec![AggPart::GroupKey, AggPart::Count, AggPart::Sum].into(),
                 num_group_keys: 1,
                 distinct: false,
+                output_order: Vec::new().into(),
             }
         );
         assert_eq!(
@@ -3917,6 +3961,181 @@ mod tests {
         run(&[InMemorySegment(amount_batch())], program)
             .unwrap()
             .into_rows()
+    }
+
+    // #585: grouped rows are merged keys-first; `Combine`'s `output_order`
+    // puts them back in select-list order before DISTINCT/ORDER BY.
+
+    fn run_grouped(sql_text: &str, segments: usize) -> Vec<Vec<Value>> {
+        use crate::vm::engine::{run, InMemorySegment};
+        let program = compile(&sql::parse(sql_text).unwrap()).unwrap();
+        let segments: Vec<InMemorySegment> = (0..segments)
+            .map(|_| InMemorySegment(amount_batch()))
+            .collect();
+        run(&segments, &program).unwrap().into_rows()
+    }
+
+    fn sorted(mut rows: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
+        rows.sort_by_key(|r| format!("{r:?}"));
+        rows
+    }
+
+    #[test]
+    fn grouped_output_follows_the_select_list_when_an_aggregate_comes_first() {
+        // One segment merges chunks directly, 256 pre-aggregate per worker.
+        for segments in [1, 256] {
+            let n = i64::try_from(segments).unwrap();
+            assert_eq!(
+                sorted(run_grouped(
+                    "SELECT MIN(amount), region FROM t GROUP BY region",
+                    segments
+                )),
+                vec![
+                    vec![Value::Float(3.0), Value::Str("b".into())],
+                    vec![Value::Float(5.0), Value::Str("a".into())],
+                ],
+            );
+            assert_eq!(
+                sorted(run_grouped(
+                    "SELECT COUNT(*), region, SUM(amount), amount FROM t GROUP BY region, amount",
+                    segments
+                )),
+                sorted(vec![
+                    vec![
+                        Value::Int(n),
+                        Value::Str("a".into()),
+                        Value::Float(5.0 * n as f64),
+                        Value::Int(5)
+                    ],
+                    vec![
+                        Value::Int(n),
+                        Value::Str("a".into()),
+                        Value::Float(20.0 * n as f64),
+                        Value::Int(20)
+                    ],
+                    vec![
+                        Value::Int(n),
+                        Value::Str("b".into()),
+                        Value::Float(3.0 * n as f64),
+                        Value::Int(3)
+                    ],
+                    vec![
+                        Value::Int(n),
+                        Value::Str("b".into()),
+                        Value::Float(30.0 * n as f64),
+                        Value::Int(30)
+                    ],
+                ]),
+            );
+        }
+    }
+
+    #[test]
+    fn grouped_output_order_covers_avg_and_aggregate_expressions() {
+        assert_eq!(
+            sorted(run_grouped(
+                "SELECT AVG(amount), SUM(amount) * 2, region FROM t GROUP BY region",
+                1
+            )),
+            vec![
+                vec![
+                    Value::Float(12.5),
+                    Value::Float(50.0),
+                    Value::Str("a".into())
+                ],
+                vec![
+                    Value::Float(16.5),
+                    Value::Float(66.0),
+                    Value::Str("b".into())
+                ],
+            ],
+        );
+    }
+
+    #[test]
+    fn a_grouped_aggregate_expression_is_computed_per_group() {
+        // Was NULL for every group: `Combine` read the expression's row
+        // count from the key column it had already moved out.
+        assert_eq!(
+            run_grouped("SELECT region, SUM(amount) * 2 FROM t GROUP BY region", 1),
+            vec![
+                vec![Value::Str("a".into()), Value::Float(50.0)],
+                vec![Value::Str("b".into()), Value::Float(66.0)],
+            ],
+        );
+    }
+
+    #[test]
+    fn order_by_a_key_listed_after_an_aggregate_sorts_by_that_key() {
+        assert_eq!(
+            run_grouped(
+                "SELECT SUM(amount), region FROM t GROUP BY region ORDER BY region DESC",
+                1
+            ),
+            vec![
+                vec![Value::Float(33.0), Value::Str("b".into())],
+                vec![Value::Float(25.0), Value::Str("a".into())],
+            ],
+        );
+        assert_eq!(
+            run_grouped(
+                "SELECT MAX(amount) AS m, region FROM t GROUP BY region ORDER BY m LIMIT 1",
+                1
+            ),
+            vec![vec![Value::Float(20.0), Value::Str("a".into())]],
+        );
+    }
+
+    // codegen_batch_grouped_output_order_476ef2ae:
+    // `next_key != num_group_keys || identity`
+    fn count_item() -> Item {
+        Item::Agg(AggFunc::Count, None, None)
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_grouped_output_order_476ef2ae__v1_aggregate_first_reorders() {
+        let items = [count_item(), Item::Column("k".into())];
+        assert_eq!(grouped_output_order(&items, 1), vec![1, 0]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_grouped_output_order_476ef2ae__v2_missing_key_keeps_merged_order() {
+        let items = [count_item(), Item::Column("k".into())];
+        assert_eq!(grouped_output_order(&items, 2), Vec::<usize>::new());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_grouped_output_order_476ef2ae__v3_keys_first_is_identity() {
+        let items = [Item::Column("k".into()), count_item()];
+        assert_eq!(grouped_output_order(&items, 1), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn keys_first_select_lists_keep_an_empty_output_order() {
+        for sql_text in [
+            "SELECT region, SUM(amount) FROM t GROUP BY region",
+            "SELECT SUM(amount) FROM t",
+            "SELECT region FROM t",
+        ] {
+            let program = compile(&sql::parse(sql_text).unwrap()).unwrap();
+            assert!(
+                program.opcodes().any(|op| matches!(
+                    op,
+                    Opcode::Combine { output_order, .. } if output_order.is_empty()
+                )),
+                "{sql_text}"
+            );
+        }
+        let program =
+            compile(&sql::parse("SELECT SUM(amount), region FROM t GROUP BY region").unwrap())
+                .unwrap();
+        assert!(program.opcodes().any(|op| matches!(
+            op,
+            Opcode::Combine { output_order, .. } if output_order[..] == [1, 0]
+        )));
     }
 
     #[test]
