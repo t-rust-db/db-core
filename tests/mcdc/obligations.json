@@ -24372,7 +24372,7 @@
   {
     "id": "storage_parquet_compression_zstd_decompress_9e26cd96",
     "file": "src/storage/parquet/compression/zstd.rs",
-    "line": 43,
+    "line": 48,
     "decision": "out.len() != uncompressed_size",
     "conditions": 1,
     "vectors_required": 2,
