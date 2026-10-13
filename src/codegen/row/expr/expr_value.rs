@@ -28,10 +28,32 @@ pub(crate) fn emit_column_read(
     idx: usize,
     dest: i32,
 ) -> Result<(), CodegenError> {
-    if schema.rowid_alias == Some(idx) {
+    // The `INTEGER PRIMARY KEY` column, or `rowid` on a table without
+    // one (#605), is the b-tree key, not a record field.
+    if is_rowid_field(schema, idx) {
         em.emit(Instruction::new(Opcode::Rowid, cursor, dest, 0));
         return Ok(());
     }
+    emit_record_read(em, schema, cursor, idx, dest)
+}
+
+/// Whether column `idx` of `schema` is its rowid: the `INTEGER PRIMARY
+/// KEY` column, or the virtual rowid slot of a table without one (#605).
+pub(crate) fn is_rowid_field(schema: &TableSchema, idx: usize) -> bool {
+    schema.rowid_alias == Some(idx)
+        || (idx == super::cond::virtual_rowid_index(schema) && super::cond::has_rowid(schema))
+}
+
+/// Field `idx` of the row `cursor` holds, read as a record field even
+/// when it is the rowid: for a cursor over a materialized record, where
+/// pass 1 stored the rowid as an ordinary field (#605).
+pub(crate) fn emit_record_read(
+    em: &mut Emitter,
+    schema: &TableSchema,
+    cursor: i32,
+    idx: usize,
+    dest: i32,
+) -> Result<(), CodegenError> {
     em.emit(Instruction::new(
         Opcode::Column,
         cursor,
@@ -84,8 +106,13 @@ pub(crate) fn expr_affinity(scope: &Scope, expr: &Expr) -> Option<Affinity> {
     match &expr.kind {
         ExprKind::Column { table, name, .. } => {
             let (_, idx, schema, _) = scope.resolve(table.as_deref(), name).ok()?;
-            let declared = schema.column_types.get(idx)?;
-            Some(affinity_of(declared))
+            match schema.column_types.get(idx) {
+                Some(declared) => Some(affinity_of(declared)),
+                // #605: a table's rowid is an integer.
+                None => (idx == super::cond::virtual_rowid_index(schema)
+                    && super::cond::has_rowid(schema))
+                .then_some(Affinity::Integer),
+            }
         }
         ExprKind::Cast { type_name, .. } => Some(affinity_of(type_name)),
         ExprKind::Paren(inner) => expr_affinity(scope, inner),
@@ -246,6 +273,8 @@ pub(crate) fn compile_value(
                 // rather than going through a real `Column`/`Rowid`
                 // read.
                 em.emit(Instruction::new(Opcode::Null, 0, r, 0));
+            } else if scope.is_record_cursor(cursor) {
+                emit_record_read(em, schema, cursor, idx, r)?;
             } else {
                 emit_column_read(em, schema, cursor, idx, r)?;
             }
@@ -711,6 +740,8 @@ fn emit_branch_into(
             let (cursor, idx, schema, forced_null) = scope.resolve(table.as_deref(), name)?;
             if forced_null {
                 em.emit(Instruction::new(Opcode::Null, 0, dest, 0));
+            } else if scope.is_record_cursor(cursor) {
+                emit_record_read(em, schema, cursor, idx, dest)?;
             } else {
                 emit_column_read(em, schema, cursor, idx, dest)?;
             }

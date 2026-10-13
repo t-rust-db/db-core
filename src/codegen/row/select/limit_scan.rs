@@ -100,16 +100,29 @@ pub(crate) fn is_rowid_reference(schema: &TableSchema, expr: &Expr) -> bool {
 }
 
 fn is_rowid_reference_name(schema: &TableSchema, name: &str) -> bool {
-    if name.eq_ignore_ascii_case("rowid")
-        || name.eq_ignore_ascii_case("_rowid_")
-        || name.eq_ignore_ascii_case("oid")
-    {
-        return true;
+    // Resolved the way a read is (#605): a real column named `rowid`
+    // shadows the keyword (it used to seek by rowid instead), and a
+    // WITHOUT ROWID table has no rowid to seek.
+    column_index(schema, name).is_some_and(|idx| is_rowid_field(schema, idx))
+}
+
+/// Whether `select`'s result columns or ORDER BY read the virtual rowid
+/// of `schema` (#605), so a sort record must carry it. Unsure (an
+/// expression shape the walker does not look into) counts as yes.
+fn reads_rowid(select: &Select, schema: &TableSchema) -> bool {
+    let mut names = std::collections::HashSet::new();
+    let mut bail = false;
+    for column in &select.columns {
+        if let ResultColumn::Expr { expr, .. } = column {
+            super::aggregate::walk_expr_for_column_refs(expr, &mut names, &mut bail);
+        }
     }
-    schema
-        .rowid_alias
-        .and_then(|idx| schema.columns.get(idx))
-        .is_some_and(|col| col.eq_ignore_ascii_case(name))
+    for term in &select.order_by {
+        super::aggregate::walk_expr_for_column_refs(&term.expr, &mut names, &mut bail);
+    }
+    bail || names
+        .iter()
+        .any(|name| column_index(schema, name) == Some(virtual_rowid_index(schema)))
 }
 
 /// An operand `top_level_equality_operands`/[`propagate_constants`] will
@@ -1084,6 +1097,19 @@ where
         false,
         catalog,
     )?;
+    // #605: a table without an INTEGER PRIMARY KEY keeps its rowid in
+    // the b-tree key, not in a column, so pass 2 (reading the record
+    // through a pseudo-cursor) could not get it back. Store it as one
+    // more field, at its virtual column index.
+    if has_rowid(schema) && schema.rowid_alias.is_none() && reads_rowid(select, schema) {
+        let r = reg.alloc();
+        if key_index(r, first)? != virtual_rowid_index(schema) {
+            return Err(CodegenError::Internal {
+                reason: "the sort record's rowid field is not next to its columns".to_string(),
+            });
+        }
+        em.emit(Instruction::new(Opcode::Rowid, cursors.table, r, 0));
+    }
 
     // Compute every genuine-expression sort key into its own register,
     // appended after the schema-column block. A key's final register

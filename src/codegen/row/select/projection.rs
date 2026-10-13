@@ -61,6 +61,22 @@ pub(super) fn result_column_collations(
 /// temporaries before settling on its final result register), then
 /// `Opcode::Copy`'d into a freshly reserved contiguous run — mirroring
 /// the aggregate/snapshot dest-block pattern below (#141).
+/// The scope a projection reads `cursor` through: a materialized
+/// record's when `pseudo` (#605: its rowid is a stored field).
+fn record_scope(
+    schema: &Rc<TableSchema>,
+    cursor: i32,
+    pseudo: bool,
+    catalog: &[TableSchema],
+) -> Scope {
+    let scope = Scope::single_shared(schema, cursor).with_catalog(catalog);
+    if pseudo {
+        scope.with_record_cursors()
+    } else {
+        scope
+    }
+}
+
 pub(super) fn compile_row_values(
     em: &mut Emitter,
     reg: &mut RegAlloc,
@@ -84,7 +100,7 @@ pub(super) fn compile_row_values(
                         name: (*name).to_string(),
                     })?;
                 let r = reg.alloc();
-                if pseudo && schema.rowid_alias == Some(idx) {
+                if pseudo && is_rowid_field(schema, idx) {
                     // `cursor` is a post-`ORDER BY` `OpenPseudo` re-read
                     // of an already-materialized record (see
                     // `compile_sorted_scan`'s pass 1), not a live table
@@ -137,7 +153,7 @@ pub(super) fn compile_row_values(
                     let pseudo_rowid_idx = pseudo
                         .then(|| column_index(schema, name))
                         .flatten()
-                        .filter(|idx| schema.rowid_alias == Some(*idx));
+                        .filter(|idx| is_rowid_field(schema, *idx));
                     if let Some(idx) = pseudo_rowid_idx {
                         let r = reg.alloc();
                         em.emit(Instruction::new(
@@ -154,7 +170,7 @@ pub(super) fn compile_row_values(
                             em,
                             reg,
                             expr_scope.get_or_insert_with(|| {
-                                Scope::single_shared(schema, cursor).with_catalog(catalog)
+                                record_scope(schema, cursor, pseudo, catalog)
                             }),
                             expr,
                         )?
@@ -163,9 +179,8 @@ pub(super) fn compile_row_values(
                     compile_value(
                         em,
                         reg,
-                        expr_scope.get_or_insert_with(|| {
-                            Scope::single_shared(schema, cursor).with_catalog(catalog)
-                        }),
+                        expr_scope
+                            .get_or_insert_with(|| record_scope(schema, cursor, pseudo, catalog)),
                         expr,
                     )?
                 }

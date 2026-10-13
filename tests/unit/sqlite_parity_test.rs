@@ -122,6 +122,8 @@ fn result_column_names_match_sqlite3() {
         ("SELECT * FROM vv", &["a", "id+1"]),
         ("SELECT * FROM v2", &["p", "q"]),
         ("SELECT x.abc FROM t AS x", &["Abc"]),
+        ("SELECT rowid, oid FROM w", &["id", "id"]),
+        ("SELECT rowid, _rowid_ FROM t", &["rowid", "rowid"]),
         ("SELECT x.abc, X.k FROM t x WHERE x.abc = 1", &["Abc", "k"]),
         ("SELECT * FROM w x JOIN w y USING(a)", &["id", "a", "id"]),
         ("SELECT x.*, y.id FROM w x, w y", &["id", "a", "id"]),
@@ -151,15 +153,11 @@ fn result_column_names_match_sqlite3() {
 /// Queries sqlite3 answers and the row engine still refuses, with the
 /// headers sqlite3 gives. Each is asserted to still fail: once one runs,
 /// move it into [`result_column_names_match_sqlite3`] and close its issue.
-const KNOWN_GAPS: &[(&str, &[&str], &str)] = &[
-    ("SELECT rowid, oid FROM w", &["id", "id"], "#605"),
-    ("SELECT rowid, _rowid_ FROM t", &["rowid", "rowid"], "#605"),
-    (
-        "SELECT DISTINCT t.k FROM t JOIN u ON t.k = u.k GROUP BY t.k",
-        &["k"],
-        "#608",
-    ),
-];
+const KNOWN_GAPS: &[(&str, &[&str], &str)] = &[(
+    "SELECT DISTINCT t.k FROM t JOIN u ON t.k = u.k GROUP BY t.k",
+    &["k"],
+    "#608",
+)];
 
 #[test]
 fn known_gaps_still_fail() {
@@ -523,4 +521,142 @@ fn table_aliases_qualify_columns_in_single_table_queries() {
     // sqlite3: "no such column: g.k".
     let err = e.run_query("SELECT g.k FROM g AS x").unwrap_err();
     assert!(err.to_string().contains("g.k"), "{err}");
+}
+
+fn rowid_engine(db: &TempDb) -> RowEngine {
+    let mut e = RowEngine::open(db.path()).expect("open fixture copy");
+    e.run_query(
+        "CREATE TABLE p(a TEXT, b INT); INSERT INTO p VALUES('x',3),('y',1),('z',2); \
+         CREATE TABLE k(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO k VALUES(10,'p'),(20,'q'); \
+         CREATE TABLE s(rowid TEXT, v INT); INSERT INTO s VALUES('r1',5); \
+         CREATE TABLE s2(rowid INT, v TEXT); INSERT INTO s2 VALUES(5,'a'),(1,'b'); \
+         CREATE TABLE w(a INT PRIMARY KEY, b) WITHOUT ROWID",
+    )
+    .unwrap();
+    e
+}
+
+/// Runs each query and compares sqlite3's `.headers on` + `.mode quote`
+/// output: the header row, then the rows, joined by `;`.
+fn check_cases(e: &mut RowEngine, cases: &[(&str, &str)]) {
+    let mut failures = Vec::new();
+    for (sql, expected) in cases {
+        match e.run_query(sql) {
+            Ok(r) => {
+                let header = r
+                    .columns
+                    .iter()
+                    .map(|c| format!("'{}'", c.replace('\'', "''")))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let got = std::iter::once(header)
+                    .chain(r.rows.iter().map(|row| quote(row)))
+                    .collect::<Vec<_>>()
+                    .join(";");
+                if got != *expected {
+                    failures.push(format!("{sql}\n    got     {got}\n    sqlite3 {expected}"));
+                }
+            }
+            Err(err) => failures.push(format!("{sql}\n    error: {err}")),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}
+
+/// #605: rowid, oid and _rowid_ (sqlite3 3.51, `.headers on`).
+#[test]
+fn rowid_references_match_sqlite3() {
+    let db = TempDb::new("rowid");
+    let mut e = rowid_engine(&db);
+    check_cases(
+        &mut e,
+        &[
+            ("SELECT rowid, a FROM p", "'rowid','a';1,'x';2,'y';3,'z'"),
+            (
+                "SELECT oid, _rowid_, ROWID FROM p WHERE rowid > 1",
+                "'rowid','rowid','rowid';2,2,2;3,3,3",
+            ),
+            ("SELECT a FROM p WHERE rowid = 2", "'a';'y'"),
+            (
+                "SELECT rowid + 1, typeof(rowid) FROM p WHERE oid < 3",
+                "'rowid + 1','typeof(rowid)';2,'integer';3,'integer'",
+            ),
+            (
+                "SELECT a FROM p WHERE rowid IN (1, 3) ORDER BY a DESC",
+                "'a';'z';'x'",
+            ),
+            (
+                "SELECT rowid, a FROM p ORDER BY b",
+                "'rowid','a';2,'y';3,'z';1,'x'",
+            ),
+            (
+                "SELECT rowid, a FROM p ORDER BY rowid DESC",
+                "'rowid','a';3,'z';2,'y';1,'x'",
+            ),
+            (
+                "SELECT rowid, id, v FROM k WHERE rowid >= 20",
+                "'id','id','v';20,20,'q'",
+            ),
+            ("SELECT rowid, v FROM s", "'rowid','v';'r1',5"),
+            ("SELECT v FROM s WHERE rowid = 'r1'", "'v';5"),
+            (
+                "SELECT x.rowid, x.a FROM p x WHERE x.rowid = 3",
+                "'rowid','a';3,'z'",
+            ),
+            (
+                "SELECT COUNT(*), MAX(rowid) FROM p",
+                "'COUNT(*)','MAX(rowid)';3,3",
+            ),
+            (
+                "SELECT b % 2 AS par, MAX(rowid) FROM p GROUP BY b % 2 ORDER BY 1",
+                "'par','MAX(rowid)';0,3;1,2",
+            ),
+            // After a sort the rowid comes from the sort record, also inside
+            // an expression; `id + 1` used to read 0 there (sqlite3 21, 11).
+            (
+                "SELECT id + 1, v FROM k ORDER BY v DESC",
+                "'id + 1','v';21,'q';11,'p'",
+            ),
+            (
+                "SELECT rowid * 10, a FROM p ORDER BY a DESC LIMIT 2",
+                "'rowid * 10','a';30,'z';20,'y'",
+            ),
+            (
+                "SELECT DISTINCT rowid % 2 FROM p ORDER BY 1",
+                "'rowid % 2';0;1",
+            ),
+        ],
+    );
+    // sqlite3: "no such column: rowid".
+    for sql in [
+        "SELECT rowid FROM w",
+        "SELECT rowid FROM (SELECT a FROM p) AS q",
+    ] {
+        let err = e.run_query(sql).unwrap_err();
+        assert!(err.to_string().contains("rowid"), "{sql}: {err}");
+    }
+}
+
+/// #605: rowid in UPDATE and DELETE WHERE clauses (sqlite3:
+/// 1,'x',3;2,'y',100).
+#[test]
+fn rowid_in_update_and_delete() {
+    let db = TempDb::new("rowid-dml");
+    let mut e = rowid_engine(&db);
+    e.run_query("UPDATE p SET b = b * 100 WHERE rowid > 1; DELETE FROM p WHERE oid = 3")
+        .unwrap();
+    let rows: Vec<String> = e
+        .run_query("SELECT rowid, a, b FROM p")
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| quote(r))
+        .collect();
+    assert_eq!(rows, ["1,'x',3", "2,'y',100"]);
 }

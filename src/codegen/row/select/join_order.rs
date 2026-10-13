@@ -356,9 +356,12 @@ mod tests {
     #[test]
     fn seekable_tables_true_for_rowid_equality() {
         let t0 = schema("t0", &["id"], vec![]);
-        // is_rowid_reference matches the literal "rowid"/"_rowid_"/"oid"
-        // names regardless of rowid_alias, so this triggers that path.
-        let t1 = schema("t1", &["rowid", "t0_id"], vec![]);
+        // `rowid` the keyword, on a real table: no column is named
+        // rowid, which would shadow it (#605).
+        let t1 = TableSchema {
+            root_page: 3,
+            ..schema("t1", &["t0_id"], vec![])
+        };
         let constraint = eq(col(Some("t1"), "rowid"), col(Some("t0"), "id"));
         let seekable = seekable_tables(&[t0, t1], &[Some(constraint)]);
         assert_eq!(seekable, vec![false, true]);
