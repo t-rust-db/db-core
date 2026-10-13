@@ -256,9 +256,29 @@ pub(crate) fn compile_select_scan<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
 {
+    // #604: an aliased table is known by its alias alone (`SELECT x.abc
+    // FROM t AS x`; `t.abc` is then refused, as in sqlite3). Every scope
+    // this scan builds binds `schema.name`, so rename it here, once, the
+    // way a FROM subquery is already named after its alias. Statistics
+    // and the root page were looked up by the real name before this.
+    let aliased;
+    let schema = match select
+        .from
+        .as_ref()
+        .map(|f| (&f.first.kind, &f.first.alias))
+    {
+        Some((TableRefKind::Name(_), Some(alias))) if !alias.eq_ignore_ascii_case(&schema.name) => {
+            aliased = Rc::new(TableSchema {
+                name: alias.clone(),
+                ..(**schema).clone()
+            });
+            &aliased
+        }
+        _ => schema,
+    };
     // #597: ORDER BY / DISTINCT over an aggregate's output: run the
     // aggregate below without them, then sort or dedup its rows.
-    if super::post_group::needs_post_group(select) {
+    if super::post_group::needs_post_group(select, schema) {
         return super::post_group::compile_post_group(
             em, reg, select, schema, cursors, end_label, catalog, stats, sink,
         );

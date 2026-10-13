@@ -22,6 +22,36 @@ pub(crate) fn column_index(schema: &TableSchema, name: &str) -> Option<usize> {
         .columns
         .iter()
         .position(|c| c.eq_ignore_ascii_case(name))
+        .or_else(|| rowid_index(schema, name))
+}
+
+/// The names a table's rowid answers to when no column has the name.
+pub(crate) const ROWID_NAMES: [&str; 3] = ["rowid", "oid", "_rowid_"];
+
+/// Whether `schema` is a table with a rowid: a real b-tree table (not a
+/// subquery, view or GROUP BY record, which have no root page), not
+/// `WITHOUT ROWID`, not virtual.
+pub(crate) fn has_rowid(schema: &TableSchema) -> bool {
+    schema.root_page > 0 && !schema.without_rowid && !schema.is_virtual
+}
+
+/// #605: `rowid`/`oid`/`_rowid_` when no column has that name: the
+/// column `rowid_alias` marks (the `INTEGER PRIMARY KEY`, or where a
+/// GROUP BY's compacted record keeps the rowid), else on a table with a
+/// rowid [`virtual_rowid_index`].
+fn rowid_index(schema: &TableSchema, name: &str) -> Option<usize> {
+    if !ROWID_NAMES.iter().any(|r| r.eq_ignore_ascii_case(name)) {
+        return None;
+    }
+    schema
+        .rowid_alias
+        .or_else(|| has_rowid(schema).then(|| virtual_rowid_index(schema)))
+}
+
+/// The column index a table without an `INTEGER PRIMARY KEY` reads its
+/// rowid at: one past its last column, read with `Opcode::Rowid` (#605).
+pub(crate) fn virtual_rowid_index(schema: &TableSchema) -> usize {
+    schema.columns.len()
 }
 
 /// #581: a rough, static (no `ANALYZE` data needed) cost class for an

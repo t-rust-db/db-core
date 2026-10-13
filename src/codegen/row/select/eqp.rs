@@ -503,7 +503,32 @@ pub fn explain_query_plan(
     }
     // #597: an aggregate's DISTINCT and ORDER BY each go through a temp
     // b-tree after it, in this order, as sqlite3 reports them.
-    if from.joins.is_empty() && super::post_group::needs_post_group(select) {
+    // #608: a joined aggregate always groups through a sorter, then
+    // dedups and re-sorts its group rows.
+    if !from.joins.is_empty() && (!select.group_by.is_empty() || select_has_aggregate(select)) {
+        for (needed, detail) in [
+            (!select.group_by.is_empty(), "USE TEMP B-TREE FOR GROUP BY"),
+            (
+                select.distinct == Some(Distinctness::Distinct),
+                "USE TEMP B-TREE FOR DISTINCT",
+            ),
+            (!select.order_by.is_empty(), "USE TEMP B-TREE FOR ORDER BY"),
+        ] {
+            if needed {
+                rows.push(EqpRow {
+                    id: next_id,
+                    parent: 0,
+                    notused: 0,
+                    detail: detail.to_string(),
+                });
+            }
+        }
+    }
+    let post_group = from.joins.is_empty()
+        && bindings
+            .first()
+            .is_some_and(|b| super::post_group::needs_post_group(select, &b.schema));
+    if post_group {
         for (needed, detail) in [
             (
                 select.distinct == Some(Distinctness::Distinct),
@@ -531,7 +556,7 @@ pub fn explain_query_plan(
 /// or for an aggregate with ORDER BY/DISTINCT the one
 /// [`super::post_group::aggregate_query`] builds (#597).
 fn aggregate_select(select: &Select, schema: &TableSchema) -> Result<Select, CodegenError> {
-    if super::post_group::needs_post_group(select) {
+    if super::post_group::needs_post_group(select, schema) {
         Ok(super::post_group::aggregate_query(select, schema)?.0)
     } else {
         Ok(select.clone())
@@ -904,12 +929,60 @@ mod mcdc_vectors {
             .collect()
     }
 
-    // codegen_row_select_eqp_explain_query_plan_422934c5:
-    // `from.joins.is_empty() && needs_post_group(select)` (#597).
+    // codegen_row_select_eqp_explain_query_plan_6418db63: a joined
+    // aggregate reports its temp b-trees (#608):
+    // `joined && (group_by || has_aggregate)`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_row_select_eqp_explain_query_plan_422934c5__v1_single_table_ordered_aggregate_reports_the_sort(
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_6418db63__v1_a_joined_group_by_reports_it() {
+        let d = eqp_details("SELECT t.a, count(*) FROM t JOIN u ON u.b = t.a GROUP BY t.a");
+        assert!(
+            d.iter().any(|r| r == "USE TEMP B-TREE FOR GROUP BY"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_6418db63__v2_a_single_table_group_by_reports_once(
     ) {
+        let d = eqp_details("SELECT a + b, count(*) FROM t GROUP BY a + b");
+        assert_eq!(
+            d.iter()
+                .filter(|r| *r == "USE TEMP B-TREE FOR GROUP BY")
+                .count(),
+            1,
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_6418db63__v3_a_joined_aggregate_reports_its_order_by(
+    ) {
+        let d = eqp_details("SELECT count(*) FROM t JOIN u ON u.b = t.a ORDER BY 1");
+        assert!(
+            d.iter().any(|r| r == "USE TEMP B-TREE FOR ORDER BY"),
+            "{d:?}"
+        );
+        assert!(
+            !d.iter().any(|r| r == "USE TEMP B-TREE FOR GROUP BY"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_6418db63__v4_a_plain_join_reports_no_aggregate_rows(
+    ) {
+        let d = eqp_details("SELECT DISTINCT t.a FROM t JOIN u ON u.b = t.a");
+        assert!(!d.iter().any(|r| r.starts_with("USE TEMP B-TREE")), "{d:?}");
+    }
+
+    // #597: which plans report the post-group temp b-trees.
+    #[test]
+    #[allow(non_snake_case)]
+    fn post_group_rows_single_table_ordered_aggregate_reports_the_sort() {
         let d = eqp_details("SELECT a, count(*) FROM t GROUP BY a ORDER BY 2");
         assert!(
             d.iter().any(|r| r == "USE TEMP B-TREE FOR ORDER BY"),
@@ -919,8 +992,7 @@ mod mcdc_vectors {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_row_select_eqp_explain_query_plan_422934c5__v2_a_join_reports_no_post_group_rows(
-    ) {
+    fn post_group_rows_a_join_reports_no_post_group_rows() {
         let d = eqp_details("SELECT DISTINCT t.a FROM t JOIN u ON t.b = u.b");
         assert!(
             !d.iter()
@@ -931,8 +1003,7 @@ mod mcdc_vectors {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_row_select_eqp_explain_query_plan_422934c5__v3_an_ordered_plain_scan_is_not_post_group(
-    ) {
+    fn post_group_rows_an_ordered_plain_scan_is_not_post_group() {
         let d = eqp_details("SELECT a FROM t ORDER BY b");
         assert!(
             !d.iter().any(|r| r == "USE TEMP B-TREE FOR DISTINCT"),
@@ -1051,8 +1122,10 @@ mod mcdc_vectors {
     #[test]
     fn mcdc__codegen_row_select_eqp_explain_query_plan_5836fc83__v2_joined_group_by_is_not_reported(
     ) {
+        // The single-table GROUP BY row is not added for a join; the
+        // joined aggregate reports its own, once (#608).
         let d = eqp_details("SELECT t.a, count(*) FROM t JOIN u ON u.b = t.a GROUP BY t.a");
-        assert!(!d.iter().any(|x| x == TEMP_BTREE), "{d:?}");
+        assert_eq!(d.iter().filter(|x| *x == TEMP_BTREE).count(), 1, "{d:?}");
     }
 
     #[test]

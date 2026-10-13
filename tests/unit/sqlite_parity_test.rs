@@ -121,6 +121,10 @@ fn result_column_names_match_sqlite3() {
         ("SELECT k, upper(k) FROM t GROUP BY k", &["k", "upper(k)"]),
         ("SELECT * FROM vv", &["a", "id+1"]),
         ("SELECT * FROM v2", &["p", "q"]),
+        ("SELECT x.abc FROM t AS x", &["Abc"]),
+        ("SELECT rowid, oid FROM w", &["id", "id"]),
+        ("SELECT rowid, _rowid_ FROM t", &["rowid", "rowid"]),
+        ("SELECT x.abc, X.k FROM t x WHERE x.abc = 1", &["Abc", "k"]),
         ("SELECT * FROM w x JOIN w y USING(a)", &["id", "a", "id"]),
         ("SELECT x.*, y.id FROM w x, w y", &["id", "a", "id"]),
         ("SELECT COUNT(*), k FROM t GROUP BY k", &["COUNT(*)", "k"]),
@@ -149,16 +153,8 @@ fn result_column_names_match_sqlite3() {
 /// Queries sqlite3 answers and the row engine still refuses, with the
 /// headers sqlite3 gives. Each is asserted to still fail: once one runs,
 /// move it into [`result_column_names_match_sqlite3`] and close its issue.
-const KNOWN_GAPS: &[(&str, &[&str], &str)] = &[
-    ("SELECT x.abc FROM t AS x", &["Abc"], "#604"),
-    ("SELECT rowid, oid FROM w", &["id", "id"], "#605"),
-    ("SELECT rowid, _rowid_ FROM t", &["rowid", "rowid"], "#605"),
-    (
-        "SELECT DISTINCT t.k FROM t JOIN u ON t.k = u.k GROUP BY t.k",
-        &["k"],
-        "#608",
-    ),
-];
+const KNOWN_GAPS: &[(&str, &[&str], &str)] =
+    &[("SELECT x FROM (SELECT 1 AS x) WHERE x = 1", &["x"], "#611")];
 
 #[test]
 fn known_gaps_still_fail() {
@@ -388,8 +384,7 @@ fn ordered_aggregates_feed_inserts_and_union_arms() {
 }
 
 /// #597: EXPLAIN QUERY PLAN for ordered and distinct aggregates, as
-/// sqlite3 3.51 reports it. ORDER BY on the GROUP BY keys themselves is
-/// the one difference (an extra sort here, #607), pinned so a fix shows.
+/// sqlite3 3.51 reports it.
 #[test]
 fn aggregate_plans_match_sqlite3() {
     let db = TempDb::new("eqp");
@@ -436,15 +431,10 @@ fn aggregate_plans_match_sqlite3() {
     for (sql, expected) in cases {
         assert_eq!(plan(sql), *expected, "{sql}");
     }
-    // #607: sqlite3 reports only SCAN g / USE TEMP B-TREE FOR GROUP BY.
+    // #607: ORDER BY on the GROUP BY key needs no second sort.
     assert_eq!(
         plan("SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k DESC"),
-        [
-            "SCAN g",
-            "USE TEMP B-TREE FOR GROUP BY",
-            "USE TEMP B-TREE FOR ORDER BY"
-        ],
-        "if this now matches sqlite3, move it into the cases above and close #607"
+        ["SCAN g", "USE TEMP B-TREE FOR GROUP BY"]
     );
 }
 
@@ -477,5 +467,334 @@ fn distinct_after_aggregation_honours_collations() {
             "SELECT DISTINCT k COLLATE BINARY FROM c2 GROUP BY n ORDER BY 1"
         ),
         ["'A'", "'a'", "'b'"]
+    );
+}
+
+/// #604: a table alias qualifies columns in every clause of a
+/// single-table query, including a correlated subquery, and the real
+/// table name no longer does (sqlite3 3.51 results).
+#[test]
+fn table_aliases_qualify_columns_in_single_table_queries() {
+    let db = TempDb::new("alias");
+    let mut e = grouped_engine(&db);
+    let cases: &[(&str, &str)] = &[
+        ("SELECT x.k, x.n FROM g AS x WHERE x.n > 4 ORDER BY x.n", "'a',5;NULL,7;'c',9"),
+        (
+            "SELECT x.k, COUNT(*) FROM g x GROUP BY x.k HAVING COUNT(*) > 1 ORDER BY x.k",
+            "NULL,2;'b',2",
+        ),
+        ("SELECT x.* FROM g x WHERE x.n = 9", "'c',9,'X'"),
+        (
+            "SELECT x.k FROM g x WHERE x.n = (SELECT MAX(y.n) FROM g y WHERE y.k = x.k) ORDER BY x.k",
+            "'A';'a';'b';'c'",
+        ),
+        ("SELECT DISTINCT x.s FROM g x WHERE x.s IS NOT NULL ORDER BY 1", "'X';'x';'y';'z'"),
+        ("SELECT x.n FROM g x ORDER BY x.n DESC LIMIT 2", "9;7"),
+    ];
+    let mut failures = Vec::new();
+    for (sql, expected) in cases {
+        match e.run_query(sql) {
+            Ok(r) => {
+                let got = r
+                    .rows
+                    .iter()
+                    .map(|row| quote(row))
+                    .collect::<Vec<_>>()
+                    .join(";");
+                if got != *expected {
+                    failures.push(format!("{sql}\n    got     {got}\n    sqlite3 {expected}"));
+                }
+            }
+            Err(err) => failures.push(format!("{sql}\n    error: {err}")),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // sqlite3: "no such column: g.k".
+    let err = e.run_query("SELECT g.k FROM g AS x").unwrap_err();
+    assert!(err.to_string().contains("g.k"), "{err}");
+}
+
+fn rowid_engine(db: &TempDb) -> RowEngine {
+    let mut e = RowEngine::open(db.path()).expect("open fixture copy");
+    e.run_query(
+        "CREATE TABLE p(a TEXT, b INT); INSERT INTO p VALUES('x',3),('y',1),('z',2); \
+         CREATE TABLE k(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO k VALUES(10,'p'),(20,'q'); \
+         CREATE TABLE s(rowid TEXT, v INT); INSERT INTO s VALUES('r1',5); \
+         CREATE TABLE s2(rowid INT, v TEXT); INSERT INTO s2 VALUES(5,'a'),(1,'b'); \
+         CREATE TABLE w(a INT PRIMARY KEY, b) WITHOUT ROWID",
+    )
+    .unwrap();
+    e
+}
+
+/// Runs each query and compares sqlite3's `.headers on` + `.mode quote`
+/// output: the header row, then the rows, joined by `;`.
+fn check_cases(e: &mut RowEngine, cases: &[(&str, &str)]) {
+    let mut failures = Vec::new();
+    for (sql, expected) in cases {
+        match e.run_query(sql) {
+            Ok(r) => {
+                let header = r
+                    .columns
+                    .iter()
+                    .map(|c| format!("'{}'", c.replace('\'', "''")))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let got = std::iter::once(header)
+                    .chain(r.rows.iter().map(|row| quote(row)))
+                    .collect::<Vec<_>>()
+                    .join(";");
+                if got != *expected {
+                    failures.push(format!("{sql}\n    got     {got}\n    sqlite3 {expected}"));
+                }
+            }
+            Err(err) => failures.push(format!("{sql}\n    error: {err}")),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+}
+
+/// #605: rowid, oid and _rowid_ (sqlite3 3.51, `.headers on`).
+#[test]
+fn rowid_references_match_sqlite3() {
+    let db = TempDb::new("rowid");
+    let mut e = rowid_engine(&db);
+    check_cases(
+        &mut e,
+        &[
+            ("SELECT rowid, a FROM p", "'rowid','a';1,'x';2,'y';3,'z'"),
+            (
+                "SELECT oid, _rowid_, ROWID FROM p WHERE rowid > 1",
+                "'rowid','rowid','rowid';2,2,2;3,3,3",
+            ),
+            ("SELECT a FROM p WHERE rowid = 2", "'a';'y'"),
+            (
+                "SELECT rowid + 1, typeof(rowid) FROM p WHERE oid < 3",
+                "'rowid + 1','typeof(rowid)';2,'integer';3,'integer'",
+            ),
+            (
+                "SELECT a FROM p WHERE rowid IN (1, 3) ORDER BY a DESC",
+                "'a';'z';'x'",
+            ),
+            (
+                "SELECT rowid, a FROM p ORDER BY b",
+                "'rowid','a';2,'y';3,'z';1,'x'",
+            ),
+            (
+                "SELECT rowid, a FROM p ORDER BY rowid DESC",
+                "'rowid','a';3,'z';2,'y';1,'x'",
+            ),
+            (
+                "SELECT rowid, id, v FROM k WHERE rowid >= 20",
+                "'id','id','v';20,20,'q'",
+            ),
+            ("SELECT rowid, v FROM s", "'rowid','v';'r1',5"),
+            ("SELECT v FROM s WHERE rowid = 'r1'", "'v';5"),
+            (
+                "SELECT x.rowid, x.a FROM p x WHERE x.rowid = 3",
+                "'rowid','a';3,'z'",
+            ),
+            (
+                "SELECT COUNT(*), MAX(rowid) FROM p",
+                "'COUNT(*)','MAX(rowid)';3,3",
+            ),
+            (
+                "SELECT b % 2 AS par, MAX(rowid) FROM p GROUP BY b % 2 ORDER BY 1",
+                "'par','MAX(rowid)';0,3;1,2",
+            ),
+            // After a sort the rowid comes from the sort record, also inside
+            // an expression; `id + 1` used to read 0 there (sqlite3 21, 11).
+            (
+                "SELECT id + 1, v FROM k ORDER BY v DESC",
+                "'id + 1','v';21,'q';11,'p'",
+            ),
+            (
+                "SELECT rowid * 10, a FROM p ORDER BY a DESC LIMIT 2",
+                "'rowid * 10','a';30,'z';20,'y'",
+            ),
+            (
+                "SELECT DISTINCT rowid % 2 FROM p ORDER BY 1",
+                "'rowid % 2';0;1",
+            ),
+        ],
+    );
+    // sqlite3: "no such column: rowid".
+    for sql in [
+        "SELECT rowid FROM w",
+        "SELECT rowid FROM (SELECT a FROM p) AS q",
+        "SELECT rowid FROM (SELECT a FROM p)",
+    ] {
+        let err = e.run_query(sql).unwrap_err();
+        assert!(err.to_string().contains("rowid"), "{sql}: {err}");
+    }
+}
+
+/// #605: rowid in UPDATE and DELETE WHERE clauses (sqlite3:
+/// 1,'x',3;2,'y',100).
+#[test]
+fn rowid_in_update_and_delete() {
+    let db = TempDb::new("rowid-dml");
+    let mut e = rowid_engine(&db);
+    e.run_query("UPDATE p SET b = b * 100 WHERE rowid > 1; DELETE FROM p WHERE oid = 3")
+        .unwrap();
+    let rows: Vec<String> = e
+        .run_query("SELECT rowid, a, b FROM p")
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| quote(r))
+        .collect();
+    assert_eq!(rows, ["1,'x',3", "2,'y',100"]);
+}
+
+/// #606: a FROM subquery without an alias (sqlite3 3.51, `.headers on`).
+#[test]
+fn unaliased_from_subqueries_match_sqlite3() {
+    let db = TempDb::new("unaliased");
+    let mut e = grouped_engine(&db);
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT c, k FROM (SELECT COUNT(*) AS c, k FROM g GROUP BY k) ORDER BY k DESC",
+                "'c','k';1,'c';2,'b';1,'a';1,'A';2,NULL",
+            ),
+            (
+                "SELECT * FROM (SELECT k FROM g WHERE n > 4) ORDER BY 1",
+                "'k';NULL;'a';'c'",
+            ),
+        ],
+    );
+    // Nothing can qualify an unaliased subquery's columns.
+    let err = e
+        .run_query("SELECT a.k FROM (SELECT k FROM g) JOIN (SELECT k AS k2 FROM g) ON k = k2")
+        .unwrap_err();
+    assert!(err.to_string().contains("a.k"), "{err}");
+}
+
+/// #607: ORDER BY listing the GROUP BY keys orders the groups as they are
+/// formed, with or without an index on the key (sqlite3 3.51). A
+/// descending order walks the index backward; NULLS FIRST on a
+/// descending key still needs the second sort.
+#[test]
+fn ordering_by_the_group_keys_sorts_once() {
+    let db = TempDb::new("group-order");
+    let mut e = grouped_engine(&db);
+    let cases: &[(&str, &str, &[&str])] = &[
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k DESC",
+            "'c',1;'b',2;'a',1;'A',1;NULL,2",
+            &["SCAN g", "USE TEMP B-TREE FOR GROUP BY"],
+        ),
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY 1",
+            "NULL,2;'A',1;'a',1;'b',2;'c',1",
+            &["SCAN g", "USE TEMP B-TREE FOR GROUP BY"],
+        ),
+        (
+            "SELECT k AS key, SUM(n) FROM g GROUP BY k ORDER BY key DESC LIMIT 3",
+            "'c',9;'b',3;'a',5",
+            &["SCAN g", "USE TEMP B-TREE FOR GROUP BY"],
+        ),
+        (
+            "SELECT k, s, COUNT(*) FROM g GROUP BY k, s ORDER BY k DESC, s DESC",
+            "'c','X',1;'b','y',2;'a','x',1;'A','x',1;NULL,'z',1;NULL,NULL,1",
+            &["SCAN g", "USE TEMP B-TREE FOR GROUP BY"],
+        ),
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k DESC NULLS FIRST",
+            "NULL,2;'c',1;'b',2;'a',1;'A',1",
+            &[
+                "SCAN g",
+                "USE TEMP B-TREE FOR GROUP BY",
+                "USE TEMP B-TREE FOR ORDER BY",
+            ],
+        ),
+    ];
+    let rows = |e: &mut RowEngine, sql: &str| -> String {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"))
+            .rows
+            .iter()
+            .map(|r| quote(r))
+            .collect::<Vec<_>>()
+            .join(";")
+    };
+    let plan = |e: &RowEngine, sql: &str| -> Vec<String> {
+        e.explain_plan(sql)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.detail)
+            .collect()
+    };
+    for (sql, expected, expected_plan) in cases {
+        assert_eq!(rows(&mut e, sql), *expected, "{sql}");
+        assert_eq!(plan(&e, sql), *expected_plan, "{sql}");
+    }
+    // With an index on the key: the same rows, and the groups come off the
+    // index (backward for DESC) with no temp b-tree at all.
+    e.run_query("CREATE INDEX gk ON g(k)").unwrap();
+    for (sql, expected, _) in cases {
+        assert_eq!(rows(&mut e, sql), *expected, "{sql} (indexed)");
+    }
+    let indexed = plan(&e, "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k DESC");
+    assert!(
+        indexed.iter().any(|r| r.contains("INDEX gk")),
+        "{indexed:?}"
+    );
+    assert!(
+        !indexed.iter().any(|r| r.contains("TEMP B-TREE")),
+        "{indexed:?}"
+    );
+}
+
+/// #608: DISTINCT over a joined aggregate (sqlite3 3.51, `.headers on`):
+/// a duplicate group row is dropped before ORDER BY and LIMIT see it.
+#[test]
+fn distinct_over_a_joined_aggregate_matches_sqlite3() {
+    let db = TempDb::new("joined-distinct");
+    let mut e = grouped_engine(&db);
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT DISTINCT a.s FROM g a JOIN g b ON a.k = b.k GROUP BY a.k, a.s ORDER BY 1",
+                "'s';'X';'x';'y'",
+            ),
+            (
+                "SELECT DISTINCT COUNT(*) FROM g a JOIN g b ON a.k = b.k GROUP BY a.k ORDER BY 1 DESC",
+                "'COUNT(*)';4;1",
+            ),
+            (
+                "SELECT DISTINCT COUNT(*) FROM g a JOIN g b ON a.k = b.k GROUP BY a.k ORDER BY 1 DESC LIMIT 1",
+                "'COUNT(*)';4",
+            ),
+        ],
+    );
+    // The plan: GROUP BY, DISTINCT and ORDER BY temp b-trees after the
+    // join, as sqlite3 lists them.
+    let plan: Vec<String> = e
+        .explain_plan(
+            "SELECT DISTINCT COUNT(*) FROM g a JOIN g b ON a.k = b.k GROUP BY a.k ORDER BY 1 DESC",
+        )
+        .unwrap()
+        .into_iter()
+        .map(|r| r.detail)
+        .collect();
+    let temp: Vec<&String> = plan.iter().filter(|r| r.contains("TEMP B-TREE")).collect();
+    assert_eq!(
+        temp,
+        [
+            "USE TEMP B-TREE FOR GROUP BY",
+            "USE TEMP B-TREE FOR DISTINCT",
+            "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "{plan:?}"
     );
 }

@@ -61,6 +61,22 @@ pub(super) fn result_column_collations(
 /// temporaries before settling on its final result register), then
 /// `Opcode::Copy`'d into a freshly reserved contiguous run — mirroring
 /// the aggregate/snapshot dest-block pattern below (#141).
+/// The scope a projection reads `cursor` through: a materialized
+/// record's when `pseudo` (#605: its rowid is a stored field).
+fn record_scope(
+    schema: &Rc<TableSchema>,
+    cursor: i32,
+    pseudo: bool,
+    catalog: &[TableSchema],
+) -> Scope {
+    let scope = Scope::single_shared(schema, cursor).with_catalog(catalog);
+    if pseudo {
+        scope.with_record_cursors()
+    } else {
+        scope
+    }
+}
+
 pub(super) fn compile_row_values(
     em: &mut Emitter,
     reg: &mut RegAlloc,
@@ -84,7 +100,7 @@ pub(super) fn compile_row_values(
                         name: (*name).to_string(),
                     })?;
                 let r = reg.alloc();
-                if pseudo && schema.rowid_alias == Some(idx) {
+                if pseudo && is_rowid_field(schema, idx) {
                     // `cursor` is a post-`ORDER BY` `OpenPseudo` re-read
                     // of an already-materialized record (see
                     // `compile_sorted_scan`'s pass 1), not a live table
@@ -137,7 +153,7 @@ pub(super) fn compile_row_values(
                     let pseudo_rowid_idx = pseudo
                         .then(|| column_index(schema, name))
                         .flatten()
-                        .filter(|idx| schema.rowid_alias == Some(*idx));
+                        .filter(|idx| is_rowid_field(schema, *idx));
                     if let Some(idx) = pseudo_rowid_idx {
                         let r = reg.alloc();
                         em.emit(Instruction::new(
@@ -154,7 +170,7 @@ pub(super) fn compile_row_values(
                             em,
                             reg,
                             expr_scope.get_or_insert_with(|| {
-                                Scope::single_shared(schema, cursor).with_catalog(catalog)
+                                record_scope(schema, cursor, pseudo, catalog)
                             }),
                             expr,
                         )?
@@ -163,9 +179,8 @@ pub(super) fn compile_row_values(
                     compile_value(
                         em,
                         reg,
-                        expr_scope.get_or_insert_with(|| {
-                            Scope::single_shared(schema, cursor).with_catalog(catalog)
-                        }),
+                        expr_scope
+                            .get_or_insert_with(|| record_scope(schema, cursor, pseudo, catalog)),
                         expr,
                     )?
                 }
@@ -365,7 +380,7 @@ mod mcdc_vectors {
 
     // --- projection_78: `pseudo && rowid_alias == idx` --------------------
     #[test]
-    fn mcdc__codegen_row_select_projection_compile_row_values_7db81c2f__v1_sorted_rowid_alias_is_re_read_as_a_pseudo_column(
+    fn mcdc__codegen_row_select_projection_compile_row_values_6bab8a72__v1_sorted_rowid_alias_is_re_read_as_a_pseudo_column(
     ) {
         let p = compile(
             "SELECT a FROM t ORDER BY b",
@@ -383,7 +398,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_select_projection_compile_row_values_7db81c2f__v2_unsorted_rowid_alias_is_read_via_rowid(
+    fn mcdc__codegen_row_select_projection_compile_row_values_6bab8a72__v2_unsorted_rowid_alias_is_read_via_rowid(
     ) {
         let p = compile("SELECT a FROM t", &schema("INTEGER", false, true));
         assert!(!has(&p, Opcode::OpenPseudo));
@@ -391,7 +406,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_select_projection_compile_row_values_7db81c2f__v3_sorted_ordinary_column_never_touches_rowid(
+    fn mcdc__codegen_row_select_projection_compile_row_values_6bab8a72__v3_sorted_ordinary_column_never_touches_rowid(
     ) {
         let p = compile(
             "SELECT a FROM t ORDER BY b",
@@ -399,5 +414,94 @@ mod mcdc_vectors {
         );
         assert!(has(&p, Opcode::OpenPseudo));
         assert!(!has(&p, Opcode::Rowid));
+    }
+
+    // --- limit_scan 7d7c81b0 (#605): a sort record carries the rowid when
+    // `has_rowid && rowid_alias.is_none() && reads_rowid`.
+    fn rowids(program: &Program) -> usize {
+        program
+            .instructions
+            .iter()
+            .filter(|i| i.opcode == Opcode::Rowid)
+            .count()
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_limit_scan_compile_sorted_scan_7d7c81b0__v1_a_read_rowid_is_stored_in_the_sort_record(
+    ) {
+        let p = compile(
+            "SELECT rowid, a FROM t ORDER BY b",
+            &schema("TEXT", false, false),
+        );
+        assert_eq!(rowids(&p), 1, "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_limit_scan_compile_sorted_scan_7d7c81b0__v2_without_rowid_has_no_rowid(
+    ) {
+        let without = TableSchema {
+            without_rowid: true,
+            ..schema("TEXT", false, false)
+        };
+        let compiled = compile_select_with_catalog(
+            &select("SELECT oid FROM t ORDER BY b"),
+            &without,
+            std::slice::from_ref(&without),
+        );
+        assert!(compiled.is_err());
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_limit_scan_compile_sorted_scan_7d7c81b0__v3_an_integer_primary_key_is_already_a_field(
+    ) {
+        let p = compile(
+            "SELECT rowid, b FROM t ORDER BY b",
+            &schema("INTEGER", false, true),
+        );
+        // The INTEGER PRIMARY KEY's own read only; no extra rowid field.
+        assert_eq!(rowids(&p), 1, "{p:?}");
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_limit_scan_compile_sorted_scan_7d7c81b0__v4_a_query_not_reading_rowid_stores_none(
+    ) {
+        let p = compile("SELECT a FROM t ORDER BY b", &schema("TEXT", false, false));
+        assert_eq!(rowids(&p), 0, "{p:?}");
+    }
+
+    // --- post_group d487362d (#607): `group_order` declines when there is
+    // no GROUP BY, the ORDER BY has another length, or DISTINCT is set.
+    fn group_order_of(sql: &str) -> Option<Vec<bool>> {
+        super::super::post_group::group_order(&select(sql), &schema("TEXT", false, false))
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_post_group_group_order_d487362d__v1_order_by_the_group_key_is_taken(
+    ) {
+        assert_eq!(
+            group_order_of("SELECT a, count(*) FROM t GROUP BY a ORDER BY a DESC"),
+            Some(vec![true])
+        );
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_post_group_group_order_d487362d__v2_no_group_by_declines() {
+        assert_eq!(group_order_of("SELECT count(*) FROM t ORDER BY 1"), None);
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_post_group_group_order_d487362d__v3_a_longer_order_by_declines() {
+        assert_eq!(
+            group_order_of("SELECT a, count(*) FROM t GROUP BY a ORDER BY a, b"),
+            None
+        );
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_post_group_group_order_d487362d__v4_distinct_declines() {
+        assert_eq!(
+            group_order_of("SELECT DISTINCT a FROM t GROUP BY a ORDER BY a"),
+            None
+        );
     }
 }

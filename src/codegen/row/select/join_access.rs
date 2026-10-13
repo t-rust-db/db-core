@@ -953,7 +953,12 @@ mod tests {
     #[test]
     fn choose_join_access_rowid_seek() {
         let t0 = binding(schema("t0", &["id"], vec![]), None);
-        let t1 = schema("t1", &["rowid", "name"], vec![]);
+        // `rowid` the keyword, on a real table (a column named `rowid`
+        // would shadow it, #605).
+        let t1 = TableSchema {
+            root_page: 2,
+            ..schema("t1", &["name"], vec![])
+        };
         let t1b = binding(t1, None);
         let on_expr = eq(col(Some("t1"), "rowid"), col(Some("t0"), "id"));
         let result = choose_join_access(&t1b, &on_expr, &[t0]);
@@ -1022,7 +1027,13 @@ mod tests {
     #[test]
     fn choose_join_access_rhs_belongs_to_binding() {
         let t0 = binding(schema("t0", &["id"], vec![]), None);
-        let t1b = binding(schema("t1", &["rowid"], vec![]), None);
+        let t1b = binding(
+            TableSchema {
+                root_page: 2,
+                ..schema("t1", &["name"], vec![])
+            },
+            None,
+        );
         // lhs belongs to prior t0, rhs belongs to t1 -> swapped branch.
         let on_expr = eq(col(Some("t0"), "id"), col(Some("t1"), "rowid"));
         let result = choose_join_access(&t1b, &on_expr, &[t0]);

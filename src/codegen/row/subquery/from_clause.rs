@@ -35,7 +35,7 @@ pub(crate) fn resolve_subquery_schema(
                 .to_string(),
         });
     };
-    let schema = catalog
+    let mut schema = catalog
         .iter()
         .find(|s| s.name.eq_ignore_ascii_case(name))
         .cloned()
@@ -45,6 +45,11 @@ pub(crate) fn resolve_subquery_schema(
                  catalog"
             ),
         })?;
+    // #604: an aliased table is known by its alias alone, as in the
+    // single-table scan (`compile_select_scan`).
+    if let Some(alias) = &from.first.alias {
+        schema.name = alias.clone();
+    }
     Ok(Some(schema))
 }
 
@@ -148,11 +153,14 @@ fn subquery_result_schema(
     }
 }
 
+/// The name an unaliased FROM subquery is bound under (#606).
+pub(crate) const UNALIASED_SUBQUERY: &str = "(subquery)";
+
 /// Resolves `table_ref` to the [`TableSchema`] the rest of codegen
 /// should treat it as: a real catalog lookup by name, or (#257) the
 /// synthetic schema describing a `FROM`-subquery's own projected
-/// columns (its `name` is `table_ref`'s alias — mandatory for a
-/// subquery, enforced by the parser). Used by callers (the `sqlite-rs`
+/// columns (its `name` is `table_ref`'s alias, or [`UNALIASED_SUBQUERY`]
+/// without one, #606). Used by callers (the `sqlite-rs`
 /// CLI, `INSERT ... SELECT`) that need a `TableSchema` up front, before
 /// the codegen pass that actually emits the materialization
 /// (`compile_select_with_catalog`/`compile_select_joined` call
@@ -173,14 +181,13 @@ pub fn resolve_from_table_schema(
             let table_refs = subquery_own_table_refs(subquery)?;
             let schemas = resolve_subquery_schemas(&table_refs, catalog)?;
             let mut schema = subquery_result_schema(subquery, &table_refs, &schemas);
-            // The grammar requires an alias on a FROM subquery, so `None`
-            // here is a planner bug, not an unnamed derived table (#232).
+            // An unaliased subquery (#606) gets a name no identifier can
+            // match, as sqlite3's `(subquery-N)`: its columns resolve only
+            // unqualified.
             schema.name = table_ref
                 .alias
                 .clone()
-                .ok_or_else(|| CodegenError::Internal {
-                    reason: "FROM subquery reached codegen without an alias".to_string(),
-                })?;
+                .unwrap_or_else(|| UNALIASED_SUBQUERY.to_string());
             Ok(schema)
         }
     }

@@ -766,11 +766,10 @@ fn columns_needed_for_projection(
 
     let mut indices = std::collections::HashSet::with_capacity(names.len());
     for name in &names {
-        match schema
-            .columns
-            .iter()
-            .position(|c| c.eq_ignore_ascii_case(name))
-        {
+        // `column_index`, not a plain name match: `rowid` resolves to the
+        // table's virtual rowid column (#605), which the compacted record
+        // then carries.
+        match column_index(schema, name) {
             Some(idx) => {
                 indices.insert(idx);
             }
@@ -793,7 +792,8 @@ fn ordered_needed_columns(
     needed: &std::collections::HashSet<usize>,
     schema: &TableSchema,
 ) -> Vec<usize> {
-    (0..schema.columns.len())
+    // `..=`: the virtual rowid column (#605) sits one past the last.
+    (0..=schema.columns.len())
         .filter(|i| needed.contains(i))
         .collect()
 }
@@ -803,7 +803,8 @@ fn ordered_needed_columns(
 /// or `None` if it was pruned away entirely. Sized to `schema.columns.len()`
 /// so every lookup is a plain (safe, bounds-checked) `.get()`.
 fn compact_index_map(needed_order: &[usize], schema_len: usize) -> Vec<Option<usize>> {
-    let mut map = vec![None; schema_len];
+    // One past the columns: the virtual rowid column (#605).
+    let mut map = vec![None; schema_len.saturating_add(1)];
     for (pos, &orig) in needed_order.iter().enumerate() {
         if let Some(slot) = map.get_mut(orig) {
             *slot = Some(pos);
@@ -827,7 +828,12 @@ fn compact_schema(
 ) -> Result<TableSchema, CodegenError> {
     // `needed_order` is built from `schema` a few lines up; an index past
     // its width is a planner bug, not an unnamed/untyped column (#232).
+    // The virtual rowid column (#605) is stored as a field named `rowid`.
+    let virtual_rowid = |i: usize| i == virtual_rowid_index(schema) && has_rowid(schema);
     let column = |i: usize| {
+        if virtual_rowid(i) {
+            return Ok("rowid".to_string());
+        }
         schema
             .columns
             .get(i)
@@ -839,7 +845,12 @@ fn compact_schema(
     // A column with no entry in `column_types` has no declared type --
     // SQLite's "no affinity" case, spelled as an empty decltype -- so the
     // empty string is the semantics here, not a fallback.
-    let column_type = |i: usize| schema.column_types.get(i).cloned().unwrap_or_default();
+    let column_type = |i: usize| {
+        if virtual_rowid(i) {
+            return "INTEGER".to_string();
+        }
+        schema.column_types.get(i).cloned().unwrap_or_default()
+    };
     Ok(TableSchema {
         name: schema.name.clone(),
         root_page: 0,
@@ -863,8 +874,11 @@ fn compact_schema(
         is_virtual: false,
         sql: String::new(),
         indexes: Vec::new(),
+        // Where the record keeps the rowid: the INTEGER PRIMARY KEY's
+        // position, or the virtual rowid column's (#605).
         rowid_alias: schema
             .rowid_alias
+            .or_else(|| has_rowid(schema).then(|| virtual_rowid_index(schema)))
             .and_then(|orig| needed_order.iter().position(|&i| i == orig)),
     })
 }
@@ -899,7 +913,7 @@ fn compile_row_values_compact(
 /// `subquery::correlation::walk_expr_for_correlation` — see that
 /// function's doc for why a subquery-bearing expression bails
 /// conservatively rather than being reasoned through.
-fn walk_expr_for_column_refs(
+pub(super) fn walk_expr_for_column_refs(
     expr: &Expr,
     names: &mut std::collections::HashSet<String>,
     bail: &mut bool,
@@ -1166,7 +1180,12 @@ where
     let needed_order = ordered_needed_columns(&needed_columns, schema);
     let compact_of = compact_index_map(&needed_order, schema.columns.len());
     let pseudo_schema = compact_schema(schema, &needed_order)?;
-    let mut pseudo_scope = Scope::single(&pseudo_schema, cursors.pseudo).with_catalog(catalog);
+    // A record cursor (#605): the rowid is a stored field here, and
+    // reading it as `Opcode::Rowid` answered 0 (`MAX(id)` over an
+    // INTEGER PRIMARY KEY in a GROUP BY).
+    let mut pseudo_scope = Scope::single(&pseudo_schema, cursors.pseudo)
+        .with_catalog(catalog)
+        .with_record_cursors();
     if let Some(outer) = outer_scope {
         pseudo_scope = pseudo_scope.with_outer(outer.clone());
     }
@@ -1192,6 +1211,8 @@ where
     // closure on whichever path actually runs (exactly one of the two
     // branches below), so it's still correct for the single
     // `sorter_open_addr` patch after either one.
+    // #607: groups formed in ORDER BY's order, when it lists the keys.
+    let directions = super::post_group::group_order(select, schema).unwrap_or_default();
     let mut sort_keys = Vec::with_capacity(group_targets.len());
     let mut emit_pass1_row = |em: &mut Emitter, reg: &mut RegAlloc| -> Result<(), CodegenError> {
         let first = compile_row_values_compact(em, reg, schema, &needed_order, cursors.table)?;
@@ -1214,13 +1235,14 @@ where
                     key_index(r, first)?
                 }
             };
+            let descending = directions.get(sort_keys.len()).copied().unwrap_or(false);
             sort_keys.push(SortKeyColumn {
                 index,
-                descending: false,
+                descending,
                 collation: collation_of(expr)
                     .or_else(|| expr_collation(&table_scope, expr))
                     .unwrap_or(Collation::Binary),
-                nulls_first: true,
+                nulls_first: !descending,
             });
         }
 
@@ -1608,13 +1630,17 @@ pub(super) fn group_by_index_ordering(
     else {
         return Ok(None);
     };
+    // #607: in ORDER BY's direction when it lists the keys, so a
+    // descending ORDER BY walks the index backward.
+    let directions = super::post_group::group_order(select, schema).unwrap_or_default();
     let plans: Vec<OrderByPlan> = select
         .group_by
         .iter()
         .zip(&group_targets)
-        .map(|(expr, target)| OrderByPlan {
+        .enumerate()
+        .map(|(i, (expr, target))| OrderByPlan {
             target: target.clone(),
-            descending: false,
+            descending: directions.get(i).copied().unwrap_or(false),
             collation: collation_of(expr).unwrap_or_else(|| match target {
                 OrderByTarget::Column(idx) => schema
                     .column_collations
@@ -1623,7 +1649,7 @@ pub(super) fn group_by_index_ordering(
                     .unwrap_or(Collation::Binary),
                 OrderByTarget::Expr(_) => Collation::Binary,
             }),
-            nulls_first: true,
+            nulls_first: !directions.get(i).copied().unwrap_or(false),
         })
         .collect();
     Ok(super::index_scan::find_ordering_index(schema, &plans))

@@ -526,6 +526,11 @@ pub(crate) struct Scope {
     /// subquery's lookup simply misses and it falls through to the
     /// unmodified per-row [`subquery::compile_scalar_subquery`] path.
     pub(crate) memoized: std::rc::Rc<HashMap<usize, subquery::MemoizedSubquery>>,
+    /// Cursors that re-read a materialized row (an `OpenPseudo` over a
+    /// sorter record), not a b-tree: the rowid, or the `INTEGER PRIMARY
+    /// KEY` column, is a record field there, never `Opcode::Rowid`
+    /// (#605). Reading it with `Rowid` answered 0.
+    pub(crate) record_cursors: Vec<i32>,
 }
 
 impl Scope {
@@ -559,7 +564,26 @@ impl Scope {
             dedup_star: vec![std::collections::HashSet::new()],
             hoisted: std::rc::Rc::default(),
             memoized: std::rc::Rc::default(),
+            record_cursors: Vec::new(),
         }
+    }
+
+    /// Marks this scope's own cursors as re-reading materialized records
+    /// (see [`Scope::record_cursors`]).
+    pub(crate) fn with_record_cursors(mut self) -> Self {
+        self.record_cursors
+            .extend(self.tables.iter().map(|b| b.cursor));
+        self
+    }
+
+    /// Whether `cursor` re-reads a materialized record, here or in an
+    /// enclosing scope.
+    pub(crate) fn is_record_cursor(&self, cursor: i32) -> bool {
+        self.record_cursors.contains(&cursor)
+            || self
+                .outer
+                .as_ref()
+                .is_some_and(|o| o.is_record_cursor(cursor))
     }
 
     /// Attaches the full table catalog (#238) so subquery expressions

@@ -35,10 +35,15 @@ impl std::error::Error for ZstdError {}
 type Result<T> = std::result::Result<T, ZstdError>;
 
 pub fn decompress(data: &[u8], uncompressed_size: usize) -> Result<Vec<u8>> {
-    let mut decoder =
-        ruzstd::StreamingDecoder::new(data).map_err(|e| ZstdError::Frame(e.to_string()))?;
+    let decoder = ruzstd::decoding::StreamingDecoder::new(data)
+        .map_err(|e| ZstdError::Frame(e.to_string()))?;
+    // Read at most one byte past the declared size: enough to detect an
+    // oversized frame without letting a hostile page grow `out` unbounded.
+    let limit = u64::try_from(uncompressed_size)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
     let mut out = Vec::with_capacity(uncompressed_size);
-    std::io::Read::read_to_end(&mut decoder, &mut out)
+    std::io::Read::read_to_end(&mut std::io::Read::take(decoder, limit), &mut out)
         .map_err(|e| ZstdError::Read(e.to_string()))?;
     if out.len() != uncompressed_size {
         return Err(ZstdError::SizeMismatch {
@@ -101,6 +106,23 @@ mod tests {
             err.to_string()
                 .starts_with("zstd decompressed size mismatch:"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn an_oversized_frame_stops_one_byte_past_the_declared_size() {
+        let text = "hello hello hello world world world zstd zstd zstd test test test";
+        let compressed = zstd_encode_for_test(text.as_bytes());
+        let err = decompress(&compressed, 4).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ZstdError::SizeMismatch {
+                    expected: 4,
+                    actual: 5
+                }
+            ),
+            "{err:?}"
         );
     }
 

@@ -459,13 +459,9 @@ where
     let table_cursor_count = i32::try_from(n).unwrap_or(0);
 
     if !select.group_by.is_empty() || select_has_aggregate(select) {
-        if select.distinct.is_some() {
-            return Err(CodegenError::Unsupported {
-                reason: "GROUP BY/aggregate combined with DISTINCT and a JOIN is not yet \
-                         supported"
-                    .to_string(),
-            });
-        }
+        // #608: DISTINCT dedups each group row in its own ephemeral index.
+        let distinct_cursor =
+            (select.distinct == Some(Distinctness::Distinct)).then(|| reg.alloc_cursor());
         let implicit_group = select.group_by.is_empty();
         let sort_cursor = cursor_base.saturating_add(table_cursor_count);
         let pseudo_cursor = sort_cursor.saturating_add(1);
@@ -498,6 +494,7 @@ where
             pseudo_cursor,
             flush_cursor,
             order_cursors,
+            distinct_cursor,
             end_label,
             implicit_group,
             sink,
@@ -785,27 +782,27 @@ mod mcdc_vectors {
     #[test]
     fn mcdc__codegen_row_select_joins_compile_select_joined_scan_8e3e2857__v1_group_by_routes_to_the_grouped_join(
     ) {
-        let e = err_text(
+        // Since #608 the grouped join also takes DISTINCT: it compiles,
+        // grouping (or finalizing aggregates) and deduplicating group rows.
+        let p = ok(
             "SELECT DISTINCT a.k FROM a JOIN b ON a.k = b.k GROUP BY a.k",
             &two_tables(),
         );
-        assert!(
-            e.contains("GROUP BY/aggregate combined with DISTINCT and a JOIN"),
-            "{e}"
-        );
+        assert!(has(&p, Opcode::SorterSort), "{p:?}");
+        assert!(has(&p, Opcode::OpenEphemeral), "{p:?}");
     }
 
     #[test]
     fn mcdc__codegen_row_select_joins_compile_select_joined_scan_8e3e2857__v2_aggregate_without_group_by_routes_to_the_grouped_join(
     ) {
-        let e = err_text(
+        // Since #608 the grouped join also takes DISTINCT: it compiles,
+        // grouping (or finalizing aggregates) and deduplicating group rows.
+        let p = ok(
             "SELECT DISTINCT count(*) FROM a JOIN b ON a.k = b.k",
             &two_tables(),
         );
-        assert!(
-            e.contains("GROUP BY/aggregate combined with DISTINCT and a JOIN"),
-            "{e}"
-        );
+        assert!(has(&p, Opcode::AggFinal), "{p:?}");
+        assert!(has(&p, Opcode::OpenEphemeral), "{p:?}");
     }
 
     #[test]
