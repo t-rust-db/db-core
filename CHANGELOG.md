@@ -4,6 +4,20 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.128.1] - 2026-10-13
+
+### Fixed
+
+- **Row engine result column names follow sqlite3** (#596). An unaliased expression is named by its source text as written; a column by its declared name; `rowid` by the `INTEGER PRIMARY KEY` column; `*` and `t.*` by the sources' names, with `USING`/`NATURAL` columns listed once. Derived tables repeat names as `name:1`, `name:2`. Previously `column1`, `column2`, and so on.
+- **Quoted column names with spaces** (`"x y"`) were read from the catalog as `x` with a garbled type.
+- **`WITH ... SELECT` returned no column names**: it ran as a plain statement.
+- **ORDER BY and DISTINCT over an aggregate in the row engine** (#597). `GROUP BY ... ORDER BY`, ORDER BY on an aggregate without GROUP BY, and DISTINCT over an aggregate were refused. Dedup compares under each column's collation; an ORDER BY term naming no output column becomes a hidden column. EXPLAIN QUERY PLAN reports the temp b-trees as sqlite3 does.
+- **`INSERT ... SELECT ... GROUP BY` with more than one group** inserted wrong rows: the per-group flush shared a fixed cursor with the INSERT's scan.
+
+### Known gaps
+
+Pinned in `tests/unit/sqlite_parity_test.rs` (each asserted to still fail until fixed): #604 alias-qualified columns, #605 `rowid`/`oid`/`_rowid_`, #606 unaliased FROM subqueries. Also #607 (an extra sort for `GROUP BY k ORDER BY k`) and #608 (DISTINCT over a joined aggregate).
+
 ## [0.128.0] - 2026-10-12
 
 ### Added
