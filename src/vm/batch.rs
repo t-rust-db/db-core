@@ -8982,7 +8982,10 @@ mod tests {
             let n = concurrent_now.fetch_add(1, Ordering::SeqCst) + 1;
             concurrent_peak.fetch_max(n, Ordering::SeqCst);
             let drained = if i == 0 {
-                while done.load(Ordering::SeqCst) < others && Instant::now() < deadline {
+                while done.load(Ordering::SeqCst) < others {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 done.load(Ordering::SeqCst) == others
