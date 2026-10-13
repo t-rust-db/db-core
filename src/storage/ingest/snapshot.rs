@@ -127,6 +127,11 @@ impl Snapshot {
             .zip(self.files.iter().map(|m| &**m))
     }
 
+    /// The table's line format.
+    pub(crate) fn format(&self) -> Format {
+        self.manifest.format
+    }
+
     /// The records above `flushed_lsn`, oldest first.
     pub fn pages(&self) -> &[Page] {
         &self.pages

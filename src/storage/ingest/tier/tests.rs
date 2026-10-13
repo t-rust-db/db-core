@@ -67,6 +67,7 @@ fn an_hour_without_pages_is_an_error() {
     let err = write_hour(
         &dir,
         &[],
+        Format::Jsonl,
         &TierOptions::default(),
         &WriterOptions::default(),
     );
@@ -86,7 +87,14 @@ fn an_hour_is_one_file_sorted_across_pages_then_cut() {
         max_file_size: 1,
         ..TierOptions::default()
     };
-    let outputs = write_hour(&dir, &pages, &tier, &WriterOptions::default()).unwrap();
+    let outputs = write_hour(
+        &dir,
+        &pages,
+        Format::Jsonl,
+        &tier,
+        &WriterOptions::default(),
+    )
+    .unwrap();
     assert_eq!(outputs.len(), 1);
     let o = &outputs[0];
     assert_eq!((o.lsn_lo, o.lsn_hi, o.file.rows), (1, 5, 5));
@@ -116,6 +124,7 @@ fn a_day_merge_refuses_inputs_that_do_not_match_the_manifest() {
     let outputs = write_hour(
         &dir,
         &pages,
+        Format::Jsonl,
         &TierOptions::default(),
         &WriterOptions::default(),
     )

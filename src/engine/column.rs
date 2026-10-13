@@ -458,6 +458,8 @@ enum TableSegment<'a, 'm> {
     Page {
         segment: Arc<crate::storage::stream::segment::Segment>,
         requests: Vec<table::Request>,
+        /// The table's format: how its strings are stored (#583).
+        format: crate::storage::stream::detect::Format,
     },
 }
 

@@ -338,7 +338,12 @@ impl TableWriter {
         let tmp_dir = self.dir.join(TMP_DIR);
         fs::create_dir_all(&tmp_dir)?;
         let tmp = tmp_dir.join(&name);
-        let written = flush::write_file(&tmp, &self.sealed, &self.options.parquet)?;
+        let written = flush::write_file(
+            &tmp,
+            &self.sealed,
+            self.options.format,
+            &self.options.parquet,
+        )?;
         self.crash_point(1)?;
 
         // 2. Publish into data/.
@@ -423,7 +428,13 @@ impl TableWriter {
         // 1. Write under tmp/.
         let tmp = self.dir.join(TMP_DIR).join(&id);
         fs::create_dir_all(&tmp)?;
-        let outputs = tier::write_hour(&tmp, pages, tier_options, &self.options.parquet)?;
+        let outputs = tier::write_hour(
+            &tmp,
+            pages,
+            self.options.format,
+            tier_options,
+            &self.options.parquet,
+        )?;
         self.crash_point(1)?;
 
         // 2. Publish the hour's directory.

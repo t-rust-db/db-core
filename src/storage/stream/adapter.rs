@@ -26,7 +26,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::detect::DetectedParser;
+use super::detect::{DetectedParser, Format};
 use super::file::{LogFile, Refresh};
 use super::segment::{MixedValue, OwnedColumn, Segment};
 use super::Source;
@@ -187,6 +187,47 @@ pub(crate) fn column_values(segment: &Segment, name: &str) -> Option<Vec<Value>>
     Some(col)
 }
 
+/// [`column_values`] as an ingested table stores and reads it (#583): in a
+/// JSON Lines table, string values decode their JSON escapes
+/// ([`crate::json_path::unescape`]), so `{"msg":"a\\"b"}` stores `a"b`, as
+/// any JSON reader would. Tier-3 fields only exist on lines that parsed as
+/// JSON objects; `message` is decoded only where it is a value inside the
+/// line, not a whole line kept as written (a line that is not a JSON
+/// object). `raw` stays the line as written. Other formats are unchanged.
+pub(crate) fn stored_column_values(
+    segment: &Segment,
+    name: &str,
+    format: Format,
+) -> Option<Vec<Value>> {
+    let mut values = column_values(segment, name)?;
+    if format != Format::Jsonl || name == "raw" {
+        return Some(values);
+    }
+    for (i, value) in values.iter_mut().enumerate() {
+        let Value::Str(text) = value else {
+            continue;
+        };
+        if name == "message" && is_whole_line(segment, i, text) {
+            continue;
+        }
+        if let std::borrow::Cow::Owned(decoded) = crate::json_path::unescape(text) {
+            *value = Value::Str(decoded.into());
+        }
+    }
+    Some(values)
+}
+
+/// Whether `message` is row `i`'s entire line (line terminator aside).
+fn is_whole_line(segment: &Segment, i: usize, message: &str) -> bool {
+    let line = segment.raw_line(i);
+    // Trimmed as the JSON Lines parser trims a line before storing it.
+    let end = line
+        .iter()
+        .rposition(|b| !matches!(b, b'\r' | b'\n'))
+        .map_or(0, |last| last.saturating_add(1));
+    line.get(..end) == Some(message.as_bytes())
+}
+
 fn ints(v: &[Option<i64>]) -> Vec<Value> {
     v.iter()
         .map(|x| x.map_or(Value::Null, Value::Int))
@@ -324,6 +365,80 @@ mod tests {
             7,
         );
         Arc::new(v.remove(0))
+    }
+
+    fn jsonl_seg(text: &str) -> Arc<Segment> {
+        let b = Block {
+            file_off: 0,
+            bytes: Arc::from(text.as_bytes()),
+        };
+        let mut v = Segment::seal_block(
+            &b,
+            &Source::new(SourceKind::File, "t"),
+            &crate::storage::stream::jsonl::JsonlParser::new(),
+            7,
+        );
+        Arc::new(v.remove(0))
+    }
+
+    fn strs(values: Vec<Value>) -> Vec<String> {
+        values.iter().map(ToString::to_string).collect()
+    }
+
+    // storage_stream_adapter_stored_column_values_2ad2bd15:
+    // `format != Format::Jsonl || name == "raw"`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_adapter_stored_column_values_2ad2bd15__v1_json_field_is_decoded() {
+        let s = jsonl_seg("{\"u\":\"a\\\"b\"}\n");
+        let got = stored_column_values(&s, "u", Format::Jsonl).unwrap();
+        assert_eq!(strs(got), vec!["a\"b"]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_adapter_stored_column_values_2ad2bd15__v2_other_formats_keep_escapes() {
+        let s = jsonl_seg("{\"u\":\"a\\\"b\"}\n");
+        let got = stored_column_values(&s, "u", Format::Logfmt).unwrap();
+        assert_eq!(strs(got), vec![r#"a\"b"#]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_adapter_stored_column_values_2ad2bd15__v3_raw_stays_the_line() {
+        let s = jsonl_seg("{\"u\":\"a\\\"b\"}\n");
+        let got = stored_column_values(&s, "raw", Format::Jsonl).unwrap();
+        assert_eq!(strs(got), vec![r#"{"u":"a\"b"}"#]);
+    }
+
+    // storage_stream_adapter_stored_column_values_029cef6d:
+    // `name == "message" && is_whole_line(segment, i, text)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_adapter_stored_column_values_029cef6d__v1_a_plain_line_message_is_kept()
+    {
+        let s = jsonl_seg("C:\\new\r\n");
+        let got = stored_column_values(&s, "message", Format::Jsonl).unwrap();
+        assert_eq!(strs(got), vec![r"C:\new"]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_adapter_stored_column_values_029cef6d__v2_a_json_message_is_decoded() {
+        let s = jsonl_seg("{\"msg\":\"C:\\\\new\"}\n");
+        let got = stored_column_values(&s, "message", Format::Jsonl).unwrap();
+        assert_eq!(strs(got), vec![r"C:\new"]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_stream_adapter_stored_column_values_029cef6d__v3_a_field_is_decoded_whatever_its_text(
+    ) {
+        // A field whose decoded text would also pass the whole-line test
+        // is still decoded: only `message` can be a whole line.
+        let s = jsonl_seg("{\"m\":\"x\\ty\"}\n");
+        let got = stored_column_values(&s, "m", Format::Jsonl).unwrap();
+        assert_eq!(strs(got), vec!["x\ty"]);
     }
 
     #[test]

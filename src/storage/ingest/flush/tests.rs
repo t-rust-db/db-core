@@ -22,7 +22,7 @@ fn write(pages: &[Page]) -> (Vec<u8>, FlushedFile) {
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path =
         std::env::temp_dir().join(format!("db-core-flush-{}-{n}.parquet", std::process::id()));
-    let flushed = write_file(&path, pages, &WriterOptions::default()).unwrap();
+    let flushed = write_file(&path, pages, Format::Jsonl, &WriterOptions::default()).unwrap();
     let bytes = std::fs::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
     (bytes, flushed)
@@ -159,7 +159,7 @@ fn a_field_named_like_a_predefined_column_is_left_out() {
 #[test]
 fn no_pages_is_an_error() {
     let path = std::env::temp_dir().join("db-core-flush-none.parquet");
-    assert!(write_file(&path, &[], &WriterOptions::default()).is_err());
+    assert!(write_file(&path, &[], Format::Jsonl, &WriterOptions::default()).is_err());
 }
 
 #[test]
@@ -195,4 +195,64 @@ fn convert_covers_every_target_type() {
         widen(ColumnType::Boolean, ColumnType::Int64),
         ColumnType::Utf8
     );
+}
+
+#[test]
+fn json_strings_are_stored_unescaped_and_plain_lines_as_written() {
+    let escaped = r#"{"msg":"a\"b\n","user":"caf\u00e9 \ud83d\ude00","path":"C:\\tmp"}"#;
+    let pages = [page(
+        1,
+        &[escaped, r"plain C:\new line", r#"{"user":"x\qy"}"#],
+    )];
+    let (bytes, _) = write(&pages);
+    let file = ParquetFile::open(&bytes).unwrap();
+    let rg = file.row_group(0).unwrap();
+    let read = |name: &str| rg.read_string_column(column_index(&file, name)).unwrap();
+    assert_eq!(
+        read("message"),
+        vec![
+            Some("a\"b\n".to_string()),
+            // Not a JSON object: the whole line, backslashes and all.
+            Some(r"plain C:\new line".to_string()),
+            None,
+        ]
+    );
+    assert_eq!(
+        read("user"),
+        vec![
+            Some("café 😀".to_string()),
+            None,
+            // An invalid escape is kept as written.
+            Some(r"x\qy".to_string()),
+        ]
+    );
+    assert_eq!(read("path")[0].as_deref(), Some(r"C:\tmp"));
+    // `raw` is the line as written.
+    assert_eq!(read("raw")[0].as_deref(), Some(escaped));
+}
+
+#[test]
+fn other_formats_store_strings_as_written() {
+    let mut head = HeadPage::default();
+    head.push(1, 101, br#"level=info msg="a \"q\"""#);
+    let page = head
+        .snapshot(
+            &Source::new(SourceKind::Stdin, "t"),
+            &DetectedParser::for_format(Format::Logfmt),
+        )
+        .unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "db-core-flush-{}-logfmt.parquet",
+        std::process::id()
+    ));
+    write_file(&path, &[page], Format::Logfmt, &WriterOptions::default()).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let file = ParquetFile::open(&bytes).unwrap();
+    let message = file
+        .row_group(0)
+        .unwrap()
+        .read_string_column(column_index(&file, "message"))
+        .unwrap();
+    assert_eq!(message, vec![Some(r#"a \"q\""#.to_string())]);
 }
