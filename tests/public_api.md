@@ -243,6 +243,8 @@ pub fn db_core::codegen::row::dispatch::leading_keywords(&str) -> alloc::vec::Ve
 pub mod db_core::codegen::row::expr
 pub mod db_core::codegen::row::insert
 pub fn db_core::codegen::row::insert::compile_insert(&db_core::parser::ast::Insert, &db_core::schema::TableSchema, core::option::Option<&[db_core::schema::TableSchema]>) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
+pub mod db_core::codegen::row::names
+pub fn db_core::codegen::row::names::result_column_names(&db_core::parser::ast::Select, &str, &[db_core::schema::TableSchema], &[db_core::schema::ViewSchema]) -> alloc::vec::Vec<alloc::string::String>
 pub mod db_core::codegen::row::planner
 pub struct db_core::codegen::row::planner::IndexSamples
 impl core::clone::Clone for db_core::codegen::row::planner::IndexSamples
@@ -544,6 +546,7 @@ pub fn db_core::codegen::row::output_column_names(&db_core::parser::ast::Select,
 pub fn db_core::codegen::row::push_down_where_predicates(&mut db_core::parser::ast::Select)
 pub fn db_core::codegen::row::resolve_from_table_schema(&db_core::parser::ast::TableRef, &[db_core::schema::TableSchema]) -> core::result::Result<db_core::schema::TableSchema, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::resolve_views(&[db_core::schema::ViewSchema]) -> alloc::vec::Vec<db_core::codegen::row::ResolvedView>
+pub fn db_core::codegen::row::result_column_names(&db_core::parser::ast::Select, &str, &[db_core::schema::TableSchema], &[db_core::schema::ViewSchema]) -> alloc::vec::Vec<alloc::string::String>
 pub mod db_core::codegen::stream
 pub enum db_core::codegen::stream::Scope
 pub db_core::codegen::stream::Scope::All
