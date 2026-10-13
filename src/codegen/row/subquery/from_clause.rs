@@ -35,7 +35,7 @@ pub(crate) fn resolve_subquery_schema(
                 .to_string(),
         });
     };
-    let schema = catalog
+    let mut schema = catalog
         .iter()
         .find(|s| s.name.eq_ignore_ascii_case(name))
         .cloned()
@@ -45,6 +45,11 @@ pub(crate) fn resolve_subquery_schema(
                  catalog"
             ),
         })?;
+    // #604: an aliased table is known by its alias alone, as in the
+    // single-table scan (`compile_select_scan`).
+    if let Some(alias) = &from.first.alias {
+        schema.name = alias.clone();
+    }
     Ok(Some(schema))
 }
 

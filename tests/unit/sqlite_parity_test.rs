@@ -121,6 +121,8 @@ fn result_column_names_match_sqlite3() {
         ("SELECT k, upper(k) FROM t GROUP BY k", &["k", "upper(k)"]),
         ("SELECT * FROM vv", &["a", "id+1"]),
         ("SELECT * FROM v2", &["p", "q"]),
+        ("SELECT x.abc FROM t AS x", &["Abc"]),
+        ("SELECT x.abc, X.k FROM t x WHERE x.abc = 1", &["Abc", "k"]),
         ("SELECT * FROM w x JOIN w y USING(a)", &["id", "a", "id"]),
         ("SELECT x.*, y.id FROM w x, w y", &["id", "a", "id"]),
         ("SELECT COUNT(*), k FROM t GROUP BY k", &["COUNT(*)", "k"]),
@@ -150,7 +152,6 @@ fn result_column_names_match_sqlite3() {
 /// headers sqlite3 gives. Each is asserted to still fail: once one runs,
 /// move it into [`result_column_names_match_sqlite3`] and close its issue.
 const KNOWN_GAPS: &[(&str, &[&str], &str)] = &[
-    ("SELECT x.abc FROM t AS x", &["Abc"], "#604"),
     ("SELECT rowid, oid FROM w", &["id", "id"], "#605"),
     ("SELECT rowid, _rowid_ FROM t", &["rowid", "rowid"], "#605"),
     (
@@ -478,4 +479,48 @@ fn distinct_after_aggregation_honours_collations() {
         ),
         ["'A'", "'a'", "'b'"]
     );
+}
+
+/// #604: a table alias qualifies columns in every clause of a
+/// single-table query, including a correlated subquery, and the real
+/// table name no longer does (sqlite3 3.51 results).
+#[test]
+fn table_aliases_qualify_columns_in_single_table_queries() {
+    let db = TempDb::new("alias");
+    let mut e = grouped_engine(&db);
+    let cases: &[(&str, &str)] = &[
+        ("SELECT x.k, x.n FROM g AS x WHERE x.n > 4 ORDER BY x.n", "'a',5;NULL,7;'c',9"),
+        (
+            "SELECT x.k, COUNT(*) FROM g x GROUP BY x.k HAVING COUNT(*) > 1 ORDER BY x.k",
+            "NULL,2;'b',2",
+        ),
+        ("SELECT x.* FROM g x WHERE x.n = 9", "'c',9,'X'"),
+        (
+            "SELECT x.k FROM g x WHERE x.n = (SELECT MAX(y.n) FROM g y WHERE y.k = x.k) ORDER BY x.k",
+            "'A';'a';'b';'c'",
+        ),
+        ("SELECT DISTINCT x.s FROM g x WHERE x.s IS NOT NULL ORDER BY 1", "'X';'x';'y';'z'"),
+        ("SELECT x.n FROM g x ORDER BY x.n DESC LIMIT 2", "9;7"),
+    ];
+    let mut failures = Vec::new();
+    for (sql, expected) in cases {
+        match e.run_query(sql) {
+            Ok(r) => {
+                let got = r
+                    .rows
+                    .iter()
+                    .map(|row| quote(row))
+                    .collect::<Vec<_>>()
+                    .join(";");
+                if got != *expected {
+                    failures.push(format!("{sql}\n    got     {got}\n    sqlite3 {expected}"));
+                }
+            }
+            Err(err) => failures.push(format!("{sql}\n    error: {err}")),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    // sqlite3: "no such column: g.k".
+    let err = e.run_query("SELECT g.k FROM g AS x").unwrap_err();
+    assert!(err.to_string().contains("g.k"), "{err}");
 }
