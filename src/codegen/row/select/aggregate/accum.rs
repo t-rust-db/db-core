@@ -446,7 +446,11 @@ where
         i32::try_from(synthetic_count).unwrap_or(0),
         record_reg,
     ));
-    let flush_cursor = FLUSH_CURSOR;
+    // #597: a cursor of this program's own, not a fixed number -- a
+    // fixed 4 collided with an `INSERT ... SELECT`'s scan cursors (its
+    // pseudo-cursor is 4 there), so every group after the first read the
+    // flush record instead of its sorted row.
+    let flush_cursor = reg.alloc_cursor();
     em.emit(Instruction::new(
         Opcode::OpenPseudo,
         flush_cursor,
@@ -512,8 +516,3 @@ where
     em.place(skip_label);
     Ok(())
 }
-
-/// A cursor number for `flush_group`'s synthetic per-group record —
-/// distinct from [`ScanCursors`]'s four numbers (0-3), which stay live
-/// across every `flush_group` call within the same grouped scan.
-pub(super) const FLUSH_CURSOR: i32 = 4;

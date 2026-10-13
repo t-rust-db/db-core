@@ -153,6 +153,11 @@ const KNOWN_GAPS: &[(&str, &[&str], &str)] = &[
     ("SELECT x.abc FROM t AS x", &["Abc"], "#604"),
     ("SELECT rowid, oid FROM w", &["id", "id"], "#605"),
     ("SELECT rowid, _rowid_ FROM t", &["rowid", "rowid"], "#605"),
+    (
+        "SELECT DISTINCT t.k FROM t JOIN u ON t.k = u.k GROUP BY t.k",
+        &["k"],
+        "#608",
+    ),
 ];
 
 #[test]
@@ -180,4 +185,297 @@ fn renamed_columns_keep_their_values() {
     let r = e.run_query("SELECT abc+1, upper(k) FROM t").unwrap();
     assert_eq!(r.columns, ["abc+1", "upper(k)"]);
     assert_eq!(r.rows, vec![vec![Cell::Int(2), text("A")]]);
+}
+
+/// One row as sqlite3's `.mode quote` prints it.
+fn quote(row: &[Cell]) -> String {
+    row.iter()
+        .map(|c| match c {
+            Cell::Null => "NULL".to_string(),
+            Cell::Int(i) => i.to_string(),
+            Cell::Real(f) => format!("{f:?}"),
+            Cell::Bool(b) => i64::from(*b).to_string(),
+            Cell::Text(s) => format!("'{}'", s.replace('\'', "''")),
+            Cell::Blob(b) => format!(
+                "X'{}'",
+                b.iter().map(|x| format!("{x:02X}")).collect::<String>()
+            ),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn grouped_engine(db: &TempDb) -> RowEngine {
+    let mut e = RowEngine::open(db.path()).expect("open fixture copy");
+    e.run_query(
+        "CREATE TABLE g(k TEXT, n INT, s TEXT); \
+         INSERT INTO g VALUES('a',5,'x'),('b',1,'y'),('b',2,'y'),('c',9,'X'),(NULL,4,'z'),('A',3,'x'),(NULL,7,NULL)",
+    )
+    .unwrap();
+    e
+}
+
+/// #597: ORDER BY and DISTINCT over an aggregate, each result as sqlite3
+/// 3.51 prints it (`.mode quote`, rows joined by `;`). Ties are broken
+/// explicitly wherever sqlite3 leaves the order open.
+#[test]
+fn ordering_and_distinct_after_aggregation_match_sqlite3() {
+    let db = TempDb::new("grouped");
+    let mut e = grouped_engine(&db);
+    let cases: &[(&str, &str)] = &[
+        (
+            "SELECT COUNT(*), k FROM g GROUP BY k ORDER BY k DESC",
+            "1,'c';2,'b';1,'a';1,'A';2,NULL",
+        ),
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k",
+            "NULL,2;'A',1;'a',1;'b',2;'c',1",
+        ),
+        (
+            "SELECT k, SUM(n) FROM g GROUP BY k ORDER BY SUM(n) DESC, k",
+            "NULL,11;'c',9;'a',5;'A',3;'b',3",
+        ),
+        (
+            "SELECT k FROM g GROUP BY k ORDER BY SUM(n), k",
+            "'A';'b';'a';'c';NULL",
+        ),
+        (
+            "SELECT k, COUNT(*) AS c FROM g GROUP BY k ORDER BY c DESC, k",
+            "NULL,2;'b',2;'A',1;'a',1;'c',1",
+        ),
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY 2 DESC, 1 DESC",
+            "'b',2;NULL,2;'c',1;'a',1;'A',1",
+        ),
+        (
+            "SELECT k, MAX(n) FROM g GROUP BY k ORDER BY MAX(n) - MIN(n), k",
+            "'A',3;'a',5;'c',9;'b',2;NULL,7",
+        ),
+        (
+            "SELECT k FROM g GROUP BY k ORDER BY k NULLS LAST",
+            "'A';'a';'b';'c';NULL",
+        ),
+        (
+            "SELECT k FROM g GROUP BY k ORDER BY k DESC NULLS FIRST",
+            "NULL;'c';'b';'a';'A'",
+        ),
+        (
+            "SELECT k FROM g GROUP BY k ORDER BY k COLLATE NOCASE, k",
+            "NULL;'A';'a';'b';'c'",
+        ),
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k HAVING COUNT(*) > 1 ORDER BY k DESC",
+            "'b',2;NULL,2",
+        ),
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k LIMIT 2",
+            "NULL,2;'A',1",
+        ),
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k LIMIT 2 OFFSET 2",
+            "'a',1;'b',2",
+        ),
+        (
+            "SELECT s, COUNT(*) FROM g GROUP BY s ORDER BY 2 DESC, s",
+            "'x',2;'y',2;NULL,1;'X',1;'z',1",
+        ),
+        ("SELECT COUNT(*) FROM g ORDER BY 1", "7"),
+        (
+            "SELECT SUM(n), MAX(n) FROM g ORDER BY SUM(n) DESC LIMIT 1",
+            "31,9",
+        ),
+        (
+            "SELECT DISTINCT COUNT(*) FROM g GROUP BY k ORDER BY 1 DESC",
+            "2;1",
+        ),
+        (
+            "SELECT DISTINCT s FROM g GROUP BY k, s ORDER BY s",
+            "NULL;'X';'x';'y';'z'",
+        ),
+        ("SELECT DISTINCT COUNT(*) FROM g", "7"),
+        (
+            "SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k LIMIT 0",
+            "",
+        ),
+        (
+            "SELECT k, COUNT(*) AS k2 FROM g GROUP BY k ORDER BY k2, k",
+            "'A',1;'a',1;'c',1;NULL,2;'b',2",
+        ),
+        ("SELECT * FROM g WHERE n > 100 GROUP BY k ORDER BY k", ""),
+        (
+            "SELECT a.k, COUNT(*) FROM g a JOIN g b ON a.k = b.k GROUP BY a.k ORDER BY 2, 1",
+            "'A',1;'a',1;'c',1;'b',4",
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (sql, expected) in cases {
+        match e.run_query(sql) {
+            Ok(r) => {
+                let got = r
+                    .rows
+                    .iter()
+                    .map(|row| quote(row))
+                    .collect::<Vec<_>>()
+                    .join(";");
+                if got != *expected {
+                    failures.push(format!("{sql}\n    got     {got}\n    sqlite3 {expected}"));
+                }
+            }
+            Err(err) => failures.push(format!("{sql}\n    error: {err}")),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} of {} differ:\n{}",
+        failures.len(),
+        cases.len(),
+        failures.join("\n")
+    );
+    // Without ORDER BY the row order is open: compare as a set.
+    let mut rows: Vec<String> = e
+        .run_query("SELECT DISTINCT COUNT(*) FROM g GROUP BY k")
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| quote(r))
+        .collect();
+    rows.sort();
+    assert_eq!(rows, ["1", "2"]);
+}
+
+/// The same step behind `INSERT ... SELECT` and inside a UNION arm, which
+/// drive the aggregate scan with their own sinks.
+#[test]
+fn ordered_aggregates_feed_inserts_and_union_arms() {
+    let db = TempDb::new("sinks");
+    let mut e = grouped_engine(&db);
+    e.run_query(
+        "CREATE TABLE top2(k TEXT, c INT); \
+         INSERT INTO top2 SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY COUNT(*) DESC, k LIMIT 2",
+    )
+    .unwrap();
+    let rows = e.run_query("SELECT * FROM top2").unwrap().rows;
+    let got: Vec<String> = rows.iter().map(|r| quote(r)).collect();
+    assert_eq!(got, ["NULL,2", "'b',2"], "sqlite3: NULL,2;'b',2");
+
+    // Without ORDER BY too: every group after the first used to read the
+    // previous group's flush record (a fixed cursor 4 shared with the
+    // INSERT's scan), inserting three wrong rows instead of five.
+    e.run_query(
+        "CREATE TABLE every(k TEXT, c INT); \
+         INSERT INTO every SELECT k, COUNT(*) FROM g GROUP BY k",
+    )
+    .unwrap();
+    let rows = e.run_query("SELECT * FROM every").unwrap().rows;
+    let mut got: Vec<String> = rows.iter().map(|r| quote(r)).collect();
+    got.sort();
+    assert_eq!(
+        got,
+        ["'A',1", "'a',1", "'b',2", "'c',1", "NULL,2"],
+        "sqlite3: NULL,2;'A',1;'a',1;'b',2;'c',1"
+    );
+
+    let rows = e
+        .run_query(
+            "SELECT DISTINCT COUNT(*) FROM g GROUP BY k \
+             UNION ALL SELECT MIN(n) FROM g WHERE n < 3 GROUP BY s",
+        )
+        .unwrap()
+        .rows;
+    let mut got: Vec<String> = rows.iter().map(|r| quote(r)).collect();
+    got.sort();
+    assert_eq!(got, ["1", "1", "2"], "sqlite3: 2;1;1 (arm order open)");
+}
+
+/// #597: EXPLAIN QUERY PLAN for ordered and distinct aggregates, as
+/// sqlite3 3.51 reports it. ORDER BY on the GROUP BY keys themselves is
+/// the one difference (an extra sort here, #607), pinned so a fix shows.
+#[test]
+fn aggregate_plans_match_sqlite3() {
+    let db = TempDb::new("eqp");
+    let e = grouped_engine(&db);
+    let plan = |sql: &str| -> Vec<String> {
+        e.explain_plan(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"))
+            .into_iter()
+            .map(|r| r.detail)
+            .collect()
+    };
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "SELECT k, SUM(n) FROM g GROUP BY k ORDER BY SUM(n)",
+            &[
+                "SCAN g",
+                "USE TEMP B-TREE FOR GROUP BY",
+                "USE TEMP B-TREE FOR ORDER BY",
+            ],
+        ),
+        (
+            "SELECT DISTINCT COUNT(*) FROM g GROUP BY k ORDER BY 1 DESC",
+            &[
+                "SCAN g",
+                "USE TEMP B-TREE FOR GROUP BY",
+                "USE TEMP B-TREE FOR DISTINCT",
+                "USE TEMP B-TREE FOR ORDER BY",
+            ],
+        ),
+        (
+            "SELECT DISTINCT COUNT(*) FROM g GROUP BY k",
+            &[
+                "SCAN g",
+                "USE TEMP B-TREE FOR GROUP BY",
+                "USE TEMP B-TREE FOR DISTINCT",
+            ],
+        ),
+        (
+            "SELECT DISTINCT COUNT(*) FROM g",
+            &["SCAN g", "USE TEMP B-TREE FOR DISTINCT"],
+        ),
+        ("SELECT COUNT(*) FROM g ORDER BY 1", &["SCAN g"]),
+    ];
+    for (sql, expected) in cases {
+        assert_eq!(plan(sql), *expected, "{sql}");
+    }
+    // #607: sqlite3 reports only SCAN g / USE TEMP B-TREE FOR GROUP BY.
+    assert_eq!(
+        plan("SELECT k, COUNT(*) FROM g GROUP BY k ORDER BY k DESC"),
+        [
+            "SCAN g",
+            "USE TEMP B-TREE FOR GROUP BY",
+            "USE TEMP B-TREE FOR ORDER BY"
+        ],
+        "if this now matches sqlite3, move it into the cases above and close #607"
+    );
+}
+
+/// DISTINCT over an aggregate compares under each column's collation: a
+/// NOCASE column dedupes `'a'` and `'A'`, an explicit `COLLATE BINARY`
+/// keeps both (sqlite3: `'a';'b'` and `'A';'a';'b'`).
+#[test]
+fn distinct_after_aggregation_honours_collations() {
+    let db = TempDb::new("collate");
+    let mut e = RowEngine::open(db.path()).expect("open fixture copy");
+    e.run_query(
+        "CREATE TABLE c2(k TEXT COLLATE NOCASE, n INT); \
+         INSERT INTO c2 VALUES('a',1),('A',2),('b',3)",
+    )
+    .unwrap();
+    let rows = |e: &mut RowEngine, sql: &str| -> Vec<String> {
+        e.run_query(sql)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|r| quote(r))
+            .collect()
+    };
+    let nocase = rows(&mut e, "SELECT DISTINCT k FROM c2 GROUP BY n");
+    assert_eq!(nocase.len(), 2, "{nocase:?}");
+    assert!(nocase.contains(&"'b'".to_string()), "{nocase:?}");
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT DISTINCT k COLLATE BINARY FROM c2 GROUP BY n ORDER BY 1"
+        ),
+        ["'A'", "'a'", "'b'"]
+    );
 }

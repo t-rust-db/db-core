@@ -256,17 +256,38 @@ pub(crate) fn compile_select_scan<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
 {
+    // #597: ORDER BY / DISTINCT over an aggregate's output: run the
+    // aggregate below without them, then sort or dedup its rows.
+    if super::post_group::needs_post_group(select) {
+        return super::post_group::compile_post_group(
+            em, reg, select, schema, cursors, end_label, catalog, stats, sink,
+        );
+    }
+    compile_select_scan_body(
+        em, reg, select, schema, cursors, end_label, catalog, stats, sink,
+    )
+}
+
+/// [`compile_select_scan`] past the #597 post-aggregation check: what
+/// [`super::post_group::compile_post_group`] runs for the aggregate
+/// itself (calling back into `compile_select_scan` would instantiate it
+/// with ever deeper sink closures).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn compile_select_scan_body<F>(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    select: &Select,
+    schema: &Rc<TableSchema>,
+    cursors: ScanCursors,
+    end_label: Label,
+    catalog: &[TableSchema],
+    stats: &crate::codegen::row::planner::Stats,
+    sink: &mut F,
+) -> Result<(), CodegenError>
+where
+    F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
+{
     if !select.group_by.is_empty() {
-        if !select.order_by.is_empty() {
-            return Err(CodegenError::Unsupported {
-                reason: "GROUP BY combined with ORDER BY not yet supported".to_string(),
-            });
-        }
-        if select.distinct.is_some() {
-            return Err(CodegenError::Unsupported {
-                reason: "GROUP BY combined with DISTINCT not yet supported".to_string(),
-            });
-        }
         if try_compile_index_ordered_group_by(
             em, reg, select, schema, cursors, end_label, catalog, false, sink,
         )? {
@@ -291,18 +312,6 @@ where
     // row — count(*) = 0, other aggregates NULL — instead of zero
     // rows the way an explicit `GROUP BY` over no matches would).
     if select_has_aggregate(select) {
-        if !select.order_by.is_empty() {
-            return Err(CodegenError::Unsupported {
-                reason: "ORDER BY combined with an aggregate (no GROUP BY) not yet supported"
-                    .to_string(),
-            });
-        }
-        if select.distinct.is_some() {
-            return Err(CodegenError::Unsupported {
-                reason: "DISTINCT combined with an aggregate (no GROUP BY) not yet supported"
-                    .to_string(),
-            });
-        }
         if super::aggregate::try_compile_index_only_count(
             em, reg, select, schema, cursors, catalog, sink,
         )? {

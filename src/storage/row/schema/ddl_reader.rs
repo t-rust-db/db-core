@@ -907,6 +907,27 @@ mod tests {
 
         use super::*;
 
+        // storage_row_schema_ddl_reader_split_column_name_50878681:
+        // `close != ']' && next starts with close` -- a doubled quote is
+        // one quote, except inside `[...]`.
+        #[test]
+        fn mcdc__storage_row_schema_ddl_reader_split_column_name_50878681__v1_doubled_quote_is_one_quote(
+        ) {
+            assert_eq!(column_name(r#""a""b" INT"#), r#"a"b"#);
+        }
+
+        #[test]
+        fn mcdc__storage_row_schema_ddl_reader_split_column_name_50878681__v2_brackets_do_not_escape(
+        ) {
+            assert_eq!(column_name("[a]]b] INT"), "a");
+        }
+
+        #[test]
+        fn mcdc__storage_row_schema_ddl_reader_split_column_name_50878681__v3_a_lone_quote_closes_the_name(
+        ) {
+            assert_eq!(column_name(r#""ab" INT"#), "ab");
+        }
+
         // storage_row_schema_ddl_reader_mask_quotes_and_comments_8c0bc292: `b == b'*' && at(i.saturating_add(1)) == Some(b'/')`
         // in mask_quotes_and_comments's block-comment scan.
         #[test]
