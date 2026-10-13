@@ -206,6 +206,7 @@ mod join_order;
 mod joins;
 mod limit_scan;
 mod order_by;
+mod post_group;
 mod projection;
 mod range_scan;
 

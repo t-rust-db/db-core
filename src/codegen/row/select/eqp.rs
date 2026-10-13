@@ -301,7 +301,7 @@ pub fn explain_query_plan(
         };
         let index_walk = if level == 0 && from.joins.is_empty() {
             aggregate_index_walk_detail(
-                select,
+                &aggregate_select(select, &binding.schema)?,
                 &binding.schema,
                 dispatch,
                 &eqp_display_name(table_ref),
@@ -487,8 +487,9 @@ pub fn explain_query_plan(
     // for #654, which only found this gap via a single-table scenario.
     if from.joins.is_empty() && !select.group_by.is_empty() {
         if let Some(binding) = bindings.first() {
+            let aggregate = aggregate_select(select, &binding.schema)?;
             let index_ordered =
-                super::aggregate::group_by_index_ordering(select, &binding.schema, false)?
+                super::aggregate::group_by_index_ordering(&aggregate, &binding.schema, false)?
                     .is_some();
             if !index_ordered {
                 rows.push(EqpRow {
@@ -500,7 +501,41 @@ pub fn explain_query_plan(
             }
         }
     }
+    // #597: an aggregate's DISTINCT and ORDER BY each go through a temp
+    // b-tree after it, in this order, as sqlite3 reports them.
+    if from.joins.is_empty() && super::post_group::needs_post_group(select) {
+        for (needed, detail) in [
+            (
+                select.distinct == Some(Distinctness::Distinct),
+                "USE TEMP B-TREE FOR DISTINCT",
+            ),
+            (
+                !select.order_by.is_empty() && !select.group_by.is_empty(),
+                "USE TEMP B-TREE FOR ORDER BY",
+            ),
+        ] {
+            if needed {
+                rows.push(EqpRow {
+                    id: next_id,
+                    parent: 0,
+                    notused: 0,
+                    detail: detail.to_string(),
+                });
+            }
+        }
+    }
     Ok(rows)
+}
+
+/// The query whose aggregate a single-table `select` compiles: itself,
+/// or for an aggregate with ORDER BY/DISTINCT the one
+/// [`super::post_group::aggregate_query`] builds (#597).
+fn aggregate_select(select: &Select, schema: &TableSchema) -> Result<Select, CodegenError> {
+    if super::post_group::needs_post_group(select) {
+        Ok(super::post_group::aggregate_query(select, schema)?.0)
+    } else {
+        Ok(select.clone())
+    }
 }
 
 /// The `SCAN t USING [COVERING] INDEX ix` detail for a single-table
@@ -867,6 +902,43 @@ mod mcdc_vectors {
             .into_iter()
             .map(|r| r.detail)
             .collect()
+    }
+
+    // codegen_row_select_eqp_explain_query_plan_422934c5:
+    // `from.joins.is_empty() && needs_post_group(select)` (#597).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_422934c5__v1_single_table_ordered_aggregate_reports_the_sort(
+    ) {
+        let d = eqp_details("SELECT a, count(*) FROM t GROUP BY a ORDER BY 2");
+        assert!(
+            d.iter().any(|r| r == "USE TEMP B-TREE FOR ORDER BY"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_422934c5__v2_a_join_reports_no_post_group_rows(
+    ) {
+        let d = eqp_details("SELECT DISTINCT t.a FROM t JOIN u ON t.b = u.b");
+        assert!(
+            !d.iter()
+                .any(|r| r.starts_with("USE TEMP B-TREE FOR DISTINCT")),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_422934c5__v3_an_ordered_plain_scan_is_not_post_group(
+    ) {
+        let d = eqp_details("SELECT a FROM t ORDER BY b");
+        assert!(
+            !d.iter().any(|r| r == "USE TEMP B-TREE FOR DISTINCT"),
+            "{d:?}"
+        );
+        assert!(!d.iter().any(|r| r.contains("GROUP BY")), "{d:?}");
     }
 
     // codegen_row_select_eqp_explain_query_plan_7c74682c / codegen_row_select_eqp_explain_query_plan_7c74682c_2: `level == 0 && direct_scan && access.is_none() && covering.is_none()`

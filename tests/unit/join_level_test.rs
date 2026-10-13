@@ -127,20 +127,13 @@ fn using_join_dedups_the_shared_column_under_star() {
          INSERT INTO uj_b(k, w) VALUES (1, 100)",
     )
     .unwrap();
-    // `SELECT *` over a `USING` join reports the shared column once at
-    // the *row* level, not once per side -- `dedup_star` bookkeeping in
-    // `resolve_join_constraint`. The header count (`derive_headers`,
-    // via `select_result_column_count_joined`) doesn't consult that
-    // same dedup -- a documented narrow spot on that helper -- so it
-    // over-counts by the one deduped column here; the actual row width
-    // (asserted below) is what a client renders against.
+    // `SELECT *` over a `USING` join reports the shared column once, in
+    // the header as in the row: sqlite3's `id|k|v|id|w` (#596; the header
+    // used to be six positional `columnN` names for five values).
     let result = e
         .run_query("SELECT * FROM uj_a JOIN uj_b USING (k)")
         .unwrap();
-    assert_eq!(
-        result.columns,
-        ["column1", "column2", "column3", "column4", "column5", "column6"]
-    );
+    assert_eq!(result.columns, ["id", "k", "v", "id", "w"]);
     assert_eq!(ints(&result.rows), vec![vec![1, 1, 10, 1, 100]]);
 }
 

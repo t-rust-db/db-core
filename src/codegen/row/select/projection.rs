@@ -27,7 +27,10 @@ pub(super) fn result_columns(select: &Select, schema: &TableSchema) -> Vec<Resul
 /// its schema-declared `COLLATE` (default [`Collation::Binary`]) —
 /// mirrors [`order_by::resolve_order_by`]'s identical fallback for
 /// ORDER BY keys.
-fn result_column_collations(schema: &TableSchema, cols: &[ResultColumnPlan]) -> Vec<Collation> {
+pub(super) fn result_column_collations(
+    schema: &TableSchema,
+    cols: &[ResultColumnPlan],
+) -> Vec<Collation> {
     cols.iter()
         .map(|col| match col {
             ResultColumnPlan::Column(name) => schema

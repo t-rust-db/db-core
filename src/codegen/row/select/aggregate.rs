@@ -13,7 +13,6 @@ use crate::codegen::row::{key_index, record_width};
 use std::rc::Rc;
 
 pub(crate) use accum::select_has_aggregate;
-use accum::FLUSH_CURSOR;
 pub(super) use accum::{
     collect_aggregates, emit_agg_step, flush_group, read_pseudo_column, read_row_columns_into,
     AggSlot,
@@ -1353,7 +1352,7 @@ where
         .enumerate()
         .map(|(slot, (call, name, arg, distinct))| {
             let slot = i32::try_from(slot).unwrap_or(0);
-            let eph_cursor = distinct.then(|| FLUSH_CURSOR.saturating_add(1).saturating_add(slot));
+            let eph_cursor = distinct.then(|| reg.alloc_cursor());
             AggSlot {
                 call,
                 name,
@@ -1700,7 +1699,7 @@ where
         .enumerate()
         .map(|(slot, (call, name, arg, distinct))| {
             let slot = i32::try_from(slot).unwrap_or(0);
-            let eph_cursor = distinct.then(|| FLUSH_CURSOR.saturating_add(1).saturating_add(slot));
+            let eph_cursor = distinct.then(|| reg.alloc_cursor());
             AggSlot {
                 call,
                 name,
@@ -1905,10 +1904,10 @@ mod mcdc_vectors {
         }
     }
 
-    fn err_text(sql: &str, schemas: &[TableSchema]) -> String {
-        match compile(sql, schemas) {
-            Ok(p) => panic!("{sql}: expected Err, got program {p:?}"),
-            Err(e) => format!("{e:?}"),
+    fn parsed(sql: &str) -> crate::parser::ast::Select {
+        match crate::parser::row::parse_select(sql) {
+            crate::parser::row::ParseOutcome::Accepted(s) => *s,
+            _ => panic!("{sql}"),
         }
     }
 
@@ -2124,8 +2123,12 @@ mod mcdc_vectors {
     #[test]
     fn mcdc__codegen_row_select_aggregate_find_index_only_count_09980e36__v4_order_by_never_reaches_the_count_fast_path(
     ) {
-        let e = err_text("SELECT count(*) FROM t ORDER BY 1", &[t_indexed_a()]);
-        assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
+        // Since #597 the planner strips ORDER BY before the aggregate
+        // runs, so the guard is checked on the function itself.
+        let select = parsed("SELECT count(*) FROM t ORDER BY 1");
+        assert!(super::find_index_only_count(&select, &t_indexed_a()).is_none());
+        // ...and the query itself compiles: one row, nothing to sort.
+        ok("SELECT count(*) FROM t ORDER BY 1", &[t_indexed_a()]);
     }
 
     // ---------------------------------------------------------------------
@@ -2196,8 +2199,10 @@ mod mcdc_vectors {
     #[test]
     fn mcdc__codegen_row_select_aggregate_find_index_only_sum_183395db__v5_order_by_never_reaches_the_sum_fast_path(
     ) {
-        let e = err_text("SELECT sum(a) FROM t ORDER BY 1", &[t_indexed_a()]);
-        assert!(e.contains("ORDER BY combined with an aggregate"), "{e}");
+        // Since #597 the planner strips ORDER BY before the aggregate
+        // runs, so the guard is checked on the function itself.
+        let select = parsed("SELECT sum(a) FROM t ORDER BY 1");
+        assert!(super::find_index_only_sum(&select, &t_indexed_a()).is_none());
     }
 
     /// A `GROUP BY` routes to the grouped-scan branch of
