@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.129.1] - 2026-10-14
+
+### Fixed
+
+- **logfmt and CLF tables store string values decoded** (#616), as #583 did for JSON. A quoted logfmt value decodes JSON's escapes, as go-logfmt reads it: `msg="a \"q\""` stores `a "q"`. A bare value such as `path=C:\new` keeps its backslash. CLF fields decode Apache and nginx escapes (`\"`, `\\`, `\n`, `\r`, `\t`, `\b`, `\v`, and `\xHH` read as bytes, then as UTF-8). Values read the same before and after a flush. `raw` stays as written, and the stream engine still returns values as written. ADR 0027 updated.
+- **A CLF quoted field ended at an escaped quote** (#616). Apache writes `"` inside the request line as `\"`; the field was cut short there, and status, bytes, referer and user agent were read from the rest of the line. A quoted field now ends at the first `"` without a backslash before it, in tables and in the stream engine.
+
 ## [0.129.0] - 2026-10-13
 
 ### Changed
