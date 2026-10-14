@@ -798,3 +798,104 @@ fn distinct_over_a_joined_aggregate_matches_sqlite3() {
         "{plan:?}"
     );
 }
+
+/// #613: DISTINCT over a plain join compares each column under its
+/// collation, sorted or not, across INNER, LEFT and FULL joins and
+/// through `*`/`t.*` (sqlite3 3.53, `.headers on`).
+#[test]
+fn distinct_over_a_join_honours_collations() {
+    let db = TempDb::new("join-distinct-collate");
+    let mut e = grouped_engine(&db);
+    e.run_query(
+        "CREATE TABLE h(k INT, s TEXT COLLATE NOCASE); \
+         INSERT INTO h VALUES(1,'a'),(1,'A'),(2,'b')",
+    )
+    .unwrap();
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT DISTINCT h1.s FROM h h1 JOIN h h2 ON h1.k = h2.k",
+                "'s';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.s FROM h h1 LEFT JOIN h h2 ON h1.k = h2.k",
+                "'s';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.s FROM h h1 FULL JOIN h h2 ON h1.k = h2.k",
+                "'s';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.s FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY 1 DESC",
+                "'s';'b';'a'",
+            ),
+            (
+                "SELECT DISTINCT h1.s FROM h h1 LEFT JOIN h h2 ON h1.k = h2.k ORDER BY 1",
+                "'s';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.s FROM h h1 FULL JOIN h h2 ON h1.k = h2.k ORDER BY 1",
+                "'s';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.* FROM h h1 JOIN h h2 ON h1.k = h2.k",
+                "'k','s';1,'a';2,'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.s COLLATE BINARY FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY 1",
+                "'h1.s COLLATE BINARY';'A';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT a.s COLLATE NOCASE FROM g a JOIN g b ON a.k = b.k ORDER BY 1",
+                "'a.s COLLATE NOCASE';'x';'y'",
+            ),
+        ],
+    );
+    // `*` skips the USING column and keeps both NOCASE `s` columns: one
+    // row per `k` (which spelling survives follows the join order).
+    let r = e
+        .run_query("SELECT DISTINCT * FROM h h1 JOIN h h2 USING (k)")
+        .unwrap();
+    assert_eq!(r.columns, ["k", "s", "s"]);
+    assert_eq!(r.rows.len(), 2, "{:?}", r.rows);
+}
+
+/// ORDER BY a position over a join sorts on that result column, under
+/// its collation (sqlite3 3.53, `.headers on`). It used to sort on the
+/// constant itself, leaving the rows in join order.
+#[test]
+fn ordering_a_join_by_position_matches_sqlite3() {
+    let db = TempDb::new("join-order-position");
+    let mut e = RowEngine::open(db.path()).expect("open fixture copy");
+    e.run_query(
+        "CREATE TABLE h(k INT, s TEXT COLLATE NOCASE); \
+         INSERT INTO h VALUES(1,'a'),(1,'B'),(2,'c')",
+    )
+    .unwrap();
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT h1.k, h2.s FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY 2 DESC, 1",
+                "'k','s';2,'c';1,'B';1,'B';1,'a';1,'a'",
+            ),
+            (
+                "SELECT h1.s AS z FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY z DESC",
+                "'z';'c';'B';'B';'a';'a'",
+            ),
+            (
+                "SELECT * FROM h h1 JOIN h h2 USING (k) ORDER BY 3 DESC, 2",
+                "'k','s','s';2,'c','c';1,'a','B';1,'B','B';1,'a','a';1,'B','a'",
+            ),
+            (
+                "SELECT h1.* FROM h h1 LEFT JOIN h h2 ON h1.k = h2.k + 1 ORDER BY 2 DESC",
+                "'k','s';2,'c';2,'c';1,'B';1,'a'",
+            ),
+        ],
+    );
+    let err = e
+        .run_query("SELECT h1.k FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY 2")
+        .unwrap_err();
+    assert!(err.to_string().contains("out of range"), "{err}");
+}

@@ -8,7 +8,7 @@ use super::super::limit_scan::{
     compile_limit_setup, emit_limit_guard, emit_offset_guard, LimitState,
 };
 use super::super::order_by::strip_collate;
-use super::super::projection::emit_dedup_check;
+use super::super::projection::{emit_dedup_check, joined_result_collations};
 use super::super::*;
 use super::accum::{collect_aggregates, substitute_aggregates, AggSlot};
 
@@ -627,7 +627,7 @@ where
                 agg_slots,
                 flush_cursor,
             )?;
-            let collations = distinct_collations(select, full_scope, count);
+            let collations = joined_result_collations(select, full_scope, dedup_star);
             emit_dedup_check(em, cursor, first, collations, skip_label);
             Some((first, count))
         }
@@ -668,29 +668,6 @@ where
     sink(em, reg, first, i32::try_from(count).unwrap_or(0))?;
     em.place(skip_label);
     Ok(())
-}
-
-/// The collations a joined aggregate's `SELECT DISTINCT` compares its
-/// `count` visible columns under (#608): an explicit `COLLATE`, else the
-/// column's declared one, else BINARY. `*` columns compare as BINARY.
-fn distinct_collations(select: &Select, full_scope: &Scope, count: usize) -> Vec<Collation> {
-    let per_column: Vec<Collation> = select
-        .columns
-        .iter()
-        .filter_map(|c| match c {
-            ResultColumn::Expr { expr, .. } => Some(
-                collation_of(expr)
-                    .or_else(|| expr_collation(full_scope, expr))
-                    .unwrap_or(Collation::Binary),
-            ),
-            ResultColumn::Star | ResultColumn::TableStar { .. } => None,
-        })
-        .collect();
-    if per_column.len() == count {
-        per_column
-    } else {
-        vec![Collation::Binary; count]
-    }
 }
 
 /// db-core#219: a synthetic single-cursor schema over one flushed joined
