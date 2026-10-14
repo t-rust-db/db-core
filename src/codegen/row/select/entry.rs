@@ -9,7 +9,7 @@ use super::limit_scan::{
     emit_offset_guard,
 };
 use super::order_by::{output_column_names, resolve_order_by, OrderByTarget};
-use super::projection::{compile_row_values, emit_dedup_check, result_columns};
+use super::projection::{compile_row_values, emit_dedup_check, result_columns, ResultColumnPlan};
 use super::*;
 use crate::codegen::row::index_maintenance::valid_table_root_page;
 use std::rc::Rc;
@@ -140,15 +140,6 @@ pub(super) fn compile_select_no_from(
     select: &Select,
     catalog: &[TableSchema],
 ) -> Result<Program, CodegenError> {
-    if select
-        .columns
-        .iter()
-        .any(|col| !matches!(col, ResultColumn::Expr { .. }))
-    {
-        return Err(CodegenError::Unsupported {
-            reason: "`*`/`tbl.*` has no table to expand in a FROM-less SELECT".to_string(),
-        });
-    }
     if select.where_clause.is_some()
         || !select.group_by.is_empty()
         || select.having.is_some()
@@ -172,7 +163,46 @@ pub(super) fn compile_select_no_from(
     em.place(body_start);
     em.patch_p2(init_addr, body_start);
 
-    let no_table = TableSchema {
+    compile_constant_row(
+        &mut em,
+        &mut reg,
+        &select.columns,
+        catalog,
+        &mut |em: &mut Emitter, _reg: &mut RegAlloc, first: i32, count: i32| {
+            em.emit(Instruction::new(Opcode::ResultRow, first, count, 0));
+            Ok(())
+        },
+    )?;
+    em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+
+    Ok(em.finish())
+}
+
+/// One FROM-less row: `columns` compiled once against an empty schema
+/// and handed to `sink` as `(first, count)`. Shared by a top-level
+/// FROM-less SELECT (#260) and a FROM subquery or `VALUES` row
+/// materialized into an ephemeral table (#611). `*`/`tbl.*` has no
+/// table to expand and is rejected.
+pub(crate) fn compile_constant_row<F>(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    columns: &[ResultColumn],
+    catalog: &[TableSchema],
+    sink: &mut F,
+) -> Result<(), CodegenError>
+where
+    F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
+{
+    let mut cols = Vec::with_capacity(columns.len());
+    for col in columns {
+        let ResultColumn::Expr { expr, .. } = col else {
+            return Err(CodegenError::Unsupported {
+                reason: "`*`/`tbl.*` has no table to expand in a FROM-less SELECT".to_string(),
+            });
+        };
+        cols.push(ResultColumnPlan::Expr(expr.clone()));
+    }
+    let no_table = Rc::new(TableSchema {
         name: String::new(),
         root_page: 0,
         columns: vec![],
@@ -184,20 +214,9 @@ pub(super) fn compile_select_no_from(
         sql: String::new(),
         indexes: vec![],
         rowid_alias: None,
-    };
-    let no_table = Rc::new(no_table);
-    let cols = result_columns(select, &no_table);
-    let (first, count) =
-        compile_row_values(&mut em, &mut reg, &no_table, &cols, -1, false, catalog)?;
-    em.emit(Instruction::new(
-        Opcode::ResultRow,
-        first,
-        i32::try_from(count).unwrap_or(0),
-        0,
-    ));
-    em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
-
-    Ok(em.finish())
+    });
+    let (first, count) = compile_row_values(em, reg, &no_table, &cols, -1, false, catalog)?;
+    sink(em, reg, first, i32::try_from(count).unwrap_or(0))
 }
 
 /// Which arm of [`compile_select_scan`]'s dispatch a single-table

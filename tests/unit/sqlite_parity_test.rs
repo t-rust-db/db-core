@@ -153,8 +153,7 @@ fn result_column_names_match_sqlite3() {
 /// Queries sqlite3 answers and the row engine still refuses, with the
 /// headers sqlite3 gives. Each is asserted to still fail: once one runs,
 /// move it into [`result_column_names_match_sqlite3`] and close its issue.
-const KNOWN_GAPS: &[(&str, &[&str], &str)] =
-    &[("SELECT x FROM (SELECT 1 AS x) WHERE x = 1", &["x"], "#611")];
+const KNOWN_GAPS: &[(&str, &[&str], &str)] = &[];
 
 #[test]
 fn known_gaps_still_fail() {
@@ -898,4 +897,55 @@ fn ordering_a_join_by_position_matches_sqlite3() {
         .run_query("SELECT h1.k FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY 2")
         .unwrap_err();
     assert!(err.to_string().contains("out of range"), "{err}");
+}
+
+/// #611: a FROM subquery without a FROM of its own, and `VALUES` in
+/// FROM, materialized as constant rows (sqlite3 3.53, `.headers on`).
+#[test]
+fn from_less_subqueries_and_values_match_sqlite3() {
+    let db = TempDb::new("from-less");
+    let mut e = engine(&db);
+    check_cases(
+        &mut e,
+        &[
+            ("SELECT x FROM (SELECT 1 AS x) WHERE x = 1", "'x';1"),
+            (
+                "SELECT * FROM (SELECT 1 AS x, 'a' AS y) AS s",
+                "'x','y';1,'a'",
+            ),
+            (
+                "SELECT * FROM (SELECT 1 AS x) s JOIN t ON s.x = t.Abc",
+                "'x','Abc','x y','k';1,1,'p','a'",
+            ),
+            (
+                "SELECT * FROM (SELECT 1 AS x UNION ALL SELECT 2)",
+                "'x';1;2",
+            ),
+            ("WITH c AS (SELECT 1 AS x) SELECT * FROM c", "'x';1"),
+            ("SELECT * FROM (SELECT 1+1)", "'1+1';2"),
+            (
+                "SELECT * FROM (VALUES(1,2),(3,4))",
+                "'column1','column2';1,2;3,4",
+            ),
+            (
+                "SELECT * FROM (VALUES(1,2),(3,4)) AS v WHERE column1 > 1",
+                "'column1','column2';3,4",
+            ),
+            (
+                "SELECT v.column2 FROM (VALUES(1,'a'),(2,'b')) v \
+                 JOIN (VALUES(2)) w ON v.column1 = w.column1",
+                "'column2';'b'",
+            ),
+            (
+                "SELECT count(*), sum(column1) FROM (VALUES(1),(2),(NULL))",
+                "'count(*)','sum(column1)';3,3",
+            ),
+        ],
+    );
+    let err = e.run_query("SELECT * FROM (VALUES(1,2),(3))").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("all VALUES must have the same number of terms"),
+        "{err}"
+    );
 }
