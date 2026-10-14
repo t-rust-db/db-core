@@ -8,7 +8,9 @@ use super::limit_scan::{
     compile_direct_scan, compile_limit_setup, compile_sorted_scan, emit_limit_guard,
     emit_offset_guard,
 };
-use super::order_by::{output_column_names, resolve_order_by, OrderByTarget};
+use super::order_by::{
+    output_column_names, resolve_order_by, resolve_single_table_group_terms, OrderByTarget,
+};
 use super::projection::{compile_row_values, emit_dedup_check, result_columns, ResultColumnPlan};
 use super::*;
 use crate::codegen::row::index_maintenance::valid_table_root_page;
@@ -294,6 +296,16 @@ where
             &aliased
         }
         _ => schema,
+    };
+    // #610: GROUP BY positions and aliases, HAVING aliases, as sqlite3
+    // resolves them.
+    let resolved;
+    let select = match resolve_single_table_group_terms(select, schema)? {
+        Some(select) => {
+            resolved = select;
+            &resolved
+        }
+        None => select,
     };
     // #597: ORDER BY / DISTINCT over an aggregate's output: run the
     // aggregate below without them, then sort or dedup its rows.

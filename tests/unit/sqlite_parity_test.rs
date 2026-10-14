@@ -1084,3 +1084,76 @@ fn nested_aggregates_match_sqlite3() {
         ],
     );
 }
+
+/// #610: a GROUP BY position or result-column alias, and HAVING on an
+/// alias, as sqlite3 3.53 resolves them: a FROM column wins over an
+/// alias of the same name.
+#[test]
+fn group_by_positions_and_aliases_match_sqlite3() {
+    let db = TempDb::new("group-alias");
+    let mut e = rowid_engine(&db);
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY par",
+                "'par','COUNT(*)';0,1;1,2",
+            ),
+            (
+                "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY 1",
+                "'par','COUNT(*)';0,1;1,2",
+            ),
+            (
+                "SELECT b % 2 AS a, COUNT(*) FROM p GROUP BY a ORDER BY 1, 2",
+                "'a','COUNT(*)';0,1;1,1;1,1",
+            ),
+            (
+                "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY par HAVING par = 1",
+                "'par','COUNT(*)';1,2",
+            ),
+            (
+                "SELECT b % 2 AS par, COUNT(*) AS n FROM p GROUP BY par HAVING n > 1",
+                "'par','n';1,2",
+            ),
+            (
+                "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY 1, par ORDER BY par DESC",
+                "'par','COUNT(*)';1,2;0,1",
+            ),
+            (
+                "SELECT *, count(*) FROM p GROUP BY 2 ORDER BY 2",
+                "'a','b','count(*)';'y',1,1;'z',2,1;'x',3,1",
+            ),
+            ("SELECT count(*) AS c FROM p HAVING c > 2", "'c';3"),
+            (
+                "SELECT x.b % 2 AS par, count(*) FROM p x JOIN p y ON x.b = y.b GROUP BY par",
+                "'par','count(*)';0,1;1,2",
+            ),
+            (
+                "SELECT x.b % 2 AS par, count(*) FROM p x JOIN p y ON x.b = y.b \
+                 GROUP BY 1 HAVING par = 0",
+                "'par','count(*)';0,1",
+            ),
+        ],
+    );
+    for (sql, error) in [
+        (
+            "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY 3",
+            "1st GROUP BY term out of range - should be between 1 and 2",
+        ),
+        (
+            "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY 2",
+            "aggregate functions are not allowed in the GROUP BY clause",
+        ),
+        (
+            "SELECT b % 2 AS par, COUNT(*) AS n FROM p GROUP BY n",
+            "aggregate functions are not allowed in the GROUP BY clause",
+        ),
+        (
+            "SELECT x.a AS b, count(*) FROM p x JOIN p y ON x.b = y.b GROUP BY b",
+            "ambiguous",
+        ),
+    ] {
+        let err = e.run_query(sql).unwrap_err().to_string();
+        assert!(err.contains(error), "{sql}: {err}");
+    }
+}
