@@ -913,7 +913,7 @@ fn resolve_group_order_target(
         }
         Some(NamedColumn::Expr(target)) => {
             let (key, collation) =
-                resolve_group_order_target(select, full_scope, agg_slots, total_width, target)?;
+                resolve_group_order_target(select, full_scope, agg_slots, total_width, &target)?;
             return Ok((key, explicit.unwrap_or(collation)));
         }
         None => {}

@@ -385,8 +385,8 @@ pub(super) fn resolve_join_order_by(
         let (target, collation) = match named_result_column(base_expr, select, scope)? {
             Some(NamedColumn::Offset(abs, collation)) => (JoinOrderTarget::Offset(abs), collation),
             Some(NamedColumn::Expr(expr)) => (
-                column_or_expr_target(strip_collate(expr), scope)?,
-                expr_collation(scope, expr).unwrap_or(Collation::Binary),
+                column_or_expr_target(strip_collate(&expr), scope)?,
+                expr_collation(scope, &expr).unwrap_or(Collation::Binary),
             ),
             None => (
                 column_or_expr_target(base_expr, scope)?,
@@ -408,23 +408,23 @@ pub(super) fn resolve_join_order_by(
 }
 
 /// The result column an ORDER BY term names over a join.
-pub(super) enum NamedColumn<'a> {
+pub(super) enum NamedColumn {
     /// A `*`/`table.*` column: its offset in the joined row, and its
     /// declared collation.
     Offset(usize, Collation),
     /// A result-column expression.
-    Expr(&'a Expr),
+    Expr(Expr),
 }
 
 /// The result column `expr` names, as sqlite3 resolves an ORDER BY term:
 /// an integer is a 1-based position counting `*`/`table.*` expanded, an
 /// unqualified name matching a result alias is that column (aliases win
 /// over table columns). `None` when `expr` is neither.
-pub(super) fn named_result_column<'a>(
+pub(super) fn named_result_column(
     expr: &Expr,
-    select: &'a Select,
+    select: &Select,
     scope: &Scope,
-) -> Result<Option<NamedColumn<'a>>, CodegenError> {
+) -> Result<Option<NamedColumn>, CodegenError> {
     match &expr.kind {
         ExprKind::Literal(Literal::Integer(n)) => {
             let columns = expanded_result_columns(select, scope)?;
@@ -446,7 +446,7 @@ pub(super) fn named_result_column<'a>(
             ResultColumn::Expr {
                 expr,
                 alias: Some(a),
-            } if a == name => Some(NamedColumn::Expr(expr)),
+            } if a == name => Some(NamedColumn::Expr(expr.clone())),
             _ => None,
         })),
         _ => Ok(None),
@@ -456,10 +456,10 @@ pub(super) fn named_result_column<'a>(
 /// `select`'s result columns with `*`/`table.*` expanded across
 /// `scope.tables` in FROM order, skipping the NATURAL/USING columns
 /// `scope.dedup_star` names, as [`emit_join_row`] projects them.
-fn expanded_result_columns<'a>(
-    select: &'a Select,
+fn expanded_result_columns(
+    select: &Select,
     scope: &Scope,
-) -> Result<Vec<NamedColumn<'a>>, CodegenError> {
+) -> Result<Vec<NamedColumn>, CodegenError> {
     let declared = |binding: &TableBinding, idx: usize| {
         binding
             .schema
@@ -503,7 +503,7 @@ fn expanded_result_columns<'a>(
                     }
                 }
             }
-            ResultColumn::Expr { expr, .. } => out.push(NamedColumn::Expr(expr)),
+            ResultColumn::Expr { expr, .. } => out.push(NamedColumn::Expr(expr.clone())),
         }
     }
     Ok(out)
@@ -1218,7 +1218,7 @@ mod tests {
     ) -> Result<JoinOrderTarget, CodegenError> {
         match named_result_column(expr, select, scope)? {
             Some(NamedColumn::Offset(abs, _)) => Ok(JoinOrderTarget::Offset(abs)),
-            Some(NamedColumn::Expr(named)) => column_or_expr_target(strip_collate(named), scope),
+            Some(NamedColumn::Expr(named)) => column_or_expr_target(strip_collate(&named), scope),
             None => column_or_expr_target(expr, scope),
         }
     }

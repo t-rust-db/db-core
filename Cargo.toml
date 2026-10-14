@@ -228,7 +228,7 @@ required-features = [
 # Both optional, pulled in only by storage-column (the only consumer of
 # either today).
 memmap2 = { version = "0.9.11", optional = true }
-ruzstd = { version = "0.9.0", optional = true }
+ruzstd = { version = "0.9.1", optional = true }
 
 [dev-dependencies]
 # Self-dependency so a bare `cargo test` (what `cargo-mvl-mcdc harvest`
