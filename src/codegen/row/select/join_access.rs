@@ -353,6 +353,17 @@ impl JoinOrderPlan {
             nulls_first: true,
         }
     }
+
+    /// [`Self::ascending_offset`] for a computed `GROUP BY` key (#610),
+    /// evaluated against the join's cursors in pass 1.
+    pub(super) fn ascending_expr(expr: Expr, collation: Collation) -> Self {
+        JoinOrderPlan {
+            target: JoinOrderTarget::Expr(expr),
+            descending: false,
+            collation,
+            nulls_first: true,
+        }
+    }
 }
 
 /// [`resolve_order_by`]'s joined counterpart: resolves each `ORDER BY`
@@ -397,7 +408,7 @@ pub(super) fn resolve_join_order_by(
 }
 
 /// The result column an ORDER BY term names over a join.
-enum NamedColumn<'a> {
+pub(super) enum NamedColumn<'a> {
     /// A `*`/`table.*` column: its offset in the joined row, and its
     /// declared collation.
     Offset(usize, Collation),
@@ -409,7 +420,7 @@ enum NamedColumn<'a> {
 /// an integer is a 1-based position counting `*`/`table.*` expanded, an
 /// unqualified name matching a result alias is that column (aliases win
 /// over table columns). `None` when `expr` is neither.
-fn named_result_column<'a>(
+pub(super) fn named_result_column<'a>(
     expr: &Expr,
     select: &'a Select,
     scope: &Scope,

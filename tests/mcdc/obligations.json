@@ -5062,7 +5062,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_collect_aggregates_be2ff6a2",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 108,
+    "line": 107,
     "decision": "let ResultColumn::Expr { expr, .. } = col",
     "conditions": 1,
     "vectors_required": 2,
@@ -5072,7 +5072,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_collect_aggregates_75087af1",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 112,
+    "line": 111,
     "decision": "let Some(having) = &select.having",
     "conditions": 1,
     "vectors_required": 2,
@@ -5082,7 +5082,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_select_has_aggregate_be2ff6a2",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 132,
+    "line": 131,
     "decision": "let ResultColumn::Expr { expr, .. } = col",
     "conditions": 1,
     "vectors_required": 2,
@@ -5092,7 +5092,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_select_has_aggregate_aeb19e21",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 134,
+    "line": 133,
     "decision": "!found.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -5102,7 +5102,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_select_has_aggregate_75087af1",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 139,
+    "line": 138,
     "decision": "let Some(having) = &select.having",
     "conditions": 1,
     "vectors_required": 2,
@@ -5112,7 +5112,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_find_aggregates_7be92766",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 146,
+    "line": 145,
     "decision": "let ExprKind::FunctionCall { name, args, .. } = &expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -5122,7 +5122,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_find_aggregates_31493ac7",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 147,
+    "line": 146,
     "decision": "is_aggregate_call(name, args)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5132,7 +5132,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_find_aggregates_07411904",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 148,
+    "line": 147,
     "decision": "!out.contains(expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5140,19 +5140,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_accum_find_aggregates_2c846bd0",
-    "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 154,
-    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) | ExprKind::Collate { expr: inner, .. } => {\n            find_aggregates(inner, out);\n        }\n        ExprKind::Unary { expr: inner, .. } => find_aggregates(inner, out),\n        ExprKind::Binary { lhs, rhs, .. } => {\n            find_aggregates(lhs, out);\n            find_aggregates(rhs, out);\n        }\n        _ => {}\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": true
-  },
-  {
     "id": "codegen_row_select_aggregate_accum_substitute_aggregates_7f5f7b91",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 178,
+    "line": 173,
     "decision": "let Some(pos) = agg_slots.iter().position(|slot| slot.call == *expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5160,10 +5150,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_accum_substitute_aggregates_a5413066",
+    "id": "codegen_row_select_aggregate_accum_map_subexprs_5e8fc4d8",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 191,
-    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => ExprKind::Paren(Box::new(substitute_aggregates(\n            inner,\n            agg_slots,\n            synthetic_names,\n        ))),\n        ExprKind::Collate {\n            expr: inner,\n            collation,\n        } => ExprKind::Collate {\n            expr: Box::new(substitute_aggregates(inner, agg_slots, synthetic_names)),\n            collation: collation.clone(),\n        },\n        ExprKind::Unary { op, expr: inner } => ExprKind::Unary {\n            op: *op,\n            expr: Box::new(substitute_aggregates(inner, agg_slots, synthetic_names)),\n        },\n        ExprKind::Binary { op, lhs, rhs } => ExprKind::Binary {\n            op: *op,\n            lhs: Box::new(substitute_aggregates(lhs, agg_slots, synthetic_names)),\n            rhs: Box::new(substitute_aggregates(rhs, agg_slots, synthetic_names)),\n        },\n        other => other.clone(),\n    }",
+    "line": 204,
+    "decision": "match &expr.kind {\n        ExprKind::Literal(_)\n        | ExprKind::Param(_)\n        | ExprKind::Column { .. }\n        | ExprKind::Subquery(_)\n        | ExprKind::Exists { .. } => expr.kind.clone(),\n        ExprKind::FunctionCall {\n            name,\n            distinct,\n            args,\n            tail,\n        } => ExprKind::FunctionCall {\n            name: name.clone(),\n            distinct: *distinct,\n            args: match args {\n                FunctionArgs::Star => FunctionArgs::Star,\n                FunctionArgs::List(list) => {\n                    FunctionArgs::List(list.iter().map(&mut *f).collect::<Result<_, _>>()?)\n                }\n            },\n            tail: tail.clone(),\n        },\n        ExprKind::Unary { op, expr: inner } => ExprKind::Unary {\n            op: *op,\n            expr: boxed(f, inner)?,\n        },\n        ExprKind::Binary { op, lhs, rhs } => ExprKind::Binary {\n            op: *op,\n            lhs: boxed(f, lhs)?,\n            rhs: boxed(f, rhs)?,\n        },\n        ExprKind::Is { lhs, rhs, negated } => ExprKind::Is {\n            lhs: boxed(f, lhs)?,\n            rhs: boxed(f, rhs)?,\n            negated: *negated,\n        },\n        ExprKind::IsNull {\n            expr: inner,\n            negated,\n        } => ExprKind::IsNull {\n            expr: boxed(f, inner)?,\n            negated: *negated,\n        },\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            negated,\n        } => ExprKind::Between {\n            expr: boxed(f, inner)?,\n            lo: boxed(f, lo)?,\n            hi: boxed(f, hi)?,\n            negated: *negated,\n        },\n        ExprKind::In {\n            expr: inner,\n            list,\n            negated,\n        } => ExprKind::In {\n            expr: boxed(f, inner)?,\n            list: list.iter().map(&mut *f).collect::<Result<_, _>>()?,\n            negated: *negated,\n        },\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            glob,\n            negated,\n            escape,\n        } => ExprKind::Like {\n            expr: boxed(f, inner)?,\n            pattern: boxed(f, pattern)?,\n            glob: *glob,\n            negated: *negated,\n            escape: escape.as_deref().map(|e| boxed(f, e)).transpose()?,\n        },\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => ExprKind::Case {\n            operand: operand.as_deref().map(|e| boxed(f, e)).transpose()?,\n            whens: whens\n                .iter()\n                .map(|(w, t)| Ok((f(w)?, f(t)?)))\n                .collect::<Result<_, CodegenError>>()?,\n            else_: else_.as_deref().map(|e| boxed(f, e)).transpose()?,\n        },\n        ExprKind::Cast {\n            expr: inner,\n            type_name,\n        } => ExprKind::Cast {\n            expr: boxed(f, inner)?,\n            type_name: type_name.clone(),\n        },\n        ExprKind::Collate {\n            expr: inner,\n            collation,\n        } => ExprKind::Collate {\n            expr: boxed(f, inner)?,\n            collation: collation.clone(),\n        },\n        ExprKind::Paren(inner) => ExprKind::Paren(boxed(f, inner)?),\n        ExprKind::InSubquery {\n            expr: inner,\n            subquery,\n            negated,\n        } => ExprKind::InSubquery {\n            expr: boxed(f, inner)?,\n            subquery: subquery.clone(),\n            negated: *negated,\n        },\n        ExprKind::InSubqueryMulti {\n            exprs,\n            subquery,\n            negated,\n        } => ExprKind::InSubqueryMulti {\n            exprs: exprs.iter().map(&mut *f).collect::<Result<_, _>>()?,\n            subquery: subquery.clone(),\n            negated: *negated,\n        },\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_aggregate_accum_map_subexprs_bd7d6cec",
+    "file": "src/codegen/row/select/aggregate/accum.rs",
+    "line": 218,
+    "decision": "match args {\n                FunctionArgs::Star => FunctionArgs::Star,\n                FunctionArgs::List(list) => {\n                    FunctionArgs::List(list.iter().map(&mut *f).collect::<Result<_, _>>()?)\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -5172,7 +5172,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_read_pseudo_column_2645eac3",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 233,
+    "line": 351,
     "decision": "schema.rowid_alias == Some(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5182,7 +5182,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_emit_agg_step_fa9dd1ee",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 292,
+    "line": 410,
     "decision": "match &agg.arg {\n        Some(expr) => {\n            let collation = collation_of(expr)\n                .or_else(|| expr_collation(scope, expr))\n                .unwrap_or(Collation::Binary);\n            (\n                Some(compile_value(em, reg, scope, expr)?),\n                1usize,\n                collation,\n            )\n        }\n        None => (None, 0usize, Collation::Binary),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5192,7 +5192,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_emit_agg_step_cf95d892",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 317,
+    "line": 435,
     "decision": "reset",
     "conditions": 1,
     "vectors_required": 2,
@@ -5202,7 +5202,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_emit_agg_step_cf95d892_2",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 331,
+    "line": 449,
     "decision": "reset",
     "conditions": 1,
     "vectors_required": 2,
@@ -5212,7 +5212,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_flush_group_75087af1",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 463,
+    "line": 581,
     "decision": "let Some(having) = &select.having",
     "conditions": 1,
     "vectors_required": 2,
@@ -5222,7 +5222,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_flush_group_de1ce4a5",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 473,
+    "line": 591,
     "decision": "let Some(limit) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -5232,7 +5232,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_flush_group_de1ce4a5_2",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 476,
+    "line": 594,
     "decision": "let Some(limit) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -5242,7 +5242,7 @@
   {
     "id": "codegen_row_select_aggregate_accum_flush_group_963ce5ae",
     "file": "src/codegen/row/select/aggregate/accum.rs",
-    "line": 483,
+    "line": 601,
     "decision": "match col {\n            ResultColumn::Expr { expr, alias } => ResultColumn::Expr {\n                expr: substitute_aggregates(expr, agg_slots, &synthetic_names),\n                alias: alias.clone(),\n            },\n            other => other.clone(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5252,18 +5252,8 @@
   {
     "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_2a9fc23b",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 74,
+    "line": 66,
     "decision": "let Some(cursor) = distinct_cursor",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_a8af1afa",
-    "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 85,
-    "decision": "let Some(expr) = arg",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -5272,7 +5262,7 @@
   {
     "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_9d292ee3",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 93,
+    "line": 82,
     "decision": "match order_cursors {\n        Some((_, order_pseudo_cursor)) => order_pseudo_cursor.saturating_add(1),\n        None => flush_cursor.saturating_add(1),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5282,7 +5272,7 @@
   {
     "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_5f5df4aa",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 118,
+    "line": 109,
     "decision": "let Some((order_sort_cursor, _)) = order_cursors",
     "conditions": 1,
     "vectors_required": 2,
@@ -5290,9 +5280,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_00b2d3e6",
+    "file": "src/codegen/row/select/aggregate/join.rs",
+    "line": 122,
+    "decision": "match key {\n                    GroupOrderKey::Offset(offset) => offset,\n                    GroupOrderKey::Expr(expr) => {\n                        order_exprs.push(expr);\n                        record_width.saturating_add(order_exprs.len().saturating_sub(1))\n                    }\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_b0e1f07a",
+    "file": "src/codegen/row/select/aggregate/join.rs",
+    "line": 159,
+    "decision": "match joined_bare_column_offset(full_scope, expr) {\n                Some(offset) => JoinOrderPlan::ascending_offset(offset?, collation),\n                None => JoinOrderPlan::ascending_expr(expr.clone(), collation),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_3342071b",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 198,
+    "line": 197,
     "decision": "implicit_group",
     "conditions": 1,
     "vectors_required": 2,
@@ -5302,7 +5312,7 @@
   {
     "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_3342071b_2",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 333,
+    "line": 326,
     "decision": "implicit_group",
     "conditions": 1,
     "vectors_required": 2,
@@ -5312,7 +5322,7 @@
   {
     "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_0b9ce1f2",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 337,
+    "line": 330,
     "decision": "!implicit_group",
     "conditions": 1,
     "vectors_required": 2,
@@ -5322,7 +5332,7 @@
   {
     "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_f845d959",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 365,
+    "line": 359,
     "decision": "let Some((order_sort_cursor, order_pseudo_cursor)) = order_cursors",
     "conditions": 1,
     "vectors_required": 2,
@@ -5332,7 +5342,7 @@
   {
     "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_13928563",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 391,
+    "line": 385,
     "decision": "let Some(limit) = &limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -5342,7 +5352,7 @@
   {
     "id": "codegen_row_select_aggregate_join_compile_joined_grouped_scan_13928563_2",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 394,
+    "line": 388,
     "decision": "let Some(limit) = &limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -5350,10 +5360,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_join_emit_joined_agg_step_605a3542",
+    "id": "codegen_row_select_aggregate_join_emit_joined_agg_step_95ed93b9",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 452,
-    "decision": "match &agg.arg {\n        Some(expr) => {\n            let offset = joined_bare_column_offset(full_scope, expr)?;\n            let r = reg.alloc();\n            em.emit(Instruction::new(\n                Opcode::Column,\n                pseudo_cursor,\n                i32::try_from(offset).unwrap_or(0),\n                r,\n            ));\n            (\n                Some(r),\n                1usize,\n                collation_of(expr)\n                    .or_else(|| expr_collation(full_scope, expr))\n                    .unwrap_or(Collation::Binary),\n            )\n        }\n        None => (None, 0usize, Collation::Binary),\n    }",
+    "line": 444,
+    "decision": "match &agg.arg {\n        Some(expr) => (\n            Some(compile_value(\n                em,\n                reg,\n                row_scope,\n                &to_record_expr(expr, full_scope)?,\n            )?),\n            1usize,\n            collation_of(expr)\n                .or_else(|| expr_collation(full_scope, expr))\n                .unwrap_or(Collation::Binary),\n        ),\n        None => (None, 0usize, Collation::Binary),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -5362,7 +5372,7 @@
   {
     "id": "codegen_row_select_aggregate_join_emit_joined_agg_step_cf95d892",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 484,
+    "line": 471,
     "decision": "reset",
     "conditions": 1,
     "vectors_required": 2,
@@ -5372,7 +5382,7 @@
   {
     "id": "codegen_row_select_aggregate_join_strip_paren_b50de39e",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 492,
+    "line": 479,
     "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => strip_paren(inner),\n        _ => expr,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5380,39 +5390,9 @@
     "wildcard_risk": true
   },
   {
-    "id": "codegen_row_select_aggregate_join_validate_joined_group_projection_be2ff6a2",
-    "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 507,
-    "decision": "let ResultColumn::Expr { expr, .. } = col",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_select_aggregate_join_validate_joined_group_projection_a0198942",
-    "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 509,
-    "decision": "agg_slots.iter().any(|slot| slot.call == *stripped)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_select_aggregate_join_validate_joined_group_projection_3d2a3b1c",
-    "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 512,
-    "decision": "matches!(stripped.kind, ExprKind::Column { .. })",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
     "id": "codegen_row_select_aggregate_join_flush_joined_group_75087af1",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 599,
+    "line": 559,
     "decision": "let Some(having) = &select.having",
     "conditions": 1,
     "vectors_required": 2,
@@ -5420,10 +5400,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_join_flush_joined_group_fb5bc33e",
+    "id": "codegen_row_select_aggregate_join_flush_joined_group_56f0714a",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 618,
-    "decision": "match distinct_cursor {\n        Some(cursor) => {\n            let (first, count) = project_grouped_result_columns(\n                em,\n                reg,\n                select,\n                full_scope,\n                dedup_star,\n                total_width,\n                agg_slots,\n                flush_cursor,\n            )?;\n            let collations = joined_result_collations(select, full_scope, dedup_star);\n            emit_dedup_check(em, cursor, first, collations, skip_label);\n            Some((first, count))\n        }\n        None => None,\n    }",
+    "line": 579,
+    "decision": "match distinct_cursor {\n        Some(cursor) => {\n            let (first, count) = project_grouped_result_columns(\n                em,\n                reg,\n                select,\n                full_scope,\n                dedup_star,\n                agg_slots,\n                flush_cursor,\n            )?;\n            let collations = joined_result_collations(select, full_scope, dedup_star);\n            emit_dedup_check(em, cursor, first, collations, skip_label);\n            Some((first, count))\n        }\n        None => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -5432,8 +5412,18 @@
   {
     "id": "codegen_row_select_aggregate_join_flush_joined_group_0ecf0282",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 637,
+    "line": 597,
     "decision": "let Some(order_sort_cursor) = order_sort_cursor",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_aggregate_join_flush_joined_group_32234a81",
+    "file": "src/codegen/row/select/aggregate/join.rs",
+    "line": 598,
+    "decision": "order_exprs.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -5442,7 +5432,7 @@
   {
     "id": "codegen_row_select_aggregate_join_flush_joined_group_de1ce4a5",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 648,
+    "line": 633,
     "decision": "let Some(limit) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -5452,7 +5442,7 @@
   {
     "id": "codegen_row_select_aggregate_join_flush_joined_group_de1ce4a5_2",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 651,
+    "line": 636,
     "decision": "let Some(limit) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -5460,20 +5450,40 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_join_flush_joined_group_62ad86d8",
+    "id": "codegen_row_select_aggregate_join_flush_joined_group_36b0a755",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 655,
-    "decision": "match projected {\n        Some(projected) => projected,\n        None => project_grouped_result_columns(\n            em,\n            reg,\n            select,\n            full_scope,\n            dedup_star,\n            total_width,\n            agg_slots,\n            flush_cursor,\n        )?,\n    }",
+    "line": 640,
+    "decision": "match projected {\n        Some(projected) => projected,\n        None => project_grouped_result_columns(\n            em,\n            reg,\n            select,\n            full_scope,\n            dedup_star,\n            agg_slots,\n            flush_cursor,\n        )?,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_join_project_grouped_result_columns_abd4d776",
+    "id": "codegen_row_select_aggregate_join_to_record_expr_53c4eb48",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 740,
-    "decision": "match col {\n            ResultColumn::Star => {\n                for (i, binding) in full_scope.tables.iter().enumerate() {\n                    let suppressed = dedup_star.get(i);\n                    let base = joined_column_offset(full_scope, i)?;\n                    for idx in 0..binding.schema.columns.len() {\n                        let Some(name) = binding.schema.columns.get(idx) else {\n                            continue;\n                        };\n                        if suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase())) {\n                            continue;\n                        }\n                        regs.push(read_offset(em, reg, base.saturating_add(idx)));\n                    }\n                }\n            }\n            ResultColumn::TableStar { table } => {\n                let i = full_scope\n                    .tables\n                    .iter()\n                    .position(|b| b.matches_qualifier(table))\n                    .ok_or_else(|| CodegenError::UnknownColumn {\n                        name: format!(\"{table}.*\"),\n                    })?;\n                let base = joined_column_offset(full_scope, i)?;\n                // `i` was just found by name in `full_scope.tables`; a miss\n                // here is a planner bug, not an empty expansion (#232).\n                let count = full_scope\n                    .tables\n                    .get(i)\n                    .map(|b| b.schema.columns.len())\n                    .ok_or_else(|| CodegenError::Internal {\n                        reason: format!(\"binding {i} for {table}.* vanished from scope\"),\n                    })?;\n                for idx in 0..count {\n                    regs.push(read_offset(em, reg, base.saturating_add(idx)));\n                }\n            }\n            ResultColumn::Expr { expr, .. } => {\n                let stripped = strip_paren(expr);\n                if let Some(pos) = agg_slots.iter().position(|slot| slot.call == *stripped) {\n                    regs.push(read_offset(em, reg, total_width.saturating_add(pos)));\n                    continue;\n                }\n                let ExprKind::Column { table, name, .. } = &stripped.kind else {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"GROUP BY/aggregate combined with a JOIN only supports `*`/\\\n                                 `table.*`/bare column/whole aggregate-call result columns today\"\n                            .to_string(),\n                    });\n                };\n                let (binding_idx, local_idx) =\n                    resolve_scope_column(full_scope, table.as_deref(), name)?;\n                let abs = joined_column_offset(full_scope, binding_idx)?.saturating_add(local_idx);\n                regs.push(read_offset(em, reg, abs));\n            }\n        }",
+    "line": 713,
+    "decision": "match &expr.kind {\n        ExprKind::Column {\n            table: None, name, ..\n        } if name.starts_with(\"__agg\") => expr.kind.clone(),\n        ExprKind::Column { table, name, .. } => {\n            let (binding_idx, local_idx) =\n                resolve_scope_column(full_scope, table.as_deref(), name)?;\n            ExprKind::Column {\n                table: None,\n                catalog: None,\n                name: record_column_name(\n                    joined_column_offset(full_scope, binding_idx)?.saturating_add(local_idx),\n                ),\n            }\n        }\n        ExprKind::Subquery(_)\n        | ExprKind::Exists { .. }\n        | ExprKind::InSubquery { .. }\n        | ExprKind::InSubqueryMulti { .. } => {\n            return Err(CodegenError::Unsupported {\n                reason: \"a subquery inside a GROUP BY/aggregate combined with a JOIN is not yet \\\n                         supported\"\n                    .to_string(),\n            });\n        }\n        _ => map_subexprs(expr, &mut |sub: &Expr| to_record_expr(sub, full_scope))?.kind,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_row_select_aggregate_join_to_record_expr_7884e055",
+    "file": "src/codegen/row/select/aggregate/join.rs",
+    "line": 716,
+    "decision": "name.starts_with(\"__agg\")",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_aggregate_join_project_grouped_result_columns_1c22f8ed",
+    "file": "src/codegen/row/select/aggregate/join.rs",
+    "line": 771,
+    "decision": "match col {\n            ResultColumn::Star => {\n                for (i, binding) in full_scope.tables.iter().enumerate() {\n                    let suppressed = dedup_star.get(i);\n                    let base = joined_column_offset(full_scope, i)?;\n                    for idx in 0..binding.schema.columns.len() {\n                        let Some(name) = binding.schema.columns.get(idx) else {\n                            continue;\n                        };\n                        if suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase())) {\n                            continue;\n                        }\n                        regs.push(read_offset(em, reg, base.saturating_add(idx)));\n                    }\n                }\n            }\n            ResultColumn::TableStar { table } => {\n                let i = full_scope\n                    .tables\n                    .iter()\n                    .position(|b| b.matches_qualifier(table))\n                    .ok_or_else(|| CodegenError::UnknownColumn {\n                        name: format!(\"{table}.*\"),\n                    })?;\n                let base = joined_column_offset(full_scope, i)?;\n                // `i` was just found by name in `full_scope.tables`; a miss\n                // here is a planner bug, not an empty expansion (#232).\n                let count = full_scope\n                    .tables\n                    .get(i)\n                    .map(|b| b.schema.columns.len())\n                    .ok_or_else(|| CodegenError::Internal {\n                        reason: format!(\"binding {i} for {table}.* vanished from scope\"),\n                    })?;\n                for idx in 0..count {\n                    regs.push(read_offset(em, reg, base.saturating_add(idx)));\n                }\n            }\n            ResultColumn::Expr { expr, .. } => {\n                // #612: any expression over the group's columns and\n                // aggregates, evaluated against its flushed record.\n                regs.push(compile_value(\n                    em,\n                    reg,\n                    &flush_scope,\n                    &to_record_expr(\n                        &substitute_aggregates(expr, agg_slots, &synthetic_names),\n                        full_scope,\n                    )?,\n                )?);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -5482,7 +5492,7 @@
   {
     "id": "codegen_row_select_aggregate_join_project_grouped_result_columns_a4e9b51a",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 749,
+    "line": 780,
     "decision": "suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase()))",
     "conditions": 1,
     "vectors_required": 2,
@@ -5490,20 +5500,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_join_project_grouped_result_columns_d98a0b47",
+    "id": "codegen_row_select_aggregate_join_project_grouped_result_columns_726ff23e",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 780,
-    "decision": "let Some(pos) = agg_slots.iter().position(|slot| slot.call == *stripped)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_select_aggregate_join_project_grouped_result_columns_301bb25e",
-    "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 804,
-    "decision": "*r != want",
+    "line": 832,
+    "decision": "contiguous",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -5512,7 +5512,7 @@
   {
     "id": "codegen_row_select_aggregate_join_matches_agg_slot_ddfa3547",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 836,
+    "line": 863,
     "decision": "!name.eq_ignore_ascii_case(&slot.name) || *distinct != slot.eph_cursor.is_some()",
     "conditions": 2,
     "vectors_required": 3,
@@ -5520,10 +5520,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_join_matches_agg_slot_2ae6a10d",
+    "id": "codegen_row_select_aggregate_join_matches_agg_slot_45973014",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 839,
-    "decision": "match (args, &slot.arg) {\n        (FunctionArgs::Star, None) => Ok(true),\n        (FunctionArgs::List(list), None) => Ok(list.is_empty()),\n        (FunctionArgs::List(list), Some(slot_arg)) => {\n            let [arg_expr] = list.as_slice() else {\n                return Ok(false);\n            };\n            let a = joined_bare_column_offset(full_scope, arg_expr)?;\n            let b = joined_bare_column_offset(full_scope, slot_arg)?;\n            Ok(a == b)\n        }\n        (FunctionArgs::Star, Some(_)) => Ok(false),\n    }",
+    "line": 866,
+    "decision": "match (args, &slot.arg) {\n        (FunctionArgs::Star, None) => Ok(true),\n        (FunctionArgs::List(list), None) => Ok(list.is_empty()),\n        (FunctionArgs::List(list), Some(slot_arg)) => {\n            let [arg_expr] = list.as_slice() else {\n                return Ok(false);\n            };\n            Ok(to_record_expr(arg_expr, full_scope)? == to_record_expr(slot_arg, full_scope)?)\n        }\n        (FunctionArgs::Star, Some(_)) => Ok(false),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -5532,7 +5532,7 @@
   {
     "id": "codegen_row_select_aggregate_join_resolve_group_order_target_5e5a0415",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 881,
+    "line": 905,
     "decision": "matches_agg_slot(full_scope, stripped, slot)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -5540,30 +5540,30 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_join_resolve_group_order_target_e08c0343",
+    "id": "codegen_row_select_aggregate_join_resolve_group_order_target_1d193d36",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 885,
-    "decision": "let ExprKind::Literal(Literal::Integer(n)) = &stripped.kind",
+    "line": 910,
+    "decision": "match named_result_column(stripped, select, full_scope)? {\n        Some(NamedColumn::Offset(abs, collation)) => {\n            return Ok((GroupOrderKey::Offset(abs), explicit.unwrap_or(collation)));\n        }\n        Some(NamedColumn::Expr(target)) => {\n            let (key, collation) =\n                resolve_group_order_target(select, full_scope, agg_slots, total_width, target)?;\n            return Ok((key, explicit.unwrap_or(collation)));\n        }\n        None => {}\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_aggregate_join_resolve_group_order_target_5a8ea714",
+    "file": "src/codegen/row/select/aggregate/join.rs",
+    "line": 924,
+    "decision": "let Some(offset) = joined_bare_column_offset(full_scope, stripped)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_join_resolve_group_order_target_34b97134",
+    "id": "codegen_row_select_aggregate_join_substitute_matching_aggregates_94fcb9e3",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 900,
-    "decision": "let ExprKind::Column {\n        table: None, name, ..\n    } = &stripped.kind",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_select_aggregate_join_resolve_group_order_target_9aae50a2",
-    "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 904,
-    "decision": "let Some(ResultColumn::Expr {\n            expr: aliased_expr, ..\n        }) = select\n            .columns\n            .iter()\n            .find(|c| matches!(c, ResultColumn::Expr { alias: Some(a), .. } if a == name))",
+    "line": 943,
+    "decision": "matches_agg_slot(full_scope, strip_paren(expr), slot)?",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -5572,7 +5572,7 @@
   {
     "id": "codegen_row_select_aggregate_join_ok_e61d3dd7",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 957,
+    "line": 993,
     "decision": "match compile(sql, schemas) {\n            Ok(p) => p,\n            Err(e) => panic!(\"{sql}: expected Ok, got {e:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5582,7 +5582,7 @@
   {
     "id": "codegen_row_select_aggregate_join_err_text_60f80ce7",
     "file": "src/codegen/row/select/aggregate/join.rs",
-    "line": 964,
+    "line": 1000,
     "decision": "match compile(sql, schemas) {\n            Ok(p) => panic!(\"{sql}: expected Err, got program {p:?}\"),\n            Err(e) => format!(\"{e:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6922,7 +6922,7 @@
   {
     "id": "codegen_row_select_join_access_resolve_join_order_by_6af2d584",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 374,
+    "line": 385,
     "decision": "match named_result_column(base_expr, select, scope)? {\n            Some(NamedColumn::Offset(abs, collation)) => (JoinOrderTarget::Offset(abs), collation),\n            Some(NamedColumn::Expr(expr)) => (\n                column_or_expr_target(strip_collate(expr), scope)?,\n                expr_collation(scope, expr).unwrap_or(Collation::Binary),\n            ),\n            None => (\n                column_or_expr_target(base_expr, scope)?,\n                expr_collation(scope, base_expr).unwrap_or(Collation::Binary),\n            ),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6932,7 +6932,7 @@
   {
     "id": "codegen_row_select_join_access_named_result_column_a19747d6",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 417,
+    "line": 428,
     "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Integer(n)) => {\n            let columns = expanded_result_columns(select, scope)?;\n            let count = columns.len();\n            usize::try_from(*n)\n                .ok()\n                .and_then(|ordinal| ordinal.checked_sub(1))\n                .and_then(|zero_based| columns.into_iter().nth(zero_based))\n                .map(Some)\n                .ok_or_else(|| CodegenError::Unsupported {\n                    reason: format!(\n                        \"ORDER BY position {n} is out of range for a {count}-column result set\"\n                    ),\n                })\n        }\n        ExprKind::Column {\n            table: None, name, ..\n        } => Ok(select.columns.iter().find_map(|c| match c {\n            ResultColumn::Expr {\n                expr,\n                alias: Some(a),\n            } if a == name => Some(NamedColumn::Expr(expr)),\n            _ => None,\n        })),\n        _ => Ok(None),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6942,7 +6942,7 @@
   {
     "id": "codegen_row_select_join_access_named_result_column_21d66beb",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 434,
+    "line": 445,
     "decision": "match c {\n            ResultColumn::Expr {\n                expr,\n                alias: Some(a),\n            } if a == name => Some(NamedColumn::Expr(expr)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6952,7 +6952,7 @@
   {
     "id": "codegen_row_select_join_access_named_result_column_aa8caed6",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 438,
+    "line": 449,
     "decision": "a == name",
     "conditions": 1,
     "vectors_required": 2,
@@ -6962,7 +6962,7 @@
   {
     "id": "codegen_row_select_join_access_expanded_result_columns_3814a7a5",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 462,
+    "line": 473,
     "decision": "match col {\n            ResultColumn::Star => {\n                for (i, binding) in scope.tables.iter().enumerate() {\n                    let suppressed = scope.dedup_star.get(i);\n                    let base = joined_column_offset(scope, i)?;\n                    for (idx, name) in binding.schema.columns.iter().enumerate() {\n                        if !suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase())) {\n                            out.push(NamedColumn::Offset(\n                                base.saturating_add(idx),\n                                declared(binding, idx),\n                            ));\n                        }\n                    }\n                }\n            }\n            ResultColumn::TableStar { table } => {\n                let i = scope\n                    .tables\n                    .iter()\n                    .position(|b| b.matches_qualifier(table))\n                    .ok_or_else(|| CodegenError::UnknownColumn {\n                        name: format!(\"{table}.*\"),\n                    })?;\n                let base = joined_column_offset(scope, i)?;\n                if let Some(binding) = scope.tables.get(i) {\n                    for idx in 0..binding.schema.columns.len() {\n                        out.push(NamedColumn::Offset(\n                            base.saturating_add(idx),\n                            declared(binding, idx),\n                        ));\n                    }\n                }\n            }\n            ResultColumn::Expr { expr, .. } => out.push(NamedColumn::Expr(expr)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -6972,7 +6972,7 @@
   {
     "id": "codegen_row_select_join_access_expanded_result_columns_8af7c86b",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 468,
+    "line": 479,
     "decision": "!suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase()))",
     "conditions": 1,
     "vectors_required": 2,
@@ -6982,7 +6982,7 @@
   {
     "id": "codegen_row_select_join_access_expanded_result_columns_fcef695b",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 486,
+    "line": 497,
     "decision": "let Some(binding) = scope.tables.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -6992,7 +6992,7 @@
   {
     "id": "codegen_row_select_join_access_column_or_expr_target_3d716bb3",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 504,
+    "line": 515,
     "decision": "match &expr.kind {\n        ExprKind::Column { table, name, .. } => {\n            let (binding_idx, local_idx) = resolve_scope_column(scope, table.as_deref(), name)?;\n            Ok(JoinOrderTarget::Offset(\n                joined_column_offset(scope, binding_idx)?.saturating_add(local_idx),\n            ))\n        }\n        _ => Ok(JoinOrderTarget::Expr(expr.clone())),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7002,7 +7002,7 @@
   {
     "id": "codegen_row_select_join_access_emit_full_joined_row_5092d053",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 530,
+    "line": 541,
     "decision": "first.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7012,7 +7012,7 @@
   {
     "id": "codegen_row_select_join_access_emit_joined_pseudo_projection_e7227301",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 567,
+    "line": 578,
     "decision": "match col {\n            ResultColumn::Star => {\n                for (i, binding) in scope.tables.iter().enumerate() {\n                    let suppressed = scope.dedup_star.get(i);\n                    let base = joined_column_offset(scope, i)?;\n                    for idx in 0..binding.schema.columns.len() {\n                        let Some(name) = binding.schema.columns.get(idx) else {\n                            continue;\n                        };\n                        if suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase())) {\n                            continue;\n                        }\n                        regs.push(read_offset(em, reg, base.saturating_add(idx)));\n                    }\n                }\n            }\n            ResultColumn::TableStar { table } => {\n                let i = scope\n                    .tables\n                    .iter()\n                    .position(|b| b.matches_qualifier(table))\n                    .ok_or_else(|| CodegenError::UnknownColumn {\n                        name: format!(\"{table}.*\"),\n                    })?;\n                let base = joined_column_offset(scope, i)?;\n                // `i` was just found by name in `scope.tables`, so this\n                // lookup cannot miss; an empty expansion would be a bug.\n                let count = scope\n                    .tables\n                    .get(i)\n                    .map(|b| b.schema.columns.len())\n                    .ok_or_else(|| CodegenError::Internal {\n                        reason: format!(\"binding {i} for {table}.* vanished from scope\"),\n                    })?;\n                for idx in 0..count {\n                    regs.push(read_offset(em, reg, base.saturating_add(idx)));\n                }\n            }\n            // A `COLLATE`d column (#613) projects the column's value; the\n            // collation only matters to DISTINCT and ORDER BY.\n            ResultColumn::Expr { expr, .. }\n                if matches!(strip_collate(expr).kind, ExprKind::Column { .. }) =>\n            {\n                let ExprKind::Column { table, name, .. } = &strip_collate(expr).kind else {\n                    continue;\n                };\n                let (binding_idx, local_idx) = resolve_scope_column(scope, table.as_deref(), name)?;\n                let abs = joined_column_offset(scope, binding_idx)?.saturating_add(local_idx);\n                regs.push(read_offset(em, reg, abs));\n            }\n            ResultColumn::Expr { .. } => {\n                return Err(CodegenError::Unsupported {\n                    reason: \"ORDER BY combined with a JOIN only supports `*`/`table.*`/bare \\\n                             column result columns today — a computed expression in the SELECT \\\n                             list can't yet be re-projected from the sorted output\"\n                        .to_string(),\n                });\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7022,7 +7022,7 @@
   {
     "id": "codegen_row_select_join_access_emit_joined_pseudo_projection_564abaae",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 608,
+    "line": 619,
     "decision": "matches!(strip_collate(expr).kind, ExprKind::Column { .. })",
     "conditions": 1,
     "vectors_required": 2,
@@ -7032,7 +7032,7 @@
   {
     "id": "codegen_row_select_join_access_emit_joined_pseudo_projection_a4e9b51a",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 576,
+    "line": 587,
     "decision": "suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase()))",
     "conditions": 1,
     "vectors_required": 2,
@@ -7042,7 +7042,7 @@
   {
     "id": "codegen_row_select_join_access_emit_joined_pseudo_projection_301bb25e",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 632,
+    "line": 643,
     "decision": "*r != want",
     "conditions": 1,
     "vectors_required": 2,
@@ -7052,7 +7052,7 @@
   {
     "id": "codegen_row_select_join_access_compile_joined_sorted_scan_a49038f2",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 744,
+    "line": 755,
     "decision": "let Some(distinct_cursor) = distinct_cursor",
     "conditions": 1,
     "vectors_required": 2,
@@ -7062,7 +7062,7 @@
   {
     "id": "codegen_row_select_join_access_compile_joined_sorted_scan_13928563",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 749,
+    "line": 760,
     "decision": "let Some(limit) = &limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -7072,7 +7072,7 @@
   {
     "id": "codegen_row_select_join_access_compile_joined_sorted_scan_13928563_2",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 752,
+    "line": 763,
     "decision": "let Some(limit) = &limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -7082,7 +7082,7 @@
   {
     "id": "codegen_row_select_join_access_compile_join_order_by_sort_keys_4ef99e0a",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 780,
+    "line": 791,
     "decision": "match &plan.target {\n            JoinOrderTarget::Offset(off) => *off,\n            JoinOrderTarget::Expr(expr) => {\n                let r = compile_value(em, reg, scope, expr)?;\n                key_index(r, first)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7092,7 +7092,7 @@
   {
     "id": "codegen_row_select_join_access_compile_join_level_for_sort_0d86c16d",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 839,
+    "line": 850,
     "decision": "let Some(where_expr) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -7102,7 +7102,7 @@
   {
     "id": "codegen_row_select_join_access_resolve_join_order_by_target_cfd1ee7f",
     "file": "src/codegen/row/select/join_access.rs",
-    "line": 1208,
+    "line": 1219,
     "decision": "match named_result_column(expr, select, scope)? {\n            Some(NamedColumn::Offset(abs, _)) => Ok(JoinOrderTarget::Offset(abs)),\n            Some(NamedColumn::Expr(named)) => column_or_expr_target(strip_collate(named), scope),\n            None => column_or_expr_target(expr, scope),\n        }",
     "conditions": 0,
     "vectors_required": 0,
