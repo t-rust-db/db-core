@@ -231,28 +231,58 @@ fn json_strings_are_stored_unescaped_and_plain_lines_as_written() {
     assert_eq!(read("raw")[0].as_deref(), Some(escaped));
 }
 
-#[test]
-fn other_formats_store_strings_as_written() {
+/// The `message` column `line` stores as a `format` table.
+fn stored_message(format: Format, line: &[u8]) -> Option<String> {
     let mut head = HeadPage::default();
-    head.push(1, 101, br#"level=info msg="a \"q\"""#);
+    head.push(1, 101, line);
     let page = head
         .snapshot(
             &Source::new(SourceKind::Stdin, "t"),
-            &DetectedParser::for_format(Format::Logfmt),
+            &DetectedParser::for_format(format),
         )
         .unwrap();
     let path = std::env::temp_dir().join(format!(
-        "db-core-flush-{}-logfmt.parquet",
-        std::process::id()
+        "db-core-flush-{}-{}.parquet",
+        std::process::id(),
+        format.as_str()
     ));
-    write_file(&path, &[page], Format::Logfmt, &WriterOptions::default()).unwrap();
+    write_file(&path, &[page], format, &WriterOptions::default()).unwrap();
     let bytes = std::fs::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
     let file = ParquetFile::open(&bytes).unwrap();
-    let message = file
+    let mut message = file
         .row_group(0)
         .unwrap()
         .read_string_column(column_index(&file, "message"))
         .unwrap();
-    assert_eq!(message, vec![Some(r#"a \"q\""#.to_string())]);
+    message.pop().flatten()
+}
+
+#[test]
+fn logfmt_and_clf_strings_are_stored_unescaped() {
+    // #616: quoted logfmt values and CLF fields decode their escapes.
+    assert_eq!(
+        stored_message(Format::Logfmt, br#"level=info msg="a \"q\" \\ b""#).as_deref(),
+        Some(r#"a "q" \ b"#)
+    );
+    assert_eq!(
+        stored_message(
+            Format::Clf,
+            br#"10.0.0.1 - - [10/Sep/2026:08:00:05 +0000] "GET /a\"b HTTP/1.1" 200 5 "-" "-""#
+        )
+        .as_deref(),
+        Some(r#"GET /a"b HTTP/1.1"#)
+    );
+}
+
+#[test]
+fn syslog_strings_are_stored_as_written() {
+    assert_eq!(
+        stored_message(
+            Format::Syslog,
+            br#"<134>Sep 10 08:00:02 web01 app[3]: a \"q\""#
+        )
+        .as_deref(),
+        Some(r#"a \"q\""#)
+    );
 }

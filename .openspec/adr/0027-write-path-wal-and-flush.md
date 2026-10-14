@@ -306,8 +306,15 @@ compares each JSON line's fields with DuckDB's `json_extract_string` of its
 leaves a page: at flush and hour close, and when a query reads a page, so
 flush timing never changes an answer. `raw` is the line as written, and a
 line that is not a JSON object keeps its whole text as `message`, unchanged.
-Other formats store strings as written: logfmt keeps `\"` and `\\` inside
-quoted values, and a CLF quoted field ends at its first `"`.
+logfmt and CLF decode at the same points (#616). A quoted logfmt value
+decodes JSON's escapes, as go-logfmt does; a bare value such as
+`path=C:\new` is kept as written. A CLF field decodes the escapes Apache and
+nginx write (`\"`, `\\`, `\n`, `\r`, `\t`, `\b`, `\v`, and `\xHH` read as
+bytes, then as UTF-8), and a quoted CLF field ends at the first `"` without
+a backslash before it, so a request line with an escaped quote no longer
+shifts the fields after it. syslog and freeform lines store strings as
+written. The stream engine reads the parsed lines directly and returns
+values as written in every format.
 
 ## Structure
 

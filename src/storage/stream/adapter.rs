@@ -187,34 +187,72 @@ pub(crate) fn column_values(segment: &Segment, name: &str) -> Option<Vec<Value>>
     Some(col)
 }
 
-/// [`column_values`] as an ingested table stores and reads it (#583): in a
-/// JSON Lines table, string values decode their JSON escapes
-/// ([`crate::json_path::unescape`]), so `{"msg":"a\\"b"}` stores `a"b`, as
-/// any JSON reader would. Tier-3 fields only exist on lines that parsed as
-/// JSON objects; `message` is decoded only where it is a value inside the
-/// line, not a whole line kept as written (a line that is not a JSON
-/// object). `raw` stays the line as written. Other formats are unchanged.
+/// [`column_values`] as an ingested table stores and reads it: string
+/// values decode the escapes of their format, as that format's readers
+/// would. `raw` stays the line as written.
+///
+/// - JSON Lines (#583): JSON escapes ([`crate::json_path::unescape`]), so
+///   `{"msg":"a\\"b"}` stores `a"b`. Tier-3 fields only exist on lines
+///   that parsed as JSON objects; `message` is decoded only where it is a
+///   value inside the line, not a whole line kept as written (a line that
+///   is not a JSON object).
+/// - logfmt (#616): quoted values decode the same escapes, as go-logfmt
+///   does; a bare value such as `path=C:\new` is kept as written.
+/// - CLF (#616): every field decodes Apache and nginx escapes
+///   ([`super::clf::unescape`]).
+///
+/// Other formats are unchanged.
 pub(crate) fn stored_column_values(
     segment: &Segment,
     name: &str,
     format: Format,
 ) -> Option<Vec<Value>> {
     let mut values = column_values(segment, name)?;
-    if format != Format::Jsonl || name == "raw" {
+    if name == "raw" {
         return Some(values);
     }
     for (i, value) in values.iter_mut().enumerate() {
         let Value::Str(text) = value else {
             continue;
         };
-        if name == "message" && is_whole_line(segment, i, text) {
-            continue;
-        }
-        if let std::borrow::Cow::Owned(decoded) = crate::json_path::unescape(text) {
+        let decoded = match format {
+            Format::Jsonl => decode_json(segment, i, name, text),
+            Format::Logfmt => decode_logfmt(segment, i, text),
+            Format::Clf => super::clf::unescape(text),
+            Format::Syslog | Format::Freeform => continue,
+        };
+        if let std::borrow::Cow::Owned(decoded) = decoded {
             *value = Value::Str(decoded.into());
         }
     }
     Some(values)
+}
+
+/// Row `i`'s JSON Lines value `text` of column `name`, decoded.
+fn decode_json<'t>(
+    segment: &Segment,
+    i: usize,
+    name: &str,
+    text: &'t str,
+) -> std::borrow::Cow<'t, str> {
+    if name == "message" && is_whole_line(segment, i, text) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    crate::json_path::unescape(text)
+}
+
+/// Row `i`'s logfmt value `text`, decoded if the line wrote it in quotes.
+fn decode_logfmt<'t>(segment: &Segment, i: usize, text: &'t str) -> std::borrow::Cow<'t, str> {
+    if !text.contains('\\') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let line = String::from_utf8_lossy(segment.raw_line(i));
+    // Trimmed as the logfmt parser trims a line before scanning it.
+    let line = line.trim_end_matches(['\r', '\n']);
+    if crate::logfmt_scan::quoted_values(line).any(|quoted| quoted == text) {
+        return crate::json_path::unescape(text);
+    }
+    std::borrow::Cow::Borrowed(text)
 }
 
 /// Whether `message` is row `i`'s entire line (line terminator aside).
@@ -368,16 +406,18 @@ mod tests {
     }
 
     fn jsonl_seg(text: &str) -> Arc<Segment> {
+        parsed_seg(text, &crate::storage::stream::jsonl::JsonlParser::new())
+    }
+
+    fn parsed_seg<P: crate::storage::stream::batch::LineParser>(
+        text: &str,
+        parser: &P,
+    ) -> Arc<Segment> {
         let b = Block {
             file_off: 0,
             bytes: Arc::from(text.as_bytes()),
         };
-        let mut v = Segment::seal_block(
-            &b,
-            &Source::new(SourceKind::File, "t"),
-            &crate::storage::stream::jsonl::JsonlParser::new(),
-            7,
-        );
+        let mut v = Segment::seal_block(&b, &Source::new(SourceKind::File, "t"), parser, 7);
         Arc::new(v.remove(0))
     }
 
@@ -385,38 +425,84 @@ mod tests {
         values.iter().map(ToString::to_string).collect()
     }
 
-    // storage_stream_adapter_stored_column_values_2ad2bd15:
-    // `format != Format::Jsonl || name == "raw"`
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__storage_stream_adapter_stored_column_values_2ad2bd15__v1_json_field_is_decoded() {
+    fn a_json_field_is_decoded() {
         let s = jsonl_seg("{\"u\":\"a\\\"b\"}\n");
         let got = stored_column_values(&s, "u", Format::Jsonl).unwrap();
         assert_eq!(strs(got), vec!["a\"b"]);
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__storage_stream_adapter_stored_column_values_2ad2bd15__v2_other_formats_keep_escapes() {
-        let s = jsonl_seg("{\"u\":\"a\\\"b\"}\n");
-        let got = stored_column_values(&s, "u", Format::Logfmt).unwrap();
-        assert_eq!(strs(got), vec![r#"a\"b"#]);
-    }
-
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__storage_stream_adapter_stored_column_values_2ad2bd15__v3_raw_stays_the_line() {
+    fn raw_stays_the_line() {
         let s = jsonl_seg("{\"u\":\"a\\\"b\"}\n");
         let got = stored_column_values(&s, "raw", Format::Jsonl).unwrap();
         assert_eq!(strs(got), vec![r#"{"u":"a\"b"}"#]);
     }
 
-    // storage_stream_adapter_stored_column_values_029cef6d:
+    #[test]
+    fn syslog_keeps_its_escapes() {
+        let s = seg("<134>Sep 10 08:00:02 web01 app[3]: a\\\"b\n");
+        let got = stored_column_values(&s, "message", Format::Syslog).unwrap();
+        assert_eq!(strs(got), vec![r#"a\"b"#]);
+    }
+
+    fn logfmt_seg(text: &str) -> Arc<Segment> {
+        parsed_seg(text, &crate::storage::stream::logfmt::LogfmtParser::new())
+    }
+
+    #[test]
+    fn logfmt_quoted_values_are_decoded() {
+        let s = logfmt_seg("level=info msg=\"a \\\"q\\\" \\\\ b\" u=\"x\\ty\"\r\n");
+        let msg = stored_column_values(&s, "message", Format::Logfmt).unwrap();
+        assert_eq!(strs(msg), vec![r#"a "q" \ b"#]);
+        let u = stored_column_values(&s, "u", Format::Logfmt).unwrap();
+        assert_eq!(strs(u), vec!["x\ty"]);
+    }
+
+    #[test]
+    fn an_unterminated_logfmt_quote_is_decoded() {
+        let s = logfmt_seg("level=info msg=\"a\\\"b\r\n");
+        let got = stored_column_values(&s, "message", Format::Logfmt).unwrap();
+        assert_eq!(strs(got), vec!["a\"b"]);
+    }
+
+    // storage_stream_adapter_decode_logfmt_8b2db62e: a value is decoded
+    // only where the line wrote it in quotes.
+    #[test]
+    fn a_bare_logfmt_value_keeps_its_backslashes() {
+        let s = logfmt_seg("level=info msg=done path=C:\\new\n");
+        let got = stored_column_values(&s, "path", Format::Logfmt).unwrap();
+        assert_eq!(strs(got), vec![r"C:\new"]);
+    }
+
+    fn clf_seg(text: &str) -> Arc<Segment> {
+        parsed_seg(text, &crate::storage::stream::clf::ClfParser::new())
+    }
+
+    #[test]
+    fn clf_fields_are_decoded() {
+        let s = clf_seg(concat!(
+            r#"10.0.0.1 - - [10/Sep/2026:08:00:00 +0000] "GET /a\"b HTTP/1.1" 200 5 "-" "x\x22y\xC3\xA9""#,
+            "\n"
+        ));
+        let path = stored_column_values(&s, "path", Format::Clf).unwrap();
+        assert_eq!(strs(path), vec!["/a\"b"]);
+        let ua = stored_column_values(&s, "ua", Format::Clf).unwrap();
+        assert_eq!(strs(ua), vec!["x\"yé"]);
+        let raw = stored_column_values(&s, "raw", Format::Clf).unwrap();
+        assert_eq!(
+            strs(raw),
+            vec![
+                r#"10.0.0.1 - - [10/Sep/2026:08:00:00 +0000] "GET /a\"b HTTP/1.1" 200 5 "-" "x\x22y\xC3\xA9""#
+            ]
+        );
+    }
+
+    // storage_stream_adapter_decode_json_029cef6d:
     // `name == "message" && is_whole_line(segment, i, text)`
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_stream_adapter_stored_column_values_029cef6d__v1_a_plain_line_message_is_kept()
-    {
+    fn mcdc__storage_stream_adapter_decode_json_029cef6d__v1_a_plain_line_message_is_kept() {
         let s = jsonl_seg("C:\\new\r\n");
         let got = stored_column_values(&s, "message", Format::Jsonl).unwrap();
         assert_eq!(strs(got), vec![r"C:\new"]);
@@ -424,7 +510,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_stream_adapter_stored_column_values_029cef6d__v2_a_json_message_is_decoded() {
+    fn mcdc__storage_stream_adapter_decode_json_029cef6d__v2_a_json_message_is_decoded() {
         let s = jsonl_seg("{\"msg\":\"C:\\\\new\"}\n");
         let got = stored_column_values(&s, "message", Format::Jsonl).unwrap();
         assert_eq!(strs(got), vec![r"C:\new"]);
@@ -432,8 +518,8 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_stream_adapter_stored_column_values_029cef6d__v3_a_field_is_decoded_whatever_its_text(
-    ) {
+    fn mcdc__storage_stream_adapter_decode_json_029cef6d__v3_a_field_is_decoded_whatever_its_text()
+    {
         // A field whose decoded text would also pass the whole-line test
         // is still decoded: only `message` can be a whole line.
         let s = jsonl_seg("{\"m\":\"x\\ty\"}\n");
