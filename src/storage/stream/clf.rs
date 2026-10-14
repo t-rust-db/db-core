@@ -135,15 +135,18 @@ impl ClfParser {
         }
     }
 
-    /// Parse a `"quoted"` field, returning (inner, rest). Malformed input
-    /// (no opening/closing quote) leaves `rest` untouched and returns `None`.
+    /// Parse a `"quoted"` field, returning (inner, rest), escapes left as
+    /// written. The field ends at the first `"` without a backslash before
+    /// it: Apache writes a quote inside a field as `\"` (#616). Malformed
+    /// input (no opening/closing quote) leaves `rest` untouched and
+    /// returns `None`.
     fn parse_quoted<'a>(&self, s: &'a str) -> (Option<&'a str>, &'a str) {
         let s = s.trim_start();
         if !s.starts_with('"') {
             return (None, s);
         }
         let after_quote = s.get(1..).unwrap_or("");
-        match after_quote.find('"') {
+        match closing_quote(after_quote) {
             Some(end) => {
                 let inner = after_quote.get(..end).unwrap_or("");
                 let rest = after_quote
@@ -311,6 +314,67 @@ impl LineParser for ClfParser {
     }
 }
 
+/// The byte offset of the first `"` in `s` that is not escaped.
+fn closing_quote(s: &str) -> Option<usize> {
+    let mut escaped = false;
+    for (i, b) in s.bytes().enumerate() {
+        if escaped {
+            escaped = false;
+        } else if b == b'\\' {
+            escaped = true;
+        } else if b == b'"' {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// A CLF field as Apache and nginx meant it (#616): `\"`, `\\`, `\b`,
+/// `\n`, `\r`, `\t` and `\v` decode to their characters and `\xHH` to the
+/// byte it names. nginx writes each byte of a non-ASCII character as its
+/// own `\xHH`, so the bytes are decoded first and then read as UTF-8, with
+/// U+FFFD for any that are not. Other escapes stay as written.
+pub(crate) fn unescape(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains('\\') {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        let (decoded, consumed) = if b == b'\\' {
+            decode_escape(bytes.get(i..).unwrap_or_default()).unwrap_or((b, 1))
+        } else {
+            (b, 1)
+        };
+        out.push(decoded);
+        i = i.saturating_add(consumed);
+    }
+    std::borrow::Cow::Owned(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// The byte an escape at the start of `tail` stands for, and its length.
+fn decode_escape(tail: &[u8]) -> Option<(u8, usize)> {
+    let simple = match tail.get(1)? {
+        b'"' => b'"',
+        b'\\' => b'\\',
+        b'b' => 0x08,
+        b'n' => b'\n',
+        b'r' => b'\r',
+        b't' => b'\t',
+        b'v' => 0x0b,
+        b'x' => {
+            let hex = std::str::from_utf8(tail.get(2..4)?).ok()?;
+            if !hex.bytes().all(|h| h.is_ascii_hexdigit()) {
+                return None;
+            }
+            return Some((u8::from_str_radix(hex, 16).ok()?, 4));
+        }
+        _ => return None,
+    };
+    Some((simple, 2))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,6 +427,52 @@ mod tests {
             }
             other => panic!("expected Dict referer, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_end_the_request_field() {
+        // Apache writes a quote inside the request line as `\"` (#616).
+        let batch = parse_one(
+            "10.0.0.1 - - [10/Sep/2026:08:00:05 +0000] \"GET /a\\\"b HTTP/1.1\" 404 12 \"r\\\\\" \"ua\"\n",
+        );
+        assert_eq!(batch.message.first(), Some(&Some(r#"GET /a\"b HTTP/1.1"#)));
+        match batch.fields.get("status") {
+            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(404)]),
+            other => panic!("expected Int status, got {other:?}"),
+        }
+        match batch.fields.get("bytes") {
+            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(12)]),
+            other => panic!("expected Int bytes, got {other:?}"),
+        }
+        match batch.fields.get("referer") {
+            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [r"r\\"]),
+            other => panic!("expected Dict referer, got {other:?}"),
+        }
+        match batch.fields.get("ua") {
+            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), ["ua"]),
+            other => panic!("expected Dict ua, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unescape_decodes_apache_and_nginx_escapes() {
+        assert_eq!(
+            unescape(r#"a\"b\\c\bd\ne\rf\tg\vh\x22i"#),
+            "a\"b\\c\u{8}d\ne\rf\tg\u{b}h\"i"
+        );
+        // nginx escapes each byte of a non-ASCII character.
+        assert_eq!(unescape(r"caf\xC3\xA9 \xc3\xa9"), "café é");
+        assert_eq!(unescape(r"bad \xff"), "bad \u{fffd}");
+        assert!(matches!(
+            unescape("plain é"),
+            std::borrow::Cow::Borrowed("plain é")
+        ));
+    }
+
+    #[test]
+    fn unescape_keeps_malformed_escapes() {
+        assert_eq!(unescape(r"\q \x2 \x+f \xzz end\"), r"\q \x2 \x+f \xzz end\");
+        assert_eq!(unescape(r"\x4"), r"\x4");
     }
 
     #[test]

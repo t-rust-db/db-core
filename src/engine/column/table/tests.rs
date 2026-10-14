@@ -538,6 +538,46 @@ fn a_sort_key_lets_statistics_skip_row_groups() {
 }
 
 #[test]
+fn logfmt_and_clf_strings_read_the_same_before_and_after_a_flush() {
+    // #616: quoted logfmt values and CLF fields decode their escapes on
+    // a page and in the file it flushes to; a bare logfmt value does not.
+    let t = TempTable::new();
+    let mut w = t.writer_with(TableOptions {
+        format: Format::Logfmt,
+        ..TableOptions::default()
+    });
+    append(&mut w, &[r#"level=info msg="a \"q\"" path=C:\new"#]);
+    let sql = "SELECT message, path FROM logs";
+    let before = rows(&w, sql);
+    assert_eq!(before, vec![vec![text(r#"a "q""#), text(r"C:\new")]]);
+    w.flush().unwrap();
+    assert_eq!(rows(&w, sql), before);
+
+    let t = TempTable::new();
+    let mut w = t.writer_with(TableOptions {
+        format: Format::Clf,
+        ..TableOptions::default()
+    });
+    append(
+        &mut w,
+        &[r#"10.0.0.1 - - [10/Sep/2026:08:00:05 +0000] "GET /a\"b HTTP/1.1" 404 12 "-" "x\x22y""#],
+    );
+    let sql = "SELECT path, status, bytes, ua FROM logs";
+    let before = rows(&w, sql);
+    assert_eq!(
+        before,
+        vec![vec![
+            text(r#"/a"b"#),
+            Cell::Int(404),
+            Cell::Int(12),
+            text(r#"x"y"#)
+        ]]
+    );
+    w.flush().unwrap();
+    assert_eq!(rows(&w, sql), before);
+}
+
+#[test]
 fn json_strings_read_the_same_before_and_after_a_flush() {
     // #583: a page and the file it flushes to both decode JSON escapes,
     // so flush timing never changes a query's answer.
