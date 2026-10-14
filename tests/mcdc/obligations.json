@@ -5540,10 +5540,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_aggregate_join_resolve_group_order_target_1d193d36",
+    "id": "codegen_row_select_aggregate_join_resolve_group_order_target_9fdfceca",
     "file": "src/codegen/row/select/aggregate/join.rs",
     "line": 910,
-    "decision": "match named_result_column(stripped, select, full_scope)? {\n        Some(NamedColumn::Offset(abs, collation)) => {\n            return Ok((GroupOrderKey::Offset(abs), explicit.unwrap_or(collation)));\n        }\n        Some(NamedColumn::Expr(target)) => {\n            let (key, collation) =\n                resolve_group_order_target(select, full_scope, agg_slots, total_width, target)?;\n            return Ok((key, explicit.unwrap_or(collation)));\n        }\n        None => {}\n    }",
+    "decision": "match named_result_column(stripped, select, full_scope)? {\n        Some(NamedColumn::Offset(abs, collation)) => {\n            return Ok((GroupOrderKey::Offset(abs), explicit.unwrap_or(collation)));\n        }\n        Some(NamedColumn::Expr(target)) => {\n            let (key, collation) =\n                resolve_group_order_target(select, full_scope, agg_slots, total_width, &target)?;\n            return Ok((key, explicit.unwrap_or(collation)));\n        }\n        None => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -6950,30 +6950,30 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_join_access_resolve_join_order_by_6af2d584",
+    "id": "codegen_row_select_join_access_resolve_join_order_by_5a1c3dd3",
     "file": "src/codegen/row/select/join_access.rs",
     "line": 385,
-    "decision": "match named_result_column(base_expr, select, scope)? {\n            Some(NamedColumn::Offset(abs, collation)) => (JoinOrderTarget::Offset(abs), collation),\n            Some(NamedColumn::Expr(expr)) => (\n                column_or_expr_target(strip_collate(expr), scope)?,\n                expr_collation(scope, expr).unwrap_or(Collation::Binary),\n            ),\n            None => (\n                column_or_expr_target(base_expr, scope)?,\n                expr_collation(scope, base_expr).unwrap_or(Collation::Binary),\n            ),\n        }",
+    "decision": "match named_result_column(base_expr, select, scope)? {\n            Some(NamedColumn::Offset(abs, collation)) => (JoinOrderTarget::Offset(abs), collation),\n            Some(NamedColumn::Expr(expr)) => (\n                column_or_expr_target(strip_collate(&expr), scope)?,\n                expr_collation(scope, &expr).unwrap_or(Collation::Binary),\n            ),\n            None => (\n                column_or_expr_target(base_expr, scope)?,\n                expr_collation(scope, base_expr).unwrap_or(Collation::Binary),\n            ),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_join_access_named_result_column_a19747d6",
+    "id": "codegen_row_select_join_access_named_result_column_5564e927",
     "file": "src/codegen/row/select/join_access.rs",
     "line": 428,
-    "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Integer(n)) => {\n            let columns = expanded_result_columns(select, scope)?;\n            let count = columns.len();\n            usize::try_from(*n)\n                .ok()\n                .and_then(|ordinal| ordinal.checked_sub(1))\n                .and_then(|zero_based| columns.into_iter().nth(zero_based))\n                .map(Some)\n                .ok_or_else(|| CodegenError::Unsupported {\n                    reason: format!(\n                        \"ORDER BY position {n} is out of range for a {count}-column result set\"\n                    ),\n                })\n        }\n        ExprKind::Column {\n            table: None, name, ..\n        } => Ok(select.columns.iter().find_map(|c| match c {\n            ResultColumn::Expr {\n                expr,\n                alias: Some(a),\n            } if a == name => Some(NamedColumn::Expr(expr)),\n            _ => None,\n        })),\n        _ => Ok(None),\n    }",
+    "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Integer(n)) => {\n            let columns = expanded_result_columns(select, scope)?;\n            let count = columns.len();\n            usize::try_from(*n)\n                .ok()\n                .and_then(|ordinal| ordinal.checked_sub(1))\n                .and_then(|zero_based| columns.into_iter().nth(zero_based))\n                .map(Some)\n                .ok_or_else(|| CodegenError::Unsupported {\n                    reason: format!(\n                        \"ORDER BY position {n} is out of range for a {count}-column result set\"\n                    ),\n                })\n        }\n        ExprKind::Column {\n            table: None, name, ..\n        } => Ok(select.columns.iter().find_map(|c| match c {\n            ResultColumn::Expr {\n                expr,\n                alias: Some(a),\n            } if a == name => Some(NamedColumn::Expr(expr.clone())),\n            _ => None,\n        })),\n        _ => Ok(None),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "codegen_row_select_join_access_named_result_column_21d66beb",
+    "id": "codegen_row_select_join_access_named_result_column_299a0b75",
     "file": "src/codegen/row/select/join_access.rs",
     "line": 445,
-    "decision": "match c {\n            ResultColumn::Expr {\n                expr,\n                alias: Some(a),\n            } if a == name => Some(NamedColumn::Expr(expr)),\n            _ => None,\n        }",
+    "decision": "match c {\n            ResultColumn::Expr {\n                expr,\n                alias: Some(a),\n            } if a == name => Some(NamedColumn::Expr(expr.clone())),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -6990,10 +6990,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_join_access_expanded_result_columns_3814a7a5",
+    "id": "codegen_row_select_join_access_expanded_result_columns_525a9205",
     "file": "src/codegen/row/select/join_access.rs",
     "line": 473,
-    "decision": "match col {\n            ResultColumn::Star => {\n                for (i, binding) in scope.tables.iter().enumerate() {\n                    let suppressed = scope.dedup_star.get(i);\n                    let base = joined_column_offset(scope, i)?;\n                    for (idx, name) in binding.schema.columns.iter().enumerate() {\n                        if !suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase())) {\n                            out.push(NamedColumn::Offset(\n                                base.saturating_add(idx),\n                                declared(binding, idx),\n                            ));\n                        }\n                    }\n                }\n            }\n            ResultColumn::TableStar { table } => {\n                let i = scope\n                    .tables\n                    .iter()\n                    .position(|b| b.matches_qualifier(table))\n                    .ok_or_else(|| CodegenError::UnknownColumn {\n                        name: format!(\"{table}.*\"),\n                    })?;\n                let base = joined_column_offset(scope, i)?;\n                if let Some(binding) = scope.tables.get(i) {\n                    for idx in 0..binding.schema.columns.len() {\n                        out.push(NamedColumn::Offset(\n                            base.saturating_add(idx),\n                            declared(binding, idx),\n                        ));\n                    }\n                }\n            }\n            ResultColumn::Expr { expr, .. } => out.push(NamedColumn::Expr(expr)),\n        }",
+    "decision": "match col {\n            ResultColumn::Star => {\n                for (i, binding) in scope.tables.iter().enumerate() {\n                    let suppressed = scope.dedup_star.get(i);\n                    let base = joined_column_offset(scope, i)?;\n                    for (idx, name) in binding.schema.columns.iter().enumerate() {\n                        if !suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase())) {\n                            out.push(NamedColumn::Offset(\n                                base.saturating_add(idx),\n                                declared(binding, idx),\n                            ));\n                        }\n                    }\n                }\n            }\n            ResultColumn::TableStar { table } => {\n                let i = scope\n                    .tables\n                    .iter()\n                    .position(|b| b.matches_qualifier(table))\n                    .ok_or_else(|| CodegenError::UnknownColumn {\n                        name: format!(\"{table}.*\"),\n                    })?;\n                let base = joined_column_offset(scope, i)?;\n                if let Some(binding) = scope.tables.get(i) {\n                    for idx in 0..binding.schema.columns.len() {\n                        out.push(NamedColumn::Offset(\n                            base.saturating_add(idx),\n                            declared(binding, idx),\n                        ));\n                    }\n                }\n            }\n            ResultColumn::Expr { expr, .. } => out.push(NamedColumn::Expr(expr.clone())),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -7130,10 +7130,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_join_access_resolve_join_order_by_target_cfd1ee7f",
+    "id": "codegen_row_select_join_access_resolve_join_order_by_target_578cfae6",
     "file": "src/codegen/row/select/join_access.rs",
     "line": 1219,
-    "decision": "match named_result_column(expr, select, scope)? {\n            Some(NamedColumn::Offset(abs, _)) => Ok(JoinOrderTarget::Offset(abs)),\n            Some(NamedColumn::Expr(named)) => column_or_expr_target(strip_collate(named), scope),\n            None => column_or_expr_target(expr, scope),\n        }",
+    "decision": "match named_result_column(expr, select, scope)? {\n            Some(NamedColumn::Offset(abs, _)) => Ok(JoinOrderTarget::Offset(abs)),\n            Some(NamedColumn::Expr(named)) => column_or_expr_target(strip_collate(&named), scope),\n            None => column_or_expr_target(expr, scope),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
