@@ -4,6 +4,26 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.130.0] - 2026-10-15
+
+### Added
+
+- **Record tables** (#594). A table can be created with a fixed schema (`TableOptions::schema`) and appended to with typed rows (`TableWriter::append_row`) instead of log lines. A row must match the schema exactly: arity, NULL only in nullable columns, each value of its column's type and range. Nothing is converted. Flushes, hour and day merges write exactly the schema's columns, and a day merge reads each column back as its declared type, so logical types survive compaction. A record table's manifest is version 3; lines tables stay version 2.
+- **Parquet writer types** (#595): BLOB (`ColumnType::Binary`), `UInt8/16/32/64`, `Decimal { precision, scale }` (INT32 up to 9 digits, INT64 up to 18, a 16-byte FIXED_LEN_BYTE_ARRAY above) and `FixedLenByteArray(n)`, with type-ordered statistics and both ConvertedType and LogicalType annotations. DuckDB 1.5.6 and pyarrow 25.0.1 read each type back with its declared type, values and bounds.
+- **Column engine reads** of the new types, by annotation: unsigned values are unsigned (a `UINT_64` above `i64::MAX` is an error, not a wrapped negative), DECIMAL reads as a float, and BLOB and fixed-length bytes read as lowercase hex.
+
+### Changed
+
+- `ColumnValues::column_type()` is replaced by `ColumnValues::is_for()`: a decimal's or fixed-length column's parameters are not in its values.
+- A BYTE_ARRAY without a UTF8 annotation reads as hex, not as a string (DuckDB's BLOB).
+
+### Fixed
+
+- **Pruning on unsigned statistics.** Footer statistics for `UINT_32` and `UINT_64` were read as signed, so a row group holding `u32::MAX` was skipped for `u32 > 3000000000`.
+- **DECIMAL columns written by DuckDB** read as their unscaled integers; they now read as their value.
+- **Ungrouped aggregates over no row groups.** `SELECT count(*) ...` returned no row when footer statistics pruned every row group, or when the file had none; it returns one row (count 0, the others NULL), as sqlite and DuckDB do.
+- `make check-features`: the `vm-batch` gate on the `storage::column` decode re-export was lost, so `storage-column` alone failed to build.
+
 ## [0.129.2] - 2026-10-15
 
 ### Fixed
