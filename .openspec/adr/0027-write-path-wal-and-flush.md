@@ -16,8 +16,8 @@ Two options were considered:
 
 1. **Batch export.** Buffer records, periodically write a Parquet file.
    Records are invisible until their batch is flushed, so a live use case
-   (a session's recent events) needs a separate hot store — the
-   "PostgreSQL hot window" of the DetACT event-store proposal.
+   (a session's recent events) needs a separate hot store, such as a
+   row database holding the last day or two.
 2. **Queryable write-ahead tail.** Records land in an in-memory page that
    is queryable immediately, are made durable by a separate WAL thread,
    and the oldest pages are flushed to Parquet. Queries read the union of
