@@ -94,7 +94,14 @@ pub enum Value {
     Str(Cow<'static, str>),
     /// SQL `NULL`.
     Null,
+    /// A `MAP<VARCHAR, VARCHAR>` (#621): `(key, value)` entries in order,
+    /// unique keys, a value may be NULL. Read from a Parquet MAP column;
+    /// queried with `m['k']` and the map functions.
+    Map(Arc<MapEntries>),
 }
+
+/// A map value's `(key, value)` entries, in order.
+pub type MapEntries = Vec<(String, Option<String>)>;
 
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -104,6 +111,20 @@ impl fmt::Display for Value {
             Value::Bool(v) => write!(f, "{v}"),
             Value::Str(v) => write!(f, "{v}"),
             Value::Null => write!(f, "NULL"),
+            // As DuckDB prints a map: `{a=1, b=NULL}`.
+            Value::Map(entries) => {
+                write!(f, "{{")?;
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    match v {
+                        Some(v) => write!(f, "{k}={v}")?,
+                        None => write!(f, "{k}=NULL")?,
+                    }
+                }
+                write!(f, "}}")
+            }
         }
     }
 }
@@ -666,6 +687,8 @@ fn to_scalar_value(v: &Value) -> crate::value::Value {
         Value::Bool(b) => crate::value::Value::Integer(i64::from(*b)),
         Value::Str(s) => crate::value::Value::Text(s.as_ref().into()),
         Value::Null => crate::value::Value::Null,
+        // The row functions have no map type: its rendered text.
+        Value::Map(_) => crate::value::Value::Text(v.to_string().into()),
     }
 }
 
@@ -2203,6 +2226,10 @@ fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
             v.hash(state);
         }
         Value::Null => 4u8.hash(state),
+        Value::Map(entries) => {
+            5u8.hash(state);
+            entries.hash(state);
+        }
     }
 }
 
@@ -2216,6 +2243,7 @@ const TAG_FLOAT: u64 = 0x9E37_79B9_7F4A_7C15;
 const TAG_BOOL: u64 = 0xC2B2_AE3D_27D4_EB4F;
 const TAG_STR: u64 = 0x1656_67B1_9E37_79F9;
 const TAG_NULL: u64 = 0x2545_F491_4F6C_DD1D;
+const TAG_MAP: u64 = 0x4CF5_AD43_2745_937F;
 /// Dictionary codes are hashed within one segment only (the code -> string
 /// map is per column chunk), so their tag just has to stay clear of the
 /// scalar tags above.
@@ -2236,6 +2264,8 @@ fn hash_one_value(value: &Value) -> u64 {
         Value::Bool(v) => murmur_finalize(u64::from(*v) ^ TAG_BOOL),
         Value::Str(s) => hash_str_bytes(s.as_bytes()),
         Value::Null => murmur_finalize(TAG_NULL),
+        // Rare as a key: the rendered entries, kept apart from strings.
+        Value::Map(_) => murmur_finalize(hash_str_bytes(value.to_string().as_bytes()) ^ TAG_MAP),
     }
 }
 
@@ -3733,16 +3763,29 @@ impl Vm {
                 if arg_regs.iter().any(|r| r.len() != num_rows) {
                     return Err(VmError::RegisterLengthMismatch { opcode });
                 }
-                let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];
-                let mut result = Vec::with_capacity(num_rows);
-                for row in 0..num_rows {
-                    for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {
-                        *slot = to_scalar_value(&reg[row]);
+                // #621: map functions read `Value::Map`, which the row
+                // functions' values cannot carry.
+                let result: Vec<Value> = if super::map_fns::is_map_function(name) {
+                    (0..num_rows)
+                        .map(|row| {
+                            let args: Vec<&Value> =
+                                arg_regs.iter().filter_map(|r| r.get(row)).collect();
+                            super::map_fns::call(name, &args)
+                        })
+                        .collect()
+                } else {
+                    let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];
+                    let mut result = Vec::with_capacity(num_rows);
+                    for row in 0..num_rows {
+                        for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {
+                            *slot = to_scalar_value(&reg[row]);
+                        }
+                        let value = crate::functions::call(name, &call_args)
+                            .map_or(Value::Null, from_scalar_value);
+                        result.push(value);
                     }
-                    let value = crate::functions::call(name, &call_args)
-                        .map_or(Value::Null, from_scalar_value);
-                    result.push(value);
-                }
+                    result
+                };
                 self.registers.insert(*dst, Arc::new(result));
             }
             Opcode::Filter { predicate } => {

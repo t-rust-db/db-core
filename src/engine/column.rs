@@ -160,12 +160,25 @@ fn resolve_columns(leaves: &[Leaf], names: &[String]) -> Result<Vec<Leaf>, Engin
 fn leaf_columns(file: &ParquetFile<'_>) -> Vec<Leaf> {
     file.fields()
         .into_iter()
-        .filter(|f| !f.nested)
         .filter_map(|f| {
-            let pt = f.element.physical_type?;
+            // A MAP (#621) is a column at its first leaf; it decodes as
+            // map values (`Annotation::Map`). Other groups are not columns.
+            let pt = match f.element.physical_type {
+                Some(pt) => pt,
+                None if is_map(&f) => PhysicalType::ByteArray,
+                None => return None,
+            };
             Some((f.name, f.leaves.start, pt))
         })
         .collect()
+}
+
+/// A top-level `MAP` field of two leaves.
+fn is_map(field: &crate::storage::parquet::Field) -> bool {
+    field.nested
+        && field.leaves.len() == 2
+        && field.element.converted_type
+            == Some(crate::storage::parquet::footer::ConvertedType::Other(1))
 }
 
 /// One row group of a Parquet file as a lazily-loaded [`Segment`]: decodes
@@ -414,8 +427,10 @@ fn segment_error(row_group_index: usize, column_name: &str, e: &impl std::fmt::D
 /// Applies one column's decoded shape onto `batch` under `name` (see
 /// [`Decoded`]).
 fn apply_decoded(batch: Batch, name: &str, decoded: Decoded) -> Batch {
-    let Decoded::Column(column) = decoded;
-    batch.with_typed_column(name.to_string(), column)
+    match decoded {
+        Decoded::Column(column) => batch.with_typed_column(name.to_string(), column),
+        Decoded::Values(values) => batch.with_column(name.to_string(), values),
+    }
 }
 
 /// Builds one [`RowGroupSegment`] per row group, skipping any row group
@@ -569,7 +584,7 @@ mod prune {
                     .ok()
                     .map(StatValue::Int);
             }
-            Annotation::Decimal | Annotation::Bytes => return None,
+            Annotation::Decimal | Annotation::Bytes | Annotation::Map => return None,
         }
         match physical_type {
             PhysicalType::Int32 => {
@@ -1248,6 +1263,68 @@ mod tests {
             err.to_string().contains("not loaded by this segment"),
             "{err}"
         );
+    }
+
+    /// #621: a MAP column reads as maps, rendered as DuckDB prints them,
+    /// and `m['k']` and the map functions answer as in DuckDB 1.5
+    /// (`map_get_ci` has no DuckDB equivalent).
+    #[test]
+    fn map_columns_answer_subscripts_and_map_functions() {
+        let path = Path::new("tests/fixtures/parquet/nested_map.parquet");
+        let mut engine = BatchEngine::open(path).unwrap();
+        let rows = |engine: &mut BatchEngine, sql: &str| -> Vec<String> {
+            engine
+                .run_query(sql)
+                .unwrap()
+                .rows
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("|")
+                })
+                .collect()
+        };
+        assert_eq!(
+            rows(
+                &mut engine,
+                "SELECT h, h['k'], element_at(h, 'k'), map_keys(h), cardinality(h) FROM nested_map"
+            ),
+            [
+                "{User-Agent=curl/8, Accept=*/*}||[]|[User-Agent, Accept]|2",
+                "||||",
+                "{}||[]|[]|0",
+                "{k=NULL}||[NULL]|[k]|1",
+                "{héader=välue, k=v}|v|[v]|[héader, k]|2",
+            ]
+        );
+        assert_eq!(
+            rows(
+                &mut engine,
+                "SELECT id FROM nested_map WHERE map_get_ci(h, 'user-AGENT') = 'curl/8'"
+            ),
+            ["0"]
+        );
+        assert_eq!(
+            rows(&mut engine, "SELECT id FROM nested_map WHERE h['k'] = 'v'"),
+            ["4"]
+        );
+        assert_eq!(
+            rows(
+                &mut engine,
+                "SELECT count(*) FROM nested_map WHERE h['k'] IS NULL"
+            ),
+            ["4"]
+        );
+        // The key leaf's statistics are of keys, not maps: never pruned on.
+        assert_eq!(
+            rows(&mut engine, "SELECT id FROM nested_map WHERE h > 'zzz'"),
+            Vec::<String>::new()
+        );
+        let tables = engine.tables().unwrap();
+        let names: Vec<&str> = tables[0].columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["id", "h", "x"]);
     }
 
     /// A column after a MAP reads its own chunk, filters and prunes; the

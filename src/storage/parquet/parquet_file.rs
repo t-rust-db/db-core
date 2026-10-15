@@ -399,6 +399,15 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         self.file.leaf_element(column_index)
     }
 
+    /// The top-level nested field (struct, list, map) whose first leaf is
+    /// `column_index`, if any.
+    pub fn nested_field_at(&self, column_index: usize) -> Option<Field> {
+        self.file
+            .fields()
+            .into_iter()
+            .find(|f| f.nested && f.leaves.start == column_index)
+    }
+
     pub fn num_columns(&self) -> usize {
         self.row_group.columns.len()
     }

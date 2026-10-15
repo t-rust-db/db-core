@@ -2356,8 +2356,32 @@ impl Parser {
                     span,
                 });
             }
-            this.primary_expr()
+            this.postfix_expr()
         })
+    }
+
+    /// A primary expression and any subscripts after it (#621, column
+    /// dialect only: the tokenizer emits [`TokenKind::LBracket`] only in
+    /// subscript mode). `m['k']` is DuckDB's `map_extract_value(m, 'k')`
+    /// and parses as that call, so no expression walker sees a new form.
+    fn postfix_expr(&mut self) -> PResult<Expr> {
+        let mut expr = self.primary_expr()?;
+        while matches!(self.peek().kind, TokenKind::LBracket) {
+            self.advance_span();
+            let index = self.expr()?;
+            let end = self.expect_punct(TokenKind::RBracket, "']' to close the subscript")?;
+            let span = join_span(expr.span, end);
+            expr = Expr {
+                kind: ExprKind::FunctionCall {
+                    name: "map_extract_value".to_string(),
+                    distinct: false,
+                    args: FunctionArgs::List(vec![expr, index]),
+                    tail: None,
+                },
+                span,
+            };
+        }
+        Ok(expr)
     }
 
     // db-core#531: matches on `&self.peek().kind` (a borrow) instead of

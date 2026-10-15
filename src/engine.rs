@@ -174,6 +174,8 @@ impl From<crate::vm::batch::Value> for Cell {
             crate::vm::batch::Value::Float(x) => Cell::Real(x),
             crate::vm::batch::Value::Bool(b) => Cell::Bool(b),
             crate::vm::batch::Value::Str(s) => Cell::Text(s.into_owned()),
+            // As DuckDB prints a map: `{a=1, b=NULL}`.
+            m @ crate::vm::batch::Value::Map(_) => Cell::Text(m.to_string()),
         }
     }
 }

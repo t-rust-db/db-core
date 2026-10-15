@@ -20,6 +20,8 @@ use crate::vm::column::build_str_column;
 /// than rebuilding a per-row [`Value`](crate::vm::batch::Value).
 pub enum Decoded {
     Column(Column),
+    /// Values a typed [`Column`] cannot hold: a map column (#621).
+    Values(Vec<Value>),
 }
 
 /// What a column's annotation changes about how its values decode (#595).
@@ -41,10 +43,17 @@ pub enum Annotation {
     /// An unannotated BYTE_ARRAY (`BLOB`) or FIXED_LEN_BYTE_ARRAY:
     /// lowercase hex text, as DuckDB's `hex()` renders it.
     Bytes,
+    /// The first leaf of a `MAP<UTF8, UTF8>` field (#621): the field reads
+    /// as [`Value::Map`], and its leaves' statistics (of keys and values,
+    /// not maps) never prune.
+    Map,
 }
 
 /// The [`Annotation`] of leaf `index` in `rg`'s file.
 pub fn annotation(rg: &RowGroupReader<'_, '_>, index: usize) -> Annotation {
+    if rg.nested_field_at(index).is_some() {
+        return Annotation::Map;
+    }
     let Some(element) = rg.schema_element(index) else {
         return Annotation::Plain;
     };
@@ -67,7 +76,7 @@ fn decode_annotated(
     physical_type: PhysicalType,
 ) -> Result<Option<Column>, FileError> {
     Ok(Some(match annotation(rg, index) {
-        Annotation::Plain => return Ok(None),
+        Annotation::Plain | Annotation::Map => return Ok(None),
         Annotation::UInt32 => int_column(
             rg.read_int32_column(index)?
                 .into_iter()
@@ -101,6 +110,24 @@ fn decode_annotated(
     }))
 }
 
+/// Every row of the map field starting at leaf `index` as [`Value::Map`]
+/// (NULL for a NULL map), or `None` when `index` starts no nested field.
+fn map_values(rg: &RowGroupReader<'_, '_>, index: usize) -> Result<Option<Vec<Value>>, FileError> {
+    let Some(field) = rg.nested_field_at(index) else {
+        return Ok(None);
+    };
+    let rows = rg.read_map_utf8_column(&field)?;
+    Ok(Some(
+        rows.into_iter()
+            .map(|m| {
+                m.map_or(Value::Null, |entries| {
+                    Value::Map(std::sync::Arc::new(entries))
+                })
+            })
+            .collect(),
+    ))
+}
+
 /// Lowercase hex of `bytes`, as the column engine renders a BLOB.
 pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
@@ -128,6 +155,9 @@ pub fn decode_column_full(
     // definition levels become its `Bitmap` with no `Vec<Option<T>>` in
     // between. `None` means the chunk has a dictionary or other encoding,
     // and the `Vec<Option<T>>` readers below handle it as before.
+    if let Some(values) = map_values(rg, index)? {
+        return Ok(Decoded::Values(values));
+    }
     if let Some(column) = decode_annotated(rg, index, physical_type)? {
         return Ok(Decoded::Column(column));
     }
@@ -205,6 +235,18 @@ pub fn decode_column_at(
     // #513: fixed-width primitives read only the wanted rows of only the
     // pages holding them; `None` (a non-PLAIN chunk) keeps the
     // decode-then-gather readers below.
+    if let Some(values) = map_values(rg, index)? {
+        let gathered = positions
+            .iter()
+            .map(|&p| {
+                usize::try_from(p)
+                    .ok()
+                    .and_then(|i| values.get(i).cloned())
+                    .ok_or(FileError::RowPositionOutOfRange(p))
+            })
+            .collect::<Result<Vec<Value>, _>>()?;
+        return Ok(Decoded::Values(gathered));
+    }
     if let Some(column) = decode_annotated(rg, index, physical_type)? {
         let values = positions
             .iter()
@@ -686,7 +728,10 @@ mod tests {
         let file_bytes = build_single_column_file(1 /* INT32 */, &body, values.len() as i32);
         let file = crate::storage::parquet::ParquetFile::open(&file_bytes).unwrap();
         let rg = file.row_group(0).unwrap();
-        let Decoded::Column(column) = decode_column_full(&rg, 0, PhysicalType::Int32).unwrap();
+        let Decoded::Column(column) = decode_column_full(&rg, 0, PhysicalType::Int32).unwrap()
+        else {
+            panic!("expected a typed column");
+        };
         match column {
             Column::Int { data, valid } => {
                 assert_eq!(data, vec![1, -2, 3]);
@@ -708,7 +753,10 @@ mod tests {
         let file_bytes = build_single_column_file(4 /* FLOAT */, &body, values.len() as i32);
         let file = crate::storage::parquet::ParquetFile::open(&file_bytes).unwrap();
         let rg = file.row_group(0).unwrap();
-        let Decoded::Column(column) = decode_column_full(&rg, 0, PhysicalType::Float).unwrap();
+        let Decoded::Column(column) = decode_column_full(&rg, 0, PhysicalType::Float).unwrap()
+        else {
+            panic!("expected a typed column");
+        };
         match column {
             Column::Float { data, valid } => {
                 assert_eq!(data, vec![1.5, -2.5]);
@@ -733,7 +781,10 @@ mod tests {
             build_single_column_file(0 /* BOOLEAN */, &[byte], values.len() as i32);
         let file = crate::storage::parquet::ParquetFile::open(&file_bytes).unwrap();
         let rg = file.row_group(0).unwrap();
-        let Decoded::Column(column) = decode_column_full(&rg, 0, PhysicalType::Boolean).unwrap();
+        let Decoded::Column(column) = decode_column_full(&rg, 0, PhysicalType::Boolean).unwrap()
+        else {
+            panic!("expected a typed column");
+        };
         match column {
             Column::Bool { data, valid } => {
                 assert_eq!(data, values.to_vec());
@@ -758,7 +809,10 @@ mod tests {
         let int_rg = int_file.row_group(0).unwrap();
         let positions = [0u32, 2, 3];
         let Decoded::Column(int_at) =
-            decode_column_at(&int_rg, 0, PhysicalType::Int32, &positions).unwrap();
+            decode_column_at(&int_rg, 0, PhysicalType::Int32, &positions).unwrap()
+        else {
+            panic!("expected a typed column");
+        };
         assert_eq!(int_at.get(0), Value::Int(10));
         assert_eq!(int_at.get(1), Value::Int(30));
         assert_eq!(int_at.get(2), Value::Int(40));
@@ -774,7 +828,10 @@ mod tests {
         let bool_file = crate::storage::parquet::ParquetFile::open(&bool_file_bytes).unwrap();
         let bool_rg = bool_file.row_group(0).unwrap();
         let Decoded::Column(bool_at) =
-            decode_column_at(&bool_rg, 0, PhysicalType::Boolean, &positions).unwrap();
+            decode_column_at(&bool_rg, 0, PhysicalType::Boolean, &positions).unwrap()
+        else {
+            panic!("expected a typed column");
+        };
         assert_eq!(bool_at.get(0), Value::Bool(true));
         assert_eq!(bool_at.get(1), Value::Bool(true));
         assert_eq!(bool_at.get(2), Value::Bool(false));
@@ -800,11 +857,17 @@ mod tests {
         let file = crate::storage::parquet::ParquetFile::open(&file_bytes).unwrap();
         let rg = file.row_group(0).unwrap();
 
-        let Decoded::Column(full) = decode_column_full(&rg, 0, PhysicalType::Double).unwrap();
+        let Decoded::Column(full) = decode_column_full(&rg, 0, PhysicalType::Double).unwrap()
+        else {
+            panic!("expected a typed column");
+        };
 
         let positions: Vec<u32> = vec![4, 1, 1, 0];
         let Decoded::Column(positional) =
-            decode_column_at(&rg, 0, PhysicalType::Double, &positions).unwrap();
+            decode_column_at(&rg, 0, PhysicalType::Double, &positions).unwrap()
+        else {
+            panic!("expected a typed column");
+        };
 
         assert_eq!(positional.len(), positions.len());
         for (i, &pos) in positions.iter().enumerate() {
