@@ -96,9 +96,8 @@ pub(in crate::codegen::row::select) fn classify_aggregate(
 pub(in crate::codegen::row::select) type CollectedAggregate = (Expr, String, Option<Expr>, bool);
 
 /// Finds every aggregate-call sub-expression reachable from `select`'s
-/// result columns and `HAVING` clause through `Paren`/`Collate`/`Unary`/
-/// `Binary` wrappers (see [`compile_grouped_scan`]'s doc comment for the
-/// bound), deduplicated by AST equality so `HAVING count(*) > 1` sharing
+/// result columns and `HAVING` clause through every expression form but a
+/// subquery (#612), deduplicated by AST equality so `HAVING count(*) > 1` sharing
 /// a call with a `count(*)` result column accumulates into one slot.
 pub(in crate::codegen::row::select) fn collect_aggregates(
     select: &Select,
@@ -151,17 +150,13 @@ pub(in crate::codegen::row::select) fn find_aggregates(expr: &Expr, out: &mut Ve
             return;
         }
     }
-    match &expr.kind {
-        ExprKind::Paren(inner) | ExprKind::Collate { expr: inner, .. } => {
-            find_aggregates(inner, out);
-        }
-        ExprKind::Unary { expr: inner, .. } => find_aggregates(inner, out),
-        ExprKind::Binary { lhs, rhs, .. } => {
-            find_aggregates(lhs, out);
-            find_aggregates(rhs, out);
-        }
-        _ => {}
-    }
+    // #612: through every expression form (CASE, function arguments,
+    // BETWEEN, ...), not only arithmetic; never into a subquery.
+    map_subexprs(expr, &mut |sub: &Expr| {
+        find_aggregates(sub, out);
+        Ok(sub.clone())
+    })
+    .ok();
 }
 
 /// Rewrites every aggregate-call sub-expression matching one of
@@ -188,34 +183,157 @@ pub(in crate::codegen::row::select) fn substitute_aggregates(
             span: expr.span,
         };
     }
+    // #612: through every expression form, as `find_aggregates` finds
+    // them. The rewrite itself cannot fail.
+    map_subexprs(expr, &mut |sub: &Expr| {
+        Ok(substitute_aggregates(sub, agg_slots, synthetic_names))
+    })
+    .unwrap_or_else(|_| expr.clone())
+}
+
+/// `expr` with each direct sub-expression replaced by `f` of it (#612):
+/// the one-level step of a whole-tree rewrite. A subquery body is left
+/// as it is (it is its own scope); a function's FILTER/OVER tail too.
+pub(in crate::codegen::row::select) fn map_subexprs<F>(
+    expr: &Expr,
+    f: &mut F,
+) -> Result<Expr, CodegenError>
+where
+    F: FnMut(&Expr) -> Result<Expr, CodegenError>,
+{
     let kind = match &expr.kind {
-        ExprKind::Paren(inner) => ExprKind::Paren(Box::new(substitute_aggregates(
-            inner,
-            agg_slots,
-            synthetic_names,
-        ))),
+        ExprKind::Literal(_)
+        | ExprKind::Param(_)
+        | ExprKind::Column { .. }
+        | ExprKind::Subquery(_)
+        | ExprKind::Exists { .. } => expr.kind.clone(),
+        ExprKind::FunctionCall {
+            name,
+            distinct,
+            args,
+            tail,
+        } => ExprKind::FunctionCall {
+            name: name.clone(),
+            distinct: *distinct,
+            args: match args {
+                FunctionArgs::Star => FunctionArgs::Star,
+                FunctionArgs::List(list) => {
+                    FunctionArgs::List(list.iter().map(&mut *f).collect::<Result<_, _>>()?)
+                }
+            },
+            tail: tail.clone(),
+        },
+        ExprKind::Unary { op, expr: inner } => ExprKind::Unary {
+            op: *op,
+            expr: boxed(f, inner)?,
+        },
+        ExprKind::Binary { op, lhs, rhs } => ExprKind::Binary {
+            op: *op,
+            lhs: boxed(f, lhs)?,
+            rhs: boxed(f, rhs)?,
+        },
+        ExprKind::Is { lhs, rhs, negated } => ExprKind::Is {
+            lhs: boxed(f, lhs)?,
+            rhs: boxed(f, rhs)?,
+            negated: *negated,
+        },
+        ExprKind::IsNull {
+            expr: inner,
+            negated,
+        } => ExprKind::IsNull {
+            expr: boxed(f, inner)?,
+            negated: *negated,
+        },
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            negated,
+        } => ExprKind::Between {
+            expr: boxed(f, inner)?,
+            lo: boxed(f, lo)?,
+            hi: boxed(f, hi)?,
+            negated: *negated,
+        },
+        ExprKind::In {
+            expr: inner,
+            list,
+            negated,
+        } => ExprKind::In {
+            expr: boxed(f, inner)?,
+            list: list.iter().map(&mut *f).collect::<Result<_, _>>()?,
+            negated: *negated,
+        },
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            glob,
+            negated,
+            escape,
+        } => ExprKind::Like {
+            expr: boxed(f, inner)?,
+            pattern: boxed(f, pattern)?,
+            glob: *glob,
+            negated: *negated,
+            escape: escape.as_deref().map(|e| boxed(f, e)).transpose()?,
+        },
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => ExprKind::Case {
+            operand: operand.as_deref().map(|e| boxed(f, e)).transpose()?,
+            whens: whens
+                .iter()
+                .map(|(w, t)| Ok((f(w)?, f(t)?)))
+                .collect::<Result<_, CodegenError>>()?,
+            else_: else_.as_deref().map(|e| boxed(f, e)).transpose()?,
+        },
+        ExprKind::Cast {
+            expr: inner,
+            type_name,
+        } => ExprKind::Cast {
+            expr: boxed(f, inner)?,
+            type_name: type_name.clone(),
+        },
         ExprKind::Collate {
             expr: inner,
             collation,
         } => ExprKind::Collate {
-            expr: Box::new(substitute_aggregates(inner, agg_slots, synthetic_names)),
+            expr: boxed(f, inner)?,
             collation: collation.clone(),
         },
-        ExprKind::Unary { op, expr: inner } => ExprKind::Unary {
-            op: *op,
-            expr: Box::new(substitute_aggregates(inner, agg_slots, synthetic_names)),
+        ExprKind::Paren(inner) => ExprKind::Paren(boxed(f, inner)?),
+        ExprKind::InSubquery {
+            expr: inner,
+            subquery,
+            negated,
+        } => ExprKind::InSubquery {
+            expr: boxed(f, inner)?,
+            subquery: subquery.clone(),
+            negated: *negated,
         },
-        ExprKind::Binary { op, lhs, rhs } => ExprKind::Binary {
-            op: *op,
-            lhs: Box::new(substitute_aggregates(lhs, agg_slots, synthetic_names)),
-            rhs: Box::new(substitute_aggregates(rhs, agg_slots, synthetic_names)),
+        ExprKind::InSubqueryMulti {
+            exprs,
+            subquery,
+            negated,
+        } => ExprKind::InSubqueryMulti {
+            exprs: exprs.iter().map(&mut *f).collect::<Result<_, _>>()?,
+            subquery: subquery.clone(),
+            negated: *negated,
         },
-        other => other.clone(),
     };
-    Expr {
+    Ok(Expr {
         kind,
         span: expr.span,
-    }
+    })
+}
+
+fn boxed<F>(f: &mut F, expr: &Expr) -> Result<Box<Expr>, CodegenError>
+where
+    F: FnMut(&Expr) -> Result<Expr, CodegenError>,
+{
+    f(expr).map(Box::new)
 }
 
 /// Pseudo-cursor-safe single-column read: like `emit_column_read`, but

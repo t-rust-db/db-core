@@ -137,6 +137,195 @@ pub(super) fn order_by_entries(select: &Select, schema: &TableSchema) -> Vec<Ord
     out
 }
 
+/// `select` with its GROUP BY and HAVING names resolved as sqlite3 does
+/// (#610), or `None` when nothing changes. A GROUP BY integer is a
+/// 1-based position into `entries` (the result columns, `*` expanded);
+/// a bare GROUP BY or HAVING name that `is_column` doesn't know as a
+/// FROM column is a result-column alias. Columns win over aliases here,
+/// unlike ORDER BY. A GROUP BY term may not name an aggregate.
+pub(super) fn resolve_group_terms<F>(
+    select: &Select,
+    entries: &[OrderByEntry],
+    is_column: F,
+) -> Result<Option<Select>, CodegenError>
+where
+    F: Fn(&str) -> bool,
+{
+    if select.group_by.is_empty() && select.having.is_none() {
+        return Ok(None);
+    }
+    let alias = |name: &str| -> Option<Expr> {
+        if is_column(name) {
+            return None;
+        }
+        entries
+            .iter()
+            .find(|e| {
+                e.alias
+                    .as_deref()
+                    .is_some_and(|a| a.eq_ignore_ascii_case(name))
+            })
+            .map(|e| e.expr.clone())
+    };
+    let mut changed = false;
+    let mut group_by = Vec::with_capacity(select.group_by.len());
+    for (i, term) in select.group_by.iter().enumerate() {
+        let named = match &strip_collate(term).kind {
+            ExprKind::Literal(Literal::Integer(n)) => Some(
+                usize::try_from(*n)
+                    .ok()
+                    .and_then(|n| n.checked_sub(1))
+                    .and_then(|idx| entries.get(idx))
+                    .map(|e| e.expr.clone())
+                    .ok_or_else(|| CodegenError::Unsupported {
+                        reason: format!(
+                            "{} GROUP BY term out of range - should be between 1 and {}",
+                            ordinal(i.saturating_add(1)),
+                            entries.len()
+                        ),
+                    })?,
+            ),
+            ExprKind::Column {
+                table: None, name, ..
+            } => alias(name),
+            _ => None,
+        };
+        let Some(named) = named else {
+            group_by.push(term.clone());
+            continue;
+        };
+        let mut aggregates = Vec::new();
+        super::aggregate::find_aggregates(&named, &mut aggregates);
+        if !aggregates.is_empty() {
+            return Err(CodegenError::Unsupported {
+                reason: "aggregate functions are not allowed in the GROUP BY clause".to_string(),
+            });
+        }
+        changed = true;
+        group_by.push(match &term.kind {
+            ExprKind::Collate { collation, .. } => Expr {
+                kind: ExprKind::Collate {
+                    expr: Box::new(named),
+                    collation: collation.clone(),
+                },
+                span: term.span,
+            },
+            _ => named,
+        });
+    }
+    let having = match &select.having {
+        Some(having) => {
+            let resolved = resolve_having_aliases(having, &alias)?;
+            changed |= resolved != *having;
+            Some(resolved)
+        }
+        None => None,
+    };
+    Ok(changed.then(|| Select {
+        group_by,
+        having,
+        ..select.clone()
+    }))
+}
+
+/// [`resolve_group_terms`] for a single-table `select` over `schema`.
+pub(super) fn resolve_single_table_group_terms(
+    select: &Select,
+    schema: &TableSchema,
+) -> Result<Option<Select>, CodegenError> {
+    resolve_group_terms(select, &order_by_entries(select, schema), |name| {
+        column_index(schema, name).is_some()
+    })
+}
+
+/// [`resolve_group_terms`] over a join: `*`/`table.*` expand across
+/// `scope.tables` in FROM order (skipping NATURAL/USING duplicates) to
+/// qualified column references, and a name is a FROM column when any
+/// table has it.
+pub(super) fn resolve_joined_group_terms(
+    select: &Select,
+    scope: &Scope,
+) -> Result<Option<Select>, CodegenError> {
+    let column = |binding: &TableBinding, name: &str| OrderByEntry {
+        expr: Expr {
+            kind: ExprKind::Column {
+                table: Some(
+                    binding
+                        .alias
+                        .clone()
+                        .unwrap_or_else(|| binding.name.clone()),
+                ),
+                catalog: None,
+                name: name.to_string(),
+            },
+            span: SYNTHETIC_SPAN,
+        },
+        alias: None,
+    };
+    let mut entries = Vec::new();
+    for col in &select.columns {
+        match col {
+            ResultColumn::Star => {
+                for (i, binding) in scope.tables.iter().enumerate() {
+                    let suppressed = scope.dedup_star.get(i);
+                    for name in &binding.schema.columns {
+                        if !suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase())) {
+                            entries.push(column(binding, name));
+                        }
+                    }
+                }
+            }
+            ResultColumn::TableStar { table } => {
+                if let Some(binding) = scope.tables.iter().find(|b| b.matches_qualifier(table)) {
+                    entries.extend(
+                        binding
+                            .schema
+                            .columns
+                            .iter()
+                            .map(|name| column(binding, name)),
+                    );
+                }
+            }
+            ResultColumn::Expr { expr, alias } => entries.push(OrderByEntry {
+                expr: expr.clone(),
+                alias: alias.clone(),
+            }),
+        }
+    }
+    resolve_group_terms(select, &entries, |name| {
+        scope
+            .tables
+            .iter()
+            .any(|b| column_index(&b.schema, name).is_some())
+    })
+}
+
+/// `expr` with each bare name `alias` resolves replaced by that result
+/// column's expression; a subquery is its own scope and is left alone.
+fn resolve_having_aliases<A>(expr: &Expr, alias: &A) -> Result<Expr, CodegenError>
+where
+    A: Fn(&str) -> Option<Expr>,
+{
+    if let ExprKind::Column {
+        table: None, name, ..
+    } = &expr.kind
+    {
+        return Ok(alias(name).unwrap_or_else(|| expr.clone()));
+    }
+    super::aggregate::map_subexprs(expr, &mut |sub: &Expr| resolve_having_aliases(sub, alias))
+}
+
+/// `1st`, `2nd`, `3rd`, `4th`, ... as sqlite3 numbers a clause's terms.
+fn ordinal(n: usize) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (1, r) if r != 11 => "st",
+        (2, r) if r != 12 => "nd",
+        (3, r) if r != 13 => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
 /// Resolves a result-column expression to its `OrderByTarget`: a bare
 /// unqualified column becomes a direct schema index (already present
 /// in the sorter's row tuple), anything else becomes a computed
@@ -194,5 +383,69 @@ pub(super) fn resolve_order_by_target(
                 .ok_or_else(|| CodegenError::UnknownColumn { name: name.clone() })
         }
         _ => order_by_target_for_expr(expr, schema),
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`; db-core#219/#235).
+
+    use super::*;
+    use crate::parser::row::{parse_select, ParseOutcome};
+
+    fn resolved(sql: &str) -> Option<Select> {
+        let select = match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("{sql}: {other:?}"),
+        };
+        let schema = TableSchema {
+            name: "p".to_string(),
+            columns: vec!["a".to_string(), "b".to_string()],
+            ..TableSchema::default()
+        };
+        resolve_single_table_group_terms(&select, &schema).unwrap()
+    }
+
+    // ---------------------------------------------------------------------
+    // resolve_group_terms -- nothing to resolve without GROUP BY or HAVING.
+    // ---------------------------------------------------------------------
+    #[test]
+    fn mcdc__codegen_row_select_order_by_resolve_group_terms_6bfa2166__v1_no_group_by_or_having_is_left_alone(
+    ) {
+        assert!(resolved("SELECT b % 2 AS par FROM p ORDER BY par").is_none());
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_order_by_resolve_group_terms_6bfa2166__v2_a_group_by_position_is_resolved(
+    ) {
+        let select = resolved("SELECT b % 2 AS par, count(*) FROM p GROUP BY 1").unwrap();
+        assert!(
+            matches!(
+                select.group_by.as_slice(),
+                [Expr {
+                    kind: ExprKind::Binary { .. },
+                    ..
+                }]
+            ),
+            "{:?}",
+            select.group_by
+        );
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_order_by_resolve_group_terms_6bfa2166__v3_a_having_alias_is_resolved(
+    ) {
+        let select = resolved("SELECT count(*) AS c FROM p HAVING c > 1").unwrap();
+        let Some(Expr {
+            kind: ExprKind::Binary { lhs, .. },
+            ..
+        }) = &select.having
+        else {
+            panic!("{:?}", select.having);
+        };
+        assert!(matches!(lhs.kind, ExprKind::FunctionCall { .. }), "{lhs:?}");
     }
 }

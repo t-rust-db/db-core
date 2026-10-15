@@ -7,7 +7,7 @@ use super::eqp::table_binding_name;
 use super::join_access::{compile_joined_sorted_scan, resolve_join_order_by};
 use super::join_full::compile_full_join_two_table;
 use super::limit_scan::compile_limit_setup;
-use super::order_by::SYNTHETIC_SPAN;
+use super::order_by::{resolve_joined_group_terms, SYNTHETIC_SPAN};
 use super::*;
 use crate::codegen::row::index_maintenance::valid_table_root_page;
 
@@ -458,6 +458,15 @@ where
     };
     let table_cursor_count = i32::try_from(n).unwrap_or(0);
 
+    // #610: GROUP BY positions and aliases, HAVING aliases.
+    let resolved;
+    let select = match resolve_joined_group_terms(select, &full_scope)? {
+        Some(select) => {
+            resolved = select;
+            &resolved
+        }
+        None => select,
+    };
     if !select.group_by.is_empty() || select_has_aggregate(select) {
         // #608: DISTINCT dedups each group row in its own ephemeral index.
         let distinct_cursor =

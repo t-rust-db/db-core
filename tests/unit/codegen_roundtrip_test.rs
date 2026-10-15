@@ -280,13 +280,30 @@ fn having_filters_groups_over_a_join() {
 }
 
 #[test]
-fn having_over_a_join_may_name_a_bare_grouped_column() {
+fn having_over_a_join_may_name_a_grouped_column() {
     let rows = run_two(
-        "SELECT t.k, sum(u.v) FROM t JOIN u ON u.k = t.k GROUP BY t.k HAVING k = 2",
+        "SELECT t.k, sum(u.v) FROM t JOIN u ON u.k = t.k GROUP BY t.k HAVING t.k = 2",
         (&["k"], vec![(1, ints(&[1])), (2, ints(&[2]))]),
         (&["k", "v"], vec![(1, ints(&[1, 10])), (2, ints(&[2, 30]))]),
     );
     assert_eq!(rows, vec![ints(&[2, 30])]);
+}
+
+#[test]
+fn having_over_a_join_refuses_an_ambiguous_column() {
+    // #612: both tables have `k`; sqlite3 reports "ambiguous column
+    // name: k" rather than picking the first table's.
+    let schemas = [
+        schema_with_root("t", &["k"], 2),
+        schema_with_root("u", &["k", "v"], 3),
+    ];
+    let err = compile_statement(
+        "SELECT t.k, sum(u.v) FROM t JOIN u ON u.k = t.k GROUP BY t.k HAVING k = 2",
+        &schemas,
+        &[],
+    )
+    .unwrap_err();
+    assert!(format!("{err:?}").contains("AmbiguousColumn"), "{err:?}");
 }
 
 #[test]
@@ -871,10 +888,14 @@ fn scalar_subquery_in_the_select_list() {
 }
 
 #[test]
-fn aggregate_used_as_a_plain_scalar_argument_is_unsupported() {
-    // `abs(count(*))` reaches `compile_value` for the *inner* `count(*)`
-    // in a context this V2 compiler's aggregate pass never sees.
+fn aggregate_used_as_a_plain_scalar_argument_is_accumulated() {
+    // #612: `abs(count(*))` accumulates the inner `count(*)` and applies
+    // `abs` to its final value.
     let schemas = [schema("t", &["a"])];
-    let err = compile_statement("SELECT abs(count(*)) FROM t", &schemas, &[]).unwrap_err();
-    assert!(format!("{err:?}").contains("count"), "{err:?}");
+    let program = compile_statement("SELECT abs(count(*)) FROM t", &schemas, &[]).unwrap();
+    let ops: Vec<_> = program.instructions.iter().map(|i| i.opcode).collect();
+    assert!(
+        ops.contains(&Opcode::AggStep) && ops.contains(&Opcode::Function),
+        "{ops:?}"
+    );
 }

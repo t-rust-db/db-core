@@ -532,11 +532,15 @@ result-column   ::= "*"                                   (* V2 [parse.y:717 sel
 
 table-ref       ::= table-name [ [ "AS" ] identifier ]    (* V2 [parse.y:762 seltablist, single-table shape only --
                                                               no schema-qualifier or INDEXED BY/NOT INDEXED] *)
-                  | "(" select-stmt ")" [ "AS" ] identifier ;
+                  | "(" select-stmt ")" [ "AS" ] identifier
                                                            (* V4 [parse.y:762 seltablist LP select RP as, #257 --
                                                               this codebase requires the alias SQLite itself
                                                               leaves optional, since column resolution needs a
                                                               qualifier] *)
+                  | "(" "VALUES" "(" expr-list ")" { "," "(" expr-list ")" } ")" [ [ "AS" ] identifier ] ;
+                                                           (* #611 [parse.y:631 values] -- a UNION ALL of
+                                                              FROM-less rows named column1..columnN, every row
+                                                              the same width *)
 
 (* #237 landed the INNER/plain JOIN, LEFT [OUTER] JOIN, and CROSS JOIN
  * subset of this chain; #250 extended it with NATURAL, RIGHT [OUTER]/

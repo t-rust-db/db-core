@@ -54,6 +54,50 @@ pub(super) fn result_column_collations(
         .collect()
 }
 
+/// [`result_column_collations`] over a join (#608, #613): an explicit
+/// `COLLATE`, else the column's declared collation resolved through
+/// `scope`, else BINARY. `*`/`table.*` expand across `scope.tables` in
+/// FROM order, skipping the NATURAL/USING columns `dedup_star` names, as
+/// the joined projections do, so the collations line up column by column.
+pub(super) fn joined_result_collations(
+    select: &Select,
+    scope: &Scope,
+    dedup_star: &[std::collections::HashSet<String>],
+) -> Vec<Collation> {
+    let declared = |binding: &TableBinding, idx: usize| {
+        binding
+            .schema
+            .column_collations
+            .get(idx)
+            .copied()
+            .unwrap_or(Collation::Binary)
+    };
+    let mut out = Vec::new();
+    for col in &select.columns {
+        match col {
+            ResultColumn::Star => {
+                for (i, binding) in scope.tables.iter().enumerate() {
+                    let suppressed = dedup_star.get(i);
+                    for (idx, name) in binding.schema.columns.iter().enumerate() {
+                        if !suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase())) {
+                            out.push(declared(binding, idx));
+                        }
+                    }
+                }
+            }
+            ResultColumn::TableStar { table } => {
+                if let Some(binding) = scope.tables.iter().find(|b| b.matches_qualifier(table)) {
+                    out.extend((0..binding.schema.columns.len()).map(|idx| declared(binding, idx)));
+                }
+            }
+            ResultColumn::Expr { expr, .. } => {
+                out.push(expr_collation(scope, expr).unwrap_or(Collation::Binary));
+            }
+        }
+    }
+    out
+}
+
 /// Compiles each result column into a contiguous register range,
 /// returning `(first, count)`. Each column is first compiled into
 /// whatever register the bump allocator hands out next (a compound

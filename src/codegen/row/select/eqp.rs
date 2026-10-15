@@ -111,6 +111,20 @@ pub fn explain_query_plan(
             ),
         });
     }
+    // #610: the GROUP BY that compiles, positions and aliases resolved.
+    let resolved;
+    let select = match (from.joins.is_empty(), schemas.first()) {
+        (true, Some(schema)) => {
+            match super::order_by::resolve_single_table_group_terms(select, schema)? {
+                Some(select) => {
+                    resolved = select;
+                    &resolved
+                }
+                None => select,
+            }
+        }
+        _ => select,
+    };
     let bindings: Vec<TableBinding> = table_refs
         .iter()
         .zip(schemas.iter())

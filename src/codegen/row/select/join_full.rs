@@ -372,11 +372,17 @@ pub(super) fn compile_full_join_two_table(
         let (first, count) =
             emit_joined_pseudo_projection(&mut em, &mut reg, select, &full_scope, pseudo_cursor)?;
         if let Some(distinct_cursor) = distinct_cursor {
-            super::join_access::emit_pseudo_distinct_guard(
+            // #613: each column under its collation.
+            let collations = super::projection::joined_result_collations(
+                select,
+                &full_scope,
+                &full_scope.dedup_star,
+            );
+            super::projection::emit_dedup_check(
                 &mut em,
                 distinct_cursor,
                 first,
-                count,
+                collations,
                 row_skip,
             );
         }

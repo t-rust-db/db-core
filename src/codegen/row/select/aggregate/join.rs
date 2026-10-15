@@ -1,16 +1,17 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
 use super::super::join_access::{
-    compile_join_level_for_sort, joined_column_offset, resolve_scope_column, JoinOrderPlan,
+    compile_join_level_for_sort, joined_column_offset, named_result_column, resolve_scope_column,
+    JoinOrderPlan, NamedColumn,
 };
 use super::super::joins::LevelPlan;
 use super::super::limit_scan::{
     compile_limit_setup, emit_limit_guard, emit_offset_guard, LimitState,
 };
 use super::super::order_by::strip_collate;
-use super::super::projection::emit_dedup_check;
+use super::super::projection::{emit_dedup_check, joined_result_collations};
 use super::super::*;
-use super::accum::{collect_aggregates, substitute_aggregates, AggSlot};
+use super::accum::{collect_aggregates, map_subexprs, substitute_aggregates, AggSlot};
 
 /// [`super::compile_grouped_scan`]'s joined counterpart (#333):
 /// `GROUP BY`/an implicit whole-table aggregate combined with a JOIN.
@@ -24,23 +25,14 @@ use super::accum::{collect_aggregates, substitute_aggregates, AggSlot};
 /// already does for the `ORDER BY` case) into the sorter, keyed by the
 /// `GROUP BY` columns; pass 2 walks the sorted buffer through a shared
 /// flat pseudo cursor, detecting group boundaries and accumulating via
-/// `AggStep`/`AggFinal` by absolute column offset instead of a
-/// `TableSchema`-relative index.
+/// `AggStep`/`AggFinal` against that flat row.
 ///
-/// Bounded MVP scope (documented rather than silently wrong, matching
-/// this module's existing joined-`ORDER BY` restrictions):
-/// - Every `GROUP BY` term must be a bare (optionally table-qualified)
-///   column — a computed `GROUP BY` expression combined with a JOIN is
-///   rejected.
-/// - Every aggregate call's argument must likewise be a bare column (or
-///   absent, for `count(*)`).
-/// - Every result column must be `*`/`table.*`/a bare column/exactly one
-///   whole aggregate call — an aggregate nested inside a larger
-///   expression (`count(*) + 1`) is rejected.
-/// - `HAVING` combined with a JOIN is rejected outright.
-///
-/// None of these restrictions apply to the single-table path — only to
-/// a `GROUP BY`/aggregate combined with a JOIN.
+/// Every expression — `GROUP BY` keys (#610), aggregate arguments,
+/// result columns, `HAVING` and `ORDER BY` terms (#612) — is compiled
+/// against the flat row (or the flushed group record) by rewriting its
+/// column references to that record's `__c<abs>` fields
+/// ([`to_record_expr`]), each keeping its column's declared collation.
+/// A subquery inside one of them is still refused.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(crate) fn compile_joined_grouped_scan<F>(
     em: &mut Emitter,
@@ -74,18 +66,15 @@ where
     if let Some(cursor) = distinct_cursor {
         em.emit(Instruction::new(Opcode::OpenEphemeral, cursor, 0, 0));
     }
-    let group_offsets: Vec<usize> = select
+    // #612: every expression is compiled against the flat joined row,
+    // its column references rewritten to that row's `__c<abs>` fields.
+    let group_keys: Vec<Expr> = select
         .group_by
         .iter()
-        .map(|expr| joined_bare_column_offset(full_scope, expr))
+        .map(|expr| to_record_expr(expr, full_scope))
         .collect::<Result<_, _>>()?;
 
     let aggs = collect_aggregates(select)?;
-    for (_, _, arg, _) in &aggs {
-        if let Some(expr) = arg {
-            joined_bare_column_offset(full_scope, expr)?;
-        }
-    }
     // DISTINCT-aggregate ephemeral dedup cursors start right after the
     // highest cursor number this scan already uses — `flush_cursor`
     // normally, or past the two extra `ORDER BY` sorter cursors
@@ -105,7 +94,6 @@ where
             eph_cursor: distinct.then(|| eph_base.saturating_add(i32::try_from(slot).unwrap_or(0))),
         })
         .collect();
-    validate_joined_group_projection(select, &agg_slots)?;
 
     let total_width = joined_column_offset(full_scope, full_scope.tables.len())?;
 
@@ -115,28 +103,37 @@ where
     // already assembles into `dests` for every group. Resolved and
     // opened up front so `SorterInsert` calls inside the boundary/tail
     // flushes below have a P4 sort-key layout already in place.
+    // #612: a computed key is evaluated per group and appended after the
+    // record's `total_width + agg_slots.len()` fields.
+    let mut order_exprs: Vec<Expr> = Vec::new();
     if let Some((order_sort_cursor, _)) = order_cursors {
+        let record_width = total_width.saturating_add(agg_slots.len());
         let order_sort_keys: Vec<SortKeyColumn> = select
             .order_by
             .iter()
             .map(|term| {
-                let offset = resolve_group_order_target(
+                let (key, collation) = resolve_group_order_target(
                     select,
                     full_scope,
                     &agg_slots,
                     total_width,
                     &term.expr,
                 )?;
+                let index = match key {
+                    GroupOrderKey::Offset(offset) => offset,
+                    GroupOrderKey::Expr(expr) => {
+                        order_exprs.push(expr);
+                        record_width.saturating_add(order_exprs.len().saturating_sub(1))
+                    }
+                };
                 let descending = term.desc.unwrap_or(false);
                 let nulls_first = term
                     .nulls_last
                     .map_or(!descending, |nulls_last| !nulls_last);
                 Ok(SortKeyColumn {
-                    index: offset,
+                    index,
                     descending,
-                    collation: collation_of(&term.expr)
-                        .or_else(|| expr_collation(full_scope, &term.expr))
-                        .unwrap_or(Collation::Binary),
+                    collation,
                     nulls_first,
                 })
             })
@@ -150,19 +147,21 @@ where
         ));
     }
 
+    // Pass 1 sorts on a bare-column key in place, and on a computed key
+    // (#610) evaluated against the join's cursors.
     let order_by_plans: Vec<JoinOrderPlan> = select
         .group_by
         .iter()
-        .zip(&group_offsets)
-        .map(|(expr, &offset)| {
-            JoinOrderPlan::ascending_offset(
-                offset,
-                collation_of(expr)
-                    .or_else(|| expr_collation(full_scope, expr))
-                    .unwrap_or(Collation::Binary),
-            )
+        .map(|expr| {
+            let collation = collation_of(expr)
+                .or_else(|| expr_collation(full_scope, expr))
+                .unwrap_or(Collation::Binary);
+            Ok(match joined_bare_column_offset(full_scope, expr) {
+                Some(offset) => JoinOrderPlan::ascending_offset(offset?, collation),
+                None => JoinOrderPlan::ascending_expr(expr.clone(), collation),
+            })
         })
-        .collect();
+        .collect::<Result<_, CodegenError>>()?;
 
     // Pass 1: buffer every WHERE-matching joined row, sorted by the
     // GROUP BY key — reuses the exact traversal #250's joined `ORDER
@@ -209,7 +208,7 @@ where
     let have_group_reg = reg.alloc();
     em.emit(Instruction::new(Opcode::Integer, 0, have_group_reg, 0));
 
-    let prev_key_regs: Vec<i32> = group_offsets.iter().map(|_| reg.alloc()).collect();
+    let prev_key_regs: Vec<i32> = group_keys.iter().map(|_| reg.alloc()).collect();
     let snapshot_regs: Vec<i32> = (0..total_width).map(|_| reg.alloc()).collect();
     for &r in &snapshot_regs {
         em.emit(Instruction::new(Opcode::Null, 0, r, 0));
@@ -231,19 +230,12 @@ where
         0,
     ));
 
-    let cur_key_regs: Vec<i32> = group_offsets
+    let row_schema = joined_record_schema(full_scope, &[]);
+    let row_scope = record_scope(&row_schema, pseudo_cursor, full_scope);
+    let cur_key_regs: Vec<i32> = group_keys
         .iter()
-        .map(|&offset| {
-            let r = reg.alloc();
-            em.emit(Instruction::new(
-                Opcode::Column,
-                pseudo_cursor,
-                i32::try_from(offset).unwrap_or(0),
-                r,
-            ));
-            r
-        })
-        .collect();
+        .map(|key| compile_value(em, reg, &row_scope, key))
+        .collect::<Result<_, _>>()?;
 
     let group_key_p4s: Vec<P4> = select
         .group_by
@@ -297,6 +289,7 @@ where
         limit.as_ref(),
         end_label,
         order_cursors.map(|(order_sort_cursor, _)| order_sort_cursor),
+        &order_exprs,
         distinct_cursor,
         sink,
     )?;
@@ -306,7 +299,7 @@ where
     }
     em.emit(Instruction::new(Opcode::Integer, 1, have_group_reg, 0));
     for agg in &agg_slots {
-        emit_joined_agg_step(em, reg, full_scope, pseudo_cursor, agg, true)?;
+        emit_joined_agg_step(em, reg, full_scope, &row_scope, agg, true)?;
     }
     let after_accumulate = em.new_label();
     let goto_after_accumulate = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
@@ -314,7 +307,7 @@ where
 
     em.place(not_boundary_label);
     for agg in &agg_slots {
-        emit_joined_agg_step(em, reg, full_scope, pseudo_cursor, agg, false)?;
+        emit_joined_agg_step(em, reg, full_scope, &row_scope, agg, false)?;
     }
 
     em.place(after_accumulate);
@@ -351,6 +344,7 @@ where
         limit.as_ref(),
         end_label,
         order_cursors.map(|(order_sort_cursor, _)| order_sort_cursor),
+        &order_exprs,
         distinct_cursor,
         sink,
     )?;
@@ -400,7 +394,6 @@ where
             select,
             full_scope,
             dedup_star,
-            total_width,
             &agg_slots,
             order_pseudo_cursor,
         )?;
@@ -419,54 +412,48 @@ where
 }
 
 /// Resolves `expr` (after stripping any `COLLATE` wrapper) to its
-/// absolute flat-row offset — the joined counterpart of a `GROUP
-/// BY`/aggregate-argument column reference — or `Unsupported` when
-/// `expr` isn't a bare (optionally qualified) column, per this module's
-/// documented MVP restriction.
-fn joined_bare_column_offset(full_scope: &Scope, expr: &Expr) -> Result<usize, CodegenError> {
-    let stripped = strip_collate(expr);
-    let ExprKind::Column { table, name, .. } = &stripped.kind else {
-        return Err(CodegenError::Unsupported {
-            reason: "GROUP BY/aggregate arguments combined with a JOIN only support a bare \
-                     column today — a computed expression is not yet supported"
-                .to_string(),
-        });
+/// absolute flat-row offset when it is a bare (optionally qualified)
+/// column; `None` for any other expression.
+fn joined_bare_column_offset(
+    full_scope: &Scope,
+    expr: &Expr,
+) -> Option<Result<usize, CodegenError>> {
+    let ExprKind::Column { table, name, .. } = &strip_collate(expr).kind else {
+        return None;
     };
-    let (binding_idx, local_idx) = resolve_scope_column(full_scope, table.as_deref(), name)?;
-    Ok(joined_column_offset(full_scope, binding_idx)?.saturating_add(local_idx))
+    Some(
+        resolve_scope_column(full_scope, table.as_deref(), name).and_then(
+            |(binding_idx, local_idx)| {
+                Ok(joined_column_offset(full_scope, binding_idx)?.saturating_add(local_idx))
+            },
+        ),
+    )
 }
 
-/// [`super::accum::emit_agg_step`]'s joined counterpart: reads
-/// `agg.arg`'s value straight off the flat pseudo cursor at its
-/// resolved absolute offset (per [`joined_bare_column_offset`]'s
-/// bare-column restriction) instead of compiling a general expression
-/// against a `Scope`.
+/// [`super::accum::emit_agg_step`]'s joined counterpart: evaluates
+/// `agg.arg` against the flat joined row in `row_scope` (#612), so the
+/// argument can be any expression over the joined columns.
 fn emit_joined_agg_step(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     full_scope: &Scope,
-    pseudo_cursor: i32,
+    row_scope: &Scope,
     agg: &AggSlot,
     reset: bool,
 ) -> Result<(), CodegenError> {
     let (arg_reg, arity, collation) = match &agg.arg {
-        Some(expr) => {
-            let offset = joined_bare_column_offset(full_scope, expr)?;
-            let r = reg.alloc();
-            em.emit(Instruction::new(
-                Opcode::Column,
-                pseudo_cursor,
-                i32::try_from(offset).unwrap_or(0),
-                r,
-            ));
-            (
-                Some(r),
-                1usize,
-                collation_of(expr)
-                    .or_else(|| expr_collation(full_scope, expr))
-                    .unwrap_or(Collation::Binary),
-            )
-        }
+        Some(expr) => (
+            Some(compile_value(
+                em,
+                reg,
+                row_scope,
+                &to_record_expr(expr, full_scope)?,
+            )?),
+            1usize,
+            collation_of(expr)
+                .or_else(|| expr_collation(full_scope, expr))
+                .unwrap_or(Collation::Binary),
+        ),
         None => (None, 0usize, Collation::Binary),
     };
     let p2 = arg_reg.unwrap_or(0);
@@ -493,34 +480,6 @@ fn strip_paren(expr: &Expr) -> &Expr {
         ExprKind::Paren(inner) => strip_paren(inner),
         _ => expr,
     }
-}
-
-/// Validates that every result column is `*`/`table.*`/a bare column/
-/// exactly one whole aggregate call — this module's documented MVP
-/// restriction on what can be re-projected out of the flat, joined
-/// sorted buffer.
-fn validate_joined_group_projection(
-    select: &Select,
-    agg_slots: &[AggSlot],
-) -> Result<(), CodegenError> {
-    for col in &select.columns {
-        if let ResultColumn::Expr { expr, .. } = col {
-            let stripped = strip_paren(expr);
-            if agg_slots.iter().any(|slot| slot.call == *stripped) {
-                continue;
-            }
-            if matches!(stripped.kind, ExprKind::Column { .. }) {
-                continue;
-            }
-            return Err(CodegenError::Unsupported {
-                reason: "GROUP BY/aggregate combined with a JOIN only supports `*`/`table.*`/\
-                         bare column/whole aggregate-call result columns today — an aggregate \
-                         nested inside a larger expression is not yet supported"
-                    .to_string(),
-            });
-        }
-    }
-    Ok(())
 }
 
 /// [`super::accum::flush_group`]'s joined counterpart: finalizes one
@@ -550,6 +509,7 @@ fn flush_joined_group<F>(
     limit: Option<&LimitState>,
     end_label: Label,
     order_sort_cursor: Option<i32>,
+    order_exprs: &[Expr],
     distinct_cursor: Option<i32>,
     sink: &mut F,
 ) -> Result<(), CodegenError>
@@ -597,12 +557,13 @@ where
     // ahead of the `SorterInsert` so a rejected group never reaches the
     // re-sort pass.
     if let Some(having) = &select.having {
-        let synthetic_names: Vec<String> =
-            (0..agg_slots.len()).map(|i| format!("__agg{i}")).collect();
-        let synthetic = joined_synthetic_schema(full_scope, &synthetic_names);
-        let flush_scope =
-            Scope::single(&synthetic, flush_cursor).with_catalog(full_scope.catalog.clone());
-        let rewritten = substitute_aggregates(having, agg_slots, &synthetic_names);
+        let synthetic_names = agg_field_names(agg_slots);
+        let synthetic = joined_record_schema(full_scope, &synthetic_names);
+        let flush_scope = record_scope(&synthetic, flush_cursor, full_scope);
+        let rewritten = to_record_expr(
+            &substitute_aggregates(having, agg_slots, &synthetic_names),
+            full_scope,
+        )?;
         compile_cond(
             em,
             reg,
@@ -623,11 +584,10 @@ where
                 select,
                 full_scope,
                 dedup_star,
-                total_width,
                 agg_slots,
                 flush_cursor,
             )?;
-            let collations = distinct_collations(select, full_scope, count);
+            let collations = joined_result_collations(select, full_scope, dedup_star);
             emit_dedup_check(em, cursor, first, collations, skip_label);
             Some((first, count))
         }
@@ -635,10 +595,35 @@ where
     };
 
     if let Some(order_sort_cursor) = order_sort_cursor {
+        let sort_record = if order_exprs.is_empty() {
+            record_reg
+        } else {
+            // The record plus each computed ORDER BY key (#612), copied
+            // into one contiguous run after the keys are evaluated.
+            let synthetic_names = agg_field_names(agg_slots);
+            let synthetic = joined_record_schema(full_scope, &synthetic_names);
+            let flush_scope = record_scope(&synthetic, flush_cursor, full_scope);
+            let key_regs: Vec<i32> = order_exprs
+                .iter()
+                .map(|key| compile_value(em, reg, &flush_scope, key))
+                .collect::<Result<_, _>>()?;
+            let block: Vec<i32> = dests.iter().chain(&key_regs).map(|_| reg.alloc()).collect();
+            for (&src, &dest) in dests.iter().chain(&key_regs).zip(&block) {
+                em.emit(Instruction::new(Opcode::Copy, src, dest, 0));
+            }
+            let sort_record = reg.alloc();
+            em.emit(Instruction::new(
+                Opcode::MakeRecord,
+                block.first().copied().unwrap_or(synthetic_first),
+                i32::try_from(block.len()).unwrap_or(0),
+                sort_record,
+            ));
+            sort_record
+        };
         em.emit(Instruction::new(
             Opcode::SorterInsert,
             order_sort_cursor,
-            record_reg,
+            sort_record,
             0,
         ));
         em.place(skip_label);
@@ -660,7 +645,6 @@ where
             select,
             full_scope,
             dedup_star,
-            total_width,
             agg_slots,
             flush_cursor,
         )?,
@@ -670,73 +654,95 @@ where
     Ok(())
 }
 
-/// The collations a joined aggregate's `SELECT DISTINCT` compares its
-/// `count` visible columns under (#608): an explicit `COLLATE`, else the
-/// column's declared one, else BINARY. `*` columns compare as BINARY.
-fn distinct_collations(select: &Select, full_scope: &Scope, count: usize) -> Vec<Collation> {
-    let per_column: Vec<Collation> = select
-        .columns
-        .iter()
-        .filter_map(|c| match c {
-            ResultColumn::Expr { expr, .. } => Some(
-                collation_of(expr)
-                    .or_else(|| expr_collation(full_scope, expr))
+/// The flat joined row as one record (#612): field `abs` is named
+/// `__c<abs>` and keeps its column's declared type and collation, then
+/// come the `extra` fields (each aggregate's `__agg<n>`). Unique names
+/// keep a self-join's `a.s` and `b.s` apart; expressions rewritten by
+/// [`to_record_expr`] compile against it through the ordinary
+/// `compile_value`/`compile_cond`.
+fn joined_record_schema(full_scope: &Scope, extra: &[String]) -> TableSchema {
+    let mut columns = Vec::new();
+    let mut column_types = Vec::new();
+    let mut column_collations = Vec::new();
+    for binding in &full_scope.tables {
+        let schema = &binding.schema;
+        for idx in 0..schema.columns.len() {
+            columns.push(record_column_name(columns.len()));
+            column_types.push(schema.column_types.get(idx).cloned().unwrap_or_default());
+            column_collations.push(
+                schema
+                    .column_collations
+                    .get(idx)
+                    .copied()
                     .unwrap_or(Collation::Binary),
-            ),
-            ResultColumn::Star | ResultColumn::TableStar { .. } => None,
-        })
-        .collect();
-    if per_column.len() == count {
-        per_column
-    } else {
-        vec![Collation::Binary; count]
+            );
+        }
     }
-}
-
-/// db-core#219: a synthetic single-cursor schema over one flushed joined
-/// group's record -- every binding's column names in `full_scope.tables`
-/// order (the same layout `joined_column_offset` addresses), then one
-/// `__agg<n>` field per aggregate -- so `HAVING` compiles against it
-/// through the ordinary, aggregate-unaware `compile_cond`, exactly like
-/// `accum::flush_group`'s single-table counterpart. Bare names only: a
-/// `table.`-qualified reference resolves by its bare name here, the
-/// earlier binding winning on a collision.
-fn joined_synthetic_schema(full_scope: &Scope, synthetic_names: &[String]) -> TableSchema {
-    let mut columns: Vec<String> = full_scope
-        .tables
-        .iter()
-        .flat_map(|b| b.schema.columns.iter().cloned())
-        .collect();
-    let mut column_types: Vec<String> = full_scope
-        .tables
-        .iter()
-        .flat_map(|b| {
-            b.schema
-                .columns
-                .iter()
-                .enumerate()
-                // No entry = no declared type (SQLite "no affinity"),
-                // spelled as an empty decltype.
-                .map(|(i, _)| b.schema.column_types.get(i).cloned().unwrap_or_default())
-        })
-        .collect();
-    columns.extend(synthetic_names.iter().cloned());
-    column_types.extend(synthetic_names.iter().map(|_| String::new()));
+    columns.extend(extra.iter().cloned());
+    column_types.extend(extra.iter().map(|_| String::new()));
+    column_collations.extend(extra.iter().map(|_| Collation::Binary));
     TableSchema {
         columns,
         column_types,
+        column_collations,
         ..TableSchema::default()
     }
 }
 
-/// Reprojects `select`'s result columns from `cursor` — a pseudo
-/// cursor over a `total_width + agg_slots.len()`-wide record (raw
-/// joined columns followed by finalized aggregate values, the same
-/// layout [`flush_joined_group`] assembles) — per
-/// [`validate_joined_group_projection`]'s `*`/`table.*`/bare-column/
-/// whole-aggregate-call restriction. Shared by `flush_joined_group`'s
-/// no-`ORDER BY` path and [`compile_joined_grouped_scan`]'s pass 3
-/// (#502), since both read back the identical row shape.
+fn agg_field_names(agg_slots: &[AggSlot]) -> Vec<String> {
+    (0..agg_slots.len()).map(|i| format!("__agg{i}")).collect()
+}
+
+fn record_column_name(abs: usize) -> String {
+    format!("__c{abs}")
+}
+
+/// A scope reading [`joined_record_schema`]'s record from `cursor`.
+fn record_scope(schema: &TableSchema, cursor: i32, full_scope: &Scope) -> Scope {
+    Scope::single(schema, cursor)
+        .with_catalog(full_scope.catalog.clone())
+        .with_record_cursors()
+}
+
+/// `expr` with every column reference rewritten to its `__c<abs>` field
+/// of the flat joined row (#612); `__agg<n>` fields already put in by
+/// `substitute_aggregates` stay. Spans are cleared, so two spellings of
+/// the same expression compare equal. A subquery would still read the
+/// join's cursors and is refused.
+fn to_record_expr(expr: &Expr, full_scope: &Scope) -> Result<Expr, CodegenError> {
+    let kind = match &expr.kind {
+        ExprKind::Column {
+            table: None, name, ..
+        } if name.starts_with("__agg") => expr.kind.clone(),
+        ExprKind::Column { table, name, .. } => {
+            let (binding_idx, local_idx) =
+                resolve_scope_column(full_scope, table.as_deref(), name)?;
+            ExprKind::Column {
+                table: None,
+                catalog: None,
+                name: record_column_name(
+                    joined_column_offset(full_scope, binding_idx)?.saturating_add(local_idx),
+                ),
+            }
+        }
+        ExprKind::Subquery(_)
+        | ExprKind::Exists { .. }
+        | ExprKind::InSubquery { .. }
+        | ExprKind::InSubqueryMulti { .. } => {
+            return Err(CodegenError::Unsupported {
+                reason: "a subquery inside a GROUP BY/aggregate combined with a JOIN is not yet \
+                         supported"
+                    .to_string(),
+            });
+        }
+        _ => map_subexprs(expr, &mut |sub: &Expr| to_record_expr(sub, full_scope))?.kind,
+    };
+    Ok(Expr {
+        kind,
+        span: Span::default(),
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn project_grouped_result_columns(
     em: &mut Emitter,
@@ -744,10 +750,12 @@ fn project_grouped_result_columns(
     select: &Select,
     full_scope: &Scope,
     dedup_star: &[std::collections::HashSet<String>],
-    total_width: usize,
     agg_slots: &[AggSlot],
     cursor: i32,
 ) -> Result<(i32, usize), CodegenError> {
+    let synthetic_names = agg_field_names(agg_slots);
+    let flush_schema = joined_record_schema(full_scope, &synthetic_names);
+    let flush_scope = record_scope(&flush_schema, cursor, full_scope);
     let mut regs = Vec::new();
     let read_offset = |em: &mut Emitter, reg: &mut RegAlloc, abs: usize| -> i32 {
         let r = reg.alloc();
@@ -799,22 +807,17 @@ fn project_grouped_result_columns(
                 }
             }
             ResultColumn::Expr { expr, .. } => {
-                let stripped = strip_paren(expr);
-                if let Some(pos) = agg_slots.iter().position(|slot| slot.call == *stripped) {
-                    regs.push(read_offset(em, reg, total_width.saturating_add(pos)));
-                    continue;
-                }
-                let ExprKind::Column { table, name, .. } = &stripped.kind else {
-                    return Err(CodegenError::Unsupported {
-                        reason: "GROUP BY/aggregate combined with a JOIN only supports `*`/\
-                                 `table.*`/bare column/whole aggregate-call result columns today"
-                            .to_string(),
-                    });
-                };
-                let (binding_idx, local_idx) =
-                    resolve_scope_column(full_scope, table.as_deref(), name)?;
-                let abs = joined_column_offset(full_scope, binding_idx)?.saturating_add(local_idx);
-                regs.push(read_offset(em, reg, abs));
+                // #612: any expression over the group's columns and
+                // aggregates, evaluated against its flushed record.
+                regs.push(compile_value(
+                    em,
+                    reg,
+                    &flush_scope,
+                    &to_record_expr(
+                        &substitute_aggregates(expr, agg_slots, &synthetic_names),
+                        full_scope,
+                    )?,
+                )?);
             }
         }
     }
@@ -822,25 +825,26 @@ fn project_grouped_result_columns(
         let r = reg.alloc();
         return Ok((r, 0));
     };
-    for (i, r) in regs.iter().enumerate() {
-        let want = first.saturating_add(i32::try_from(i).unwrap_or(i32::MAX));
-        if *r != want {
-            return Err(CodegenError::Unsupported {
-                reason: "result columns must land in contiguous registers for MakeRecord/\
-                         ResultRow (a function call or other multi-register expression mixed \
-                         with other columns is not yet supported)"
-                    .to_string(),
-            });
-        }
+    let contiguous = regs
+        .iter()
+        .enumerate()
+        .all(|(i, r)| *r == first.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)));
+    if contiguous {
+        return Ok((first, regs.len()));
     }
-    Ok((first, regs.len()))
+    // An expression allocated temporaries between columns: copy every
+    // value into a fresh contiguous run, as `compile_row_values` does.
+    let dests: Vec<i32> = regs.iter().map(|_| reg.alloc()).collect();
+    for (&r, &dest) in regs.iter().zip(&dests) {
+        em.emit(Instruction::new(Opcode::Copy, r, dest, 0));
+    }
+    Ok((dests.first().copied().unwrap_or(first), regs.len()))
 }
 
 /// Structural (span-independent) match between an `ORDER BY` term and
 /// one already-collected `agg_slots` entry: same function name, same
-/// `DISTINCT`-ness, and — since every aggregate argument is restricted
-/// to a bare column (or absent, for `count(*)`) — the same resolved
-/// column offset. See [`resolve_group_order_target`]'s doc for why
+/// `DISTINCT`-ness, and the same argument once both are rewritten
+/// against the flat joined row (#612, spans aside). See [`resolve_group_order_target`]'s doc for why
 /// plain `Expr` equality doesn't work here.
 fn matches_agg_slot(
     full_scope: &Scope,
@@ -866,81 +870,90 @@ fn matches_agg_slot(
             let [arg_expr] = list.as_slice() else {
                 return Ok(false);
             };
-            let a = joined_bare_column_offset(full_scope, arg_expr)?;
-            let b = joined_bare_column_offset(full_scope, slot_arg)?;
-            Ok(a == b)
+            Ok(to_record_expr(arg_expr, full_scope)? == to_record_expr(slot_arg, full_scope)?)
         }
         (FunctionArgs::Star, Some(_)) => Ok(false),
     }
 }
 
-/// Resolves one `ORDER BY` term to its absolute offset within a
-/// finalized group row (`total_width` raw joined columns followed by
-/// `agg_slots.len()` finalized aggregate values) — #502's counterpart
-/// to [`joined_bare_column_offset`] for the post-`GROUP BY` sort key.
-/// An ordinal or alias recurses into the referenced/aliased result
-/// column's own expression; per
-/// [`validate_joined_group_projection`]'s restriction, every legal
-/// result column expression is itself either a bare column or a whole
-/// aggregate call, so this always bottoms out in one of those two
-/// cases (or a clean `Unsupported` for anything else, e.g. an `ORDER
-/// BY` expression that isn't a bare column or a bare aggregate call).
+/// Where a joined aggregate's `ORDER BY` term sorts the finalized group
+/// rows: a field of the record, or (#612) an expression over it whose
+/// value is appended to the record handed to the sorter.
+enum GroupOrderKey {
+    Offset(usize),
+    Expr(Expr),
+}
+
+/// Resolves one `ORDER BY` term over a finalized group row
+/// (`total_width` raw joined columns, then `agg_slots.len()` finalized
+/// aggregates), with the collation it sorts under. A whole aggregate
+/// call or a bare column is a record field; a position or alias names
+/// a result column and sorts under that column's collation; anything
+/// else is evaluated against the record.
 fn resolve_group_order_target(
     select: &Select,
     full_scope: &Scope,
     agg_slots: &[AggSlot],
     total_width: usize,
     expr: &Expr,
-) -> Result<usize, CodegenError> {
+) -> Result<(GroupOrderKey, Collation), CodegenError> {
     let stripped = strip_paren(strip_collate(expr));
-    // Unlike `validate_joined_group_projection`/`project_grouped_result_
-    // columns` (which only ever compare a `select.columns` expr against
-    // `agg_slots` built from that very same list, so plain `Expr`
-    // equality — spans included — always matches by construction), an
-    // `ORDER BY` term is a separately parsed `Expr` even when it's the
-    // exact same aggregate call textually (different `Span`), so it
-    // needs a structural match instead of `==`.
+    let explicit = collation_of(expr);
+    // An `ORDER BY` term is parsed apart from the result columns the
+    // slots came from (different spans), so it is matched structurally.
     for (pos, slot) in agg_slots.iter().enumerate() {
         if matches_agg_slot(full_scope, stripped, slot)? {
-            return Ok(total_width.saturating_add(pos));
+            let key = GroupOrderKey::Offset(total_width.saturating_add(pos));
+            return Ok((key, explicit.unwrap_or(Collation::Binary)));
         }
     }
-    if let ExprKind::Literal(Literal::Integer(n)) = &stripped.kind {
-        let ordinal = usize::try_from(*n)
-            .ok()
-            .and_then(|n| n.checked_sub(1))
-            .and_then(|idx| select.columns.get(idx));
-        let Some(ResultColumn::Expr { expr: target, .. }) = ordinal else {
-            return Err(CodegenError::Unsupported {
-                reason: format!(
-                    "ORDER BY position {n} is out of range for a {}-column result set",
-                    select.columns.len()
-                ),
+    match named_result_column(stripped, select, full_scope)? {
+        Some(NamedColumn::Offset(abs, collation)) => {
+            return Ok((GroupOrderKey::Offset(abs), explicit.unwrap_or(collation)));
+        }
+        Some(NamedColumn::Expr(target)) => {
+            let (key, collation) =
+                resolve_group_order_target(select, full_scope, agg_slots, total_width, &target)?;
+            return Ok((key, explicit.unwrap_or(collation)));
+        }
+        None => {}
+    }
+    let collation = explicit
+        .or_else(|| expr_collation(full_scope, stripped))
+        .unwrap_or(Collation::Binary);
+    if let Some(offset) = joined_bare_column_offset(full_scope, stripped) {
+        return Ok((GroupOrderKey::Offset(offset?), collation));
+    }
+    let key = to_record_expr(
+        &substitute_matching_aggregates(stripped, full_scope, agg_slots)?,
+        full_scope,
+    )?;
+    Ok((GroupOrderKey::Expr(key), collation))
+}
+
+/// `substitute_aggregates` for an `ORDER BY` term: an aggregate call is
+/// matched to its slot structurally ([`matches_agg_slot`]), since the
+/// term was parsed apart from the result columns the slots came from.
+fn substitute_matching_aggregates(
+    expr: &Expr,
+    full_scope: &Scope,
+    agg_slots: &[AggSlot],
+) -> Result<Expr, CodegenError> {
+    for (pos, slot) in agg_slots.iter().enumerate() {
+        if matches_agg_slot(full_scope, strip_paren(expr), slot)? {
+            return Ok(Expr {
+                kind: ExprKind::Column {
+                    table: None,
+                    catalog: None,
+                    name: format!("__agg{pos}"),
+                },
+                span: expr.span,
             });
-        };
-        return resolve_group_order_target(select, full_scope, agg_slots, total_width, target);
-    }
-    if let ExprKind::Column {
-        table: None, name, ..
-    } = &stripped.kind
-    {
-        if let Some(ResultColumn::Expr {
-            expr: aliased_expr, ..
-        }) = select
-            .columns
-            .iter()
-            .find(|c| matches!(c, ResultColumn::Expr { alias: Some(a), .. } if a == name))
-        {
-            return resolve_group_order_target(
-                select,
-                full_scope,
-                agg_slots,
-                total_width,
-                aliased_expr,
-            );
         }
     }
-    joined_bare_column_offset(full_scope, stripped)
+    map_subexprs(expr, &mut |sub: &Expr| {
+        substitute_matching_aggregates(sub, full_scope, agg_slots)
+    })
 }
 
 #[cfg(test)]

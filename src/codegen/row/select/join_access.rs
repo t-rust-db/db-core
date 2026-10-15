@@ -6,6 +6,7 @@ use super::limit_scan::{
     top_level_equality_operands,
 };
 use super::order_by::strip_collate;
+use super::projection::{emit_dedup_check, joined_result_collations};
 use super::*;
 use crate::codegen::row::planner::{estimate_index_cost, estimate_scan_cost};
 use crate::codegen::row::{key_index, record_width};
@@ -352,6 +353,17 @@ impl JoinOrderPlan {
             nulls_first: true,
         }
     }
+
+    /// [`Self::ascending_offset`] for a computed `GROUP BY` key (#610),
+    /// evaluated against the join's cursors in pass 1.
+    pub(super) fn ascending_expr(expr: Expr, collation: Collation) -> Self {
+        JoinOrderPlan {
+            target: JoinOrderTarget::Expr(expr),
+            descending: false,
+            collation,
+            nulls_first: true,
+        }
+    }
 }
 
 /// [`resolve_order_by`]'s joined counterpart: resolves each `ORDER BY`
@@ -369,7 +381,18 @@ pub(super) fn resolve_join_order_by(
     let mut plans = Vec::with_capacity(select.order_by.len());
     for term in &select.order_by {
         let base_expr = strip_collate(&term.expr);
-        let target = resolve_join_order_by_target(base_expr, select, scope)?;
+        // A position or alias sorts under the named column's collation.
+        let (target, collation) = match named_result_column(base_expr, select, scope)? {
+            Some(NamedColumn::Offset(abs, collation)) => (JoinOrderTarget::Offset(abs), collation),
+            Some(NamedColumn::Expr(expr)) => (
+                column_or_expr_target(strip_collate(&expr), scope)?,
+                expr_collation(scope, &expr).unwrap_or(Collation::Binary),
+            ),
+            None => (
+                column_or_expr_target(base_expr, scope)?,
+                expr_collation(scope, base_expr).unwrap_or(Collation::Binary),
+            ),
+        };
         let descending = term.desc.unwrap_or(false);
         let nulls_first = term
             .nulls_last
@@ -377,36 +400,120 @@ pub(super) fn resolve_join_order_by(
         plans.push(JoinOrderPlan {
             target,
             descending,
-            collation: collation_of(&term.expr)
-                .or_else(|| expr_collation(scope, base_expr))
-                .unwrap_or(Collation::Binary),
+            collation: collation_of(&term.expr).unwrap_or(collation),
             nulls_first,
         });
     }
     Ok(plans)
 }
 
-pub(super) fn resolve_join_order_by_target(
+/// The result column an ORDER BY term names over a join.
+pub(super) enum NamedColumn {
+    /// A `*`/`table.*` column: its offset in the joined row, and its
+    /// declared collation.
+    Offset(usize, Collation),
+    /// A result-column expression.
+    Expr(Expr),
+}
+
+/// The result column `expr` names, as sqlite3 resolves an ORDER BY term:
+/// an integer is a 1-based position counting `*`/`table.*` expanded, an
+/// unqualified name matching a result alias is that column (aliases win
+/// over table columns). `None` when `expr` is neither.
+pub(super) fn named_result_column(
     expr: &Expr,
     select: &Select,
     scope: &Scope,
-) -> Result<JoinOrderTarget, CodegenError> {
+) -> Result<Option<NamedColumn>, CodegenError> {
     match &expr.kind {
-        ExprKind::Column { table, name, .. } => {
-            // Result-column aliases take precedence over table columns,
-            // same as the single-table path, but only for an
-            // unqualified reference.
-            if table.is_none() {
-                if let Some(ResultColumn::Expr {
-                    expr: aliased_expr, ..
-                }) = select
-                    .columns
-                    .iter()
-                    .find(|c| matches!(c, ResultColumn::Expr { alias: Some(a), .. } if a == name))
-                {
-                    return resolve_join_order_by_target(aliased_expr, select, scope);
+        ExprKind::Literal(Literal::Integer(n)) => {
+            let columns = expanded_result_columns(select, scope)?;
+            let count = columns.len();
+            usize::try_from(*n)
+                .ok()
+                .and_then(|ordinal| ordinal.checked_sub(1))
+                .and_then(|zero_based| columns.into_iter().nth(zero_based))
+                .map(Some)
+                .ok_or_else(|| CodegenError::Unsupported {
+                    reason: format!(
+                        "ORDER BY position {n} is out of range for a {count}-column result set"
+                    ),
+                })
+        }
+        ExprKind::Column {
+            table: None, name, ..
+        } => Ok(select.columns.iter().find_map(|c| match c {
+            ResultColumn::Expr {
+                expr,
+                alias: Some(a),
+            } if a == name => Some(NamedColumn::Expr(expr.clone())),
+            _ => None,
+        })),
+        _ => Ok(None),
+    }
+}
+
+/// `select`'s result columns with `*`/`table.*` expanded across
+/// `scope.tables` in FROM order, skipping the NATURAL/USING columns
+/// `scope.dedup_star` names, as [`emit_join_row`] projects them.
+fn expanded_result_columns(
+    select: &Select,
+    scope: &Scope,
+) -> Result<Vec<NamedColumn>, CodegenError> {
+    let declared = |binding: &TableBinding, idx: usize| {
+        binding
+            .schema
+            .column_collations
+            .get(idx)
+            .copied()
+            .unwrap_or(Collation::Binary)
+    };
+    let mut out = Vec::new();
+    for col in &select.columns {
+        match col {
+            ResultColumn::Star => {
+                for (i, binding) in scope.tables.iter().enumerate() {
+                    let suppressed = scope.dedup_star.get(i);
+                    let base = joined_column_offset(scope, i)?;
+                    for (idx, name) in binding.schema.columns.iter().enumerate() {
+                        if !suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase())) {
+                            out.push(NamedColumn::Offset(
+                                base.saturating_add(idx),
+                                declared(binding, idx),
+                            ));
+                        }
+                    }
                 }
             }
+            ResultColumn::TableStar { table } => {
+                let i = scope
+                    .tables
+                    .iter()
+                    .position(|b| b.matches_qualifier(table))
+                    .ok_or_else(|| CodegenError::UnknownColumn {
+                        name: format!("{table}.*"),
+                    })?;
+                let base = joined_column_offset(scope, i)?;
+                if let Some(binding) = scope.tables.get(i) {
+                    for idx in 0..binding.schema.columns.len() {
+                        out.push(NamedColumn::Offset(
+                            base.saturating_add(idx),
+                            declared(binding, idx),
+                        ));
+                    }
+                }
+            }
+            ResultColumn::Expr { expr, .. } => out.push(NamedColumn::Expr(expr.clone())),
+        }
+    }
+    Ok(out)
+}
+
+/// A bare column sorts on its offset in the joined row; anything else is
+/// evaluated as an expression.
+fn column_or_expr_target(expr: &Expr, scope: &Scope) -> Result<JoinOrderTarget, CodegenError> {
+    match &expr.kind {
+        ExprKind::Column { table, name, .. } => {
             let (binding_idx, local_idx) = resolve_scope_column(scope, table.as_deref(), name)?;
             Ok(JoinOrderTarget::Offset(
                 joined_column_offset(scope, binding_idx)?.saturating_add(local_idx),
@@ -506,14 +613,14 @@ pub(super) fn emit_joined_pseudo_projection(
                     regs.push(read_offset(em, reg, base.saturating_add(idx)));
                 }
             }
-            ResultColumn::Expr {
-                expr:
-                    Expr {
-                        kind: ExprKind::Column { table, name, .. },
-                        ..
-                    },
-                ..
-            } => {
+            // A `COLLATE`d column (#613) projects the column's value; the
+            // collation only matters to DISTINCT and ORDER BY.
+            ResultColumn::Expr { expr, .. }
+                if matches!(strip_collate(expr).kind, ExprKind::Column { .. }) =>
+            {
+                let ExprKind::Column { table, name, .. } = &strip_collate(expr).kind else {
+                    continue;
+                };
                 let (binding_idx, local_idx) = resolve_scope_column(scope, table.as_deref(), name)?;
                 let abs = joined_column_offset(scope, binding_idx)?.saturating_add(local_idx);
                 regs.push(read_offset(em, reg, abs));
@@ -646,7 +753,9 @@ where
     // counts against them -- the ephemeral index lives one cursor past
     // the sorter's pseudo cursor.
     if let Some(distinct_cursor) = distinct_cursor {
-        emit_pseudo_distinct_guard(em, distinct_cursor, first, count, row_skip);
+        // #613: each column under its collation.
+        let collations = joined_result_collations(select, full_scope, &full_scope.dedup_star);
+        emit_dedup_check(em, distinct_cursor, first, collations, row_skip);
     }
     if let Some(limit) = &limit {
         emit_offset_guard(em, limit, row_skip);
@@ -660,55 +769,6 @@ where
     let sorted_next = em.emit(Instruction::new(Opcode::SorterNext, sort_cursor, 0, 0));
     em.patch_p2(sorted_next, sorted_loop);
     Ok(())
-}
-
-/// db-core#219: the `Found`/`IdxInsert` dedup check over a result row
-/// already projected into `first..first+count` from a sorter's pseudo
-/// record -- `DISTINCT` applied post-sort. Same shape as
-/// `level::emit_join_distinct_guard`'s pre-sink check, minus the
-/// re-projection (the sorted path already has the registers in hand).
-pub(super) fn emit_pseudo_distinct_guard(
-    em: &mut Emitter,
-    distinct_cursor: i32,
-    first: i32,
-    count: usize,
-    skip_label: Label,
-) {
-    let width = P4::Int(i64::try_from(count).unwrap_or(0));
-    // db-core#527: bloom pre-filter ahead of `Found`, same shape as
-    // `projection::emit_dedup_check`.
-    let insert_label = em.new_label();
-    let filter_addr = em.emit(Instruction::with_p4(
-        Opcode::Filter,
-        distinct_cursor,
-        0,
-        first,
-        width.clone(),
-    ));
-    em.patch_p2(filter_addr, insert_label);
-    let addr = em.emit(Instruction::with_p4(
-        Opcode::Found,
-        distinct_cursor,
-        0,
-        first,
-        width.clone(),
-    ));
-    em.patch_p2(addr, skip_label);
-    em.place(insert_label);
-    em.emit(Instruction::with_p4(
-        Opcode::FilterAdd,
-        distinct_cursor,
-        0,
-        first,
-        width.clone(),
-    ));
-    em.emit(Instruction::with_p4(
-        Opcode::IdxInsert,
-        distinct_cursor,
-        first,
-        0,
-        width,
-    ));
 }
 
 /// Builds the [`SortKeyColumn`] list for one buffered joined row: a
@@ -1150,6 +1210,19 @@ mod tests {
         }
     }
 
+    /// The sort target `resolve_join_order_by` gives one ORDER BY term.
+    fn resolve_join_order_by_target(
+        expr: &Expr,
+        select: &Select,
+        scope: &Scope,
+    ) -> Result<JoinOrderTarget, CodegenError> {
+        match named_result_column(expr, select, scope)? {
+            Some(NamedColumn::Offset(abs, _)) => Ok(JoinOrderTarget::Offset(abs)),
+            Some(NamedColumn::Expr(named)) => column_or_expr_target(strip_collate(&named), scope),
+            None => column_or_expr_target(expr, scope),
+        }
+    }
+
     #[test]
     fn resolve_join_order_by_target_prefers_alias() {
         let select = empty_select(vec![ResultColumn::Expr {
@@ -1168,8 +1241,32 @@ mod tests {
     fn resolve_join_order_by_target_non_column_becomes_expr() {
         let select = empty_select(vec![]);
         let scope = Scope::default();
-        let expr = lit_int(42);
+        let expr = Expr {
+            kind: ExprKind::Literal(crate::parser::ast::Literal::Str("k".to_string())),
+            span: span(),
+        };
         let target = resolve_join_order_by_target(&expr, &select, &scope).unwrap();
         assert!(matches!(target, JoinOrderTarget::Expr(_)));
+    }
+
+    #[test]
+    fn resolve_join_order_by_target_reads_a_position() {
+        let select = empty_select(vec![
+            ResultColumn::Star,
+            ResultColumn::Expr {
+                expr: col(Some("t0"), "a"),
+                alias: None,
+            },
+        ]);
+        let scope = Scope {
+            tables: vec![binding(schema("t0", &["a", "b"], vec![]), None)],
+            ..Scope::default()
+        };
+        let target = resolve_join_order_by_target(&lit_int(2), &select, &scope).unwrap();
+        assert!(matches!(target, JoinOrderTarget::Offset(1)));
+        let target = resolve_join_order_by_target(&lit_int(3), &select, &scope).unwrap();
+        assert!(matches!(target, JoinOrderTarget::Offset(0)));
+        assert!(resolve_join_order_by_target(&lit_int(4), &select, &scope).is_err());
+        assert!(resolve_join_order_by_target(&lit_int(0), &select, &scope).is_err());
     }
 }

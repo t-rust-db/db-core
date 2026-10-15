@@ -153,8 +153,7 @@ fn result_column_names_match_sqlite3() {
 /// Queries sqlite3 answers and the row engine still refuses, with the
 /// headers sqlite3 gives. Each is asserted to still fail: once one runs,
 /// move it into [`result_column_names_match_sqlite3`] and close its issue.
-const KNOWN_GAPS: &[(&str, &[&str], &str)] =
-    &[("SELECT x FROM (SELECT 1 AS x) WHERE x = 1", &["x"], "#611")];
+const KNOWN_GAPS: &[(&str, &[&str], &str)] = &[];
 
 #[test]
 fn known_gaps_still_fail() {
@@ -797,4 +796,364 @@ fn distinct_over_a_joined_aggregate_matches_sqlite3() {
         ],
         "{plan:?}"
     );
+}
+
+/// #613: DISTINCT over a plain join compares each column under its
+/// collation, sorted or not, across INNER, LEFT and FULL joins and
+/// through `*`/`t.*` (sqlite3 3.53, `.headers on`).
+#[test]
+fn distinct_over_a_join_honours_collations() {
+    let db = TempDb::new("join-distinct-collate");
+    let mut e = grouped_engine(&db);
+    e.run_query(
+        "CREATE TABLE h(k INT, s TEXT COLLATE NOCASE); \
+         INSERT INTO h VALUES(1,'a'),(1,'A'),(2,'b')",
+    )
+    .unwrap();
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT DISTINCT h1.s FROM h h1 JOIN h h2 ON h1.k = h2.k",
+                "'s';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.s FROM h h1 LEFT JOIN h h2 ON h1.k = h2.k",
+                "'s';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.s FROM h h1 FULL JOIN h h2 ON h1.k = h2.k",
+                "'s';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.s FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY 1 DESC",
+                "'s';'b';'a'",
+            ),
+            (
+                "SELECT DISTINCT h1.s FROM h h1 LEFT JOIN h h2 ON h1.k = h2.k ORDER BY 1",
+                "'s';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.s FROM h h1 FULL JOIN h h2 ON h1.k = h2.k ORDER BY 1",
+                "'s';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.* FROM h h1 JOIN h h2 ON h1.k = h2.k",
+                "'k','s';1,'a';2,'b'",
+            ),
+            (
+                "SELECT DISTINCT h1.s COLLATE BINARY FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY 1",
+                "'h1.s COLLATE BINARY';'A';'a';'b'",
+            ),
+            (
+                "SELECT DISTINCT a.s COLLATE NOCASE FROM g a JOIN g b ON a.k = b.k ORDER BY 1",
+                "'a.s COLLATE NOCASE';'x';'y'",
+            ),
+        ],
+    );
+    // `*` skips the USING column and keeps both NOCASE `s` columns: one
+    // row per `k` (which spelling survives follows the join order).
+    let r = e
+        .run_query("SELECT DISTINCT * FROM h h1 JOIN h h2 USING (k)")
+        .unwrap();
+    assert_eq!(r.columns, ["k", "s", "s"]);
+    assert_eq!(r.rows.len(), 2, "{:?}", r.rows);
+}
+
+/// ORDER BY a position over a join sorts on that result column, under
+/// its collation (sqlite3 3.53, `.headers on`). It used to sort on the
+/// constant itself, leaving the rows in join order.
+#[test]
+fn ordering_a_join_by_position_matches_sqlite3() {
+    let db = TempDb::new("join-order-position");
+    let mut e = RowEngine::open(db.path()).expect("open fixture copy");
+    e.run_query(
+        "CREATE TABLE h(k INT, s TEXT COLLATE NOCASE); \
+         INSERT INTO h VALUES(1,'a'),(1,'B'),(2,'c')",
+    )
+    .unwrap();
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT h1.k, h2.s FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY 2 DESC, 1",
+                "'k','s';2,'c';1,'B';1,'B';1,'a';1,'a'",
+            ),
+            (
+                "SELECT h1.s AS z FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY z DESC",
+                "'z';'c';'B';'B';'a';'a'",
+            ),
+            (
+                "SELECT * FROM h h1 JOIN h h2 USING (k) ORDER BY 3 DESC, 2",
+                "'k','s','s';2,'c','c';1,'a','B';1,'B','B';1,'a','a';1,'B','a'",
+            ),
+            (
+                "SELECT h1.* FROM h h1 LEFT JOIN h h2 ON h1.k = h2.k + 1 ORDER BY 2 DESC",
+                "'k','s';2,'c';2,'c';1,'B';1,'a'",
+            ),
+        ],
+    );
+    let err = e
+        .run_query("SELECT h1.k FROM h h1 JOIN h h2 ON h1.k = h2.k ORDER BY 2")
+        .unwrap_err();
+    assert!(err.to_string().contains("out of range"), "{err}");
+}
+
+/// #611: a FROM subquery without a FROM of its own, and `VALUES` in
+/// FROM, materialized as constant rows (sqlite3 3.53, `.headers on`).
+#[test]
+fn from_less_subqueries_and_values_match_sqlite3() {
+    let db = TempDb::new("from-less");
+    let mut e = engine(&db);
+    check_cases(
+        &mut e,
+        &[
+            ("SELECT x FROM (SELECT 1 AS x) WHERE x = 1", "'x';1"),
+            (
+                "SELECT * FROM (SELECT 1 AS x, 'a' AS y) AS s",
+                "'x','y';1,'a'",
+            ),
+            (
+                "SELECT * FROM (SELECT 1 AS x) s JOIN t ON s.x = t.Abc",
+                "'x','Abc','x y','k';1,1,'p','a'",
+            ),
+            (
+                "SELECT * FROM (SELECT 1 AS x UNION ALL SELECT 2)",
+                "'x';1;2",
+            ),
+            ("WITH c AS (SELECT 1 AS x) SELECT * FROM c", "'x';1"),
+            ("SELECT * FROM (SELECT 1+1)", "'1+1';2"),
+            (
+                "SELECT * FROM (VALUES(1,2),(3,4))",
+                "'column1','column2';1,2;3,4",
+            ),
+            (
+                "SELECT * FROM (VALUES(1,2),(3,4)) AS v WHERE column1 > 1",
+                "'column1','column2';3,4",
+            ),
+            (
+                "SELECT v.column2 FROM (VALUES(1,'a'),(2,'b')) v \
+                 JOIN (VALUES(2)) w ON v.column1 = w.column1",
+                "'column2';'b'",
+            ),
+            (
+                "SELECT count(*), sum(column1) FROM (VALUES(1),(2),(NULL))",
+                "'count(*)','sum(column1)';3,3",
+            ),
+        ],
+    );
+    let err = e.run_query("SELECT * FROM (VALUES(1,2),(3))").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("all VALUES must have the same number of terms"),
+        "{err}"
+    );
+}
+
+/// #612: a joined GROUP BY/aggregate's result columns, aggregate
+/// arguments, HAVING and ORDER BY terms can be any expression over the
+/// group's columns and aggregates, under the columns' collations
+/// (sqlite3 3.53, `.headers on`).
+#[test]
+fn joined_aggregate_expressions_match_sqlite3() {
+    let db = TempDb::new("joined-agg-expr");
+    let mut e = RowEngine::open(db.path()).expect("open fixture copy");
+    e.run_query(
+        "CREATE TABLE g(k INT, s TEXT, n INT); \
+         INSERT INTO g VALUES(1,'x',2),(1,'X',3),(2,'y',4),(3,'z',NULL); \
+         CREATE TABLE h(k INT, s TEXT COLLATE NOCASE); \
+         INSERT INTO h VALUES(1,'a'),(1,'A'),(2,'b')",
+    )
+    .unwrap();
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT DISTINCT a.s COLLATE NOCASE FROM g a JOIN g b ON a.k = b.k GROUP BY a.s",
+                "'a.s COLLATE NOCASE';'X';'y';'z'",
+            ),
+            (
+                "SELECT upper(a.s), COUNT(*) + 1, a.n * 2 FROM g a JOIN g b ON a.k = b.k \
+                 GROUP BY a.s ORDER BY 1, 3",
+                "'upper(a.s)','COUNT(*) + 1','a.n * 2';'X',3,4;'X',3,6;'Y',2,8;'Z',2,NULL",
+            ),
+            (
+                "SELECT a.k, CASE WHEN count(*) > 1 THEN 'many' ELSE 'one' END AS c \
+                 FROM g a JOIN g b ON a.k = b.k GROUP BY a.k ORDER BY a.k",
+                "'k','c';1,'many';2,'one';3,'one'",
+            ),
+            (
+                "SELECT a.k, sum(a.n * b.n), max(a.n + b.n) - min(b.n) FROM g a JOIN g b \
+                 ON a.k = b.k GROUP BY a.k ORDER BY 2 DESC",
+                "'k','sum(a.n * b.n)','max(a.n + b.n) - min(b.n)';1,25,4;2,16,4;3,NULL,NULL",
+            ),
+            (
+                "SELECT a.k, count(*) AS c FROM g a JOIN g b ON a.k = b.k GROUP BY a.k \
+                 HAVING max(a.s) = 'x' ORDER BY a.k",
+                "'k','c';1,4",
+            ),
+            (
+                "SELECT a.k, b.s FROM g a JOIN g b ON a.k = b.k GROUP BY a.k, b.s \
+                 HAVING b.s = 'X' ORDER BY 1",
+                "'k','s';1,'X'",
+            ),
+            (
+                "SELECT a.k, count(*) FROM g a JOIN g b ON a.k = b.k GROUP BY a.k \
+                 ORDER BY count(*) * -1, a.k",
+                "'k','count(*)';1,4;2,1;3,1",
+            ),
+            (
+                "SELECT lower(a.s), count(*) FROM h a JOIN h b ON a.k = b.k GROUP BY a.s ORDER BY 1",
+                "'lower(a.s)','count(*)';'a',4;'b',1",
+            ),
+            (
+                "SELECT lower(a.s) || '!', count(*) FROM h a LEFT JOIN h b ON a.k = b.k + 1 \
+                 GROUP BY a.s ORDER BY 1 DESC",
+                "'lower(a.s) || ''!''','count(*)';'b!',2;'a!',2",
+            ),
+            (
+                "SELECT DISTINCT lower(a.s) FROM h a JOIN h b ON a.k = b.k GROUP BY a.s, b.s \
+                 ORDER BY 1",
+                "'lower(a.s)';'a';'b'",
+            ),
+            (
+                "SELECT coalesce(max(a.n), 0) FROM g a JOIN g b ON a.k = b.k WHERE a.k > 5",
+                "'coalesce(max(a.n), 0)';0",
+            ),
+        ],
+    );
+}
+
+/// #610's computed GROUP BY keys under a JOIN (sqlite3 3.53).
+#[test]
+fn joined_aggregate_groups_by_expressions() {
+    let db = TempDb::new("joined-agg-keys");
+    let mut e = RowEngine::open(db.path()).expect("open fixture copy");
+    e.run_query(
+        "CREATE TABLE g(k INT, s TEXT, n INT); \
+         INSERT INTO g VALUES(1,'x',2),(1,'X',3),(2,'y',4),(3,'z',NULL)",
+    )
+    .unwrap();
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT a.k % 2 AS par, count(*) FROM g a JOIN g b ON a.k = b.k \
+                 GROUP BY a.k % 2 ORDER BY par",
+                "'par','count(*)';0,1;1,5",
+            ),
+            (
+                "SELECT upper(a.s) AS u, count(*) FROM g a JOIN g b ON a.k = b.k \
+                 GROUP BY upper(a.s) ORDER BY u DESC",
+                "'u','count(*)';'Z',1;'Y',1;'X',4",
+            ),
+        ],
+    );
+}
+
+/// An aggregate nested in CASE, a function argument or BETWEEN is
+/// accumulated like any other (found with #612; sqlite3 3.53).
+#[test]
+fn nested_aggregates_match_sqlite3() {
+    let db = TempDb::new("nested-agg");
+    let mut e = RowEngine::open(db.path()).expect("open fixture copy");
+    e.run_query(
+        "CREATE TABLE g(k INT, s TEXT, n INT); \
+         INSERT INTO g VALUES(1,'x',2),(1,'X',3),(2,'y',4)",
+    )
+    .unwrap();
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT k, CASE WHEN count(*) > 1 THEN 'many' ELSE 'one' END FROM g GROUP BY k",
+                "'k','CASE WHEN count(*) > 1 THEN ''many'' ELSE ''one'' END';1,'many';2,'one'",
+            ),
+            (
+                "SELECT k, coalesce(max(n), 0), abs(-sum(n)) FROM g GROUP BY k",
+                "'k','coalesce(max(n), 0)','abs(-sum(n))';1,3,5;2,4,4",
+            ),
+            (
+                "SELECT k FROM g GROUP BY k HAVING max(n) BETWEEN 3 AND 5",
+                "'k';1;2",
+            ),
+            (
+                "SELECT CASE WHEN count(*) > 2 THEN 'big' END FROM g",
+                "'CASE WHEN count(*) > 2 THEN ''big'' END';'big'",
+            ),
+        ],
+    );
+}
+
+/// #610: a GROUP BY position or result-column alias, and HAVING on an
+/// alias, as sqlite3 3.53 resolves them: a FROM column wins over an
+/// alias of the same name.
+#[test]
+fn group_by_positions_and_aliases_match_sqlite3() {
+    let db = TempDb::new("group-alias");
+    let mut e = rowid_engine(&db);
+    check_cases(
+        &mut e,
+        &[
+            (
+                "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY par",
+                "'par','COUNT(*)';0,1;1,2",
+            ),
+            (
+                "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY 1",
+                "'par','COUNT(*)';0,1;1,2",
+            ),
+            (
+                "SELECT b % 2 AS a, COUNT(*) FROM p GROUP BY a ORDER BY 1, 2",
+                "'a','COUNT(*)';0,1;1,1;1,1",
+            ),
+            (
+                "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY par HAVING par = 1",
+                "'par','COUNT(*)';1,2",
+            ),
+            (
+                "SELECT b % 2 AS par, COUNT(*) AS n FROM p GROUP BY par HAVING n > 1",
+                "'par','n';1,2",
+            ),
+            (
+                "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY 1, par ORDER BY par DESC",
+                "'par','COUNT(*)';1,2;0,1",
+            ),
+            (
+                "SELECT *, count(*) FROM p GROUP BY 2 ORDER BY 2",
+                "'a','b','count(*)';'y',1,1;'z',2,1;'x',3,1",
+            ),
+            ("SELECT count(*) AS c FROM p HAVING c > 2", "'c';3"),
+            (
+                "SELECT x.b % 2 AS par, count(*) FROM p x JOIN p y ON x.b = y.b GROUP BY par",
+                "'par','count(*)';0,1;1,2",
+            ),
+            (
+                "SELECT x.b % 2 AS par, count(*) FROM p x JOIN p y ON x.b = y.b \
+                 GROUP BY 1 HAVING par = 0",
+                "'par','count(*)';0,1",
+            ),
+        ],
+    );
+    for (sql, error) in [
+        (
+            "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY 3",
+            "1st GROUP BY term out of range - should be between 1 and 2",
+        ),
+        (
+            "SELECT b % 2 AS par, COUNT(*) FROM p GROUP BY 2",
+            "aggregate functions are not allowed in the GROUP BY clause",
+        ),
+        (
+            "SELECT b % 2 AS par, COUNT(*) AS n FROM p GROUP BY n",
+            "aggregate functions are not allowed in the GROUP BY clause",
+        ),
+        (
+            "SELECT x.a AS b, count(*) FROM p x JOIN p y ON x.b = y.b GROUP BY b",
+            "ambiguous",
+        ),
+    ] {
+        let err = e.run_query(sql).unwrap_err().to_string();
+        assert!(err.contains(error), "{sql}: {err}");
+    }
 }

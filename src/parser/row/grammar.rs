@@ -1697,16 +1697,75 @@ impl Parser {
     /// explicit `unsupported(..)` errors. A subquery's alias is
     /// optional, as in SQLite (#606): without one its columns are only
     /// reachable unqualified.
+    /// `VALUES (expr-list) { , (expr-list) }` in FROM (#611), as sqlite3
+    /// builds it: a `UNION ALL` of FROM-less rows whose columns are named
+    /// `column1`..`columnN`. Every row must have the same width.
+    fn values_select(&mut self) -> PResult<Select> {
+        let start = self.expect_kw(Keyword::VALUES)?;
+        let mut rows = vec![(self.peek().span, self.value_row()?)];
+        while self.eat_punct(&TokenKind::Comma) {
+            rows.push((self.peek().span, self.value_row()?));
+        }
+        let width = rows.first().map_or(0, |(_, row)| row.len());
+        if rows.iter().any(|(_, row)| row.len() != width) {
+            return self.invalid("all VALUES must have the same number of terms");
+        }
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map_or(start, |t| t.span);
+        let columns = |row: Vec<Expr>| -> Vec<ResultColumn> {
+            row.into_iter()
+                .enumerate()
+                .map(|(i, expr)| ResultColumn::Expr {
+                    expr,
+                    alias: Some(format!("column{}", i.saturating_add(1))),
+                })
+                .collect()
+        };
+        let mut rows = rows.into_iter();
+        let first = rows.next().map_or_else(Vec::new, |(_, row)| columns(row));
+        let compound = rows
+            .map(|(span, row)| CompoundSelect {
+                op: CompoundOp::UnionAll,
+                distinct: None,
+                columns: columns(row),
+                from: None,
+                where_clause: None,
+                group_by: vec![],
+                having: None,
+                span,
+            })
+            .collect();
+        Ok(Select {
+            with_clause: None,
+            distinct: None,
+            columns: first,
+            from: None,
+            where_clause: None,
+            group_by: vec![],
+            having: None,
+            compound,
+            order_by: vec![],
+            limit: None,
+            scope: None,
+            span: join_span(start, end),
+        })
+    }
+
     fn table_ref(&mut self) -> PResult<TableRef> {
         if matches!(self.peek().kind, TokenKind::LParen) {
             let start = self.peek().span;
             self.advance();
-            if !self.at_kw(Keyword::SELECT) {
+            let subquery = if self.at_kw(Keyword::VALUES) {
+                self.values_select()?
+            } else if self.at_kw(Keyword::SELECT) {
+                self.parse_select_stmt()?
+            } else {
                 return self.unsupported(
                     "table-valued functions in FROM not yet supported (only a SELECT subquery is)",
                 );
-            }
-            let subquery = self.parse_select_stmt()?;
+            };
             self.expect_punct(TokenKind::RParen, "')' to close FROM subquery")?;
             let alias = self.opt_alias()?;
             let end = self
