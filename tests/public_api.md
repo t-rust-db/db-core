@@ -2910,9 +2910,23 @@ impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::column::parquet::parquet_file::Field
+pub db_core::storage::column::parquet::parquet_file::Field::element: db_core::storage::parquet::footer::SchemaElement
+pub db_core::storage::column::parquet::parquet_file::Field::leaves: core::ops::range::Range<usize>
+pub db_core::storage::column::parquet::parquet_file::Field::name: alloc::string::String
+pub db_core::storage::column::parquet::parquet_file::Field::nested: bool
+impl core::clone::Clone for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::parquet_file::Field
 pub struct db_core::storage::column::parquet::parquet_file::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -3293,9 +3307,23 @@ impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::column::parquet::Field
+pub db_core::storage::column::parquet::Field::element: db_core::storage::parquet::footer::SchemaElement
+pub db_core::storage::column::parquet::Field::leaves: core::ops::range::Range<usize>
+pub db_core::storage::column::parquet::Field::name: alloc::string::String
+pub db_core::storage::column::parquet::Field::nested: bool
+impl core::clone::Clone for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::parquet_file::Field
 pub struct db_core::storage::column::parquet::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -3444,7 +3472,9 @@ pub type db_core::storage::column::memory::MemoryVfs::File = db_core::storage::c
 pub fn db_core::storage::column::memory::MemoryVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub struct db_core::storage::column::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -4593,9 +4623,23 @@ impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::parquet::parquet_file::Field
+pub db_core::storage::parquet::parquet_file::Field::element: db_core::storage::parquet::footer::SchemaElement
+pub db_core::storage::parquet::parquet_file::Field::leaves: core::ops::range::Range<usize>
+pub db_core::storage::parquet::parquet_file::Field::name: alloc::string::String
+pub db_core::storage::parquet::parquet_file::Field::nested: bool
+impl core::clone::Clone for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::parquet_file::Field
 pub struct db_core::storage::parquet::parquet_file::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -4976,9 +5020,23 @@ impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::parquet::Field
+pub db_core::storage::parquet::Field::element: db_core::storage::parquet::footer::SchemaElement
+pub db_core::storage::parquet::Field::leaves: core::ops::range::Range<usize>
+pub db_core::storage::parquet::Field::name: alloc::string::String
+pub db_core::storage::parquet::Field::nested: bool
+impl core::clone::Clone for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::parquet_file::Field
 pub struct db_core::storage::parquet::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -7195,7 +7253,9 @@ pub type db_core::storage::column::memory::MemoryVfs::File = db_core::storage::c
 pub fn db_core::storage::column::memory::MemoryVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub struct db_core::storage::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64

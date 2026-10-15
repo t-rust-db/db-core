@@ -83,4 +83,4 @@ pub mod thrift;
 #[cfg(feature = "storage-column-write")]
 pub mod writer;
 
-pub use parquet_file::{DictionaryIndices, FileError, ParquetFile, RowGroupReader};
+pub use parquet_file::{DictionaryIndices, Field, FileError, ParquetFile, RowGroupReader};

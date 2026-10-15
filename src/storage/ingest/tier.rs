@@ -410,13 +410,14 @@ pub(crate) fn merge_day(
     let mut bounds_by_file = Vec::new();
     let mut current: (Bounds, Bounds) = (None, None);
     for (entry, file) in &opened {
-        let leaves: Vec<(&str, usize, PhysicalType)> = file
-            .metadata()
-            .schema
+        let fields = file.fields();
+        let leaves: Vec<(&str, usize, PhysicalType)> = fields
             .iter()
-            .skip(1)
-            .enumerate()
-            .filter_map(|(i, e)| e.physical_type.map(|pt| (e.name.as_str(), i, pt)))
+            .filter(|f| !f.nested)
+            .filter_map(|f| {
+                let pt = f.element.physical_type?;
+                Some((f.name.as_str(), f.leaves.start, pt))
+            })
             .collect();
         let mut next = entry.lsn_lo;
         for rg in file.row_groups() {

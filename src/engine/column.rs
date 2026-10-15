@@ -153,15 +153,18 @@ fn resolve_columns(leaves: &[Leaf], names: &[String]) -> Result<Vec<Leaf>, Engin
         .collect()
 }
 
-/// Leaf schema columns as `(name, column_index, physical_type)`, in file
-/// order. Element 0 of the footer schema is the root group, skipped.
+/// The file's top-level leaf columns as `(name, column_index,
+/// physical_type)`, in file order. `column_index` counts leaves, so a
+/// column after a group (struct, list, map) reads its own chunk; a group's
+/// leaves are not columns of their own.
 fn leaf_columns(file: &ParquetFile<'_>) -> Vec<Leaf> {
-    file.metadata()
-        .schema
-        .iter()
-        .skip(1)
-        .enumerate()
-        .filter_map(|(i, s)| s.physical_type.map(|pt| (s.name.clone(), i, pt)))
+    file.fields()
+        .into_iter()
+        .filter(|f| !f.nested)
+        .filter_map(|f| {
+            let pt = f.element.physical_type?;
+            Some((f.name, f.leaves.start, pt))
+        })
         .collect()
 }
 
@@ -1245,6 +1248,36 @@ mod tests {
             err.to_string().contains("not loaded by this segment"),
             "{err}"
         );
+    }
+
+    /// A column after a MAP reads its own chunk, filters and prunes; the
+    /// map's `key`/`value` leaves are not columns (before, `x` read leaf
+    /// index 5 of 4 and `key` read `x`'s chunk as strings).
+    #[test]
+    fn columns_after_a_nested_field_read_their_own_chunk() {
+        let path = Path::new("tests/fixtures/parquet/nested_map.parquet");
+        let mut engine = BatchEngine::open(path).unwrap();
+        let rows = |engine: &mut BatchEngine, sql: &str| -> Vec<String> {
+            engine
+                .run_query(sql)
+                .unwrap()
+                .rows
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .collect()
+        };
+        assert_eq!(
+            rows(&mut engine, "SELECT id, x FROM nested_map WHERE x > 15"),
+            ["2,20", "3,30", "4,40"]
+        );
+        assert_eq!(rows(&mut engine, "SELECT sum(x) FROM nested_map"), ["100.0"]);
+        let err = engine.run_query("SELECT key FROM nested_map").unwrap_err();
+        assert!(err.to_string().contains("unknown column: key"), "{err}");
     }
 
     /// End to end over the 3-row-group fixture whose `id`/`amount` are

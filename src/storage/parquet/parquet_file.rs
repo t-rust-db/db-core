@@ -184,6 +184,26 @@ pub struct ParquetFile<'a> {
     data: &'a [u8],
     schema_tree: SchemaNode,
     is_flat: bool,
+    /// Leaf (column chunk) `i`'s index in `metadata.schema`. For a flat
+    /// schema that is `i + 1`; a group (struct, list, map) shifts every
+    /// leaf after it.
+    leaf_elements: Vec<usize>,
+    /// Leaf `i`'s max definition level, from the schema tree.
+    leaf_max_def: Vec<u32>,
+}
+
+/// One top-level field of a file: a leaf column, or a group (struct, list,
+/// map) and the leaves (column chunks) it spans.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    /// The field's name.
+    pub name: String,
+    /// Its schema element (for a group: the group node, e.g. `MAP`).
+    pub element: footer::SchemaElement,
+    /// The column chunks it is stored in, as leaf indices.
+    pub leaves: std::ops::Range<usize>,
+    /// A group rather than a single leaf.
+    pub nested: bool,
 }
 
 impl<'a> ParquetFile<'a> {
@@ -196,12 +216,56 @@ impl<'a> ParquetFile<'a> {
         let metadata = footer::parse_footer(data)?;
         let is_flat = is_flat_schema(&metadata.schema);
         let schema_tree = schema_tree::build_schema_tree(&metadata.schema);
+        let leaf_elements = metadata
+            .schema
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, e)| e.physical_type.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        let leaf_max_def = schema_tree
+            .leaves()
+            .iter()
+            .map(|l| l.max_def_level)
+            .collect();
         Ok(ParquetFile {
             metadata,
             data,
             schema_tree,
             is_flat,
+            leaf_elements,
+            leaf_max_def,
         })
+    }
+
+    /// The schema element of leaf (column chunk) `column_index`.
+    pub fn leaf_element(&self, column_index: usize) -> Option<&footer::SchemaElement> {
+        self.metadata
+            .schema
+            .get(*self.leaf_elements.get(column_index)?)
+    }
+
+    /// The top-level fields, in schema order, each with the leaves it is
+    /// stored in. Column chunk indices count leaves, not schema elements,
+    /// so a field after a group does not start at its element's position.
+    pub fn fields(&self) -> Vec<Field> {
+        let mut next = 0usize;
+        self.schema_tree
+            .children
+            .iter()
+            .map(|child| {
+                let count = child.leaves().len();
+                let start = next;
+                next = next.saturating_add(count);
+                Field {
+                    name: child.name.clone(),
+                    element: child.element.clone(),
+                    leaves: start..next,
+                    nested: !child.is_leaf(),
+                }
+            })
+            .collect()
     }
 
     /// Whether every field in the schema is a required/optional leaf
@@ -282,43 +346,28 @@ impl<'a> ParquetFile<'a> {
         (0..self.num_row_groups()).flat_map(move |i| self.row_group(i))
     }
 
-    /// Max definition level for a leaf column, derived from its schema
-    /// repetition: `OPTIONAL` -> 1, `REQUIRED` -> 0. The schema list's first
-    /// entry is the root (message) node, so leaf column `i` is
-    /// `schema[i + 1]` for a flat (non-nested) schema.
+    /// Max definition level for a leaf column: one per optional or
+    /// repeated node on its path (for a top-level leaf, `OPTIONAL` -> 1,
+    /// `REQUIRED` -> 0).
     fn max_definition_level(&self, column_index: usize) -> u32 {
-        match self
-            .metadata
-            .schema
-            .get(column_index + 1)
-            .and_then(|s| s.repetition)
-        {
-            Some(Repetition::Optional) => 1,
-            _ => 0,
-        }
+        self.leaf_max_def.get(column_index).copied().unwrap_or(0)
     }
 
     /// Fixed byte width for a `FIXED_LEN_BYTE_ARRAY` leaf column.
     fn type_length(&self, column_index: usize) -> Result<usize> {
-        self.metadata
-            .schema
-            .get(column_index + 1)
+        self.leaf_element(column_index)
             .and_then(|s| s.type_length)
             .and_then(|len| usize::try_from(len).ok())
             .ok_or(FileError::MissingTypeLength)
     }
 
     fn converted_type(&self, column_index: usize) -> Option<footer::ConvertedType> {
-        self.metadata
-            .schema
-            .get(column_index + 1)
+        self.leaf_element(column_index)
             .and_then(|s| s.converted_type)
     }
 
     fn decimal_scale(&self, column_index: usize) -> Result<i32> {
-        self.metadata
-            .schema
-            .get(column_index + 1)
+        self.leaf_element(column_index)
             .and_then(|s| s.scale)
             .ok_or(FileError::MissingDecimalScale)
     }
@@ -339,7 +388,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// The schema element of leaf `column_index`: its annotations
     /// (converted type, scale, type length).
     pub fn schema_element(&self, column_index: usize) -> Option<&footer::SchemaElement> {
-        self.file.metadata.schema.get(column_index + 1)
+        self.file.leaf_element(column_index)
     }
 
     pub fn num_columns(&self) -> usize {
@@ -1077,6 +1126,42 @@ fn int96_to_epoch_micros(v: reader::Int96) -> i64 {
 )]
 mod tests {
     use super::*;
+
+    /// A MAP between two flat columns (tools/gen_parquet_fixtures.sh):
+    /// leaves `id`, `h.key_value.key`, `h.key_value.value`, `x`.
+    #[test]
+    fn leaves_after_a_group_are_indexed_by_leaf_not_by_schema_element() {
+        let bytes = std::fs::read("tests/fixtures/parquet/nested_map.parquet").unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let fields: Vec<(String, std::ops::Range<usize>, bool)> = file
+            .fields()
+            .into_iter()
+            .map(|f| (f.name, f.leaves, f.nested))
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                ("id".to_string(), 0..1, false),
+                ("h".to_string(), 1..3, true),
+                ("x".to_string(), 3..4, false)
+            ]
+        );
+        let names: Vec<&str> = (0..4)
+            .map(|i| file.leaf_element(i).unwrap().name.as_str())
+            .collect();
+        assert_eq!(names, ["id", "key", "value", "x"]);
+        assert!(file.leaf_element(4).is_none());
+        // optional h, repeated key_value: key 2, value 3; x is top level.
+        let levels: Vec<u32> = (0..4).map(|i| file.max_definition_level(i)).collect();
+        assert_eq!(levels, [1, 2, 3, 1]);
+        // The column after the map reads its own chunk.
+        let rg = file.row_group(0).unwrap();
+        assert_eq!(
+            rg.read_int32_column(3).unwrap(),
+            [Some(0), Some(10), Some(20), Some(30), Some(40)]
+        );
+        assert_eq!(rg.schema_element(3).unwrap().name, "x");
+    }
 
     struct StructWriter {
         buf: Vec<u8>,

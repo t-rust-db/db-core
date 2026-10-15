@@ -13492,7 +13492,7 @@
   {
     "id": "engine_column_leaves_named_47db8089",
     "file": "src/engine/column.rs",
-    "line": 259,
+    "line": 262,
     "decision": "!self.columns.iter().any(|(leaf, _, _)| leaf == name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13502,7 +13502,7 @@
   {
     "id": "engine_column_order_key_bound_96ce0bd6",
     "file": "src/engine/column.rs",
-    "line": 297,
+    "line": 300,
     "decision": "descending",
     "conditions": 1,
     "vectors_required": 2,
@@ -13512,7 +13512,7 @@
   {
     "id": "engine_column_load_c2239b69",
     "file": "src/engine/column.rs",
-    "line": 373,
+    "line": 376,
     "decision": "let Some(values) = predicate_batch.columns.get(name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -13522,7 +13522,7 @@
   {
     "id": "engine_column_load_eae013f0",
     "file": "src/engine/column.rs",
-    "line": 379,
+    "line": 382,
     "decision": "let Some(column) = predicate_batch.typed_columns.get(name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -13532,7 +13532,7 @@
   {
     "id": "engine_column_row_group_segments_b8f6287e",
     "file": "src/engine/column.rs",
-    "line": 438,
+    "line": 441,
     "decision": "match (where_clause, file.row_group(i)) {\n            (Some(expr), Some(rg)) => !prune::definitely_empty(expr, &rg, &leaves_by_name),\n            _ => true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13542,7 +13542,7 @@
   {
     "id": "engine_column_into_value_64b9c9ef",
     "file": "src/engine/column.rs",
-    "line": 528,
+    "line": 531,
     "decision": "match stat {\n            StatValue::Int(i) => Value::Int(i),\n            StatValue::Float(f) => Value::Float(f),\n            StatValue::Str(s) => Value::Str(s.into()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13552,7 +13552,7 @@
   {
     "id": "engine_column_compare_eb9e37d0",
     "file": "src/engine/column.rs",
-    "line": 536,
+    "line": 539,
     "decision": "match (a, b) {\n            (StatValue::Int(x), StatValue::Int(y)) => Some(x.cmp(y)),\n            (StatValue::Float(x), StatValue::Float(y)) => x.partial_cmp(y),\n            (StatValue::Int(x), StatValue::Float(y)) => (*x as f64).partial_cmp(y),\n            (StatValue::Float(x), StatValue::Int(y)) => x.partial_cmp(&(*y as f64)),\n            (StatValue::Str(x), StatValue::Str(y)) => Some(x.cmp(y)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13562,7 +13562,7 @@
   {
     "id": "engine_column_decode_stat_bytes_63fb2b31",
     "file": "src/engine/column.rs",
-    "line": 557,
+    "line": 560,
     "decision": "match annotation {\n            Annotation::Plain => {}\n            Annotation::UInt32 => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                return Some(StatValue::Int(i64::from(u32::from_le_bytes(arr))));\n            }\n            Annotation::UInt64 => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                return i64::try_from(u64::from_le_bytes(arr))\n                    .ok()\n                    .map(StatValue::Int);\n            }\n            Annotation::Decimal | Annotation::Bytes => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13572,7 +13572,7 @@
   {
     "id": "engine_column_decode_stat_bytes_94ae8332",
     "file": "src/engine/column.rs",
-    "line": 571,
+    "line": 574,
     "decision": "match physical_type {\n            PhysicalType::Int32 => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from(i32::from_le_bytes(arr))))\n            }\n            PhysicalType::Int64 => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from_le_bytes(arr)))\n            }\n            PhysicalType::Float => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from(f32::from_le_bytes(arr))))\n            }\n            PhysicalType::Double => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from_le_bytes(arr)))\n            }\n            PhysicalType::ByteArray => std::str::from_utf8(bytes)\n                .ok()\n                .map(str::to_string)\n                .map(StatValue::Str),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13582,7 +13582,7 @@
   {
     "id": "engine_column_literal_stat_value_46d4637c",
     "file": "src/engine/column.rs",
-    "line": 597,
+    "line": 600,
     "decision": "match (lit, physical_type) {\n            (Literal::Integer(i), PhysicalType::Int32 | PhysicalType::Int64) => {\n                Some(StatValue::Int(*i))\n            }\n            (Literal::Integer(i), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*i as f64))\n            }\n            (Literal::Float(f), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*f))\n            }\n            (Literal::Str(s), PhysicalType::ByteArray) => Some(StatValue::Str(s.clone())),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13592,7 +13592,7 @@
   {
     "id": "engine_column_as_column_and_literal_34999e3c",
     "file": "src/engine/column.rs",
-    "line": 620,
+    "line": 623,
     "decision": "match (&lhs.kind, &rhs.kind) {\n            (ExprKind::Column { name, .. }, ExprKind::Literal(lit)) => Some((name, lit, false)),\n            (ExprKind::Literal(lit), ExprKind::Column { name, .. }) => Some((name, lit, true)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13602,7 +13602,7 @@
   {
     "id": "engine_column_flip_3667ef35",
     "file": "src/engine/column.rs",
-    "line": 628,
+    "line": 631,
     "decision": "match op {\n            BinaryOp::Lt => BinaryOp::Gt,\n            BinaryOp::Le => BinaryOp::Ge,\n            BinaryOp::Gt => BinaryOp::Lt,\n            BinaryOp::Ge => BinaryOp::Le,\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13612,7 +13612,7 @@
   {
     "id": "engine_column_comparison_definitely_empty_a3ff3693",
     "file": "src/engine/column.rs",
-    "line": 645,
+    "line": 648,
     "decision": "flipped",
     "conditions": 1,
     "vectors_required": 2,
@@ -13622,7 +13622,7 @@
   {
     "id": "engine_column_comparison_definitely_empty_e54e6aca",
     "file": "src/engine/column.rs",
-    "line": 659,
+    "line": 662,
     "decision": "match op {\n            BinaryOp::Eq => {\n                let below_min = min\n                    .as_ref()\n                    .and_then(|m| compare(&literal, m))\n                    .is_some_and(|o| o == Ordering::Less);\n                let above_max = max\n                    .as_ref()\n                    .and_then(|m| compare(&literal, m))\n                    .is_some_and(|o| o == Ordering::Greater);\n                below_min || above_max\n            }\n            BinaryOp::Lt => min\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o != Ordering::Less),\n            BinaryOp::Le => min\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o == Ordering::Greater),\n            BinaryOp::Gt => max\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o != Ordering::Greater),\n            BinaryOp::Ge => max\n                .as_ref()\n                .and_then(|m| compare(m, &literal))\n                .is_some_and(|o| o == Ordering::Less),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13632,7 +13632,7 @@
   {
     "id": "engine_column_definitely_empty_f9c337cf",
     "file": "src/engine/column.rs",
-    "line": 701,
+    "line": 704,
     "decision": "match &expr.kind {\n            ExprKind::Paren(inner) => definitely_empty(inner, rg, leaves_by_name),\n            ExprKind::Binary {\n                op: BinaryOp::And,\n                lhs,\n                rhs,\n            } => {\n                definitely_empty(lhs, rg, leaves_by_name)\n                    || definitely_empty(rhs, rg, leaves_by_name)\n            }\n            ExprKind::Binary {\n                op: BinaryOp::Or,\n                lhs,\n                rhs,\n            } => {\n                definitely_empty(lhs, rg, leaves_by_name)\n                    && definitely_empty(rhs, rg, leaves_by_name)\n            }\n            ExprKind::Binary { op, lhs, rhs } => {\n                comparison_definitely_empty(*op, lhs, rhs, rg, leaves_by_name).unwrap_or(false)\n            }\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13642,7 +13642,7 @@
   {
     "id": "engine_column_in_subquery_38ffb216",
     "file": "src/engine/column.rs",
-    "line": 742,
+    "line": 745,
     "decision": "match &select.where_clause {\n        Some(Expr {\n            kind: ExprKind::InSubquery { subquery, .. },\n            ..\n        }) => Some(subquery),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13652,7 +13652,7 @@
   {
     "id": "engine_column_is_window_column_21d3bda9",
     "file": "src/engine/column.rs",
-    "line": 752,
+    "line": 755,
     "decision": "match column {\n        ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { tail, .. },\n                    ..\n                },\n            ..\n        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13662,7 +13662,7 @@
   {
     "id": "engine_column_plan_err_bbf17c28",
     "file": "src/engine/column.rs",
-    "line": 768,
+    "line": 771,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13672,7 +13672,7 @@
   {
     "id": "engine_column_type_name_16b2089b",
     "file": "src/engine/column.rs",
-    "line": 781,
+    "line": 784,
     "decision": "match pt {\n        PhysicalType::Boolean => \"BOOLEAN\",\n        PhysicalType::Int32 => \"INT32\",\n        PhysicalType::Int64 => \"INT64\",\n        PhysicalType::Int96 => \"INT96\",\n        PhysicalType::Float => \"FLOAT\",\n        PhysicalType::Double => \"DOUBLE\",\n        PhysicalType::ByteArray => \"BYTE_ARRAY\",\n        PhysicalType::FixedLenByteArray => \"FIXED_LEN_BYTE_ARRAY\",\n        PhysicalType::Unknown(_) => \"\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13682,7 +13682,7 @@
   {
     "id": "engine_column_write_varint_2427714d",
     "file": "src/engine/column.rs",
-    "line": 978,
+    "line": 981,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13692,7 +13692,7 @@
   {
     "id": "engine_column_write_varint_a5b1bbc4",
     "file": "src/engine/column.rs",
-    "line": 982,
+    "line": 985,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -13702,7 +13702,7 @@
   {
     "id": "engine_column_list_of_structs_field_b09c4ad2",
     "file": "src/engine/column.rs",
-    "line": 1021,
+    "line": 1024,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -13712,7 +13712,7 @@
   {
     "id": "engine_column_build_double_row_group_4ca87ac2",
     "file": "src/engine/column.rs",
-    "line": 1081,
+    "line": 1084,
     "decision": "let Some(stats) = stats_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -13722,7 +13722,7 @@
   {
     "id": "engine_column_a_string_literal_prunes_a_byte_array_column_3ad0fe2b",
     "file": "src/engine/column.rs",
-    "line": 1662,
+    "line": 1695,
     "decision": "let Some(s) = stats",
     "conditions": 1,
     "vectors_required": 2,
@@ -25162,7 +25162,7 @@
   {
     "id": "storage_ingest_tier_merge_day_a1123787",
     "file": "src/storage/ingest/tier.rs",
-    "line": 428,
+    "line": 429,
     "decision": "schema.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25172,7 +25172,7 @@
   {
     "id": "storage_ingest_tier_merge_day_70df342c",
     "file": "src/storage/ingest/tier.rs",
-    "line": 439,
+    "line": 440,
     "decision": "match leaf {\n                    Some((_, index, pt)) => read_values(&rg, *index, *pt)\n                        .map_err(|why| corrupt(&entry.path, why))?\n                        .into_iter()\n                        .map(|v| cast(v, spec.column_type))\n                        .collect(),\n                    None => vec![Value::Null; usize::try_from(rows).unwrap_or(0)],\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25182,7 +25182,7 @@
   {
     "id": "storage_ingest_tier_merge_day_93d8e9a9",
     "file": "src/storage/ingest/tier.rs",
-    "line": 453,
+    "line": 454,
     "decision": "next.saturating_sub(1) != entry.lsn_hi",
     "conditions": 1,
     "vectors_required": 2,
@@ -25192,7 +25192,7 @@
   {
     "id": "storage_ingest_tier_merge_day_7c39fb9d",
     "file": "src/storage/ingest/tier.rs",
-    "line": 469,
+    "line": 470,
     "decision": "files.done.len() > before",
     "conditions": 1,
     "vectors_required": 2,
@@ -25202,7 +25202,7 @@
   {
     "id": "storage_ingest_tier_merge_day_b511161e",
     "file": "src/storage/ingest/tier.rs",
-    "line": 473,
+    "line": 474,
     "decision": "files.open.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26182,7 +26182,7 @@
   {
     "id": "storage_parquet_parquet_file_read_nested_column_314dfa36",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 225,
+    "line": 289,
     "decision": "!self\n            .schema_tree\n            .children\n            .iter()\n            .any(|c| c.name == field_name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -26190,19 +26190,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_parquet_file_max_definition_level_bbbd9203",
-    "file": "src/storage/parquet/parquet_file.rs",
-    "line": 290,
-    "decision": "match self\n            .metadata\n            .schema\n            .get(column_index + 1)\n            .and_then(|s| s.repetition)\n        {\n            Some(Repetition::Optional) => 1,\n            _ => 0,\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": true
-  },
-  {
     "id": "storage_parquet_parquet_file_read_column_7d4f73a5",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 418,
+    "line": 467,
     "decision": "pos < chunk_bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26212,7 +26202,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_d459dc35",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 431,
+    "line": 480,
     "decision": "match header.page_type {\n                PageType::Data(data_page_header) => {\n                    let page_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    let is_dictionary_encoded = matches!(\n                        data_page_header.encoding,\n                        page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                    );\n                    let values = match (is_dictionary_encoded, &dictionary) {\n                        (true, Some(dict)) => {\n                            decode_data(&page_body, &data_page_header, max_def_level, dict)?\n                        }\n                        (true, None) => return Err(FileError::MissingDictionaryPage),\n                        (false, _) => decode_plain(&page_body, &data_page_header, max_def_level)?,\n                    };\n                    out.extend(values);\n                }\n                PageType::Dictionary(dictionary_page_header) => {\n                    if dictionary.is_some() {\n                        return Err(FileError::UnexpectedDictionaryPage);\n                    }\n                    let dictionary_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    dictionary = Some(decode_dictionary(\n                        &dictionary_body,\n                        dictionary_page_header.num_values,\n                    )?);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26222,7 +26212,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_0746b8a2",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 442,
+    "line": 491,
     "decision": "match (is_dictionary_encoded, &dictionary) {\n                        (true, Some(dict)) => {\n                            decode_data(&page_body, &data_page_header, max_def_level, dict)?\n                        }\n                        (true, None) => return Err(FileError::MissingDictionaryPage),\n                        (false, _) => decode_plain(&page_body, &data_page_header, max_def_level)?,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26232,7 +26222,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_d31770f8",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 452,
+    "line": 501,
     "decision": "dictionary.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26242,7 +26232,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_7d4f73a5",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 493,
+    "line": 542,
     "decision": "pos < chunk_bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26252,7 +26242,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_53dde488",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 508,
+    "line": 557,
     "decision": "data_page_header.encoding != page::Encoding::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -26262,7 +26252,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_f95568f1",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 562,
+    "line": 611,
     "decision": "pos < chunk_bytes.len() && next < wanted.len()",
     "conditions": 2,
     "vectors_required": 3,
@@ -26272,7 +26262,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_53dde488",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 577,
+    "line": 626,
     "decision": "data_page_header.encoding != page::Encoding::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -26282,7 +26272,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_09289e59",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 590,
+    "line": 639,
     "decision": "let Some(&(position, slot)) = wanted.get(next)",
     "conditions": 1,
     "vectors_required": 2,
@@ -26292,7 +26282,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_020b6d33",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 591,
+    "line": 640,
     "decision": "position >= page_end_row",
     "conditions": 1,
     "vectors_required": 2,
@@ -26302,7 +26292,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_1c99f19c",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 597,
+    "line": 646,
     "decision": "!rows.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26312,7 +26302,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_27b449af",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 616,
+    "line": 665,
     "decision": "let Some(&(position, _)) = wanted.get(next)",
     "conditions": 1,
     "vectors_required": 2,
@@ -26322,7 +26312,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_4c7ae637",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 619,
+    "line": 668,
     "decision": "max_def_level == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -26332,7 +26322,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_dictionary_indices_7d4f73a5",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 649,
+    "line": 698,
     "decision": "pos < chunk_bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26342,7 +26332,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_dictionary_indices_3a94da7c",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 662,
+    "line": 711,
     "decision": "match header.page_type {\n                PageType::Data(data_page_header) => {\n                    if dictionary.is_none()\n                        || !matches!(\n                            data_page_header.encoding,\n                            page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                        )\n                    {\n                        return Ok(None);\n                    }\n                    let page_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    indices.extend(reader::read_dictionary_index_column(\n                        &page_body,\n                        &data_page_header,\n                        max_def_level,\n                    )?);\n                }\n                PageType::Dictionary(dictionary_page_header) => {\n                    if dictionary.is_some() {\n                        return Err(FileError::UnexpectedDictionaryPage);\n                    }\n                    let dictionary_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    dictionary = Some(decode_dictionary(\n                        &dictionary_body,\n                        dictionary_page_header.num_values,\n                    )?);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26352,7 +26342,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_dictionary_indices_1b5585c0",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 664,
+    "line": 713,
     "decision": "dictionary.is_none()\n                        || !matches!(\n                            data_page_header.encoding,\n                            page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                        )",
     "conditions": 2,
     "vectors_required": 3,
@@ -26362,7 +26352,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_dictionary_indices_d31770f8",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 684,
+    "line": 733,
     "decision": "dictionary.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26372,7 +26362,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_7d4f73a5",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 718,
+    "line": 767,
     "decision": "pos < chunk_bytes.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26382,7 +26372,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_4d4fe138",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 731,
+    "line": 780,
     "decision": "match header.page_type {\n                PageType::Dictionary(_) => return Err(FileError::UnsupportedNestedDictionary),\n                PageType::Data(data_page_header) => {\n                    if data_page_header.encoding != Encoding::Plain {\n                        return Err(FileError::UnsupportedNestedEncoding(\n                            data_page_header.encoding,\n                        ));\n                    }\n                    let page_body = compression::decompress(\n                        codec,\n                        compressed,\n                        page_size(\"uncompressed_page_size\", header.uncompressed_page_size)?,\n                    )?;\n                    let (rep_levels, def_levels, mut value_bytes) = reader::split_rep_def_levels(\n                        &page_body,\n                        &data_page_header,\n                        leaf.max_rep_level,\n                        leaf.max_def_level,\n                    )?;\n\n                    let num_values =\n                        usize::try_from(data_page_header.num_values).map_err(|_| {\n                            FileError::InvalidMetadata {\n                                field: \"data_page.num_values\",\n                                value: i64::from(data_page_header.num_values),\n                            }\n                        })?;\n                    let mut bit_pos = 0usize;\n                    for i in 0..num_values {\n                        let def = def_levels.get(i).copied().unwrap_or(leaf.max_def_level);\n                        if def == leaf.max_def_level {\n                            let scalar = reader::read_plain_scalar(\n                                &mut value_bytes,\n                                physical_type,\n                                &mut bit_pos,\n                            )?;\n                            out.values.push(Some(scalar));\n                        } else {\n                            out.values.push(None);\n                        }\n                    }\n                    if rep_levels.is_empty() {\n                        out.rep_levels.extend(std::iter::repeat_n(0, num_values));\n                    } else {\n                        out.rep_levels.extend(rep_levels);\n                    }\n                    if def_levels.is_empty() {\n                        out.def_levels\n                            .extend(std::iter::repeat_n(leaf.max_def_level, num_values));\n                    } else {\n                        out.def_levels.extend(def_levels);\n                    }\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26392,7 +26382,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_012840c2",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 734,
+    "line": 783,
     "decision": "data_page_header.encoding != Encoding::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -26402,7 +26392,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_4235326a",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 761,
+    "line": 810,
     "decision": "def == leaf.max_def_level",
     "conditions": 1,
     "vectors_required": 2,
@@ -26412,7 +26402,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_7959e6f3",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 772,
+    "line": 821,
     "decision": "rep_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26422,7 +26412,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_f3e67ac5",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 777,
+    "line": 826,
     "decision": "def_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26432,7 +26422,7 @@
   {
     "id": "storage_parquet_parquet_file_read_timestamp_column_c91e7f9e",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 988,
+    "line": 1037,
     "decision": "match self.column_meta(column_index)?.physical_type {\n            footer::PhysicalType::Int64 => {\n                let is_millis = matches!(\n                    self.file.converted_type(column_index),\n                    Some(footer::ConvertedType::TimestampMillis)\n                );\n                let raw = self.read_int64_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| v.map(|v| if is_millis { v * 1000 } else { v }))\n                    .collect())\n            }\n            footer::PhysicalType::Int96 => {\n                let raw = self.read_int96_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| v.map(int96_to_epoch_micros))\n                    .collect())\n            }\n            other => Err(FileError::UnsupportedTimestampPhysicalType(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26442,7 +26432,7 @@
   {
     "id": "storage_parquet_parquet_file_read_timestamp_column_8829ff3d",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 997,
+    "line": 1046,
     "decision": "is_millis",
     "conditions": 1,
     "vectors_required": 2,
@@ -26452,7 +26442,7 @@
   {
     "id": "storage_parquet_parquet_file_read_decimal_column_c35316d7",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1019,
+    "line": 1068,
     "decision": "match self.column_meta(column_index)?.physical_type {\n            footer::PhysicalType::Int32 => {\n                let raw = self.read_int32_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|v| crate::storage::parquet::decimal::Decimal {\n                            unscaled: v as i128,\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            footer::PhysicalType::Int64 => {\n                let raw = self.read_int64_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|v| crate::storage::parquet::decimal::Decimal {\n                            unscaled: v as i128,\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            footer::PhysicalType::FixedLenByteArray => {\n                let raw = self.read_fixed_len_byte_array_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|bytes| crate::storage::parquet::decimal::Decimal {\n                            unscaled: crate::storage::parquet::decimal::from_be_bytes(&bytes),\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            other => Err(FileError::UnsupportedDecimalPhysicalType(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26462,7 +26452,7 @@
   {
     "id": "storage_parquet_parquet_file_write_varint_2427714d",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1097,
+    "line": 1182,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -26472,7 +26462,7 @@
   {
     "id": "storage_parquet_parquet_file_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1101,
+    "line": 1186,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -26482,7 +26472,7 @@
   {
     "id": "storage_parquet_parquet_file_list_of_structs_field_b09c4ad2",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1135,
+    "line": 1220,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -26492,7 +26482,7 @@
   {
     "id": "storage_parquet_parquet_file_build_file_from_chunk_typed_642303d1",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1292,
+    "line": 1377,
     "decision": "let Some(len) = type_length",
     "conditions": 1,
     "vectors_required": 2,
@@ -26502,7 +26492,7 @@
   {
     "id": "storage_parquet_parquet_file_build_file_from_chunk_annotated_642303d1",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1325,
+    "line": 1410,
     "decision": "let Some(len) = type_length",
     "conditions": 1,
     "vectors_required": 2,
@@ -26512,7 +26502,7 @@
   {
     "id": "storage_parquet_parquet_file_build_file_from_chunk_annotated_aafe5a53",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1331,
+    "line": 1416,
     "decision": "let Some(s) = scale",
     "conditions": 1,
     "vectors_required": 2,
@@ -26522,7 +26512,7 @@
   {
     "id": "storage_parquet_parquet_file_encode_dictionary_indices_9466a82b",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1360,
+    "line": 1445,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -26532,7 +26522,7 @@
   {
     "id": "storage_parquet_parquet_file_negative_page_size_is_invalid_metadata_not_a_huge_allocation_a5ccf881",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2042,
+    "line": 2127,
     "decision": "match page_size(\"compressed_page_size\", -1) {\n            Err(FileError::InvalidMetadata { field, value }) => {\n                assert_eq!(field, \"compressed_page_size\");\n                assert_eq!(value, -1);\n            }\n            other => panic!(\"expected InvalidMetadata, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
