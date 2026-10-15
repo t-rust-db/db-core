@@ -2478,7 +2478,6 @@ pub mod db_core::storage::column::decode
 pub enum db_core::storage::column::decode::Annotation
 pub db_core::storage::column::decode::Annotation::Bytes
 pub db_core::storage::column::decode::Annotation::Decimal
-pub db_core::storage::column::decode::Annotation::Map
 pub db_core::storage::column::decode::Annotation::Plain
 pub db_core::storage::column::decode::Annotation::UInt32
 pub db_core::storage::column::decode::Annotation::UInt64
@@ -2493,7 +2492,6 @@ impl core::marker::Copy for db_core::storage::column::decode::Annotation
 impl core::marker::StructuralPartialEq for db_core::storage::column::decode::Annotation
 pub enum db_core::storage::column::decode::Decoded
 pub db_core::storage::column::decode::Decoded::Column(db_core::vm::column::Column)
-pub db_core::storage::column::decode::Decoded::Values(alloc::vec::Vec<db_core::vm::batch::Value>)
 pub fn db_core::storage::column::decode::annotation(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize) -> db_core::storage::column::decode::Annotation
 pub fn db_core::storage::column::decode::decode_column_at(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub fn db_core::storage::column::decode::decode_column_full(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
@@ -3423,7 +3421,6 @@ pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::erro
 pub enum db_core::storage::column::Annotation
 pub db_core::storage::column::Annotation::Bytes
 pub db_core::storage::column::Annotation::Decimal
-pub db_core::storage::column::Annotation::Map
 pub db_core::storage::column::Annotation::Plain
 pub db_core::storage::column::Annotation::UInt32
 pub db_core::storage::column::Annotation::UInt64
@@ -3438,7 +3435,6 @@ impl core::marker::Copy for db_core::storage::column::decode::Annotation
 impl core::marker::StructuralPartialEq for db_core::storage::column::decode::Annotation
 pub enum db_core::storage::column::Decoded
 pub db_core::storage::column::Decoded::Column(db_core::vm::column::Column)
-pub db_core::storage::column::Decoded::Values(alloc::vec::Vec<db_core::vm::batch::Value>)
 pub enum db_core::storage::column::FileError
 pub db_core::storage::column::FileError::ChunkOutOfBounds
 pub db_core::storage::column::FileError::ColumnIndexOutOfRange(usize)

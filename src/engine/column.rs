@@ -27,6 +27,7 @@ use crate::storage::column::{
     annotation, decode_column_at, decode_column_full, Annotation, Decoded,
 };
 use crate::storage::parquet::footer::PhysicalType;
+use crate::storage::parquet::{Field, FileError};
 use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs, VfsFile};
 use crate::vm::batch::{Batch, Program, Segment, Value, Vm, VmError};
 use crate::vm::engine;
@@ -162,7 +163,7 @@ fn leaf_columns(file: &ParquetFile<'_>) -> Vec<Leaf> {
         .into_iter()
         .filter_map(|f| {
             // A MAP (#621) is a column at its first leaf; it decodes as
-            // map values (`Annotation::Map`). Other groups are not columns.
+            // map values (see `load_leaf`). Other groups are not columns.
             let pt = match f.element.physical_type {
                 Some(pt) => pt,
                 None if is_map(&f) => PhysicalType::ByteArray,
@@ -249,9 +250,9 @@ impl RowGroupSegment<'_, '_> {
     ) -> Result<Batch, VmError> {
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in leaves {
-            let decoded = decode_column_full(rg, *index, *physical_type)
+            let decoded = load_leaf(rg, *index, *physical_type)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
-            batch = apply_decoded(batch, name, decoded);
+            batch = apply_loaded(batch, name, decoded);
         }
         Ok(batch)
     }
@@ -293,9 +294,9 @@ impl RowGroupSegment<'_, '_> {
         let rg = self.row_group()?;
         let mut batch = Batch::new(positions.len());
         for (name, index, physical_type) in self.leaves_named(columns)? {
-            let decoded = decode_column_at(&rg, index, physical_type, positions)
+            let decoded = load_leaf_at(&rg, index, physical_type, positions)
                 .map_err(|e| segment_error(self.row_group_index, &name, &e))?;
-            batch = apply_decoded(batch, &name, decoded);
+            batch = apply_loaded(batch, &name, decoded);
         }
         Ok(batch)
     }
@@ -315,6 +316,9 @@ impl Segment for RowGroupSegment<'_, '_> {
         } else {
             stats.min.as_deref()
         }?;
+        if rg.nested_field_at(index).is_some() {
+            return None;
+        }
         prune::decode_stat_bytes(bytes, physical_type, annotation(&rg, index))
             .map(prune::into_value)
     }
@@ -362,9 +366,9 @@ impl Segment for RowGroupSegment<'_, '_> {
             .collect();
         let mut predicate_batch = Batch::new(num_rows);
         for (name, index, physical_type) in &predicate_leaves {
-            let decoded = decode_column_full(&rg, *index, *physical_type)
+            let decoded = load_leaf(&rg, *index, *physical_type)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
-            predicate_batch = apply_decoded(predicate_batch, name, decoded);
+            predicate_batch = apply_loaded(predicate_batch, name, decoded);
         }
 
         let mut vm = Vm::new();
@@ -407,9 +411,9 @@ impl Segment for RowGroupSegment<'_, '_> {
             .filter(|(name, ..)| !predicate_names.iter().any(|n| n == name))
             .collect();
         for (name, index, physical_type) in &projection_leaves {
-            let decoded = decode_column_at(&rg, *index, *physical_type, &indices)
+            let decoded = load_leaf_at(&rg, *index, *physical_type, &indices)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
-            batch = apply_decoded(batch, name, decoded);
+            batch = apply_loaded(batch, name, decoded);
         }
 
         Ok(Arc::new(batch))
@@ -424,12 +428,65 @@ fn segment_error(row_group_index: usize, column_name: &str, e: &impl std::fmt::D
     }
 }
 
-/// Applies one column's decoded shape onto `batch` under `name` (see
-/// [`Decoded`]).
-fn apply_decoded(batch: Batch, name: &str, decoded: Decoded) -> Batch {
-    match decoded {
-        Decoded::Column(column) => batch.with_typed_column(name.to_string(), column),
-        Decoded::Values(values) => batch.with_column(name.to_string(), values),
+/// A leaf's rows as the engine loads them: a typed column, or a MAP
+/// field's values (#621), which a typed column cannot hold.
+enum Loaded {
+    Typed(Decoded),
+    Map(Vec<Value>),
+}
+
+/// Leaf `index` decoded for every row: a MAP field (at its first leaf) as
+/// map values, anything else as its typed column.
+fn load_leaf(
+    rg: &RowGroupReader<'_, '_>,
+    index: usize,
+    physical_type: PhysicalType,
+) -> Result<Loaded, FileError> {
+    match rg.nested_field_at(index) {
+        Some(field) => map_values(rg, &field).map(Loaded::Map),
+        None => decode_column_full(rg, index, physical_type).map(Loaded::Typed),
+    }
+}
+
+/// [`load_leaf`] at `positions` only.
+fn load_leaf_at(
+    rg: &RowGroupReader<'_, '_>,
+    index: usize,
+    physical_type: PhysicalType,
+    positions: &[u32],
+) -> Result<Loaded, FileError> {
+    match rg.nested_field_at(index) {
+        Some(field) => {
+            let all = map_values(rg, &field)?;
+            positions
+                .iter()
+                .map(|&p| {
+                    usize::try_from(p)
+                        .ok()
+                        .and_then(|i| all.get(i).cloned())
+                        .ok_or(FileError::RowPositionOutOfRange(p))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Loaded::Map)
+        }
+        None => decode_column_at(rg, index, physical_type, positions).map(Loaded::Typed),
+    }
+}
+
+/// Every row of MAP field `field` as [`Value::Map`] (NULL for a NULL map).
+fn map_values(rg: &RowGroupReader<'_, '_>, field: &Field) -> Result<Vec<Value>, FileError> {
+    Ok(rg
+        .read_map_utf8_column(field)?
+        .into_iter()
+        .map(|m| m.map_or(Value::Null, |entries| Value::Map(Arc::new(entries))))
+        .collect())
+}
+
+/// Applies one leaf's loaded rows onto `batch` under `name`.
+fn apply_loaded(batch: Batch, name: &str, loaded: Loaded) -> Batch {
+    match loaded {
+        Loaded::Typed(Decoded::Column(column)) => batch.with_typed_column(name.to_string(), column),
+        Loaded::Map(values) => batch.with_column(name.to_string(), values),
     }
 }
 
@@ -584,7 +641,7 @@ mod prune {
                     .ok()
                     .map(StatValue::Int);
             }
-            Annotation::Decimal | Annotation::Bytes | Annotation::Map => return None,
+            Annotation::Decimal | Annotation::Bytes => return None,
         }
         match physical_type {
             PhysicalType::Int32 => {
@@ -664,6 +721,10 @@ mod prune {
         let (index, physical_type) = *leaves_by_name.get(col_name)?;
         let statistics = rg.column_statistics(index).ok()??;
         let literal = literal_stat_value(lit, physical_type)?;
+        // A MAP's leaves are keys and values: its statistics bound neither.
+        if rg.nested_field_at(index).is_some() {
+            return None;
+        }
         let annotation = annotation(rg, index);
         let min = statistics
             .min
