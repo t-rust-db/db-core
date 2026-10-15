@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.129.2] - 2026-10-15
+
+### Fixed
+
+- **GROUP BY on a result-column position or alias** (#610). `GROUP BY 1` grouped on the constant 1 and folded every row into one group; it is now a 1-based position into the result columns, `*` expanded. A bare GROUP BY name is a FROM column first and a result-column alias only when no table has it, and HAVING sees aliases too, on one table and over a join. A position that is out of range, or a term naming an aggregate, gets sqlite3's error.
+- **FROM subqueries without their own FROM, and `VALUES` in FROM** (#611). `SELECT x FROM (SELECT 1 AS x)` and `(VALUES (1,2),(3,4))` are materialized as constant rows, including through CTEs and views. `VALUES` columns are named `column1`..`columnN`; rows of different widths are refused.
+- **Expressions in a joined aggregate** (#612). Result columns, GROUP BY keys, aggregate arguments, HAVING and ORDER BY terms of a joined GROUP BY or aggregate can be any expression, such as `upper(a.s)`, `COUNT(*) + 1` or `a.k % 2`. HAVING over a self-join no longer reads `b.s` as `a.s`, keeps a NOCASE column's collation, and refuses an ambiguous name as sqlite3 does.
+- **ORDER BY a position over a join** sorted on the constant itself, leaving rows in join order (#612). It now sorts on that result column, under its collation.
+- **Aggregates nested in CASE, function arguments or BETWEEN** (`coalesce(max(n), 0)`, `CASE WHEN count(*) > 1 ...`) now compile, with or without a JOIN (#612).
+- **DISTINCT over a join honours column collations** (#613). A NOCASE column kept both `'a'` and `'A'`; inner, LEFT and FULL joins, sorted or not, now compare each column under its collation, through `*` and `table.*` too.
+
 ## [0.129.1] - 2026-10-14
 
 ### Fixed
