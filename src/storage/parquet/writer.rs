@@ -1,7 +1,9 @@
-//! Parquet writer for flat schemas (#566), the inverse of the reader in
+//! Parquet writer (#566), the inverse of the reader in
 //! [`crate::storage::parquet`], with no dependency on Arrow.
 //!
-//! Columns are `required` or `optional` leaves of one [`ColumnType`] each.
+//! Columns are `required` or `optional` fields of one [`ColumnType`] each:
+//! a leaf, or a `MAP<UTF8, UTF8>` group of two leaves written with
+//! repetition and definition levels (#621, see [`leaf`]).
 //! Rows arrive as column batches ([`ParquetWriter::write_columns`]) and are
 //! buffered until a row group's worth is reached, then written out: one
 //! column chunk per column, each a DATA_PAGE (v1) preceded by a dictionary
@@ -33,6 +35,7 @@
 //! ```
 
 mod encode;
+mod leaf;
 mod meta;
 mod snappy;
 mod stats;
@@ -97,6 +100,10 @@ pub enum ColumnType {
     /// FIXED_LEN_BYTE_ARRAY of this many bytes (at least 1), no
     /// annotation: e.g. 16 for an IPv6 address.
     FixedLenByteArray(u16),
+    /// A `MAP<UTF8, UTF8>`: the group DuckDB writes for `MAP(VARCHAR,
+    /// VARCHAR)`, a required UTF8 `key` and an optional UTF8 `value` per
+    /// entry (#621). Keys within a map are unique.
+    MapUtf8,
 }
 
 /// Where a [`ColumnType::Decimal`]'s unscaled value is stored.
@@ -178,7 +185,12 @@ pub enum ColumnValues {
     /// For a [`ColumnType::FixedLenByteArray`] column: each value exactly
     /// the column's length.
     FixedLenByteArray(Vec<Option<Vec<u8>>>),
+    /// For a [`ColumnType::MapUtf8`] column: each map's entries in order,
+    /// `None` for a NULL map, `Some(vec![])` for an empty one.
+    Map(Vec<Option<MapEntries>>),
 }
+
+pub use crate::storage::parquet::parquet_file::MapEntries;
 
 impl ColumnValues {
     /// An empty batch of the given type.
@@ -199,6 +211,7 @@ impl ColumnValues {
             ColumnType::UInt64 => ColumnValues::UInt64(Vec::new()),
             ColumnType::Decimal { .. } => ColumnValues::Decimal(Vec::new()),
             ColumnType::FixedLenByteArray(_) => ColumnValues::FixedLenByteArray(Vec::new()),
+            ColumnType::MapUtf8 => ColumnValues::Map(Vec::new()),
         }
     }
 
@@ -228,6 +241,7 @@ impl ColumnValues {
                     ColumnValues::FixedLenByteArray(_),
                     ColumnType::FixedLenByteArray(_)
                 )
+                | (ColumnValues::Map(_), ColumnType::MapUtf8)
         )
     }
 
@@ -248,6 +262,7 @@ impl ColumnValues {
             ColumnValues::UInt32(v) => v.len(),
             ColumnValues::UInt64(v) => v.len(),
             ColumnValues::Decimal(v) => v.len(),
+            ColumnValues::Map(v) => v.len(),
         }
     }
 
@@ -275,6 +290,7 @@ impl ColumnValues {
             ColumnValues::UInt32(v) => v.iter().map(Option::is_some).collect(),
             ColumnValues::UInt64(v) => v.iter().map(Option::is_some).collect(),
             ColumnValues::Decimal(v) => v.iter().map(Option::is_some).collect(),
+            ColumnValues::Map(v) => v.iter().map(Option::is_some).collect(),
         }
     }
 
@@ -297,6 +313,7 @@ impl ColumnValues {
             (ColumnValues::UInt64(a), ColumnValues::UInt64(b)) => a.extend(b),
             (ColumnValues::Decimal(a), ColumnValues::Decimal(b)) => a.extend(b),
             (ColumnValues::FixedLenByteArray(a), ColumnValues::FixedLenByteArray(b)) => a.extend(b),
+            (ColumnValues::Map(a), ColumnValues::Map(b)) => a.extend(b),
             _ => {}
         }
     }
@@ -596,8 +613,13 @@ impl<W: Write> ParquetWriter<W> {
         let mut chunks = Vec::with_capacity(columns.len());
         let mut uncompressed: u64 = 0;
         let mut compressed: u64 = 0;
-        for (spec, values) in self.schema.iter().zip(&columns) {
-            let chunk = write_chunk(&mut self.sink, spec, values, &self.options)?;
+        let leaves = self
+            .schema
+            .iter()
+            .zip(columns)
+            .flat_map(|(spec, values)| leaf::leaves(spec, values));
+        for leaf in leaves {
+            let chunk = write_chunk(&mut self.sink, &leaf, &self.options)?;
             uncompressed = uncompressed
                 .checked_add(chunk.uncompressed)
                 .ok_or_else(|| too_large("row group size"))?;
@@ -725,8 +747,23 @@ fn check_column(spec: &ColumnSpec, values: &ColumnValues, rows: usize) -> Result
                 None => Ok(()),
             }
         }
+        (ColumnType::MapUtf8, ColumnValues::Map(v)) => {
+            match v.iter().flatten().find_map(|m| duplicate_key(m)) {
+                Some(key) => Err(invalid(format!("map key {key:?} repeated in one map"))),
+                None => Ok(()),
+            }
+        }
         _ => Ok(()),
     }
+}
+
+/// The first key that occurs twice in `entries`.
+fn duplicate_key(entries: &MapEntries) -> Option<&str> {
+    let mut seen = HashSet::new();
+    entries
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .find(|k| !seen.insert(*k))
 }
 
 /// A written column chunk: its `ColumnChunk` metadata and on-disk sizes
@@ -746,23 +783,33 @@ struct EncodedValues {
     dictionary: Option<(Vec<u8>, usize)>,
 }
 
+/// Appends one level section of a DATA_PAGE v1: its `u32` byte length,
+/// then the levels RLE/bit-packed at the width of `max`.
+fn level_section(body: &mut Vec<u8>, levels: &[u32], max: u32) -> Result<(), WriteError> {
+    let mut encoded = Vec::new();
+    encode::rle_hybrid(&mut encoded, levels, encode::bit_width(max));
+    let len = u32::try_from(encoded.len()).map_err(|_| too_large("levels"))?;
+    body.extend_from_slice(&len.to_le_bytes());
+    body.extend_from_slice(&encoded);
+    Ok(())
+}
+
 fn write_chunk<W: Write>(
     sink: &mut Sink<W>,
-    spec: &ColumnSpec,
-    values: &ColumnValues,
+    leaf: &leaf::Leaf,
     options: &WriterOptions,
 ) -> Result<WrittenChunk, WriteError> {
-    let chunk_stats = stats::chunk_stats(values, spec.column_type);
+    let values = &leaf.values;
+    let chunk_stats = stats::chunk_stats(values, leaf.column_type);
     let mut body = Vec::new();
-    if spec.nullable {
-        let levels: Vec<u32> = values.validity().into_iter().map(u32::from).collect();
-        let mut encoded = Vec::new();
-        encode::rle_hybrid(&mut encoded, &levels, 1);
-        let len = u32::try_from(encoded.len()).map_err(|_| too_large("definition levels"))?;
-        body.extend_from_slice(&len.to_le_bytes());
-        body.extend_from_slice(&encoded);
+    // Repetition levels first, then definition levels (DATA_PAGE v1).
+    if let Some(levels) = &leaf.rep_levels {
+        level_section(&mut body, levels, leaf.max_rep)?;
     }
-    let encoded = encode_values(values, spec.column_type, options)?;
+    if let Some(levels) = &leaf.def_levels {
+        level_section(&mut body, levels, leaf.max_def)?;
+    }
+    let encoded = encode_values(values, leaf.column_type, options)?;
     body.extend_from_slice(&encoded.data);
 
     let codec = options.compression;
@@ -803,7 +850,13 @@ fn write_chunk<W: Write>(
         "null count",
     )?;
     Ok(WrittenChunk {
-        metadata: meta::column_chunk(spec, &layout, &chunk_stats, null_count),
+        metadata: meta::column_chunk(
+            &leaf.path,
+            leaf.column_type,
+            &layout,
+            &chunk_stats,
+            null_count,
+        ),
         uncompressed: sizes.uncompressed,
         compressed: sizes.compressed,
     })
@@ -927,6 +980,10 @@ fn encode_values(
             out.extend_from_slice(&x.to_le_bytes());
             Ok(())
         }),
+        // A map is written as its leaves (see `leaf`), never as one chunk.
+        ColumnValues::Map(_) => Err(WriteError::InvalidSchema(
+            "a MAP column is written as its key and value leaves".to_string(),
+        )),
         ColumnValues::Decimal(v) => {
             let storage = match column_type {
                 ColumnType::Decimal { precision, .. } => DecimalStorage::for_precision(precision),

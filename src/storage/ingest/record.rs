@@ -66,6 +66,7 @@ pub fn type_name(t: ColumnType) -> String {
         ColumnType::UInt64 => "uint64".into(),
         ColumnType::Decimal { precision, scale } => format!("decimal({precision},{scale})"),
         ColumnType::FixedLenByteArray(len) => format!("fixed({len})"),
+        ColumnType::MapUtf8 => "map(utf8,utf8)".into(),
     }
 }
 
@@ -85,6 +86,7 @@ pub fn type_from_name(name: &str) -> Option<ColumnType> {
         ColumnType::UInt16,
         ColumnType::UInt32,
         ColumnType::UInt64,
+        ColumnType::MapUtf8,
     ];
     if let Some(t) = simple.into_iter().find(|t| type_name(*t) == name) {
         return Some(t);
@@ -125,6 +127,12 @@ pub(crate) fn invalid_schema(schema: &[ColumnSpec]) -> Option<String> {
         }
         if !seen.insert(spec.name.as_str()) {
             return Some(format!("duplicate column name '{}'", spec.name));
+        }
+        if spec.column_type == ColumnType::MapUtf8 {
+            return Some(format!(
+                "column '{}': record tables do not take MAP columns yet",
+                spec.name
+            ));
         }
     }
     crate::storage::parquet::writer::validate_schema(schema)
@@ -395,6 +403,8 @@ fn push_value(column: &mut ColumnValues, value: RecordValue) {
             V::Decimal(d) => Some(d),
             _ => None,
         }),
+        // `invalid_schema` refuses MAP columns.
+        ColumnValues::Map(c) => c.push(None),
     }
 }
 
@@ -435,6 +445,7 @@ pub(crate) fn engine_values(
                     .map_err(|_| FileError::UnsignedOutOfRange(*u).to_string()),
             })
             .collect::<Result<_, _>>()?,
+        ColumnValues::Map(_) => return Err("a MAP column is not readable yet".to_string()),
         ColumnValues::Decimal(v) => {
             let scale = match column_type {
                 ColumnType::Decimal { scale, .. } => i32::from(scale),
@@ -474,6 +485,7 @@ pub(crate) fn gather(values: &ColumnValues, order: &[usize]) -> ColumnValues {
         ColumnValues::UInt32(v) => ColumnValues::UInt32(pick(v, order)),
         ColumnValues::UInt64(v) => ColumnValues::UInt64(pick(v, order)),
         ColumnValues::Decimal(v) => ColumnValues::Decimal(pick(v, order)),
+        ColumnValues::Map(v) => ColumnValues::Map(pick(v, order)),
     }
 }
 
@@ -514,6 +526,7 @@ pub(crate) fn compare_rows(values: &ColumnValues, a: usize, b: usize) -> Orderin
         ColumnValues::UInt32(v) => by(v, a, b, Ord::cmp),
         ColumnValues::UInt64(v) => by(v, a, b, Ord::cmp),
         ColumnValues::Decimal(v) => by(v, a, b, Ord::cmp),
+        ColumnValues::Map(v) => by(v, a, b, Ord::cmp),
     }
 }
 
@@ -551,6 +564,7 @@ pub(crate) fn read_column(
                 .map(|x| x.map(i64::cast_unsigned))
                 .collect(),
         ),
+        ColumnType::MapUtf8 => return Err(FileError::NotAStringMap(format!("column {index}"))),
         ColumnType::Decimal { .. } => ColumnValues::Decimal(
             rg.read_decimal_column(index)?
                 .into_iter()

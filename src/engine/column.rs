@@ -1275,7 +1275,10 @@ mod tests {
             rows(&mut engine, "SELECT id, x FROM nested_map WHERE x > 15"),
             ["2,20", "3,30", "4,40"]
         );
-        assert_eq!(rows(&mut engine, "SELECT sum(x) FROM nested_map"), ["100.0"]);
+        assert_eq!(
+            rows(&mut engine, "SELECT sum(x) FROM nested_map"),
+            ["100.0"]
+        );
         let err = engine.run_query("SELECT key FROM nested_map").unwrap_err();
         assert!(err.to_string().contains("unknown column: key"), "{err}");
     }

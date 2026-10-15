@@ -221,8 +221,68 @@ fn extended_types_batch() -> Vec<ColumnValues> {
     ]
 }
 
+/// #621: maps between flat columns (leaf indices shift): two entries, a
+/// NULL map, an empty map, a NULL value, non-ASCII keys, 100 entries, and
+/// entries in non-sorted order; a required map after them.
+fn map_batch() -> Vec<ColumnValues> {
+    let entries = |e: &[(&str, Option<&str>)]| {
+        Some(
+            e.iter()
+                .map(|(k, v)| (k.to_string(), v.map(str::to_string)))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let hundred: Vec<(String, Option<String>)> = (0..100)
+        .map(|i| {
+            (
+                format!("key{i:03}"),
+                (i % 7 != 0).then(|| format!("v{}", i % 5)),
+            )
+        })
+        .collect();
+    vec![
+        ColumnValues::Int32((0..7).map(Some).collect()),
+        ColumnValues::Map(vec![
+            entries(&[("User-Agent", Some("curl/8")), ("Accept", Some("*/*"))]),
+            None,
+            entries(&[]),
+            entries(&[("k", None)]),
+            entries(&[("héader", Some("välue")), ("ключ", Some("значение"))]),
+            Some(hundred),
+            entries(&[("z", Some("1")), ("a", Some("2"))]),
+        ]),
+        ColumnValues::Int64((0..7).map(|i| (i != 3).then_some(i * 10)).collect()),
+        ColumnValues::Map(
+            (0..7)
+                .map(|i| entries(&[("n", Some("v"))][..(i % 2)]))
+                .collect(),
+        ),
+    ]
+}
+
+fn map_schema() -> Vec<ColumnSpec> {
+    vec![
+        ColumnSpec::new("id", ColumnType::Int32, false),
+        ColumnSpec::new("h", ColumnType::MapUtf8, true),
+        ColumnSpec::new("x", ColumnType::Int64, true),
+        ColumnSpec::new("r", ColumnType::MapUtf8, false),
+    ]
+}
+
 fn cases() -> Vec<Case> {
     vec![
+        Case {
+            name: "maps_dictionary",
+            schema: map_schema(),
+            batches: (0..3).map(|_| map_batch()).collect(),
+            options: options(Compression::Snappy, true, 100),
+        },
+        Case {
+            name: "maps_plain",
+            schema: map_schema(),
+            batches: vec![map_batch()],
+            options: options(Compression::Uncompressed, false, 3),
+        },
         Case {
             name: "extended_types_dictionary",
             schema: extended_types_schema(),
@@ -415,6 +475,24 @@ fn json_values(out: &mut String, values: &ColumnValues) {
         ColumnValues::UInt64(v) => list(out, v, |o, x| o.push_str(&format!("{x}"))),
         // The unscaled value; the scale is in the type name.
         ColumnValues::Decimal(v) => list(out, v, |o, x| o.push_str(&format!("{x}"))),
+        // A map as its [key, value|null] pairs, in order.
+        ColumnValues::Map(v) => list(out, v, |o, entries| {
+            o.push('[');
+            for (i, (k, val)) in entries.iter().enumerate() {
+                if i > 0 {
+                    o.push(',');
+                }
+                o.push('[');
+                json_string(o, k);
+                o.push(',');
+                match val {
+                    Some(val) => json_string(o, val),
+                    None => o.push_str("null"),
+                }
+                o.push(']');
+            }
+            o.push(']');
+        }),
     }
 }
 
@@ -435,6 +513,7 @@ fn type_name(t: ColumnType) -> String {
         ColumnType::UInt64 => "uint64".into(),
         ColumnType::Decimal { precision, scale } => format!("decimal({precision},{scale})"),
         ColumnType::FixedLenByteArray(len) => format!("fixed({len})"),
+        ColumnType::MapUtf8 => "map(utf8,utf8)".into(),
     }
 }
 
@@ -523,6 +602,10 @@ fn concat(a: ColumnValues, b: &ColumnValues) -> ColumnValues {
         (ColumnValues::FixedLenByteArray(mut a), ColumnValues::FixedLenByteArray(b)) => {
             a.extend_from_slice(b);
             ColumnValues::FixedLenByteArray(a)
+        }
+        (ColumnValues::Map(mut a), ColumnValues::Map(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::Map(a)
         }
         (a, _) => a,
     }

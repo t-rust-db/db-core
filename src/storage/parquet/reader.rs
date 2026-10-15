@@ -307,7 +307,7 @@ pub fn decode_dictionary_fixed_len_byte_array(
 /// Read the dictionary-index stream of a dictionary-encoded data page:
 /// a 1-byte bit-width followed by the RLE/Bit-Packed Hybrid encoding of
 /// `num_indices` index values (one per non-null value in the page).
-fn read_dictionary_indices(data: &[u8], num_indices: usize) -> Result<Vec<u32>> {
+pub(crate) fn read_dictionary_indices(data: &[u8], num_indices: usize) -> Result<Vec<u32>> {
     let bit_width = *data.first().ok_or(ReadError::UnexpectedEof)? as u32;
     let rest = data.get(1..).ok_or(ReadError::UnexpectedEof)?;
     Ok(encoding::decode_hybrid_rle_bitpacked(

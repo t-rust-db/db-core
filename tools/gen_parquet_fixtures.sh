@@ -27,4 +27,9 @@ duckdb -c "COPY (SELECT * FROM (VALUES
     (4, MAP {'héader': 'välue', 'k': 'v'}, 40)
   ) t(id, h, x) ORDER BY id) TO '$DIR/nested_map.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
 
-echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet"
+# #621: nested fields that are not a MAP<UTF8, UTF8>, and one that is
+# (read_map_utf8_column's shape check).
+duckdb -c "COPY (SELECT ['x']::VARCHAR[] AS lst, MAP {1: 'a'} AS ik,
+    MAP {'a': 1} AS iv, MAP {'a': '1'} AS m) TO '$DIR/nested_shapes.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
+
+echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet"
