@@ -52,6 +52,7 @@ fn tier() -> TierOptions {
         row_group_max_rows: 3,
         max_file_size: 1 << 30,
         delete_grace_ns: 60_000_000_000,
+        spill_rows: usize::MAX,
     }
 }
 
@@ -129,7 +130,7 @@ fn files_on_disk(t: &TempTable) -> Vec<String> {
         }
     }
     let mut out = Vec::new();
-    for area in ["data", "live", "archive"] {
+    for area in ["data", "live", "archive", "staging"] {
         walk(&t.0.join(area), area, &mut out);
     }
     out.sort();
@@ -369,9 +370,11 @@ fn layout_rules() {
     let t = TempTable::new();
     set_clock(0, 10, 0);
     let mut w = open(&t);
-    let err = w.append(b"{}", Ack::Flushed).unwrap_err();
-    assert!(matches!(err, IngestError::Unsupported(_)), "{err}");
-    assert!(err.to_string().starts_with("unsupported: Ack::Flushed"));
+    // Ack::Flushed spills the open hour to staging/.
+    assert_eq!(w.append(b"{}", Ack::Flushed).unwrap(), 1);
+    assert_eq!(w.manifest().files.len(), 1);
+    assert_eq!(w.manifest().files[0].area, Area::Staging);
+    assert!(w.sealed_pages().is_empty());
     drop(w);
     let err = TableWriter::open(&t.0, TableOptions::default()).unwrap_err();
     assert_eq!(err.to_string(), "the table's layout is tiered, not flat");
@@ -455,44 +458,6 @@ fn mcdc__storage_ingest_table_push_bc95699f__v3_flat_ignores_hours() {
     assert_eq!(sealed_after_two_records(Layout::Flat, 11), 0);
 }
 
-fn append_with(layout: Layout, ack: Ack) -> Result<u64, IngestError> {
-    let t = TempTable::new();
-    set_clock(0, 10, 0);
-    let options = TableOptions {
-        layout,
-        clock,
-        ..TableOptions::default()
-    };
-    TableWriter::open(&t.0, options).unwrap().append(b"{}", ack)
-}
-
-#[test]
-#[allow(non_snake_case)]
-fn mcdc__storage_ingest_table_append_record_85ef2f0f__v1_flushed_on_tiered_is_refused() {
-    let _serial = serial();
-    assert!(matches!(
-        append_with(Layout::Tiered(tier()), Ack::Flushed),
-        Err(IngestError::Unsupported(_))
-    ));
-}
-
-#[test]
-#[allow(non_snake_case)]
-fn mcdc__storage_ingest_table_append_record_85ef2f0f__v2_durable_on_tiered_is_accepted() {
-    let _serial = serial();
-    assert_eq!(
-        append_with(Layout::Tiered(tier()), Ack::Durable).unwrap(),
-        1
-    );
-}
-
-#[test]
-#[allow(non_snake_case)]
-fn mcdc__storage_ingest_table_append_record_85ef2f0f__v3_flushed_on_flat_is_accepted() {
-    let _serial = serial();
-    assert_eq!(append_with(Layout::Flat, Ack::Flushed).unwrap(), 1);
-}
-
 /// A table directory with `area/a/b/file`, the file already deleted.
 fn nested(t: &TempTable) -> PathBuf {
     let file = t.0.join("live/a/b/file");
@@ -536,4 +501,151 @@ fn mcdc__storage_ingest_table_remove_empty_parents_58e0bb1d__v4_a_non_empty_dire
     fs::write(file.parent().unwrap().join("other"), b"x").unwrap();
     remove_empty_parents(&t.0, &file);
     assert!(t.0.join("live/a/b/other").exists());
+}
+
+/// [`tier`] spilling past `rows` sealed rows.
+fn spilling(rows: usize) -> TableOptions {
+    options(TierOptions {
+        spill_rows: rows,
+        ..tier()
+    })
+}
+
+/// The `kind` of every row of `entry`'s file, in file order.
+fn kinds(w: &TableWriter, entry: &FileEntry) -> Vec<String> {
+    let bytes = fs::read(w.dir().join(&entry.path)).unwrap();
+    let file = ParquetFile::open(&bytes).unwrap();
+    let kind = file.metadata().schema[1..]
+        .iter()
+        .position(|e| e.name == "kind")
+        .unwrap();
+    file.row_groups()
+        .flat_map(|rg| rg.read_string_column(kind).unwrap())
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn an_open_hour_over_its_budget_spills_and_its_close_merges_the_runs() {
+    let _serial = serial();
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = TableWriter::open(&t.0, spilling(2)).unwrap();
+    let mut lines = Vec::new();
+    // 3 rows sealed: over 2, a run. 2 rows: within. 2 + 4: a run. 1 row
+    // stays in pages.
+    for range in [0..3, 3..5, 5..9, 9..10] {
+        lines.extend(append(&mut w, range));
+        w.seal_head().unwrap();
+    }
+    let areas: Vec<Area> = w.manifest().files.iter().map(|f| f.area).collect();
+    assert_eq!(areas, [Area::Staging, Area::Staging]);
+    assert_eq!(w.manifest().flushed_lsn, 9);
+    assert_eq!(w.sealed_pages().len(), 1);
+    assert_eq!(all_rows(&w), sorted(lines.clone()));
+    assert_eq!(files_on_disk(&t), listed(&w));
+    for entry in &w.manifest().files.clone() {
+        assert!(entry.path.starts_with("staging/date=2026-10-11/hour=10/"));
+        assert!(kinds(&w, entry).is_sorted(), "a run is sorted");
+    }
+
+    // The hour closes: both runs and the page, merged into one sorted file.
+    set_clock(0, 11, 0);
+    lines.extend(append(&mut w, 10..11));
+    let added = w.flush().unwrap();
+    assert_eq!(added.len(), 1);
+    let hour = &added[0];
+    assert_eq!(hour.area, Area::Live);
+    assert_eq!((hour.lsn_lo, hour.lsn_hi, hour.rows), (1, 10, 10));
+    assert_eq!(w.manifest().files, added);
+    let k = kinds(&w, hour);
+    assert_eq!(k.len(), 10);
+    assert!(k.is_sorted(), "{k:?}");
+    assert_eq!(all_rows(&w), sorted(lines.clone()));
+    assert_eq!(
+        w.pending_deletes().count(),
+        2,
+        "the runs wait out the grace"
+    );
+
+    // After the grace period the runs and their directories are gone, and
+    // the day still merges.
+    set_clock(1, 1, 0);
+    w.compact().unwrap();
+    set_clock(1, 2, 0);
+    w.compact().unwrap();
+    assert!(!t.0.join("staging").join("date=2026-10-11").exists());
+    assert_eq!(all_rows(&w), sorted(lines));
+    assert_eq!(files_on_disk(&t), listed(&w));
+}
+
+#[test]
+fn an_hour_that_only_spilled_closes_from_its_runs() {
+    let _serial = serial();
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = open(&t);
+    let mut lines = Vec::new();
+    for i in 0..4 {
+        let l = line(i);
+        w.append(l.as_bytes(), Ack::Flushed).unwrap();
+        lines.push(l);
+    }
+    assert_eq!(w.manifest().files.len(), 4, "one run per flushed append");
+    set_clock(0, 11, 0);
+    let added = w.flush().unwrap();
+    assert_eq!(added.len(), 1);
+    assert_eq!((added[0].lsn_lo, added[0].lsn_hi), (1, 4));
+    assert_eq!(kinds(&w, &added[0]), ["a", "b", "c", "c"]);
+    assert_eq!(all_rows(&w), sorted(lines));
+}
+
+#[test]
+fn a_crash_at_every_spill_and_close_step_recovers_every_record_once() {
+    let _serial = serial();
+    for (step, closing) in [
+        (21u8, false),
+        (22, false),
+        (23, false),
+        (25, false),
+        (1, true),
+        (2, true),
+        (3, true),
+        (5, true),
+    ] {
+        let t = TempTable::new();
+        set_clock(0, 10, 0);
+        let mut w = TableWriter::open(&t.0, spilling(2)).unwrap();
+        let mut lines = append(&mut w, 0..3);
+        if closing {
+            w.seal_head().unwrap();
+            lines.extend(append(&mut w, 3..4));
+            w.seal_head().unwrap();
+            set_clock(0, 11, 0);
+        }
+        w.crash_after = Some(step);
+        let err = if closing {
+            w.flush().unwrap_err()
+        } else {
+            w.seal_head().unwrap_err()
+        };
+        assert!(
+            err.to_string()
+                .contains(&format!("after flush step {step}")),
+            "{err}"
+        );
+        drop(w);
+
+        let mut w = TableWriter::open(&t.0, spilling(2)).unwrap();
+        assert_eq!(all_rows(&w), sorted(lines.clone()), "step {step}");
+        assert_eq!(files_on_disk(&t), listed(&w), "step {step}: strays left");
+        assert!(!t.0.join(TMP_DIR).exists());
+        w.manifest().check().unwrap();
+        // And the table carries on.
+        set_clock(1, 0, 0);
+        lines.extend(append(&mut w, 10..11));
+        w.compact().unwrap();
+        assert_eq!(all_rows(&w), sorted(lines), "step {step}");
+        assert!(w.manifest().files.iter().any(|f| f.area == Area::Archive));
+    }
 }

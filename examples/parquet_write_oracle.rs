@@ -764,6 +764,9 @@ fn tiered_table_case(dir: &Path) -> Result<(), String> {
             row_group_max_rows: 100,
             max_file_size: 64 * 1024,
             delete_grace_ns: 0,
+            // Every 7th record is flushed: the open hour spills to
+            // staging/, and its close merges the runs.
+            spill_rows: 1_000_000,
         }),
         clock: now,
         ..TableOptions::default()
@@ -781,7 +784,14 @@ fn tiered_table_case(dir: &Path) -> Result<(), String> {
             _ => format!("plain text line {i}"),
         };
         writer
-            .append(line.as_bytes(), Ack::Memory)
+            .append(
+                line.as_bytes(),
+                if i % 7 == 0 {
+                    Ack::Flushed
+                } else {
+                    Ack::Memory
+                },
+            )
             .map_err(|e| e.to_string())?;
         let day = at.div_euclid(DAY) - 20_737;
         if day < 3 {
@@ -858,6 +868,8 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
             row_group_max_rows: 200,
             max_file_size: 32 * 1024,
             delete_grace_ns: 0,
+            // Every 7th row is flushed, as in the tiered table case.
+            spill_rows: 1_000_000,
         }),
         clock: now,
         ..TableOptions::default()
@@ -902,7 +914,14 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
             *slot = record_json(&stored);
         }
         writer
-            .append_row(row, Ack::Memory)
+            .append_row(
+                row,
+                if i % 7 == 0 {
+                    Ack::Flushed
+                } else {
+                    Ack::Memory
+                },
+            )
             .map_err(|e| e.to_string())?;
         if (at.div_euclid(DAY) - 20_737) < 3 {
             archived.push(json);

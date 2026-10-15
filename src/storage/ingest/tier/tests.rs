@@ -203,3 +203,197 @@ fn every_physical_type_reads_back() {
         "wrong type for the chunk"
     );
 }
+
+/// `outputs` (one file in `dir`) as the manifest entry of a staging run.
+fn run_entry(dir: &Path, outputs: &[Output]) -> (FileEntry, Vec<u8>) {
+    let o = &outputs[0];
+    let entry = FileEntry {
+        path: o.name.clone(),
+        area: Area::Staging,
+        lsn_lo: o.lsn_lo,
+        lsn_hi: o.lsn_hi,
+        rows: o.file.rows,
+        bytes: o.file.bytes,
+        observed_ts: o.file.observed_ts,
+        timestamp: o.file.timestamp,
+    };
+    (entry, fs::read(dir.join(&o.name)).unwrap())
+}
+
+/// Column `name` of every row group of `file`, as strings.
+fn string_groups(file: &ParquetFile<'_>, name: &str) -> Vec<Vec<Option<String>>> {
+    let index = file.metadata().schema[1..]
+        .iter()
+        .position(|e| e.name == name)
+        .unwrap();
+    file.row_groups()
+        .map(|rg| rg.read_string_column(index).unwrap())
+        .collect()
+}
+
+#[test]
+fn an_hour_closes_by_merging_its_runs_and_pages_under_a_widened_schema() {
+    let dir = temp_dir("close");
+    let run_tier = TierOptions {
+        sort_key: vec!["k".to_string()],
+        row_group_max_rows: 1,
+        ..TierOptions::default()
+    };
+    let parquet = WriterOptions::default();
+    let write_run = |name: &str, pages: &[Page]| {
+        let run_dir = dir.join(name);
+        fs::create_dir_all(&run_dir).unwrap();
+        let outputs = write_hour(&run_dir, pages, Format::Jsonl, &run_tier, &parquet).unwrap();
+        run_entry(&run_dir, &outputs)
+    };
+    // `n` is an integer in the first run and a string in the second: the
+    // merge widens it. `extra` is only in the pages.
+    let first = write_run(
+        "r1",
+        &[page(
+            1,
+            &[r#"{"k":"m","n":1}"#, r#"{"k":"c"}"#, r#"{"k":"x"}"#],
+        )],
+    );
+    let second = write_run("r2", &[page(4, &[r#"{"k":"b","n":"t"}"#, r#"{"k":"y"}"#])]);
+    let pages = [page(6, &[r#"{"k":"a","extra":true}"#, r#"{"k":"n"}"#])];
+    let out = dir.join("out");
+    fs::create_dir_all(&out).unwrap();
+    let tier = TierOptions {
+        row_group_max_rows: 3,
+        ..run_tier.clone()
+    };
+    let outputs = close_hour(
+        &out,
+        &[(&first.0, &first.1), (&second.0, &second.1)],
+        &pages,
+        Format::Jsonl,
+        None,
+        &tier,
+        &parquet,
+    )
+    .unwrap();
+    assert_eq!(outputs.len(), 1);
+    let o = &outputs[0];
+    assert_eq!((o.lsn_lo, o.lsn_hi, o.file.rows), (1, 7, 7));
+    assert_eq!(o.file.observed_ts, Some((100, 102)));
+    let bytes = fs::read(out.join(&o.name)).unwrap();
+    let file = ParquetFile::open(&bytes).unwrap();
+    let s = |x: &str| Some(x.to_string());
+    assert_eq!(
+        string_groups(&file, "k"),
+        [
+            vec![s("a"), s("b"), s("c")],
+            vec![s("m"), s("n"), s("x")],
+            vec![s("y")]
+        ]
+    );
+    assert_eq!(
+        string_groups(&file, "n"),
+        [
+            vec![None, s("t"), None],
+            vec![s("1"), None, None],
+            vec![None]
+        ]
+    );
+    assert!(file.metadata().schema.iter().any(|e| e.name == "extra"));
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn an_hour_without_runs_closes_like_write_hour() {
+    let dir = temp_dir("close-plain");
+    let pages = [page(1, &[r#"{"k":"b"}"#, r#"{"k":"a"}"#])];
+    let tier = TierOptions {
+        sort_key: vec!["k".to_string()],
+        ..TierOptions::default()
+    };
+    let outputs = close_hour(
+        &dir,
+        &[],
+        &pages,
+        Format::Jsonl,
+        None,
+        &tier,
+        &WriterOptions::default(),
+    )
+    .unwrap();
+    let bytes = fs::read(dir.join(&outputs[0].name)).unwrap();
+    let file = ParquetFile::open(&bytes).unwrap();
+    let s = |x: &str| Some(x.to_string());
+    assert_eq!(string_groups(&file, "k"), [vec![s("a"), s("b")]]);
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `close_hour` over one run of `run_lines` (written in row groups of
+/// `run_rows`) and `pages`; returns the merged file's `k`, in order.
+fn close_one_run(name: &str, run_lines: &[&str], run_rows: usize, pages: &[Page]) -> Vec<String> {
+    let dir = temp_dir(name);
+    let tier = TierOptions {
+        sort_key: vec!["k".to_string()],
+        row_group_max_rows: run_rows,
+        ..TierOptions::default()
+    };
+    let parquet = WriterOptions::default();
+    let run_dir = dir.join("run");
+    fs::create_dir_all(&run_dir).unwrap();
+    let outputs = write_hour(
+        &run_dir,
+        &[page(1, run_lines)],
+        Format::Jsonl,
+        &tier,
+        &parquet,
+    )
+    .unwrap();
+    let (entry, bytes) = run_entry(&run_dir, &outputs);
+    let out = dir.join("out");
+    fs::create_dir_all(&out).unwrap();
+    let merged = close_hour(
+        &out,
+        &[(&entry, &bytes)],
+        pages,
+        Format::Jsonl,
+        None,
+        &TierOptions {
+            row_group_max_rows: 1_000,
+            ..tier
+        },
+        &parquet,
+    )
+    .unwrap();
+    let bytes = fs::read(out.join(&merged[0].name)).unwrap();
+    let file = ParquetFile::open(&bytes).unwrap();
+    let k = string_groups(&file, "k")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
+    fs::remove_dir_all(&dir).unwrap();
+    k
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_tier_close_hour_b2b17113__v1_an_exhausted_row_group_loads_the_next() {
+    // Row groups of one row: each pick ends a chunk with another behind it.
+    let k = close_one_run("v1", &[r#"{"k":"b"}"#, r#"{"k":"a"}"#], 1, &[]);
+    assert_eq!(k, ["a", "b"]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_tier_close_hour_b2b17113__v2_a_chunk_with_rows_left_is_kept() {
+    // One row group of two: the first pick leaves a row in the chunk.
+    let k = close_one_run("v2", &[r#"{"k":"b"}"#, r#"{"k":"a"}"#], 2, &[]);
+    assert_eq!(k, ["a", "b"]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_tier_close_hour_b2b17113__v3_an_exhausted_run_without_more_is_done() {
+    // The pages' run has no file: once its row is picked it is done, and
+    // the run's row follows.
+    let pages = [page(2, &[r#"{"k":"a"}"#])];
+    let k = close_one_run("v3", &[r#"{"k":"b"}"#], 1, &pages);
+    assert_eq!(k, ["a", "b"]);
+}

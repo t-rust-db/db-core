@@ -137,18 +137,25 @@ impl Manifest {
     /// `rows` equal to its length, the first starting at 1, each next one
     /// right after the previous, the last ending at `flushed_lsn`. A flat
     /// table's files are all in `data/`; a tiered table's in `archive/`,
-    /// then `live/` (closed days come before open ones).
+    /// then `live/`, then `staging/` (closed days come before open ones,
+    /// and only the open hour spills).
     pub fn check(&self) -> Result<(), ManifestError> {
         let mut next: u64 = 1;
-        let mut seen_live = false;
+        // The furthest tier seen: archive, live, staging.
+        let mut tier = 0u8;
         for file in &self.files {
             let allowed = match (self.layout, file.area) {
                 (LayoutKind::Flat, Area::Data) => true,
-                (LayoutKind::Tiered, Area::Live) => {
-                    seen_live = true;
-                    true
+                (LayoutKind::Tiered, area @ (Area::Archive | Area::Live | Area::Staging)) => {
+                    let rank = match area {
+                        Area::Archive => 0,
+                        Area::Live => 1,
+                        _ => 2,
+                    };
+                    let in_order = rank >= tier;
+                    tier = rank;
+                    in_order
                 }
-                (LayoutKind::Tiered, Area::Archive) => !seen_live,
                 _ => false,
             };
             if !allowed {

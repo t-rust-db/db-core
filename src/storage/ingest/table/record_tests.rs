@@ -81,6 +81,7 @@ fn tiered() -> TableOptions {
             row_group_max_rows: 3,
             max_file_size: 1 << 30,
             delete_grace_ns: 0,
+            spill_rows: usize::MAX,
         }),
         ..flat()
     }

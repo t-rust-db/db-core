@@ -11,7 +11,9 @@
 //!   cut into row groups; [`compact`](super::TableWriter::compact) merges a closed day's
 //!   hours into `archive/date=D/`, which is final. Every output is built
 //!   under `tmp/` and published with one directory rename, so a directory
-//!   listing sees an hour or a day whole or not at all.
+//!   listing sees an hour or a day whole or not at all. An open hour with
+//!   more than `spill_rows` rows in sealed pages spills them to
+//!   `staging/date=D/hour=H/` as sorted runs, which its close merges.
 //!
 //! Because `observed_ts` and the LSN only grow together, every hour and
 //! every day is a contiguous LSN range, and ADR 0027's manifest invariant
@@ -43,16 +45,23 @@ pub struct TierOptions {
     /// How long files replaced by a compaction are kept, for external
     /// readers that list directories instead of reading the manifest.
     pub delete_grace_ns: i64,
+    /// Most rows the open hour keeps in sealed pages: past it, they spill
+    /// to `staging/` as a sorted run (the head, at most one page, stays).
+    /// The memory budget of a tiered table, in rows rather than bytes,
+    /// since that is what is counted exactly.
+    pub spill_rows: usize,
 }
 
 impl Default for TierOptions {
-    /// Arrival order, 1M-row row groups, 1 GiB files, 10 minutes' grace.
+    /// Arrival order, 1M-row row groups, 1 GiB files, 10 minutes' grace,
+    /// spills past 1M rows.
     fn default() -> Self {
         TierOptions {
             sort_key: Vec::new(),
             row_group_max_rows: 1_000_000,
             max_file_size: 1 << 30,
             delete_grace_ns: 600_000_000_000,
+            spill_rows: 1_000_000,
         }
     }
 }
@@ -112,6 +121,8 @@ pub enum Area {
     Live,
     /// `archive/date=D/`, a closed day; final.
     Archive,
+    /// `staging/date=D/hour=H/`, sorted runs the open hour spilled.
+    Staging,
 }
 
 impl Area {
@@ -121,12 +132,13 @@ impl Area {
             Area::Data => "data",
             Area::Live => "live",
             Area::Archive => "archive",
+            Area::Staging => "staging",
         }
     }
 
     /// The area called `name`.
     pub fn from_name(name: &str) -> Option<Area> {
-        [Area::Data, Area::Live, Area::Archive]
+        [Area::Data, Area::Live, Area::Archive, Area::Staging]
             .into_iter()
             .find(|a| a.as_str() == name)
     }
@@ -181,6 +193,16 @@ pub fn live_dir(hour: i64) -> String {
     format!(
         "{}/date={}/hour={:02}",
         Area::Live.as_str(),
+        date_string(day_of_hour(hour)),
+        hour.rem_euclid(24)
+    )
+}
+
+/// `staging/date=D/hour=H`, the directory of an open hour's spills.
+pub fn staging_dir(hour: i64) -> String {
+    format!(
+        "{}/date={}/hour={:02}",
+        Area::Staging.as_str(),
         date_string(day_of_hour(hour)),
         hour.rem_euclid(24)
     )

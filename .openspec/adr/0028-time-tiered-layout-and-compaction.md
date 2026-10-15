@@ -3,7 +3,8 @@
 ## Status
 
 Accepted (#573; builds on ADR 0027). Part (a) built: layouts, hour close,
-day merge, sort key, deferred deletes; see "As built" at the end.
+day merge, sort key, deferred deletes. Part (b) built: `staging/` spills.
+See "As built" at the end.
 
 ## Context
 
@@ -272,8 +273,8 @@ closed hour, and seals a head whose hour has passed, so an idle table's
 hour closes on the next call. `compact()` first flushes every closed
 hour, then merges each closed day. Merging a day before its last hour is
 in `live/` would publish its archive directory twice. The compactor
-thread and an idle timer come with #574's ingest thread. `Ack::Flushed`
-is refused on a tiered table until spills exist.
+thread and an idle timer come with #574's ingest thread. (`Ack::Flushed`
+was refused on a tiered table until spills existed; see part b.)
 
 **Deferred deletes are in memory.** Replaced files are deleted by the
 first `flush()`/`compact()` after `delete_grace_ns`. In-process snapshots
@@ -286,7 +287,8 @@ at once, without the grace period.
 widening to the day's schema. The byte-for-byte chunk copy is a later
 optimisation.
 
-**Recovery** removes unlisted files in `data/`, `live/` and `archive/`
+**Recovery** removes unlisted files in `data/`, `live/` and `archive/` (and
+`staging/`, part b)
 and the directories left empty. A crash after each step of a flush and a
 compaction (write, publish, commit, release) recovers every record once.
 
@@ -297,8 +299,48 @@ compaction (write, publish, commit, release) recovers every record once.
 - The flush-timing property test runs half its seeds tiered, with a
   moving clock, random compactions and random sort keys.
 
-**Not yet (part b):**
-- `staging/` spills under `hot_memory_budget`
+## As built (#573, part b)
+
+**Spills are counted in rows.** `TierOptions.spill_rows` (default 1M)
+replaces `hot_memory_budget`: the rows in sealed pages are known exactly,
+a parsed segment's bytes are not. When sealing a page leaves more than
+`spill_rows` rows sealed, the writer closes every closed hour, then
+writes the open hour's sealed pages to
+`staging/date=D/hour=H/<lsn_lo>-<lsn_hi>.parquet` as one run: sorted by
+`sort_key`, in row groups of at most 65 536 rows. A spill commits like a
+flush (write under `tmp/`, rename, commit, release the WAL and the
+pages), so its rows leave memory and the WAL. The head, at most one page,
+stays.
+
+**The manifest lists runs.** A staging entry has area `staging`; a
+tiered manifest is `archive/`, then `live/`, then `staging/` (only the
+open hour spills). A reader that predates part b refuses the area. Runs
+are ordinary files in a snapshot, so a query sees spilled rows; DuckDB
+over `archive/` never does.
+
+**The hour's close merges its runs.** It is a k-way merge of the runs
+and the remaining pages (sorted in memory as before) into one file in
+`live/`, holding one row group of each run rather than the hour. Ties
+keep arrival order, so the result is the order a close without spills
+would give. A lines table's runs may disagree on fields and types: the
+merge uses the widened schema, as the day merge does. The commit
+replaces the runs with the hour's file in one swap; the runs are deleted
+after `delete_grace_ns`.
+
+**`Ack::Flushed` on a tiered table** seals, closes closed hours and
+spills the open hour: one run per call. It is correct but costly when
+used per record.
+
+**Recovery** also cleans `staging/`. A crash after each step of a spill
+(write, publish, commit, release) and of a close from runs recovers
+every record once.
+
+**Checked:** the flush-timing property test spills at random budgets in
+half its tiered seeds; the `tiered_table` and `record_table` oracle
+cases flush every 7th record, so DuckDB reads archives built from merged
+runs.
+
+**Not yet:**
 - retention
 - the byte-copy merge
-- the compactor thread
+- the compactor thread (#574)

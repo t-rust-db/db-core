@@ -24,11 +24,11 @@ fn names_round_trip() {
     for kind in [LayoutKind::Flat, LayoutKind::Tiered] {
         assert_eq!(LayoutKind::from_name(kind.as_str()), Some(kind));
     }
-    for area in [Area::Data, Area::Live, Area::Archive] {
+    for area in [Area::Data, Area::Live, Area::Archive, Area::Staging] {
         assert_eq!(Area::from_name(area.as_str()), Some(area));
     }
     assert_eq!(LayoutKind::from_name("x"), None);
-    assert_eq!(Area::from_name("staging"), None);
+    assert_eq!(Area::from_name("x"), None);
     assert_eq!(Layout::default().kind(), LayoutKind::Flat);
     assert_eq!(
         Layout::Tiered(TierOptions::default()).kind(),

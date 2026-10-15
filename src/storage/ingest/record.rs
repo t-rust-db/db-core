@@ -580,31 +580,48 @@ pub(crate) fn concat(column_type: ColumnType, parts: &[&ColumnValues]) -> Column
 /// first, then by value (unsigned values unsigned, decimals by unscaled
 /// value, floats in IEEE total order, bytes byte-wise).
 pub(crate) fn compare_rows(values: &ColumnValues, a: usize, b: usize) -> Ordering {
-    fn by<T>(v: &[Option<T>], a: usize, b: usize, cmp: impl Fn(&T, &T) -> Ordering) -> Ordering {
+    compare_across(values, a, values, b)
+}
+
+/// Row `a` of `x` against row `b` of `y` (two chunks of one column, so of
+/// one type) in [`compare_rows`]' order; chunks of different types compare
+/// equal.
+pub(crate) fn compare_across(x: &ColumnValues, a: usize, y: &ColumnValues, b: usize) -> Ordering {
+    fn by<T>(
+        v: &[Option<T>],
+        a: usize,
+        w: &[Option<T>],
+        b: usize,
+        cmp: impl Fn(&T, &T) -> Ordering,
+    ) -> Ordering {
         match (
             v.get(a).and_then(Option::as_ref),
-            v.get(b).and_then(Option::as_ref),
+            w.get(b).and_then(Option::as_ref),
         ) {
-            (Some(x), Some(y)) => cmp(x, y),
-            (x, y) => x.is_some().cmp(&y.is_some()),
+            (Some(p), Some(q)) => cmp(p, q),
+            (p, q) => p.is_some().cmp(&q.is_some()),
         }
     }
-    match values {
-        ColumnValues::Boolean(v) => by(v, a, b, Ord::cmp),
-        ColumnValues::Int32(v) => by(v, a, b, Ord::cmp),
-        ColumnValues::Int64(v)
-        | ColumnValues::TimestampMicros(v)
-        | ColumnValues::TimestampNanos(v) => by(v, a, b, Ord::cmp),
-        ColumnValues::Float(v) => by(v, a, b, f32::total_cmp),
-        ColumnValues::Double(v) => by(v, a, b, f64::total_cmp),
-        ColumnValues::Utf8(v) => by(v, a, b, Ord::cmp),
-        ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => by(v, a, b, Ord::cmp),
-        ColumnValues::UInt8(v) => by(v, a, b, Ord::cmp),
-        ColumnValues::UInt16(v) => by(v, a, b, Ord::cmp),
-        ColumnValues::UInt32(v) => by(v, a, b, Ord::cmp),
-        ColumnValues::UInt64(v) => by(v, a, b, Ord::cmp),
-        ColumnValues::Decimal(v) => by(v, a, b, Ord::cmp),
-        ColumnValues::Map(v) => by(v, a, b, Ord::cmp),
+    use ColumnValues as C;
+    match (x, y) {
+        (C::Boolean(v), C::Boolean(w)) => by(v, a, w, b, Ord::cmp),
+        (C::Int32(v), C::Int32(w)) => by(v, a, w, b, Ord::cmp),
+        (C::Int64(v), C::Int64(w))
+        | (C::TimestampMicros(v), C::TimestampMicros(w))
+        | (C::TimestampNanos(v), C::TimestampNanos(w)) => by(v, a, w, b, Ord::cmp),
+        (C::Float(v), C::Float(w)) => by(v, a, w, b, f32::total_cmp),
+        (C::Double(v), C::Double(w)) => by(v, a, w, b, f64::total_cmp),
+        (C::Utf8(v), C::Utf8(w)) => by(v, a, w, b, Ord::cmp),
+        (C::Binary(v), C::Binary(w)) | (C::FixedLenByteArray(v), C::FixedLenByteArray(w)) => {
+            by(v, a, w, b, Ord::cmp)
+        }
+        (C::UInt8(v), C::UInt8(w)) => by(v, a, w, b, Ord::cmp),
+        (C::UInt16(v), C::UInt16(w)) => by(v, a, w, b, Ord::cmp),
+        (C::UInt32(v), C::UInt32(w)) => by(v, a, w, b, Ord::cmp),
+        (C::UInt64(v), C::UInt64(w)) => by(v, a, w, b, Ord::cmp),
+        (C::Decimal(v), C::Decimal(w)) => by(v, a, w, b, Ord::cmp),
+        (C::Map(v), C::Map(w)) => by(v, a, w, b, Ord::cmp),
+        _ => Ordering::Equal,
     }
 }
 

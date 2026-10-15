@@ -3568,6 +3568,7 @@ pub enum db_core::storage::ingest::layout::Area
 pub db_core::storage::ingest::layout::Area::Archive
 pub db_core::storage::ingest::layout::Area::Data
 pub db_core::storage::ingest::layout::Area::Live
+pub db_core::storage::ingest::layout::Area::Staging
 impl db_core::storage::ingest::layout::Area
 pub fn db_core::storage::ingest::layout::Area::as_str(self) -> &'static str
 pub fn db_core::storage::ingest::layout::Area::from_name(&str) -> core::option::Option<db_core::storage::ingest::layout::Area>
@@ -3615,6 +3616,7 @@ pub db_core::storage::ingest::layout::TierOptions::delete_grace_ns: i64
 pub db_core::storage::ingest::layout::TierOptions::max_file_size: u64
 pub db_core::storage::ingest::layout::TierOptions::row_group_max_rows: usize
 pub db_core::storage::ingest::layout::TierOptions::sort_key: alloc::vec::Vec<alloc::string::String>
+pub db_core::storage::ingest::layout::TierOptions::spill_rows: usize
 impl core::clone::Clone for db_core::storage::ingest::layout::TierOptions
 pub fn db_core::storage::ingest::layout::TierOptions::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::ingest::layout::TierOptions
@@ -3633,6 +3635,7 @@ pub fn db_core::storage::ingest::layout::date_string(i64) -> alloc::string::Stri
 pub fn db_core::storage::ingest::layout::day_of_hour(i64) -> i64
 pub fn db_core::storage::ingest::layout::hour_of(i64) -> i64
 pub fn db_core::storage::ingest::layout::live_dir(i64) -> alloc::string::String
+pub fn db_core::storage::ingest::layout::staging_dir(i64) -> alloc::string::String
 pub mod db_core::storage::ingest::lock
 pub enum db_core::storage::ingest::lock::LockError
 pub db_core::storage::ingest::lock::LockError::Held
@@ -3929,6 +3932,7 @@ pub enum db_core::storage::ingest::Area
 pub db_core::storage::ingest::Area::Archive
 pub db_core::storage::ingest::Area::Data
 pub db_core::storage::ingest::Area::Live
+pub db_core::storage::ingest::Area::Staging
 impl db_core::storage::ingest::layout::Area
 pub fn db_core::storage::ingest::layout::Area::as_str(self) -> &'static str
 pub fn db_core::storage::ingest::layout::Area::from_name(&str) -> core::option::Option<db_core::storage::ingest::layout::Area>
@@ -4182,6 +4186,7 @@ pub db_core::storage::ingest::TierOptions::delete_grace_ns: i64
 pub db_core::storage::ingest::TierOptions::max_file_size: u64
 pub db_core::storage::ingest::TierOptions::row_group_max_rows: usize
 pub db_core::storage::ingest::TierOptions::sort_key: alloc::vec::Vec<alloc::string::String>
+pub db_core::storage::ingest::TierOptions::spill_rows: usize
 impl core::clone::Clone for db_core::storage::ingest::layout::TierOptions
 pub fn db_core::storage::ingest::layout::TierOptions::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::ingest::layout::TierOptions
