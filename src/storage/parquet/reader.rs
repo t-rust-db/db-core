@@ -207,6 +207,11 @@ fn read_plain_string(buf: &mut &[u8]) -> Result<String> {
     String::from_utf8(bytes.to_vec()).map_err(|_| ReadError::InvalidUtf8)
 }
 
+fn read_plain_bytes(buf: &mut &[u8]) -> Result<Vec<u8>> {
+    let len = u32::from_le_bytes(take_array(buf)?) as usize;
+    Ok(take(buf, len)?.to_vec())
+}
+
 fn read_plain_i32(buf: &mut &[u8]) -> Result<i32> {
     Ok(i32::from_le_bytes(take_array(buf)?))
 }
@@ -263,6 +268,15 @@ pub fn decode_dictionary_string(dictionary_body: &[u8], num_values: i32) -> Resu
     let mut buf = dictionary_body;
     (0..num_values)
         .map(|_| read_plain_string(&mut buf))
+        .collect()
+}
+
+/// Decode a PLAIN-encoded BYTE_ARRAY dictionary page body into its
+/// `num_values` entries as raw bytes (no UTF-8 check).
+pub fn decode_dictionary_bytes(dictionary_body: &[u8], num_values: i32) -> Result<Vec<Vec<u8>>> {
+    let mut buf = dictionary_body;
+    (0..num_values)
+        .map(|_| read_plain_bytes(&mut buf))
         .collect()
 }
 
@@ -637,6 +651,20 @@ pub fn read_string_column(
     }
     let (levels, values) = split_definition_levels(page_body, header, max_def_level)?;
     assemble(header, &levels, max_def_level, values, read_plain_string)
+}
+
+/// Read a PLAIN-encoded BYTE_ARRAY column as raw bytes: each value is a
+/// 4-byte little-endian length prefix and that many bytes, any content.
+pub fn read_bytes_column(
+    page_body: &[u8],
+    header: &DataPageHeader,
+    max_def_level: u32,
+) -> Result<Vec<Option<Vec<u8>>>> {
+    if header.num_values == 0 {
+        return Ok(Vec::new());
+    }
+    let (levels, values) = split_definition_levels(page_body, header, max_def_level)?;
+    assemble(header, &levels, max_def_level, values, read_plain_bytes)
 }
 
 /// Read a PLAIN_DICTIONARY/RLE_DICTIONARY-encoded BYTE_ARRAY (string) column

@@ -36,7 +36,7 @@ use super::table::IngestError;
 use super::wal::{Record, WAL_DIR};
 use crate::storage::column::{MmapRegion, Vfs, VfsFile};
 use crate::storage::parquet::footer::PhysicalType;
-use crate::storage::parquet::writer::{ColumnSpec, ColumnType};
+use crate::storage::parquet::writer::{ColumnSpec, ColumnType, DecimalStorage};
 use crate::storage::parquet::ParquetFile;
 use crate::storage::stream::detect::{DetectedParser, Format};
 use crate::storage::stream::{Source, SourceKind};
@@ -222,13 +222,22 @@ pub(crate) fn column_type(pt: PhysicalType) -> Option<ColumnType> {
 pub fn physical_type(t: ColumnType) -> PhysicalType {
     match t {
         ColumnType::Boolean => PhysicalType::Boolean,
-        ColumnType::Int32 => PhysicalType::Int32,
-        ColumnType::Int64 | ColumnType::TimestampMicros | ColumnType::TimestampNanos => {
-            PhysicalType::Int64
+        ColumnType::Int32 | ColumnType::UInt8 | ColumnType::UInt16 | ColumnType::UInt32 => {
+            PhysicalType::Int32
         }
+        ColumnType::Int64
+        | ColumnType::TimestampMicros
+        | ColumnType::TimestampNanos
+        | ColumnType::UInt64 => PhysicalType::Int64,
         ColumnType::Float => PhysicalType::Float,
         ColumnType::Double => PhysicalType::Double,
-        ColumnType::Utf8 => PhysicalType::ByteArray,
+        ColumnType::Utf8 | ColumnType::Binary => PhysicalType::ByteArray,
+        ColumnType::Decimal { precision, .. } => match DecimalStorage::for_precision(precision) {
+            DecimalStorage::Int32 => PhysicalType::Int32,
+            DecimalStorage::Int64 => PhysicalType::Int64,
+            DecimalStorage::Fixed16 => PhysicalType::FixedLenByteArray,
+        },
+        ColumnType::FixedLenByteArray(_) => PhysicalType::FixedLenByteArray,
     }
 }
 
@@ -248,6 +257,15 @@ pub fn cast(v: Value, t: ColumnType) -> Value {
         ) => v,
         (ColumnType::Int32, Value::Int(i)) if i32::try_from(i).is_ok() => Value::Int(i),
         (ColumnType::Boolean, v @ Value::Bool(_)) => v,
+        (ColumnType::UInt8, Value::Int(i)) if u8::try_from(i).is_ok() => Value::Int(i),
+        (ColumnType::UInt16, Value::Int(i)) if u16::try_from(i).is_ok() => Value::Int(i),
+        (ColumnType::UInt32, Value::Int(i)) if u32::try_from(i).is_ok() => Value::Int(i),
+        (ColumnType::UInt64, Value::Int(i)) if i >= 0 => Value::Int(i),
+        // As the column engine reads them: a decimal as a float, bytes as
+        // lowercase hex.
+        (ColumnType::Decimal { .. }, Value::Float(f)) => Value::Float(f),
+        (ColumnType::Decimal { .. }, Value::Int(i)) => Value::Float(i as f64),
+        (ColumnType::Binary | ColumnType::FixedLenByteArray(_), v @ Value::Str(_)) => v,
         _ => Value::Null,
     }
 }

@@ -113,6 +113,12 @@ pub enum ConvertedType {
     Decimal,
     TimestampMillis,
     TimestampMicros,
+    /// `UINT_8`..`UINT_64`: an INT32/INT64 holding an unsigned value's
+    /// bit pattern.
+    Uint8,
+    Uint16,
+    Uint32,
+    Uint64,
     Other(i32),
 }
 
@@ -122,6 +128,10 @@ impl From<i32> for ConvertedType {
             5 => ConvertedType::Decimal,
             9 => ConvertedType::TimestampMillis,
             10 => ConvertedType::TimestampMicros,
+            11 => ConvertedType::Uint8,
+            12 => ConvertedType::Uint16,
+            13 => ConvertedType::Uint32,
+            14 => ConvertedType::Uint64,
             other => ConvertedType::Other(other),
         }
     }

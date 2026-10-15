@@ -35,6 +35,9 @@ pub enum FileError {
     MissingDictionaryPage,
     MissingTypeLength,
     MissingDecimalScale,
+    /// A `UINT_64` value above `i64::MAX`, which the engine's integers
+    /// cannot hold.
+    UnsignedOutOfRange(u64),
     UnsupportedTimestampPhysicalType(footer::PhysicalType),
     UnsupportedDecimalPhysicalType(footer::PhysicalType),
     UnsupportedNestedDictionary,
@@ -70,6 +73,11 @@ impl fmt::Display for FileError {
             FileError::MissingDecimalScale => {
                 write!(f, "DECIMAL column has no scale in its schema")
             }
+            FileError::UnsignedOutOfRange(v) => write!(
+                f,
+                "unsigned value {v} is above the largest supported integer ({})",
+                i64::MAX
+            ),
             FileError::UnsupportedTimestampPhysicalType(t) => {
                 write!(f, "unsupported physical type for a timestamp column: {t:?}")
             }
@@ -326,6 +334,12 @@ pub struct RowGroupReader<'a, 'm> {
 impl<'a, 'm> RowGroupReader<'a, 'm> {
     pub fn num_rows(&self) -> i64 {
         self.row_group.num_rows
+    }
+
+    /// The schema element of leaf `column_index`: its annotations
+    /// (converted type, scale, type length).
+    pub fn schema_element(&self, column_index: usize) -> Option<&footer::SchemaElement> {
+        self.file.metadata.schema.get(column_index + 1)
     }
 
     pub fn num_columns(&self) -> usize {
@@ -939,6 +953,17 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             move |body, num_values| {
                 reader::decode_dictionary_fixed_len_byte_array(body, num_values, type_length)
             },
+            reader::read_fixed_len_byte_array_column_dictionary,
+        )
+    }
+
+    /// A BYTE_ARRAY column as raw bytes, whatever its content (no UTF-8
+    /// check): `BLOB` and other unannotated binary columns.
+    pub fn read_binary_column(&self, column_index: usize) -> Result<Vec<Option<Vec<u8>>>> {
+        self.read_column(
+            column_index,
+            reader::read_bytes_column,
+            reader::decode_dictionary_bytes,
             reader::read_fixed_len_byte_array_column_dictionary,
         )
     }

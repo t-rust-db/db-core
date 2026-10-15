@@ -149,6 +149,19 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
     // whose input is bounded by the number of surviving groups, still
     // goes through the row-based `finalize`.
     if !agg_parts.is_empty() {
+        if segments.is_empty() && *num_group_keys == 0 {
+            // An aggregate without GROUP BY is one row even over no rows
+            // (`count` 0, the others NULL), and that row comes from a
+            // segment's `Reduce`: with every row group pruned, or a file
+            // with none, run the body once over an empty batch.
+            let empty = program
+                .columns_to_load()
+                .into_iter()
+                .fold(Batch::new(0), |batch, column| {
+                    batch.with_column(column, Vec::new())
+                });
+            return run(&[InMemorySegment(empty)], program);
+        }
         let combined = if preaggregation_pays(segments.len()) {
             let partials = run_parallel_preaggregate(segments, &body, agg_parts, *num_group_keys)?;
             combine_partials(agg_parts, *num_group_keys, &partials)?
@@ -1428,5 +1441,82 @@ mod preaggregation_tests {
         assert_eq!(rows[0][0], Value::Int(0));
         assert_eq!(rows[1][0], Value::Int(1));
         assert_eq!(rows[499][0], Value::Int(499));
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json` by
+    //! `make test-mcdc`).
+
+    use super::super::batch::{AggFunc, AggPart, Batch, Instruction, Opcode, Program, Value};
+    use super::{run, InMemorySegment};
+
+    /// `SELECT count(x)` (`grouped`: `SELECT x, count(x) GROUP BY x`).
+    fn count_program(grouped: bool) -> Program {
+        let load = Instruction::new(Opcode::LoadColumn {
+            reg: 0,
+            column: "x".into(),
+        });
+        let (reduce, emit, parts, keys) = if grouped {
+            (
+                Opcode::GroupReduce {
+                    group_by: vec![0].into(),
+                    aggs: vec![(AggFunc::Count, Some(0))].into(),
+                    agg_dst: vec![1].into(),
+                },
+                vec![0, 1],
+                vec![AggPart::GroupKey, AggPart::Count],
+                1,
+            )
+        } else {
+            (
+                Opcode::Reduce {
+                    func: AggFunc::Count,
+                    src: Some(0),
+                    dst: 1,
+                },
+                vec![1],
+                vec![AggPart::Count],
+                0,
+            )
+        };
+        Program::new(vec![
+            load,
+            Instruction::new(reduce),
+            Instruction::new(Opcode::Emit {
+                registers: emit.into(),
+            }),
+            Instruction::new(Opcode::Combine {
+                agg_parts: parts.into(),
+                num_group_keys: keys,
+                distinct: false,
+                output_order: Vec::new().into(),
+            }),
+        ])
+    }
+
+    fn rows(segments: &[InMemorySegment], grouped: bool) -> Vec<Vec<Value>> {
+        run(segments, &count_program(grouped)).unwrap().into_rows()
+    }
+
+    // vm_engine_run_7330e6cc: `segments.is_empty() && *num_group_keys == 0`
+    #[test]
+    fn mcdc__vm_engine_run_7330e6cc__v1_no_segments_ungrouped_is_one_row_of_zero() {
+        assert_eq!(rows(&[], false), vec![vec![Value::Int(0)]]);
+    }
+
+    #[test]
+    fn mcdc__vm_engine_run_7330e6cc__v2_with_segments_the_segments_supply_the_row() {
+        let segment =
+            InMemorySegment(Batch::new(2).with_column("x", vec![Value::Int(1), Value::Int(2)]));
+        assert_eq!(rows(&[segment], false), vec![vec![Value::Int(2)]]);
+    }
+
+    #[test]
+    fn mcdc__vm_engine_run_7330e6cc__v3_no_segments_grouped_is_no_rows() {
+        assert!(rows(&[], true).is_empty());
     }
 }

@@ -137,6 +137,17 @@ pub(crate) fn convert(values: Vec<Value>, column_type: ColumnType) -> ColumnValu
                 .collect(),
         ),
         ColumnType::Float => ColumnValues::Float(vec![None; values.len()]),
+        ColumnType::UInt8 => ColumnValues::UInt8(unsigned(&values)),
+        ColumnType::UInt16 => ColumnValues::UInt16(unsigned(&values)),
+        ColumnType::UInt32 => ColumnValues::UInt32(unsigned(&values)),
+        ColumnType::UInt64 => ColumnValues::UInt64(unsigned(&values)),
+        // Nor these: a decimal or byte value has no exact `Value` to come
+        // from.
+        ColumnType::Decimal { .. } => ColumnValues::Decimal(vec![None; values.len()]),
+        ColumnType::Binary => ColumnValues::Binary(vec![None; values.len()]),
+        ColumnType::FixedLenByteArray(_) => {
+            ColumnValues::FixedLenByteArray(vec![None; values.len()])
+        }
         ColumnType::Boolean => ColumnValues::Boolean(
             values
                 .iter()
@@ -157,6 +168,17 @@ pub(crate) fn convert(values: Vec<Value>, column_type: ColumnType) -> ColumnValu
                 .collect(),
         ),
     }
+}
+
+/// Integers that fit `T`, the others NULL.
+fn unsigned<T: TryFrom<i64>>(values: &[Value]) -> Vec<Option<T>> {
+    values
+        .iter()
+        .map(|v| match v {
+            Value::Int(i) => T::try_from(*i).ok(),
+            _ => None,
+        })
+        .collect()
 }
 
 /// One page's columns in `specs` order, as a `format` table stores them.

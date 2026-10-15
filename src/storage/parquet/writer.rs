@@ -72,6 +72,51 @@ pub enum ColumnType {
     /// would read a UTC-marked one as microsecond `TIMESTAMPTZ`). LogicalType
     /// only: the legacy ConvertedType has no nanosecond unit.
     TimestampNanos,
+    /// BYTE_ARRAY with no annotation: raw bytes (DuckDB `BLOB`).
+    Binary,
+    /// INT32 annotated as an unsigned 8-bit integer.
+    UInt8,
+    /// INT32 annotated as an unsigned 16-bit integer.
+    UInt16,
+    /// INT32 annotated as an unsigned 32-bit integer (stored as its bit
+    /// pattern).
+    UInt32,
+    /// INT64 annotated as an unsigned 64-bit integer (stored as its bit
+    /// pattern).
+    UInt64,
+    /// A fixed-point number, annotated DECIMAL(precision, scale): the
+    /// unscaled value in INT32 up to precision 9, INT64 up to 18, and a
+    /// 16-byte big-endian FIXED_LEN_BYTE_ARRAY above that, as DuckDB
+    /// writes them. Precision is 1..=38, scale at most the precision.
+    Decimal {
+        /// Total significant digits.
+        precision: u8,
+        /// Digits after the decimal point.
+        scale: u8,
+    },
+    /// FIXED_LEN_BYTE_ARRAY of this many bytes (at least 1), no
+    /// annotation: e.g. 16 for an IPv6 address.
+    FixedLenByteArray(u16),
+}
+
+/// Where a [`ColumnType::Decimal`]'s unscaled value is stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DecimalStorage {
+    Int32,
+    Int64,
+    Fixed16,
+}
+
+impl DecimalStorage {
+    pub(crate) fn for_precision(precision: u8) -> Self {
+        if precision <= 9 {
+            DecimalStorage::Int32
+        } else if precision <= 18 {
+            DecimalStorage::Int64
+        } else {
+            DecimalStorage::Fixed16
+        }
+    }
 }
 
 /// One column of the schema.
@@ -117,6 +162,22 @@ pub enum ColumnValues {
     /// For a [`ColumnType::TimestampNanos`] column: nanoseconds since the
     /// Unix epoch, UTC.
     TimestampNanos(Vec<Option<i64>>),
+    /// For a [`ColumnType::Binary`] column.
+    Binary(Vec<Option<Vec<u8>>>),
+    /// For a [`ColumnType::UInt8`] column.
+    UInt8(Vec<Option<u8>>),
+    /// For a [`ColumnType::UInt16`] column.
+    UInt16(Vec<Option<u16>>),
+    /// For a [`ColumnType::UInt32`] column.
+    UInt32(Vec<Option<u32>>),
+    /// For a [`ColumnType::UInt64`] column.
+    UInt64(Vec<Option<u64>>),
+    /// For a [`ColumnType::Decimal`] column: the unscaled values (`12.34`
+    /// at scale 2 is `1234`), each within the column's precision.
+    Decimal(Vec<Option<i128>>),
+    /// For a [`ColumnType::FixedLenByteArray`] column: each value exactly
+    /// the column's length.
+    FixedLenByteArray(Vec<Option<Vec<u8>>>),
 }
 
 impl ColumnValues {
@@ -131,21 +192,43 @@ impl ColumnValues {
             ColumnType::Utf8 => ColumnValues::Utf8(Vec::new()),
             ColumnType::TimestampMicros => ColumnValues::TimestampMicros(Vec::new()),
             ColumnType::TimestampNanos => ColumnValues::TimestampNanos(Vec::new()),
+            ColumnType::Binary => ColumnValues::Binary(Vec::new()),
+            ColumnType::UInt8 => ColumnValues::UInt8(Vec::new()),
+            ColumnType::UInt16 => ColumnValues::UInt16(Vec::new()),
+            ColumnType::UInt32 => ColumnValues::UInt32(Vec::new()),
+            ColumnType::UInt64 => ColumnValues::UInt64(Vec::new()),
+            ColumnType::Decimal { .. } => ColumnValues::Decimal(Vec::new()),
+            ColumnType::FixedLenByteArray(_) => ColumnValues::FixedLenByteArray(Vec::new()),
         }
     }
 
-    /// The column type these values belong to.
-    pub fn column_type(&self) -> ColumnType {
-        match self {
-            ColumnValues::Boolean(_) => ColumnType::Boolean,
-            ColumnValues::Int32(_) => ColumnType::Int32,
-            ColumnValues::Int64(_) => ColumnType::Int64,
-            ColumnValues::Float(_) => ColumnType::Float,
-            ColumnValues::Double(_) => ColumnType::Double,
-            ColumnValues::Utf8(_) => ColumnType::Utf8,
-            ColumnValues::TimestampMicros(_) => ColumnType::TimestampMicros,
-            ColumnValues::TimestampNanos(_) => ColumnType::TimestampNanos,
-        }
+    /// Whether these values are of `column_type`'s variant (any precision,
+    /// scale or length: those are checked per value).
+    pub fn is_for(&self, column_type: ColumnType) -> bool {
+        matches!(
+            (self, column_type),
+            (ColumnValues::Boolean(_), ColumnType::Boolean)
+                | (ColumnValues::Int32(_), ColumnType::Int32)
+                | (ColumnValues::Int64(_), ColumnType::Int64)
+                | (ColumnValues::Float(_), ColumnType::Float)
+                | (ColumnValues::Double(_), ColumnType::Double)
+                | (ColumnValues::Utf8(_), ColumnType::Utf8)
+                | (
+                    ColumnValues::TimestampMicros(_),
+                    ColumnType::TimestampMicros
+                )
+                | (ColumnValues::TimestampNanos(_), ColumnType::TimestampNanos)
+                | (ColumnValues::Binary(_), ColumnType::Binary)
+                | (ColumnValues::UInt8(_), ColumnType::UInt8)
+                | (ColumnValues::UInt16(_), ColumnType::UInt16)
+                | (ColumnValues::UInt32(_), ColumnType::UInt32)
+                | (ColumnValues::UInt64(_), ColumnType::UInt64)
+                | (ColumnValues::Decimal(_), ColumnType::Decimal { .. })
+                | (
+                    ColumnValues::FixedLenByteArray(_),
+                    ColumnType::FixedLenByteArray(_)
+                )
+        )
     }
 
     /// Number of values, nulls included.
@@ -159,6 +242,12 @@ impl ColumnValues {
             ColumnValues::Float(v) => v.len(),
             ColumnValues::Double(v) => v.len(),
             ColumnValues::Utf8(v) => v.len(),
+            ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => v.len(),
+            ColumnValues::UInt8(v) => v.len(),
+            ColumnValues::UInt16(v) => v.len(),
+            ColumnValues::UInt32(v) => v.len(),
+            ColumnValues::UInt64(v) => v.len(),
+            ColumnValues::Decimal(v) => v.len(),
         }
     }
 
@@ -178,6 +267,14 @@ impl ColumnValues {
             ColumnValues::Float(v) => v.iter().map(Option::is_some).collect(),
             ColumnValues::Double(v) => v.iter().map(Option::is_some).collect(),
             ColumnValues::Utf8(v) => v.iter().map(Option::is_some).collect(),
+            ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {
+                v.iter().map(Option::is_some).collect()
+            }
+            ColumnValues::UInt8(v) => v.iter().map(Option::is_some).collect(),
+            ColumnValues::UInt16(v) => v.iter().map(Option::is_some).collect(),
+            ColumnValues::UInt32(v) => v.iter().map(Option::is_some).collect(),
+            ColumnValues::UInt64(v) => v.iter().map(Option::is_some).collect(),
+            ColumnValues::Decimal(v) => v.iter().map(Option::is_some).collect(),
         }
     }
 
@@ -193,13 +290,15 @@ impl ColumnValues {
             (ColumnValues::Utf8(a), ColumnValues::Utf8(b)) => a.extend(b),
             (ColumnValues::TimestampMicros(a), ColumnValues::TimestampMicros(b)) => a.extend(b),
             (ColumnValues::TimestampNanos(a), ColumnValues::TimestampNanos(b)) => a.extend(b),
+            (ColumnValues::Binary(a), ColumnValues::Binary(b)) => a.extend(b),
+            (ColumnValues::UInt8(a), ColumnValues::UInt8(b)) => a.extend(b),
+            (ColumnValues::UInt16(a), ColumnValues::UInt16(b)) => a.extend(b),
+            (ColumnValues::UInt32(a), ColumnValues::UInt32(b)) => a.extend(b),
+            (ColumnValues::UInt64(a), ColumnValues::UInt64(b)) => a.extend(b),
+            (ColumnValues::Decimal(a), ColumnValues::Decimal(b)) => a.extend(b),
+            (ColumnValues::FixedLenByteArray(a), ColumnValues::FixedLenByteArray(b)) => a.extend(b),
             _ => {}
         }
-    }
-
-    /// Moves the values out, leaving an empty batch of the same type.
-    fn take(&mut self) -> ColumnValues {
-        std::mem::replace(self, ColumnValues::empty(self.column_type()))
     }
 }
 
@@ -294,6 +393,14 @@ pub enum WriteError {
         /// The column.
         column: String,
     },
+    /// A value does not fit its column: a decimal beyond the precision, or
+    /// a fixed-length value of another length.
+    InvalidValue {
+        /// The column.
+        column: String,
+        /// What is wrong with it.
+        reason: String,
+    },
     /// A size or count exceeds what a Parquet field can hold (a page over
     /// 2 GiB, a string over 4 GiB, a file over 2^63 bytes).
     TooLarge(String),
@@ -319,6 +426,9 @@ impl fmt::Display for WriteError {
             } => write!(f, "column '{column}': {found} values, expected {expected}"),
             WriteError::NullInRequired { column } => {
                 write!(f, "column '{column}' is required but got a null")
+            }
+            WriteError::InvalidValue { column, reason } => {
+                write!(f, "column '{column}': {reason}")
             }
             WriteError::TooLarge(what) => write!(f, "too large for parquet: {what}"),
         }
@@ -477,7 +587,12 @@ impl<W: Write> ParquetWriter<W> {
         }
         let rows = u64::try_from(self.buffered_rows).map_err(|_| too_large("row count"))?;
         let group_start = self.sink.position()?;
-        let columns: Vec<ColumnValues> = self.buffer.iter_mut().map(ColumnValues::take).collect();
+        let columns: Vec<ColumnValues> = self
+            .buffer
+            .iter_mut()
+            .zip(&self.schema)
+            .map(|(buffer, spec)| std::mem::replace(buffer, ColumnValues::empty(spec.column_type)))
+            .collect();
         let mut chunks = Vec::with_capacity(columns.len());
         let mut uncompressed: u64 = 0;
         let mut compressed: u64 = 0;
@@ -544,12 +659,29 @@ fn validate_schema(schema: &[ColumnSpec]) -> Result<(), WriteError> {
                 spec.name
             )));
         }
+        match spec.column_type {
+            ColumnType::Decimal { precision, scale }
+                if !(1..=38).contains(&precision) || scale > precision =>
+            {
+                return Err(WriteError::InvalidSchema(format!(
+                    "column '{}': DECIMAL({precision}, {scale}) needs precision 1..=38 and scale at most the precision",
+                    spec.name
+                )));
+            }
+            ColumnType::FixedLenByteArray(0) => {
+                return Err(WriteError::InvalidSchema(format!(
+                    "column '{}': FIXED_LEN_BYTE_ARRAY needs a length of at least 1",
+                    spec.name
+                )));
+            }
+            _ => {}
+        }
     }
     Ok(())
 }
 
 fn check_column(spec: &ColumnSpec, values: &ColumnValues, rows: usize) -> Result<(), WriteError> {
-    if values.column_type() != spec.column_type {
+    if !values.is_for(spec.column_type) {
         return Err(WriteError::TypeMismatch {
             column: spec.name.clone(),
         });
@@ -561,15 +693,40 @@ fn check_column(spec: &ColumnSpec, values: &ColumnValues, rows: usize) -> Result
             found: values.len(),
         });
     }
-    if spec.nullable {
-        return Ok(());
-    }
-    if values.validity().contains(&false) {
+    if !spec.nullable && values.validity().contains(&false) {
         return Err(WriteError::NullInRequired {
             column: spec.name.clone(),
         });
     }
-    Ok(())
+    let invalid = |reason: String| WriteError::InvalidValue {
+        column: spec.name.clone(),
+        reason,
+    };
+    match (spec.column_type, values) {
+        (ColumnType::Decimal { precision, .. }, ColumnValues::Decimal(v)) => {
+            let limit = 10i128.pow(u32::from(precision));
+            match v
+                .iter()
+                .flatten()
+                .find(|x| x.unsigned_abs() >= limit.unsigned_abs())
+            {
+                Some(x) => Err(invalid(format!(
+                    "unscaled value {x} has more than {precision} digits"
+                ))),
+                None => Ok(()),
+            }
+        }
+        (ColumnType::FixedLenByteArray(len), ColumnValues::FixedLenByteArray(v)) => {
+            match v.iter().flatten().find(|x| x.len() != usize::from(len)) {
+                Some(x) => Err(invalid(format!(
+                    "{}-byte value in a {len}-byte column",
+                    x.len()
+                ))),
+                None => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
 }
 
 /// A written column chunk: its `ColumnChunk` metadata and on-disk sizes
@@ -595,7 +752,7 @@ fn write_chunk<W: Write>(
     values: &ColumnValues,
     options: &WriterOptions,
 ) -> Result<WrittenChunk, WriteError> {
-    let chunk_stats = stats::chunk_stats(values);
+    let chunk_stats = stats::chunk_stats(values, spec.column_type);
     let mut body = Vec::new();
     if spec.nullable {
         let levels: Vec<u32> = values.validity().into_iter().map(u32::from).collect();
@@ -605,7 +762,7 @@ fn write_chunk<W: Write>(
         body.extend_from_slice(&len.to_le_bytes());
         body.extend_from_slice(&encoded);
     }
-    let encoded = encode_values(values, options)?;
+    let encoded = encode_values(values, spec.column_type, options)?;
     body.extend_from_slice(&encoded.data);
 
     let codec = options.compression;
@@ -710,6 +867,7 @@ fn write_page<W: Write>(
 
 fn encode_values(
     values: &ColumnValues,
+    column_type: ColumnType,
     options: &WriterOptions,
 ) -> Result<EncodedValues, WriteError> {
     match values {
@@ -746,6 +904,56 @@ fn encode_values(
         ColumnValues::Utf8(v) => dictionary_or_plain(v, options, |out, s| {
             encode::plain_byte_array(out, s.as_bytes()).ok_or_else(|| too_large("string value"))
         }),
+        ColumnValues::Binary(v) => dictionary_or_plain(v, options, |out, b| {
+            encode::plain_byte_array(out, b).ok_or_else(|| too_large("binary value"))
+        }),
+        ColumnValues::FixedLenByteArray(v) => dictionary_or_plain(v, options, |out, b| {
+            out.extend_from_slice(b);
+            Ok(())
+        }),
+        ColumnValues::UInt8(v) => dictionary_or_plain(v, options, |out, x| {
+            out.extend_from_slice(&u32::from(*x).to_le_bytes());
+            Ok(())
+        }),
+        ColumnValues::UInt16(v) => dictionary_or_plain(v, options, |out, x| {
+            out.extend_from_slice(&u32::from(*x).to_le_bytes());
+            Ok(())
+        }),
+        ColumnValues::UInt32(v) => dictionary_or_plain(v, options, |out, x| {
+            out.extend_from_slice(&x.to_le_bytes());
+            Ok(())
+        }),
+        ColumnValues::UInt64(v) => dictionary_or_plain(v, options, |out, x| {
+            out.extend_from_slice(&x.to_le_bytes());
+            Ok(())
+        }),
+        ColumnValues::Decimal(v) => {
+            let storage = match column_type {
+                ColumnType::Decimal { precision, .. } => DecimalStorage::for_precision(precision),
+                _ => DecimalStorage::Fixed16,
+            };
+            dictionary_or_plain(v, options, |out, x| {
+                out.extend_from_slice(&decimal_bytes(*x, storage));
+                Ok(())
+            })
+        }
+    }
+}
+
+/// An unscaled decimal as stored: little-endian INT32/INT64, or 16 bytes
+/// of big-endian two's complement. The caller has checked it fits the
+/// precision, so the narrowing keeps every significant bit.
+pub(crate) fn decimal_bytes(unscaled: i128, storage: DecimalStorage) -> Vec<u8> {
+    match storage {
+        DecimalStorage::Int32 => i32::try_from(unscaled)
+            .unwrap_or_default()
+            .to_le_bytes()
+            .to_vec(),
+        DecimalStorage::Int64 => i64::try_from(unscaled)
+            .unwrap_or_default()
+            .to_le_bytes()
+            .to_vec(),
+        DecimalStorage::Fixed16 => unscaled.to_be_bytes().to_vec(),
     }
 }
 

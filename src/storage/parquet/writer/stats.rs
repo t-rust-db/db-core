@@ -5,9 +5,11 @@
 //! Orders follow the Parquet type-defined orders: signed for integers,
 //! `false < true` for booleans, unsigned byte-wise for UTF-8 strings (the
 //! same as `str`'s `Ord`), and IEEE order for floats with NaN ignored and
-//! zero bounds widened to `-0.0`/`+0.0`.
+//! zero bounds widened to `-0.0`/`+0.0`. Unsigned integers order unsigned
+//! (their bounds are bit patterns that a signed reader would misorder),
+//! decimals by their unscaled value, and binary values byte-wise.
 
-use super::ColumnValues;
+use super::{decimal_bytes, ColumnType, ColumnValues, DecimalStorage};
 
 /// Statistics for one column chunk.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -17,7 +19,7 @@ pub(crate) struct ChunkStats {
     pub(crate) null_count: usize,
 }
 
-pub(crate) fn chunk_stats(values: &ColumnValues) -> ChunkStats {
+pub(crate) fn chunk_stats(values: &ColumnValues, column_type: ColumnType) -> ChunkStats {
     match values {
         ColumnValues::Boolean(v) => ordered(v.iter().copied(), |b| vec![u8::from(*b)]),
         ColumnValues::Int32(v) => ordered(v.iter().copied(), |x| x.to_le_bytes().to_vec()),
@@ -29,6 +31,24 @@ pub(crate) fn chunk_stats(values: &ColumnValues) -> ChunkStats {
         ColumnValues::Float(v) => real(v.iter().copied()),
         ColumnValues::Double(v) => real(v.iter().copied()),
         ColumnValues::Utf8(v) => ordered(v.iter().map(Option::as_deref), |s| s.as_bytes().to_vec()),
+        ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {
+            ordered(v.iter().map(Option::as_deref), |b| b.to_vec())
+        }
+        ColumnValues::UInt8(v) => {
+            ordered(v.iter().copied(), |x| u32::from(*x).to_le_bytes().to_vec())
+        }
+        ColumnValues::UInt16(v) => {
+            ordered(v.iter().copied(), |x| u32::from(*x).to_le_bytes().to_vec())
+        }
+        ColumnValues::UInt32(v) => ordered(v.iter().copied(), |x| x.to_le_bytes().to_vec()),
+        ColumnValues::UInt64(v) => ordered(v.iter().copied(), |x| x.to_le_bytes().to_vec()),
+        ColumnValues::Decimal(v) => {
+            let storage = match column_type {
+                ColumnType::Decimal { precision, .. } => DecimalStorage::for_precision(precision),
+                _ => DecimalStorage::Fixed16,
+            };
+            ordered(v.iter().copied(), |x| decimal_bytes(*x, storage))
+        }
     }
 }
 
@@ -134,6 +154,68 @@ fn real<T: Real>(values: impl Iterator<Item = Option<T>>) -> ChunkStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The column type only matters for decimals.
+    fn chunk_stats(values: &ColumnValues) -> ChunkStats {
+        super::chunk_stats(values, ColumnType::Boolean)
+    }
+
+    #[test]
+    fn unsigned_integers_use_unsigned_order() {
+        let s = chunk_stats(&ColumnValues::UInt64(vec![Some(u64::MAX), Some(1), None]));
+        assert_eq!(s.min, Some(1u64.to_le_bytes().to_vec()));
+        assert_eq!(s.max, Some(u64::MAX.to_le_bytes().to_vec()));
+        let s = chunk_stats(&ColumnValues::UInt32(vec![Some(u32::MAX), Some(7)]));
+        assert_eq!(s.max, Some(u32::MAX.to_le_bytes().to_vec()));
+        // INT32 storage: 8- and 16-bit bounds are 4 bytes wide.
+        let s = chunk_stats(&ColumnValues::UInt8(vec![Some(200), Some(3)]));
+        assert_eq!(s.max, Some(200u32.to_le_bytes().to_vec()));
+        let s = chunk_stats(&ColumnValues::UInt16(vec![Some(65_535)]));
+        assert_eq!(s.min, Some(65_535u32.to_le_bytes().to_vec()));
+    }
+
+    #[test]
+    fn decimals_order_by_unscaled_value_in_their_storage() {
+        let values = ColumnValues::Decimal(vec![Some(-5), Some(12_34), None]);
+        let int32 = ColumnType::Decimal {
+            precision: 9,
+            scale: 2,
+        };
+        let s = super::chunk_stats(&values, int32);
+        assert_eq!(s.min, Some((-5i32).to_le_bytes().to_vec()));
+        assert_eq!(s.max, Some(1234i32.to_le_bytes().to_vec()));
+        let int64 = ColumnType::Decimal {
+            precision: 18,
+            scale: 2,
+        };
+        let s = super::chunk_stats(&values, int64);
+        assert_eq!(s.min, Some((-5i64).to_le_bytes().to_vec()));
+        let fixed = ColumnType::Decimal {
+            precision: 38,
+            scale: 2,
+        };
+        let s = super::chunk_stats(&values, fixed);
+        assert_eq!(s.min, Some((-5i128).to_be_bytes().to_vec()));
+        assert_eq!(s.max, Some(1234i128.to_be_bytes().to_vec()));
+    }
+
+    #[test]
+    fn binary_compares_as_unsigned_bytes() {
+        let s = chunk_stats(&ColumnValues::Binary(vec![
+            Some(vec![0xff]),
+            Some(vec![0x00, 0x01]),
+            Some(Vec::new()),
+        ]));
+        assert_eq!((s.min, s.max), (Some(Vec::new()), Some(vec![0xff])));
+        let s = chunk_stats(&ColumnValues::FixedLenByteArray(vec![
+            Some(vec![0x80, 0]),
+            Some(vec![0x7f, 0xff]),
+        ]));
+        assert_eq!(
+            (s.min, s.max),
+            (Some(vec![0x7f, 0xff]), Some(vec![0x80, 0]))
+        );
+    }
 
     #[test]
     fn integers_use_signed_order_and_count_nulls() {

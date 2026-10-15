@@ -101,8 +101,141 @@ fn log_batch(start: i64, n: i64) -> Vec<ColumnValues> {
     ]
 }
 
+fn extended_types_schema() -> Vec<ColumnSpec> {
+    vec![
+        ColumnSpec::new("blob", ColumnType::Binary, true),
+        ColumnSpec::new("u8", ColumnType::UInt8, true),
+        ColumnSpec::new("u16", ColumnType::UInt16, true),
+        ColumnSpec::new("u32", ColumnType::UInt32, true),
+        ColumnSpec::new("u64", ColumnType::UInt64, false),
+        ColumnSpec::new(
+            "dec_9_2",
+            ColumnType::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            true,
+        ),
+        ColumnSpec::new(
+            "dec_18_4",
+            ColumnType::Decimal {
+                precision: 18,
+                scale: 4,
+            },
+            true,
+        ),
+        ColumnSpec::new(
+            "dec_38_10",
+            ColumnType::Decimal {
+                precision: 38,
+                scale: 10,
+            },
+            true,
+        ),
+        ColumnSpec::new("ip", ColumnType::FixedLenByteArray(16), true),
+    ]
+}
+
+/// The new types' edges (#595): unsigned values at and above the signed
+/// limits, decimals at their precision's limits, non-UTF-8 and empty
+/// binary values.
+fn extended_types_batch() -> Vec<ColumnValues> {
+    let mut mapped = [0u8; 16];
+    mapped[10] = 0xff;
+    mapped[11] = 0xff;
+    mapped[12..].copy_from_slice(&[192, 168, 1, 7]);
+    let max_digits = |p: u32| 10i128.pow(p) - 1;
+    vec![
+        ColumnValues::Binary(vec![
+            Some(Vec::new()),
+            Some(vec![0x00]),
+            Some(vec![0xff, 0x00]),
+            Some(vec![0x80, 0x81, 0xc3]),
+            None,
+            Some(b"abc".to_vec()),
+        ]),
+        ColumnValues::UInt8(vec![
+            Some(0),
+            Some(u8::MAX),
+            None,
+            Some(1),
+            Some(128),
+            Some(7),
+        ]),
+        ColumnValues::UInt16(vec![
+            Some(0),
+            Some(u16::MAX),
+            Some(32_768),
+            None,
+            Some(1),
+            Some(7),
+        ]),
+        ColumnValues::UInt32(vec![
+            Some(0),
+            Some(u32::MAX),
+            Some(1 << 31),
+            None,
+            Some(1),
+            Some(7),
+        ]),
+        ColumnValues::UInt64(vec![
+            Some(0),
+            Some(u64::MAX),
+            Some(1 << 63),
+            Some(i64::MAX as u64),
+            Some(1),
+            Some(7),
+        ]),
+        ColumnValues::Decimal(vec![
+            Some(-max_digits(9)),
+            Some(max_digits(9)),
+            Some(0),
+            None,
+            Some(-1),
+            Some(1234),
+        ]),
+        ColumnValues::Decimal(vec![
+            Some(-max_digits(18)),
+            Some(max_digits(18)),
+            None,
+            Some(0),
+            Some(-1),
+            Some(1234),
+        ]),
+        ColumnValues::Decimal(vec![
+            Some(-max_digits(38)),
+            Some(max_digits(38)),
+            Some(0),
+            Some(-1),
+            None,
+            Some(12_345_678_901_234_567_890_123),
+        ]),
+        ColumnValues::FixedLenByteArray(vec![
+            Some(vec![0; 16]),
+            Some(vec![0xff; 16]),
+            Some(mapped.to_vec()),
+            None,
+            Some((1..=16).collect()),
+            Some(vec![0x80; 16]),
+        ]),
+    ]
+}
+
 fn cases() -> Vec<Case> {
     vec![
+        Case {
+            name: "extended_types_dictionary",
+            schema: extended_types_schema(),
+            // Repeated, so the dictionary pays off.
+            batches: (0..4).map(|_| extended_types_batch()).collect(),
+            options: options(Compression::Snappy, true, 100),
+        },
+        Case {
+            name: "extended_types_plain",
+            schema: extended_types_schema(),
+            batches: vec![extended_types_batch()],
+            options: options(Compression::Uncompressed, false, 100),
+        },
         Case {
             name: "logs_snappy_dictionary",
             schema: all_types_schema(),
@@ -271,19 +404,37 @@ fn json_values(out: &mut String, values: &ColumnValues) {
         ColumnValues::Float(v) => list(out, v, |o, x| json_float(o, f64::from(*x))),
         ColumnValues::Double(v) => list(out, v, |o, x| json_float(o, *x)),
         ColumnValues::Utf8(v) => list(out, v, |o, s| json_string(o, s)),
+        // Bytes as lowercase hex.
+        ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => list(out, v, |o, b| {
+            let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+            json_string(o, &hex);
+        }),
+        ColumnValues::UInt8(v) => list(out, v, |o, x| o.push_str(&format!("{x}"))),
+        ColumnValues::UInt16(v) => list(out, v, |o, x| o.push_str(&format!("{x}"))),
+        ColumnValues::UInt32(v) => list(out, v, |o, x| o.push_str(&format!("{x}"))),
+        ColumnValues::UInt64(v) => list(out, v, |o, x| o.push_str(&format!("{x}"))),
+        // The unscaled value; the scale is in the type name.
+        ColumnValues::Decimal(v) => list(out, v, |o, x| o.push_str(&format!("{x}"))),
     }
 }
 
-fn type_name(t: ColumnType) -> &'static str {
+fn type_name(t: ColumnType) -> String {
     match t {
-        ColumnType::Boolean => "boolean",
-        ColumnType::Int32 => "int32",
-        ColumnType::Int64 => "int64",
-        ColumnType::Float => "float",
-        ColumnType::Double => "double",
-        ColumnType::Utf8 => "utf8",
-        ColumnType::TimestampMicros => "timestamp_micros",
-        ColumnType::TimestampNanos => "timestamp_nanos",
+        ColumnType::Boolean => "boolean".into(),
+        ColumnType::Int32 => "int32".into(),
+        ColumnType::Int64 => "int64".into(),
+        ColumnType::Float => "float".into(),
+        ColumnType::Double => "double".into(),
+        ColumnType::Utf8 => "utf8".into(),
+        ColumnType::TimestampMicros => "timestamp_micros".into(),
+        ColumnType::TimestampNanos => "timestamp_nanos".into(),
+        ColumnType::Binary => "binary".into(),
+        ColumnType::UInt8 => "uint8".into(),
+        ColumnType::UInt16 => "uint16".into(),
+        ColumnType::UInt32 => "uint32".into(),
+        ColumnType::UInt64 => "uint64".into(),
+        ColumnType::Decimal { precision, scale } => format!("decimal({precision},{scale})"),
+        ColumnType::FixedLenByteArray(len) => format!("fixed({len})"),
     }
 }
 
@@ -344,6 +495,34 @@ fn concat(a: ColumnValues, b: &ColumnValues) -> ColumnValues {
         (ColumnValues::TimestampNanos(mut a), ColumnValues::TimestampNanos(b)) => {
             a.extend_from_slice(b);
             ColumnValues::TimestampNanos(a)
+        }
+        (ColumnValues::Binary(mut a), ColumnValues::Binary(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::Binary(a)
+        }
+        (ColumnValues::UInt8(mut a), ColumnValues::UInt8(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::UInt8(a)
+        }
+        (ColumnValues::UInt16(mut a), ColumnValues::UInt16(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::UInt16(a)
+        }
+        (ColumnValues::UInt32(mut a), ColumnValues::UInt32(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::UInt32(a)
+        }
+        (ColumnValues::UInt64(mut a), ColumnValues::UInt64(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::UInt64(a)
+        }
+        (ColumnValues::Decimal(mut a), ColumnValues::Decimal(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::Decimal(a)
+        }
+        (ColumnValues::FixedLenByteArray(mut a), ColumnValues::FixedLenByteArray(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::FixedLenByteArray(a)
         }
         (a, _) => a,
     }

@@ -10,8 +10,9 @@
 //! failure here is returned as an `Err`, never substituted with a batch of
 //! NULLs (column-rs#27 wants the latter for its own loader).
 
-use crate::storage::parquet::{footer::PhysicalType, FileError, RowGroupReader};
-use crate::vm::batch::{Bitmap, Column};
+use crate::storage::parquet::footer::{ConvertedType, PhysicalType};
+use crate::storage::parquet::{FileError, RowGroupReader};
+use crate::vm::batch::{Bitmap, Column, Value};
 use crate::vm::column::build_str_column;
 
 /// One column's decoded shape out of a whole row group: every
@@ -19,6 +20,96 @@ use crate::vm::column::build_str_column;
 /// than rebuilding a per-row [`Value`](crate::vm::batch::Value).
 pub enum Decoded {
     Column(Column),
+}
+
+/// What a column's annotation changes about how its values decode (#595).
+/// `Plain` columns decode by their physical type alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Annotation {
+    /// The physical type says it all (signed integers, floats, booleans,
+    /// UTF-8 strings).
+    Plain,
+    /// INT32 `UINT_32`: the bit pattern read unsigned. (`UINT_8`/`UINT_16`
+    /// values are below 2^31, so they read correctly as `Plain`.)
+    UInt32,
+    /// INT64 `UINT_64`: unsigned; a value above `i64::MAX` is an error
+    /// rather than a wrapped negative.
+    UInt64,
+    /// `DECIMAL` on INT32, INT64 or FIXED_LEN_BYTE_ARRAY: a float, as
+    /// SQLite reads a DECIMAL column (REAL affinity).
+    Decimal,
+    /// An unannotated BYTE_ARRAY (`BLOB`) or FIXED_LEN_BYTE_ARRAY:
+    /// lowercase hex text, as DuckDB's `hex()` renders it.
+    Bytes,
+}
+
+/// The [`Annotation`] of leaf `index` in `rg`'s file.
+pub fn annotation(rg: &RowGroupReader<'_, '_>, index: usize) -> Annotation {
+    let Some(element) = rg.schema_element(index) else {
+        return Annotation::Plain;
+    };
+    match (element.physical_type, element.converted_type) {
+        (_, Some(ConvertedType::Decimal)) => Annotation::Decimal,
+        (Some(PhysicalType::Int32), Some(ConvertedType::Uint32)) => Annotation::UInt32,
+        (Some(PhysicalType::Int64), Some(ConvertedType::Uint64)) => Annotation::UInt64,
+        (Some(PhysicalType::ByteArray), None) | (Some(PhysicalType::FixedLenByteArray), _) => {
+            Annotation::Bytes
+        }
+        _ => Annotation::Plain,
+    }
+}
+
+/// Every row of an annotated (non-[`Annotation::Plain`]) column, or `None`
+/// for a plain one.
+fn decode_annotated(
+    rg: &RowGroupReader<'_, '_>,
+    index: usize,
+    physical_type: PhysicalType,
+) -> Result<Option<Column>, FileError> {
+    Ok(Some(match annotation(rg, index) {
+        Annotation::Plain => return Ok(None),
+        Annotation::UInt32 => int_column(
+            rg.read_int32_column(index)?
+                .into_iter()
+                .map(|v| v.map(|x| i64::from(x.cast_unsigned())))
+                .collect(),
+        ),
+        Annotation::UInt64 => int_column(
+            rg.read_int64_column(index)?
+                .into_iter()
+                .map(|v| match v {
+                    // A negative bit pattern is a value above i64::MAX.
+                    Some(x) if x < 0 => Err(FileError::UnsignedOutOfRange(x.cast_unsigned())),
+                    other => Ok(other),
+                })
+                .collect::<Result<_, _>>()?,
+        ),
+        Annotation::Decimal => float_column(
+            rg.read_decimal_column(index)?
+                .into_iter()
+                .map(|v| v.map(|d| d.to_f64()))
+                .collect(),
+        ),
+        Annotation::Bytes => {
+            let bytes = if physical_type == PhysicalType::FixedLenByteArray {
+                rg.read_fixed_len_byte_array_column(index)?
+            } else {
+                rg.read_binary_column(index)?
+            };
+            str_column(bytes.into_iter().map(|v| v.map(|b| hex(&b))).collect())
+        }
+    }))
+}
+
+/// Lowercase hex of `bytes`.
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
+    for b in bytes {
+        out.push(char::from(DIGITS[usize::from(b >> 4)]));
+        out.push(char::from(DIGITS[usize::from(b & 0xf)]));
+    }
+    out
 }
 
 /// Decodes one column for every row of `rg` -- the whole-row-group path
@@ -37,6 +128,9 @@ pub fn decode_column_full(
     // definition levels become its `Bitmap` with no `Vec<Option<T>>` in
     // between. `None` means the chunk has a dictionary or other encoding,
     // and the `Vec<Option<T>>` readers below handle it as before.
+    if let Some(column) = decode_annotated(rg, index, physical_type)? {
+        return Ok(Decoded::Column(column));
+    }
     match physical_type {
         PhysicalType::Int64 => match rg.read_plain_fixed_column(index, i64::from_le_bytes)? {
             Some(typed) => Ok(Decoded::Column(typed_int(typed))),
@@ -111,6 +205,19 @@ pub fn decode_column_at(
     // #513: fixed-width primitives read only the wanted rows of only the
     // pages holding them; `None` (a non-PLAIN chunk) keeps the
     // decode-then-gather readers below.
+    if let Some(column) = decode_annotated(rg, index, physical_type)? {
+        let values = positions
+            .iter()
+            .map(|&p| {
+                usize::try_from(p)
+                    .ok()
+                    .filter(|&i| i < column.len())
+                    .map(|i| column.get(i))
+                    .ok_or(FileError::RowPositionOutOfRange(p))
+            })
+            .collect::<Result<Vec<Value>, _>>()?;
+        return Ok(Decoded::Column(Column::from(values)));
+    }
     match physical_type {
         PhysicalType::Int64 => {
             match rg.read_plain_fixed_column_at(index, i64::from_le_bytes, positions)? {
@@ -245,7 +352,12 @@ fn str_column(values: Vec<Option<String>>) -> Column {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vm::batch::Value;
+
+    #[test]
+    fn hex_is_lowercase_two_digits_per_byte() {
+        assert_eq!(hex(&[0x00, 0x0f, 0xab, 0xff]), "000fabff");
+        assert_eq!(hex(&[]), "");
+    }
 
     #[test]
     fn dict_column_carries_codes_through_unchanged() {

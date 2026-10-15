@@ -21,7 +21,7 @@ pub mod posix;
 pub mod vfs;
 
 #[cfg(feature = "vm-batch")]
-pub use decode::{decode_column_at, decode_column_full, Decoded};
+pub use decode::{annotation, decode_column_at, decode_column_full, Annotation, Decoded};
 pub use memory::MemoryVfs;
 pub use posix::PosixVfs;
 pub use vfs::{MmapRegion, Vfs, VfsFile};
