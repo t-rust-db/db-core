@@ -46,12 +46,14 @@ use super::layout::{archive_dir, day_of_hour, hour_of, live_dir, Area, Layout, L
 use super::lock::{LockError, TableLock};
 use super::manifest::{FileEntry, Manifest, ManifestError};
 use super::page::{decode_record, encode_record, invalid_line, HeadPage, Page};
-use super::record::{check_row, decode_row, encode_row, invalid_schema, RecordValue};
+use super::record::{
+    check_row, decode_row, encode_row, invalid_schema, join_repeated_keys, RecordValue,
+};
 use super::snapshot::Snapshot;
 use super::tier::{self, Output};
 use super::wal::{Ack, Wal, WalError, WalOptions, Watermarks};
 use crate::storage::column::{Vfs, VfsFile};
-use crate::storage::parquet::writer::{ColumnSpec, WriteError, WriterOptions};
+use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriteError, WriterOptions};
 use crate::storage::stream::adapter::now_ns;
 use crate::storage::stream::detect::{DetectedParser, Format};
 use crate::storage::stream::{Source, SourceKind};
@@ -226,13 +228,14 @@ impl TableWriter {
                 return Err(IngestError::InvalidSchema(why));
             }
             if let Layout::Tiered(tier) = &options.layout {
-                if let Some(key) = tier
-                    .sort_key
-                    .iter()
-                    .find(|k| !schema.iter().any(|s| s.name == **k))
-                {
+                let sortable = |k: &String| {
+                    schema
+                        .iter()
+                        .any(|s| s.name == *k && s.column_type != ColumnType::MapUtf8)
+                };
+                if let Some(key) = tier.sort_key.iter().find(|k| !sortable(k)) {
                     return Err(IngestError::InvalidSchema(format!(
-                        "sort key {key} is not a column"
+                        "sort key {key} is not a column that sorts (a MAP does not)"
                     )));
                 }
             }
@@ -352,6 +355,7 @@ impl TableWriter {
         if let Some(why) = check_row(schema, &row) {
             return Err(IngestError::InvalidRecord(why));
         }
+        let row = join_repeated_keys(row);
         let body = encode_row(&row)
             .ok_or_else(|| IngestError::InvalidRecord("a value is over 4 GiB".to_string()))?;
         self.append_record(&body, ack, |head, lsn, observed| {

@@ -24,6 +24,7 @@ fn every_type() -> Vec<ColumnType> {
             scale: 10,
         },
         ColumnType::FixedLenByteArray(16),
+        ColumnType::MapUtf8,
     ]
 }
 
@@ -57,6 +58,11 @@ fn rows_round_trip_through_the_wal_encoding() {
         RecordValue::Bytes(vec![0xff, 0x00]),
         RecordValue::Bytes(Vec::new()),
         RecordValue::Decimal(-(10i128.pow(38) - 1)),
+        RecordValue::Map(Vec::new()),
+        RecordValue::Map(vec![
+            ("é".to_string(), None),
+            ("k".to_string(), Some(String::new())),
+        ]),
     ];
     let bytes = encode_row(&row).unwrap();
     assert_eq!(decode_row(&bytes), Some(row));
@@ -210,4 +216,73 @@ fn concat_gather_and_compare() {
     let d = ColumnValues::Double(vec![Some(-0.0), Some(f64::NAN), Some(0.0)]);
     assert!(compare_rows(&d, 0, 2).is_lt(), "total order: -0.0 < 0.0");
     assert!(compare_rows(&d, 2, 1).is_lt(), "NaN last");
+}
+
+fn entries(e: &[(&str, Option<&str>)]) -> Vec<(String, Option<String>)> {
+    e.iter()
+        .map(|(k, v)| (k.to_string(), v.map(str::to_string)))
+        .collect()
+}
+
+/// #621: a repeated key's values join in order under its first position:
+/// ", " (the HTTP list separator), a newline for Set-Cookie (any case);
+/// NULLs are left out; an all-NULL key stays NULL.
+#[test]
+fn repeated_map_keys_are_joined() {
+    let row = vec![
+        RecordValue::Int(1),
+        RecordValue::Map(entries(&[
+            ("X-Forwarded-For", Some("10.0.0.1")),
+            ("Host", Some("a")),
+            ("X-Forwarded-For", None),
+            ("X-Forwarded-For", Some("10.0.0.2")),
+            ("set-cookie", Some("a=1; Path=/")),
+            ("set-cookie", Some("b=2, c")),
+            ("n", None),
+            ("n", None),
+            ("late", None),
+            ("late", Some("x")),
+            ("x-forwarded-for", Some("other case")),
+        ])),
+    ];
+    assert_eq!(
+        join_repeated_keys(row),
+        [
+            RecordValue::Int(1),
+            RecordValue::Map(entries(&[
+                ("X-Forwarded-For", Some("10.0.0.1, 10.0.0.2")),
+                ("Host", Some("a")),
+                ("set-cookie", Some("a=1; Path=/\nb=2, c")),
+                ("n", None),
+                ("late", Some("x")),
+                // Keys compare exactly, as a MAP's do.
+                ("x-forwarded-for", Some("other case")),
+            ])),
+        ]
+    );
+}
+
+#[test]
+fn a_map_column_takes_only_a_map() {
+    let fits = |v: RecordValue| check_row(&[spec("h", ColumnType::MapUtf8, true)], &[v]).is_none();
+    assert!(fits(RecordValue::Map(Vec::new())));
+    assert!(fits(RecordValue::Null));
+    assert!(!fits(RecordValue::Str("{}".into())));
+    // A map value reads back as the engine's map.
+    let mut page = RowPage::new(Arc::from(
+        vec![spec("h", ColumnType::MapUtf8, true)].as_slice(),
+    ));
+    page.push(1, vec![RecordValue::Map(entries(&[("a", None)]))]);
+    page.push(2, vec![RecordValue::Null]);
+    assert_eq!(
+        page.engine_column("h").unwrap().unwrap(),
+        [Value::Map(Arc::new(entries(&[("a", None)]))), Value::Null]
+    );
+    // Truncated map bytes are not a row.
+    let bytes = encode_row(&[RecordValue::Map(entries(&[("k", Some("v"))]))]).unwrap();
+    assert_eq!(decode_row(&bytes[..bytes.len() - 1]), None);
+    let mut bad_value_tag = bytes.clone();
+    let tag_at = bytes.len() - 6;
+    bad_value_tag[tag_at] = 99;
+    assert_eq!(decode_row(&bad_value_tag), None);
 }

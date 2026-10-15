@@ -427,12 +427,13 @@ pub(crate) fn merge_day(
             for spec in &specs {
                 let leaf = leaves.iter().find(|(name, _, _)| *name == spec.name);
                 if schema.is_some() {
-                    // A record table's file has every column, as declared.
-                    let (_, index, _) = leaf.ok_or_else(|| {
+                    // A record table's file has every column, as declared
+                    // (a MAP is a field of two leaves).
+                    let field = fields.iter().find(|f| f.name == spec.name).ok_or_else(|| {
                         corrupt(&entry.path, format!("has no column {}", spec.name))
                     })?;
                     columns.push(
-                        read_column(&rg, *index, spec.column_type)
+                        read_column(&rg, field, spec.column_type)
                             .map_err(|e| corrupt(&entry.path, e.to_string()))?,
                     );
                     continue;

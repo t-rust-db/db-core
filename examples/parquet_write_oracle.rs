@@ -847,6 +847,7 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
         ColumnSpec::new("ip", ColumnType::FixedLenByteArray(16), true),
         ColumnSpec::new("memo", ColumnType::Binary, true),
         ColumnSpec::new("score", ColumnType::Double, true),
+        ColumnSpec::new("headers", ColumnType::MapUtf8, true),
     ];
     let start = 20_737 * DAY; // 2026-10-11
     NOW.store(start, std::sync::atomic::Ordering::SeqCst);
@@ -871,7 +872,7 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
         ip[11] = 0xff;
         ip[12..].copy_from_slice(&[10, 0, (i / 256) as u8, i as u8]);
         // Ids above i64::MAX, amounts both signs, some NULLs.
-        let row = vec![
+        let mut row = vec![
             RecordValue::UInt(u64::MAX - i * 7_919),
             RecordValue::Str(format!("NL{:02}BANK{:04}", i % 13, i % 97)),
             RecordValue::Decimal((i as i128 - 1_500) * 1_234_567),
@@ -892,8 +893,14 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
             } else {
                 RecordValue::Float(i as f64 * 0.25 - 100.0)
             },
+            RecordValue::Null,
         ];
-        let json: Vec<String> = row.iter().map(record_json).collect();
+        let (headers, stored) = record_headers(i);
+        let mut json: Vec<String> = row.iter().map(record_json).collect();
+        if let (Some(last), Some(slot)) = (row.last_mut(), json.last_mut()) {
+            *last = headers;
+            *slot = record_json(&stored);
+        }
         writer
             .append_row(row, Ack::Memory)
             .map_err(|e| e.to_string())?;
@@ -944,8 +951,49 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Row `i`'s `headers` map as appended, and as the table stores it (a
+/// repeated key's values joined, #621): NULL, empty, 1, 3 and 100 entries,
+/// a NULL value, non-ASCII keys, a repeated `X-Forwarded-For`.
+fn record_headers(i: u64) -> (RecordValue, RecordValue) {
+    let map = |e: &[(&str, Option<&str>)]| {
+        RecordValue::Map(
+            e.iter()
+                .map(|(k, v)| (k.to_string(), v.map(str::to_string)))
+                .collect(),
+        )
+    };
+    let same = |v: RecordValue| (v.clone(), v);
+    match i % 7 {
+        0 => same(RecordValue::Null),
+        1 => same(map(&[])),
+        2 => same(map(&[("User-Agent", Some("curl/8"))])),
+        3 => same(map(&[
+            ("Accept", None),
+            ("héader", Some("välue")),
+            ("ключ", Some("значение")),
+        ])),
+        4 => same(RecordValue::Map(
+            (0..100)
+                .map(|k| (format!("h{k:03}"), Some(format!("{}", k * i))))
+                .collect(),
+        )),
+        5 => (
+            map(&[
+                ("X-Forwarded-For", Some("10.0.0.1")),
+                ("Host", Some("a")),
+                ("X-Forwarded-For", Some("10.0.0.2")),
+            ]),
+            map(&[
+                ("X-Forwarded-For", Some("10.0.0.1, 10.0.0.2")),
+                ("Host", Some("a")),
+            ]),
+        ),
+        _ => same(map(&[("Host", Some(&format!("h{i}")))])),
+    }
+}
+
 /// A record value as the checker's JSON: integers and unscaled decimals
-/// as numbers, bytes as lowercase hex.
+/// as numbers, bytes as lowercase hex, a map as `[key, value]` pairs.
 fn record_json(v: &RecordValue) -> String {
     let mut out = String::new();
     match v {
@@ -959,6 +1007,23 @@ fn record_json(v: &RecordValue) -> String {
         RecordValue::Bytes(b) => {
             let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
             json_string(&mut out, &hex);
+        }
+        RecordValue::Map(entries) => {
+            out.push('[');
+            for (n, (k, v)) in entries.iter().enumerate() {
+                if n > 0 {
+                    out.push(',');
+                }
+                out.push('[');
+                json_string(&mut out, k);
+                out.push(',');
+                match v {
+                    Some(v) => json_string(&mut out, v),
+                    None => out.push_str("null"),
+                }
+                out.push(']');
+            }
+            out.push(']');
         }
     }
     out
