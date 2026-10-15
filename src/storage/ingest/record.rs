@@ -13,6 +13,14 @@
 //! column engine decodes the flushed Parquet into (an unsigned value as an
 //! integer, a decimal as a float, bytes as lowercase hex), so a record
 //! reads the same before and after its flush.
+//!
+//! A `MAP<UTF8, UTF8>` column (#621) takes [`RecordValue::Map`]. A map whose
+//! key repeats (HTTP repeats `Set-Cookie`, `X-Forwarded-For`...) is stored
+//! with the repeated values joined, in order, under the key's first
+//! position: with `", "` (the HTTP list separator), or a newline for
+//! `Set-Cookie`, whose values may contain commas. NULL values are left out
+//! of the join; a key whose values are all NULL keeps a NULL value. Keys
+//! are compared exactly, as a MAP's are.
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -21,7 +29,7 @@ use std::sync::Arc;
 use crate::storage::column::hex;
 use crate::storage::parquet::decimal::Decimal;
 use crate::storage::parquet::writer::{ColumnSpec, ColumnType, ColumnValues};
-use crate::storage::parquet::{FileError, RowGroupReader};
+use crate::storage::parquet::{Field, FileError, RowGroupReader};
 use crate::vm::batch::Value;
 
 /// One value of a record row.
@@ -46,6 +54,9 @@ pub enum RecordValue {
     /// A DECIMAL's unscaled value (`12.34` at scale 2 is `1234`), within the
     /// column's precision.
     Decimal(i128),
+    /// A MAP's `(key, value)` entries, in order; a repeated key's values
+    /// are joined (see the [module docs](self)).
+    Map(Vec<(String, Option<String>)>),
 }
 
 /// The name a column type has in the manifest.
@@ -66,6 +77,7 @@ pub fn type_name(t: ColumnType) -> String {
         ColumnType::UInt64 => "uint64".into(),
         ColumnType::Decimal { precision, scale } => format!("decimal({precision},{scale})"),
         ColumnType::FixedLenByteArray(len) => format!("fixed({len})"),
+        ColumnType::MapUtf8 => "map(utf8,utf8)".into(),
     }
 }
 
@@ -85,6 +97,7 @@ pub fn type_from_name(name: &str) -> Option<ColumnType> {
         ColumnType::UInt16,
         ColumnType::UInt32,
         ColumnType::UInt64,
+        ColumnType::MapUtf8,
     ];
     if let Some(t) = simple.into_iter().find(|t| type_name(*t) == name) {
         return Some(t);
@@ -161,6 +174,7 @@ pub(crate) fn check_row(schema: &[ColumnSpec], row: &[RecordValue]) -> Option<St
             (ColumnType::FixedLenByteArray(len), RecordValue::Bytes(b)) => {
                 b.len() == usize::from(len)
             }
+            (ColumnType::MapUtf8, RecordValue::Map(_)) => true,
             _ => false,
         };
         (!fits).then(|| {
@@ -200,6 +214,7 @@ const TAG_FLOAT: u8 = 4;
 const TAG_STR: u8 = 5;
 const TAG_BYTES: u8 = 6;
 const TAG_DECIMAL: u8 = 7;
+const TAG_MAP: u8 = 8;
 
 /// A row as WAL bytes: per value a tag byte, then its little-endian bytes
 /// (a string or bytes as a `u32` length and the bytes). Self-describing,
@@ -234,6 +249,22 @@ pub(crate) fn encode_row(row: &[RecordValue]) -> Option<Vec<u8>> {
             RecordValue::Decimal(d) => {
                 out.push(TAG_DECIMAL);
                 out.extend_from_slice(&d.to_le_bytes());
+            }
+            // The entry count, then per entry the key and its value (a
+            // NULL tag, or a string tag and the string).
+            RecordValue::Map(entries) => {
+                out.push(TAG_MAP);
+                out.extend_from_slice(&u32::try_from(entries.len()).ok()?.to_le_bytes());
+                for (key, value) in entries {
+                    length_prefixed(&mut out, key.as_bytes())?;
+                    match value {
+                        None => out.push(TAG_NULL),
+                        Some(v) => {
+                            out.push(TAG_STR);
+                            length_prefixed(&mut out, v.as_bytes())?;
+                        }
+                    }
+                }
             }
         }
     }
@@ -274,6 +305,25 @@ pub(crate) fn decode_row(bytes: &[u8]) -> Option<Vec<RecordValue>> {
                 }
             }
             TAG_DECIMAL => RecordValue::Decimal(i128::from_le_bytes(take(16)?.try_into().ok()?)),
+            TAG_MAP => {
+                let count = u32::from_le_bytes(take(4)?.try_into().ok()?);
+                let mut entries = Vec::new();
+                for _ in 0..count {
+                    let len = u32::from_le_bytes(take(4)?.try_into().ok()?);
+                    let key = String::from_utf8(take(usize::try_from(len).ok()?)?.to_vec()).ok()?;
+                    let value = match take(1)?.first().copied()? {
+                        TAG_NULL => None,
+                        TAG_STR => {
+                            let len = u32::from_le_bytes(take(4)?.try_into().ok()?);
+                            let bytes = take(usize::try_from(len).ok()?)?.to_vec();
+                            Some(String::from_utf8(bytes).ok()?)
+                        }
+                        _ => return None,
+                    };
+                    entries.push((key, value));
+                }
+                RecordValue::Map(entries)
+            }
             _ => return None,
         });
     }
@@ -351,6 +401,40 @@ impl RowPage {
     }
 }
 
+/// `row` with every map's repeated keys joined (see the [module docs](self)).
+pub(crate) fn join_repeated_keys(row: Vec<RecordValue>) -> Vec<RecordValue> {
+    row.into_iter()
+        .map(|value| match value {
+            RecordValue::Map(entries) => RecordValue::Map(join_entries(entries)),
+            other => other,
+        })
+        .collect()
+}
+
+fn join_entries(entries: Vec<(String, Option<String>)>) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = Vec::with_capacity(entries.len());
+    for (key, value) in entries {
+        let Some((_, joined)) = out.iter_mut().find(|(k, _)| *k == key) else {
+            out.push((key, value));
+            continue;
+        };
+        let separator = if key.eq_ignore_ascii_case("set-cookie") {
+            "\n"
+        } else {
+            ", "
+        };
+        match (joined.as_mut(), value) {
+            (Some(acc), Some(v)) => {
+                acc.push_str(separator);
+                acc.push_str(&v);
+            }
+            (None, Some(v)) => *joined = Some(v),
+            (_, None) => {}
+        }
+    }
+    out
+}
+
 /// Appends `value` to `column`; a value of another type (which
 /// [`check_row`] refuses) is appended as NULL.
 fn push_value(column: &mut ColumnValues, value: RecordValue) {
@@ -395,6 +479,10 @@ fn push_value(column: &mut ColumnValues, value: RecordValue) {
             V::Decimal(d) => Some(d),
             _ => None,
         }),
+        ColumnValues::Map(c) => c.push(match value {
+            V::Map(entries) => Some(entries),
+            _ => None,
+        }),
     }
 }
 
@@ -435,6 +523,7 @@ pub(crate) fn engine_values(
                     .map_err(|_| FileError::UnsignedOutOfRange(*u).to_string()),
             })
             .collect::<Result<_, _>>()?,
+        ColumnValues::Map(v) => map(v, |entries| Value::Map(Arc::new(entries.clone()))),
         ColumnValues::Decimal(v) => {
             let scale = match column_type {
                 ColumnType::Decimal { scale, .. } => i32::from(scale),
@@ -474,6 +563,7 @@ pub(crate) fn gather(values: &ColumnValues, order: &[usize]) -> ColumnValues {
         ColumnValues::UInt32(v) => ColumnValues::UInt32(pick(v, order)),
         ColumnValues::UInt64(v) => ColumnValues::UInt64(pick(v, order)),
         ColumnValues::Decimal(v) => ColumnValues::Decimal(pick(v, order)),
+        ColumnValues::Map(v) => ColumnValues::Map(pick(v, order)),
     }
 }
 
@@ -514,16 +604,18 @@ pub(crate) fn compare_rows(values: &ColumnValues, a: usize, b: usize) -> Orderin
         ColumnValues::UInt32(v) => by(v, a, b, Ord::cmp),
         ColumnValues::UInt64(v) => by(v, a, b, Ord::cmp),
         ColumnValues::Decimal(v) => by(v, a, b, Ord::cmp),
+        ColumnValues::Map(v) => by(v, a, b, Ord::cmp),
     }
 }
 
-/// One column chunk of a record table's file, read back as the
+/// Field `field` of a record table's file, read back as the
 /// `column_type` it was written as (a day merge's input).
 pub(crate) fn read_column(
     rg: &RowGroupReader<'_, '_>,
-    index: usize,
+    field: &Field,
     column_type: ColumnType,
 ) -> Result<ColumnValues, FileError> {
+    let index = field.leaves.start;
     fn bits32<T: TryFrom<u32>>(v: Vec<Option<i32>>) -> Vec<Option<T>> {
         v.into_iter()
             .map(|x| x.and_then(|x| T::try_from(x.cast_unsigned()).ok()))
@@ -551,6 +643,7 @@ pub(crate) fn read_column(
                 .map(|x| x.map(i64::cast_unsigned))
                 .collect(),
         ),
+        ColumnType::MapUtf8 => ColumnValues::Map(rg.read_map_utf8_column(field)?),
         ColumnType::Decimal { .. } => ColumnValues::Decimal(
             rg.read_decimal_column(index)?
                 .into_iter()

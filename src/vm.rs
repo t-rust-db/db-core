@@ -60,6 +60,8 @@ pub mod engine;
 #[cfg(feature = "vm-batch")]
 pub(crate) mod int_key_table;
 pub mod join;
+#[cfg(feature = "vm-batch")]
+pub(crate) mod map_fns;
 #[cfg(feature = "vm-row")]
 pub mod row;
 #[cfg(feature = "vm-stream")]

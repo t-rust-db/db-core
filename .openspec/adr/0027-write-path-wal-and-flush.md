@@ -356,6 +356,35 @@ in with.
   as an integer, and above `i64::MAX` an error; a DECIMAL as a float; bytes
   as lowercase hex), so a row reads the same before and after its flush.
 
+### MAP columns (#621)
+
+**Amendment (#621).** A record table column may be `MAP<UTF8, UTF8>`
+(manifest type `map(utf8,utf8)`), for key/value collections whose keys
+are not known in advance (HTTP headers, cookies, query parameters).
+
+- **Layout.** Exactly what DuckDB writes for `MAP(VARCHAR, VARCHAR)`: a
+  `MAP` group, a repeated `key_value` group, a required UTF8 `key` and an
+  optional UTF8 `value`, written as two column chunks with repetition and
+  definition levels and dictionary-encoded like any string column. DuckDB
+  and pyarrow read it as a map; `make check-parquet-write-oracle` checks
+  empty, NULL and 100-entry maps, NULL values and non-ASCII keys.
+- **Repeated keys.** DuckDB refuses a map whose key repeats, and HTTP
+  repeats some headers. `append_row` joins a repeated key's values, in
+  order, under its first position: with `", "` (the HTTP list
+  separator), or a newline for `Set-Cookie`, whose values may contain
+  commas. NULL values are left out of the join, and a key whose values are
+  all NULL keeps a NULL value. Keys compare exactly, as a MAP's do. The
+  rejected alternative, `MAP<UTF8, LIST<UTF8>>`, keeps every value but
+  makes every lookup return a list.
+- **Not a sort key.** A tiered table's `sort_key` cannot name a MAP.
+- **Reads.** The column engine reads a MAP as a map value, printed as
+  DuckDB prints it (`{a=1, b=NULL}`). `m['k']` (column dialect) and
+  `map_extract_value(m, k)` give the value or NULL, `element_at(m, k)`
+  DuckDB's one-element list as text, `map_keys(m)` and `cardinality(m)` as
+  in DuckDB, and `map_get_ci(m, k)` looks a key up case-insensitively (HTTP
+  header names), which DuckDB has no function for. A MAP's leaf statistics
+  never prune.
+
 ## Structure
 
 Feature split and client packaging: ADR 0029.

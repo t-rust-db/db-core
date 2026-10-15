@@ -255,6 +255,8 @@ pub fn physical_type(t: ColumnType) -> PhysicalType {
             DecimalStorage::Fixed16 => PhysicalType::FixedLenByteArray,
         },
         ColumnType::FixedLenByteArray(_) => PhysicalType::FixedLenByteArray,
+        // A map's leaves; the group has no physical type of its own.
+        ColumnType::MapUtf8 => PhysicalType::ByteArray,
     }
 }
 

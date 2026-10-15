@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::storage::ingest::layout::{TierOptions, DAY_NS, HOUR_NS};
-use crate::storage::ingest::record::{read_column, RecordValue};
+use crate::storage::ingest::record::{join_repeated_keys, read_column, RecordValue};
 use crate::storage::ingest::PageBody;
 use crate::storage::parquet::footer::ConvertedType;
 use crate::storage::parquet::writer::{ColumnType, ColumnValues};
@@ -62,6 +62,7 @@ fn schema() -> Vec<ColumnSpec> {
             true,
         ),
         ColumnSpec::new("ip", ColumnType::FixedLenByteArray(16), true),
+        ColumnSpec::new("headers", ColumnType::MapUtf8, true),
     ]
 }
 
@@ -109,6 +110,17 @@ fn row(i: u64) -> Vec<RecordValue> {
                     .collect(),
             )
         },
+        match i % 4 {
+            0 => RecordValue::Null,
+            1 => RecordValue::Map(Vec::new()),
+            // A repeated key, joined at append.
+            2 => RecordValue::Map(vec![
+                ("Via".to_string(), Some(format!("p{i}"))),
+                ("Accept".to_string(), None),
+                ("Via".to_string(), Some("q".to_string())),
+            ]),
+            _ => RecordValue::Map(vec![("héader".to_string(), Some(i.to_string()))]),
+        },
     ]
 }
 
@@ -116,7 +128,7 @@ fn append(w: &mut TableWriter, range: std::ops::Range<u64>) -> Vec<String> {
     range
         .map(|i| {
             w.append_row(row(i), Ack::Durable).unwrap();
-            render_row(&row(i))
+            render_row(&join_repeated_keys(row(i)))
         })
         .collect()
 }
@@ -140,6 +152,7 @@ fn value_at(values: &ColumnValues, i: usize) -> RecordValue {
             at(v, i).map(RecordValue::Bytes)
         }
         ColumnValues::Decimal(v) => at(v, i).map(RecordValue::Decimal),
+        ColumnValues::Map(v) => at(v, i).map(RecordValue::Map),
         other => panic!("not in the test schema: {other:?}"),
     };
     v.unwrap_or(RecordValue::Null)
@@ -163,7 +176,7 @@ fn all_rows(w: &TableWriter) -> Vec<String> {
             let columns: Vec<ColumnValues> = schema
                 .iter()
                 .enumerate()
-                .map(|(i, spec)| read_column(&rg, i, spec.column_type).unwrap())
+                .map(|(i, spec)| read_column(&rg, &file.fields()[i], spec.column_type).unwrap())
                 .collect();
             add(&columns, usize::try_from(rg.num_rows()).unwrap());
         }
@@ -200,7 +213,11 @@ fn assert_files_have_the_schema(w: &TableWriter) {
                 "kind",
                 "value",
                 "amount",
-                "ip"
+                "ip",
+                "headers",
+                "key_value",
+                "key",
+                "value"
             ],
             "{}",
             file.path
@@ -211,6 +228,8 @@ fn assert_files_have_the_schema(w: &TableWriter) {
         assert_eq!(leaves[5].converted_type, Some(ConvertedType::Decimal));
         assert_eq!((leaves[5].precision, leaves[5].scale), (Some(18), Some(2)));
         assert_eq!(leaves[6].type_length, Some(16));
+        // The map is its group, key_value group and two leaves.
+        assert_eq!(leaves[7].converted_type, Some(ConvertedType::Other(1)));
     }
 }
 
@@ -353,7 +372,8 @@ fn rows_that_do_not_match_the_schema_are_refused() {
         r
     };
     let bad = [
-        (row(1)[..6].to_vec(), "6 values for 7 columns"),
+        (row(1)[..6].to_vec(), "6 values for 8 columns"),
+        (with(7, RecordValue::Str("x".into())), "column 'headers'"),
         (
             with(0, RecordValue::Null),
             "column 'session_id' (uint64, required)",
@@ -457,16 +477,24 @@ fn invalid_schemas_and_sort_keys_are_refused() {
         assert!(err.to_string().contains(why), "{err} lacks {why}");
         assert!(!t.0.join("manifest.json").exists(), "nothing created");
     }
-    let t = TempTable::new();
-    let mut options = tiered();
-    if let Layout::Tiered(tier) = &mut options.layout {
-        tier.sort_key = vec!["nope".to_string()];
+    for (key, why) in [
+        (
+            "nope",
+            "sort key nope is not a column that sorts (a MAP does not)",
+        ),
+        (
+            "headers",
+            "sort key headers is not a column that sorts (a MAP does not)",
+        ),
+    ] {
+        let t = TempTable::new();
+        let mut options = tiered();
+        if let Layout::Tiered(tier) = &mut options.layout {
+            tier.sort_key = vec![key.to_string()];
+        }
+        let err = TableWriter::open(&t.0, options).unwrap_err();
+        assert_eq!(err.to_string(), format!("invalid record schema: {why}"));
     }
-    let err = TableWriter::open(&t.0, options).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "invalid record schema: sort key nope is not a column"
-    );
 }
 
 #[allow(non_snake_case)]

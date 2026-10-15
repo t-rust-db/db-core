@@ -2064,10 +2064,12 @@ pub fn db_core::parser::row::error::parse_drop_index(&str) -> db_core::parser::r
 pub fn db_core::parser::row::error::parse_drop_table(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::DropTable>
 pub fn db_core::parser::row::error::parse_drop_view(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::DropView>
 pub fn db_core::parser::row::error::parse_explain(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Explain>
+pub fn db_core::parser::row::error::parse_explain_with_subscripts(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Explain>
 pub fn db_core::parser::row::error::parse_insert(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Insert>
 pub fn db_core::parser::row::error::parse_pragma(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Pragma>
 pub fn db_core::parser::row::error::parse_rollback(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Rollback>
 pub fn db_core::parser::row::error::parse_select(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Select>
+pub fn db_core::parser::row::error::parse_select_with_subscripts(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Select>
 pub fn db_core::parser::row::error::parse_update(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Update>
 pub mod db_core::parser::row::grammar
 pub struct db_core::parser::row::grammar::Parser
@@ -2267,6 +2269,7 @@ pub db_core::parser::row::tokenizer::TokenKind::Gt
 pub db_core::parser::row::tokenizer::TokenKind::Identifier(alloc::string::String)
 pub db_core::parser::row::tokenizer::TokenKind::Integer(i64)
 pub db_core::parser::row::tokenizer::TokenKind::Keyword(db_core::parser::row::tokenizer::Keyword)
+pub db_core::parser::row::tokenizer::TokenKind::LBracket
 pub db_core::parser::row::tokenizer::TokenKind::LParen
 pub db_core::parser::row::tokenizer::TokenKind::Le
 pub db_core::parser::row::tokenizer::TokenKind::Lt
@@ -2276,6 +2279,7 @@ pub db_core::parser::row::tokenizer::TokenKind::Null
 pub db_core::parser::row::tokenizer::TokenKind::Param(alloc::boxed::Box<db_core::parser::row::tokenizer::Param>)
 pub db_core::parser::row::tokenizer::TokenKind::Percent
 pub db_core::parser::row::tokenizer::TokenKind::Plus
+pub db_core::parser::row::tokenizer::TokenKind::RBracket
 pub db_core::parser::row::tokenizer::TokenKind::RParen
 pub db_core::parser::row::tokenizer::TokenKind::Semicolon
 pub db_core::parser::row::tokenizer::TokenKind::Shl
@@ -2306,6 +2310,7 @@ impl db_core::parser::row::tokenizer::Tokenizer
 pub fn db_core::parser::row::tokenizer::Tokenizer::new() -> Self
 pub fn db_core::parser::row::tokenizer::Tokenizer::next_token(&mut self, &str) -> db_core::parser::row::tokenizer::Token
 pub fn db_core::parser::row::tokenizer::Tokenizer::tokenize(&str) -> alloc::vec::Vec<db_core::parser::row::tokenizer::Token>
+pub fn db_core::parser::row::tokenizer::Tokenizer::tokenize_with_subscripts(&str) -> alloc::vec::Vec<db_core::parser::row::tokenizer::Token>
 impl core::default::Default for db_core::parser::row::tokenizer::Tokenizer
 pub fn db_core::parser::row::tokenizer::Tokenizer::default() -> Self
 pub fn db_core::parser::row::tokenizer::ends_with_semicolon(&str) -> bool
@@ -2339,10 +2344,12 @@ pub fn db_core::parser::row::parse_drop_index(&str) -> db_core::parser::row::err
 pub fn db_core::parser::row::parse_drop_table(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::DropTable>
 pub fn db_core::parser::row::parse_drop_view(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::DropView>
 pub fn db_core::parser::row::parse_explain(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Explain>
+pub fn db_core::parser::row::parse_explain_with_subscripts(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Explain>
 pub fn db_core::parser::row::parse_insert(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Insert>
 pub fn db_core::parser::row::parse_pragma(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Pragma>
 pub fn db_core::parser::row::parse_rollback(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Rollback>
 pub fn db_core::parser::row::parse_select(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Select>
+pub fn db_core::parser::row::parse_select_with_subscripts(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Select>
 pub fn db_core::parser::row::parse_update(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Update>
 pub fn db_core::parser::row::split_statements(&str) -> alloc::vec::Vec<alloc::string::String>
 pub enum db_core::parser::Explain
@@ -2886,6 +2893,7 @@ pub db_core::storage::column::parquet::parquet_file::FileError::MissingDecimalSc
 pub db_core::storage::column::parquet::parquet_file::FileError::MissingDictionaryPage
 pub db_core::storage::column::parquet::parquet_file::FileError::MissingTypeLength
 pub db_core::storage::column::parquet::parquet_file::FileError::Nested(db_core::storage::parquet::nested::NestedError)
+pub db_core::storage::column::parquet::parquet_file::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::column::parquet::parquet_file::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::column::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
@@ -2910,9 +2918,23 @@ impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::column::parquet::parquet_file::Field
+pub db_core::storage::column::parquet::parquet_file::Field::element: db_core::storage::parquet::footer::SchemaElement
+pub db_core::storage::column::parquet::parquet_file::Field::leaves: core::ops::range::Range<usize>
+pub db_core::storage::column::parquet::parquet_file::Field::name: alloc::string::String
+pub db_core::storage::column::parquet::parquet_file::Field::nested: bool
+impl core::clone::Clone for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::parquet_file::Field
 pub struct db_core::storage::column::parquet::parquet_file::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -2923,6 +2945,7 @@ pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&sel
 pub struct db_core::storage::column::parquet::parquet_file::RowGroupReader<'a, 'm>
 impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
@@ -2942,6 +2965,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_map_utf8_column(&self, &db_core::storage::parquet::parquet_file::Field) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::parquet_file::MapEntries>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
@@ -2950,6 +2974,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub type db_core::storage::column::parquet::parquet_file::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
+pub type db_core::storage::column::parquet::parquet_file::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
 pub type db_core::storage::column::parquet::parquet_file::Result<T> = core::result::Result<T, db_core::storage::parquet::parquet_file::FileError>
 pub mod db_core::storage::column::parquet::reader
 pub enum db_core::storage::column::parquet::reader::LeafScalar
@@ -3102,6 +3127,7 @@ pub db_core::storage::column::parquet::writer::ColumnType::FixedLenByteArray(u16
 pub db_core::storage::column::parquet::writer::ColumnType::Float
 pub db_core::storage::column::parquet::writer::ColumnType::Int32
 pub db_core::storage::column::parquet::writer::ColumnType::Int64
+pub db_core::storage::column::parquet::writer::ColumnType::MapUtf8
 pub db_core::storage::column::parquet::writer::ColumnType::TimestampMicros
 pub db_core::storage::column::parquet::writer::ColumnType::TimestampNanos
 pub db_core::storage::column::parquet::writer::ColumnType::UInt16
@@ -3127,6 +3153,7 @@ pub db_core::storage::column::parquet::writer::ColumnValues::FixedLenByteArray(a
 pub db_core::storage::column::parquet::writer::ColumnValues::Float(alloc::vec::Vec<core::option::Option<f32>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::Int32(alloc::vec::Vec<core::option::Option<i32>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::Int64(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::column::parquet::writer::ColumnValues::Map(alloc::vec::Vec<core::option::Option<db_core::storage::parquet::parquet_file::MapEntries>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::TimestampMicros(alloc::vec::Vec<core::option::Option<i64>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::TimestampNanos(alloc::vec::Vec<core::option::Option<i64>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::UInt16(alloc::vec::Vec<core::option::Option<u16>>)
@@ -3256,6 +3283,7 @@ pub fn db_core::storage::parquet::writer::WriterOptions::default() -> Self
 impl core::fmt::Debug for db_core::storage::parquet::writer::WriterOptions
 pub fn db_core::storage::parquet::writer::WriterOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::WriterOptions
+pub type db_core::storage::column::parquet::writer::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
 pub enum db_core::storage::column::parquet::FileError
 pub db_core::storage::column::parquet::FileError::ChunkOutOfBounds
 pub db_core::storage::column::parquet::FileError::ColumnIndexOutOfRange(usize)
@@ -3269,6 +3297,7 @@ pub db_core::storage::column::parquet::FileError::MissingDecimalScale
 pub db_core::storage::column::parquet::FileError::MissingDictionaryPage
 pub db_core::storage::column::parquet::FileError::MissingTypeLength
 pub db_core::storage::column::parquet::FileError::Nested(db_core::storage::parquet::nested::NestedError)
+pub db_core::storage::column::parquet::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::column::parquet::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::column::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::parquet::FileError::RowPositionOutOfRange(u32)
@@ -3293,9 +3322,23 @@ impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::column::parquet::Field
+pub db_core::storage::column::parquet::Field::element: db_core::storage::parquet::footer::SchemaElement
+pub db_core::storage::column::parquet::Field::leaves: core::ops::range::Range<usize>
+pub db_core::storage::column::parquet::Field::name: alloc::string::String
+pub db_core::storage::column::parquet::Field::nested: bool
+impl core::clone::Clone for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::parquet_file::Field
 pub struct db_core::storage::column::parquet::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -3306,6 +3349,7 @@ pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&sel
 pub struct db_core::storage::column::parquet::RowGroupReader<'a, 'm>
 impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
@@ -3325,6 +3369,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_map_utf8_column(&self, &db_core::storage::parquet::parquet_file::Field) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::parquet_file::MapEntries>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
@@ -3403,6 +3448,7 @@ pub db_core::storage::column::FileError::MissingDecimalScale
 pub db_core::storage::column::FileError::MissingDictionaryPage
 pub db_core::storage::column::FileError::MissingTypeLength
 pub db_core::storage::column::FileError::Nested(db_core::storage::parquet::nested::NestedError)
+pub db_core::storage::column::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::column::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::column::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::FileError::RowPositionOutOfRange(u32)
@@ -3444,7 +3490,9 @@ pub type db_core::storage::column::memory::MemoryVfs::File = db_core::storage::c
 pub fn db_core::storage::column::memory::MemoryVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub struct db_core::storage::column::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -3461,6 +3509,7 @@ pub fn db_core::storage::column::posix::PosixVfs::open(&self, &std::path::Path) 
 pub struct db_core::storage::column::RowGroupReader<'a, 'm>
 impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
@@ -3480,6 +3529,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_map_utf8_column(&self, &db_core::storage::parquet::parquet_file::Field) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::parquet_file::MapEntries>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
@@ -3680,6 +3730,7 @@ pub db_core::storage::ingest::record::RecordValue::Bytes(alloc::vec::Vec<u8>)
 pub db_core::storage::ingest::record::RecordValue::Decimal(i128)
 pub db_core::storage::ingest::record::RecordValue::Float(f64)
 pub db_core::storage::ingest::record::RecordValue::Int(i64)
+pub db_core::storage::ingest::record::RecordValue::Map(alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>)
 pub db_core::storage::ingest::record::RecordValue::Null
 pub db_core::storage::ingest::record::RecordValue::Str(alloc::string::String)
 pub db_core::storage::ingest::record::RecordValue::UInt(u64)
@@ -3980,6 +4031,7 @@ pub db_core::storage::ingest::RecordValue::Bytes(alloc::vec::Vec<u8>)
 pub db_core::storage::ingest::RecordValue::Decimal(i128)
 pub db_core::storage::ingest::RecordValue::Float(f64)
 pub db_core::storage::ingest::RecordValue::Int(i64)
+pub db_core::storage::ingest::RecordValue::Map(alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>)
 pub db_core::storage::ingest::RecordValue::Null
 pub db_core::storage::ingest::RecordValue::Str(alloc::string::String)
 pub db_core::storage::ingest::RecordValue::UInt(u64)
@@ -4569,6 +4621,7 @@ pub db_core::storage::parquet::parquet_file::FileError::MissingDecimalScale
 pub db_core::storage::parquet::parquet_file::FileError::MissingDictionaryPage
 pub db_core::storage::parquet::parquet_file::FileError::MissingTypeLength
 pub db_core::storage::parquet::parquet_file::FileError::Nested(db_core::storage::parquet::nested::NestedError)
+pub db_core::storage::parquet::parquet_file::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::parquet::parquet_file::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
@@ -4593,9 +4646,23 @@ impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::parquet::parquet_file::Field
+pub db_core::storage::parquet::parquet_file::Field::element: db_core::storage::parquet::footer::SchemaElement
+pub db_core::storage::parquet::parquet_file::Field::leaves: core::ops::range::Range<usize>
+pub db_core::storage::parquet::parquet_file::Field::name: alloc::string::String
+pub db_core::storage::parquet::parquet_file::Field::nested: bool
+impl core::clone::Clone for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::parquet_file::Field
 pub struct db_core::storage::parquet::parquet_file::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -4606,6 +4673,7 @@ pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&sel
 pub struct db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
@@ -4625,6 +4693,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_map_utf8_column(&self, &db_core::storage::parquet::parquet_file::Field) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::parquet_file::MapEntries>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
@@ -4633,6 +4702,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub type db_core::storage::parquet::parquet_file::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
+pub type db_core::storage::parquet::parquet_file::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
 pub type db_core::storage::parquet::parquet_file::Result<T> = core::result::Result<T, db_core::storage::parquet::parquet_file::FileError>
 pub mod db_core::storage::parquet::reader
 pub enum db_core::storage::parquet::reader::LeafScalar
@@ -4785,6 +4855,7 @@ pub db_core::storage::parquet::writer::ColumnType::FixedLenByteArray(u16)
 pub db_core::storage::parquet::writer::ColumnType::Float
 pub db_core::storage::parquet::writer::ColumnType::Int32
 pub db_core::storage::parquet::writer::ColumnType::Int64
+pub db_core::storage::parquet::writer::ColumnType::MapUtf8
 pub db_core::storage::parquet::writer::ColumnType::TimestampMicros
 pub db_core::storage::parquet::writer::ColumnType::TimestampNanos
 pub db_core::storage::parquet::writer::ColumnType::UInt16
@@ -4810,6 +4881,7 @@ pub db_core::storage::parquet::writer::ColumnValues::FixedLenByteArray(alloc::ve
 pub db_core::storage::parquet::writer::ColumnValues::Float(alloc::vec::Vec<core::option::Option<f32>>)
 pub db_core::storage::parquet::writer::ColumnValues::Int32(alloc::vec::Vec<core::option::Option<i32>>)
 pub db_core::storage::parquet::writer::ColumnValues::Int64(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::parquet::writer::ColumnValues::Map(alloc::vec::Vec<core::option::Option<db_core::storage::parquet::parquet_file::MapEntries>>)
 pub db_core::storage::parquet::writer::ColumnValues::TimestampMicros(alloc::vec::Vec<core::option::Option<i64>>)
 pub db_core::storage::parquet::writer::ColumnValues::TimestampNanos(alloc::vec::Vec<core::option::Option<i64>>)
 pub db_core::storage::parquet::writer::ColumnValues::UInt16(alloc::vec::Vec<core::option::Option<u16>>)
@@ -4939,6 +5011,7 @@ pub fn db_core::storage::parquet::writer::WriterOptions::default() -> Self
 impl core::fmt::Debug for db_core::storage::parquet::writer::WriterOptions
 pub fn db_core::storage::parquet::writer::WriterOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::WriterOptions
+pub type db_core::storage::parquet::writer::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
 pub enum db_core::storage::parquet::FileError
 pub db_core::storage::parquet::FileError::ChunkOutOfBounds
 pub db_core::storage::parquet::FileError::ColumnIndexOutOfRange(usize)
@@ -4952,6 +5025,7 @@ pub db_core::storage::parquet::FileError::MissingDecimalScale
 pub db_core::storage::parquet::FileError::MissingDictionaryPage
 pub db_core::storage::parquet::FileError::MissingTypeLength
 pub db_core::storage::parquet::FileError::Nested(db_core::storage::parquet::nested::NestedError)
+pub db_core::storage::parquet::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::parquet::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::parquet::FileError::RowPositionOutOfRange(u32)
@@ -4976,9 +5050,23 @@ impl core::fmt::Debug for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::parquet::Field
+pub db_core::storage::parquet::Field::element: db_core::storage::parquet::footer::SchemaElement
+pub db_core::storage::parquet::Field::leaves: core::ops::range::Range<usize>
+pub db_core::storage::parquet::Field::name: alloc::string::String
+pub db_core::storage::parquet::Field::nested: bool
+impl core::clone::Clone for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::parquet_file::Field
+pub fn db_core::storage::parquet::parquet_file::Field::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::parquet_file::Field
 pub struct db_core::storage::parquet::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -4989,6 +5077,7 @@ pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&sel
 pub struct db_core::storage::parquet::RowGroupReader<'a, 'm>
 impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
@@ -5008,6 +5097,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_map_utf8_column(&self, &db_core::storage::parquet::parquet_file::Field) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::parquet_file::MapEntries>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
@@ -7069,6 +7159,7 @@ pub db_core::storage::FileError::MissingDecimalScale
 pub db_core::storage::FileError::MissingDictionaryPage
 pub db_core::storage::FileError::MissingTypeLength
 pub db_core::storage::FileError::Nested(db_core::storage::parquet::nested::NestedError)
+pub db_core::storage::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::FileError::RowPositionOutOfRange(u32)
@@ -7195,7 +7286,9 @@ pub type db_core::storage::column::memory::MemoryVfs::File = db_core::storage::c
 pub fn db_core::storage::column::memory::MemoryVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub struct db_core::storage::ParquetFile<'a>
 impl<'a> db_core::storage::parquet::parquet_file::ParquetFile<'a>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::fields(&self) -> alloc::vec::Vec<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::is_flat(&self) -> bool
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::leaf_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self) -> &db_core::storage::parquet::footer::FileMetaData
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
@@ -7226,6 +7319,7 @@ pub fn db_core::storage::stream::batch::Resource::fmt(&self, &mut core::fmt::For
 pub struct db_core::storage::RowGroupReader<'a, 'm>
 impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
@@ -7245,6 +7339,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int64_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_int96_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::reader::Int96>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_map_utf8_column(&self, &db_core::storage::parquet::parquet_file::Field) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::parquet_file::MapEntries>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_plain_fixed_column_at<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T, &[u32]) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
@@ -7611,6 +7706,7 @@ pub enum db_core::vm::batch::Value
 pub db_core::vm::batch::Value::Bool(bool)
 pub db_core::vm::batch::Value::Float(f64)
 pub db_core::vm::batch::Value::Int(i64)
+pub db_core::vm::batch::Value::Map(alloc::rcs::arc::Arc<db_core::vm::batch::MapEntries>)
 pub db_core::vm::batch::Value::Null
 pub db_core::vm::batch::Value::Str(alloc::borrow::Cow<'static, str>)
 impl db_core::vm::batch::Value
@@ -7864,6 +7960,7 @@ pub fn db_core::vm::batch::run_parallel<S: db_core::vm::batch::Segment>(&[S], &[
 pub fn db_core::vm::batch::run_parallel_streaming<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], impl core::ops::function::FnMut(db_core::vm::batch::Chunk) -> db_core::vm::batch::Result<()>) -> db_core::vm::batch::Result<()>
 pub fn db_core::vm::batch::run_parallel_top_n<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], &db_core::vm::batch::TopN) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub type db_core::vm::batch::Chunk = alloc::vec::Vec<alloc::rcs::arc::Arc<alloc::vec::Vec<db_core::vm::batch::Value>>>
+pub type db_core::vm::batch::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
 pub type db_core::vm::batch::Result<T> = core::result::Result<T, db_core::vm::batch::VmError>
 pub mod db_core::vm::column
 pub enum db_core::vm::column::Column

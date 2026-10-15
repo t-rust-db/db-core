@@ -16,4 +16,20 @@ DIR="tests/fixtures/parquet"
 duckdb -c "COPY (SELECT * FROM '$SRC') TO '$DIR/production_snappy.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
 duckdb -c "COPY (SELECT * FROM '$SRC') TO '$DIR/production_uncompressed.parquet' (FORMAT PARQUET, COMPRESSION 'uncompressed');"
 
-echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet"
+# #621: a MAP between two flat columns, as DuckDB writes it (dictionary-
+# encoded leaves): two entries, a NULL map, an empty map, a NULL value, a
+# non-ASCII key. The column after the map checks leaf indexing.
+duckdb -c "COPY (SELECT * FROM (VALUES
+    (0, MAP {'User-Agent': 'curl/8', 'Accept': '*/*'}, 0),
+    (1, NULL, 10),
+    (2, MAP {}::MAP(VARCHAR, VARCHAR), 20),
+    (3, MAP {'k': NULL::VARCHAR}, 30),
+    (4, MAP {'héader': 'välue', 'k': 'v'}, 40)
+  ) t(id, h, x) ORDER BY id) TO '$DIR/nested_map.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
+
+# #621: nested fields that are not a MAP<UTF8, UTF8>, and one that is
+# (read_map_utf8_column's shape check).
+duckdb -c "COPY (SELECT ['x']::VARCHAR[] AS lst, MAP {1: 'a'} AS ik,
+    MAP {'a': 1} AS iv, MAP {'a': '1'} AS m) TO '$DIR/nested_shapes.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
+
+echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet"

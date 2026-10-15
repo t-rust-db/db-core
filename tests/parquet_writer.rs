@@ -47,6 +47,7 @@ fn validity(values: &ColumnValues) -> Vec<bool> {
         ColumnValues::UInt32(v) => v.iter().map(Option::is_some).collect(),
         ColumnValues::UInt64(v) => v.iter().map(Option::is_some).collect(),
         ColumnValues::Decimal(v) => v.iter().map(Option::is_some).collect(),
+        ColumnValues::Map(v) => v.iter().map(Option::is_some).collect(),
     }
 }
 
@@ -66,6 +67,7 @@ fn append(into: &mut ColumnValues, from: ColumnValues) {
         (ColumnValues::UInt32(a), ColumnValues::UInt32(b)) => a.extend(b),
         (ColumnValues::UInt64(a), ColumnValues::UInt64(b)) => a.extend(b),
         (ColumnValues::Decimal(a), ColumnValues::Decimal(b)) => a.extend(b),
+        (ColumnValues::Map(a), ColumnValues::Map(b)) => a.extend(b),
         (ColumnValues::FixedLenByteArray(a), ColumnValues::FixedLenByteArray(b)) => a.extend(b),
         (a, b) => panic!("append {b:?} to {a:?}"),
     }
@@ -96,11 +98,15 @@ fn options(compression: Compression, dictionary: bool, row_group_rows: usize) ->
 fn read_column(
     file: &ParquetFile,
     group: usize,
-    column: usize,
+    field: usize,
     column_type: ColumnType,
 ) -> ColumnValues {
     let rg = file.row_group(group).unwrap();
+    // Leaf (column chunk) indices: a map before a column shifts it.
+    let field = &file.fields()[field];
+    let column = field.leaves.start;
     match column_type {
+        ColumnType::MapUtf8 => ColumnValues::Map(rg.read_map_utf8_column(field).unwrap()),
         ColumnType::Boolean => ColumnValues::Boolean(rg.read_boolean_column(column).unwrap()),
         ColumnType::Int32 => ColumnValues::Int32(rg.read_int32_column(column).unwrap()),
         ColumnType::Int64 => ColumnValues::Int64(rg.read_int64_column(column).unwrap()),
@@ -194,6 +200,40 @@ fn read_all(bytes: &[u8], schema: &[ColumnSpec]) -> Vec<ColumnValues> {
     out
 }
 
+/// [`check_stats`] for every leaf of field `field`: a map's key and value
+/// leaves are UTF8 columns with one slot per level entry.
+fn check_field_stats(file: &ParquetFile, group: usize, field: usize, values: &ColumnValues) {
+    let rg = file.row_group(group).unwrap();
+    let leaves = file.fields()[field].leaves.clone();
+    let ColumnValues::Map(rows) = values else {
+        check_stats(values, rg.column_statistics(leaves.start).unwrap().unwrap());
+        return;
+    };
+    let (mut keys, mut vals) = (Vec::new(), Vec::new());
+    for row in rows {
+        match row.as_deref() {
+            None | Some([]) => {
+                keys.push(None);
+                vals.push(None);
+            }
+            Some(entries) => {
+                for (k, v) in entries {
+                    keys.push(Some(k.clone()));
+                    vals.push(v.clone());
+                }
+            }
+        }
+    }
+    check_stats(
+        &ColumnValues::Utf8(keys),
+        rg.column_statistics(leaves.start).unwrap().unwrap(),
+    );
+    check_stats(
+        &ColumnValues::Utf8(vals),
+        rg.column_statistics(leaves.start + 1).unwrap().unwrap(),
+    );
+}
+
 /// Pruning safety for one chunk: every non-null, non-NaN value lies within
 /// [min, max], both bounds are attained (up to the zero widening), and the
 /// null count is exact.
@@ -240,6 +280,7 @@ fn check_stats(values: &ColumnValues, stats: &Statistics) {
             u64::from_le_bytes(b.try_into().unwrap())
         }),
         // The bound's width says where the decimal is stored.
+        ColumnValues::Map(_) => panic!("maps are checked per leaf"),
         ColumnValues::Decimal(v) => bounds(v.iter().flatten().copied(), stats, |b| match b.len() {
             4 => i128::from(i32::from_le_bytes(b.try_into().unwrap())),
             8 => i128::from(i64::from_le_bytes(b.try_into().unwrap())),
@@ -447,7 +488,8 @@ fn statistics_bound_every_chunk() {
     let file = ParquetFile::open(&bytes).unwrap();
     let rg = file.row_group(0).unwrap();
     for (i, values) in batch.iter().enumerate() {
-        check_stats(values, rg.column_statistics(i).unwrap().unwrap());
+        let _ = &rg;
+        check_field_stats(&file, 0, i, values);
     }
 }
 
@@ -752,6 +794,7 @@ fn column_type_strategy() -> impl Strategy<Value = ColumnType> {
             .prop_flat_map(|p| (Just(p), 0..=p))
             .prop_map(|(p, s)| decimal(p, s)),
         (1u16..20).prop_map(ColumnType::FixedLenByteArray),
+        Just(ColumnType::MapUtf8),
     ]
 }
 
@@ -867,6 +910,16 @@ fn values_strategy(t: ColumnType, nullable: bool, n: usize) -> BoxedStrategy<Col
             .prop_map(ColumnValues::Decimal)
             .boxed()
         }
+        // Unique keys (a writer requirement), any values, empty maps.
+        ColumnType::MapUtf8 => col(
+            proptest::collection::btree_map("[a-zé]{0,4}", proptest::option::of(".{0,5}"), 0..4)
+                .prop_map(|m| m.into_iter().collect::<Vec<_>>()),
+            Just(vec![("k".to_string(), None)]),
+            nullable,
+            n,
+        )
+        .prop_map(ColumnValues::Map)
+        .boxed(),
         ColumnType::FixedLenByteArray(len) => {
             let len = usize::from(len);
             col(
@@ -935,7 +988,8 @@ proptest! {
         for group in 0..file.num_row_groups() {
             let rg = file.row_group(group).unwrap();
             for (i, spec) in schema.iter().enumerate() {
-                check_stats(&read_column(&file, group, i, spec.column_type), rg.column_statistics(i).unwrap().unwrap());
+                let _ = &rg;
+                check_field_stats(&file, group, i, &read_column(&file, group, i, spec.column_type));
             }
         }
     }
@@ -1120,4 +1174,141 @@ fn an_ungrouped_aggregate_over_no_row_groups_is_one_row() {
         ["0|"]
     );
     std::fs::remove_dir_all(dir).ok();
+}
+
+// --- MAP<UTF8, UTF8> (#621) -------------------------------------------------
+
+fn map(entries: &[(&str, Option<&str>)]) -> Option<MapEntries> {
+    Some(
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.map(str::to_string)))
+            .collect(),
+    )
+}
+
+/// Maps between flat columns, so leaf indices shift: the empty, NULL and
+/// 100-entry maps, NULL values, non-ASCII keys and entry order survive,
+/// with and without dictionary encoding.
+#[test]
+fn map_columns_round_trip_between_flat_columns() {
+    let schema = vec![
+        ColumnSpec::new("id", ColumnType::Int32, false),
+        ColumnSpec::new("h", ColumnType::MapUtf8, true),
+        ColumnSpec::new("x", ColumnType::Int64, true),
+        ColumnSpec::new("r", ColumnType::MapUtf8, false),
+    ];
+    let hundred: MapEntries = (0..100)
+        .map(|i| {
+            (
+                format!("key{i:03}"),
+                (i % 7 != 0).then(|| format!("v{}", i % 5)),
+            )
+        })
+        .collect();
+    let h = vec![
+        map(&[("User-Agent", Some("curl/8")), ("Accept", Some("*/*"))]),
+        None,
+        map(&[]),
+        map(&[("k", None)]),
+        map(&[("héader", Some("välue")), ("ä", Some(""))]),
+        Some(hundred),
+        map(&[("z", Some("1")), ("a", Some("2"))]),
+    ];
+    let rows = h.len();
+    let batch = vec![
+        ColumnValues::Int32((0..rows as i32).map(Some).collect()),
+        ColumnValues::Map(h),
+        ColumnValues::Int64(
+            (0..rows as i64)
+                .map(|i| (i != 3).then_some(i * 10))
+                .collect(),
+        ),
+        ColumnValues::Map(
+            (0..rows)
+                .map(|i| {
+                    let n = i.to_string();
+                    map(&[("n", Some(n.as_str()))][..(i % 2)])
+                })
+                .collect(),
+        ),
+    ];
+    for dictionary in [false, true] {
+        for row_group_rows in [1, 1000] {
+            let bytes = write(
+                schema.clone(),
+                options(Compression::Snappy, dictionary, row_group_rows),
+                vec![batch.clone()],
+            );
+            assert_eq!(
+                read_all(&bytes, &schema),
+                batch,
+                "dict={dictionary} rg={row_group_rows}"
+            );
+            let file = ParquetFile::open(&bytes).unwrap();
+            let paths: Vec<Vec<String>> = file.metadata().row_groups[0]
+                .columns
+                .iter()
+                .map(|c| c.meta_data.as_ref().unwrap().path_in_schema.clone())
+                .collect();
+            assert_eq!(
+                paths,
+                [
+                    vec!["id"],
+                    vec!["h", "key_value", "key"],
+                    vec!["h", "key_value", "value"],
+                    vec!["x"],
+                    vec!["r", "key_value", "key"],
+                    vec!["r", "key_value", "value"]
+                ]
+            );
+            for group in 0..file.num_row_groups() {
+                for (i, spec) in schema.iter().enumerate() {
+                    check_field_stats(
+                        &file,
+                        group,
+                        i,
+                        &read_column(&file, group, i, spec.column_type),
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_map_with_a_repeated_key_is_refused() {
+    let schema = vec![ColumnSpec::new("h", ColumnType::MapUtf8, true)];
+    let mut w = ParquetWriter::new(Vec::new(), schema, WriterOptions::default()).unwrap();
+    let err = w
+        .write_columns(vec![ColumnValues::Map(vec![map(&[
+            ("a", None),
+            ("a", Some("1")),
+        ])])])
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "column 'h': map key \"a\" repeated in one map"
+    );
+}
+
+/// DuckDB's own MAP file (tools/gen_parquet_fixtures.sh) reads back.
+#[test]
+fn a_duckdb_map_reads_back() {
+    let bytes = std::fs::read("tests/fixtures/parquet/nested_map.parquet").unwrap();
+    let file = ParquetFile::open(&bytes).unwrap();
+    let fields = file.fields();
+    let rg = file.row_group(0).unwrap();
+    assert_eq!(
+        rg.read_map_utf8_column(&fields[1]).unwrap(),
+        [
+            map(&[("User-Agent", Some("curl/8")), ("Accept", Some("*/*"))]),
+            None,
+            map(&[]),
+            map(&[("k", None)]),
+            map(&[("héader", Some("välue")), ("k", Some("v"))]),
+        ]
+    );
+    let err = rg.read_map_utf8_column(&fields[0]).unwrap_err();
+    assert_eq!(err.to_string(), "field id is not a MAP<UTF8, UTF8>");
 }

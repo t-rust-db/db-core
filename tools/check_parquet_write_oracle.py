@@ -42,6 +42,7 @@ ARROW_TYPES = {
     "uint16": pa.uint16(),
     "uint32": pa.uint32(),
     "uint64": pa.uint64(),
+    "map(utf8,utf8)": pa.map_(pa.string(), pa.string()),
 }
 
 DUCKDB_TYPES = {
@@ -58,6 +59,7 @@ DUCKDB_TYPES = {
     "uint16": "USMALLINT",
     "uint32": "UINTEGER",
     "uint64": "UBIGINT",
+    "map(utf8,utf8)": "MAP(VARCHAR, VARCHAR)",
 }
 
 # How DuckDB's VARCHAR stats_min_value/stats_max_value are cast back.
@@ -121,6 +123,14 @@ def normalize(column_type, value):
     """A value as both sides should compare it."""
     if value is None:
         return None
+    if column_type == "map(utf8,utf8)":
+        # A map as its (key, value) pairs in order: pyarrow gives a list of
+        # tuples, DuckDB a dict, the example a list of [key, value] lists.
+        if isinstance(value, dict):
+            pairs = zip(value["key"], value["value"]) if set(value) == {"key", "value"} else value.items()
+        else:
+            pairs = value
+        return tuple((k, v) for k, v in pairs)
     if column_type == "float":
         value = f32(value)
     if column_type in ("float", "double"):
@@ -192,11 +202,16 @@ def check_pyarrow(path, columns, fails):
             col["values"] = [v for v in data.to_pylist()]
         want = [normalize(ctype, v) for v in col["values"]]
         fails.check(got == want, f"pyarrow {name}: values differ (first at {first_diff(got, want)})")
+        if ctype == "map(utf8,utf8)":
+            continue  # statistics are per leaf; the values check covers maps
         start = 0
         for rg in range(meta.num_row_groups):
             n = meta.row_group(rg).num_rows
             nulls, lo, hi = expected_bounds(ctype, col["values"][start : start + n])
-            stats = meta.row_group(rg).column(i).statistics
+            # The column chunk by path: a map before this column shifts it.
+            group = meta.row_group(rg)
+            leaf = next(j for j in range(group.num_columns) if group.column(j).path_in_schema == name)
+            stats = group.column(leaf).statistics
             where = f"pyarrow {name} rg{rg}"
             fails.check(stats is not None and stats.null_count == nulls, f"{where}: null_count {stats and stats.null_count}, expected {nulls}")
             if lo is None:
@@ -226,6 +241,8 @@ def check_duckdb(path, columns, fails):
         got = [normalize(ctype, r[0]) for r in con.execute(f"SELECT {select} FROM read_parquet('{p}')").fetchall()]
         want = [normalize(ctype, v) for v in col["values"]]
         fails.check(got == want, f"duckdb {name}: values differ (first at {first_diff(got, want)})")
+        if ctype == "map(utf8,utf8)":
+            continue
         cast = duckdb_stat_cast(ctype)
         stats = con.execute(
             f"SELECT row_group_id, stats_null_count, {cast.format('stats_min_value')}, {cast.format('stats_max_value')} "

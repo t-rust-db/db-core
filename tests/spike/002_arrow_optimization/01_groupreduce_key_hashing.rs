@@ -74,6 +74,10 @@ impl Hash for GroupKey {
                     v.hash(state);
                 }
                 Value::Null => 4u8.hash(state),
+                Value::Map(entries) => {
+                    5u8.hash(state);
+                    entries.hash(state);
+                }
             }
         }
     }

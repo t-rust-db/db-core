@@ -26,8 +26,10 @@ const TYPE_FIXED_LEN_BYTE_ARRAY: i32 = 7;
 
 const REPETITION_REQUIRED: i32 = 0;
 const REPETITION_OPTIONAL: i32 = 1;
+const REPETITION_REPEATED: i32 = 2;
 
 const CONVERTED_UTF8: i32 = 0;
+const CONVERTED_MAP: i32 = 1;
 const CONVERTED_DECIMAL: i32 = 5;
 const CONVERTED_TIMESTAMP_MICROS: i32 = 10;
 const CONVERTED_UINT_8: i32 = 11;
@@ -107,6 +109,8 @@ pub(crate) fn physical_type(column_type: ColumnType) -> i32 {
             DecimalStorage::Fixed16 => TYPE_FIXED_LEN_BYTE_ARRAY,
         },
         ColumnType::FixedLenByteArray(_) => TYPE_FIXED_LEN_BYTE_ARRAY,
+        // A map's leaves are UTF8; the group itself has no physical type.
+        ColumnType::MapUtf8 => TYPE_BYTE_ARRAY,
     }
 }
 
@@ -160,18 +164,19 @@ pub(crate) struct ChunkLayout {
 /// `ColumnChunk` with its `ColumnMetaData` inline (no `file_path`: the
 /// data is in this file). `file_offset` is the chunk's first page.
 pub(crate) fn column_chunk(
-    spec: &ColumnSpec,
+    path: &[String],
+    column_type: ColumnType,
     layout: &ChunkLayout,
     stats: &ChunkStats,
     null_count: i64,
 ) -> Value {
     let mut meta = vec![
-        (1, Value::I32(physical_type(spec.column_type))),
+        (1, Value::I32(physical_type(column_type))),
         (
             2,
             Value::List(layout.encodings.iter().map(|e| Value::I32(*e)).collect()),
         ),
-        (3, Value::List(vec![string(&spec.name)])),
+        (3, Value::List(path.iter().map(|p| string(p)).collect())),
         (4, Value::I32(layout.codec)),
         (5, Value::I64(layout.num_values)),
         (6, Value::I64(layout.total_uncompressed_size)),
@@ -263,9 +268,43 @@ fn schema_element(spec: &ColumnSpec) -> Value {
         | ColumnType::Float
         | ColumnType::Double
         | ColumnType::Binary
-        | ColumnType::FixedLenByteArray(_) => {}
+        | ColumnType::FixedLenByteArray(_)
+        | ColumnType::MapUtf8 => {}
     }
     Value::Struct(fields)
+}
+
+/// A column's `SchemaElement`s, depth first: one leaf, or for a map the
+/// `MAP` group, its repeated `key_value` group and the `key`/`value`
+/// leaves, as DuckDB writes `MAP(VARCHAR, VARCHAR)`.
+fn schema_elements(spec: &ColumnSpec) -> Vec<Value> {
+    if spec.column_type != ColumnType::MapUtf8 {
+        return vec![schema_element(spec)];
+    }
+    let repetition = if spec.nullable {
+        REPETITION_OPTIONAL
+    } else {
+        REPETITION_REQUIRED
+    };
+    // LogicalType.MAP (2): MapType {}
+    let map = Value::Struct(vec![
+        (3, Value::I32(repetition)),
+        (4, string(&spec.name)),
+        (5, Value::I32(1)),
+        (6, Value::I32(CONVERTED_MAP)),
+        (10, Value::Struct(vec![(2, empty())])),
+    ]);
+    let key_value = Value::Struct(vec![
+        (3, Value::I32(REPETITION_REPEATED)),
+        (4, string("key_value")),
+        (5, Value::I32(2)),
+    ]);
+    vec![
+        map,
+        key_value,
+        schema_element(&ColumnSpec::new("key", ColumnType::Utf8, false)),
+        schema_element(&ColumnSpec::new("value", ColumnType::Utf8, true)),
+    ]
 }
 
 /// `FileMetaData`: version 1, the flattened schema (a root group named
@@ -282,11 +321,14 @@ pub(crate) fn file_metadata(
     let num_children = i32::try_from(schema.len()).unwrap_or(i32::MAX);
     let root = Value::Struct(vec![(4, string("schema")), (5, Value::I32(num_children))]);
     let elements = std::iter::once(root)
-        .chain(schema.iter().map(schema_element))
+        .chain(schema.iter().flat_map(schema_elements))
         .collect();
-    // ColumnOrder.TYPE_ORDER (1): TypeDefinedOrder {}
-    let orders = schema
+    // ColumnOrder.TYPE_ORDER (1): TypeDefinedOrder {}, one per leaf.
+    let leaves: usize = schema
         .iter()
+        .map(|s| super::leaf::leaf_count(s.column_type))
+        .sum();
+    let orders = (0..leaves)
         .map(|_| Value::Struct(vec![(1, empty())]))
         .collect();
     let mut fields = vec![

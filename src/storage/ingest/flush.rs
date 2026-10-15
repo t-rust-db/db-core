@@ -157,6 +157,7 @@ pub(crate) fn convert(values: Vec<Value>, column_type: ColumnType) -> ColumnValu
         ColumnType::FixedLenByteArray(_) => {
             ColumnValues::FixedLenByteArray(vec![None; values.len()])
         }
+        ColumnType::MapUtf8 => ColumnValues::Map(vec![None; values.len()]),
         ColumnType::Boolean => ColumnValues::Boolean(
             values
                 .iter()

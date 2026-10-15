@@ -27,6 +27,7 @@ use crate::storage::column::{
     annotation, decode_column_at, decode_column_full, Annotation, Decoded,
 };
 use crate::storage::parquet::footer::PhysicalType;
+use crate::storage::parquet::{Field, FileError};
 use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs, VfsFile};
 use crate::vm::batch::{Batch, Program, Segment, Value, Vm, VmError};
 use crate::vm::engine;
@@ -153,16 +154,32 @@ fn resolve_columns(leaves: &[Leaf], names: &[String]) -> Result<Vec<Leaf>, Engin
         .collect()
 }
 
-/// Leaf schema columns as `(name, column_index, physical_type)`, in file
-/// order. Element 0 of the footer schema is the root group, skipped.
+/// The file's top-level leaf columns as `(name, column_index,
+/// physical_type)`, in file order. `column_index` counts leaves, so a
+/// column after a group (struct, list, map) reads its own chunk; a group's
+/// leaves are not columns of their own.
 fn leaf_columns(file: &ParquetFile<'_>) -> Vec<Leaf> {
-    file.metadata()
-        .schema
-        .iter()
-        .skip(1)
-        .enumerate()
-        .filter_map(|(i, s)| s.physical_type.map(|pt| (s.name.clone(), i, pt)))
+    file.fields()
+        .into_iter()
+        .filter_map(|f| {
+            // A MAP (#621) is a column at its first leaf; it decodes as
+            // map values (see `load_leaf`). Other groups are not columns.
+            let pt = match f.element.physical_type {
+                Some(pt) => pt,
+                None if is_map(&f) => PhysicalType::ByteArray,
+                None => return None,
+            };
+            Some((f.name, f.leaves.start, pt))
+        })
         .collect()
+}
+
+/// A top-level `MAP` field of two leaves.
+fn is_map(field: &crate::storage::parquet::Field) -> bool {
+    field.nested
+        && field.leaves.len() == 2
+        && field.element.converted_type
+            == Some(crate::storage::parquet::footer::ConvertedType::Other(1))
 }
 
 /// One row group of a Parquet file as a lazily-loaded [`Segment`]: decodes
@@ -233,9 +250,9 @@ impl RowGroupSegment<'_, '_> {
     ) -> Result<Batch, VmError> {
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in leaves {
-            let decoded = decode_column_full(rg, *index, *physical_type)
+            let decoded = load_leaf(rg, *index, *physical_type)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
-            batch = apply_decoded(batch, name, decoded);
+            batch = apply_loaded(batch, name, decoded);
         }
         Ok(batch)
     }
@@ -277,9 +294,9 @@ impl RowGroupSegment<'_, '_> {
         let rg = self.row_group()?;
         let mut batch = Batch::new(positions.len());
         for (name, index, physical_type) in self.leaves_named(columns)? {
-            let decoded = decode_column_at(&rg, index, physical_type, positions)
+            let decoded = load_leaf_at(&rg, index, physical_type, positions)
                 .map_err(|e| segment_error(self.row_group_index, &name, &e))?;
-            batch = apply_decoded(batch, &name, decoded);
+            batch = apply_loaded(batch, &name, decoded);
         }
         Ok(batch)
     }
@@ -299,6 +316,9 @@ impl Segment for RowGroupSegment<'_, '_> {
         } else {
             stats.min.as_deref()
         }?;
+        if rg.nested_field_at(index).is_some() {
+            return None;
+        }
         prune::decode_stat_bytes(bytes, physical_type, annotation(&rg, index))
             .map(prune::into_value)
     }
@@ -346,9 +366,9 @@ impl Segment for RowGroupSegment<'_, '_> {
             .collect();
         let mut predicate_batch = Batch::new(num_rows);
         for (name, index, physical_type) in &predicate_leaves {
-            let decoded = decode_column_full(&rg, *index, *physical_type)
+            let decoded = load_leaf(&rg, *index, *physical_type)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
-            predicate_batch = apply_decoded(predicate_batch, name, decoded);
+            predicate_batch = apply_loaded(predicate_batch, name, decoded);
         }
 
         let mut vm = Vm::new();
@@ -391,9 +411,9 @@ impl Segment for RowGroupSegment<'_, '_> {
             .filter(|(name, ..)| !predicate_names.iter().any(|n| n == name))
             .collect();
         for (name, index, physical_type) in &projection_leaves {
-            let decoded = decode_column_at(&rg, *index, *physical_type, &indices)
+            let decoded = load_leaf_at(&rg, *index, *physical_type, &indices)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
-            batch = apply_decoded(batch, name, decoded);
+            batch = apply_loaded(batch, name, decoded);
         }
 
         Ok(Arc::new(batch))
@@ -408,11 +428,66 @@ fn segment_error(row_group_index: usize, column_name: &str, e: &impl std::fmt::D
     }
 }
 
-/// Applies one column's decoded shape onto `batch` under `name` (see
-/// [`Decoded`]).
-fn apply_decoded(batch: Batch, name: &str, decoded: Decoded) -> Batch {
-    let Decoded::Column(column) = decoded;
-    batch.with_typed_column(name.to_string(), column)
+/// A leaf's rows as the engine loads them: a typed column, or a MAP
+/// field's values (#621), which a typed column cannot hold.
+enum Loaded {
+    Typed(Decoded),
+    Map(Vec<Value>),
+}
+
+/// Leaf `index` decoded for every row: a MAP field (at its first leaf) as
+/// map values, anything else as its typed column.
+fn load_leaf(
+    rg: &RowGroupReader<'_, '_>,
+    index: usize,
+    physical_type: PhysicalType,
+) -> Result<Loaded, FileError> {
+    match rg.nested_field_at(index) {
+        Some(field) => map_values(rg, &field).map(Loaded::Map),
+        None => decode_column_full(rg, index, physical_type).map(Loaded::Typed),
+    }
+}
+
+/// [`load_leaf`] at `positions` only.
+fn load_leaf_at(
+    rg: &RowGroupReader<'_, '_>,
+    index: usize,
+    physical_type: PhysicalType,
+    positions: &[u32],
+) -> Result<Loaded, FileError> {
+    match rg.nested_field_at(index) {
+        Some(field) => {
+            let all = map_values(rg, &field)?;
+            positions
+                .iter()
+                .map(|&p| {
+                    usize::try_from(p)
+                        .ok()
+                        .and_then(|i| all.get(i).cloned())
+                        .ok_or(FileError::RowPositionOutOfRange(p))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Loaded::Map)
+        }
+        None => decode_column_at(rg, index, physical_type, positions).map(Loaded::Typed),
+    }
+}
+
+/// Every row of MAP field `field` as [`Value::Map`] (NULL for a NULL map).
+fn map_values(rg: &RowGroupReader<'_, '_>, field: &Field) -> Result<Vec<Value>, FileError> {
+    Ok(rg
+        .read_map_utf8_column(field)?
+        .into_iter()
+        .map(|m| m.map_or(Value::Null, |entries| Value::Map(Arc::new(entries))))
+        .collect())
+}
+
+/// Applies one leaf's loaded rows onto `batch` under `name`.
+fn apply_loaded(batch: Batch, name: &str, loaded: Loaded) -> Batch {
+    match loaded {
+        Loaded::Typed(Decoded::Column(column)) => batch.with_typed_column(name.to_string(), column),
+        Loaded::Map(values) => batch.with_column(name.to_string(), values),
+    }
 }
 
 /// Builds one [`RowGroupSegment`] per row group, skipping any row group
@@ -646,6 +721,10 @@ mod prune {
         let (index, physical_type) = *leaves_by_name.get(col_name)?;
         let statistics = rg.column_statistics(index).ok()??;
         let literal = literal_stat_value(lit, physical_type)?;
+        // A MAP's leaves are keys and values: its statistics bound neither.
+        if rg.nested_field_at(index).is_some() {
+            return None;
+        }
         let annotation = annotation(rg, index);
         let min = statistics
             .min
@@ -1245,6 +1324,101 @@ mod tests {
             err.to_string().contains("not loaded by this segment"),
             "{err}"
         );
+    }
+
+    /// #621: a MAP column reads as maps, rendered as DuckDB prints them,
+    /// and `m['k']` and the map functions answer as in DuckDB 1.5
+    /// (`map_get_ci` has no DuckDB equivalent).
+    #[test]
+    fn map_columns_answer_subscripts_and_map_functions() {
+        let path = Path::new("tests/fixtures/parquet/nested_map.parquet");
+        let mut engine = BatchEngine::open(path).unwrap();
+        let rows = |engine: &mut BatchEngine, sql: &str| -> Vec<String> {
+            engine
+                .run_query(sql)
+                .unwrap()
+                .rows
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join("|")
+                })
+                .collect()
+        };
+        assert_eq!(
+            rows(
+                &mut engine,
+                "SELECT h, h['k'], element_at(h, 'k'), map_keys(h), cardinality(h) FROM nested_map"
+            ),
+            [
+                "{User-Agent=curl/8, Accept=*/*}||[]|[User-Agent, Accept]|2",
+                "||||",
+                "{}||[]|[]|0",
+                "{k=NULL}||[NULL]|[k]|1",
+                "{héader=välue, k=v}|v|[v]|[héader, k]|2",
+            ]
+        );
+        assert_eq!(
+            rows(
+                &mut engine,
+                "SELECT id FROM nested_map WHERE map_get_ci(h, 'user-AGENT') = 'curl/8'"
+            ),
+            ["0"]
+        );
+        assert_eq!(
+            rows(&mut engine, "SELECT id FROM nested_map WHERE h['k'] = 'v'"),
+            ["4"]
+        );
+        assert_eq!(
+            rows(
+                &mut engine,
+                "SELECT count(*) FROM nested_map WHERE h['k'] IS NULL"
+            ),
+            ["4"]
+        );
+        // The key leaf's statistics are of keys, not maps: never pruned on.
+        assert_eq!(
+            rows(&mut engine, "SELECT id FROM nested_map WHERE h > 'zzz'"),
+            Vec::<String>::new()
+        );
+        let tables = engine.tables().unwrap();
+        let names: Vec<&str> = tables[0].columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["id", "h", "x"]);
+    }
+
+    /// A column after a MAP reads its own chunk, filters and prunes; the
+    /// map's `key`/`value` leaves are not columns (before, `x` read leaf
+    /// index 5 of 4 and `key` read `x`'s chunk as strings).
+    #[test]
+    fn columns_after_a_nested_field_read_their_own_chunk() {
+        let path = Path::new("tests/fixtures/parquet/nested_map.parquet");
+        let mut engine = BatchEngine::open(path).unwrap();
+        let rows = |engine: &mut BatchEngine, sql: &str| -> Vec<String> {
+            engine
+                .run_query(sql)
+                .unwrap()
+                .rows
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .collect()
+        };
+        assert_eq!(
+            rows(&mut engine, "SELECT id, x FROM nested_map WHERE x > 15"),
+            ["2,20", "3,30", "4,40"]
+        );
+        assert_eq!(
+            rows(&mut engine, "SELECT sum(x) FROM nested_map"),
+            ["100.0"]
+        );
+        let err = engine.run_query("SELECT key FROM nested_map").unwrap_err();
+        assert!(err.to_string().contains("unknown column: key"), "{err}");
     }
 
     /// End to end over the 3-row-group fixture whose `id`/`amount` are

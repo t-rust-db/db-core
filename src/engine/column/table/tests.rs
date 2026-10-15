@@ -286,6 +286,7 @@ fn record_schema() -> Vec<ColumnSpec> {
         ColumnSpec::new("blob", ColumnType::Binary, true),
         ColumnSpec::new("ts", ColumnType::TimestampNanos, false),
         ColumnSpec::new("f", ColumnType::Float, true),
+        ColumnSpec::new("h", ColumnType::MapUtf8, true),
     ]
 }
 
@@ -316,10 +317,28 @@ fn random_row(rng: &mut Rng, i: u64) -> Vec<RecordValue> {
         maybe(rng, blob),
         RecordValue::Int(1_760_000_000_000_000_000 + rng.below(1_000) as i64),
         maybe(rng, f),
+        {
+            let h = random_map(rng);
+            maybe(rng, h)
+        },
     ]
 }
 
-const RECORD_INVARIANCE_QUERIES: [&str; 7] = [
+/// A random map (#621): up to three of five keys, some values NULL, a
+/// repeated key now and then (joined at append).
+fn random_map(rng: &mut Rng) -> RecordValue {
+    let keys = ["a", "B", "c", "Host", "ä"];
+    let entries = (0..rng.below(4))
+        .map(|_| {
+            let key = keys[rng.below(5) as usize].to_string();
+            let value = (rng.below(4) > 0).then(|| format!("v{}", rng.below(3)));
+            (key, value)
+        })
+        .collect();
+    RecordValue::Map(entries)
+}
+
+const RECORD_INVARIANCE_QUERIES: [&str; 10] = [
     "SELECT COUNT(*), COUNT(n), SUM(n), MIN(amount), MAX(amount), SUM(u), COUNT(blob), SUM(f) \
      FROM logs",
     "SELECT id, kind, n, amount, u, blob, ts, f FROM logs ORDER BY id",
@@ -328,6 +347,10 @@ const RECORD_INVARIANCE_QUERIES: [&str; 7] = [
     "SELECT id, amount FROM logs WHERE amount >= 5 ORDER BY id DESC LIMIT 7",
     "SELECT blob, COUNT(*) FROM logs GROUP BY blob ORDER BY blob",
     "SELECT u FROM logs WHERE u IS NOT NULL ORDER BY u DESC LIMIT 3",
+    "SELECT id, h, h['a'], map_get_ci(h, 'HOST'), cardinality(h), map_keys(h) FROM logs \
+     ORDER BY id",
+    "SELECT h['a'] AS a, count(*) FROM logs GROUP BY a ORDER BY a",
+    "SELECT id FROM logs WHERE h['B'] = 'v1' ORDER BY id",
 ];
 
 /// What the flush-timing test appends: a lines table's lines or a record

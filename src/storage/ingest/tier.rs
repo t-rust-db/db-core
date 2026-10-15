@@ -410,13 +410,14 @@ pub(crate) fn merge_day(
     let mut bounds_by_file = Vec::new();
     let mut current: (Bounds, Bounds) = (None, None);
     for (entry, file) in &opened {
-        let leaves: Vec<(&str, usize, PhysicalType)> = file
-            .metadata()
-            .schema
+        let fields = file.fields();
+        let leaves: Vec<(&str, usize, PhysicalType)> = fields
             .iter()
-            .skip(1)
-            .enumerate()
-            .filter_map(|(i, e)| e.physical_type.map(|pt| (e.name.as_str(), i, pt)))
+            .filter(|f| !f.nested)
+            .filter_map(|f| {
+                let pt = f.element.physical_type?;
+                Some((f.name.as_str(), f.leaves.start, pt))
+            })
             .collect();
         let mut next = entry.lsn_lo;
         for rg in file.row_groups() {
@@ -426,12 +427,13 @@ pub(crate) fn merge_day(
             for spec in &specs {
                 let leaf = leaves.iter().find(|(name, _, _)| *name == spec.name);
                 if schema.is_some() {
-                    // A record table's file has every column, as declared.
-                    let (_, index, _) = leaf.ok_or_else(|| {
+                    // A record table's file has every column, as declared
+                    // (a MAP is a field of two leaves).
+                    let field = fields.iter().find(|f| f.name == spec.name).ok_or_else(|| {
                         corrupt(&entry.path, format!("has no column {}", spec.name))
                     })?;
                     columns.push(
-                        read_column(&rg, *index, spec.column_type)
+                        read_column(&rg, field, spec.column_type)
                             .map_err(|e| corrupt(&entry.path, e.to_string()))?,
                     );
                     continue;

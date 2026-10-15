@@ -42,6 +42,8 @@ pub enum FileError {
     UnsupportedDecimalPhysicalType(footer::PhysicalType),
     UnsupportedNestedDictionary,
     UnsupportedNestedEncoding(page::Encoding),
+    /// A field read as a `MAP<UTF8, UTF8>` that is not one.
+    NotAStringMap(String),
     Nested(NestedError),
 }
 
@@ -83,6 +85,9 @@ impl fmt::Display for FileError {
             }
             FileError::UnsupportedDecimalPhysicalType(t) => {
                 write!(f, "unsupported physical type for a DECIMAL column: {t:?}")
+            }
+            FileError::NotAStringMap(name) => {
+                write!(f, "field {name} is not a MAP<UTF8, UTF8>")
             }
             FileError::UnsupportedNestedDictionary => write!(
                 f,
@@ -184,6 +189,29 @@ pub struct ParquetFile<'a> {
     data: &'a [u8],
     schema_tree: SchemaNode,
     is_flat: bool,
+    /// Leaf (column chunk) `i`'s index in `metadata.schema`. For a flat
+    /// schema that is `i + 1`; a group (struct, list, map) shifts every
+    /// leaf after it.
+    leaf_elements: Vec<usize>,
+    /// Leaf `i`'s max definition level, from the schema tree.
+    leaf_max_def: Vec<u32>,
+}
+
+/// A map's `(key, value)` entries, in order; a value may be NULL.
+pub type MapEntries = Vec<(String, Option<String>)>;
+
+/// One top-level field of a file: a leaf column, or a group (struct, list,
+/// map) and the leaves (column chunks) it spans.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    /// The field's name.
+    pub name: String,
+    /// Its schema element (for a group: the group node, e.g. `MAP`).
+    pub element: footer::SchemaElement,
+    /// The column chunks it is stored in, as leaf indices.
+    pub leaves: std::ops::Range<usize>,
+    /// A group rather than a single leaf.
+    pub nested: bool,
 }
 
 impl<'a> ParquetFile<'a> {
@@ -196,12 +224,56 @@ impl<'a> ParquetFile<'a> {
         let metadata = footer::parse_footer(data)?;
         let is_flat = is_flat_schema(&metadata.schema);
         let schema_tree = schema_tree::build_schema_tree(&metadata.schema);
+        let leaf_elements = metadata
+            .schema
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, e)| e.physical_type.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        let leaf_max_def = schema_tree
+            .leaves()
+            .iter()
+            .map(|l| l.max_def_level)
+            .collect();
         Ok(ParquetFile {
             metadata,
             data,
             schema_tree,
             is_flat,
+            leaf_elements,
+            leaf_max_def,
         })
+    }
+
+    /// The schema element of leaf (column chunk) `column_index`.
+    pub fn leaf_element(&self, column_index: usize) -> Option<&footer::SchemaElement> {
+        self.metadata
+            .schema
+            .get(*self.leaf_elements.get(column_index)?)
+    }
+
+    /// The top-level fields, in schema order, each with the leaves it is
+    /// stored in. Column chunk indices count leaves, not schema elements,
+    /// so a field after a group does not start at its element's position.
+    pub fn fields(&self) -> Vec<Field> {
+        let mut next = 0usize;
+        self.schema_tree
+            .children
+            .iter()
+            .map(|child| {
+                let count = child.leaves().len();
+                let start = next;
+                next = next.saturating_add(count);
+                Field {
+                    name: child.name.clone(),
+                    element: child.element.clone(),
+                    leaves: start..next,
+                    nested: !child.is_leaf(),
+                }
+            })
+            .collect()
     }
 
     /// Whether every field in the schema is a required/optional leaf
@@ -282,43 +354,28 @@ impl<'a> ParquetFile<'a> {
         (0..self.num_row_groups()).flat_map(move |i| self.row_group(i))
     }
 
-    /// Max definition level for a leaf column, derived from its schema
-    /// repetition: `OPTIONAL` -> 1, `REQUIRED` -> 0. The schema list's first
-    /// entry is the root (message) node, so leaf column `i` is
-    /// `schema[i + 1]` for a flat (non-nested) schema.
+    /// Max definition level for a leaf column: one per optional or
+    /// repeated node on its path (for a top-level leaf, `OPTIONAL` -> 1,
+    /// `REQUIRED` -> 0).
     fn max_definition_level(&self, column_index: usize) -> u32 {
-        match self
-            .metadata
-            .schema
-            .get(column_index + 1)
-            .and_then(|s| s.repetition)
-        {
-            Some(Repetition::Optional) => 1,
-            _ => 0,
-        }
+        self.leaf_max_def.get(column_index).copied().unwrap_or(0)
     }
 
     /// Fixed byte width for a `FIXED_LEN_BYTE_ARRAY` leaf column.
     fn type_length(&self, column_index: usize) -> Result<usize> {
-        self.metadata
-            .schema
-            .get(column_index + 1)
+        self.leaf_element(column_index)
             .and_then(|s| s.type_length)
             .and_then(|len| usize::try_from(len).ok())
             .ok_or(FileError::MissingTypeLength)
     }
 
     fn converted_type(&self, column_index: usize) -> Option<footer::ConvertedType> {
-        self.metadata
-            .schema
-            .get(column_index + 1)
+        self.leaf_element(column_index)
             .and_then(|s| s.converted_type)
     }
 
     fn decimal_scale(&self, column_index: usize) -> Result<i32> {
-        self.metadata
-            .schema
-            .get(column_index + 1)
+        self.leaf_element(column_index)
             .and_then(|s| s.scale)
             .ok_or(FileError::MissingDecimalScale)
     }
@@ -339,7 +396,16 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// The schema element of leaf `column_index`: its annotations
     /// (converted type, scale, type length).
     pub fn schema_element(&self, column_index: usize) -> Option<&footer::SchemaElement> {
-        self.file.metadata.schema.get(column_index + 1)
+        self.file.leaf_element(column_index)
+    }
+
+    /// The top-level nested field (struct, list, map) whose first leaf is
+    /// `column_index`, if any.
+    pub fn nested_field_at(&self, column_index: usize) -> Option<Field> {
+        self.file
+            .fields()
+            .into_iter()
+            .find(|f| f.nested && f.leaves.start == column_index)
     }
 
     pub fn num_columns(&self) -> usize {
@@ -714,6 +780,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
 
         let mut pos = 0usize;
         let mut out = LeafEntries::default();
+        let mut dictionary: Option<Vec<reader::LeafScalar>> = None;
 
         while pos < chunk_bytes.len() {
             let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
@@ -729,13 +796,40 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                 .ok_or(FileError::ChunkOutOfBounds)?;
 
             match header.page_type {
-                PageType::Dictionary(_) => return Err(FileError::UnsupportedNestedDictionary),
-                PageType::Data(data_page_header) => {
-                    if data_page_header.encoding != Encoding::Plain {
-                        return Err(FileError::UnsupportedNestedEncoding(
-                            data_page_header.encoding,
-                        ));
+                // #621: DuckDB and pyarrow dictionary-encode nested leaves
+                // (a map's keys) by default.
+                PageType::Dictionary(dictionary_page_header) => {
+                    if dictionary.is_some() {
+                        return Err(FileError::UnexpectedDictionaryPage);
                     }
+                    let body = compression::decompress(
+                        codec,
+                        compressed,
+                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
+                    )?;
+                    let count =
+                        usize::try_from(dictionary_page_header.num_values).map_err(|_| {
+                            FileError::InvalidMetadata {
+                                field: "dictionary_page.num_values",
+                                value: i64::from(dictionary_page_header.num_values),
+                            }
+                        })?;
+                    let mut buf: &[u8] = &body;
+                    let mut bit_pos = 0usize;
+                    dictionary = Some(
+                        (0..count)
+                            .map(|_| {
+                                reader::read_plain_scalar(&mut buf, physical_type, &mut bit_pos)
+                            })
+                            .collect::<reader::Result<_>>()?,
+                    );
+                }
+                PageType::Data(data_page_header) => {
+                    let dictionary_encoded = match data_page_header.encoding {
+                        Encoding::Plain => false,
+                        Encoding::PlainDictionary | Encoding::RleDictionary => true,
+                        other => return Err(FileError::UnsupportedNestedEncoding(other)),
+                    };
                     let page_body = compression::decompress(
                         codec,
                         compressed,
@@ -755,18 +849,42 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                                 value: i64::from(data_page_header.num_values),
                             }
                         })?;
-                    let mut bit_pos = 0usize;
-                    for i in 0..num_values {
-                        let def = def_levels.get(i).copied().unwrap_or(leaf.max_def_level);
-                        if def == leaf.max_def_level {
-                            let scalar = reader::read_plain_scalar(
-                                &mut value_bytes,
-                                physical_type,
-                                &mut bit_pos,
-                            )?;
-                            out.values.push(Some(scalar));
-                        } else {
-                            out.values.push(None);
+                    let defined = |i: usize| {
+                        def_levels.get(i).copied().unwrap_or(leaf.max_def_level)
+                            == leaf.max_def_level
+                    };
+                    if dictionary_encoded {
+                        let dict = dictionary
+                            .as_ref()
+                            .ok_or(FileError::MissingDictionaryPage)?;
+                        let present = (0..num_values).filter(|&i| defined(i)).count();
+                        let mut indices =
+                            reader::read_dictionary_indices(value_bytes, present)?.into_iter();
+                        for i in 0..num_values {
+                            if !defined(i) {
+                                out.values.push(None);
+                                continue;
+                            }
+                            let index = indices.next().ok_or(ReadError::UnexpectedEof)?;
+                            let entry = usize::try_from(index)
+                                .ok()
+                                .and_then(|i| dict.get(i))
+                                .ok_or(ReadError::DictionaryIndexOutOfRange(index))?;
+                            out.values.push(Some(entry.clone()));
+                        }
+                    } else {
+                        let mut bit_pos = 0usize;
+                        for i in 0..num_values {
+                            if defined(i) {
+                                let scalar = reader::read_plain_scalar(
+                                    &mut value_bytes,
+                                    physical_type,
+                                    &mut bit_pos,
+                                )?;
+                                out.values.push(Some(scalar));
+                            } else {
+                                out.values.push(None);
+                            }
                         }
                     }
                     if rep_levels.is_empty() {
@@ -785,6 +903,62 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             pos = page_end;
         }
         Ok(out)
+    }
+
+    /// Field `field` (a `MAP<UTF8, UTF8>`, e.g. DuckDB's `MAP(VARCHAR,
+    /// VARCHAR)`) of this row group, one value per row: `None` for a NULL
+    /// map, else its `(key, value)` entries in order (#621). Decodes only
+    /// the field's two leaves.
+    pub fn read_map_utf8_column(&self, field: &Field) -> Result<Vec<Option<MapEntries>>> {
+        let not_a_map = || FileError::NotAStringMap(field.name.clone());
+        let leaves = self.file.schema_tree.leaves();
+        let (start, end) = (field.leaves.start, field.leaves.end);
+        let (Some(key), Some(value)) = (leaves.get(start), leaves.get(start.saturating_add(1)))
+        else {
+            return Err(not_a_map());
+        };
+        let is_string =
+            |n: &SchemaNode| n.element.physical_type == Some(footer::PhysicalType::ByteArray);
+        let shape = field.nested
+            && end == start.saturating_add(2)
+            && key.max_rep_level == 1
+            && value.max_rep_level == 1
+            && value.max_def_level == key.max_def_level.saturating_add(1);
+        if !shape || !is_string(key) || !is_string(value) {
+            return Err(not_a_map());
+        }
+        let keys = self.read_leaf_entries(start, key)?;
+        let values = self.read_leaf_entries(start.saturating_add(1), value)?;
+        if keys.def_levels.len() != values.def_levels.len() {
+            return Err(not_a_map());
+        }
+        // A key is defined at its max level; one below is an empty map and
+        // anything lower a NULL map.
+        let entry_def = key.max_def_level;
+        let text = |v: Option<&reader::LeafScalar>| match v {
+            Some(reader::LeafScalar::Str(s)) => Some(s.clone()),
+            _ => None,
+        };
+        let mut rows: Vec<Option<MapEntries>> = Vec::new();
+        for i in 0..keys.def_levels.len() {
+            let def = keys.def_levels.get(i).copied().unwrap_or(0);
+            let rep = keys.rep_levels.get(i).copied().unwrap_or(0);
+            if def < entry_def {
+                if rep != 0 {
+                    return Err(not_a_map());
+                }
+                rows.push((def.saturating_add(1) == entry_def).then(Vec::new));
+                continue;
+            }
+            let k = text(keys.values.get(i).and_then(Option::as_ref)).ok_or_else(not_a_map)?;
+            let v = text(values.values.get(i).and_then(Option::as_ref));
+            match (rep, rows.last_mut()) {
+                (0, _) => rows.push(Some(vec![(k, v)])),
+                (_, Some(Some(entries))) => entries.push((k, v)),
+                _ => return Err(not_a_map()),
+            }
+        }
+        Ok(rows)
     }
 
     pub fn read_int64_column_dictionary_indices(
@@ -1077,6 +1251,88 @@ fn int96_to_epoch_micros(v: reader::Int96) -> i64 {
 )]
 mod tests {
     use super::*;
+
+    #[allow(non_snake_case)]
+    mod mcdc_map_shape {
+        //! Tagged MC/DC vectors for `read_map_utf8_column`'s shape check,
+        //! over tools/gen_parquet_fixtures.sh's `nested_shapes.parquet`:
+        //! `lst LIST(VARCHAR)`, `ik MAP(INT, VARCHAR)`, `iv MAP(VARCHAR,
+        //! INT)`, `m MAP(VARCHAR, VARCHAR)`.
+        use super::*;
+
+        fn read(field: &str) -> Result<Vec<Option<MapEntries>>> {
+            let bytes = std::fs::read("tests/fixtures/parquet/nested_shapes.parquet").unwrap();
+            let file = ParquetFile::open(&bytes).unwrap();
+            let field = file.fields().into_iter().find(|f| f.name == field).unwrap();
+            let rg = file.row_group(0).unwrap();
+            rg.read_map_utf8_column(&field)
+        }
+
+        // storage_parquet_parquet_file_read_map_utf8_column_62508017:
+        // `!shape || !is_string(key) || !is_string(value)`
+        #[test]
+        fn mcdc__storage_parquet_parquet_file_read_map_utf8_column_62508017__v1_a_list_is_not_a_map(
+        ) {
+            assert!(matches!(read("lst"), Err(FileError::NotAStringMap(n)) if n == "lst"));
+        }
+
+        #[test]
+        fn mcdc__storage_parquet_parquet_file_read_map_utf8_column_62508017__v2_integer_keys_are_refused(
+        ) {
+            assert!(matches!(read("ik"), Err(FileError::NotAStringMap(_))));
+        }
+
+        #[test]
+        fn mcdc__storage_parquet_parquet_file_read_map_utf8_column_62508017__v3_integer_values_are_refused(
+        ) {
+            assert!(matches!(read("iv"), Err(FileError::NotAStringMap(_))));
+        }
+
+        #[test]
+        fn mcdc__storage_parquet_parquet_file_read_map_utf8_column_62508017__v4_a_string_map_reads()
+        {
+            assert_eq!(
+                read("m").unwrap(),
+                [Some(vec![("a".to_string(), Some("1".to_string()))])]
+            );
+        }
+    }
+
+    /// A MAP between two flat columns (tools/gen_parquet_fixtures.sh):
+    /// leaves `id`, `h.key_value.key`, `h.key_value.value`, `x`.
+    #[test]
+    fn leaves_after_a_group_are_indexed_by_leaf_not_by_schema_element() {
+        let bytes = std::fs::read("tests/fixtures/parquet/nested_map.parquet").unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let fields: Vec<(String, std::ops::Range<usize>, bool)> = file
+            .fields()
+            .into_iter()
+            .map(|f| (f.name, f.leaves, f.nested))
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                ("id".to_string(), 0..1, false),
+                ("h".to_string(), 1..3, true),
+                ("x".to_string(), 3..4, false)
+            ]
+        );
+        let names: Vec<&str> = (0..4)
+            .map(|i| file.leaf_element(i).unwrap().name.as_str())
+            .collect();
+        assert_eq!(names, ["id", "key", "value", "x"]);
+        assert!(file.leaf_element(4).is_none());
+        // optional h, repeated key_value: key 2, value 3; x is top level.
+        let levels: Vec<u32> = (0..4).map(|i| file.max_definition_level(i)).collect();
+        assert_eq!(levels, [1, 2, 3, 1]);
+        // The column after the map reads its own chunk.
+        let rg = file.row_group(0).unwrap();
+        assert_eq!(
+            rg.read_int32_column(3).unwrap(),
+            [Some(0), Some(10), Some(20), Some(30), Some(40)]
+        );
+        assert_eq!(rg.schema_element(3).unwrap().name, "x");
+    }
 
     struct StructWriter {
         buf: Vec<u8>,

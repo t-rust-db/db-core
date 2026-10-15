@@ -58,7 +58,15 @@ pub(super) type PResult<T> = Result<T, ParseFail>;
 /// grammar `.openspec/grammar/sqlite.ebnf` V2 block). Never panics —
 /// any input produces one of the three [`ParseOutcome`] variants.
 pub fn parse_select(src: &str) -> ParseOutcome<Select> {
-    let tokens = Tokenizer::tokenize(src);
+    parse_select_tokens(Tokenizer::tokenize(src))
+}
+
+/// [`parse_select`] in the column dialect: `m['k']` is a subscript (#621).
+pub fn parse_select_with_subscripts(src: &str) -> ParseOutcome<Select> {
+    parse_select_tokens(Tokenizer::tokenize_with_subscripts(src))
+}
+
+fn parse_select_tokens(tokens: Vec<super::tokenizer::Token>) -> ParseOutcome<Select> {
     let mut parser = Parser::new(tokens);
     match parser.parse_select_stmt() {
         Ok(select) => match parser.expect_end() {
@@ -82,7 +90,15 @@ pub fn parse_select(src: &str) -> ParseOutcome<Select> {
 /// entry point doesn't implement, per [`ParseOutcome`]'s three-way
 /// contract.
 pub fn parse_explain(src: &str) -> ParseOutcome<Explain> {
-    let tokens = Tokenizer::tokenize(src);
+    parse_explain_tokens(Tokenizer::tokenize(src))
+}
+
+/// [`parse_explain`] in the column dialect: `m['k']` is a subscript (#621).
+pub fn parse_explain_with_subscripts(src: &str) -> ParseOutcome<Explain> {
+    parse_explain_tokens(Tokenizer::tokenize_with_subscripts(src))
+}
+
+fn parse_explain_tokens(tokens: Vec<super::tokenizer::Token>) -> ParseOutcome<Explain> {
     let mut parser = Parser::new(tokens);
     match parser.parse_explain_stmt() {
         Ok(explain) => match parser.expect_end() {

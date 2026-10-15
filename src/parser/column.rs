@@ -411,7 +411,9 @@ fn is_known_scalar_function(name: &str, arity: usize) -> bool {
     matches!(
         (name.to_ascii_lowercase().as_str(), arity),
         ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3)
-    )
+    ) || crate::vm::map_fns::MAP_FUNCTIONS
+        .iter()
+        .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
 }
 
 fn arg_count(args: &FunctionArgs) -> usize {
@@ -706,6 +708,16 @@ fn validate_expr(expr: &mut AstExpr, allow_agg: bool) -> Result<()> {
             expr.span,
             format!("aggregate function {name} not allowed here"),
         )),
+        // A scalar function (json_extract, the map functions of #621...)
+        // anywhere an expression is: `WHERE map_get_ci(h, 'host') = 'x'`.
+        ExprKind::FunctionCall {
+            name,
+            distinct: false,
+            args: FunctionArgs::List(args),
+            tail: None,
+        } if is_known_scalar_function(name, args.len()) => {
+            args.iter_mut().try_for_each(|a| validate_expr(a, false))
+        }
         other => Err(unsupported(
             expr.span,
             format!("unsupported expression form {other:?}"),
@@ -988,7 +1000,7 @@ fn from_outcome(message: String, span: Span) -> ParseError {
 /// and resolving table aliases in place. The returned [`Select`] is the
 /// same AST [`crate::codegen::row`] consumes -- there is one AST (#153).
 pub fn parse(sql_text: &str) -> Result<Select> {
-    match crate::parser::row::parse_select(sql_text) {
+    match crate::parser::row::parse_select_with_subscripts(sql_text) {
         ParseOutcome::Accepted(mut select) => {
             validate_select(&mut select)?;
             Ok(*select)
@@ -1025,7 +1037,7 @@ pub fn parse_explain(sql_text: &str) -> Result<(Explain, Select)> {
     if !starts_with_explain {
         return Ok((Explain::None, parse(sql_text)?));
     }
-    match crate::parser::row::parse_explain(sql_text) {
+    match crate::parser::row::parse_explain_with_subscripts(sql_text) {
         ParseOutcome::Accepted(explain) => {
             let form = if explain.query_plan {
                 Explain::QueryPlan
@@ -1066,6 +1078,27 @@ pub fn parse_explain(sql_text: &str) -> Result<(Explain, Select)> {
 mod tests {
     use super::*;
     use crate::parser::ast::ResultColumn;
+
+    /// #621: `m['k']` is `map_extract_value(m, 'k')`, and a scalar
+    /// function is allowed in WHERE.
+    #[test]
+    fn a_subscript_parses_as_map_extract_value() {
+        let select = parse("SELECT h['k'] FROM t WHERE map_get_ci(h, 'Host') = 'x'").unwrap();
+        let ResultColumn::Expr { expr, .. } = &select.columns[0] else {
+            panic!("expected an expression column");
+        };
+        let ExprKind::FunctionCall { name, args, .. } = &expr.kind else {
+            panic!("expected a call, got {:?}", expr.kind);
+        };
+        assert_eq!(name, "map_extract_value");
+        let FunctionArgs::List(args) = args else {
+            panic!("expected arguments");
+        };
+        assert!(matches!(&args[1].kind, ExprKind::Literal(AstLiteral::Str(k)) if k == "k"));
+        assert!(parse("SELECT h['k' FROM t").is_err());
+        // Unknown functions are still refused, in WHERE too.
+        assert!(parse("SELECT a FROM t WHERE nosuch(a) = 1").is_err());
+    }
 
     /// Test-only helper: the bare (possibly qualified) column name behind
     /// one `SELECT`-list item, or `None` if it isn't a plain column.

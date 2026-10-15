@@ -84,6 +84,12 @@ pub enum TokenKind {
     LParen,
     /// `)`
     RParen,
+    /// `[` opening a subscript (`m['k']`); only in subscript mode
+    /// ([`Tokenizer::tokenize_with_subscripts`]), where `[` right after an
+    /// expression is not a bracket-quoted identifier (#621).
+    LBracket,
+    /// `]` closing a subscript.
+    RBracket,
     /// `.`
     Dot,
     /// `+`
@@ -687,6 +693,13 @@ pub struct Tokenizer {
     pos: usize,
     line: u32,
     column: u32,
+    /// Subscript mode (#621): `[` after an identifier, `)` or `]` opens a
+    /// subscript instead of a bracket-quoted identifier.
+    subscripts: bool,
+    /// The previous token can end an expression.
+    after_expr: bool,
+    /// Subscripts open.
+    open_brackets: u32,
 }
 
 impl Tokenizer {
@@ -696,11 +709,25 @@ impl Tokenizer {
             pos: 0,
             line: 1,
             column: 1,
+            subscripts: false,
+            after_expr: false,
+            open_brackets: 0,
         }
+    }
+
+    /// [`Tokenizer::tokenize`] for the column dialect (#621): `[` directly
+    /// after an identifier, `)` or `]` is [`TokenKind::LBracket`] (a
+    /// subscript, `m['k']`), elsewhere still a bracket-quoted identifier.
+    pub fn tokenize_with_subscripts(src: &str) -> Vec<Token> {
+        Self::tokenize_mode(src, true)
     }
 
     /// Tokenizes the whole input, including the trailing [`TokenKind::Eof`].
     pub fn tokenize(src: &str) -> Vec<Token> {
+        Self::tokenize_mode(src, false)
+    }
+
+    fn tokenize_mode(src: &str, subscripts: bool) -> Vec<Token> {
         // Spans carry `u32` offsets. Rather than let offsets past 4 GiB
         // saturate (which would silently mis-slice `split_statements`),
         // refuse the input up front; everything below may then assume
@@ -730,8 +757,13 @@ impl Tokenizer {
         // any but the shortest inputs.
         let mut out = Vec::with_capacity(src.len().saturating_div(4).saturating_add(1));
         let mut tokenizer = Tokenizer::new();
+        tokenizer.subscripts = subscripts;
         loop {
             let tok = tokenizer.next_token(src);
+            tokenizer.after_expr = matches!(
+                tok.kind,
+                TokenKind::Identifier(_) | TokenKind::RParen | TokenKind::RBracket
+            );
             let is_eof = matches!(tok.kind, TokenKind::Eof);
             out.push(tok);
             if is_eof {
@@ -875,6 +907,16 @@ impl Tokenizer {
             }
             '\'' => self.scan_string(src),
             '"' => self.scan_quoted_identifier(src, '"', '"'),
+            '[' if self.subscripts && self.after_expr => {
+                self.bump(src);
+                self.open_brackets = self.open_brackets.saturating_add(1);
+                TokenKind::LBracket
+            }
+            ']' if self.open_brackets > 0 => {
+                self.bump(src);
+                self.open_brackets = self.open_brackets.saturating_sub(1);
+                TokenKind::RBracket
+            }
             '[' => self.scan_quoted_identifier(src, '[', ']'),
             '`' => self.scan_quoted_identifier(src, '`', '`'),
             '?' => self.scan_param_question(src),
@@ -1317,6 +1359,39 @@ fn is_ident_continue(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subscript_mode_reads_brackets_after_an_expression_as_a_subscript() {
+        let kinds = |toks: Vec<Token>| toks.into_iter().map(|t| t.kind).collect::<Vec<_>>();
+        assert_eq!(
+            kinds(Tokenizer::tokenize_with_subscripts("m['k']")),
+            [
+                TokenKind::Identifier("m".into()),
+                TokenKind::LBracket,
+                TokenKind::String("k".into()),
+                TokenKind::RBracket,
+                TokenKind::Eof
+            ]
+        );
+        // After `)` and `]` too; after a keyword `[x]` is still an identifier.
+        let toks = kinds(Tokenizer::tokenize_with_subscripts(
+            "f(m)['a']['b'] SELECT [x]",
+        ));
+        assert_eq!(
+            toks.iter().filter(|k| **k == TokenKind::LBracket).count(),
+            2
+        );
+        assert!(toks.contains(&TokenKind::Identifier("x".into())));
+        // The sqlite dialect keeps `[...]` a bracket-quoted identifier.
+        assert_eq!(
+            kinds(Tokenizer::tokenize("m['k']")),
+            [
+                TokenKind::Identifier("m".into()),
+                TokenKind::Identifier("'k'".into()),
+                TokenKind::Eof
+            ]
+        );
+    }
 
     #[test]
     fn split_statements_splits_on_top_level_semicolons_and_trims_whitespace() {
@@ -1799,5 +1874,49 @@ mod tests {
     fn mcdc__parser_row_tokenizer_scan_identifier_or_keyword_2f93ed48__v3_any_other_ascii_byte_ends_the_identifier(
     ) {
         assert_eq!(first_kind("ab-c"), TokenKind::Identifier("ab".to_string()));
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod mcdc_subscript_vectors {
+    //! Tagged MC/DC vectors (`mcdc__<id>__vN`, joined to
+    //! `tests/mcdc/obligations.json` by `make test-mcdc`).
+    use super::*;
+
+    fn second(tokens: Vec<Token>) -> TokenKind {
+        tokens
+            .into_iter()
+            .nth(1)
+            .map(|t| t.kind)
+            .unwrap_or(TokenKind::Eof)
+    }
+
+    // parser_row_tokenizer_next_token_a1d138c1: `self.subscripts && self.after_expr`
+    #[test]
+    fn mcdc__parser_row_tokenizer_next_token_a1d138c1__v1_after_an_expression_in_subscript_mode_is_a_subscript(
+    ) {
+        assert_eq!(
+            second(Tokenizer::tokenize_with_subscripts("m['k']")),
+            TokenKind::LBracket
+        );
+    }
+
+    #[test]
+    fn mcdc__parser_row_tokenizer_next_token_a1d138c1__v2_the_sqlite_dialect_keeps_a_bracket_identifier(
+    ) {
+        assert_eq!(
+            second(Tokenizer::tokenize("m['k']")),
+            TokenKind::Identifier("'k'".into())
+        );
+    }
+
+    #[test]
+    fn mcdc__parser_row_tokenizer_next_token_a1d138c1__v3_after_a_keyword_it_is_a_bracket_identifier(
+    ) {
+        assert_eq!(
+            second(Tokenizer::tokenize_with_subscripts("SELECT [k]")),
+            TokenKind::Identifier("k".into())
+        );
     }
 }

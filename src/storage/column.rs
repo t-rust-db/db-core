@@ -20,7 +20,8 @@ pub mod mmap;
 pub mod posix;
 pub mod vfs;
 
-#[cfg(feature = "vm-batch")]
+// Only record tables (ingest) render bytes outside the decoder.
+#[cfg(feature = "ingest")]
 pub(crate) use decode::hex;
 #[cfg(feature = "vm-batch")]
 pub use decode::{annotation, decode_column_at, decode_column_full, Annotation, Decoded};

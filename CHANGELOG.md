@@ -4,6 +4,23 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.131.0] - 2026-10-15
+
+### Added
+
+- **`MAP<UTF8, UTF8>` columns** (#621). The Parquet writer writes `ColumnType::MapUtf8` as DuckDB writes `MAP(VARCHAR, VARCHAR)`: a `key_value` group of a required UTF8 key and an optional UTF8 value, with repetition and definition levels and dictionary-encoded leaves. DuckDB 1.5.6 and pyarrow 25.0.1 read the maps back with their entries and entry order. `RowGroupReader::read_map_utf8_column` reads a MAP field, and nested leaves now take dictionary pages.
+- **Maps in the column engine** (#621). A MAP field reads as a map value (`vm::batch::Value::Map`), printed as DuckDB prints a map (`{a=1, b=NULL}`). `m['k']` (column dialect) and `map_extract_value(m, k)` give the value or NULL; `element_at(m, k)` gives DuckDB's one-element list as text; `map_keys(m)` and `cardinality(m)` answer as in DuckDB; `map_get_ci(m, k)` looks a key up case-insensitively, for HTTP header names. Known scalar functions are now accepted anywhere in an expression, so a lookup can filter in WHERE.
+- **MAP columns in record tables** (#621). A repeated key's values are joined at append, in order: with `", "`, or a newline for `Set-Cookie`. A MAP cannot be a sort key. ADR 0027 is amended.
+- `examples/map_vs_flat` measures a MAP column against a flat key/value table: about the same bytes per request (63.8 vs 65.6) and lookup time.
+
+### Changed
+
+- `vm::batch::Value` has a new variant, `Map`. Code that matches `Value` exhaustively needs an arm (t-rust-db/tools#40 adds it to column-rs).
+
+### Fixed
+
+- **Columns after a nested field read the wrong chunk.** In a Parquet file with a group (MAP, LIST, STRUCT), the column engine and a tiered table's day merge numbered column chunks by schema element instead of by leaf, so every column after the group read another column's chunk: for DuckDB's `id, h MAP, x`, `SELECT x` failed and `SELECT key` read `x`'s integers as strings. `ParquetFile::fields` now lists each top-level field with the leaves it spans.
+
 ## [0.130.0] - 2026-10-15
 
 ### Added

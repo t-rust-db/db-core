@@ -221,8 +221,68 @@ fn extended_types_batch() -> Vec<ColumnValues> {
     ]
 }
 
+/// #621: maps between flat columns (leaf indices shift): two entries, a
+/// NULL map, an empty map, a NULL value, non-ASCII keys, 100 entries, and
+/// entries in non-sorted order; a required map after them.
+fn map_batch() -> Vec<ColumnValues> {
+    let entries = |e: &[(&str, Option<&str>)]| {
+        Some(
+            e.iter()
+                .map(|(k, v)| (k.to_string(), v.map(str::to_string)))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let hundred: Vec<(String, Option<String>)> = (0..100)
+        .map(|i| {
+            (
+                format!("key{i:03}"),
+                (i % 7 != 0).then(|| format!("v{}", i % 5)),
+            )
+        })
+        .collect();
+    vec![
+        ColumnValues::Int32((0..7).map(Some).collect()),
+        ColumnValues::Map(vec![
+            entries(&[("User-Agent", Some("curl/8")), ("Accept", Some("*/*"))]),
+            None,
+            entries(&[]),
+            entries(&[("k", None)]),
+            entries(&[("héader", Some("välue")), ("ключ", Some("значение"))]),
+            Some(hundred),
+            entries(&[("z", Some("1")), ("a", Some("2"))]),
+        ]),
+        ColumnValues::Int64((0..7).map(|i| (i != 3).then_some(i * 10)).collect()),
+        ColumnValues::Map(
+            (0..7)
+                .map(|i| entries(&[("n", Some("v"))][..(i % 2)]))
+                .collect(),
+        ),
+    ]
+}
+
+fn map_schema() -> Vec<ColumnSpec> {
+    vec![
+        ColumnSpec::new("id", ColumnType::Int32, false),
+        ColumnSpec::new("h", ColumnType::MapUtf8, true),
+        ColumnSpec::new("x", ColumnType::Int64, true),
+        ColumnSpec::new("r", ColumnType::MapUtf8, false),
+    ]
+}
+
 fn cases() -> Vec<Case> {
     vec![
+        Case {
+            name: "maps_dictionary",
+            schema: map_schema(),
+            batches: (0..3).map(|_| map_batch()).collect(),
+            options: options(Compression::Snappy, true, 100),
+        },
+        Case {
+            name: "maps_plain",
+            schema: map_schema(),
+            batches: vec![map_batch()],
+            options: options(Compression::Uncompressed, false, 3),
+        },
         Case {
             name: "extended_types_dictionary",
             schema: extended_types_schema(),
@@ -415,6 +475,24 @@ fn json_values(out: &mut String, values: &ColumnValues) {
         ColumnValues::UInt64(v) => list(out, v, |o, x| o.push_str(&format!("{x}"))),
         // The unscaled value; the scale is in the type name.
         ColumnValues::Decimal(v) => list(out, v, |o, x| o.push_str(&format!("{x}"))),
+        // A map as its [key, value|null] pairs, in order.
+        ColumnValues::Map(v) => list(out, v, |o, entries| {
+            o.push('[');
+            for (i, (k, val)) in entries.iter().enumerate() {
+                if i > 0 {
+                    o.push(',');
+                }
+                o.push('[');
+                json_string(o, k);
+                o.push(',');
+                match val {
+                    Some(val) => json_string(o, val),
+                    None => o.push_str("null"),
+                }
+                o.push(']');
+            }
+            o.push(']');
+        }),
     }
 }
 
@@ -435,6 +513,7 @@ fn type_name(t: ColumnType) -> String {
         ColumnType::UInt64 => "uint64".into(),
         ColumnType::Decimal { precision, scale } => format!("decimal({precision},{scale})"),
         ColumnType::FixedLenByteArray(len) => format!("fixed({len})"),
+        ColumnType::MapUtf8 => "map(utf8,utf8)".into(),
     }
 }
 
@@ -523,6 +602,10 @@ fn concat(a: ColumnValues, b: &ColumnValues) -> ColumnValues {
         (ColumnValues::FixedLenByteArray(mut a), ColumnValues::FixedLenByteArray(b)) => {
             a.extend_from_slice(b);
             ColumnValues::FixedLenByteArray(a)
+        }
+        (ColumnValues::Map(mut a), ColumnValues::Map(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::Map(a)
         }
         (a, _) => a,
     }
@@ -764,6 +847,7 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
         ColumnSpec::new("ip", ColumnType::FixedLenByteArray(16), true),
         ColumnSpec::new("memo", ColumnType::Binary, true),
         ColumnSpec::new("score", ColumnType::Double, true),
+        ColumnSpec::new("headers", ColumnType::MapUtf8, true),
     ];
     let start = 20_737 * DAY; // 2026-10-11
     NOW.store(start, std::sync::atomic::Ordering::SeqCst);
@@ -788,7 +872,7 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
         ip[11] = 0xff;
         ip[12..].copy_from_slice(&[10, 0, (i / 256) as u8, i as u8]);
         // Ids above i64::MAX, amounts both signs, some NULLs.
-        let row = vec![
+        let mut row = vec![
             RecordValue::UInt(u64::MAX - i * 7_919),
             RecordValue::Str(format!("NL{:02}BANK{:04}", i % 13, i % 97)),
             RecordValue::Decimal((i as i128 - 1_500) * 1_234_567),
@@ -809,8 +893,14 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
             } else {
                 RecordValue::Float(i as f64 * 0.25 - 100.0)
             },
+            RecordValue::Null,
         ];
-        let json: Vec<String> = row.iter().map(record_json).collect();
+        let (headers, stored) = record_headers(i);
+        let mut json: Vec<String> = row.iter().map(record_json).collect();
+        if let (Some(last), Some(slot)) = (row.last_mut(), json.last_mut()) {
+            *last = headers;
+            *slot = record_json(&stored);
+        }
         writer
             .append_row(row, Ack::Memory)
             .map_err(|e| e.to_string())?;
@@ -861,8 +951,49 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Row `i`'s `headers` map as appended, and as the table stores it (a
+/// repeated key's values joined, #621): NULL, empty, 1, 3 and 100 entries,
+/// a NULL value, non-ASCII keys, a repeated `X-Forwarded-For`.
+fn record_headers(i: u64) -> (RecordValue, RecordValue) {
+    let map = |e: &[(&str, Option<&str>)]| {
+        RecordValue::Map(
+            e.iter()
+                .map(|(k, v)| (k.to_string(), v.map(str::to_string)))
+                .collect(),
+        )
+    };
+    let same = |v: RecordValue| (v.clone(), v);
+    match i % 7 {
+        0 => same(RecordValue::Null),
+        1 => same(map(&[])),
+        2 => same(map(&[("User-Agent", Some("curl/8"))])),
+        3 => same(map(&[
+            ("Accept", None),
+            ("héader", Some("välue")),
+            ("ключ", Some("значение")),
+        ])),
+        4 => same(RecordValue::Map(
+            (0..100)
+                .map(|k| (format!("h{k:03}"), Some(format!("{}", k * i))))
+                .collect(),
+        )),
+        5 => (
+            map(&[
+                ("X-Forwarded-For", Some("10.0.0.1")),
+                ("Host", Some("a")),
+                ("X-Forwarded-For", Some("10.0.0.2")),
+            ]),
+            map(&[
+                ("X-Forwarded-For", Some("10.0.0.1, 10.0.0.2")),
+                ("Host", Some("a")),
+            ]),
+        ),
+        _ => same(map(&[("Host", Some(&format!("h{i}")))])),
+    }
+}
+
 /// A record value as the checker's JSON: integers and unscaled decimals
-/// as numbers, bytes as lowercase hex.
+/// as numbers, bytes as lowercase hex, a map as `[key, value]` pairs.
 fn record_json(v: &RecordValue) -> String {
     let mut out = String::new();
     match v {
@@ -876,6 +1007,23 @@ fn record_json(v: &RecordValue) -> String {
         RecordValue::Bytes(b) => {
             let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
             json_string(&mut out, &hex);
+        }
+        RecordValue::Map(entries) => {
+            out.push('[');
+            for (n, (k, v)) in entries.iter().enumerate() {
+                if n > 0 {
+                    out.push(',');
+                }
+                out.push('[');
+                json_string(&mut out, k);
+                out.push(',');
+                match v {
+                    Some(v) => json_string(&mut out, v),
+                    None => out.push_str("null"),
+                }
+                out.push(']');
+            }
+            out.push(']');
         }
     }
     out

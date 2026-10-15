@@ -3,7 +3,7 @@ members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"
-version = "0.130.0"
+version = "0.131.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -243,6 +243,10 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 [[example]]
 name = "parquet_write_oracle"
 required-features = ["ingest"]
+
+[[example]]
+name = "map_vs_flat"
+required-features = ["storage-column-write", "engine-column"]
 
 [[bin]]
 name = "wal_probe"
