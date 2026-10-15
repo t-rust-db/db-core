@@ -244,6 +244,10 @@ proptest = { version = "1", default-features = false, features = ["std"] }
 name = "parquet_write_oracle"
 required-features = ["ingest"]
 
+[[example]]
+name = "map_vs_flat"
+required-features = ["storage-column-write", "engine-column"]
+
 [[bin]]
 name = "wal_probe"
 path = "tests/helpers/wal_probe.rs"
