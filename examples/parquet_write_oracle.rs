@@ -23,7 +23,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use db_core::storage::ingest::Ack;
-use db_core::storage::ingest::{Layout, TableOptions, TableWriter, TierOptions};
+use db_core::storage::ingest::{Layout, RecordValue, TableOptions, TableWriter, TierOptions};
 use db_core::storage::parquet::footer::PhysicalType;
 use db_core::storage::parquet::writer::{
     ColumnSpec, ColumnType, ColumnValues, Compression, ParquetWriter, WriterOptions,
@@ -738,6 +738,149 @@ fn tiered_table_case(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// #594: a relational dump (transactions) imported into a tiered record
+/// table over three days and compacted. Writes `record_table.records`: the
+/// declared columns and every archived row, so the checker reads
+/// `archive/` with DuckDB and pyarrow (no `union_by_name`: every file must
+/// carry exactly the declared schema) and compares types and values.
+fn record_table_case(dir: &Path) -> Result<(), String> {
+    const HOUR: i64 = 3_600_000_000_000;
+    const DAY: i64 = 24 * HOUR;
+    let table = dir.join("record_table");
+    fs::remove_dir_all(&table).ok();
+    let schema = vec![
+        ColumnSpec::new("txn_id", ColumnType::UInt64, false),
+        ColumnSpec::new("account", ColumnType::Utf8, false),
+        ColumnSpec::new(
+            "amount",
+            ColumnType::Decimal {
+                precision: 18,
+                scale: 2,
+            },
+            false,
+        ),
+        ColumnSpec::new("booked_at", ColumnType::TimestampMicros, false),
+        ColumnSpec::new("channel", ColumnType::UInt8, false),
+        ColumnSpec::new("ip", ColumnType::FixedLenByteArray(16), true),
+        ColumnSpec::new("memo", ColumnType::Binary, true),
+        ColumnSpec::new("score", ColumnType::Double, true),
+    ];
+    let start = 20_737 * DAY; // 2026-10-11
+    NOW.store(start, std::sync::atomic::Ordering::SeqCst);
+    let options = TableOptions {
+        schema: Some(schema.clone()),
+        layout: Layout::Tiered(TierOptions {
+            sort_key: vec!["account".to_string(), "txn_id".to_string()],
+            row_group_max_rows: 200,
+            max_file_size: 32 * 1024,
+            delete_grace_ns: 0,
+        }),
+        clock: now,
+        ..TableOptions::default()
+    };
+    let mut writer = TableWriter::open(&table, options).map_err(|e| e.to_string())?;
+    let mut archived: Vec<Vec<String>> = Vec::new();
+    for i in 0..3_000u64 {
+        let at = start + i.cast_signed() * 100_000_000_000;
+        NOW.store(at, std::sync::atomic::Ordering::SeqCst);
+        let mut ip = [0u8; 16];
+        ip[10] = 0xff;
+        ip[11] = 0xff;
+        ip[12..].copy_from_slice(&[10, 0, (i / 256) as u8, i as u8]);
+        // Ids above i64::MAX, amounts both signs, some NULLs.
+        let row = vec![
+            RecordValue::UInt(u64::MAX - i * 7_919),
+            RecordValue::Str(format!("NL{:02}BANK{:04}", i % 13, i % 97)),
+            RecordValue::Decimal((i as i128 - 1_500) * 1_234_567),
+            RecordValue::Int(1_760_000_000_000_000 + i.cast_signed() * 1_000_003),
+            RecordValue::UInt(i % 256),
+            if i.is_multiple_of(9) {
+                RecordValue::Null
+            } else {
+                RecordValue::Bytes(ip.to_vec())
+            },
+            if i.is_multiple_of(4) {
+                RecordValue::Null
+            } else {
+                RecordValue::Bytes(vec![0x80 | (i % 64) as u8, 0, 0xff])
+            },
+            if i.is_multiple_of(5) {
+                RecordValue::Null
+            } else {
+                RecordValue::Float(i as f64 * 0.25 - 100.0)
+            },
+        ];
+        let json: Vec<String> = row.iter().map(record_json).collect();
+        writer
+            .append_row(row, Ack::Memory)
+            .map_err(|e| e.to_string())?;
+        if (at.div_euclid(DAY) - 20_737) < 3 {
+            archived.push(json);
+        }
+        if i % 400 == 0 {
+            writer.compact().map_err(|e| e.to_string())?;
+        }
+    }
+    NOW.store(
+        start + 3 * DAY + 2 * HOUR,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    writer.compact().map_err(|e| e.to_string())?;
+    writer.compact().map_err(|e| e.to_string())?;
+    if !writer
+        .manifest()
+        .files
+        .iter()
+        .any(|f| f.area.as_str() == "archive")
+    {
+        return Err("expected archived days".to_string());
+    }
+    writer.close().map_err(|e| e.to_string())?;
+    let mut out = String::from("{\"columns\":[");
+    for (i, spec) in schema.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!(
+            "{{\"name\":\"{}\",\"type\":\"{}\",\"nullable\":{}}}",
+            spec.name,
+            type_name(spec.column_type),
+            spec.nullable
+        ));
+    }
+    out.push_str("],\"rows\":[");
+    for (i, row) in archived.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&format!("[{}]", row.join(",")));
+    }
+    out.push_str("]}");
+    fs::write(dir.join("record_table.records"), out).map_err(|e| e.to_string())?;
+    println!("record_table: {} archived rows over 3 days", archived.len());
+    Ok(())
+}
+
+/// A record value as the checker's JSON: integers and unscaled decimals
+/// as numbers, bytes as lowercase hex.
+fn record_json(v: &RecordValue) -> String {
+    let mut out = String::new();
+    match v {
+        RecordValue::Null => out.push_str("null"),
+        RecordValue::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        RecordValue::Int(i) => out.push_str(&i.to_string()),
+        RecordValue::UInt(u) => out.push_str(&u.to_string()),
+        RecordValue::Decimal(d) => out.push_str(&d.to_string()),
+        RecordValue::Float(f) => json_float(&mut out, *f),
+        RecordValue::Str(s) => json_string(&mut out, s),
+        RecordValue::Bytes(b) => {
+            let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+            json_string(&mut out, &hex);
+        }
+    }
+    out
+}
+
 fn main() -> ExitCode {
     let Some(dir) = std::env::args().nth(1) else {
         eprintln!("usage: parquet_write_oracle <out_dir>");
@@ -760,6 +903,10 @@ fn main() -> ExitCode {
     }
     if let Err(e) = tiered_table_case(dir) {
         eprintln!("tiered_table: {e}");
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = record_table_case(dir) {
+        eprintln!("record_table: {e}");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS

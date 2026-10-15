@@ -26,11 +26,13 @@
 use std::fmt;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::flush::{add_field, add_page_fields, predefined_specs};
 use super::manifest::{FileEntry, Manifest};
 use super::page::{decode_record, HeadPage, Page};
+use super::record::{check_row, decode_row};
 use super::recover::read_tail;
 use super::table::IngestError;
 use super::wal::{Record, WAL_DIR};
@@ -80,7 +82,8 @@ impl Snapshot {
                 std::thread::sleep(Duration::from_millis(1));
                 continue;
             };
-            let pages = pages_from_records(table, manifest.format, records)?;
+            let pages =
+                pages_from_records(table, manifest.format, manifest.schema.as_deref(), records)?;
             match Snapshot::new(table, manifest, pages) {
                 // A compaction replaced the file and its grace period is
                 // over: a newer manifest no longer lists it.
@@ -146,7 +149,7 @@ impl Snapshot {
 
     /// Records in the snapshot.
     pub fn rows(&self) -> u64 {
-        let paged: usize = self.pages.iter().map(|p| p.segment.len()).sum();
+        let paged: usize = self.pages.iter().map(Page::len).sum();
         self.manifest
             .files
             .iter()
@@ -158,6 +161,10 @@ impl Snapshot {
     /// The table's columns: the predefined ones, then every field of every
     /// file and page in LSN order, a field's type widened over all of them.
     pub fn schema(&self) -> Result<Vec<ColumnSpec>, IngestError> {
+        // A record table's columns are its schema, whatever is flushed.
+        if let Some(schema) = &self.manifest.schema {
+            return Ok(schema.clone());
+        }
         let mut specs = predefined_specs();
         for (entry, bytes) in self.files() {
             let file = ParquetFile::open(bytes)
@@ -176,10 +183,12 @@ impl Snapshot {
 }
 
 /// Pages holding `records` (WAL payloads), sealed at the page size as the
-/// writer seals them.
+/// writer seals them: a lines table's lines in `format`, or a record
+/// table's rows of `schema`.
 pub(crate) fn pages_from_records(
     table: &Path,
     format: Format,
+    schema: Option<&[ColumnSpec]>,
     records: Vec<Record>,
 ) -> Result<Vec<Page>, IngestError> {
     let parser = DetectedParser::for_format(format);
@@ -188,12 +197,20 @@ pub(crate) fn pages_from_records(
         head.snapshot(&source, &parser)
             .ok_or_else(|| IngestError::Corrupt("the parser rejected a page".to_string()))
     };
-    let mut head = HeadPage::default();
+    let mut head = schema.map_or_else(HeadPage::default, |s| HeadPage::for_records(Arc::from(s)));
     let mut pages = Vec::new();
     for (lsn, payload) in records {
-        let (observed, line) = decode_record(&payload)
-            .ok_or_else(|| IngestError::Corrupt(format!("WAL record {lsn} is not a record")))?;
-        head.push(lsn, observed, line);
+        let corrupt = || IngestError::Corrupt(format!("WAL record {lsn} is not a record"));
+        let (observed, body) = decode_record(&payload).ok_or_else(corrupt)?;
+        match schema {
+            Some(schema) => {
+                let row = decode_row(body)
+                    .filter(|row| check_row(schema, row).is_none())
+                    .ok_or_else(corrupt)?;
+                head.push_row(lsn, observed, row);
+            }
+            None => head.push(lsn, observed, body),
+        }
         if head.is_full() {
             pages.push(seal(&head)?);
             head.clear();

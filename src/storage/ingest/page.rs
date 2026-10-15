@@ -8,22 +8,74 @@
 //!
 //! In the WAL a record is `[observed_ts i64 LE][line]`, so a replayed
 //! record keeps the arrival time it was given.
+//!
+//! A record table's (#594) pages hold typed rows instead: a [`RowPage`].
 
 use std::sync::Arc;
 
+use super::record::{RecordValue, RowPage};
+use crate::storage::parquet::writer::ColumnSpec;
 use crate::storage::stream::detect::DetectedParser;
 use crate::storage::stream::segment::SEGMENT_MAX_ROWS;
 use crate::storage::stream::{Segment, Source};
 
-/// A sealed page: an immutable segment and the LSNs it holds.
+/// A sealed page: its rows and the LSNs it holds.
 #[derive(Debug, Clone)]
 pub struct Page {
     /// First LSN.
     pub lsn_lo: u64,
     /// Last LSN.
     pub lsn_hi: u64,
-    /// The parsed rows, one per LSN.
-    pub segment: Arc<Segment>,
+    /// The rows, one per LSN.
+    pub body: PageBody,
+}
+
+/// A page's rows: parsed lines, or a record table's typed rows.
+#[derive(Debug, Clone)]
+pub enum PageBody {
+    /// A lines table's: the parsed segment.
+    Lines(Arc<Segment>),
+    /// A record table's (#594).
+    Rows(Arc<RowPage>),
+}
+
+impl Page {
+    /// Rows in the page.
+    pub fn len(&self) -> usize {
+        match &self.body {
+            PageBody::Lines(segment) => segment.len(),
+            PageBody::Rows(rows) => rows.len(),
+        }
+    }
+
+    /// No rows.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The parsed segment of a lines table's page.
+    pub fn lines(&self) -> Option<&Arc<Segment>> {
+        match &self.body {
+            PageBody::Lines(segment) => Some(segment),
+            PageBody::Rows(_) => None,
+        }
+    }
+
+    /// Each row's arrival time (ns).
+    pub fn observed_ts_ns(&self) -> Vec<Option<i64>> {
+        match &self.body {
+            PageBody::Lines(segment) => segment.observed_ts_ns().to_vec(),
+            PageBody::Rows(rows) => rows.observed_ts_ns().iter().copied().map(Some).collect(),
+        }
+    }
+
+    /// The first row's arrival time.
+    pub fn first_observed(&self) -> Option<i64> {
+        match &self.body {
+            PageBody::Lines(segment) => segment.observed_ts_ns().first().copied().flatten(),
+            PageBody::Rows(rows) => rows.observed_ts_ns().first().copied(),
+        }
+    }
 }
 
 /// The WAL payload for a record.
@@ -52,15 +104,37 @@ pub(crate) fn invalid_line(line: &[u8]) -> Option<String> {
     None
 }
 
-/// The mutable head: lines not yet sealed.
+/// The mutable head: lines (or, for a record table, rows) not yet sealed.
 #[derive(Debug, Default)]
 pub(crate) struct HeadPage {
     lsn_lo: u64,
     bytes: Vec<u8>,
     observed: Vec<i64>,
+    /// A record table's rows; `None` for a lines table.
+    rows: Option<RowPage>,
 }
 
 impl HeadPage {
+    /// An empty head for a record table with `schema`.
+    pub(crate) fn for_records(schema: Arc<[ColumnSpec]>) -> HeadPage {
+        HeadPage {
+            rows: Some(RowPage::new(schema)),
+            ..HeadPage::default()
+        }
+    }
+
+    /// Appends row `lsn` of a record table (checked against its schema),
+    /// which must follow the head's last LSN.
+    pub(crate) fn push_row(&mut self, lsn: u64, observed_ts_ns: i64, row: Vec<RecordValue>) {
+        if self.observed.is_empty() {
+            self.lsn_lo = lsn;
+        }
+        self.observed.push(observed_ts_ns);
+        if let Some(rows) = &mut self.rows {
+            rows.push(observed_ts_ns, row);
+        }
+    }
+
     /// Rows in the head.
     pub(crate) fn len(&self) -> usize {
         self.observed.len()
@@ -90,6 +164,13 @@ impl HeadPage {
     pub(crate) fn snapshot(&self, source: &Source, parser: &DetectedParser) -> Option<Page> {
         let count = u64::try_from(self.len()).ok()?;
         let lsn_hi = self.lsn_lo.checked_add(count)?.checked_sub(1)?;
+        if let Some(rows) = &self.rows {
+            return Some(Page {
+                lsn_lo: self.lsn_lo,
+                lsn_hi,
+                body: PageBody::Rows(Arc::new(rows.clone())),
+            });
+        }
         let segment = Segment::seal_lines(
             Arc::from(self.bytes.as_slice()),
             self.lsn_lo,
@@ -100,7 +181,7 @@ impl HeadPage {
         Some(Page {
             lsn_lo: self.lsn_lo,
             lsn_hi,
-            segment: Arc::new(segment),
+            body: PageBody::Lines(Arc::new(segment)),
         })
     }
 
@@ -108,6 +189,9 @@ impl HeadPage {
     pub(crate) fn clear(&mut self) {
         self.bytes.clear();
         self.observed.clear();
+        if let Some(rows) = &mut self.rows {
+            *rows = rows.cleared();
+        }
     }
 }
 
@@ -143,8 +227,11 @@ mod tests {
         assert!(!head.is_full());
         let page = head.snapshot(&source, &parser).unwrap();
         assert_eq!((page.lsn_lo, page.lsn_hi), (41, 42));
-        assert_eq!(page.segment.len(), 2);
-        assert_eq!(page.segment.observed_ts_ns(), &[Some(100), Some(200)]);
+        assert_eq!(page.lines().unwrap().len(), 2);
+        assert_eq!(
+            page.lines().unwrap().observed_ts_ns(),
+            &[Some(100), Some(200)]
+        );
         head.clear();
         assert_eq!(head.len(), 0);
         head.push(43, 300, b"{}");

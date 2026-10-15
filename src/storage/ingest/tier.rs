@@ -7,6 +7,11 @@
 //! row group holds a range of the sort key. A day merge copies those row
 //! groups as they are (a row group never spans an hour), and starts a new
 //! file at an input file boundary once a file reaches `max_file_size`.
+//!
+//! A record table's (#594) hour and day keep its declared schema: its rows
+//! are sorted and written as the typed columns they are, and a day merge
+//! reads every column back as its declared type, so logical types (a
+//! DECIMAL, an unsigned integer, a timestamp) survive compaction.
 
 use std::fs::{self, File};
 use std::io::BufWriter;
@@ -15,7 +20,8 @@ use std::path::{Path, PathBuf};
 use super::flush::{add_field, bounds, convert, predefined_specs, schema, FlushedFile};
 use super::layout::{compare, TierOptions};
 use super::manifest::FileEntry;
-use super::page::Page;
+use super::page::{Page, PageBody};
+use super::record::{compare_rows, concat, gather, read_column};
 use super::snapshot::{cast, column_type};
 use super::table::IngestError;
 use crate::storage::parquet::footer::PhysicalType;
@@ -170,9 +176,10 @@ fn widen_bounds(a: Bounds, b: Bounds) -> Bounds {
 fn page_rows(pages: &[Page], spec: &ColumnSpec, format: Format) -> Vec<Value> {
     pages
         .iter()
-        .flat_map(|page| {
-            stored_column_values(&page.segment, &spec.name, format)
-                .unwrap_or_else(|| vec![Value::Null; page.segment.len()])
+        .filter_map(Page::lines)
+        .flat_map(|segment| {
+            stored_column_values(segment, &spec.name, format)
+                .unwrap_or_else(|| vec![Value::Null; segment.len()])
         })
         .map(|v| cast(v, spec.column_type))
         .collect()
@@ -222,8 +229,11 @@ pub(crate) fn write_hour(
     let (Some(first), Some(last)) = (pages.first(), pages.last()) else {
         return Err(IngestError::Corrupt("no pages to write".to_string()));
     };
+    if let PageBody::Rows(_) = first.body {
+        return write_record_hour(dir, pages, tier, parquet);
+    }
     let specs = schema(pages);
-    let total: usize = pages.iter().map(|p| p.segment.len()).sum();
+    let total: usize = pages.iter().map(Page::len).sum();
     let columns: Vec<Vec<Value>> = specs.iter().map(|s| page_rows(pages, s, format)).collect();
     let columns = sorted(columns, &specs, &tier.sort_key);
     let range_of = |name: &str| {
@@ -265,6 +275,72 @@ pub(crate) fn write_hour(
     Ok(outputs)
 }
 
+/// [`write_hour`] for a record table: the typed columns concatenated,
+/// sorted by `sort_key` and cut into row groups as they are. The output's
+/// `observed_ts` range is the rows' arrival times (not written: a record
+/// table has only its own columns); it has no `timestamp` range.
+fn write_record_hour(
+    dir: &Path,
+    pages: &[Page],
+    tier: &TierOptions,
+    parquet: &WriterOptions,
+) -> Result<Vec<Output>, IngestError> {
+    let row_pages: Vec<_> = pages
+        .iter()
+        .filter_map(|p| match &p.body {
+            PageBody::Rows(rows) => Some(rows),
+            PageBody::Lines(_) => None,
+        })
+        .collect();
+    let (Some(first), Some(last), Some(rows)) = (pages.first(), pages.last(), row_pages.first())
+    else {
+        return Err(IngestError::Corrupt("no record pages to write".to_string()));
+    };
+    let specs = rows.schema().to_vec();
+    let columns: Vec<_> = specs
+        .iter()
+        .enumerate()
+        .map(|(i, spec)| {
+            let parts: Vec<_> = row_pages
+                .iter()
+                .filter_map(|r| r.columns().get(i))
+                .collect();
+            concat(spec.column_type, &parts)
+        })
+        .collect();
+    let keys: Vec<usize> = tier
+        .sort_key
+        .iter()
+        .filter_map(|k| specs.iter().position(|s| s.name == *k))
+        .collect();
+    let total: usize = row_pages.iter().map(|r| r.len()).sum();
+    let mut order: Vec<usize> = (0..total).collect();
+    order.sort_by(|&a, &b| {
+        keys.iter()
+            .filter_map(|&k| columns.get(k))
+            .map(|c| compare_rows(c, a, b))
+            .find(|o| o.is_ne())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let observed = bounds(
+        row_pages
+            .iter()
+            .flat_map(|r| r.observed_ts_ns().iter().copied().map(Some)),
+    );
+    let chunk = tier.row_group_max_rows.max(1);
+    let mut files = Files::new(dir, specs, parquet, tier);
+    for rows in order.chunks(chunk) {
+        let values = columns.iter().map(|c| gather(c, rows)).collect();
+        files.row_group(values, first.lsn_lo, last.lsn_hi)?;
+    }
+    let mut outputs = files.finish()?;
+    for output in &mut outputs {
+        output.file.observed_ts = observed;
+        output.file.timestamp = None;
+    }
+    Ok(outputs)
+}
+
 /// One column chunk of `rg` as values, by its physical type.
 fn read_values(
     rg: &RowGroupReader<'_, '_>,
@@ -299,10 +375,11 @@ fn read_values(
 
 /// Merges one closed day's hour files (`inputs`, contiguous, oldest first)
 /// into `dir`, which must exist and be empty: their row groups, in order,
-/// under the day's widened schema.
+/// under the day's widened schema, or a record table's `schema`.
 pub(crate) fn merge_day(
     dir: &Path,
     inputs: &[(&FileEntry, &[u8])],
+    schema: Option<&[ColumnSpec]>,
     tier: &TierOptions,
     parquet: &WriterOptions,
 ) -> Result<Vec<Output>, IngestError> {
@@ -315,14 +392,20 @@ pub(crate) fn merge_day(
                 .map_err(|e| corrupt(&entry.path, e.to_string()))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut specs = predefined_specs();
-    for (_, file) in &opened {
-        for element in file.metadata().schema.iter().skip(1) {
-            if let Some(t) = element.physical_type.and_then(column_type) {
-                add_field(&mut specs, &element.name, t);
+    let specs = match schema {
+        Some(schema) => schema.to_vec(),
+        None => {
+            let mut specs = predefined_specs();
+            for (_, file) in &opened {
+                for element in file.metadata().schema.iter().skip(1) {
+                    if let Some(t) = element.physical_type.and_then(column_type) {
+                        add_field(&mut specs, &element.name, t);
+                    }
+                }
             }
+            specs
         }
-    }
+    };
     let mut files = Files::new(dir, specs.clone(), parquet, tier);
     let mut bounds_by_file = Vec::new();
     let mut current: (Bounds, Bounds) = (None, None);
@@ -341,7 +424,19 @@ pub(crate) fn merge_day(
                 .map_err(|_| corrupt(&entry.path, "negative row count".to_string()))?;
             let mut columns = Vec::with_capacity(specs.len());
             for spec in &specs {
-                let values = match leaves.iter().find(|(name, _, _)| *name == spec.name) {
+                let leaf = leaves.iter().find(|(name, _, _)| *name == spec.name);
+                if schema.is_some() {
+                    // A record table's file has every column, as declared.
+                    let (_, index, _) = leaf.ok_or_else(|| {
+                        corrupt(&entry.path, format!("has no column {}", spec.name))
+                    })?;
+                    columns.push(
+                        read_column(&rg, *index, spec.column_type)
+                            .map_err(|e| corrupt(&entry.path, e.to_string()))?,
+                    );
+                    continue;
+                }
+                let values = match leaf {
                     Some((_, index, pt)) => read_values(&rg, *index, *pt)
                         .map_err(|why| corrupt(&entry.path, why))?
                         .into_iter()

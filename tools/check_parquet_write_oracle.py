@@ -288,6 +288,41 @@ def check_archive(spec, fails):
         fails.check(False, "live/: expected the open day's hours")
 
 
+def check_records(spec, fails):
+    """#594: DuckDB and pyarrow read a tiered record table's `archive/`
+    with exactly its declared column types (no `union_by_name`: every file
+    has the same schema), and every archived row with its values."""
+    expected = json.loads(spec.read_text())
+    columns = expected["columns"]
+    names = [c["name"] for c in columns]
+    files = sorted((spec.with_suffix("") / "archive").rglob("*.parquet"))
+    fails.check(bool(files), "record archive: no files")
+    glob = (spec.with_suffix("") / "archive" / "*" / "*.parquet").as_posix()
+    con = duckdb.connect()
+    source = f"read_parquet('{glob}', hive_partitioning = false)"
+    described = con.execute(f"SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM {source})").fetchall()
+    want_types = [(c["name"], duckdb_type(c["type"])) for c in columns]
+    fails.check(described == want_types, f"duckdb record types {described}, expected {want_types}")
+    select = []
+    for c in columns:
+        q = '"' + c["name"].replace('"', '""') + '"'
+        select.append({"timestamp_micros": f"epoch_us({q})", "timestamp_nanos": f"epoch_ns({q})"}.get(c["type"], q))
+    got = con.execute(f"SELECT {', '.join(select)} FROM {source}").fetchall()
+
+    def norm(rows):
+        return sorted((tuple(normalize(c["type"], v) for c, v in zip(columns, row)) for row in rows), key=repr)
+
+    want = norm(expected["rows"])
+    fails.check(norm(got) == want, f"duckdb record rows: {len(got)} vs {len(want)}; {first_diff(norm(got), want)}")
+    for path in files:
+        schema = pq.read_schema(path)
+        fails.check(schema.names == names, f"pyarrow {path.name}: columns {schema.names}")
+        for c in columns:
+            field = schema.field(c["name"])
+            fails.check(field.type == arrow_type(c["type"]), f"pyarrow {path.name} {c['name']}: type {field.type}")
+            fails.check(field.nullable == c["nullable"], f"pyarrow {path.name} {c['name']}: nullable {field.nullable}")
+
+
 def first_diff(a, b):
     for i, (x, y) in enumerate(zip(a, b)):
         if x != y:
@@ -326,9 +361,19 @@ def main():
         for item in fails.items[:20]:
             print(f"    {item}")
         failed += bool(fails.items)
+    records = sorted(Path(sys.argv[1]).glob("*.records"))
+    for spec in records:
+        fails = Failures()
+        check_records(spec, fails)
+        status = "ok" if not fails.items else f"FAIL ({len(fails.items)})"
+        print(f"  {spec.stem} (record table archive/): {status}")
+        for item in fails.items[:20]:
+            print(f"    {item}")
+        failed += bool(fails.items)
+    total = len(cases) + len(archives) + len(records)
     if failed:
-        sys.exit(f"{failed} of {len(cases) + len(archives)} cases failed")
-    print(f"all {len(cases) + len(archives)} cases agree with DuckDB and pyarrow")
+        sys.exit(f"{failed} of {total} cases failed")
+    print(f"all {total} cases agree with DuckDB and pyarrow")
 
 
 if __name__ == "__main__":

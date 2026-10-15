@@ -59,8 +59,8 @@ fn all_rows(w: &TableWriter) -> Vec<String> {
         }
     }
     for page in w.sealed_pages().iter().chain(w.head_page().iter()) {
-        for i in 0..page.segment.len() {
-            rows.push(String::from_utf8(page.segment.raw_line(i).to_vec()).unwrap());
+        for i in 0..page.lines().unwrap().len() {
+            rows.push(String::from_utf8(page.lines().unwrap().raw_line(i).to_vec()).unwrap());
         }
     }
     rows
@@ -87,7 +87,7 @@ fn append_seal_flush_and_read_back() {
     let t = TempTable::new();
     let mut w = open(&t);
     let lines = append_lines(&mut w, 0..10);
-    assert_eq!(w.head_page().unwrap().segment.len(), 10);
+    assert_eq!(w.head_page().unwrap().lines().unwrap().len(), 10);
     let entry = w.flush_all().unwrap().remove(0);
     assert_eq!((entry.lsn_lo, entry.lsn_hi, entry.rows), (1, 10, 10));
     assert_eq!(entry.path, format!("data/{:020}-{:020}.parquet", 1, 10));
@@ -110,7 +110,13 @@ fn unflushed_records_come_back_as_pages_on_reopen() {
     lines.extend(append_lines(&mut w, 5..12));
     w.seal_head().unwrap();
     lines.extend(append_lines(&mut w, 12..15));
-    let observed_before = w.head_page().unwrap().segment.observed_ts_ns().to_vec();
+    let observed_before = w
+        .head_page()
+        .unwrap()
+        .lines()
+        .unwrap()
+        .observed_ts_ns()
+        .to_vec();
     w.close().unwrap();
 
     let w = open(&t);
@@ -118,7 +124,7 @@ fn unflushed_records_come_back_as_pages_on_reopen() {
     assert_eq!(all_rows(&w), lines);
     // Replayed records keep their arrival time.
     let replayed = w.head_page().unwrap();
-    let tail = &replayed.segment.observed_ts_ns()[replayed.segment.len() - 3..];
+    let tail = &replayed.lines().unwrap().observed_ts_ns()[replayed.lines().unwrap().len() - 3..];
     assert_eq!(tail, &observed_before[..]);
 }
 
@@ -199,8 +205,8 @@ fn a_full_head_seals_itself() {
         w.append(line(i).as_bytes(), Ack::Memory).unwrap();
     }
     assert_eq!(w.sealed_pages().len(), 1);
-    assert_eq!(w.sealed_pages()[0].segment.len(), max);
-    assert_eq!(w.head_page().unwrap().segment.len(), 3);
+    assert_eq!(w.sealed_pages()[0].lines().unwrap().len(), max);
+    assert_eq!(w.head_page().unwrap().lines().unwrap().len(), 3);
 }
 
 #[test]

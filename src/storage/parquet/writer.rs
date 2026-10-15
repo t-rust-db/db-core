@@ -280,7 +280,7 @@ impl ColumnValues {
 
     /// Appends `other`, which the caller has checked is of the same type;
     /// a batch of another type is left unappended.
-    fn append(&mut self, other: ColumnValues) {
+    pub(crate) fn append(&mut self, other: ColumnValues) {
         match (self, other) {
             (ColumnValues::Boolean(a), ColumnValues::Boolean(b)) => a.extend(b),
             (ColumnValues::Int32(a), ColumnValues::Int32(b)) => a.extend(b),
@@ -644,7 +644,7 @@ impl<W: Write> ParquetWriter<W> {
     }
 }
 
-fn validate_schema(schema: &[ColumnSpec]) -> Result<(), WriteError> {
+pub(crate) fn validate_schema(schema: &[ColumnSpec]) -> Result<(), WriteError> {
     if schema.is_empty() {
         return Err(WriteError::InvalidSchema("no columns".to_string()));
     }

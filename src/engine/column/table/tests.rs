@@ -1,7 +1,8 @@
 use super::*;
 use crate::engine::Cell;
 use crate::storage::ingest::layout::{DAY_NS, HOUR_NS};
-use crate::storage::ingest::{Ack, Layout, TableOptions, TableWriter, TierOptions};
+use crate::storage::ingest::{Ack, Layout, RecordValue, TableOptions, TableWriter, TierOptions};
+use crate::storage::parquet::writer::{ColumnSpec, ColumnType};
 use crate::test_rng::Rng;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -265,33 +266,139 @@ const INVARIANCE_QUERIES: [&str; 9] = [
     "SELECT severity, MAX(n) FROM logs GROUP BY severity ORDER BY severity",
 ];
 
+/// A record table's (#594) schema for the flush-timing test: unsigned,
+/// decimal, binary and timestamp columns, which a flush writes as their
+/// Parquet types and the engine reads back from both pages and files.
+fn record_schema() -> Vec<ColumnSpec> {
+    vec![
+        ColumnSpec::new("id", ColumnType::UInt64, false),
+        ColumnSpec::new("kind", ColumnType::Utf8, true),
+        ColumnSpec::new("n", ColumnType::Int32, true),
+        ColumnSpec::new(
+            "amount",
+            ColumnType::Decimal {
+                precision: 10,
+                scale: 2,
+            },
+            true,
+        ),
+        ColumnSpec::new("u", ColumnType::UInt32, true),
+        ColumnSpec::new("blob", ColumnType::Binary, true),
+        ColumnSpec::new("ts", ColumnType::TimestampNanos, false),
+        ColumnSpec::new("f", ColumnType::Float, true),
+    ]
+}
+
+/// A random row of [`record_schema`]: `id` is `i`, the others random or
+/// NULL. Amounts step by 0.25 and floats by 0.5, so sums are exact in any
+/// order.
+fn random_row(rng: &mut Rng, i: u64) -> Vec<RecordValue> {
+    let maybe = |rng: &mut Rng, v: RecordValue| {
+        if rng.below(4) == 0 {
+            RecordValue::Null
+        } else {
+            v
+        }
+    };
+    let kind = RecordValue::Str(format!("k{}", rng.below(4)));
+    let n = RecordValue::Int(rng.below(100) as i64 - 50);
+    let amount = RecordValue::Decimal(i128::from(rng.below(400) * 25));
+    // Above i32::MAX half the time: read unsigned or it would sort wrong.
+    let u = RecordValue::UInt(rng.below(2) * 4_000_000_000 + rng.below(9));
+    let blob = RecordValue::Bytes(vec![0x80 | rng.below(4) as u8, 0xff]);
+    let f = RecordValue::Float(rng.below(40) as f64 * 0.5);
+    vec![
+        RecordValue::UInt(i),
+        maybe(rng, kind),
+        maybe(rng, n),
+        maybe(rng, amount),
+        maybe(rng, u),
+        maybe(rng, blob),
+        RecordValue::Int(1_760_000_000_000_000_000 + rng.below(1_000) as i64),
+        maybe(rng, f),
+    ]
+}
+
+const RECORD_INVARIANCE_QUERIES: [&str; 7] = [
+    "SELECT COUNT(*), COUNT(n), SUM(n), MIN(amount), MAX(amount), SUM(u), COUNT(blob), SUM(f) \
+     FROM logs",
+    "SELECT id, kind, n, amount, u, blob, ts, f FROM logs ORDER BY id",
+    "SELECT kind, COUNT(*), SUM(amount) FROM logs GROUP BY kind ORDER BY kind",
+    "SELECT id FROM logs WHERE u > 3000000000 ORDER BY id",
+    "SELECT id, amount FROM logs WHERE amount >= 5 ORDER BY id DESC LIMIT 7",
+    "SELECT blob, COUNT(*) FROM logs GROUP BY blob ORDER BY blob",
+    "SELECT u FROM logs WHERE u IS NOT NULL ORDER BY u DESC LIMIT 3",
+];
+
+/// What the flush-timing test appends: a lines table's lines or a record
+/// table's rows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Kind {
+    Lines,
+    Records,
+}
+
+enum Record {
+    Line(String),
+    Row(Vec<RecordValue>),
+}
+
+impl Record {
+    fn append(&self, w: &mut TableWriter) {
+        match self {
+            Record::Line(l) => w.append(l.as_bytes(), Ack::Memory),
+            Record::Row(r) => w.append_row(r.clone(), Ack::Memory),
+        }
+        .unwrap();
+    }
+}
+
 /// The same records give the same answers however they were split into
 /// pages and files, whether read in or out of process, also for fields
 /// whose type changes inside a page (#584), and for tiered tables, whose
 /// hours and days close as the clock moves and are compacted (#573).
 #[test]
 fn query_results_do_not_depend_on_flush_timing() {
+    flush_timing_invariance(Kind::Lines);
+}
+
+/// The same for a record table (#594): its typed rows read the same from
+/// pages, flushed hours and merged days.
+#[test]
+fn record_table_query_results_do_not_depend_on_flush_timing() {
+    flush_timing_invariance(Kind::Records);
+}
+
+fn flush_timing_invariance(kind: Kind) {
     let cases = std::env::var("DB_CORE_FLUSH_CASES")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(12u64);
     let _serial = serial();
+    let (queries, sort_keys): (&[&str], [&[&str]; 3]) = match kind {
+        Kind::Lines => (&INVARIANCE_QUERIES, [&[], &["s"], &["k", "n"]]),
+        Kind::Records => (&RECORD_INVARIANCE_QUERIES, [&[], &["kind"], &["u", "n"]]),
+    };
+    let schema = (kind == Kind::Records).then(record_schema);
     for seed in 0..cases {
         let mut rng = Rng::new(seed);
         let count = 10 + rng.below(150);
         let switch = (rng.below(count), rng.below(count));
-        let lines: Vec<String> = (0..count)
-            .map(|i| random_line(&mut rng, i, switch))
+        let lines: Vec<Record> = (0..count)
+            .map(|i| match kind {
+                Kind::Lines => Record::Line(random_line(&mut rng, i, switch)),
+                Kind::Records => Record::Row(random_row(&mut rng, i)),
+            })
             .collect();
         let reference = TempTable::new();
         let mut never = reference.writer_with(TableOptions {
             clock,
+            schema: schema.clone(),
             ..TableOptions::default()
         });
         // Half the seeds tiered: hours close as the clock moves, days
         // merge into the archive, row groups sorted by a random key.
         let tiered = rng.below(2) == 0;
-        let sort_keys: [&[&str]; 3] = [&[], &["s"], &["k", "n"]];
         let layout = if tiered {
             Layout::Tiered(TierOptions {
                 sort_key: sort_keys[rng.below(3) as usize]
@@ -309,6 +416,7 @@ fn query_results_do_not_depend_on_flush_timing() {
         let mut w = t.writer_with(TableOptions {
             layout,
             clock,
+            schema: schema.clone(),
             ..TableOptions::default()
         });
         // Seal and flush at random points, and query at random points too.
@@ -317,8 +425,8 @@ fn query_results_do_not_depend_on_flush_timing() {
             if rng.below(8) == 0 {
                 advance_clock(rng.below(3 * HOUR_NS as u64) as i64);
             }
-            never.append(l.as_bytes(), Ack::Memory).unwrap();
-            w.append(l.as_bytes(), Ack::Memory).unwrap();
+            l.append(&mut never);
+            l.append(&mut w);
             if rng.below(seal_odds) == 0 {
                 w.seal_head().unwrap();
             }
@@ -330,7 +438,7 @@ fn query_results_do_not_depend_on_flush_timing() {
             }
             let last = k + 1 == lines.len();
             if [rng.below(40) == 0, last].contains(&true) {
-                for sql in INVARIANCE_QUERIES {
+                for &sql in queries {
                     assert_eq!(
                         answer(&w, sql),
                         answer(&never, sql),
@@ -356,7 +464,7 @@ fn query_results_do_not_depend_on_flush_timing() {
             );
         }
         let mut engine = TableEngine::open(&t.0).unwrap();
-        for sql in INVARIANCE_QUERIES {
+        for &sql in queries {
             assert_eq!(
                 engine
                     .run_query(sql)

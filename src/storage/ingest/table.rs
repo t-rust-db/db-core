@@ -28,6 +28,10 @@
 //! passed. A tiered table keeps its open hour in memory until it closes
 //! (spilling to `staging/` under a memory budget is #573's second part).
 //!
+//! A record table (#594, [`TableOptions::schema`]) is appended to with
+//! typed rows ([`TableWriter::append_row`]) instead of lines; its pages,
+//! files and manifest carry exactly its schema (see [`super::record`]).
+//!
 //! This is the single-threaded core; #574 wraps it as the public `Table`
 //! with an ingest thread and input sources.
 
@@ -35,17 +39,19 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::flush;
 use super::layout::{archive_dir, day_of_hour, hour_of, live_dir, Area, Layout, LayoutKind};
 use super::lock::{LockError, TableLock};
 use super::manifest::{FileEntry, Manifest, ManifestError};
 use super::page::{decode_record, encode_record, invalid_line, HeadPage, Page};
+use super::record::{check_row, decode_row, encode_row, invalid_schema, RecordValue};
 use super::snapshot::Snapshot;
 use super::tier::{self, Output};
 use super::wal::{Ack, Wal, WalError, WalOptions, Watermarks};
 use crate::storage::column::{Vfs, VfsFile};
-use crate::storage::parquet::writer::{WriteError, WriterOptions};
+use crate::storage::parquet::writer::{ColumnSpec, WriteError, WriterOptions};
 use crate::storage::stream::adapter::now_ns;
 use crate::storage::stream::detect::{DetectedParser, Format};
 use crate::storage::stream::{Source, SourceKind};
@@ -59,8 +65,13 @@ pub const TMP_DIR: &str = "tmp";
 /// How a table is written.
 #[derive(Debug, Clone)]
 pub struct TableOptions {
-    /// The record format, fixed when the table is created.
+    /// The record format, fixed when the table is created. Unused by a
+    /// record table.
     pub format: Format,
+    /// A record table's schema (#594), fixed when the table is created:
+    /// rows are appended with [`TableWriter::append_row`] and flushed as
+    /// exactly these columns. `None` (the default) is a lines table.
+    pub schema: Option<Vec<ColumnSpec>>,
     /// WAL settings.
     pub wal: WalOptions,
     /// Parquet writer settings for flushed files.
@@ -79,6 +90,7 @@ impl Default for TableOptions {
     fn default() -> Self {
         TableOptions {
             format: Format::Jsonl,
+            schema: None,
             wal: WalOptions::default(),
             parquet: WriterOptions::default(),
             layout: Layout::Flat,
@@ -114,7 +126,12 @@ pub enum IngestError {
         /// The layout asked for.
         requested: LayoutKind,
     },
-    /// The operation is not available for this table's layout.
+    /// A record table's schema (or a tiered one's sort key) is not valid.
+    InvalidSchema(String),
+    /// The table exists with another schema, or is a lines table opened
+    /// as a record table or the other way round.
+    SchemaMismatch,
+    /// The operation is not available for this table's layout or kind.
     Unsupported(String),
     /// A replayed WAL payload is not a record, or the parser rejected a
     /// page.
@@ -141,6 +158,10 @@ impl fmt::Display for IngestError {
                 table.as_str(),
                 requested.as_str()
             ),
+            IngestError::InvalidSchema(why) => write!(f, "invalid record schema: {why}"),
+            IngestError::SchemaMismatch => {
+                write!(f, "the table's schema is not the one asked for")
+            }
             IngestError::Unsupported(why) => write!(f, "unsupported: {why}"),
             IngestError::Corrupt(why) => write!(f, "table: {why}"),
         }
@@ -200,15 +221,35 @@ impl TableWriter {
             LockError::Held => IngestError::Wal(WalError::Locked),
             LockError::Io(e) => IngestError::Io(e),
         })?;
+        if let Some(schema) = &options.schema {
+            if let Some(why) = invalid_schema(schema) {
+                return Err(IngestError::InvalidSchema(why));
+            }
+            if let Layout::Tiered(tier) = &options.layout {
+                if let Some(key) = tier
+                    .sort_key
+                    .iter()
+                    .find(|k| !schema.iter().any(|s| s.name == **k))
+                {
+                    return Err(IngestError::InvalidSchema(format!(
+                        "sort key {key} is not a column"
+                    )));
+                }
+            }
+        }
         let manifest = match Manifest::read(table)? {
             Some(m) => m,
             None => {
-                let m = Manifest::new(options.format, options.layout.kind());
+                let mut m = Manifest::new(options.format, options.layout.kind());
+                m.schema.clone_from(&options.schema);
                 m.write(table)?;
                 m
             }
         };
-        if manifest.format != options.format {
+        if manifest.schema != options.schema {
+            return Err(IngestError::SchemaMismatch);
+        }
+        if manifest.schema.is_none() && manifest.format != options.format {
             return Err(IngestError::FormatMismatch {
                 table: manifest.format,
                 requested: options.format,
@@ -223,6 +264,10 @@ impl TableWriter {
         clean_up(table, &manifest)?;
         let (wal, records) =
             Wal::open_locked(lock, table, manifest.flushed_lsn, options.wal.clone())?;
+        let head = match &manifest.schema {
+            Some(schema) => HeadPage::for_records(Arc::from(schema.as_slice())),
+            None => HeadPage::default(),
+        };
         let mut writer = TableWriter {
             dir: table.to_path_buf(),
             wal,
@@ -230,7 +275,7 @@ impl TableWriter {
             source: Source::new(SourceKind::Stdin, &table.to_string_lossy()),
             manifest,
             options,
-            head: HeadPage::default(),
+            head,
             sealed: Vec::new(),
             last_observed: i64::MIN,
             pending_deletes: Vec::new(),
@@ -238,17 +283,26 @@ impl TableWriter {
             crash_after: None,
         };
         for (lsn, payload) in records {
-            let (observed, line) = decode_record(&payload)
-                .ok_or_else(|| IngestError::Corrupt(format!("WAL record {lsn} is not a record")))?;
+            let corrupt = || IngestError::Corrupt(format!("WAL record {lsn} is not a record"));
+            let (observed, body) = decode_record(&payload).ok_or_else(corrupt)?;
             writer.last_observed = writer.last_observed.max(observed);
-            writer.push(lsn, observed, line)?;
+            match writer.manifest.schema.as_deref() {
+                Some(schema) => {
+                    let row = decode_row(body)
+                        .filter(|row| check_row(schema, row).is_none())
+                        .ok_or_else(corrupt)?;
+                    writer.push(observed, |head| head.push_row(lsn, observed, row))?;
+                }
+                None => writer.push(observed, |head| head.push(lsn, observed, body))?,
+            }
         }
         Ok(writer)
     }
 
-    /// Adds a record to the head: a tiered table first seals a head of an
-    /// earlier hour, so no page spans an hour.
-    fn push(&mut self, lsn: u64, observed: i64, line: &[u8]) -> Result<(), IngestError> {
+    /// Adds a record that arrived at `observed` to the head with `add` (a
+    /// line or a row): a tiered table first seals a head of an earlier
+    /// hour, so no page spans an hour.
+    fn push(&mut self, observed: i64, add: impl FnOnce(&mut HeadPage)) -> Result<(), IngestError> {
         let other_hour = self
             .head
             .first_observed()
@@ -256,7 +310,7 @@ impl TableWriter {
         if other_hour && self.options.layout.kind() == LayoutKind::Tiered {
             self.seal_head()?;
         }
-        self.head.push(lsn, observed, line);
+        add(&mut self.head);
         if self.head.is_full() {
             self.seal_head()?;
         }
@@ -272,9 +326,48 @@ impl TableWriter {
     /// `ack`. `Ack::Flushed` seals and flushes everything up to it before
     /// returning. Returns the record's LSN.
     pub fn append(&mut self, line: &[u8], ack: Ack) -> Result<u64, IngestError> {
+        if self.manifest.schema.is_some() {
+            return Err(IngestError::Unsupported(
+                "append on a record table, which takes typed rows: append_row".to_string(),
+            ));
+        }
         if let Some(why) = invalid_line(line) {
             return Err(IngestError::InvalidRecord(why));
         }
+        self.append_record(line, ack, |head, lsn, observed| {
+            head.push(lsn, observed, line);
+        })
+    }
+
+    /// Appends one row to a record table (#594) and waits for `ack`, like
+    /// [`append`](Self::append). The row must match the table's schema:
+    /// one value per column, of its type and in its range, NULL only in a
+    /// nullable column; nothing is converted. Returns the row's LSN.
+    pub fn append_row(&mut self, row: Vec<RecordValue>, ack: Ack) -> Result<u64, IngestError> {
+        let Some(schema) = self.manifest.schema.as_deref() else {
+            return Err(IngestError::Unsupported(
+                "append_row on a lines table, which takes lines: append".to_string(),
+            ));
+        };
+        if let Some(why) = check_row(schema, &row) {
+            return Err(IngestError::InvalidRecord(why));
+        }
+        let body = encode_row(&row)
+            .ok_or_else(|| IngestError::InvalidRecord("a value is over 4 GiB".to_string()))?;
+        self.append_record(&body, ack, |head, lsn, observed| {
+            head.push_row(lsn, observed, row);
+        })
+    }
+
+    /// The shared tail of [`append`](Self::append) and
+    /// [`append_row`](Self::append_row): `body` into the WAL, then `add`
+    /// puts the record into the head at its LSN and arrival time.
+    fn append_record(
+        &mut self,
+        body: &[u8],
+        ack: Ack,
+        add: impl FnOnce(&mut HeadPage, u64, i64),
+    ) -> Result<u64, IngestError> {
         if ack == Ack::Flushed && self.options.layout.kind() == LayoutKind::Tiered {
             return Err(IngestError::Unsupported(
                 "Ack::Flushed on a tiered table: a record is flushed when its hour closes"
@@ -287,9 +380,9 @@ impl TableWriter {
             Ack::Flushed => Ack::Durable,
             other => other,
         };
-        let lsn = self.wal.append(&encode_record(observed, line), wal_ack)?;
+        let lsn = self.wal.append(&encode_record(observed, body), wal_ack)?;
         self.last_observed = observed;
-        self.push(lsn, observed, line)?;
+        self.push(observed, |head| add(head, lsn, observed))?;
         if ack == Ack::Flushed {
             self.seal_head()?;
             self.flush()?;
@@ -518,7 +611,13 @@ impl TableWriter {
         // 1. Write under tmp/.
         let tmp = self.dir.join(TMP_DIR).join(&id);
         fs::create_dir_all(&tmp)?;
-        let outputs = tier::merge_day(&tmp, &input_bytes, tier_options, &self.options.parquet)?;
+        let outputs = tier::merge_day(
+            &tmp,
+            &input_bytes,
+            self.manifest.schema.as_deref(),
+            tier_options,
+            &self.options.parquet,
+        )?;
         self.crash_point(11)?;
 
         // 2. Publish the day's directory.
@@ -632,12 +731,7 @@ impl TableWriter {
 /// The hour a page's records arrived in (a tiered table's pages never
 /// span an hour).
 fn page_hour(page: &Page) -> Option<i64> {
-    page.segment
-        .observed_ts_ns()
-        .first()
-        .copied()
-        .flatten()
-        .map(hour_of)
+    page.first_observed().map(hour_of)
 }
 
 /// Renames `tmp` (a finished output directory) to `target` under `table`,
@@ -723,6 +817,8 @@ fn clean_dir(dir: &Path, relative: &str, manifest: &Manifest) -> Result<bool, In
     Ok(empty)
 }
 
+#[cfg(test)]
+mod record_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

@@ -99,8 +99,8 @@ fn all_rows(w: &TableWriter) -> Vec<String> {
         }
     }
     for page in s.pages() {
-        for i in 0..page.segment.len() {
-            rows.push(String::from_utf8(page.segment.raw_line(i).to_vec()).unwrap());
+        for i in 0..page.lines().unwrap().len() {
+            rows.push(String::from_utf8(page.lines().unwrap().raw_line(i).to_vec()).unwrap());
         }
     }
     rows.sort();
@@ -468,7 +468,7 @@ fn append_with(layout: Layout, ack: Ack) -> Result<u64, IngestError> {
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__storage_ingest_table_append_85ef2f0f__v1_flushed_on_tiered_is_refused() {
+fn mcdc__storage_ingest_table_append_record_85ef2f0f__v1_flushed_on_tiered_is_refused() {
     let _serial = serial();
     assert!(matches!(
         append_with(Layout::Tiered(tier()), Ack::Flushed),
@@ -478,7 +478,7 @@ fn mcdc__storage_ingest_table_append_85ef2f0f__v1_flushed_on_tiered_is_refused()
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__storage_ingest_table_append_85ef2f0f__v2_durable_on_tiered_is_accepted() {
+fn mcdc__storage_ingest_table_append_record_85ef2f0f__v2_durable_on_tiered_is_accepted() {
     let _serial = serial();
     assert_eq!(
         append_with(Layout::Tiered(tier()), Ack::Durable).unwrap(),
@@ -488,7 +488,7 @@ fn mcdc__storage_ingest_table_append_85ef2f0f__v2_durable_on_tiered_is_accepted(
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__storage_ingest_table_append_85ef2f0f__v3_flushed_on_flat_is_accepted() {
+fn mcdc__storage_ingest_table_append_record_85ef2f0f__v3_flushed_on_flat_is_accepted() {
     let _serial = serial();
     assert_eq!(append_with(Layout::Flat, Ack::Flushed).unwrap(), 1);
 }

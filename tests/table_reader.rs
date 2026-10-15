@@ -75,8 +75,12 @@ fn check(s: &Snapshot) -> bool {
     }
     for page in s.pages() {
         assert_eq!(page.lsn_lo, next, "{s:?}");
-        for i in 0..page.segment.len() {
-            assert_eq!(page.segment.raw_line(i), line(next).as_bytes(), "{s:?}");
+        for i in 0..page.lines().unwrap().len() {
+            assert_eq!(
+                page.lines().unwrap().raw_line(i),
+                line(next).as_bytes(),
+                "{s:?}"
+            );
             next += 1;
         }
         assert_eq!(page.lsn_hi + 1, next, "{s:?}");

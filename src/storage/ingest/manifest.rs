@@ -14,6 +14,12 @@
 //! each file with its `area` (ADR 0028). Numbers are integers; strings are
 //! the table's own generated names and never need escaping (a backslash in
 //! one is refused). Version 1 (#572, before layouts) reads as a flat table.
+//!
+//! A record table (#594) adds `schema`, a list of `{name, type, nullable}`
+//! (column names are refused at creation if they would need escaping), and
+//! is written as version 3, so a reader that predates record tables
+//! refuses it rather than reading it as a lines table. A lines table is
+//! still written as version 2.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -21,13 +27,17 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use super::layout::{Area, LayoutKind};
+use super::record::{type_from_name, type_name};
 use crate::json_path::{parse_object, JsonValue};
+use crate::storage::parquet::writer::ColumnSpec;
 use crate::storage::stream::detect::Format;
 
 /// The manifest's file name inside the table directory.
 pub const MANIFEST_FILE: &str = "manifest.json";
 const MANIFEST_TMP: &str = "manifest.json.tmp";
 const VERSION: i64 = 2;
+/// The version of a record table's manifest.
+const RECORDS_VERSION: i64 = 3;
 
 /// One Parquet file in the table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +67,8 @@ pub struct Manifest {
     pub format: Format,
     /// Where files go.
     pub layout: LayoutKind,
+    /// A record table's schema (#594); `None` for a lines table.
+    pub schema: Option<Vec<ColumnSpec>>,
     /// Every LSN up to this one is in `files`.
     pub flushed_lsn: u64,
     /// The live files, in LSN order.
@@ -115,6 +127,7 @@ impl Manifest {
         Manifest {
             format,
             layout,
+            schema: None,
             flushed_lsn: 0,
             files: Vec::new(),
         }
@@ -193,12 +206,32 @@ impl Manifest {
     /// The JSON text.
     pub fn to_json(&self) -> String {
         let mut out = String::new();
+        let version = if self.schema.is_some() {
+            RECORDS_VERSION
+        } else {
+            VERSION
+        };
         out.push_str(&format!(
-            "{{\"version\":{VERSION},\"format\":\"{}\",\"layout\":\"{}\",\"flushed_lsn\":{},\"files\":[",
+            "{{\"version\":{version},\"format\":\"{}\",\"layout\":\"{}\",",
             self.format.as_str(),
             self.layout.as_str(),
-            self.flushed_lsn
         ));
+        if let Some(schema) = &self.schema {
+            out.push_str("\"schema\":[");
+            for (i, spec) in schema.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&format!(
+                    "{{\"name\":\"{}\",\"type\":\"{}\",\"nullable\":{}}}",
+                    spec.name,
+                    type_name(spec.column_type),
+                    spec.nullable
+                ));
+            }
+            out.push_str("],");
+        }
+        out.push_str(&format!("\"flushed_lsn\":{},\"files\":[", self.flushed_lsn));
         for (i, file) in self.files.iter().enumerate() {
             if i > 0 {
                 out.push(',');
@@ -228,7 +261,7 @@ impl Manifest {
         }
         let fields = owned(&root)?.into_object()?;
         let version = int(&fields, "version")?;
-        if !(1..=VERSION).contains(&version) {
+        if !(1..=RECORDS_VERSION).contains(&version) {
             return Err(malformed("unsupported version"));
         }
         let format = format_from_name(&string(&fields, "format")?)
@@ -239,6 +272,19 @@ impl Manifest {
         } else {
             LayoutKind::from_name(&string(&fields, "layout")?)
                 .ok_or_else(|| malformed("unknown layout"))?
+        };
+        let schema = if version == RECORDS_VERSION {
+            let Json::Array(columns) = field(&fields, "schema")? else {
+                return Err(malformed("schema is not an array"));
+            };
+            Some(
+                columns
+                    .into_iter()
+                    .map(|c| column_spec(&c.into_object()?))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        } else {
+            None
         };
         let flushed_lsn = unsigned(&fields, "flushed_lsn")?;
         let Json::Array(files) = field(&fields, "files")? else {
@@ -251,6 +297,7 @@ impl Manifest {
         let manifest = Manifest {
             format,
             layout,
+            schema,
             flushed_lsn,
             files,
         };
@@ -294,6 +341,7 @@ fn write_range(out: &mut String, name: &str, range: Option<(i64, i64)>) {
 #[derive(Debug, Clone)]
 enum Json {
     Null,
+    Bool(bool),
     Int(i64),
     Str(String),
     Other,
@@ -322,7 +370,8 @@ fn owned(value: &JsonValue) -> Result<Json, ManifestError> {
                 .collect::<Result<Vec<_>, ManifestError>>()?,
         ),
         JsonValue::Array(text) => Json::Array(array_of_objects(text)?),
-        JsonValue::Bool(_) | JsonValue::Float(_) => Json::Other,
+        JsonValue::Bool(b) => Json::Bool(*b),
+        JsonValue::Float(_) => Json::Other,
     })
 }
 
@@ -365,6 +414,19 @@ fn range(fields: &[(String, Json)], name: &str) -> Result<Option<(i64, i64)>, Ma
         (Json::Null, Json::Null) => Ok(None),
         _ => Err(ManifestError::Malformed(format!("{name} range"))),
     }
+}
+
+/// One record-table column.
+fn column_spec(fields: &[(String, Json)]) -> Result<ColumnSpec, ManifestError> {
+    let name = string(fields, "name")?;
+    let column_type = type_from_name(&string(fields, "type")?)
+        .ok_or_else(|| ManifestError::Malformed(format!("column {name}: unknown type")))?;
+    let Json::Bool(nullable) = field(fields, "nullable")? else {
+        return Err(ManifestError::Malformed(format!(
+            "column {name}: nullable is not a boolean"
+        )));
+    };
+    Ok(ColumnSpec::new(name, column_type, nullable))
 }
 
 fn file_entry(fields: &[(String, Json)], version: i64) -> Result<FileEntry, ManifestError> {

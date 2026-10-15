@@ -464,6 +464,11 @@ enum TableSegment<'a, 'm> {
         /// The table's format: how its strings are stored (#583).
         format: crate::storage::stream::detect::Format,
     },
+    /// A record table's page of typed rows (#594).
+    Rows {
+        rows: Arc<crate::storage::ingest::RowPage>,
+        requests: Vec<table::Request>,
+    },
 }
 
 /// `file`'s row groups as [`TableSegment`]s decoding `columns` and applying

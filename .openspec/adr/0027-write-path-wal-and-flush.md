@@ -316,6 +316,46 @@ shifts the fields after it. syslog and freeform lines store strings as
 written. The stream engine reads the parsed lines directly and returns
 values as written in every format.
 
+### Record tables (#594)
+
+**Amendment (#594).** A table is either a *lines* table, everything
+above, or a *record* table, whose schema is fixed when it is created
+(`TableOptions::schema`): a list of columns with a Parquet writer type and
+nullability. Event and transaction streams have a schema and no log line,
+and a relational dump should come out of the table with the types it went
+in with.
+
+- **Rows, not lines.** `TableWriter::append_row` takes one typed value per
+  column and refuses a row that does not match: wrong arity, NULL in a
+  required column, a value of another type or out of its column's range
+  (an INT32, an unsigned width, a DECIMAL's precision, a fixed length).
+  Nothing is converted. `append` on a record table, and `append_row` on a
+  lines table, are refused.
+- **WAL.** The payload keeps the `[observed_ts i64 LE]` prefix (a tiered
+  table still partitions by arrival time); the body is the row, each value
+  tagged with its kind, so a replay decodes it without the schema and then
+  checks it against the schema again.
+- **Pages.** A page is either the parsed segment above or a `RowPage`: the
+  arrival times and one writer `ColumnValues` per column, which a flush
+  writes as they are.
+- **Files.** A flush, an hour and a day merge write exactly the schema's
+  columns, in schema order and types. There are no predefined columns, no
+  `raw` and no widening, so DuckDB reads `archive/` without
+  `union_by_name`. A day merge reads each column back as its declared type
+  rather than deriving one from the physical type, so logical types
+  (DECIMAL, unsigned integers, timestamps) survive compaction. A manifest
+  entry's `observed_ts` range comes from the rows' arrival times, which are
+  not a column; it has no `timestamp` range.
+- **Manifest.** Version 3 adds `schema` (`{name, type, nullable}` per
+  column). Only a record table's manifest is version 3, so a reader that
+  predates record tables refuses it instead of reading it as a lines table.
+  Opening a table with another schema, or as the other kind, is
+  `SchemaMismatch`. A tiered record table's `sort_key` must name columns.
+- **Reads.** The table's columns are the schema. A page reads each column
+  as the column engine decodes the flushed Parquet type (an unsigned value
+  as an integer, and above `i64::MAX` an error; a DECIMAL as a float; bytes
+  as lowercase hex), so a row reads the same before and after its flush.
+
 ## Structure
 
 Feature split and client packaging: ADR 0029.
@@ -326,6 +366,8 @@ Feature split and client packaging: ADR 0029.
   replace, invariant check), `recover.rs`, `snapshot.rs`.
 - `src/storage/ingest/layout.rs`, `tier.rs` — ADR 0028's tiered layout:
   hour outputs, day merges.
+- `src/storage/ingest/record.rs` — record tables (#594): row checks, the
+  WAL row encoding, `RowPage`.
 - `src/engine/column/table.rs` — `TableEngine`, `query_snapshot`, the
   table schema, NULL-fill and casts; `src/engine/column.rs` holds the
   `TableSegment` enum over row groups and pages (it borrows the
