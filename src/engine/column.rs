@@ -23,7 +23,9 @@ use std::sync::Arc;
 use crate::codegen::batch::{self as planner, PlanError, TableStats};
 use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, OrderingTerm, ResultColumn, Select};
 use crate::parser::ParseError;
-use crate::storage::column::{decode_column_at, decode_column_full, Decoded};
+use crate::storage::column::{
+    annotation, decode_column_at, decode_column_full, Annotation, Decoded,
+};
 use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs, VfsFile};
 use crate::vm::batch::{Batch, Program, Segment, Value, Vm, VmError};
@@ -297,7 +299,8 @@ impl Segment for RowGroupSegment<'_, '_> {
         } else {
             stats.min.as_deref()
         }?;
-        prune::decode_stat_bytes(bytes, physical_type).map(prune::into_value)
+        prune::decode_stat_bytes(bytes, physical_type, annotation(&rg, index))
+            .map(prune::into_value)
     }
 
     /// #513: only the named leaves, every row, eagerly -- the
@@ -461,6 +464,11 @@ enum TableSegment<'a, 'm> {
         /// The table's format: how its strings are stored (#583).
         format: crate::storage::stream::detect::Format,
     },
+    /// A record table's page of typed rows (#594).
+    Rows {
+        rows: Arc<crate::storage::ingest::RowPage>,
+        requests: Vec<table::Request>,
+    },
 }
 
 /// `file`'s row groups as [`TableSegment`]s decoding `columns` and applying
@@ -499,7 +507,8 @@ fn table_row_groups<'f>(
 /// row group without reading its data pages.
 mod prune {
     use super::{
-        BinaryOp, Expr, ExprKind, HashMap, Literal, Ordering, PhysicalType, RowGroupReader, Value,
+        annotation, Annotation, BinaryOp, Expr, ExprKind, HashMap, Literal, Ordering, PhysicalType,
+        RowGroupReader, Value,
     };
 
     /// A value decoded from footer statistics or a `WHERE`-clause literal,
@@ -535,13 +544,30 @@ mod prune {
     }
 
     /// Decodes one column chunk's raw min/max statistics bytes, typed by
-    /// the column's physical type. `None` for a physical type this pruner
-    /// doesn't interpret (e.g. INT96, FIXED_LEN_BYTE_ARRAY) or malformed
-    /// bytes -- always falls back to "cannot prune", never misreads them.
+    /// the column's physical type and annotation. `None` for a type this
+    /// pruner doesn't interpret (e.g. INT96, FIXED_LEN_BYTE_ARRAY, DECIMAL,
+    /// binary), an unsigned bound above `i64::MAX`, or malformed bytes --
+    /// always falls back to "cannot prune", never misreads them (#595: an
+    /// unsigned bound read signed would wrap negative and prune matches).
     pub(super) fn decode_stat_bytes(
         bytes: &[u8],
         physical_type: PhysicalType,
+        annotation: Annotation,
     ) -> Option<StatValue> {
+        match annotation {
+            Annotation::Plain => {}
+            Annotation::UInt32 => {
+                let arr: [u8; 4] = bytes.try_into().ok()?;
+                return Some(StatValue::Int(i64::from(u32::from_le_bytes(arr))));
+            }
+            Annotation::UInt64 => {
+                let arr: [u8; 8] = bytes.try_into().ok()?;
+                return i64::try_from(u64::from_le_bytes(arr))
+                    .ok()
+                    .map(StatValue::Int);
+            }
+            Annotation::Decimal | Annotation::Bytes => return None,
+        }
         match physical_type {
             PhysicalType::Int32 => {
                 let arr: [u8; 4] = bytes.try_into().ok()?;
@@ -620,14 +646,15 @@ mod prune {
         let (index, physical_type) = *leaves_by_name.get(col_name)?;
         let statistics = rg.column_statistics(index).ok()??;
         let literal = literal_stat_value(lit, physical_type)?;
+        let annotation = annotation(rg, index);
         let min = statistics
             .min
             .as_deref()
-            .and_then(|b| decode_stat_bytes(b, physical_type));
+            .and_then(|b| decode_stat_bytes(b, physical_type, annotation));
         let max = statistics
             .max
             .as_deref()
-            .and_then(|b| decode_stat_bytes(b, physical_type));
+            .and_then(|b| decode_stat_bytes(b, physical_type, annotation));
 
         let empty = match op {
             BinaryOp::Eq => {
@@ -1674,6 +1701,7 @@ mod tests {
         col.i32_field(1, 6); // BYTE_ARRAY
         col.i32_field(3, 0);
         col.string_field(4, "region");
+        col.i32_field(6, 0); // UTF8: an unannotated BYTE_ARRAY is a BLOB (#595)
 
         let mut fmd = StructWriter::new();
         fmd.i32_field(1, 1);

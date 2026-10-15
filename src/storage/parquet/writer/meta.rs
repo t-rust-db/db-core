@@ -5,7 +5,7 @@
 //! Spec: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 
 use super::stats::ChunkStats;
-use super::{ColumnSpec, ColumnType};
+use super::{ColumnSpec, ColumnType, DecimalStorage};
 use crate::storage::parquet::thrift::Value;
 
 /// `Encoding` ids.
@@ -22,12 +22,22 @@ const TYPE_INT64: i32 = 2;
 const TYPE_FLOAT: i32 = 4;
 const TYPE_DOUBLE: i32 = 5;
 const TYPE_BYTE_ARRAY: i32 = 6;
+const TYPE_FIXED_LEN_BYTE_ARRAY: i32 = 7;
 
 const REPETITION_REQUIRED: i32 = 0;
 const REPETITION_OPTIONAL: i32 = 1;
 
 const CONVERTED_UTF8: i32 = 0;
+const CONVERTED_DECIMAL: i32 = 5;
 const CONVERTED_TIMESTAMP_MICROS: i32 = 10;
+const CONVERTED_UINT_8: i32 = 11;
+const CONVERTED_UINT_16: i32 = 12;
+const CONVERTED_UINT_32: i32 = 13;
+const CONVERTED_UINT_64: i32 = 14;
+
+/// Bytes of a FIXED_LEN_BYTE_ARRAY decimal (DuckDB's width for
+/// precision 19..=38).
+const DECIMAL_FIXED_LEN: i32 = 16;
 
 fn empty() -> Value {
     Value::Struct(Vec::new())
@@ -81,12 +91,45 @@ pub(crate) fn dictionary_page_header(sizes: &PageSizes) -> Vec<(i16, Value)> {
 pub(crate) fn physical_type(column_type: ColumnType) -> i32 {
     match column_type {
         ColumnType::Boolean => TYPE_BOOLEAN,
-        ColumnType::Int32 => TYPE_INT32,
-        ColumnType::Int64 | ColumnType::TimestampMicros | ColumnType::TimestampNanos => TYPE_INT64,
+        ColumnType::Int32 | ColumnType::UInt8 | ColumnType::UInt16 | ColumnType::UInt32 => {
+            TYPE_INT32
+        }
+        ColumnType::Int64
+        | ColumnType::TimestampMicros
+        | ColumnType::TimestampNanos
+        | ColumnType::UInt64 => TYPE_INT64,
         ColumnType::Float => TYPE_FLOAT,
         ColumnType::Double => TYPE_DOUBLE,
-        ColumnType::Utf8 => TYPE_BYTE_ARRAY,
+        ColumnType::Utf8 | ColumnType::Binary => TYPE_BYTE_ARRAY,
+        ColumnType::Decimal { precision, .. } => match DecimalStorage::for_precision(precision) {
+            DecimalStorage::Int32 => TYPE_INT32,
+            DecimalStorage::Int64 => TYPE_INT64,
+            DecimalStorage::Fixed16 => TYPE_FIXED_LEN_BYTE_ARRAY,
+        },
+        ColumnType::FixedLenByteArray(_) => TYPE_FIXED_LEN_BYTE_ARRAY,
     }
+}
+
+/// The SchemaElement `type_length` (2) of a FIXED_LEN_BYTE_ARRAY column.
+fn type_length(column_type: ColumnType) -> Option<i32> {
+    match column_type {
+        ColumnType::FixedLenByteArray(len) => Some(i32::from(len)),
+        ColumnType::Decimal { precision, .. }
+            if DecimalStorage::for_precision(precision) == DecimalStorage::Fixed16 =>
+        {
+            Some(DECIMAL_FIXED_LEN)
+        }
+        _ => None,
+    }
+}
+
+/// LogicalType.INTEGER (10): IntType { bitWidth, isSigned: false }.
+fn unsigned(converted: i32, bits: i8) -> [(i16, Value); 2] {
+    let int = Value::Struct(vec![(1, Value::Byte(bits)), (2, Value::Bool(false))]);
+    [
+        (6, Value::I32(converted)),
+        (10, Value::Struct(vec![(10, int)])),
+    ]
 }
 
 /// `Statistics` with only the type-ordered `min_value`/`max_value` (5, 6)
@@ -164,18 +207,20 @@ pub(crate) fn row_group(
 }
 
 /// One flat `SchemaElement` per column, with the legacy `ConvertedType` and
-/// the `LogicalType` union for strings and timestamps.
+/// the `LogicalType` union for strings, timestamps, unsigned integers and
+/// decimals.
 fn schema_element(spec: &ColumnSpec) -> Value {
     let repetition = if spec.nullable {
         REPETITION_OPTIONAL
     } else {
         REPETITION_REQUIRED
     };
-    let mut fields = vec![
-        (1, Value::I32(physical_type(spec.column_type))),
-        (3, Value::I32(repetition)),
-        (4, string(&spec.name)),
-    ];
+    let mut fields = vec![(1, Value::I32(physical_type(spec.column_type)))];
+    if let Some(len) = type_length(spec.column_type) {
+        fields.push((2, Value::I32(len)));
+    }
+    fields.push((3, Value::I32(repetition)));
+    fields.push((4, string(&spec.name)));
     match spec.column_type {
         ColumnType::Utf8 => {
             fields.push((6, Value::I32(CONVERTED_UTF8)));
@@ -199,11 +244,26 @@ fn schema_element(spec: &ColumnSpec) -> Value {
             let timestamp = Value::Struct(vec![(1, Value::Bool(false)), (2, unit)]);
             fields.push((10, Value::Struct(vec![(8, timestamp)])));
         }
+        ColumnType::UInt8 => fields.extend(unsigned(CONVERTED_UINT_8, 8)),
+        ColumnType::UInt16 => fields.extend(unsigned(CONVERTED_UINT_16, 16)),
+        ColumnType::UInt32 => fields.extend(unsigned(CONVERTED_UINT_32, 32)),
+        ColumnType::UInt64 => fields.extend(unsigned(CONVERTED_UINT_64, 64)),
+        ColumnType::Decimal { precision, scale } => {
+            let (precision, scale) = (i32::from(precision), i32::from(scale));
+            fields.push((6, Value::I32(CONVERTED_DECIMAL)));
+            fields.push((7, Value::I32(scale)));
+            fields.push((8, Value::I32(precision)));
+            // LogicalType.DECIMAL (5): DecimalType { scale, precision }
+            let decimal = Value::Struct(vec![(1, Value::I32(scale)), (2, Value::I32(precision))]);
+            fields.push((10, Value::Struct(vec![(5, decimal)])));
+        }
         ColumnType::Boolean
         | ColumnType::Int32
         | ColumnType::Int64
         | ColumnType::Float
-        | ColumnType::Double => {}
+        | ColumnType::Double
+        | ColumnType::Binary
+        | ColumnType::FixedLenByteArray(_) => {}
     }
     Value::Struct(fields)
 }

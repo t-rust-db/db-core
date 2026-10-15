@@ -25,7 +25,7 @@ use super::{
     RowGroupSegment, Segment, Select, TableInfo, TableSegment, TableStats, Value, VmError,
 };
 use crate::storage::ingest::snapshot::{cast, physical_type};
-use crate::storage::ingest::Snapshot;
+use crate::storage::ingest::{PageBody, RowPage, Snapshot};
 use crate::storage::parquet::writer::{ColumnSpec, ColumnType};
 use crate::storage::stream::adapter::stored_column_values;
 use crate::storage::stream::detect::Format;
@@ -111,6 +111,22 @@ fn load_page(segment: &StreamSegment, requests: &[Request], format: Format) -> B
     })
 }
 
+/// A record table's page as the engine reads the same rows once flushed
+/// (#594): each column through the decode rules of its Parquet type.
+fn load_rows(rows: &RowPage, requests: &[Request]) -> Result<Batch, VmError> {
+    requests
+        .iter()
+        .try_fold(Batch::new(rows.len()), |batch, r| {
+            let values = match rows.engine_column(&r.name) {
+                Some(values) => values.map_err(|reason| VmError::SegmentLoad {
+                    reason: format!("page column `{}`: {reason}", r.name),
+                })?,
+                None => vec![Value::Null; rows.len()],
+            };
+            Ok(batch.with_column(r.key.clone(), values))
+        })
+}
+
 impl Segment for TableSegment<'_, '_> {
     fn load(&self) -> Result<Arc<Batch>, VmError> {
         match self {
@@ -129,13 +145,14 @@ impl Segment for TableSegment<'_, '_> {
                 requests,
                 format,
             } => Ok(Arc::new(load_page(segment, requests, *format))),
+            TableSegment::Rows { rows, requests } => load_rows(rows, requests).map(Arc::new),
         }
     }
 
     fn order_key_bound(&self, descending: bool) -> Option<Value> {
         match self {
             TableSegment::RowGroup { inner, .. } => inner.order_key_bound(descending),
-            TableSegment::Page { .. } => None,
+            TableSegment::Page { .. } | TableSegment::Rows { .. } => None,
         }
     }
 
@@ -145,7 +162,7 @@ impl Segment for TableSegment<'_, '_> {
                 inner.load_columns(columns)
             }
             TableSegment::RowGroup { inner, fixups } => load_fixed(inner, fixups, columns),
-            TableSegment::Page { .. } => self.load(),
+            TableSegment::Page { .. } | TableSegment::Rows { .. } => self.load(),
         }
     }
 
@@ -154,7 +171,9 @@ impl Segment for TableSegment<'_, '_> {
             TableSegment::RowGroup { inner, fixups } if fixups.is_empty() => {
                 inner.gather_at(columns, positions)
             }
-            TableSegment::RowGroup { .. } | TableSegment::Page { .. } => None,
+            TableSegment::RowGroup { .. }
+            | TableSegment::Page { .. }
+            | TableSegment::Rows { .. } => None,
         }
     }
 }
@@ -244,10 +263,16 @@ pub fn query_snapshot(
             table_row_groups(file, &columns, &comparable, &select, &program, &fixups)
         })
         .collect();
-    segments.extend(snapshot.pages().iter().map(|page| TableSegment::Page {
-        segment: Arc::clone(&page.segment),
-        requests: requests.clone(),
-        format: snapshot.format(),
+    segments.extend(snapshot.pages().iter().map(|page| match &page.body {
+        PageBody::Lines(segment) => TableSegment::Page {
+            segment: Arc::clone(segment),
+            requests: requests.clone(),
+            format: snapshot.format(),
+        },
+        PageBody::Rows(rows) => TableSegment::Rows {
+            rows: Arc::clone(rows),
+            requests: requests.clone(),
+        },
     }));
     let output =
         engine::run(&segments, &program).map_err(|e| EngineError::new(ErrorKind::Execute, e))?;

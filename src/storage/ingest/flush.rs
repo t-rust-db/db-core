@@ -8,6 +8,8 @@
 //! named like a predefined column is left out: the predefined one is what
 //! queries see.
 //!
+//! A record table's (#594) file has exactly the table's schema instead.
+//!
 //! The file's key-value metadata records `lsn_lo` and `lsn_hi`, so a file
 //! describes itself without the manifest.
 
@@ -15,7 +17,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
-use super::page::Page;
+use super::page::{Page, PageBody};
 use crate::storage::parquet::writer::{
     ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriteError, WriterOptions,
 };
@@ -86,15 +88,22 @@ pub(crate) fn add_field(specs: &mut Vec<ColumnSpec>, name: &str, t: ColumnType) 
 
 /// Adds every field of `page` to `specs`.
 pub(crate) fn add_page_fields(specs: &mut Vec<ColumnSpec>, page: &Page) {
-    for name in page.segment.field_names() {
-        if let Some(column) = page.segment.field(name) {
+    let Some(segment) = page.lines() else {
+        return;
+    };
+    for name in segment.field_names() {
+        if let Some(column) = segment.field(name) {
             add_field(specs, name, field_type(column));
         }
     }
 }
 
-/// The file schema for `pages`.
+/// The file schema for `pages`: a record table's own, or the predefined
+/// columns and every field.
 pub(crate) fn schema(pages: &[Page]) -> Vec<ColumnSpec> {
+    if let Some(PageBody::Rows(rows)) = pages.first().map(|p| &p.body) {
+        return rows.schema().to_vec();
+    }
     let mut specs = predefined_specs();
     for page in pages {
         add_page_fields(&mut specs, page);
@@ -137,6 +146,17 @@ pub(crate) fn convert(values: Vec<Value>, column_type: ColumnType) -> ColumnValu
                 .collect(),
         ),
         ColumnType::Float => ColumnValues::Float(vec![None; values.len()]),
+        ColumnType::UInt8 => ColumnValues::UInt8(unsigned(&values)),
+        ColumnType::UInt16 => ColumnValues::UInt16(unsigned(&values)),
+        ColumnType::UInt32 => ColumnValues::UInt32(unsigned(&values)),
+        ColumnType::UInt64 => ColumnValues::UInt64(unsigned(&values)),
+        // Nor these: a decimal or byte value has no exact `Value` to come
+        // from.
+        ColumnType::Decimal { .. } => ColumnValues::Decimal(vec![None; values.len()]),
+        ColumnType::Binary => ColumnValues::Binary(vec![None; values.len()]),
+        ColumnType::FixedLenByteArray(_) => {
+            ColumnValues::FixedLenByteArray(vec![None; values.len()])
+        }
         ColumnType::Boolean => ColumnValues::Boolean(
             values
                 .iter()
@@ -159,13 +179,28 @@ pub(crate) fn convert(values: Vec<Value>, column_type: ColumnType) -> ColumnValu
     }
 }
 
+/// Integers that fit `T`, the others NULL.
+fn unsigned<T: TryFrom<i64>>(values: &[Value]) -> Vec<Option<T>> {
+    values
+        .iter()
+        .map(|v| match v {
+            Value::Int(i) => T::try_from(*i).ok(),
+            _ => None,
+        })
+        .collect()
+}
+
 /// One page's columns in `specs` order, as a `format` table stores them.
 fn page_columns(page: &Page, specs: &[ColumnSpec], format: Format) -> Vec<ColumnValues> {
-    let rows = page.segment.len();
+    let segment = match &page.body {
+        PageBody::Lines(segment) => segment,
+        PageBody::Rows(rows) => return rows.columns().to_vec(),
+    };
+    let rows = segment.len();
     specs
         .iter()
         .map(|spec| {
-            let values = stored_column_values(&page.segment, &spec.name, format)
+            let values = stored_column_values(segment, &spec.name, format)
                 .unwrap_or_else(|| vec![Value::Null; rows]);
             convert(values, spec.column_type)
         })
@@ -206,15 +241,13 @@ pub(crate) fn write_file(
         .into_inner()
         .map_err(|e| WriteError::Io(e.into_error()))?;
     file.sync_all()?;
-    let observed = bounds(
-        pages
-            .iter()
-            .flat_map(|p| p.segment.observed_ts_ns().iter().copied()),
-    );
+    let observed = bounds(pages.iter().flat_map(Page::observed_ts_ns));
+    // A record table has no event-time column of its own.
     let timestamp = bounds(
         pages
             .iter()
-            .flat_map(|p| p.segment.event_ts_ns().iter().copied()),
+            .filter_map(Page::lines)
+            .flat_map(|s| s.event_ts_ns().iter().copied()),
     );
     Ok(FlushedFile {
         rows: summary.num_rows,

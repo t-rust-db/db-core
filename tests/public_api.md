@@ -2468,8 +2468,24 @@ impl core::marker::StructuralPartialEq for db_core::schema::ViewSchema
 pub mod db_core::storage
 pub mod db_core::storage::column
 pub mod db_core::storage::column::decode
+pub enum db_core::storage::column::decode::Annotation
+pub db_core::storage::column::decode::Annotation::Bytes
+pub db_core::storage::column::decode::Annotation::Decimal
+pub db_core::storage::column::decode::Annotation::Plain
+pub db_core::storage::column::decode::Annotation::UInt32
+pub db_core::storage::column::decode::Annotation::UInt64
+impl core::clone::Clone for db_core::storage::column::decode::Annotation
+pub fn db_core::storage::column::decode::Annotation::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::column::decode::Annotation
+impl core::cmp::PartialEq for db_core::storage::column::decode::Annotation
+pub fn db_core::storage::column::decode::Annotation::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::column::decode::Annotation
+pub fn db_core::storage::column::decode::Annotation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::column::decode::Annotation
+impl core::marker::StructuralPartialEq for db_core::storage::column::decode::Annotation
 pub enum db_core::storage::column::decode::Decoded
 pub db_core::storage::column::decode::Decoded::Column(db_core::vm::column::Column)
+pub fn db_core::storage::column::decode::annotation(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize) -> db_core::storage::column::decode::Annotation
 pub fn db_core::storage::column::decode::decode_column_at(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub fn db_core::storage::column::decode::decode_column_full(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub mod db_core::storage::column::memory
@@ -2593,6 +2609,10 @@ pub db_core::storage::column::parquet::footer::ConvertedType::Decimal
 pub db_core::storage::column::parquet::footer::ConvertedType::Other(i32)
 pub db_core::storage::column::parquet::footer::ConvertedType::TimestampMicros
 pub db_core::storage::column::parquet::footer::ConvertedType::TimestampMillis
+pub db_core::storage::column::parquet::footer::ConvertedType::Uint16
+pub db_core::storage::column::parquet::footer::ConvertedType::Uint32
+pub db_core::storage::column::parquet::footer::ConvertedType::Uint64
+pub db_core::storage::column::parquet::footer::ConvertedType::Uint8
 impl core::clone::Clone for db_core::storage::parquet::footer::ConvertedType
 pub fn db_core::storage::parquet::footer::ConvertedType::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::parquet::footer::ConvertedType
@@ -2870,6 +2890,7 @@ pub db_core::storage::column::parquet::parquet_file::FileError::Page(db_core::st
 pub db_core::storage::column::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::column::parquet::parquet_file::FileError::UnexpectedDictionaryPage
+pub db_core::storage::column::parquet::parquet_file::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::column::parquet::parquet_file::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
 pub db_core::storage::column::parquet::parquet_file::FileError::UnsupportedNestedDictionary
 pub db_core::storage::column::parquet::parquet_file::FileError::UnsupportedNestedEncoding(db_core::storage::parquet::page::Encoding)
@@ -2904,6 +2925,7 @@ impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
@@ -2926,6 +2948,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub type db_core::storage::column::parquet::parquet_file::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub type db_core::storage::column::parquet::parquet_file::Result<T> = core::result::Result<T, db_core::storage::parquet::parquet_file::FileError>
 pub mod db_core::storage::column::parquet::reader
@@ -2972,6 +2995,7 @@ pub fn db_core::storage::parquet::reader::Int96::fmt(&self, &mut core::fmt::Form
 impl core::marker::Copy for db_core::storage::parquet::reader::Int96
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::reader::Int96
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_boolean(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<bool>>
+pub fn db_core::storage::column::parquet::reader::decode_dictionary_bytes(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_double(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<f64>>
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_fixed_len_byte_array(&[u8], i32, usize) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_float(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<f32>>
@@ -2981,6 +3005,7 @@ pub fn db_core::storage::column::parquet::reader::decode_dictionary_int96(&[u8],
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_string(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::column::parquet::reader::read_boolean_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::column::parquet::reader::read_boolean_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[bool]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::column::parquet::reader::read_bytes_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::column::parquet::reader::read_dictionary_index_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<u32>>>
 pub fn db_core::storage::column::parquet::reader::read_double_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::column::parquet::reader::read_double_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[f64]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
@@ -3067,13 +3092,22 @@ pub fn db_core::storage::column::parquet::thrift::decode_struct(&[u8]) -> db_cor
 pub type db_core::storage::column::parquet::thrift::Result<T> = core::result::Result<T, db_core::storage::parquet::thrift::ThriftError>
 pub mod db_core::storage::column::parquet::writer
 pub enum db_core::storage::column::parquet::writer::ColumnType
+pub db_core::storage::column::parquet::writer::ColumnType::Binary
 pub db_core::storage::column::parquet::writer::ColumnType::Boolean
+pub db_core::storage::column::parquet::writer::ColumnType::Decimal
+pub db_core::storage::column::parquet::writer::ColumnType::Decimal::precision: u8
+pub db_core::storage::column::parquet::writer::ColumnType::Decimal::scale: u8
 pub db_core::storage::column::parquet::writer::ColumnType::Double
+pub db_core::storage::column::parquet::writer::ColumnType::FixedLenByteArray(u16)
 pub db_core::storage::column::parquet::writer::ColumnType::Float
 pub db_core::storage::column::parquet::writer::ColumnType::Int32
 pub db_core::storage::column::parquet::writer::ColumnType::Int64
 pub db_core::storage::column::parquet::writer::ColumnType::TimestampMicros
 pub db_core::storage::column::parquet::writer::ColumnType::TimestampNanos
+pub db_core::storage::column::parquet::writer::ColumnType::UInt16
+pub db_core::storage::column::parquet::writer::ColumnType::UInt32
+pub db_core::storage::column::parquet::writer::ColumnType::UInt64
+pub db_core::storage::column::parquet::writer::ColumnType::UInt8
 pub db_core::storage::column::parquet::writer::ColumnType::Utf8
 impl core::clone::Clone for db_core::storage::parquet::writer::ColumnType
 pub fn db_core::storage::parquet::writer::ColumnType::clone(&self) -> Self
@@ -3085,18 +3119,25 @@ pub fn db_core::storage::parquet::writer::ColumnType::fmt(&self, &mut core::fmt:
 impl core::marker::Copy for db_core::storage::parquet::writer::ColumnType
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnType
 pub enum db_core::storage::column::parquet::writer::ColumnValues
+pub db_core::storage::column::parquet::writer::ColumnValues::Binary(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::Boolean(alloc::vec::Vec<core::option::Option<bool>>)
+pub db_core::storage::column::parquet::writer::ColumnValues::Decimal(alloc::vec::Vec<core::option::Option<i128>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::Double(alloc::vec::Vec<core::option::Option<f64>>)
+pub db_core::storage::column::parquet::writer::ColumnValues::FixedLenByteArray(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::Float(alloc::vec::Vec<core::option::Option<f32>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::Int32(alloc::vec::Vec<core::option::Option<i32>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::Int64(alloc::vec::Vec<core::option::Option<i64>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::TimestampMicros(alloc::vec::Vec<core::option::Option<i64>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::TimestampNanos(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::column::parquet::writer::ColumnValues::UInt16(alloc::vec::Vec<core::option::Option<u16>>)
+pub db_core::storage::column::parquet::writer::ColumnValues::UInt32(alloc::vec::Vec<core::option::Option<u32>>)
+pub db_core::storage::column::parquet::writer::ColumnValues::UInt64(alloc::vec::Vec<core::option::Option<u64>>)
+pub db_core::storage::column::parquet::writer::ColumnValues::UInt8(alloc::vec::Vec<core::option::Option<u8>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::Utf8(alloc::vec::Vec<core::option::Option<alloc::string::String>>)
 impl db_core::storage::parquet::writer::ColumnValues
-pub fn db_core::storage::parquet::writer::ColumnValues::column_type(&self) -> db_core::storage::parquet::writer::ColumnType
 pub fn db_core::storage::parquet::writer::ColumnValues::empty(db_core::storage::parquet::writer::ColumnType) -> Self
 pub fn db_core::storage::parquet::writer::ColumnValues::is_empty(&self) -> bool
+pub fn db_core::storage::parquet::writer::ColumnValues::is_for(&self, db_core::storage::parquet::writer::ColumnType) -> bool
 pub fn db_core::storage::parquet::writer::ColumnValues::len(&self) -> usize
 impl core::clone::Clone for db_core::storage::parquet::writer::ColumnValues
 pub fn db_core::storage::parquet::writer::ColumnValues::clone(&self) -> Self
@@ -3139,6 +3180,9 @@ pub db_core::storage::column::parquet::writer::WriteError::ColumnCount::found: u
 pub db_core::storage::column::parquet::writer::WriteError::Encode(db_core::storage::parquet::writer::EncodeError)
 pub db_core::storage::column::parquet::writer::WriteError::InvalidOptions(alloc::string::String)
 pub db_core::storage::column::parquet::writer::WriteError::InvalidSchema(alloc::string::String)
+pub db_core::storage::column::parquet::writer::WriteError::InvalidValue
+pub db_core::storage::column::parquet::writer::WriteError::InvalidValue::column: alloc::string::String
+pub db_core::storage::column::parquet::writer::WriteError::InvalidValue::reason: alloc::string::String
 pub db_core::storage::column::parquet::writer::WriteError::Io(core::io::error::Error)
 pub db_core::storage::column::parquet::writer::WriteError::LengthMismatch
 pub db_core::storage::column::parquet::writer::WriteError::LengthMismatch::column: alloc::string::String
@@ -3229,6 +3273,7 @@ pub db_core::storage::column::parquet::FileError::Page(db_core::storage::parquet
 pub db_core::storage::column::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::parquet::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::column::parquet::FileError::UnexpectedDictionaryPage
+pub db_core::storage::column::parquet::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::column::parquet::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
 pub db_core::storage::column::parquet::FileError::UnsupportedNestedDictionary
 pub db_core::storage::column::parquet::FileError::UnsupportedNestedEncoding(db_core::storage::parquet::page::Encoding)
@@ -3263,6 +3308,7 @@ impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
@@ -3285,6 +3331,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub type db_core::storage::column::parquet::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub mod db_core::storage::column::posix
 pub struct db_core::storage::column::posix::PosixFile
@@ -3326,6 +3373,21 @@ impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix:
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
+pub enum db_core::storage::column::Annotation
+pub db_core::storage::column::Annotation::Bytes
+pub db_core::storage::column::Annotation::Decimal
+pub db_core::storage::column::Annotation::Plain
+pub db_core::storage::column::Annotation::UInt32
+pub db_core::storage::column::Annotation::UInt64
+impl core::clone::Clone for db_core::storage::column::decode::Annotation
+pub fn db_core::storage::column::decode::Annotation::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::column::decode::Annotation
+impl core::cmp::PartialEq for db_core::storage::column::decode::Annotation
+pub fn db_core::storage::column::decode::Annotation::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::column::decode::Annotation
+pub fn db_core::storage::column::decode::Annotation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::column::decode::Annotation
+impl core::marker::StructuralPartialEq for db_core::storage::column::decode::Annotation
 pub enum db_core::storage::column::Decoded
 pub db_core::storage::column::Decoded::Column(db_core::vm::column::Column)
 pub enum db_core::storage::column::FileError
@@ -3345,6 +3407,7 @@ pub db_core::storage::column::FileError::Page(db_core::storage::parquet::page::P
 pub db_core::storage::column::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::column::FileError::UnexpectedDictionaryPage
+pub db_core::storage::column::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::column::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
 pub db_core::storage::column::FileError::UnsupportedNestedDictionary
 pub db_core::storage::column::FileError::UnsupportedNestedEncoding(db_core::storage::parquet::page::Encoding)
@@ -3400,6 +3463,7 @@ impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
@@ -3422,6 +3486,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub trait db_core::storage::column::Vfs: core::marker::Send + core::marker::Sync
 pub type db_core::storage::column::Vfs::File: db_core::storage::column::vfs::VfsFile
 pub fn db_core::storage::column::Vfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
@@ -3443,6 +3508,7 @@ impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix:
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
+pub fn db_core::storage::column::annotation(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize) -> db_core::storage::column::decode::Annotation
 pub fn db_core::storage::column::decode_column_at(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub fn db_core::storage::column::decode_column_full(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub type db_core::storage::column::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
@@ -3565,6 +3631,7 @@ pub db_core::storage::ingest::manifest::Manifest::files: alloc::vec::Vec<db_core
 pub db_core::storage::ingest::manifest::Manifest::flushed_lsn: u64
 pub db_core::storage::ingest::manifest::Manifest::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::manifest::Manifest::layout: db_core::storage::ingest::layout::LayoutKind
+pub db_core::storage::ingest::manifest::Manifest::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>>
 impl db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::check(&self) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::new(db_core::storage::stream::detect::Format, db_core::storage::ingest::layout::LayoutKind) -> Self
@@ -3585,14 +3652,57 @@ impl core::marker::StructuralPartialEq for db_core::storage::ingest::manifest::M
 pub const db_core::storage::ingest::manifest::MANIFEST_FILE: &str
 pub fn db_core::storage::ingest::manifest::format_from_name(&str) -> core::option::Option<db_core::storage::stream::detect::Format>
 pub mod db_core::storage::ingest::page
+pub enum db_core::storage::ingest::page::PageBody
+pub db_core::storage::ingest::page::PageBody::Lines(alloc::rcs::arc::Arc<db_core::storage::stream::segment::Segment>)
+pub db_core::storage::ingest::page::PageBody::Rows(alloc::rcs::arc::Arc<db_core::storage::ingest::record::RowPage>)
+impl core::clone::Clone for db_core::storage::ingest::page::PageBody
+pub fn db_core::storage::ingest::page::PageBody::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::ingest::page::PageBody
+pub fn db_core::storage::ingest::page::PageBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::page::Page
+pub db_core::storage::ingest::page::Page::body: db_core::storage::ingest::page::PageBody
 pub db_core::storage::ingest::page::Page::lsn_hi: u64
 pub db_core::storage::ingest::page::Page::lsn_lo: u64
-pub db_core::storage::ingest::page::Page::segment: alloc::rcs::arc::Arc<db_core::storage::stream::segment::Segment>
+impl db_core::storage::ingest::page::Page
+pub fn db_core::storage::ingest::page::Page::first_observed(&self) -> core::option::Option<i64>
+pub fn db_core::storage::ingest::page::Page::is_empty(&self) -> bool
+pub fn db_core::storage::ingest::page::Page::len(&self) -> usize
+pub fn db_core::storage::ingest::page::Page::lines(&self) -> core::option::Option<&alloc::rcs::arc::Arc<db_core::storage::stream::segment::Segment>>
+pub fn db_core::storage::ingest::page::Page::observed_ts_ns(&self) -> alloc::vec::Vec<core::option::Option<i64>>
 impl core::clone::Clone for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub mod db_core::storage::ingest::record
+pub enum db_core::storage::ingest::record::RecordValue
+pub db_core::storage::ingest::record::RecordValue::Bool(bool)
+pub db_core::storage::ingest::record::RecordValue::Bytes(alloc::vec::Vec<u8>)
+pub db_core::storage::ingest::record::RecordValue::Decimal(i128)
+pub db_core::storage::ingest::record::RecordValue::Float(f64)
+pub db_core::storage::ingest::record::RecordValue::Int(i64)
+pub db_core::storage::ingest::record::RecordValue::Null
+pub db_core::storage::ingest::record::RecordValue::Str(alloc::string::String)
+pub db_core::storage::ingest::record::RecordValue::UInt(u64)
+impl core::clone::Clone for db_core::storage::ingest::record::RecordValue
+pub fn db_core::storage::ingest::record::RecordValue::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::ingest::record::RecordValue
+pub fn db_core::storage::ingest::record::RecordValue::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::ingest::record::RecordValue
+pub fn db_core::storage::ingest::record::RecordValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::record::RecordValue
+pub struct db_core::storage::ingest::record::RowPage
+impl db_core::storage::ingest::record::RowPage
+pub fn db_core::storage::ingest::record::RowPage::columns(&self) -> &[db_core::storage::parquet::writer::ColumnValues]
+pub fn db_core::storage::ingest::record::RowPage::is_empty(&self) -> bool
+pub fn db_core::storage::ingest::record::RowPage::len(&self) -> usize
+pub fn db_core::storage::ingest::record::RowPage::observed_ts_ns(&self) -> &[i64]
+pub fn db_core::storage::ingest::record::RowPage::schema(&self) -> &[db_core::storage::parquet::writer::ColumnSpec]
+impl core::clone::Clone for db_core::storage::ingest::record::RowPage
+pub fn db_core::storage::ingest::record::RowPage::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::ingest::record::RowPage
+pub fn db_core::storage::ingest::record::RowPage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn db_core::storage::ingest::record::type_from_name(&str) -> core::option::Option<db_core::storage::parquet::writer::ColumnType>
+pub fn db_core::storage::ingest::record::type_name(db_core::storage::parquet::writer::ColumnType) -> alloc::string::String
 pub mod db_core::storage::ingest::snapshot
 pub struct db_core::storage::ingest::snapshot::Snapshot
 impl db_core::storage::ingest::snapshot::Snapshot
@@ -3614,12 +3724,14 @@ pub db_core::storage::ingest::table::IngestError::FormatMismatch
 pub db_core::storage::ingest::table::IngestError::FormatMismatch::requested: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::table::IngestError::FormatMismatch::table: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::table::IngestError::InvalidRecord(alloc::string::String)
+pub db_core::storage::ingest::table::IngestError::InvalidSchema(alloc::string::String)
 pub db_core::storage::ingest::table::IngestError::Io(core::io::error::Error)
 pub db_core::storage::ingest::table::IngestError::LayoutMismatch
 pub db_core::storage::ingest::table::IngestError::LayoutMismatch::requested: db_core::storage::ingest::layout::LayoutKind
 pub db_core::storage::ingest::table::IngestError::LayoutMismatch::table: db_core::storage::ingest::layout::LayoutKind
 pub db_core::storage::ingest::table::IngestError::Manifest(db_core::storage::ingest::manifest::ManifestError)
 pub db_core::storage::ingest::table::IngestError::Parquet(db_core::storage::parquet::writer::WriteError)
+pub db_core::storage::ingest::table::IngestError::SchemaMismatch
 pub db_core::storage::ingest::table::IngestError::Unsupported(alloc::string::String)
 pub db_core::storage::ingest::table::IngestError::Wal(db_core::storage::ingest::wal::WalError)
 impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::table::IngestError
@@ -3640,6 +3752,7 @@ pub db_core::storage::ingest::table::TableOptions::clock: fn() -> i64
 pub db_core::storage::ingest::table::TableOptions::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::table::TableOptions::layout: db_core::storage::ingest::layout::Layout
 pub db_core::storage::ingest::table::TableOptions::parquet: db_core::storage::parquet::writer::WriterOptions
+pub db_core::storage::ingest::table::TableOptions::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>>
 pub db_core::storage::ingest::table::TableOptions::wal: db_core::storage::ingest::wal::WalOptions
 impl core::clone::Clone for db_core::storage::ingest::table::TableOptions
 pub fn db_core::storage::ingest::table::TableOptions::clone(&self) -> Self
@@ -3650,6 +3763,7 @@ pub fn db_core::storage::ingest::table::TableOptions::fmt(&self, &mut core::fmt:
 pub struct db_core::storage::ingest::table::TableWriter
 impl db_core::storage::ingest::table::TableWriter
 pub fn db_core::storage::ingest::table::TableWriter::append(&mut self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::append_row(&mut self, alloc::vec::Vec<db_core::storage::ingest::record::RecordValue>, db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::close(self) -> core::result::Result<(), db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::compact(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::dir(&self) -> &std::path::Path
@@ -3782,12 +3896,14 @@ pub db_core::storage::ingest::IngestError::FormatMismatch
 pub db_core::storage::ingest::IngestError::FormatMismatch::requested: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::IngestError::FormatMismatch::table: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::IngestError::InvalidRecord(alloc::string::String)
+pub db_core::storage::ingest::IngestError::InvalidSchema(alloc::string::String)
 pub db_core::storage::ingest::IngestError::Io(core::io::error::Error)
 pub db_core::storage::ingest::IngestError::LayoutMismatch
 pub db_core::storage::ingest::IngestError::LayoutMismatch::requested: db_core::storage::ingest::layout::LayoutKind
 pub db_core::storage::ingest::IngestError::LayoutMismatch::table: db_core::storage::ingest::layout::LayoutKind
 pub db_core::storage::ingest::IngestError::Manifest(db_core::storage::ingest::manifest::ManifestError)
 pub db_core::storage::ingest::IngestError::Parquet(db_core::storage::parquet::writer::WriteError)
+pub db_core::storage::ingest::IngestError::SchemaMismatch
 pub db_core::storage::ingest::IngestError::Unsupported(alloc::string::String)
 pub db_core::storage::ingest::IngestError::Wal(db_core::storage::ingest::wal::WalError)
 impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::table::IngestError
@@ -3851,6 +3967,29 @@ impl core::fmt::Debug for db_core::storage::ingest::manifest::ManifestError
 pub fn db_core::storage::ingest::manifest::ManifestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::ingest::manifest::ManifestError
 pub fn db_core::storage::ingest::manifest::ManifestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::ingest::PageBody
+pub db_core::storage::ingest::PageBody::Lines(alloc::rcs::arc::Arc<db_core::storage::stream::segment::Segment>)
+pub db_core::storage::ingest::PageBody::Rows(alloc::rcs::arc::Arc<db_core::storage::ingest::record::RowPage>)
+impl core::clone::Clone for db_core::storage::ingest::page::PageBody
+pub fn db_core::storage::ingest::page::PageBody::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::ingest::page::PageBody
+pub fn db_core::storage::ingest::page::PageBody::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::ingest::RecordValue
+pub db_core::storage::ingest::RecordValue::Bool(bool)
+pub db_core::storage::ingest::RecordValue::Bytes(alloc::vec::Vec<u8>)
+pub db_core::storage::ingest::RecordValue::Decimal(i128)
+pub db_core::storage::ingest::RecordValue::Float(f64)
+pub db_core::storage::ingest::RecordValue::Int(i64)
+pub db_core::storage::ingest::RecordValue::Null
+pub db_core::storage::ingest::RecordValue::Str(alloc::string::String)
+pub db_core::storage::ingest::RecordValue::UInt(u64)
+impl core::clone::Clone for db_core::storage::ingest::record::RecordValue
+pub fn db_core::storage::ingest::record::RecordValue::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::ingest::record::RecordValue
+pub fn db_core::storage::ingest::record::RecordValue::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::ingest::record::RecordValue
+pub fn db_core::storage::ingest::record::RecordValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::record::RecordValue
 pub enum db_core::storage::ingest::WalError
 pub db_core::storage::ingest::WalError::Closed
 pub db_core::storage::ingest::WalError::Corrupt
@@ -3895,6 +4034,7 @@ pub db_core::storage::ingest::Manifest::files: alloc::vec::Vec<db_core::storage:
 pub db_core::storage::ingest::Manifest::flushed_lsn: u64
 pub db_core::storage::ingest::Manifest::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::Manifest::layout: db_core::storage::ingest::layout::LayoutKind
+pub db_core::storage::ingest::Manifest::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>>
 impl db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::check(&self) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::new(db_core::storage::stream::detect::Format, db_core::storage::ingest::layout::LayoutKind) -> Self
@@ -3913,13 +4053,30 @@ impl core::fmt::Debug for db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::manifest::Manifest
 pub struct db_core::storage::ingest::Page
+pub db_core::storage::ingest::Page::body: db_core::storage::ingest::page::PageBody
 pub db_core::storage::ingest::Page::lsn_hi: u64
 pub db_core::storage::ingest::Page::lsn_lo: u64
-pub db_core::storage::ingest::Page::segment: alloc::rcs::arc::Arc<db_core::storage::stream::segment::Segment>
+impl db_core::storage::ingest::page::Page
+pub fn db_core::storage::ingest::page::Page::first_observed(&self) -> core::option::Option<i64>
+pub fn db_core::storage::ingest::page::Page::is_empty(&self) -> bool
+pub fn db_core::storage::ingest::page::Page::len(&self) -> usize
+pub fn db_core::storage::ingest::page::Page::lines(&self) -> core::option::Option<&alloc::rcs::arc::Arc<db_core::storage::stream::segment::Segment>>
+pub fn db_core::storage::ingest::page::Page::observed_ts_ns(&self) -> alloc::vec::Vec<core::option::Option<i64>>
 impl core::clone::Clone for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::RowPage
+impl db_core::storage::ingest::record::RowPage
+pub fn db_core::storage::ingest::record::RowPage::columns(&self) -> &[db_core::storage::parquet::writer::ColumnValues]
+pub fn db_core::storage::ingest::record::RowPage::is_empty(&self) -> bool
+pub fn db_core::storage::ingest::record::RowPage::len(&self) -> usize
+pub fn db_core::storage::ingest::record::RowPage::observed_ts_ns(&self) -> &[i64]
+pub fn db_core::storage::ingest::record::RowPage::schema(&self) -> &[db_core::storage::parquet::writer::ColumnSpec]
+impl core::clone::Clone for db_core::storage::ingest::record::RowPage
+pub fn db_core::storage::ingest::record::RowPage::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::ingest::record::RowPage
+pub fn db_core::storage::ingest::record::RowPage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::Snapshot
 impl db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&db_core::storage::ingest::manifest::FileEntry, &[u8])>
@@ -3941,6 +4098,7 @@ pub db_core::storage::ingest::TableOptions::clock: fn() -> i64
 pub db_core::storage::ingest::TableOptions::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::TableOptions::layout: db_core::storage::ingest::layout::Layout
 pub db_core::storage::ingest::TableOptions::parquet: db_core::storage::parquet::writer::WriterOptions
+pub db_core::storage::ingest::TableOptions::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>>
 pub db_core::storage::ingest::TableOptions::wal: db_core::storage::ingest::wal::WalOptions
 impl core::clone::Clone for db_core::storage::ingest::table::TableOptions
 pub fn db_core::storage::ingest::table::TableOptions::clone(&self) -> Self
@@ -3951,6 +4109,7 @@ pub fn db_core::storage::ingest::table::TableOptions::fmt(&self, &mut core::fmt:
 pub struct db_core::storage::ingest::TableWriter
 impl db_core::storage::ingest::table::TableWriter
 pub fn db_core::storage::ingest::table::TableWriter::append(&mut self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::append_row(&mut self, alloc::vec::Vec<db_core::storage::ingest::record::RecordValue>, db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::close(self) -> core::result::Result<(), db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::compact(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::table::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::dir(&self) -> &std::path::Path
@@ -4133,6 +4292,10 @@ pub db_core::storage::parquet::footer::ConvertedType::Decimal
 pub db_core::storage::parquet::footer::ConvertedType::Other(i32)
 pub db_core::storage::parquet::footer::ConvertedType::TimestampMicros
 pub db_core::storage::parquet::footer::ConvertedType::TimestampMillis
+pub db_core::storage::parquet::footer::ConvertedType::Uint16
+pub db_core::storage::parquet::footer::ConvertedType::Uint32
+pub db_core::storage::parquet::footer::ConvertedType::Uint64
+pub db_core::storage::parquet::footer::ConvertedType::Uint8
 impl core::clone::Clone for db_core::storage::parquet::footer::ConvertedType
 pub fn db_core::storage::parquet::footer::ConvertedType::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::parquet::footer::ConvertedType
@@ -4410,6 +4573,7 @@ pub db_core::storage::parquet::parquet_file::FileError::Page(db_core::storage::p
 pub db_core::storage::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::parquet::parquet_file::FileError::UnexpectedDictionaryPage
+pub db_core::storage::parquet::parquet_file::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::parquet::parquet_file::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
 pub db_core::storage::parquet::parquet_file::FileError::UnsupportedNestedDictionary
 pub db_core::storage::parquet::parquet_file::FileError::UnsupportedNestedEncoding(db_core::storage::parquet::page::Encoding)
@@ -4444,6 +4608,7 @@ impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
@@ -4466,6 +4631,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub type db_core::storage::parquet::parquet_file::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub type db_core::storage::parquet::parquet_file::Result<T> = core::result::Result<T, db_core::storage::parquet::parquet_file::FileError>
 pub mod db_core::storage::parquet::reader
@@ -4512,6 +4678,7 @@ pub fn db_core::storage::parquet::reader::Int96::fmt(&self, &mut core::fmt::Form
 impl core::marker::Copy for db_core::storage::parquet::reader::Int96
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::reader::Int96
 pub fn db_core::storage::parquet::reader::decode_dictionary_boolean(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<bool>>
+pub fn db_core::storage::parquet::reader::decode_dictionary_bytes(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::parquet::reader::decode_dictionary_double(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<f64>>
 pub fn db_core::storage::parquet::reader::decode_dictionary_fixed_len_byte_array(&[u8], i32, usize) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::parquet::reader::decode_dictionary_float(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<f32>>
@@ -4521,6 +4688,7 @@ pub fn db_core::storage::parquet::reader::decode_dictionary_int96(&[u8], i32) ->
 pub fn db_core::storage::parquet::reader::decode_dictionary_string(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::parquet::reader::read_boolean_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::reader::read_boolean_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[bool]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
+pub fn db_core::storage::parquet::reader::read_bytes_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::reader::read_dictionary_index_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<u32>>>
 pub fn db_core::storage::parquet::reader::read_double_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::reader::read_double_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[f64]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
@@ -4607,13 +4775,22 @@ pub fn db_core::storage::parquet::thrift::decode_struct(&[u8]) -> db_core::stora
 pub type db_core::storage::parquet::thrift::Result<T> = core::result::Result<T, db_core::storage::parquet::thrift::ThriftError>
 pub mod db_core::storage::parquet::writer
 pub enum db_core::storage::parquet::writer::ColumnType
+pub db_core::storage::parquet::writer::ColumnType::Binary
 pub db_core::storage::parquet::writer::ColumnType::Boolean
+pub db_core::storage::parquet::writer::ColumnType::Decimal
+pub db_core::storage::parquet::writer::ColumnType::Decimal::precision: u8
+pub db_core::storage::parquet::writer::ColumnType::Decimal::scale: u8
 pub db_core::storage::parquet::writer::ColumnType::Double
+pub db_core::storage::parquet::writer::ColumnType::FixedLenByteArray(u16)
 pub db_core::storage::parquet::writer::ColumnType::Float
 pub db_core::storage::parquet::writer::ColumnType::Int32
 pub db_core::storage::parquet::writer::ColumnType::Int64
 pub db_core::storage::parquet::writer::ColumnType::TimestampMicros
 pub db_core::storage::parquet::writer::ColumnType::TimestampNanos
+pub db_core::storage::parquet::writer::ColumnType::UInt16
+pub db_core::storage::parquet::writer::ColumnType::UInt32
+pub db_core::storage::parquet::writer::ColumnType::UInt64
+pub db_core::storage::parquet::writer::ColumnType::UInt8
 pub db_core::storage::parquet::writer::ColumnType::Utf8
 impl core::clone::Clone for db_core::storage::parquet::writer::ColumnType
 pub fn db_core::storage::parquet::writer::ColumnType::clone(&self) -> Self
@@ -4625,18 +4802,25 @@ pub fn db_core::storage::parquet::writer::ColumnType::fmt(&self, &mut core::fmt:
 impl core::marker::Copy for db_core::storage::parquet::writer::ColumnType
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnType
 pub enum db_core::storage::parquet::writer::ColumnValues
+pub db_core::storage::parquet::writer::ColumnValues::Binary(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
 pub db_core::storage::parquet::writer::ColumnValues::Boolean(alloc::vec::Vec<core::option::Option<bool>>)
+pub db_core::storage::parquet::writer::ColumnValues::Decimal(alloc::vec::Vec<core::option::Option<i128>>)
 pub db_core::storage::parquet::writer::ColumnValues::Double(alloc::vec::Vec<core::option::Option<f64>>)
+pub db_core::storage::parquet::writer::ColumnValues::FixedLenByteArray(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
 pub db_core::storage::parquet::writer::ColumnValues::Float(alloc::vec::Vec<core::option::Option<f32>>)
 pub db_core::storage::parquet::writer::ColumnValues::Int32(alloc::vec::Vec<core::option::Option<i32>>)
 pub db_core::storage::parquet::writer::ColumnValues::Int64(alloc::vec::Vec<core::option::Option<i64>>)
 pub db_core::storage::parquet::writer::ColumnValues::TimestampMicros(alloc::vec::Vec<core::option::Option<i64>>)
 pub db_core::storage::parquet::writer::ColumnValues::TimestampNanos(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::parquet::writer::ColumnValues::UInt16(alloc::vec::Vec<core::option::Option<u16>>)
+pub db_core::storage::parquet::writer::ColumnValues::UInt32(alloc::vec::Vec<core::option::Option<u32>>)
+pub db_core::storage::parquet::writer::ColumnValues::UInt64(alloc::vec::Vec<core::option::Option<u64>>)
+pub db_core::storage::parquet::writer::ColumnValues::UInt8(alloc::vec::Vec<core::option::Option<u8>>)
 pub db_core::storage::parquet::writer::ColumnValues::Utf8(alloc::vec::Vec<core::option::Option<alloc::string::String>>)
 impl db_core::storage::parquet::writer::ColumnValues
-pub fn db_core::storage::parquet::writer::ColumnValues::column_type(&self) -> db_core::storage::parquet::writer::ColumnType
 pub fn db_core::storage::parquet::writer::ColumnValues::empty(db_core::storage::parquet::writer::ColumnType) -> Self
 pub fn db_core::storage::parquet::writer::ColumnValues::is_empty(&self) -> bool
+pub fn db_core::storage::parquet::writer::ColumnValues::is_for(&self, db_core::storage::parquet::writer::ColumnType) -> bool
 pub fn db_core::storage::parquet::writer::ColumnValues::len(&self) -> usize
 impl core::clone::Clone for db_core::storage::parquet::writer::ColumnValues
 pub fn db_core::storage::parquet::writer::ColumnValues::clone(&self) -> Self
@@ -4679,6 +4863,9 @@ pub db_core::storage::parquet::writer::WriteError::ColumnCount::found: usize
 pub db_core::storage::parquet::writer::WriteError::Encode(db_core::storage::parquet::writer::EncodeError)
 pub db_core::storage::parquet::writer::WriteError::InvalidOptions(alloc::string::String)
 pub db_core::storage::parquet::writer::WriteError::InvalidSchema(alloc::string::String)
+pub db_core::storage::parquet::writer::WriteError::InvalidValue
+pub db_core::storage::parquet::writer::WriteError::InvalidValue::column: alloc::string::String
+pub db_core::storage::parquet::writer::WriteError::InvalidValue::reason: alloc::string::String
 pub db_core::storage::parquet::writer::WriteError::Io(core::io::error::Error)
 pub db_core::storage::parquet::writer::WriteError::LengthMismatch
 pub db_core::storage::parquet::writer::WriteError::LengthMismatch::column: alloc::string::String
@@ -4769,6 +4956,7 @@ pub db_core::storage::parquet::FileError::Page(db_core::storage::parquet::page::
 pub db_core::storage::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::parquet::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::parquet::FileError::UnexpectedDictionaryPage
+pub db_core::storage::parquet::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::parquet::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
 pub db_core::storage::parquet::FileError::UnsupportedNestedDictionary
 pub db_core::storage::parquet::FileError::UnsupportedNestedEncoding(db_core::storage::parquet::page::Encoding)
@@ -4803,6 +4991,7 @@ impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
@@ -4825,6 +5014,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub type db_core::storage::parquet::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub mod db_core::storage::row
 pub mod db_core::storage::row::btree
@@ -6883,6 +7073,7 @@ pub db_core::storage::FileError::Page(db_core::storage::parquet::page::PageError
 pub db_core::storage::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::FileError::UnexpectedDictionaryPage
+pub db_core::storage::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
 pub db_core::storage::FileError::UnsupportedNestedDictionary
 pub db_core::storage::FileError::UnsupportedNestedEncoding(db_core::storage::parquet::page::Encoding)
@@ -7037,6 +7228,7 @@ impl<'a, 'm> db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_statistics(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<&db_core::storage::parquet::footer::Statistics>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
@@ -7059,6 +7251,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub struct db_core::storage::Source
 pub db_core::storage::Source::kind: db_core::storage::stream::batch::SourceKind
 pub db_core::storage::Source::path: alloc::rcs::arc::Arc<str>

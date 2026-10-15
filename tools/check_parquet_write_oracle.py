@@ -16,6 +16,7 @@ Usage: make check-parquet-write-oracle
    or: uv run --with duckdb==V --with pyarrow==V python tools/check_parquet_write_oracle.py <dir>
 """
 
+import decimal
 import json
 import math
 import struct
@@ -36,6 +37,11 @@ ARROW_TYPES = {
     "utf8": pa.string(),
     "timestamp_micros": pa.timestamp("us", tz="UTC"),
     "timestamp_nanos": pa.timestamp("ns"),
+    "binary": pa.binary(),
+    "uint8": pa.uint8(),
+    "uint16": pa.uint16(),
+    "uint32": pa.uint32(),
+    "uint64": pa.uint64(),
 }
 
 DUCKDB_TYPES = {
@@ -47,6 +53,11 @@ DUCKDB_TYPES = {
     "utf8": "VARCHAR",
     "timestamp_micros": "TIMESTAMP WITH TIME ZONE",
     "timestamp_nanos": "TIMESTAMP_NS",
+    "binary": "BLOB",
+    "uint8": "UTINYINT",
+    "uint16": "USMALLINT",
+    "uint32": "UINTEGER",
+    "uint64": "UBIGINT",
 }
 
 # How DuckDB's VARCHAR stats_min_value/stats_max_value are cast back.
@@ -59,7 +70,47 @@ DUCKDB_STAT_CAST = {
     "utf8": "{}",
     "timestamp_micros": "epoch_us({}::TIMESTAMPTZ)",
     "timestamp_nanos": "epoch_ns({}::TIMESTAMP_NS)",
+    "binary": "{}::BLOB",
+    "uint8": "{}::UTINYINT",
+    "uint16": "{}::USMALLINT",
+    "uint32": "{}::UINTEGER",
+    "uint64": "{}::UBIGINT",
 }
+
+UNSIGNED_BITS = {"uint8": 8, "uint16": 16, "uint32": 32, "uint64": 64}
+
+
+def base(column_type):
+    """`decimal(9,2)` -> `decimal`, `fixed(16)` -> `fixed`."""
+    return column_type.split("(")[0]
+
+
+def params(column_type):
+    return tuple(int(x) for x in column_type[column_type.index("(") + 1 : -1].split(","))
+
+
+def arrow_type(column_type):
+    if base(column_type) == "decimal":
+        return pa.decimal128(*params(column_type))
+    if base(column_type) == "fixed":
+        return pa.binary(params(column_type)[0])
+    return ARROW_TYPES[column_type]
+
+
+def duckdb_type(column_type):
+    if base(column_type) == "decimal":
+        return "DECIMAL({},{})".format(*params(column_type))
+    if base(column_type) == "fixed":
+        return "BLOB"
+    return DUCKDB_TYPES[column_type]
+
+
+def duckdb_stat_cast(column_type):
+    if base(column_type) == "decimal":
+        return "{}::" + duckdb_type(column_type)
+    if base(column_type) == "fixed":
+        return "{}::BLOB"
+    return DUCKDB_STAT_CAST[column_type]
 
 
 def f32(x):
@@ -78,6 +129,20 @@ def normalize(column_type, value):
         return (value, math.copysign(1.0, value))
     if column_type == "utf8" and isinstance(value, bytes):
         return value.decode("utf-8")
+    kind = base(column_type)
+    if kind in UNSIGNED_BITS:
+        # A raw statistic is the signed bit pattern.
+        return value % (1 << UNSIGNED_BITS[kind])
+    if kind in ("binary", "fixed") and isinstance(value, (bytes, bytearray)):
+        return value.hex()
+    if kind == "decimal":
+        # Compared as the unscaled integer the example wrote.
+        if isinstance(value, decimal.Decimal):
+            # A context wide enough for 38 digits (the default rounds at 28).
+            exact = decimal.Context(prec=80)
+            return int(value.scaleb(params(column_type)[1], context=exact))
+        if isinstance(value, (bytes, bytearray)):
+            return int.from_bytes(value, "big", signed=True)
     return value
 
 
@@ -115,7 +180,7 @@ def check_pyarrow(path, columns, fails):
     for i, col in enumerate(columns):
         name, ctype = col["name"], col["type"]
         field = table.schema.field(name)
-        fails.check(field.type == ARROW_TYPES[ctype], f"pyarrow {name}: type {field.type}")
+        fails.check(field.type == arrow_type(ctype), f"pyarrow {name}: type {field.type}")
         fails.check(field.nullable == col["nullable"], f"pyarrow {name}: nullable {field.nullable}")
         data = table.column(name)
         if ctype in ("timestamp_micros", "timestamp_nanos"):
@@ -156,12 +221,12 @@ def check_duckdb(path, columns, fails):
     for col in columns:
         name, ctype = col["name"], col["type"]
         q = '"' + name.replace('"', '""') + '"'
-        fails.check(types.get(name) == DUCKDB_TYPES[ctype], f"duckdb {name}: type {types.get(name)}")
+        fails.check(types.get(name) == duckdb_type(ctype), f"duckdb {name}: type {types.get(name)}")
         select = {"timestamp_micros": f"epoch_us({q})", "timestamp_nanos": f"epoch_ns({q})"}.get(ctype, q)
         got = [normalize(ctype, r[0]) for r in con.execute(f"SELECT {select} FROM read_parquet('{p}')").fetchall()]
         want = [normalize(ctype, v) for v in col["values"]]
         fails.check(got == want, f"duckdb {name}: values differ (first at {first_diff(got, want)})")
-        cast = DUCKDB_STAT_CAST[ctype]
+        cast = duckdb_stat_cast(ctype)
         stats = con.execute(
             f"SELECT row_group_id, stats_null_count, {cast.format('stats_min_value')}, {cast.format('stats_max_value')} "
             f"FROM parquet_metadata('{p}') WHERE path_in_schema = ? ORDER BY row_group_id",
@@ -216,11 +281,46 @@ def check_archive(spec, fails):
     ).fetchall()
     got = sorted((d, r) for d, r in got)
     if got != expected:
-        fails.add(f"archive: {len(got)} rows vs {len(expected)} expected; {first_diff(got, expected)}")
+        fails.check(False, f"archive: {len(got)} rows vs {len(expected)} expected; {first_diff(got, expected)}")
     # The open day is in live/ only, never in the archive.
     live = (table / "live").as_posix()
     if not any(Path(live).rglob("*.parquet")):
-        fails.add("live/: expected the open day's hours")
+        fails.check(False, "live/: expected the open day's hours")
+
+
+def check_records(spec, fails):
+    """#594: DuckDB and pyarrow read a tiered record table's `archive/`
+    with exactly its declared column types (no `union_by_name`: every file
+    has the same schema), and every archived row with its values."""
+    expected = json.loads(spec.read_text())
+    columns = expected["columns"]
+    names = [c["name"] for c in columns]
+    files = sorted((spec.with_suffix("") / "archive").rglob("*.parquet"))
+    fails.check(bool(files), "record archive: no files")
+    glob = (spec.with_suffix("") / "archive" / "*" / "*.parquet").as_posix()
+    con = duckdb.connect()
+    source = f"read_parquet('{glob}', hive_partitioning = false)"
+    described = con.execute(f"SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM {source})").fetchall()
+    want_types = [(c["name"], duckdb_type(c["type"])) for c in columns]
+    fails.check(described == want_types, f"duckdb record types {described}, expected {want_types}")
+    select = []
+    for c in columns:
+        q = '"' + c["name"].replace('"', '""') + '"'
+        select.append({"timestamp_micros": f"epoch_us({q})", "timestamp_nanos": f"epoch_ns({q})"}.get(c["type"], q))
+    got = con.execute(f"SELECT {', '.join(select)} FROM {source}").fetchall()
+
+    def norm(rows):
+        return sorted((tuple(normalize(c["type"], v) for c, v in zip(columns, row)) for row in rows), key=repr)
+
+    want = norm(expected["rows"])
+    fails.check(norm(got) == want, f"duckdb record rows: {len(got)} vs {len(want)}; {first_diff(norm(got), want)}")
+    for path in files:
+        schema = pq.read_schema(path)
+        fails.check(schema.names == names, f"pyarrow {path.name}: columns {schema.names}")
+        for c in columns:
+            field = schema.field(c["name"])
+            fails.check(field.type == arrow_type(c["type"]), f"pyarrow {path.name} {c['name']}: type {field.type}")
+            fails.check(field.nullable == c["nullable"], f"pyarrow {path.name} {c['name']}: nullable {field.nullable}")
 
 
 def first_diff(a, b):
@@ -261,9 +361,19 @@ def main():
         for item in fails.items[:20]:
             print(f"    {item}")
         failed += bool(fails.items)
+    records = sorted(Path(sys.argv[1]).glob("*.records"))
+    for spec in records:
+        fails = Failures()
+        check_records(spec, fails)
+        status = "ok" if not fails.items else f"FAIL ({len(fails.items)})"
+        print(f"  {spec.stem} (record table archive/): {status}")
+        for item in fails.items[:20]:
+            print(f"    {item}")
+        failed += bool(fails.items)
+    total = len(cases) + len(archives) + len(records)
     if failed:
-        sys.exit(f"{failed} of {len(cases) + len(archives)} cases failed")
-    print(f"all {len(cases) + len(archives)} cases agree with DuckDB and pyarrow")
+        sys.exit(f"{failed} of {total} cases failed")
+    print(f"all {total} cases agree with DuckDB and pyarrow")
 
 
 if __name__ == "__main__":

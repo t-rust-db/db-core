@@ -39,6 +39,14 @@ fn validity(values: &ColumnValues) -> Vec<bool> {
         ColumnValues::Float(v) => v.iter().map(Option::is_some).collect(),
         ColumnValues::Double(v) => v.iter().map(Option::is_some).collect(),
         ColumnValues::Utf8(v) => v.iter().map(Option::is_some).collect(),
+        ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {
+            v.iter().map(Option::is_some).collect()
+        }
+        ColumnValues::UInt8(v) => v.iter().map(Option::is_some).collect(),
+        ColumnValues::UInt16(v) => v.iter().map(Option::is_some).collect(),
+        ColumnValues::UInt32(v) => v.iter().map(Option::is_some).collect(),
+        ColumnValues::UInt64(v) => v.iter().map(Option::is_some).collect(),
+        ColumnValues::Decimal(v) => v.iter().map(Option::is_some).collect(),
     }
 }
 
@@ -52,6 +60,13 @@ fn append(into: &mut ColumnValues, from: ColumnValues) {
         (ColumnValues::Utf8(a), ColumnValues::Utf8(b)) => a.extend(b),
         (ColumnValues::TimestampMicros(a), ColumnValues::TimestampMicros(b)) => a.extend(b),
         (ColumnValues::TimestampNanos(a), ColumnValues::TimestampNanos(b)) => a.extend(b),
+        (ColumnValues::Binary(a), ColumnValues::Binary(b)) => a.extend(b),
+        (ColumnValues::UInt8(a), ColumnValues::UInt8(b)) => a.extend(b),
+        (ColumnValues::UInt16(a), ColumnValues::UInt16(b)) => a.extend(b),
+        (ColumnValues::UInt32(a), ColumnValues::UInt32(b)) => a.extend(b),
+        (ColumnValues::UInt64(a), ColumnValues::UInt64(b)) => a.extend(b),
+        (ColumnValues::Decimal(a), ColumnValues::Decimal(b)) => a.extend(b),
+        (ColumnValues::FixedLenByteArray(a), ColumnValues::FixedLenByteArray(b)) => a.extend(b),
         (a, b) => panic!("append {b:?} to {a:?}"),
     }
 }
@@ -99,7 +114,49 @@ fn read_column(
         ColumnType::TimestampNanos => {
             ColumnValues::TimestampNanos(rg.read_int64_column(column).unwrap())
         }
+        ColumnType::Binary => ColumnValues::Binary(rg.read_binary_column(column).unwrap()),
+        // Unsigned values are stored as their bit patterns.
+        ColumnType::UInt8 => ColumnValues::UInt8(unsigned32(rg.read_int32_column(column).unwrap())),
+        ColumnType::UInt16 => {
+            ColumnValues::UInt16(unsigned32(rg.read_int32_column(column).unwrap()))
+        }
+        ColumnType::UInt32 => {
+            ColumnValues::UInt32(unsigned32(rg.read_int32_column(column).unwrap()))
+        }
+        ColumnType::UInt64 => ColumnValues::UInt64(
+            rg.read_int64_column(column)
+                .unwrap()
+                .into_iter()
+                .map(|v| v.map(|x| x as u64))
+                .collect(),
+        ),
+        ColumnType::Decimal { scale, .. } => ColumnValues::Decimal(
+            rg.read_decimal_column(column)
+                .unwrap()
+                .into_iter()
+                .map(|v| {
+                    v.map(|d| {
+                        assert_eq!(d.scale, i32::from(scale));
+                        d.unscaled
+                    })
+                })
+                .collect(),
+        ),
+        ColumnType::FixedLenByteArray(_) => {
+            ColumnValues::FixedLenByteArray(rg.read_fixed_len_byte_array_column(column).unwrap())
+        }
     }
+}
+
+/// INT32 bit patterns read back as the unsigned type they were written from.
+fn unsigned32<T: TryFrom<u32>>(values: Vec<Option<i32>>) -> Vec<Option<T>>
+where
+    T::Error: std::fmt::Debug,
+{
+    values
+        .into_iter()
+        .map(|v| v.map(|x| T::try_from(x as u32).unwrap()))
+        .collect()
 }
 
 /// Values compare bit-for-bit, so NaN and -0.0 count.
@@ -166,6 +223,28 @@ fn check_stats(values: &ColumnValues, stats: &Statistics) {
         ColumnValues::Double(v) => float_bounds(v.iter().flatten().copied(), stats, |b| {
             f64::from_le_bytes(b.try_into().unwrap())
         }),
+        ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {
+            bounds(v.iter().flatten().cloned(), stats, <[u8]>::to_vec)
+        }
+        // Unsigned order: a signed decode of u32::MAX would be -1.
+        ColumnValues::UInt8(v) => bounds(v.iter().flatten().map(|x| u32::from(*x)), stats, |b| {
+            u32::from_le_bytes(b.try_into().unwrap())
+        }),
+        ColumnValues::UInt16(v) => bounds(v.iter().flatten().map(|x| u32::from(*x)), stats, |b| {
+            u32::from_le_bytes(b.try_into().unwrap())
+        }),
+        ColumnValues::UInt32(v) => bounds(v.iter().flatten().copied(), stats, |b| {
+            u32::from_le_bytes(b.try_into().unwrap())
+        }),
+        ColumnValues::UInt64(v) => bounds(v.iter().flatten().copied(), stats, |b| {
+            u64::from_le_bytes(b.try_into().unwrap())
+        }),
+        // The bound's width says where the decimal is stored.
+        ColumnValues::Decimal(v) => bounds(v.iter().flatten().copied(), stats, |b| match b.len() {
+            4 => i128::from(i32::from_le_bytes(b.try_into().unwrap())),
+            8 => i128::from(i64::from_le_bytes(b.try_into().unwrap())),
+            _ => db_core::storage::parquet::decimal::from_be_bytes(b),
+        }),
     }
 }
 
@@ -214,7 +293,20 @@ fn all_types_schema() -> Vec<ColumnSpec> {
         ColumnSpec::new("f64", ColumnType::Double, false),
         ColumnSpec::new("s", ColumnType::Utf8, true),
         ColumnSpec::new("ts", ColumnType::TimestampMicros, false),
+        ColumnSpec::new("blob", ColumnType::Binary, true),
+        ColumnSpec::new("u8", ColumnType::UInt8, true),
+        ColumnSpec::new("u16", ColumnType::UInt16, false),
+        ColumnSpec::new("u32", ColumnType::UInt32, true),
+        ColumnSpec::new("u64", ColumnType::UInt64, false),
+        ColumnSpec::new("d9", decimal(9, 2), true),
+        ColumnSpec::new("d18", decimal(18, 4), false),
+        ColumnSpec::new("d38", decimal(38, 6), true),
+        ColumnSpec::new("ip", ColumnType::FixedLenByteArray(16), true),
     ]
+}
+
+fn decimal(precision: u8, scale: u8) -> ColumnType {
+    ColumnType::Decimal { precision, scale }
 }
 
 fn all_types_batch(n: i32) -> Vec<ColumnValues> {
@@ -245,7 +337,44 @@ fn all_types_batch(n: i32) -> Vec<ColumnValues> {
                 .collect(),
         ),
         ColumnValues::TimestampMicros(
-            r.map(|i| Some(1_700_000_000_000_000 + i64::from(i)))
+            r.clone()
+                .map(|i| Some(1_700_000_000_000_000 + i64::from(i)))
+                .collect(),
+        ),
+        ColumnValues::Binary(
+            r.clone()
+                .map(|i| (i % 5 != 0).then(|| vec![0x80 | (i % 3) as u8, 0xff, (i % 2) as u8]))
+                .collect(),
+        ),
+        ColumnValues::UInt8(
+            r.clone()
+                .map(|i| (i % 4 != 0).then_some((i * 37) as u8))
+                .collect(),
+        ),
+        ColumnValues::UInt16(r.clone().map(|i| Some(u16::MAX - (i % 9) as u16)).collect()),
+        ColumnValues::UInt32(
+            r.clone()
+                .map(|i| (i % 3 != 0).then_some(u32::MAX - (i % 11) as u32))
+                .collect(),
+        ),
+        ColumnValues::UInt64(r.clone().map(|i| Some((i as u64) << 58)).collect()),
+        ColumnValues::Decimal(
+            r.clone()
+                .map(|i| (i % 6 != 0).then_some(i128::from(i % 21 - 10) * 99_999_999))
+                .collect(),
+        ),
+        ColumnValues::Decimal(
+            r.clone()
+                .map(|i| Some(i128::from(i) * -1_000_000_000_007))
+                .collect(),
+        ),
+        ColumnValues::Decimal(
+            r.clone()
+                .map(|i| (i % 2 == 0).then_some(i128::from(i % 199 - 99) * 10i128.pow(36)))
+                .collect(),
+        ),
+        ColumnValues::FixedLenByteArray(
+            r.map(|i| (i % 7 != 0).then(|| (0..16).map(|b| (b * i) as u8).collect()))
                 .collect(),
         ),
     ]
@@ -422,11 +551,19 @@ fn flush_row_group_cuts_a_group_early() {
 #[test]
 fn invalid_schemas_and_options_are_refused() {
     let col = |name: &str| ColumnSpec::new(name, ColumnType::Int32, false);
+    let typed = |t: ColumnType| vec![ColumnSpec::new("a", t, true)];
     let cases = [
         (Vec::new(), WriterOptions::default()),
         (vec![col("")], WriterOptions::default()),
         (vec![col("a"), col("a")], WriterOptions::default()),
         (vec![col("a")], options(Compression::Snappy, true, 0)),
+        (typed(decimal(0, 0)), WriterOptions::default()),
+        (typed(decimal(39, 2)), WriterOptions::default()),
+        (typed(decimal(5, 6)), WriterOptions::default()),
+        (
+            typed(ColumnType::FixedLenByteArray(0)),
+            WriterOptions::default(),
+        ),
     ];
     for (schema, opts) in cases {
         let err = ParquetWriter::new(Vec::new(), schema, opts).err().unwrap();
@@ -473,6 +610,39 @@ fn bad_batches_are_refused_and_leave_the_writer_usable() {
         read_all(&bytes, &schema),
         vec![int(vec![Some(7)]), s(vec![None])]
     );
+}
+
+#[test]
+fn values_that_do_not_fit_their_column_are_refused() {
+    let schema = vec![
+        ColumnSpec::new("d", decimal(4, 2), true),
+        ColumnSpec::new("ip", ColumnType::FixedLenByteArray(4), true),
+    ];
+    let mut w = ParquetWriter::new(Vec::new(), schema.clone(), WriterOptions::default()).unwrap();
+    let bad = [
+        vec![
+            ColumnValues::Decimal(vec![Some(-10_000)]),
+            ColumnValues::FixedLenByteArray(vec![None]),
+        ],
+        vec![
+            ColumnValues::Decimal(vec![Some(9_999)]),
+            ColumnValues::FixedLenByteArray(vec![Some(vec![1, 2, 3])]),
+        ],
+    ];
+    let expected = [
+        "column 'd': unscaled value -10000 has more than 4 digits",
+        "column 'ip': 3-byte value in a 4-byte column",
+    ];
+    for (batch, message) in bad.into_iter().zip(expected) {
+        assert_eq!(w.write_columns(batch).unwrap_err().to_string(), message);
+    }
+    let good = vec![
+        ColumnValues::Decimal(vec![Some(-9_999)]),
+        ColumnValues::FixedLenByteArray(vec![Some(vec![1, 2, 3, 4])]),
+    ];
+    w.write_columns(good.clone()).unwrap();
+    let (bytes, _) = w.finish().unwrap();
+    assert_eq!(read_all(&bytes, &schema), good);
 }
 
 #[test]
@@ -573,6 +743,15 @@ fn column_type_strategy() -> impl Strategy<Value = ColumnType> {
         Just(ColumnType::Utf8),
         Just(ColumnType::TimestampMicros),
         Just(ColumnType::TimestampNanos),
+        Just(ColumnType::Binary),
+        Just(ColumnType::UInt8),
+        Just(ColumnType::UInt16),
+        Just(ColumnType::UInt32),
+        Just(ColumnType::UInt64),
+        (1u8..=38)
+            .prop_flat_map(|p| (Just(p), 0..=p))
+            .prop_map(|(p, s)| decimal(p, s)),
+        (1u16..20).prop_map(ColumnType::FixedLenByteArray),
     ]
 }
 
@@ -647,6 +826,58 @@ fn values_strategy(t: ColumnType, nullable: bool, n: usize) -> BoxedStrategy<Col
         ColumnType::TimestampNanos => col(any::<i64>(), 0i64..4, nullable, n)
             .prop_map(ColumnValues::TimestampNanos)
             .boxed(),
+        ColumnType::Binary => col(
+            proptest::collection::vec(any::<u8>(), 0..10),
+            prop_oneof![Just(Vec::new()), Just(vec![0xff])],
+            nullable,
+            n,
+        )
+        .prop_map(ColumnValues::Binary)
+        .boxed(),
+        ColumnType::UInt8 => col(any::<u8>(), Just(u8::MAX), nullable, n)
+            .prop_map(ColumnValues::UInt8)
+            .boxed(),
+        ColumnType::UInt16 => col(any::<u16>(), Just(u16::MAX), nullable, n)
+            .prop_map(ColumnValues::UInt16)
+            .boxed(),
+        ColumnType::UInt32 => col(
+            any::<u32>(),
+            prop_oneof![Just(0), Just(u32::MAX)],
+            nullable,
+            n,
+        )
+        .prop_map(ColumnValues::UInt32)
+        .boxed(),
+        ColumnType::UInt64 => col(
+            any::<u64>(),
+            prop_oneof![Just(0), Just(u64::MAX)],
+            nullable,
+            n,
+        )
+        .prop_map(ColumnValues::UInt64)
+        .boxed(),
+        ColumnType::Decimal { precision, .. } => {
+            let limit = 10i128.pow(u32::from(precision)) - 1;
+            col(
+                -limit..=limit,
+                prop_oneof![Just(-limit), Just(limit)],
+                nullable,
+                n,
+            )
+            .prop_map(ColumnValues::Decimal)
+            .boxed()
+        }
+        ColumnType::FixedLenByteArray(len) => {
+            let len = usize::from(len);
+            col(
+                proptest::collection::vec(any::<u8>(), len),
+                Just(vec![0x80; len]),
+                nullable,
+                n,
+            )
+            .prop_map(ColumnValues::FixedLenByteArray)
+            .boxed()
+        }
     }
 }
 
@@ -708,4 +939,185 @@ proptest! {
             }
         }
     }
+}
+
+// --- the column engine over the new types (#595) ---------------------------
+
+/// Writes `batches` (one row group each) to a fresh file named `<table>.parquet`
+/// and opens the column engine over it.
+#[cfg(feature = "engine-column")]
+fn engine_over(
+    table: &str,
+    schema: Vec<ColumnSpec>,
+    batches: Vec<Vec<ColumnValues>>,
+) -> (db_core::engine::column::BatchEngine, std::path::PathBuf) {
+    let bytes = write(schema, options(Compression::Snappy, true, 1), batches);
+    let dir = std::env::temp_dir().join(format!("db-core-595-{}-{table}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{table}.parquet"));
+    std::fs::write(&path, bytes).unwrap();
+    let engine =
+        <db_core::engine::column::BatchEngine as db_core::engine::Engine>::open(&path).unwrap();
+    (engine, dir)
+}
+
+#[cfg(feature = "engine-column")]
+fn query(engine: &mut db_core::engine::column::BatchEngine, sql: &str) -> Vec<String> {
+    use db_core::engine::Engine as _;
+    engine
+        .run_query(sql)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|r| {
+            r.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("|")
+        })
+        .collect()
+}
+
+#[cfg(feature = "engine-column")]
+#[test]
+fn the_column_engine_reads_bytes_as_hex_decimals_as_floats_and_unsigned_values_unsigned() {
+    let schema = vec![
+        ColumnSpec::new("blob", ColumnType::Binary, true),
+        ColumnSpec::new("ip", ColumnType::FixedLenByteArray(4), true),
+        ColumnSpec::new("price", decimal(9, 2), true),
+        ColumnSpec::new("big", decimal(38, 3), true),
+        ColumnSpec::new("u32", ColumnType::UInt32, true),
+        ColumnSpec::new("u64", ColumnType::UInt64, true),
+    ];
+    let batch = vec![
+        ColumnValues::Binary(vec![Some(vec![0x80, 0xff]), None]),
+        ColumnValues::FixedLenByteArray(vec![Some(vec![192, 168, 1, 7]), None]),
+        ColumnValues::Decimal(vec![Some(1234), Some(-5)]),
+        ColumnValues::Decimal(vec![Some(-1_500), None]),
+        ColumnValues::UInt32(vec![Some(u32::MAX), Some(1)]),
+        ColumnValues::UInt64(vec![Some(i64::MAX as u64), Some(0)]),
+    ];
+    let (mut engine, dir) = engine_over("typed", schema, vec![batch]);
+    assert_eq!(
+        query(
+            &mut engine,
+            "SELECT blob, ip, price, big, u32, u64 FROM typed"
+        ),
+        [
+            format!("80ff|c0a80107|12.34|-1.5|4294967295|{}", i64::MAX),
+            "||-0.05||1|0".to_string(),
+        ]
+    );
+    assert_eq!(
+        query(
+            &mut engine,
+            "SELECT count(*) FROM typed WHERE blob = '80ff'"
+        ),
+        ["1"]
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A footer bound above the signed range must not be read as a negative
+/// number: before #595 the row group holding `u32::MAX` was pruned for
+/// `u32 > 3000000000`.
+#[cfg(feature = "engine-column")]
+#[test]
+fn unsigned_statistics_prune_in_unsigned_order() {
+    let schema = vec![
+        ColumnSpec::new("u32", ColumnType::UInt32, false),
+        ColumnSpec::new("u64", ColumnType::UInt64, false),
+    ];
+    let group = |a: u32, b: u64| {
+        vec![
+            ColumnValues::UInt32(vec![Some(a)]),
+            ColumnValues::UInt64(vec![Some(b)]),
+        ]
+    };
+    let (mut engine, dir) = engine_over(
+        "unsigned",
+        schema,
+        vec![
+            group(1, 1),
+            group(u32::MAX, i64::MAX as u64),
+            group(2_147_483_648, 2),
+        ],
+    );
+    let count = |engine: &mut _, sql: &str| query(engine, sql).join("");
+    assert_eq!(
+        count(
+            &mut engine,
+            "SELECT count(*) FROM unsigned WHERE u32 > 3000000000"
+        ),
+        "1"
+    );
+    assert_eq!(
+        count(
+            &mut engine,
+            "SELECT count(*) FROM unsigned WHERE u32 >= 2147483648"
+        ),
+        "2"
+    );
+    assert_eq!(
+        count(&mut engine, "SELECT count(*) FROM unsigned WHERE u32 < 5"),
+        "1"
+    );
+    assert_eq!(
+        count(&mut engine, "SELECT count(*) FROM unsigned WHERE u64 > 5"),
+        "1"
+    );
+    assert_eq!(
+        query(
+            &mut engine,
+            "SELECT u32 FROM unsigned ORDER BY u32 DESC LIMIT 1"
+        ),
+        ["4294967295"]
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// A `UINT_64` value the engine's integers cannot hold fails the query
+/// rather than reading back as a wrapped negative.
+#[cfg(feature = "engine-column")]
+#[test]
+fn an_unsigned_value_above_i64_max_is_an_error_not_a_negative() {
+    use db_core::engine::Engine as _;
+    let schema = vec![ColumnSpec::new("u64", ColumnType::UInt64, false)];
+    let batch = vec![ColumnValues::UInt64(vec![Some(u64::MAX)])];
+    let (mut engine, dir) = engine_over("too_big", schema, vec![batch]);
+    let err = engine.run_query("SELECT u64 FROM too_big").unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("unsigned value 18446744073709551615 is above the largest supported integer"),
+        "{err}"
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// An aggregate without GROUP BY is one row over no rows, also when footer
+/// statistics prune every row group or the file has none (before, no row).
+#[cfg(feature = "engine-column")]
+#[test]
+fn an_ungrouped_aggregate_over_no_row_groups_is_one_row() {
+    let schema = vec![ColumnSpec::new("x", ColumnType::Int32, false)];
+    let (mut engine, dir) = engine_over(
+        "pruned",
+        schema.clone(),
+        vec![vec![ColumnValues::Int32(vec![Some(1), Some(2)])]],
+    );
+    let all_pruned = "SELECT count(*), sum(x), min(x) FROM pruned WHERE x < 0";
+    assert_eq!(query(&mut engine, all_pruned), ["0||"]);
+    assert!(query(
+        &mut engine,
+        "SELECT x, count(*) FROM pruned WHERE x < 0 GROUP BY x"
+    )
+    .is_empty());
+    std::fs::remove_dir_all(dir).ok();
+
+    let (mut engine, dir) = engine_over("no_groups", schema, Vec::new());
+    assert_eq!(
+        query(&mut engine, "SELECT count(*), max(x) FROM no_groups"),
+        ["0|"]
+    );
+    std::fs::remove_dir_all(dir).ok();
 }

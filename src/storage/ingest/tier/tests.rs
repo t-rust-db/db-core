@@ -144,6 +144,7 @@ fn a_day_merge_refuses_inputs_that_do_not_match_the_manifest() {
     let err = merge_day(
         &out,
         &[(&entry, &bytes)],
+        None,
         &TierOptions::default(),
         &WriterOptions::default(),
     );
@@ -154,6 +155,7 @@ fn a_day_merge_refuses_inputs_that_do_not_match_the_manifest() {
     let err = merge_day(
         &out,
         &[(&entry, b"not parquet")],
+        None,
         &TierOptions::default(),
         &WriterOptions::default(),
     );

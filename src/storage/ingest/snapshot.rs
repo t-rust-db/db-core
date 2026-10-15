@@ -26,17 +26,19 @@
 use std::fmt;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::flush::{add_field, add_page_fields, predefined_specs};
 use super::manifest::{FileEntry, Manifest};
 use super::page::{decode_record, HeadPage, Page};
+use super::record::{check_row, decode_row};
 use super::recover::read_tail;
 use super::table::IngestError;
 use super::wal::{Record, WAL_DIR};
 use crate::storage::column::{MmapRegion, Vfs, VfsFile};
 use crate::storage::parquet::footer::PhysicalType;
-use crate::storage::parquet::writer::{ColumnSpec, ColumnType};
+use crate::storage::parquet::writer::{ColumnSpec, ColumnType, DecimalStorage};
 use crate::storage::parquet::ParquetFile;
 use crate::storage::stream::detect::{DetectedParser, Format};
 use crate::storage::stream::{Source, SourceKind};
@@ -80,7 +82,8 @@ impl Snapshot {
                 std::thread::sleep(Duration::from_millis(1));
                 continue;
             };
-            let pages = pages_from_records(table, manifest.format, records)?;
+            let pages =
+                pages_from_records(table, manifest.format, manifest.schema.as_deref(), records)?;
             match Snapshot::new(table, manifest, pages) {
                 // A compaction replaced the file and its grace period is
                 // over: a newer manifest no longer lists it.
@@ -146,7 +149,7 @@ impl Snapshot {
 
     /// Records in the snapshot.
     pub fn rows(&self) -> u64 {
-        let paged: usize = self.pages.iter().map(|p| p.segment.len()).sum();
+        let paged: usize = self.pages.iter().map(Page::len).sum();
         self.manifest
             .files
             .iter()
@@ -158,6 +161,10 @@ impl Snapshot {
     /// The table's columns: the predefined ones, then every field of every
     /// file and page in LSN order, a field's type widened over all of them.
     pub fn schema(&self) -> Result<Vec<ColumnSpec>, IngestError> {
+        // A record table's columns are its schema, whatever is flushed.
+        if let Some(schema) = &self.manifest.schema {
+            return Ok(schema.clone());
+        }
         let mut specs = predefined_specs();
         for (entry, bytes) in self.files() {
             let file = ParquetFile::open(bytes)
@@ -176,10 +183,12 @@ impl Snapshot {
 }
 
 /// Pages holding `records` (WAL payloads), sealed at the page size as the
-/// writer seals them.
+/// writer seals them: a lines table's lines in `format`, or a record
+/// table's rows of `schema`.
 pub(crate) fn pages_from_records(
     table: &Path,
     format: Format,
+    schema: Option<&[ColumnSpec]>,
     records: Vec<Record>,
 ) -> Result<Vec<Page>, IngestError> {
     let parser = DetectedParser::for_format(format);
@@ -188,12 +197,20 @@ pub(crate) fn pages_from_records(
         head.snapshot(&source, &parser)
             .ok_or_else(|| IngestError::Corrupt("the parser rejected a page".to_string()))
     };
-    let mut head = HeadPage::default();
+    let mut head = schema.map_or_else(HeadPage::default, |s| HeadPage::for_records(Arc::from(s)));
     let mut pages = Vec::new();
     for (lsn, payload) in records {
-        let (observed, line) = decode_record(&payload)
-            .ok_or_else(|| IngestError::Corrupt(format!("WAL record {lsn} is not a record")))?;
-        head.push(lsn, observed, line);
+        let corrupt = || IngestError::Corrupt(format!("WAL record {lsn} is not a record"));
+        let (observed, body) = decode_record(&payload).ok_or_else(corrupt)?;
+        match schema {
+            Some(schema) => {
+                let row = decode_row(body)
+                    .filter(|row| check_row(schema, row).is_none())
+                    .ok_or_else(corrupt)?;
+                head.push_row(lsn, observed, row);
+            }
+            None => head.push(lsn, observed, body),
+        }
         if head.is_full() {
             pages.push(seal(&head)?);
             head.clear();
@@ -222,13 +239,22 @@ pub(crate) fn column_type(pt: PhysicalType) -> Option<ColumnType> {
 pub fn physical_type(t: ColumnType) -> PhysicalType {
     match t {
         ColumnType::Boolean => PhysicalType::Boolean,
-        ColumnType::Int32 => PhysicalType::Int32,
-        ColumnType::Int64 | ColumnType::TimestampMicros | ColumnType::TimestampNanos => {
-            PhysicalType::Int64
+        ColumnType::Int32 | ColumnType::UInt8 | ColumnType::UInt16 | ColumnType::UInt32 => {
+            PhysicalType::Int32
         }
+        ColumnType::Int64
+        | ColumnType::TimestampMicros
+        | ColumnType::TimestampNanos
+        | ColumnType::UInt64 => PhysicalType::Int64,
         ColumnType::Float => PhysicalType::Float,
         ColumnType::Double => PhysicalType::Double,
-        ColumnType::Utf8 => PhysicalType::ByteArray,
+        ColumnType::Utf8 | ColumnType::Binary => PhysicalType::ByteArray,
+        ColumnType::Decimal { precision, .. } => match DecimalStorage::for_precision(precision) {
+            DecimalStorage::Int32 => PhysicalType::Int32,
+            DecimalStorage::Int64 => PhysicalType::Int64,
+            DecimalStorage::Fixed16 => PhysicalType::FixedLenByteArray,
+        },
+        ColumnType::FixedLenByteArray(_) => PhysicalType::FixedLenByteArray,
     }
 }
 
@@ -248,6 +274,15 @@ pub fn cast(v: Value, t: ColumnType) -> Value {
         ) => v,
         (ColumnType::Int32, Value::Int(i)) if i32::try_from(i).is_ok() => Value::Int(i),
         (ColumnType::Boolean, v @ Value::Bool(_)) => v,
+        (ColumnType::UInt8, Value::Int(i)) if u8::try_from(i).is_ok() => Value::Int(i),
+        (ColumnType::UInt16, Value::Int(i)) if u16::try_from(i).is_ok() => Value::Int(i),
+        (ColumnType::UInt32, Value::Int(i)) if u32::try_from(i).is_ok() => Value::Int(i),
+        (ColumnType::UInt64, Value::Int(i)) if i >= 0 => Value::Int(i),
+        // As the column engine reads them: a decimal as a float, bytes as
+        // lowercase hex.
+        (ColumnType::Decimal { .. }, Value::Float(f)) => Value::Float(f),
+        (ColumnType::Decimal { .. }, Value::Int(i)) => Value::Float(i as f64),
+        (ColumnType::Binary | ColumnType::FixedLenByteArray(_), v @ Value::Str(_)) => v,
         _ => Value::Null,
     }
 }

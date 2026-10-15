@@ -57,8 +57,8 @@ fn raws(s: &Snapshot) -> (Vec<String>, Vec<(u64, u64)>) {
         ranges.push((entry.lsn_lo, entry.lsn_hi));
     }
     for page in s.pages() {
-        for i in 0..page.segment.len() {
-            rows.push(String::from_utf8(page.segment.raw_line(i).to_vec()).unwrap());
+        for i in 0..page.lines().unwrap().len() {
+            rows.push(String::from_utf8(page.lines().unwrap().raw_line(i).to_vec()).unwrap());
         }
         ranges.push((page.lsn_lo, page.lsn_hi));
     }
@@ -201,14 +201,21 @@ fn pages_from_records_seal_like_the_writer_and_refuse_garbage() {
             )
         })
         .collect();
-    let pages = pages_from_records(Path::new("t"), Format::Jsonl, records).unwrap();
+    let pages = pages_from_records(Path::new("t"), Format::Jsonl, None, records).unwrap();
     assert_eq!(pages.len(), 2);
     assert_eq!((pages[0].lsn_lo, pages[0].lsn_hi), (1, max as u64));
-    assert_eq!(pages[1].segment.len(), 2);
-    assert!(pages_from_records(Path::new("t"), Format::Jsonl, vec![])
-        .unwrap()
-        .is_empty());
-    let err = pages_from_records(Path::new("t"), Format::Jsonl, vec![(1, b"x".to_vec())]);
+    assert_eq!(pages[1].lines().unwrap().len(), 2);
+    assert!(
+        pages_from_records(Path::new("t"), Format::Jsonl, None, vec![])
+            .unwrap()
+            .is_empty()
+    );
+    let err = pages_from_records(
+        Path::new("t"),
+        Format::Jsonl,
+        None,
+        vec![(1, b"x".to_vec())],
+    );
     assert!(err.unwrap_err().to_string().contains("WAL record 1"));
 }
 
