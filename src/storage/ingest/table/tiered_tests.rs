@@ -53,6 +53,7 @@ fn tier() -> TierOptions {
         max_file_size: 1 << 30,
         delete_grace_ns: 60_000_000_000,
         spill_rows: usize::MAX,
+        retention_days: None,
     }
 }
 
@@ -648,4 +649,113 @@ fn a_crash_at_every_spill_and_close_step_recovers_every_record_once() {
         assert_eq!(all_rows(&w), sorted(lines), "step {step}");
         assert!(w.manifest().files.iter().any(|f| f.area == Area::Archive));
     }
+}
+
+/// [`tier`] keeping `days` closed days.
+fn retaining(days: u32) -> TableOptions {
+    options(TierOptions {
+        retention_days: Some(days),
+        ..tier()
+    })
+}
+
+/// Records `range`, one an hour from `day` 0, hour 0.
+fn hourly(w: &mut TableWriter, range: std::ops::Range<usize>) -> Vec<(i64, String)> {
+    range
+        .map(|i| {
+            let i64_i = i as i64;
+            set_clock(i64_i / 24, i64_i % 24, 0);
+            let l = line(i);
+            w.append(l.as_bytes(), Ack::Durable).unwrap();
+            (i64_i / 24, l)
+        })
+        .collect()
+}
+
+#[test]
+fn retention_drops_the_oldest_days_whole() {
+    let _serial = serial();
+    let t = TempTable::new();
+    let mut w = TableWriter::open(&t.0, retaining(2)).unwrap();
+    // Four days and an hour, a record an hour.
+    let records = hourly(&mut w, 0..97);
+    w.compact().unwrap();
+    let kept: Vec<String> = records
+        .iter()
+        .filter(|(day, _)| *day >= 2)
+        .map(|(_, l)| l.clone())
+        .collect();
+    assert_eq!(all_rows(&w), sorted(kept.clone()));
+    let m = w.manifest().clone();
+    assert_eq!(m.dropped_lsn, 48, "days 0 and 1 are dropped");
+    assert_eq!(m.files.first().map(|f| f.lsn_lo), Some(49));
+    let days: Vec<&str> = m
+        .files
+        .iter()
+        .filter(|f| f.area == Area::Archive)
+        .map(|f| f.path.as_str())
+        .collect();
+    assert!(
+        days.iter().all(|p| p.starts_with("archive/date=2026-10-13")
+            || p.starts_with("archive/date=2026-10-14")),
+        "{days:?}"
+    );
+    assert_eq!(
+        w.pending_deletes().count(),
+        2 + 24 * 4,
+        "2 dropped days, 4 days of merged hours"
+    );
+
+    // After the grace period the dropped days are gone from disk.
+    set_clock(4, 2, 0);
+    w.compact().unwrap();
+    assert!(!t.0.join("archive/date=2026-10-11").exists());
+    assert!(!t.0.join("archive/date=2026-10-12").exists());
+    assert_eq!(files_on_disk(&t), listed(&w));
+
+    // A reopen reads dropped_lsn and the table carries on.
+    drop(w);
+    let mut w = TableWriter::open(&t.0, retaining(2)).unwrap();
+    assert_eq!(w.manifest().dropped_lsn, 48);
+    let mut kept = kept;
+    kept.extend(append(&mut w, 200..201));
+    w.flush_all().unwrap();
+    assert_eq!(all_rows(&w), sorted(kept));
+    // A snapshot from outside the writer reads it too.
+    assert_eq!(Snapshot::open(&t.0).unwrap().manifest().dropped_lsn, 48);
+}
+
+#[test]
+fn without_retention_every_day_is_kept() {
+    let _serial = serial();
+    let t = TempTable::new();
+    let mut w = open(&t);
+    let records = hourly(&mut w, 0..73);
+    w.compact().unwrap();
+    assert_eq!(w.manifest().dropped_lsn, 0);
+    let all: Vec<String> = records.into_iter().map(|(_, l)| l).collect();
+    assert_eq!(all_rows(&w), sorted(all));
+}
+
+#[test]
+fn a_crash_at_the_retention_commit_recovers_the_kept_days() {
+    let _serial = serial();
+    let t = TempTable::new();
+    let mut w = TableWriter::open(&t.0, retaining(1)).unwrap();
+    let records = hourly(&mut w, 0..49);
+    w.crash_after = Some(14);
+    let err = w.compact().unwrap_err();
+    assert!(err.to_string().contains("after flush step 14"), "{err}");
+    drop(w);
+
+    let w = TableWriter::open(&t.0, retaining(1)).unwrap();
+    let kept: Vec<String> = records
+        .into_iter()
+        .filter(|(day, _)| *day >= 1)
+        .map(|(_, l)| l)
+        .collect();
+    assert_eq!(all_rows(&w), sorted(kept));
+    assert_eq!(w.manifest().dropped_lsn, 24);
+    assert_eq!(files_on_disk(&t), listed(&w), "the dropped day is deleted");
+    assert!(!t.0.join("archive/date=2026-10-11").exists());
 }

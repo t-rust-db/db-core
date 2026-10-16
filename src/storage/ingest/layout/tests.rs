@@ -14,6 +14,7 @@ fn dates_and_partition_directories() {
     }
     let hour = hour_of(20_737 * DAY_NS + 14 * HOUR_NS + 5);
     assert_eq!(live_dir(hour), "live/date=2026-10-11/hour=14");
+    assert_eq!(staging_dir(hour), "staging/date=2026-10-11/hour=14");
     assert_eq!(archive_dir(day_of_hour(hour)), "archive/date=2026-10-11");
     assert_eq!(hour_of(-1), -1, "before the epoch rounds down");
     assert_eq!(live_dir(-1), "live/date=1969-12-31/hour=23");

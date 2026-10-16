@@ -3614,6 +3614,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::ingest::layout::Lay
 pub struct db_core::storage::ingest::layout::TierOptions
 pub db_core::storage::ingest::layout::TierOptions::delete_grace_ns: i64
 pub db_core::storage::ingest::layout::TierOptions::max_file_size: u64
+pub db_core::storage::ingest::layout::TierOptions::retention_days: core::option::Option<u32>
 pub db_core::storage::ingest::layout::TierOptions::row_group_max_rows: usize
 pub db_core::storage::ingest::layout::TierOptions::sort_key: alloc::vec::Vec<alloc::string::String>
 pub db_core::storage::ingest::layout::TierOptions::spill_rows: usize
@@ -3680,6 +3681,7 @@ impl core::fmt::Debug for db_core::storage::ingest::manifest::FileEntry
 pub fn db_core::storage::ingest::manifest::FileEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::manifest::FileEntry
 pub struct db_core::storage::ingest::manifest::Manifest
+pub db_core::storage::ingest::manifest::Manifest::dropped_lsn: u64
 pub db_core::storage::ingest::manifest::Manifest::files: alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>
 pub db_core::storage::ingest::manifest::Manifest::flushed_lsn: u64
 pub db_core::storage::ingest::manifest::Manifest::format: db_core::storage::stream::detect::Format
@@ -3687,6 +3689,7 @@ pub db_core::storage::ingest::manifest::Manifest::layout: db_core::storage::inge
 pub db_core::storage::ingest::manifest::Manifest::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>>
 impl db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::check(&self) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
+pub fn db_core::storage::ingest::manifest::Manifest::dropping(&self, usize) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::new(db_core::storage::stream::detect::Format, db_core::storage::ingest::layout::LayoutKind) -> Self
 pub fn db_core::storage::ingest::manifest::Manifest::parse(&str) -> core::result::Result<db_core::storage::ingest::manifest::Manifest, db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::read(&std::path::Path) -> core::result::Result<core::option::Option<db_core::storage::ingest::manifest::Manifest>, db_core::storage::ingest::manifest::ManifestError>
@@ -4086,6 +4089,7 @@ impl core::fmt::Debug for db_core::storage::ingest::manifest::FileEntry
 pub fn db_core::storage::ingest::manifest::FileEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::manifest::FileEntry
 pub struct db_core::storage::ingest::Manifest
+pub db_core::storage::ingest::Manifest::dropped_lsn: u64
 pub db_core::storage::ingest::Manifest::files: alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>
 pub db_core::storage::ingest::Manifest::flushed_lsn: u64
 pub db_core::storage::ingest::Manifest::format: db_core::storage::stream::detect::Format
@@ -4093,6 +4097,7 @@ pub db_core::storage::ingest::Manifest::layout: db_core::storage::ingest::layout
 pub db_core::storage::ingest::Manifest::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>>
 impl db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::check(&self) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
+pub fn db_core::storage::ingest::manifest::Manifest::dropping(&self, usize) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::new(db_core::storage::stream::detect::Format, db_core::storage::ingest::layout::LayoutKind) -> Self
 pub fn db_core::storage::ingest::manifest::Manifest::parse(&str) -> core::result::Result<db_core::storage::ingest::manifest::Manifest, db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::read(&std::path::Path) -> core::result::Result<core::option::Option<db_core::storage::ingest::manifest::Manifest>, db_core::storage::ingest::manifest::ManifestError>
@@ -4184,6 +4189,7 @@ pub fn db_core::storage::ingest::table::TableWriter::fmt(&self, &mut core::fmt::
 pub struct db_core::storage::ingest::TierOptions
 pub db_core::storage::ingest::TierOptions::delete_grace_ns: i64
 pub db_core::storage::ingest::TierOptions::max_file_size: u64
+pub db_core::storage::ingest::TierOptions::retention_days: core::option::Option<u32>
 pub db_core::storage::ingest::TierOptions::row_group_max_rows: usize
 pub db_core::storage::ingest::TierOptions::sort_key: alloc::vec::Vec<alloc::string::String>
 pub db_core::storage::ingest::TierOptions::spill_rows: usize

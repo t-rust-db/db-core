@@ -201,6 +201,9 @@ fn areas_must_fit_the_layout() {
     tiered(&[Area::Archive, Area::Archive, Area::Live, Area::Live])
         .check()
         .unwrap();
+    tiered(&[Area::Archive, Area::Live, Area::Staging, Area::Staging])
+        .check()
+        .unwrap();
     for (m, message) in [
         (
             tiered(&[Area::Live, Area::Archive]),
@@ -209,6 +212,14 @@ fn areas_must_fit_the_layout() {
         (
             tiered(&[Area::Data]),
             "data/, out of place in a tiered table",
+        ),
+        (
+            tiered(&[Area::Staging, Area::Live]),
+            "live/, out of place in a tiered table",
+        ),
+        (
+            tiered(&[Area::Live, Area::Staging, Area::Archive]),
+            "archive/, out of place in a tiered table",
         ),
         (
             {
@@ -230,4 +241,47 @@ fn areas_must_fit_the_layout() {
     assert_eq!(next.files.len(), 2);
     assert_eq!(next.flushed_lsn, 3);
     assert_eq!(Manifest::parse(&next.to_json()).unwrap(), next);
+}
+
+#[test]
+fn retention_drops_leading_files_and_records_where_it_stopped() {
+    let m = tiered(&[Area::Archive, Area::Archive, Area::Live]);
+    let next = m.dropping(2);
+    assert_eq!((next.dropped_lsn, next.flushed_lsn), (2, 3));
+    assert_eq!(next.files.len(), 1);
+    next.check().unwrap();
+    let text = next.to_json();
+    assert!(text.contains("\"dropped_lsn\":2,"), "{text}");
+    assert_eq!(Manifest::parse(&text).unwrap(), next);
+    // Nothing dropped: the field is not written, as before retention.
+    assert!(!m.to_json().contains("dropped_lsn"));
+    assert_eq!(m.dropping(0), m);
+
+    // Every file dropped: the table is empty up to flushed_lsn.
+    let all = m.dropping(3);
+    assert_eq!((all.dropped_lsn, all.flushed_lsn), (3, 3));
+    all.check().unwrap();
+    assert_eq!(Manifest::parse(&all.to_json()).unwrap(), all);
+
+    for (bad, message) in [
+        (
+            {
+                let mut b = next.clone();
+                b.dropped_lsn = 1;
+                b
+            },
+            "starts at LSN 3, expected 2",
+        ),
+        (
+            {
+                let mut b = all.clone();
+                b.dropped_lsn = 4;
+                b
+            },
+            "dropped_lsn 4 is past flushed_lsn 3",
+        ),
+    ] {
+        let err = bad.check().unwrap_err();
+        assert!(err.to_string().contains(message), "{err}");
+    }
 }

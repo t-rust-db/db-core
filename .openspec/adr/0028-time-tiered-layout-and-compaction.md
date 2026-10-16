@@ -3,8 +3,8 @@
 ## Status
 
 Accepted (#573; builds on ADR 0027). Part (a) built: layouts, hour close,
-day merge, sort key, deferred deletes. Part (b) built: `staging/` spills.
-See "As built" at the end.
+day merge, sort key, deferred deletes. Part (b) built: `staging/` spills
+and retention. See "As built" at the end.
 
 ## Context
 
@@ -340,7 +340,22 @@ half its tiered seeds; the `tiered_table` and `record_table` oracle
 cases flush every 7th record, so DuckDB reads archives built from merged
 runs.
 
+**Retention keeps whole days.** `TierOptions.retention_days` (`None`, the
+default, keeps everything) is the number of closed days kept in
+`archive/`. `compact()` ends by dropping the leading archive files of
+older days in one commit and deletes them after `delete_grace_ns`; a
+crash between the commit and the delete leaves files recovery removes.
+The manifest records `dropped_lsn`: its files now cover exactly
+`[dropped_lsn + 1, flushed_lsn]`. It is written only when not 0, so a
+table without retention keeps its manifest as before, and a reader that
+predates retention refuses a manifest with it (its first file no longer
+starts at LSN 1). Dropped LSNs are at or below `flushed_lsn`, so the WAL
+holds none of them and nothing replays them. Only `archive/` is dropped:
+by the time a day is old enough, `compact()` has merged it.
+
+**Checked:** the `tiered_table` oracle case keeps two of its three closed
+days, and DuckDB over `archive/` returns exactly those.
+
 **Not yet:**
-- retention
 - the byte-copy merge
 - the compactor thread (#574)

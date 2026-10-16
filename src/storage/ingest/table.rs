@@ -689,9 +689,10 @@ impl TableWriter {
     }
 
     /// Flushes every closed hour, then merges every closed day's hours in
-    /// `live/` into `archive/` (ADR 0028), one commit per day, and deletes
-    /// files replaced long enough ago. Returns the files it added. Nothing
-    /// for a flat table.
+    /// `live/` into `archive/` (ADR 0028), one commit per day, drops the
+    /// days `retention_days` no longer keeps, and deletes files replaced or
+    /// dropped long enough ago. Returns the files it added. Nothing for a
+    /// flat table.
     pub fn compact(&mut self) -> Result<Vec<FileEntry>, IngestError> {
         let Layout::Tiered(tier_options) = self.options.layout.clone() else {
             return Ok(Vec::new());
@@ -717,7 +718,48 @@ impl TableWriter {
                 .map_or(files.len(), |n| start.saturating_add(n));
             added.extend(self.merge_day(day, start..end, &tier_options)?);
         }
+        self.retain(&tier_options)?;
         Ok(added)
+    }
+
+    /// Retention (ADR 0028): drops the leading `archive/` files of days
+    /// before the last `retention_days` closed ones in one commit, which
+    /// moves `dropped_lsn` to their end, and deletes them after the grace
+    /// period. Their LSNs are at or below `flushed_lsn`, so the WAL holds
+    /// none of them.
+    fn retain(&mut self, tier_options: &TierOptions) -> Result<(), IngestError> {
+        let Some(days) = tier_options.retention_days else {
+            return Ok(());
+        };
+        let open_day = day_of_hour(hour_of(self.now()));
+        let first_kept = open_day.saturating_sub(i64::from(days));
+        let count = self
+            .manifest
+            .files
+            .iter()
+            .take_while(|e| {
+                e.area == Area::Archive
+                    && e.observed_ts
+                        .is_some_and(|(_, hi)| day_of_hour(hour_of(hi)) < first_kept)
+            })
+            .count();
+        if count == 0 {
+            return Ok(());
+        }
+        let next = self.manifest.dropping(count);
+        next.write(&self.dir)?;
+        self.crash_point(14)?;
+        let dropped = self
+            .manifest
+            .files
+            .get(..count)
+            .unwrap_or_default()
+            .to_vec();
+        self.manifest = next;
+        let at = self.now().saturating_add(tier_options.delete_grace_ns);
+        self.pending_deletes
+            .extend(dropped.iter().map(|e| (self.dir.join(&e.path), at)));
+        Ok(())
     }
 
     /// Merges `files[range]` (day `day`'s hours) into `archive/`.

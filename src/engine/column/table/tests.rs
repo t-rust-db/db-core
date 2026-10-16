@@ -437,6 +437,8 @@ fn flush_timing_invariance(kind: Kind) {
                 } else {
                     usize::MAX
                 },
+                // Retention drops rows the reference keeps.
+                retention_days: None,
             })
         } else {
             Layout::Flat

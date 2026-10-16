@@ -50,11 +50,15 @@ pub struct TierOptions {
     /// The memory budget of a tiered table, in rows rather than bytes,
     /// since that is what is counted exactly.
     pub spill_rows: usize,
+    /// Closed days kept in `archive/`: [`compact`](super::TableWriter::compact)
+    /// drops older ones, whole, in one commit, and deletes their files after
+    /// the grace period. `None` (the default) keeps everything.
+    pub retention_days: Option<u32>,
 }
 
 impl Default for TierOptions {
     /// Arrival order, 1M-row row groups, 1 GiB files, 10 minutes' grace,
-    /// spills past 1M rows.
+    /// spills past 1M rows, no retention.
     fn default() -> Self {
         TierOptions {
             sort_key: Vec::new(),
@@ -62,6 +66,7 @@ impl Default for TierOptions {
             max_file_size: 1 << 30,
             delete_grace_ns: 600_000_000_000,
             spill_rows: 1_000_000,
+            retention_days: None,
         }
     }
 }
