@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.134.0] - 2026-10-16
+
+### Added
+
+- **A table directory's segments for callers that run the batch engine** (t-rust-db/tools#13). `engine::column::snapshot_segments` gives a `Snapshot`'s row groups and pages as `SnapshotSegment`s (one `Segment` each, in LSN order, with the table's NULL-fill and casts), keyed as the caller names the columns. `engine::column::table::read_snapshot` gives the whole table as one `Batch`, for a join's build side or a window's input. `engine::column::snapshot_files` opens the files the segments read. column-rs uses them to run joins and window functions over a table directory.
+
 ## [0.133.0] - 2026-10-16
 
 ### Added
