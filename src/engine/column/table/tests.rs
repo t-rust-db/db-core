@@ -431,6 +431,14 @@ fn flush_timing_invariance(kind: Kind) {
                 row_group_max_rows: 1 + rng.below(40) as usize,
                 max_file_size: if rng.below(2) == 0 { 1 } else { 1 << 30 },
                 delete_grace_ns: rng.below(2) as i64 * HOUR_NS,
+                // Spill the open hour now and then, or never.
+                spill_rows: if rng.below(2) == 0 {
+                    rng.below(30) as usize
+                } else {
+                    usize::MAX
+                },
+                // Retention drops rows the reference keeps.
+                retention_days: None,
             })
         } else {
             Layout::Flat

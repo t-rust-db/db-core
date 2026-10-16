@@ -7,7 +7,8 @@
 //! never a mix.
 //!
 //! **Invariant:** file LSN ranges are disjoint, in order, and together
-//! exactly `[1, flushed_lsn]`. [`Manifest::check`] enforces it on read.
+//! exactly `[dropped_lsn + 1, flushed_lsn]`. [`Manifest::check`] enforces
+//! it on read.
 //!
 //! The format is JSON written and read here (db-core has no serde): one
 //! object with `version`, `format`, `layout`, `flushed_lsn` and `files`,
@@ -20,6 +21,11 @@
 //! is written as version 3, so a reader that predates record tables
 //! refuses it rather than reading it as a lines table. A lines table is
 //! still written as version 2.
+//!
+//! A tiered table whose retention dropped its oldest days (ADR 0028)
+//! records `dropped_lsn`, written only when it is not 0: a reader that
+//! predates retention then refuses the manifest (its files no longer start
+//! at LSN 1) rather than reading it.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -69,8 +75,10 @@ pub struct Manifest {
     pub layout: LayoutKind,
     /// A record table's schema (#594); `None` for a lines table.
     pub schema: Option<Vec<ColumnSpec>>,
-    /// Every LSN up to this one is in `files`.
+    /// Every LSN up to this one is in `files` or was dropped.
     pub flushed_lsn: u64,
+    /// Every LSN up to this one was dropped by retention (0: none was).
+    pub dropped_lsn: u64,
     /// The live files, in LSN order.
     pub files: Vec<FileEntry>,
 }
@@ -129,26 +137,41 @@ impl Manifest {
             layout,
             schema: None,
             flushed_lsn: 0,
+            dropped_lsn: 0,
             files: Vec::new(),
         }
     }
 
     /// Checks the invariant: ranges in order, each `lsn_lo <= lsn_hi` with
-    /// `rows` equal to its length, the first starting at 1, each next one
+    /// `rows` equal to its length, the first starting right after
+    /// `dropped_lsn` (at 1 if nothing was dropped), each next one
     /// right after the previous, the last ending at `flushed_lsn`. A flat
     /// table's files are all in `data/`; a tiered table's in `archive/`,
-    /// then `live/` (closed days come before open ones).
+    /// then `live/`, then `staging/` (closed days come before open ones,
+    /// and only the open hour spills).
     pub fn check(&self) -> Result<(), ManifestError> {
-        let mut next: u64 = 1;
-        let mut seen_live = false;
+        if self.dropped_lsn > self.flushed_lsn {
+            return Err(ManifestError::Invariant(format!(
+                "dropped_lsn {} is past flushed_lsn {}",
+                self.dropped_lsn, self.flushed_lsn
+            )));
+        }
+        let mut next = self.dropped_lsn.saturating_add(1);
+        // The furthest tier seen: archive, live, staging.
+        let mut tier = 0u8;
         for file in &self.files {
             let allowed = match (self.layout, file.area) {
                 (LayoutKind::Flat, Area::Data) => true,
-                (LayoutKind::Tiered, Area::Live) => {
-                    seen_live = true;
-                    true
+                (LayoutKind::Tiered, area @ (Area::Archive | Area::Live | Area::Staging)) => {
+                    let rank = match area {
+                        Area::Archive => 0,
+                        Area::Live => 1,
+                        _ => 2,
+                    };
+                    let in_order = rank >= tier;
+                    tier = rank;
+                    in_order
                 }
-                (LayoutKind::Tiered, Area::Archive) => !seen_live,
                 _ => false,
             };
             if !allowed {
@@ -203,6 +226,17 @@ impl Manifest {
         next
     }
 
+    /// The manifest without its first `count` files (retention's commit):
+    /// `dropped_lsn` moves to the last one's end; `flushed_lsn` stays.
+    pub fn dropping(&self, count: usize) -> Manifest {
+        let mut next = self.clone();
+        let dropped: Vec<FileEntry> = next.files.drain(..count.min(next.files.len())).collect();
+        if let Some(last) = dropped.last() {
+            next.dropped_lsn = last.lsn_hi;
+        }
+        next
+    }
+
     /// The JSON text.
     pub fn to_json(&self) -> String {
         let mut out = String::new();
@@ -230,6 +264,9 @@ impl Manifest {
                 ));
             }
             out.push_str("],");
+        }
+        if self.dropped_lsn > 0 {
+            out.push_str(&format!("\"dropped_lsn\":{},", self.dropped_lsn));
         }
         out.push_str(&format!("\"flushed_lsn\":{},\"files\":[", self.flushed_lsn));
         for (i, file) in self.files.iter().enumerate() {
@@ -287,6 +324,11 @@ impl Manifest {
             None
         };
         let flushed_lsn = unsigned(&fields, "flushed_lsn")?;
+        let dropped_lsn = if fields.iter().any(|(k, _)| k == "dropped_lsn") {
+            unsigned(&fields, "dropped_lsn")?
+        } else {
+            0
+        };
         let Json::Array(files) = field(&fields, "files")? else {
             return Err(malformed("files is not an array"));
         };
@@ -299,6 +341,7 @@ impl Manifest {
             layout,
             schema,
             flushed_lsn,
+            dropped_lsn,
             files,
         };
         manifest.check()?;

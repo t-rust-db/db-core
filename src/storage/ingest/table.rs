@@ -25,8 +25,10 @@
 //! hour boundary, and a flush writes only closed hours, each as one
 //! directory under `live/`; [`TableWriter::compact`] merges closed days
 //! into `archive/` and deletes what it replaced once `delete_grace_ns` has
-//! passed. A tiered table keeps its open hour in memory until it closes
-//! (spilling to `staging/` under a memory budget is #573's second part).
+//! passed. A tiered table keeps its open hour in pages until more than
+//! `spill_rows` rows are sealed, then spills them to `staging/` as a sorted
+//! run (write, publish, commit, release, like a flush); the hour's close
+//! merges its runs and remaining pages into one file in `live/`.
 //!
 //! A record table (#594, [`TableOptions::schema`]) is appended to with
 //! typed rows ([`TableWriter::append_row`]) instead of lines; its pages,
@@ -42,7 +44,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::flush;
-use super::layout::{archive_dir, day_of_hour, hour_of, live_dir, Area, Layout, LayoutKind};
+use super::layout::{
+    archive_dir, day_of_hour, hour_of, live_dir, staging_dir, Area, Layout, LayoutKind, TierOptions,
+};
 use super::lock::{LockError, TableLock};
 use super::manifest::{FileEntry, Manifest, ManifestError};
 use super::page::{decode_record, encode_record, invalid_line, HeadPage, Page};
@@ -63,6 +67,9 @@ use crate::storage::PosixVfs;
 pub const DATA_DIR: &str = "data";
 /// Files being written by a flush.
 pub const TMP_DIR: &str = "tmp";
+/// Largest row group of a spill to `staging/`: an hour's close holds one
+/// row group of each of its runs.
+const STAGING_ROW_GROUP_ROWS: usize = 65_536;
 
 /// How a table is written.
 #[derive(Debug, Clone)]
@@ -327,7 +334,8 @@ impl TableWriter {
 
     /// Appends one record (a line, without its newline) and waits for
     /// `ack`. `Ack::Flushed` seals and flushes everything up to it before
-    /// returning. Returns the record's LSN.
+    /// returning (a tiered table's open hour to `staging/`, one file per
+    /// call). Returns the record's LSN.
     pub fn append(&mut self, line: &[u8], ack: Ack) -> Result<u64, IngestError> {
         if self.manifest.schema.is_some() {
             return Err(IngestError::Unsupported(
@@ -372,12 +380,6 @@ impl TableWriter {
         ack: Ack,
         add: impl FnOnce(&mut HeadPage, u64, i64),
     ) -> Result<u64, IngestError> {
-        if ack == Ack::Flushed && self.options.layout.kind() == LayoutKind::Tiered {
-            return Err(IngestError::Unsupported(
-                "Ack::Flushed on a tiered table: a record is flushed when its hour closes"
-                    .to_string(),
-            ));
-        }
         // Arrival time, never going backwards (ADR 0027).
         let observed = self.now();
         let wal_ack = match ack {
@@ -390,13 +392,29 @@ impl TableWriter {
         if ack == Ack::Flushed {
             self.seal_head()?;
             self.flush()?;
+            self.spill()?;
         }
         Ok(lsn)
     }
 
     /// Seals the head into a page (nothing if empty) and starts a new WAL
-    /// segment, so WAL files line up with pages.
+    /// segment, so WAL files line up with pages. A tiered table with more
+    /// than `spill_rows` rows sealed then closes its closed hours and
+    /// spills the open one to `staging/`.
     pub fn seal_head(&mut self) -> Result<(), IngestError> {
+        self.seal()?;
+        if let Layout::Tiered(tier) = &self.options.layout {
+            let sealed: usize = self.sealed.iter().map(Page::len).sum();
+            if sealed > tier.spill_rows {
+                self.flush_hours()?;
+                self.spill()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// [`seal_head`](Self::seal_head) without the spill.
+    fn seal(&mut self) -> Result<(), IngestError> {
         if self.head.len() == 0 {
             return Ok(());
         }
@@ -491,10 +509,14 @@ impl TableWriter {
             .first_observed()
             .is_some_and(|t| hour_of(t) < open_hour)
         {
-            self.seal_head()?;
+            self.seal()?;
         }
         let mut added = Vec::new();
-        while let Some(hour) = self.sealed.first().and_then(page_hour) {
+        // The hour that spilled comes first: its runs hold the oldest LSNs.
+        while let Some(hour) = self
+            .staging_hour()
+            .or_else(|| self.sealed.first().and_then(page_hour))
+        {
             if hour >= open_hour {
                 break;
             }
@@ -508,27 +530,134 @@ impl TableWriter {
         Ok(added)
     }
 
-    /// Writes the first `count` sealed pages (hour `hour`) to `live/` and
-    /// commits them: ADR 0027's five steps, with a directory as the output.
-    fn flush_hour(&mut self, hour: i64, count: usize) -> Result<Vec<FileEntry>, IngestError> {
+    /// The hour whose runs are in `staging/`, if any.
+    fn staging_hour(&self) -> Option<i64> {
+        self.manifest
+            .files
+            .last()
+            .filter(|e| e.area == Area::Staging)
+            .and_then(|e| e.observed_ts)
+            .map(|(lo, _)| hour_of(lo))
+    }
+
+    /// The manifest's `staging/` entries: the open hour's runs, last.
+    fn staging_range(&self) -> std::ops::Range<usize> {
+        let files = &self.manifest.files;
+        let start = files
+            .iter()
+            .position(|e| e.area == Area::Staging)
+            .unwrap_or(files.len());
+        start..files.len()
+    }
+
+    /// Writes the sealed pages (by now all of the open hour) to `staging/`
+    /// as one sorted run and commits it like a flush: write under `tmp/`,
+    /// rename into the hour's staging directory, commit, release the WAL
+    /// and the pages.
+    fn spill(&mut self) -> Result<(), IngestError> {
         let Layout::Tiered(tier_options) = &self.options.layout else {
-            return Ok(Vec::new());
+            return Ok(());
         };
-        let pages = self.sealed.get(..count).unwrap_or_default();
-        let (Some(first), Some(last)) = (pages.first(), pages.last()) else {
-            return Ok(Vec::new());
+        let (Some(first), Some(last)) = (self.sealed.first(), self.sealed.last()) else {
+            return Ok(());
+        };
+        let Some(hour) = page_hour(first) else {
+            return Ok(());
         };
         let lsn_hi = last.lsn_hi;
         self.wal.sync()?;
         let id = format!("{:020}-{lsn_hi:020}", first.lsn_lo);
 
+        // 1. Write under tmp/, in small row groups: the hour's close holds
+        //    one row group of each run.
+        let tmp = self.dir.join(TMP_DIR).join(&id);
+        fs::create_dir_all(&tmp)?;
+        let run_options = TierOptions {
+            row_group_max_rows: tier_options.row_group_max_rows.min(STAGING_ROW_GROUP_ROWS),
+            ..tier_options.clone()
+        };
+        let outputs = tier::write_hour(
+            &tmp,
+            &self.sealed,
+            self.options.format,
+            &run_options,
+            &self.options.parquet,
+        )?;
+        self.crash_point(21)?;
+
+        // 2. Publish the run into the hour's staging directory.
+        let target = staging_dir(hour);
+        let target_dir = self.dir.join(&target);
+        fs::create_dir_all(&target_dir)?;
+        for output in &outputs {
+            fs::rename(tmp.join(&output.name), target_dir.join(&output.name))?;
+        }
+        File::open(&target_dir)?.sync_all()?;
+        fs::remove_dir(&tmp)?;
+        self.crash_point(22)?;
+
+        // 3. Commit.
+        let mut next = self.manifest.clone();
+        for entry in entries(&target, Area::Staging, outputs) {
+            next = next.with_file(entry);
+        }
+        next.write(&self.dir)?;
+        self.crash_point(23)?;
+
+        // 4. Adopt; 5. release the WAL and the pages.
+        self.manifest = next;
+        self.wal.mark_flushed(lsn_hi)?;
+        self.sealed.clear();
+        self.crash_point(25)?;
+        Ok(())
+    }
+
+    /// Closes hour `hour`: its runs in `staging/` (if it spilled) and the
+    /// first `count` sealed pages, merged into one file in `live/`, and
+    /// commits it: ADR 0027's five steps, with a directory as the output.
+    /// The commit replaces the runs, which are deleted after the grace
+    /// period.
+    fn flush_hour(&mut self, hour: i64, count: usize) -> Result<Vec<FileEntry>, IngestError> {
+        let Layout::Tiered(tier_options) = &self.options.layout else {
+            return Ok(Vec::new());
+        };
+        let pages = self.sealed.get(..count).unwrap_or_default();
+        let staged = self.staging_range();
+        let runs: Vec<FileEntry> = self
+            .manifest
+            .files
+            .get(staged.clone())
+            .unwrap_or_default()
+            .to_vec();
+        let lsn_lo = runs
+            .first()
+            .map(|e| e.lsn_lo)
+            .or(pages.first().map(|p| p.lsn_lo));
+        let lsn_hi = pages
+            .last()
+            .map(|p| p.lsn_hi)
+            .or(runs.last().map(|e| e.lsn_hi));
+        let (Some(lsn_lo), Some(lsn_hi)) = (lsn_lo, lsn_hi) else {
+            return Ok(Vec::new());
+        };
+        self.wal.sync()?;
+        let id = format!("{lsn_lo:020}-{lsn_hi:020}");
+        let maps = runs
+            .iter()
+            .map(|e| PosixVfs.open(&self.dir.join(&e.path))?.mmap())
+            .collect::<io::Result<Vec<_>>>()?;
+        let run_bytes: Vec<(&FileEntry, &[u8])> =
+            runs.iter().zip(maps.iter().map(|m| &**m)).collect();
+
         // 1. Write under tmp/.
         let tmp = self.dir.join(TMP_DIR).join(&id);
         fs::create_dir_all(&tmp)?;
-        let outputs = tier::write_hour(
+        let outputs = tier::close_hour(
             &tmp,
+            &run_bytes,
             pages,
             self.options.format,
+            self.manifest.schema.as_deref(),
             tier_options,
             &self.options.parquet,
         )?;
@@ -539,27 +668,31 @@ impl TableWriter {
         publish(&self.dir, &tmp, &target)?;
         self.crash_point(2)?;
 
-        // 3. Commit.
+        // 3. Commit: the runs out, the hour in.
         let entries = entries(&target, Area::Live, outputs);
-        let mut next = self.manifest.clone();
-        for entry in &entries {
-            next = next.with_file(entry.clone());
-        }
+        let mut next = self.manifest.replacing(staged, entries.clone());
+        next.flushed_lsn = lsn_hi;
         next.write(&self.dir)?;
         self.crash_point(3)?;
 
         // 4. Adopt; 5. release the WAL and the pages.
         self.manifest = next;
-        self.wal.mark_flushed(lsn_hi)?;
+        if count > 0 {
+            self.wal.mark_flushed(lsn_hi)?;
+        }
         self.sealed.drain(..count);
+        let at = self.now().saturating_add(tier_options.delete_grace_ns);
+        self.pending_deletes
+            .extend(runs.iter().map(|e| (self.dir.join(&e.path), at)));
         self.crash_point(5)?;
         Ok(entries)
     }
 
     /// Flushes every closed hour, then merges every closed day's hours in
-    /// `live/` into `archive/` (ADR 0028), one commit per day, and deletes
-    /// files replaced long enough ago. Returns the files it added. Nothing
-    /// for a flat table.
+    /// `live/` into `archive/` (ADR 0028), one commit per day, drops the
+    /// days `retention_days` no longer keeps, and deletes files replaced or
+    /// dropped long enough ago. Returns the files it added. Nothing for a
+    /// flat table.
     pub fn compact(&mut self) -> Result<Vec<FileEntry>, IngestError> {
         let Layout::Tiered(tier_options) = self.options.layout.clone() else {
             return Ok(Vec::new());
@@ -581,11 +714,52 @@ impl TableWriter {
             let end = files
                 .iter()
                 .skip(start)
-                .position(|e| day_of(e) != Some(day))
+                .position(|e| e.area != Area::Live || day_of(e) != Some(day))
                 .map_or(files.len(), |n| start.saturating_add(n));
             added.extend(self.merge_day(day, start..end, &tier_options)?);
         }
+        self.retain(&tier_options)?;
         Ok(added)
+    }
+
+    /// Retention (ADR 0028): drops the leading `archive/` files of days
+    /// before the last `retention_days` closed ones in one commit, which
+    /// moves `dropped_lsn` to their end, and deletes them after the grace
+    /// period. Their LSNs are at or below `flushed_lsn`, so the WAL holds
+    /// none of them.
+    fn retain(&mut self, tier_options: &TierOptions) -> Result<(), IngestError> {
+        let Some(days) = tier_options.retention_days else {
+            return Ok(());
+        };
+        let open_day = day_of_hour(hour_of(self.now()));
+        let first_kept = open_day.saturating_sub(i64::from(days));
+        let count = self
+            .manifest
+            .files
+            .iter()
+            .take_while(|e| {
+                e.area == Area::Archive
+                    && e.observed_ts
+                        .is_some_and(|(_, hi)| day_of_hour(hour_of(hi)) < first_kept)
+            })
+            .count();
+        if count == 0 {
+            return Ok(());
+        }
+        let next = self.manifest.dropping(count);
+        next.write(&self.dir)?;
+        self.crash_point(14)?;
+        let dropped = self
+            .manifest
+            .files
+            .get(..count)
+            .unwrap_or_default()
+            .to_vec();
+        self.manifest = next;
+        let at = self.now().saturating_add(tier_options.delete_grace_ns);
+        self.pending_deletes
+            .extend(dropped.iter().map(|e| (self.dir.join(&e.path), at)));
+        Ok(())
     }
 
     /// Merges `files[range]` (day `day`'s hours) into `archive/`.
@@ -781,15 +955,16 @@ fn remove_empty_parents(table: &Path, path: &Path) {
 }
 
 /// Recovery steps 1-2: empty `tmp/`, delete the Parquet files in `data/`,
-/// `live/` and `archive/` the manifest does not list (a flush or
-/// compaction published but not committed, or inputs a compaction replaced
-/// and had not deleted yet), and the directories left empty.
+/// `live/`, `archive/` and `staging/` the manifest does not list (a flush,
+/// spill or compaction published but not committed, or inputs a
+/// compaction or an hour's close replaced and had not deleted yet), and
+/// the directories left empty.
 fn clean_up(table: &Path, manifest: &Manifest) -> Result<(), IngestError> {
     let tmp = table.join(TMP_DIR);
     if tmp.exists() {
         fs::remove_dir_all(&tmp)?;
     }
-    for area in [Area::Data, Area::Live, Area::Archive] {
+    for area in [Area::Data, Area::Live, Area::Archive, Area::Staging] {
         clean_dir(&table.join(area.as_str()), area.as_str(), manifest)?;
     }
     Ok(())

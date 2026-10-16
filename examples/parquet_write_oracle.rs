@@ -748,7 +748,8 @@ fn now() -> i64 {
 }
 
 /// A tiered table (ADR 0028, #573) over three closed days and an open
-/// hour, its closed days merged into `archive/`. Writes the table under
+/// hour, its closed days merged into `archive/` and the first dropped by
+/// retention. Writes the table under
 /// `tiered_table/` and the `raw` of every record the archive must hold,
 /// sorted, with its date, to `tiered_table.archive`.
 fn tiered_table_case(dir: &Path) -> Result<(), String> {
@@ -764,6 +765,12 @@ fn tiered_table_case(dir: &Path) -> Result<(), String> {
             row_group_max_rows: 100,
             max_file_size: 64 * 1024,
             delete_grace_ns: 0,
+            // Every 7th record is flushed: the open hour spills to
+            // staging/, and its close merges the runs.
+            spill_rows: 1_000_000,
+            // Keeps two closed days: the first is dropped once the fourth
+            // opens.
+            retention_days: Some(2),
         }),
         clock: now,
         ..TableOptions::default()
@@ -781,10 +788,17 @@ fn tiered_table_case(dir: &Path) -> Result<(), String> {
             _ => format!("plain text line {i}"),
         };
         writer
-            .append(line.as_bytes(), Ack::Memory)
+            .append(
+                line.as_bytes(),
+                if i % 7 == 0 {
+                    Ack::Flushed
+                } else {
+                    Ack::Memory
+                },
+            )
             .map_err(|e| e.to_string())?;
         let day = at.div_euclid(DAY) - 20_737;
-        if day < 3 {
+        if (1..3).contains(&day) {
             archived.push((format!("2026-10-{}", 11 + day), line));
         }
         if i % 500 == 0 {
@@ -817,7 +831,10 @@ fn tiered_table_case(dir: &Path) -> Result<(), String> {
     }
     out.push(']');
     fs::write(dir.join("tiered_table.archive"), out).map_err(|e| e.to_string())?;
-    println!("tiered_table: {} archived rows over 3 days", archived.len());
+    println!(
+        "tiered_table: {} archived rows over 2 days kept of 3",
+        archived.len()
+    );
     Ok(())
 }
 
@@ -858,6 +875,9 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
             row_group_max_rows: 200,
             max_file_size: 32 * 1024,
             delete_grace_ns: 0,
+            // Every 7th row is flushed, as in the tiered table case.
+            spill_rows: 1_000_000,
+            retention_days: None,
         }),
         clock: now,
         ..TableOptions::default()
@@ -902,7 +922,14 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
             *slot = record_json(&stored);
         }
         writer
-            .append_row(row, Ack::Memory)
+            .append_row(
+                row,
+                if i % 7 == 0 {
+                    Ack::Flushed
+                } else {
+                    Ack::Memory
+                },
+            )
             .map_err(|e| e.to_string())?;
         if (at.div_euclid(DAY) - 20_737) < 3 {
             archived.push(json);
