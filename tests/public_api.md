@@ -3666,6 +3666,29 @@ impl core::fmt::Debug for db_core::storage::ingest::error::IngestError
 pub fn db_core::storage::ingest::error::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::ingest::error::IngestError
 pub fn db_core::storage::ingest::error::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub mod db_core::storage::ingest::handle
+pub struct db_core::storage::ingest::handle::Table
+impl db_core::storage::ingest::handle::Table
+pub fn db_core::storage::ingest::handle::Table::append(&self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::append_batch<L: core::convert::AsRef<[u8]>>(&self, &[L], db_core::storage::ingest::wal::Ack) -> core::result::Result<core::option::Option<u64>, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::append_row(&self, alloc::vec::Vec<db_core::storage::ingest::record::RecordValue>, db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::close(&self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::compact(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::dir(&self) -> &std::path::Path
+pub fn db_core::storage::ingest::handle::Table::flush(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::follow(&self, impl core::convert::AsRef<std::path::Path>) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::ingest_lines(&self, impl alloc::io::buf_read::BufRead) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::is_closed(&self) -> bool
+pub fn db_core::storage::ingest::handle::Table::open(impl core::convert::AsRef<std::path::Path>, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::handle::Table, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+impl db_core::storage::ingest::handle::Table
+pub fn db_core::storage::ingest::handle::Table::query(&self, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
+impl core::clone::Clone for db_core::storage::ingest::handle::Table
+pub fn db_core::storage::ingest::handle::Table::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::ingest::handle::Table
+pub fn db_core::storage::ingest::handle::Table::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const db_core::storage::ingest::handle::FOLLOW_DIR: &str
 pub mod db_core::storage::ingest::layout
 pub enum db_core::storage::ingest::layout::Area
 pub db_core::storage::ingest::layout::Area::Archive
@@ -3936,6 +3959,7 @@ pub fn db_core::storage::ingest::table::TableWriter::pending_deletes(&self) -> i
 pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::sealed_pages(&self) -> &[db_core::storage::ingest::page::Page]
 pub fn db_core::storage::ingest::table::TableWriter::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::error::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::table::TableWriter
 pub fn db_core::storage::ingest::table::TableWriter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -4252,6 +4276,27 @@ pub fn db_core::storage::ingest::snapshot::Snapshot::rows(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>, db_core::storage::ingest::error::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::Table
+impl db_core::storage::ingest::handle::Table
+pub fn db_core::storage::ingest::handle::Table::append(&self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::append_batch<L: core::convert::AsRef<[u8]>>(&self, &[L], db_core::storage::ingest::wal::Ack) -> core::result::Result<core::option::Option<u64>, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::append_row(&self, alloc::vec::Vec<db_core::storage::ingest::record::RecordValue>, db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::close(&self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::compact(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::dir(&self) -> &std::path::Path
+pub fn db_core::storage::ingest::handle::Table::flush(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::follow(&self, impl core::convert::AsRef<std::path::Path>) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::ingest_lines(&self, impl alloc::io::buf_read::BufRead) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::is_closed(&self) -> bool
+pub fn db_core::storage::ingest::handle::Table::open(impl core::convert::AsRef<std::path::Path>, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::handle::Table, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+impl db_core::storage::ingest::handle::Table
+pub fn db_core::storage::ingest::handle::Table::query(&self, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
+impl core::clone::Clone for db_core::storage::ingest::handle::Table
+pub fn db_core::storage::ingest::handle::Table::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::ingest::handle::Table
+pub fn db_core::storage::ingest::handle::Table::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::TableLock
 impl db_core::storage::ingest::lock::TableLock
 pub fn db_core::storage::ingest::lock::TableLock::acquire(&std::path::Path) -> core::result::Result<Self, db_core::storage::ingest::lock::LockError>
@@ -4286,6 +4331,7 @@ pub fn db_core::storage::ingest::table::TableWriter::pending_deletes(&self) -> i
 pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::sealed_pages(&self) -> &[db_core::storage::ingest::page::Page]
 pub fn db_core::storage::ingest::table::TableWriter::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::error::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::table::TableWriter
 pub fn db_core::storage::ingest::table::TableWriter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -4349,6 +4395,7 @@ pub fn db_core::storage::ingest::wal::Watermarks::fmt(&self, &mut core::fmt::For
 impl core::marker::Copy for db_core::storage::ingest::wal::Watermarks
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::wal::Watermarks
 pub const db_core::storage::ingest::DATA_DIR: &str
+pub const db_core::storage::ingest::FOLLOW_DIR: &str
 pub const db_core::storage::ingest::LOCK_FILE: &str
 pub const db_core::storage::ingest::MANIFEST_FILE: &str
 pub const db_core::storage::ingest::TMP_DIR: &str

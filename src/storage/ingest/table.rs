@@ -34,8 +34,8 @@
 //! typed rows ([`TableWriter::append_row`]) instead of lines; its pages,
 //! files and manifest carry exactly its schema (see [`super::record`]).
 //!
-//! This is the single-threaded core; #574 wraps it as the public `Table`
-//! with an ingest thread and input sources.
+//! This is the single-threaded core; [`super::Table`] (#574) is the
+//! public, cloneable handle over it, with the line sources.
 
 use std::fs::{self, File};
 use std::io;
@@ -750,6 +750,12 @@ impl TableWriter {
     /// The committed manifest.
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+
+    /// Waits until everything appended is durable; returns the durable
+    /// LSN.
+    pub fn sync(&self) -> Result<u64, IngestError> {
+        Ok(self.wal.sync()?)
     }
 
     /// The WAL watermarks.

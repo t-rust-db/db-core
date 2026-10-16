@@ -5,7 +5,7 @@
 //! pages the ones above. A snapshot is fixed once taken; a query that
 //! wants newer records takes a new one.
 //!
-//! - In the writer's process, [`TableWriter::snapshot`] copies the
+//! - In the writer's process, `TableWriter::snapshot` copies the
 //!   writer's pages (sealed ones are shared, the head is re-parsed), so the
 //!   view reaches the last append (`visible`).
 //! - From another process, [`Snapshot::open`] reads the manifest, then the
@@ -20,8 +20,6 @@
 //! widened as a flush widens them; a reader casts each segment's values
 //! to it with [`cast`] and fills missing columns with NULL, so a record
 //! reads the same before and after its flush.
-//!
-//! [`TableWriter::snapshot`]: super::TableWriter::snapshot
 
 use std::fmt;
 use std::io;

@@ -1,5 +1,5 @@
 //! Column types and values (#566): what a Parquet file's flat or MAP
-//! columns hold, shared by the writer ([`super::writer`]) and by readers
+//! columns hold, shared by the writer (`parquet::writer`) and by readers
 //! that know a table's schema without writing it (ADR 0029's
 //! `ingest-read`).
 

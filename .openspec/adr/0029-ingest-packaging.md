@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed (#TBD; builds on ADR 0027 and ADR 0028)
+Accepted (#574; builds on ADR 0027 and ADR 0028). The db-core part is
+built; see "As built" at the end. `column-ingest` and the readers in
+`tools` follow there.
 
 ## Context
 
@@ -121,3 +123,64 @@ list. column-rs still never writes. loglume and db-studio make the same
   db-core before the workspace builds with one pin.
 - Old client repos are archived with a pointer to `tools`; open issues
   are transferred.
+
+## As built (#574, db-core)
+
+**Features.** `ingest-read` = `storage-column` + `storage-stream` +
+`vm-batch`: the manifest, pages, the read-only WAL tail, `Snapshot` (the
+`TableSnapshot` above) and `engine::column::table`. `ingest` = `ingest-read`
++ `storage-column-write`: the flush, tiers, the lock, the WAL writer,
+`TableWriter` and `Table`. To get there:
+- `ColumnType`, `ColumnSpec` and `ColumnValues` moved to `parquet::schema`
+  (`storage-column`). `parquet::writer` re-exports them.
+- `IngestError` moved to `ingest::error`. Its `Parquet` variant exists
+  with `ingest` only.
+- The WAL writer moved to `wal::writer`.
+- Writer-only helpers are gated.
+
+The macro-expanded `ingest-read` crate has no `ParquetWriter`, `Wal` or
+`TableWriter`. `make check-features` builds it standalone in CI.
+
+**`Table` is a thin, cloneable handle without threads.** It is a mutex
+over one `TableWriter`, and each call holds it for its duration, so clones
+on other threads interleave call by call. Nothing measured asks for an
+ingest thread yet: the WAL already group-commits on its own thread.
+`TableOptions` keeps its name (not `TableConfig`). `Table::query` lives in
+`engine::column::table`, so storage does not depend on the engine. There
+is no compactor thread: whoever runs a source calls `flush()` and
+`compact()` from a clone, which is what `column-ingest` will do on a timer.
+
+**Sources are methods, not an `Input` enum.**
+`Input::Lines(Box<dyn BufRead + Send>)` is outside the qualified subset
+(no `dyn` outside the documented boundary), and a generic `Input<R>`
+would make `Follow` need a type annotation. So the sources are two
+methods:
+- `Table::ingest_lines(impl BufRead)`: lines until end of input, then
+  durable.
+- `Table::follow(path)`: logfile mode, until the table is closed from any
+  clone.
+
+**Logfile mode goes through the WAL.** This departs from "the file is the
+WAL". Each line is appended like any record, so there is one recovery
+path. After a batch is durable, `follow/<name>-<hash>.offset` records the
+file's device, inode and end offset. A restart resumes there if the file
+is the same one and at least that long; otherwise it starts from the
+beginning. A crash between the WAL fsync and the offset write appends
+that batch again, so delivery is at least once (the file-is-the-WAL
+design would be exactly once).
+
+Following handles both kinds of rotation:
+- Rename-and-recreate: the old file is read to its end before switching
+  to the new one.
+- Truncation (copytruncate): reading starts again from the beginning.
+
+A truncation is seen only as a shrink, so a file truncated and refilled
+past the old offset between two polls (50 ms) is misread, the usual
+copytruncate hazard.
+
+**Checked:**
+- Handle tests for append, batch, rows, clones and close.
+- `ingest_lines`, and `follow` with resume, partial lines, rotation and
+  truncation (repeated 100 times locally).
+- `Table::query` answers the same before and after a flush, and
+  `examples/embed_table` shows it.

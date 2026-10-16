@@ -245,6 +245,10 @@ name = "parquet_write_oracle"
 required-features = ["ingest"]
 
 [[example]]
+name = "embed_table"
+required-features = ["ingest", "engine-column"]
+
+[[example]]
 name = "map_vs_flat"
 required-features = ["storage-column-write", "engine-column"]
 

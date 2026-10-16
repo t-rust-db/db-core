@@ -1,4 +1,4 @@
-//! Why a table operation failed: shared by the writer ([`super::table`])
+//! Why a table operation failed: shared by the writer (`table`)
 //! and the read side ([`super::snapshot`]).
 
 use std::fmt;

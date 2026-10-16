@@ -23600,6 +23600,236 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_handle_with_21a4fe8a",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 82,
+    "decision": "match self.lock().as_mut() {\n            Some(writer) => f(writer),\n            None => Err(IngestError::Wal(WalError::Closed)),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_append_batch_eca85633",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 111,
+    "decision": "let Some(why) = lines\n            .iter()\n            .find_map(|l| super::page::invalid_line(l.as_ref()))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_append_batch_834054c0",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 121,
+    "decision": "i.saturating_add(1) == count",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_close_829f1020",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 158,
+    "decision": "match self.lock().take() {\n            Some(writer) => writer.close(),\n            None => Ok(()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_ingest_lines_ae0963dd",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 171,
+    "decision": "input.read_until(b'\\n', &mut buf)? == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_ingest_lines_f5279ad3",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 174,
+    "decision": "let Some(line) = trimmed(&buf)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_ingest_lines_328fb315",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 179,
+    "decision": "count > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_follow_861fe32f",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 194,
+    "decision": "!self.is_closed()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_follow_b8dadaf5",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 195,
+    "decision": "match file.refresh()? {\n                Refresh::New(blocks) => match self.append_blocks(&file, &blocks, &state)? {\n                    Some(n) => count = count.saturating_add(n),\n                    None => break,\n                },\n                Refresh::Truncated => {\n                    file = LogFile::open_at(path, 0)?;\n                    save(&state, file.identity(), 0)?;\n                }\n                Refresh::NoNew => {\n                    // A rotation: once the new file exists, read what the\n                    // old one got since the last look, then switch.\n                    if file.rotated()? {\n                        if let Ok(new) = LogFile::open_at(path, 0) {\n                            if let Refresh::New(blocks) = file.refresh()? {\n                                match self.append_blocks(&file, &blocks, &state)? {\n                                    Some(n) => count = count.saturating_add(n),\n                                    None => break,\n                                }\n                            }\n                            file = new;\n                            save(&state, file.identity(), 0)?;\n                            continue;\n                        }\n                    }\n                    std::thread::sleep(FOLLOW_POLL);\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_follow_26aabc8b",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 196,
+    "decision": "match self.append_blocks(&file, &blocks, &state)? {\n                    Some(n) => count = count.saturating_add(n),\n                    None => break,\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_follow_1b49d7a6",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 207,
+    "decision": "file.rotated()?",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_follow_61addd6e",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 208,
+    "decision": "let Ok(new) = LogFile::open_at(path, 0)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_follow_d52bb775",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 209,
+    "decision": "let Refresh::New(blocks) = file.refresh()?",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_follow_26aabc8b_2",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 210,
+    "decision": "match self.append_blocks(&file, &blocks, &state)? {\n                                    Some(n) => count = count.saturating_add(n),\n                                    None => break,\n                                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_append_blocks_a8b3ea61",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 246,
+    "decision": "match appended {\n            Ok(n) => n,\n            // Closed while reading: what was appended is in the WAL, and\n            // the offset stays at the last batch.\n            Err(IngestError::Wal(WalError::Closed)) => return Ok(None),\n            Err(e) => return Err(e),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_append_blocks_9dcaa518",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 253,
+    "decision": "let Some(end) = blocks.last().map(Block::end_off)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_state_name_8a402fee",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 284,
+    "decision": "c.is_ascii_alphanumeric() || c == '.'",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_resume_bce7c696",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 299,
+    "decision": "match (parts.next(), parts.next(), parts.next()) {\n            (Some(Ok(dev)), Some(Ok(ino)), Some(Ok(offset))) => {\n                Some((FileIdentity { dev, ino }, offset))\n            }\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_handle_resume_0c8bec94",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 306,
+    "decision": "let Some((identity, offset)) = saved",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_resume_1b179da6",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 307,
+    "decision": "FileIdentity::of(path).ok() == Some(identity)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_resume_67f05480",
+    "file": "src/storage/ingest/handle.rs",
+    "line": 308,
+    "decision": "let Ok(file) = LogFile::open_at(path, offset)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_tests_wait_for_b1f71111",
+    "file": "src/storage/ingest/handle/tests.rs",
+    "line": 58,
+    "decision": "raws(table).len() < n",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_handle_tests_wait_for_offset_4e9a9d0d",
+    "file": "src/storage/ingest/handle/tests.rs",
+    "line": 81,
+    "decision": "saved == Some(offset)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_ingest_layout_kind_545d8da4",
     "file": "src/storage/ingest/layout.rs",
     "line": 87,
@@ -24732,7 +24962,7 @@
   {
     "id": "storage_ingest_snapshot_open_d33f2419",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 87,
+    "line": 85,
     "decision": "match Snapshot::new(table, manifest, pages) {\n                // A compaction replaced the file and its grace period is\n                // over: a newer manifest no longer lists it.\n                Err(IngestError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {\n                    std::thread::sleep(Duration::from_millis(1));\n                }\n                other => return other,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24742,7 +24972,7 @@
   {
     "id": "storage_ingest_snapshot_open_20fc5e15",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 90,
+    "line": 88,
     "decision": "e.kind() == io::ErrorKind::NotFound",
     "conditions": 1,
     "vectors_required": 2,
@@ -24752,7 +24982,7 @@
   {
     "id": "storage_ingest_snapshot_schema_1f5087a9",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 166,
+    "line": 164,
     "decision": "let Some(schema) = &self.manifest.schema",
     "conditions": 1,
     "vectors_required": 2,
@@ -24762,7 +24992,7 @@
   {
     "id": "storage_ingest_snapshot_schema_2cf7ecaf",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 174,
+    "line": 172,
     "decision": "let Some(t) = element.physical_type.and_then(column_type)",
     "conditions": 1,
     "vectors_required": 2,
@@ -24772,7 +25002,7 @@
   {
     "id": "storage_ingest_snapshot_pages_from_records_44989321",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 206,
+    "line": 204,
     "decision": "match schema {\n            Some(schema) => {\n                let row = decode_row(body)\n                    .filter(|row| check_row(schema, row).is_none())\n                    .ok_or_else(corrupt)?;\n                head.push_row(lsn, observed, row);\n            }\n            None => head.push(lsn, observed, body),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24782,7 +25012,7 @@
   {
     "id": "storage_ingest_snapshot_pages_from_records_3c02f22e",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 215,
+    "line": 213,
     "decision": "head.is_full()",
     "conditions": 1,
     "vectors_required": 2,
@@ -24792,7 +25022,7 @@
   {
     "id": "storage_ingest_snapshot_pages_from_records_08d74cad",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 220,
+    "line": 218,
     "decision": "head.len() > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -24802,7 +25032,7 @@
   {
     "id": "storage_ingest_snapshot_column_type_18644b84",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 228,
+    "line": 226,
     "decision": "match pt {\n        PhysicalType::Boolean => Some(ColumnType::Boolean),\n        PhysicalType::Int32 => Some(ColumnType::Int32),\n        PhysicalType::Int64 => Some(ColumnType::Int64),\n        PhysicalType::Float => Some(ColumnType::Float),\n        PhysicalType::Double => Some(ColumnType::Double),\n        PhysicalType::ByteArray => Some(ColumnType::Utf8),\n        PhysicalType::Int96 | PhysicalType::FixedLenByteArray | PhysicalType::Unknown(_) => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24812,7 +25042,7 @@
   {
     "id": "storage_ingest_snapshot_physical_type_411ab23b",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 241,
+    "line": 239,
     "decision": "match t {\n        ColumnType::Boolean => PhysicalType::Boolean,\n        ColumnType::Int32 | ColumnType::UInt8 | ColumnType::UInt16 | ColumnType::UInt32 => {\n            PhysicalType::Int32\n        }\n        ColumnType::Int64\n        | ColumnType::TimestampMicros\n        | ColumnType::TimestampNanos\n        | ColumnType::UInt64 => PhysicalType::Int64,\n        ColumnType::Float => PhysicalType::Float,\n        ColumnType::Double => PhysicalType::Double,\n        ColumnType::Utf8 | ColumnType::Binary => PhysicalType::ByteArray,\n        ColumnType::Decimal { precision, .. } => match DecimalStorage::for_precision(precision) {\n            DecimalStorage::Int32 => PhysicalType::Int32,\n            DecimalStorage::Int64 => PhysicalType::Int64,\n            DecimalStorage::Fixed16 => PhysicalType::FixedLenByteArray,\n        },\n        ColumnType::FixedLenByteArray(_) => PhysicalType::FixedLenByteArray,\n        // A map's leaves; the group has no physical type of its own.\n        ColumnType::MapUtf8 => PhysicalType::ByteArray,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24822,7 +25052,7 @@
   {
     "id": "storage_ingest_snapshot_physical_type_fde111e0",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 253,
+    "line": 251,
     "decision": "match DecimalStorage::for_precision(precision) {\n            DecimalStorage::Int32 => PhysicalType::Int32,\n            DecimalStorage::Int64 => PhysicalType::Int64,\n            DecimalStorage::Fixed16 => PhysicalType::FixedLenByteArray,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24832,7 +25062,7 @@
   {
     "id": "storage_ingest_snapshot_cast_707379f9",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 268,
+    "line": 266,
     "decision": "match (t, v) {\n        (_, Value::Null) => Value::Null,\n        (ColumnType::Utf8, Value::Str(s)) => Value::Str(s),\n        (ColumnType::Utf8, other) => Value::Str(other.to_string().into()),\n        (ColumnType::Double, Value::Float(f)) => Value::Float(f),\n        (ColumnType::Double, Value::Int(i)) => Value::Float(i as f64),\n        (\n            ColumnType::Int64 | ColumnType::TimestampMicros | ColumnType::TimestampNanos,\n            v @ Value::Int(_),\n        ) => v,\n        (ColumnType::Int32, Value::Int(i)) if i32::try_from(i).is_ok() => Value::Int(i),\n        (ColumnType::Boolean, v @ Value::Bool(_)) => v,\n        (ColumnType::UInt8, Value::Int(i)) if u8::try_from(i).is_ok() => Value::Int(i),\n        (ColumnType::UInt16, Value::Int(i)) if u16::try_from(i).is_ok() => Value::Int(i),\n        (ColumnType::UInt32, Value::Int(i)) if u32::try_from(i).is_ok() => Value::Int(i),\n        (ColumnType::UInt64, Value::Int(i)) if i >= 0 => Value::Int(i),\n        // As the column engine reads them: a decimal as a float, bytes as\n        // lowercase hex.\n        (ColumnType::Decimal { .. }, Value::Float(f)) => Value::Float(f),\n        (ColumnType::Decimal { .. }, Value::Int(i)) => Value::Float(i as f64),\n        (ColumnType::Binary | ColumnType::FixedLenByteArray(_), v @ Value::Str(_)) => v,\n        _ => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24842,7 +25072,7 @@
   {
     "id": "storage_ingest_snapshot_cast_b3193ea8",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 278,
+    "line": 276,
     "decision": "i32::try_from(i).is_ok()",
     "conditions": 1,
     "vectors_required": 2,
@@ -24852,7 +25082,7 @@
   {
     "id": "storage_ingest_snapshot_cast_a8b49874",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 280,
+    "line": 278,
     "decision": "u8::try_from(i).is_ok()",
     "conditions": 1,
     "vectors_required": 2,
@@ -24862,7 +25092,7 @@
   {
     "id": "storage_ingest_snapshot_cast_8c3385eb",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 281,
+    "line": 279,
     "decision": "u16::try_from(i).is_ok()",
     "conditions": 1,
     "vectors_required": 2,
@@ -24872,7 +25102,7 @@
   {
     "id": "storage_ingest_snapshot_cast_17c0c42a",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 282,
+    "line": 280,
     "decision": "u32::try_from(i).is_ok()",
     "conditions": 1,
     "vectors_required": 2,
@@ -24882,7 +25112,7 @@
   {
     "id": "storage_ingest_snapshot_cast_9f69e5a1",
     "file": "src/storage/ingest/snapshot.rs",
-    "line": 283,
+    "line": 281,
     "decision": "i >= 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -25182,7 +25412,7 @@
   {
     "id": "storage_ingest_table_crash_point_791d8530",
     "file": "src/storage/ingest/table.rs",
-    "line": 795,
+    "line": 801,
     "decision": "self.crash_after == Some(step)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25192,7 +25422,7 @@
   {
     "id": "storage_ingest_table_remove_empty_parents_b71c29ab",
     "file": "src/storage/ingest/table.rs",
-    "line": 854,
+    "line": 860,
     "decision": "let Some(d) = dir",
     "conditions": 1,
     "vectors_required": 2,
@@ -25202,7 +25432,7 @@
   {
     "id": "storage_ingest_table_remove_empty_parents_58e0bb1d",
     "file": "src/storage/ingest/table.rs",
-    "line": 855,
+    "line": 861,
     "decision": "d == table || d.parent() == Some(table) || fs::remove_dir(d).is_err()",
     "conditions": 3,
     "vectors_required": 4,
@@ -25212,7 +25442,7 @@
   {
     "id": "storage_ingest_table_clean_up_322d979c",
     "file": "src/storage/ingest/table.rs",
-    "line": 869,
+    "line": 875,
     "decision": "tmp.exists()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25222,7 +25452,7 @@
   {
     "id": "storage_ingest_table_clean_dir_6f777079",
     "file": "src/storage/ingest/table.rs",
-    "line": 889,
+    "line": 895,
     "decision": "entry.file_type()?.is_dir()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25232,7 +25462,7 @@
   {
     "id": "storage_ingest_table_clean_dir_b4151af7",
     "file": "src/storage/ingest/table.rs",
-    "line": 890,
+    "line": 896,
     "decision": "clean_dir(&entry.path(), &path, manifest)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -25242,7 +25472,7 @@
   {
     "id": "storage_ingest_table_clean_dir_b0d759e3",
     "file": "src/storage/ingest/table.rs",
-    "line": 895,
+    "line": 901,
     "decision": "manifest.files.iter().any(|f| f.path == path)",
     "conditions": 1,
     "vectors_required": 2,

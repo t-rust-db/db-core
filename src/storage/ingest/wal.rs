@@ -1,19 +1,19 @@
 //! The record WAL (ADR 0027, #571): LSNs, group commit, three watermarks.
 //!
-//! [`Wal::append`] assigns the next LSN, frames the record into a shared
+//! `Wal::append` assigns the next LSN, frames the record into a shared
 //! buffer and advances `visible`. A dedicated WAL thread drains the buffer
 //! in rounds: one `write`, one `fsync`, then `durable` moves to the last
 //! LSN written and every waiter wakes. One fsync covers everything that
 //! arrived during the previous one, so `Ack::Durable` costs latency, not
 //! throughput. `flushed` moves when the caller has committed records
-//! elsewhere ([`Wal::mark_flushed`], the manifest commit of #572), which
+//! elsewhere (`Wal::mark_flushed`, the manifest commit of #572), which
 //! also unlinks segment files that hold nothing above it.
 //!
 //! `flushed <= durable <= visible` always holds.
 //!
 //! Segment files (`wal/<lsn_lo:020>.wal`) are created on their first
 //! write, the directory fsynced, and closed after the round that passes
-//! [`WalOptions::segment_bytes`] or after [`Wal::roll`]. A closed file is
+//! [`WalOptions::segment_bytes`] or after `Wal::roll`. A closed file is
 //! complete and fsynced before the next exists, so only the last file can
 //! end in a torn frame; see [`super::recover`].
 
@@ -89,7 +89,7 @@ pub enum WalError {
     Closed,
     /// The WAL thread stopped on an I/O error; no further writes succeed.
     Failed(String),
-    /// [`Wal::mark_flushed`] was given an LSN above `durable`.
+    /// `Wal::mark_flushed` was given an LSN above `durable`.
     FlushBeyondDurable {
         /// The LSN given.
         flushed: u64,
