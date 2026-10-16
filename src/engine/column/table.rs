@@ -26,7 +26,7 @@ use super::{
 };
 use crate::storage::ingest::snapshot::{cast, physical_type};
 use crate::storage::ingest::{PageBody, RowPage, Snapshot};
-use crate::storage::parquet::writer::{ColumnSpec, ColumnType};
+use crate::storage::parquet::schema::{ColumnSpec, ColumnType};
 use crate::storage::stream::adapter::stored_column_values;
 use crate::storage::stream::detect::Format;
 use crate::storage::stream::segment::Segment as StreamSegment;

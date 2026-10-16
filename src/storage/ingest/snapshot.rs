@@ -29,16 +29,16 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::flush::{add_field, add_page_fields, predefined_specs};
+use super::error::IngestError;
+use super::fields::{add_field, add_page_fields, predefined_specs};
 use super::manifest::{FileEntry, Manifest};
 use super::page::{decode_record, HeadPage, Page};
 use super::record::{check_row, decode_row};
 use super::recover::read_tail;
-use super::table::IngestError;
 use super::wal::{Record, WAL_DIR};
 use crate::storage::column::{MmapRegion, Vfs, VfsFile};
 use crate::storage::parquet::footer::PhysicalType;
-use crate::storage::parquet::writer::{ColumnSpec, ColumnType, DecimalStorage};
+use crate::storage::parquet::schema::{ColumnSpec, ColumnType, DecimalStorage};
 use crate::storage::parquet::ParquetFile;
 use crate::storage::stream::detect::{DetectedParser, Format};
 use crate::storage::stream::{Source, SourceKind};
@@ -131,6 +131,7 @@ impl Snapshot {
     }
 
     /// The table's line format.
+    #[cfg(feature = "engine-column")]
     pub(crate) fn format(&self) -> Format {
         self.manifest.format
     }

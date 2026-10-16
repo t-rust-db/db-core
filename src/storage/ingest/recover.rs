@@ -15,10 +15,14 @@
 //! An empty last file (a crash between creating it and writing to it) is
 //! removed. Replaying twice gives the same result.
 
-use std::fs::{self, OpenOptions};
+use std::fs;
+#[cfg(feature = "ingest")]
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 
-use super::frame::{self, Frame, HEADER_LEN};
+#[cfg(feature = "ingest")]
+use super::frame::HEADER_LEN;
+use super::frame::{self, Frame};
 use super::wal::WalError;
 
 /// One WAL segment file.
@@ -30,6 +34,7 @@ pub(crate) struct Segment {
 
 /// What replay found.
 #[derive(Debug)]
+#[cfg(feature = "ingest")]
 pub(crate) struct Replay {
     /// Frames above `flushed_lsn`, in LSN order.
     pub(crate) records: Vec<super::wal::Record>,
@@ -40,6 +45,7 @@ pub(crate) struct Replay {
 }
 
 /// `<lsn_lo:020>.wal`.
+#[cfg(feature = "ingest")]
 pub(crate) fn segment_name(lsn_lo: u64) -> String {
     format!("{lsn_lo:020}.wal")
 }
@@ -81,6 +87,7 @@ fn list(dir: &Path) -> Result<Vec<Segment>, WalError> {
 /// Whether a valid frame with an LSN above `prev` starts anywhere after
 /// `from`. Candidate offsets are filtered by a plausible LSN before the
 /// checksum is computed, so the scan is cheap.
+#[cfg(feature = "ingest")]
 fn valid_frame_after(buf: &[u8], from: usize, prev: u64) -> bool {
     let room = u64::try_from(buf.len().saturating_sub(from) / HEADER_LEN).unwrap_or(u64::MAX);
     let highest = prev.saturating_add(room).saturating_add(1);
@@ -101,6 +108,7 @@ fn valid_frame_after(buf: &[u8], from: usize, prev: u64) -> bool {
 }
 
 /// Replays `dir` (created if missing) from `flushed_lsn`.
+#[cfg(feature = "ingest")]
 pub(crate) fn replay(dir: &Path, flushed_lsn: u64) -> Result<Replay, WalError> {
     fs::create_dir_all(dir)?;
     let all = list(dir)?;
@@ -254,6 +262,7 @@ pub(crate) fn read_tail(
     Ok(Some(records))
 }
 
+#[cfg(feature = "ingest")]
 fn truncate(path: &Path, len: usize) -> Result<(), WalError> {
     let file = OpenOptions::new().write(true).open(path)?;
     file.set_len(u64::try_from(len).unwrap_or(u64::MAX))?;

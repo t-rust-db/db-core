@@ -1,4 +1,5 @@
 use super::*;
+use crate::storage::ingest::fields::widen;
 use crate::storage::ingest::page::HeadPage;
 use crate::storage::parquet::ParquetFile;
 use crate::storage::stream::detect::{DetectedParser, Format};

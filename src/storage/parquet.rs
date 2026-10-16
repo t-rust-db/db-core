@@ -66,6 +66,7 @@ pub mod parquet_file;
     reason = "reader lint burn-down, see storage::parquet"
 )]
 pub mod reader;
+pub mod schema;
 #[allow(
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,

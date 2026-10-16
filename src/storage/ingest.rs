@@ -8,25 +8,39 @@
 //! to Parquet under an atomically replaced manifest ([`TableWriter`]), and
 //! [`Snapshot`], the read view over both; the `Table` API is #574.
 
+// Read side (`ingest-read`): what a reader of a table directory needs.
 mod crc32c;
-mod flush;
+pub mod error;
+mod fields;
 mod frame;
 pub mod layout;
-pub mod lock;
 pub mod manifest;
 pub mod page;
 pub mod record;
 mod recover;
 pub mod snapshot;
-pub mod table;
-mod tier;
 pub mod wal;
 
+// Write side (`ingest`): the Parquet flush, tiers, the lock and the writer.
+#[cfg(feature = "ingest")]
+mod flush;
+#[cfg(feature = "ingest")]
+pub mod lock;
+#[cfg(feature = "ingest")]
+pub mod table;
+#[cfg(feature = "ingest")]
+mod tier;
+
+pub use error::IngestError;
 pub use layout::{Area, Layout, LayoutKind, TierOptions};
+#[cfg(feature = "ingest")]
 pub use lock::{LockError, TableLock, LOCK_FILE};
 pub use manifest::{FileEntry, Manifest, ManifestError, MANIFEST_FILE};
 pub use page::{Page, PageBody};
 pub use record::{RecordValue, RowPage};
 pub use snapshot::Snapshot;
-pub use table::{IngestError, TableOptions, TableWriter, DATA_DIR, TMP_DIR};
-pub use wal::{Ack, Record, Wal, WalError, WalOptions, Watermarks, WAL_DIR};
+#[cfg(feature = "ingest")]
+pub use table::{TableOptions, TableWriter, DATA_DIR, TMP_DIR};
+#[cfg(feature = "ingest")]
+pub use wal::Wal;
+pub use wal::{Ack, Record, WalError, WalOptions, Watermarks, WAL_DIR};

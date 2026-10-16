@@ -3051,6 +3051,79 @@ pub fn db_core::storage::column::parquet::reader::read_string_column(&[u8], &db_
 pub fn db_core::storage::column::parquet::reader::read_string_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[alloc::string::String]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::column::parquet::reader::split_rep_def_levels<'a>(&'a [u8], &db_core::storage::parquet::page::DataPageHeader, u32, u32) -> db_core::storage::parquet::reader::Result<(alloc::vec::Vec<u32>, alloc::vec::Vec<u32>, &'a [u8])>
 pub type db_core::storage::column::parquet::reader::Result<T> = core::result::Result<T, db_core::storage::parquet::reader::ReadError>
+pub mod db_core::storage::column::parquet::schema
+pub enum db_core::storage::column::parquet::schema::ColumnType
+pub db_core::storage::column::parquet::schema::ColumnType::Binary
+pub db_core::storage::column::parquet::schema::ColumnType::Boolean
+pub db_core::storage::column::parquet::schema::ColumnType::Decimal
+pub db_core::storage::column::parquet::schema::ColumnType::Decimal::precision: u8
+pub db_core::storage::column::parquet::schema::ColumnType::Decimal::scale: u8
+pub db_core::storage::column::parquet::schema::ColumnType::Double
+pub db_core::storage::column::parquet::schema::ColumnType::FixedLenByteArray(u16)
+pub db_core::storage::column::parquet::schema::ColumnType::Float
+pub db_core::storage::column::parquet::schema::ColumnType::Int32
+pub db_core::storage::column::parquet::schema::ColumnType::Int64
+pub db_core::storage::column::parquet::schema::ColumnType::MapUtf8
+pub db_core::storage::column::parquet::schema::ColumnType::TimestampMicros
+pub db_core::storage::column::parquet::schema::ColumnType::TimestampNanos
+pub db_core::storage::column::parquet::schema::ColumnType::UInt16
+pub db_core::storage::column::parquet::schema::ColumnType::UInt32
+pub db_core::storage::column::parquet::schema::ColumnType::UInt64
+pub db_core::storage::column::parquet::schema::ColumnType::UInt8
+pub db_core::storage::column::parquet::schema::ColumnType::Utf8
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::schema::ColumnType
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::schema::ColumnType
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnType
+pub enum db_core::storage::column::parquet::schema::ColumnValues
+pub db_core::storage::column::parquet::schema::ColumnValues::Binary(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::Boolean(alloc::vec::Vec<core::option::Option<bool>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::Decimal(alloc::vec::Vec<core::option::Option<i128>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::Double(alloc::vec::Vec<core::option::Option<f64>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::FixedLenByteArray(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::Float(alloc::vec::Vec<core::option::Option<f32>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::Int32(alloc::vec::Vec<core::option::Option<i32>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::Int64(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::Map(alloc::vec::Vec<core::option::Option<db_core::storage::parquet::parquet_file::MapEntries>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::TimestampMicros(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::TimestampNanos(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::UInt16(alloc::vec::Vec<core::option::Option<u16>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::UInt32(alloc::vec::Vec<core::option::Option<u32>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::UInt64(alloc::vec::Vec<core::option::Option<u64>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::UInt8(alloc::vec::Vec<core::option::Option<u8>>)
+pub db_core::storage::column::parquet::schema::ColumnValues::Utf8(alloc::vec::Vec<core::option::Option<alloc::string::String>>)
+impl db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::empty(db_core::storage::parquet::schema::ColumnType) -> Self
+pub fn db_core::storage::parquet::schema::ColumnValues::is_empty(&self) -> bool
+pub fn db_core::storage::parquet::schema::ColumnValues::is_for(&self, db_core::storage::parquet::schema::ColumnType) -> bool
+pub fn db_core::storage::parquet::schema::ColumnValues::len(&self) -> usize
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnValues
+pub struct db_core::storage::column::parquet::schema::ColumnSpec
+pub db_core::storage::column::parquet::schema::ColumnSpec::column_type: db_core::storage::parquet::schema::ColumnType
+pub db_core::storage::column::parquet::schema::ColumnSpec::name: alloc::string::String
+pub db_core::storage::column::parquet::schema::ColumnSpec::nullable: bool
+impl db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::new(impl core::convert::Into<alloc::string::String>, db_core::storage::parquet::schema::ColumnType, bool) -> Self
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::schema::ColumnSpec
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnSpec
+pub type db_core::storage::column::parquet::schema::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
 pub mod db_core::storage::column::parquet::schema_tree
 pub struct db_core::storage::column::parquet::schema_tree::SchemaNode
 pub db_core::storage::column::parquet::schema_tree::SchemaNode::children: alloc::vec::Vec<db_core::storage::parquet::schema_tree::SchemaNode>
@@ -3135,15 +3208,15 @@ pub db_core::storage::column::parquet::writer::ColumnType::UInt32
 pub db_core::storage::column::parquet::writer::ColumnType::UInt64
 pub db_core::storage::column::parquet::writer::ColumnType::UInt8
 pub db_core::storage::column::parquet::writer::ColumnType::Utf8
-impl core::clone::Clone for db_core::storage::parquet::writer::ColumnType
-pub fn db_core::storage::parquet::writer::ColumnType::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::parquet::writer::ColumnType
-impl core::cmp::PartialEq for db_core::storage::parquet::writer::ColumnType
-pub fn db_core::storage::parquet::writer::ColumnType::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::parquet::writer::ColumnType
-pub fn db_core::storage::parquet::writer::ColumnType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for db_core::storage::parquet::writer::ColumnType
-impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnType
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::schema::ColumnType
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::schema::ColumnType
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnType
 pub enum db_core::storage::column::parquet::writer::ColumnValues
 pub db_core::storage::column::parquet::writer::ColumnValues::Binary(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::Boolean(alloc::vec::Vec<core::option::Option<bool>>)
@@ -3161,18 +3234,18 @@ pub db_core::storage::column::parquet::writer::ColumnValues::UInt32(alloc::vec::
 pub db_core::storage::column::parquet::writer::ColumnValues::UInt64(alloc::vec::Vec<core::option::Option<u64>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::UInt8(alloc::vec::Vec<core::option::Option<u8>>)
 pub db_core::storage::column::parquet::writer::ColumnValues::Utf8(alloc::vec::Vec<core::option::Option<alloc::string::String>>)
-impl db_core::storage::parquet::writer::ColumnValues
-pub fn db_core::storage::parquet::writer::ColumnValues::empty(db_core::storage::parquet::writer::ColumnType) -> Self
-pub fn db_core::storage::parquet::writer::ColumnValues::is_empty(&self) -> bool
-pub fn db_core::storage::parquet::writer::ColumnValues::is_for(&self, db_core::storage::parquet::writer::ColumnType) -> bool
-pub fn db_core::storage::parquet::writer::ColumnValues::len(&self) -> usize
-impl core::clone::Clone for db_core::storage::parquet::writer::ColumnValues
-pub fn db_core::storage::parquet::writer::ColumnValues::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::parquet::writer::ColumnValues
-pub fn db_core::storage::parquet::writer::ColumnValues::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::parquet::writer::ColumnValues
-pub fn db_core::storage::parquet::writer::ColumnValues::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnValues
+impl db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::empty(db_core::storage::parquet::schema::ColumnType) -> Self
+pub fn db_core::storage::parquet::schema::ColumnValues::is_empty(&self) -> bool
+pub fn db_core::storage::parquet::schema::ColumnValues::is_for(&self, db_core::storage::parquet::schema::ColumnType) -> bool
+pub fn db_core::storage::parquet::schema::ColumnValues::len(&self) -> usize
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnValues
 pub enum db_core::storage::column::parquet::writer::Compression
 pub db_core::storage::column::parquet::writer::Compression::Snappy
 pub db_core::storage::column::parquet::writer::Compression::Uncompressed
@@ -3224,27 +3297,27 @@ impl core::convert::From<core::io::error::Error> for db_core::storage::parquet::
 pub fn db_core::storage::parquet::writer::WriteError::from(core::io::error::Error) -> Self
 impl core::convert::From<db_core::storage::parquet::writer::EncodeError> for db_core::storage::parquet::writer::WriteError
 pub fn db_core::storage::parquet::writer::WriteError::from(db_core::storage::parquet::writer::EncodeError) -> Self
-impl core::convert::From<db_core::storage::parquet::writer::WriteError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::parquet::writer::WriteError) -> Self
+impl core::convert::From<db_core::storage::parquet::writer::WriteError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::parquet::writer::WriteError) -> Self
 impl core::error::Error for db_core::storage::parquet::writer::WriteError
 impl core::fmt::Debug for db_core::storage::parquet::writer::WriteError
 pub fn db_core::storage::parquet::writer::WriteError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::writer::WriteError
 pub fn db_core::storage::parquet::writer::WriteError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::column::parquet::writer::ColumnSpec
-pub db_core::storage::column::parquet::writer::ColumnSpec::column_type: db_core::storage::parquet::writer::ColumnType
+pub db_core::storage::column::parquet::writer::ColumnSpec::column_type: db_core::storage::parquet::schema::ColumnType
 pub db_core::storage::column::parquet::writer::ColumnSpec::name: alloc::string::String
 pub db_core::storage::column::parquet::writer::ColumnSpec::nullable: bool
-impl db_core::storage::parquet::writer::ColumnSpec
-pub fn db_core::storage::parquet::writer::ColumnSpec::new(impl core::convert::Into<alloc::string::String>, db_core::storage::parquet::writer::ColumnType, bool) -> Self
-impl core::clone::Clone for db_core::storage::parquet::writer::ColumnSpec
-pub fn db_core::storage::parquet::writer::ColumnSpec::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::parquet::writer::ColumnSpec
-impl core::cmp::PartialEq for db_core::storage::parquet::writer::ColumnSpec
-pub fn db_core::storage::parquet::writer::ColumnSpec::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::parquet::writer::ColumnSpec
-pub fn db_core::storage::parquet::writer::ColumnSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnSpec
+impl db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::new(impl core::convert::Into<alloc::string::String>, db_core::storage::parquet::schema::ColumnType, bool) -> Self
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::schema::ColumnSpec
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnSpec
 pub struct db_core::storage::column::parquet::writer::FileSummary
 pub db_core::storage::column::parquet::writer::FileSummary::bytes: u64
 pub db_core::storage::column::parquet::writer::FileSummary::num_rows: u64
@@ -3262,10 +3335,10 @@ impl<W: core::io::write::Write> db_core::storage::parquet::writer::ParquetWriter
 pub fn db_core::storage::parquet::writer::ParquetWriter<W>::bytes_written(&self) -> u64
 pub fn db_core::storage::parquet::writer::ParquetWriter<W>::finish(self) -> core::result::Result<(W, db_core::storage::parquet::writer::FileSummary), db_core::storage::parquet::writer::WriteError>
 pub fn db_core::storage::parquet::writer::ParquetWriter<W>::flush_row_group(&mut self) -> core::result::Result<(), db_core::storage::parquet::writer::WriteError>
-pub fn db_core::storage::parquet::writer::ParquetWriter<W>::new(W, alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>, db_core::storage::parquet::writer::WriterOptions) -> core::result::Result<Self, db_core::storage::parquet::writer::WriteError>
-pub fn db_core::storage::parquet::writer::ParquetWriter<W>::schema(&self) -> &[db_core::storage::parquet::writer::ColumnSpec]
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::new(W, alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>, db_core::storage::parquet::writer::WriterOptions) -> core::result::Result<Self, db_core::storage::parquet::writer::WriteError>
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::schema(&self) -> &[db_core::storage::parquet::schema::ColumnSpec]
 pub fn db_core::storage::parquet::writer::ParquetWriter<W>::set_key_value_metadata(&mut self, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>)
-pub fn db_core::storage::parquet::writer::ParquetWriter<W>::write_columns(&mut self, alloc::vec::Vec<db_core::storage::parquet::writer::ColumnValues>) -> core::result::Result<(), db_core::storage::parquet::writer::WriteError>
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::write_columns(&mut self, alloc::vec::Vec<db_core::storage::parquet::schema::ColumnValues>) -> core::result::Result<(), db_core::storage::parquet::writer::WriteError>
 pub struct db_core::storage::column::parquet::writer::WriterOptions
 pub db_core::storage::column::parquet::writer::WriterOptions::compression: db_core::storage::parquet::writer::Compression
 pub db_core::storage::column::parquet::writer::WriterOptions::created_by: alloc::string::String
@@ -3563,6 +3636,36 @@ pub fn db_core::storage::column::decode_column_at(&db_core::storage::parquet::pa
 pub fn db_core::storage::column::decode_column_full(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub type db_core::storage::column::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub mod db_core::storage::ingest
+pub mod db_core::storage::ingest::error
+pub enum db_core::storage::ingest::error::IngestError
+pub db_core::storage::ingest::error::IngestError::Corrupt(alloc::string::String)
+pub db_core::storage::ingest::error::IngestError::FormatMismatch
+pub db_core::storage::ingest::error::IngestError::FormatMismatch::requested: db_core::storage::stream::detect::Format
+pub db_core::storage::ingest::error::IngestError::FormatMismatch::table: db_core::storage::stream::detect::Format
+pub db_core::storage::ingest::error::IngestError::InvalidRecord(alloc::string::String)
+pub db_core::storage::ingest::error::IngestError::InvalidSchema(alloc::string::String)
+pub db_core::storage::ingest::error::IngestError::Io(core::io::error::Error)
+pub db_core::storage::ingest::error::IngestError::LayoutMismatch
+pub db_core::storage::ingest::error::IngestError::LayoutMismatch::requested: db_core::storage::ingest::layout::LayoutKind
+pub db_core::storage::ingest::error::IngestError::LayoutMismatch::table: db_core::storage::ingest::layout::LayoutKind
+pub db_core::storage::ingest::error::IngestError::Manifest(db_core::storage::ingest::manifest::ManifestError)
+pub db_core::storage::ingest::error::IngestError::Parquet(db_core::storage::parquet::writer::WriteError)
+pub db_core::storage::ingest::error::IngestError::SchemaMismatch
+pub db_core::storage::ingest::error::IngestError::Unsupported(alloc::string::String)
+pub db_core::storage::ingest::error::IngestError::Wal(db_core::storage::ingest::wal::WalError)
+impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(core::io::error::Error) -> Self
+impl core::convert::From<db_core::storage::ingest::manifest::ManifestError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::ingest::manifest::ManifestError) -> Self
+impl core::convert::From<db_core::storage::ingest::wal::WalError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::ingest::wal::WalError) -> Self
+impl core::convert::From<db_core::storage::parquet::writer::WriteError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::parquet::writer::WriteError) -> Self
+impl core::error::Error for db_core::storage::ingest::error::IngestError
+impl core::fmt::Debug for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod db_core::storage::ingest::layout
 pub enum db_core::storage::ingest::layout::Area
 pub db_core::storage::ingest::layout::Area::Archive
@@ -3656,8 +3759,8 @@ pub db_core::storage::ingest::manifest::ManifestError::Io(core::io::error::Error
 pub db_core::storage::ingest::manifest::ManifestError::Malformed(alloc::string::String)
 impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::manifest::ManifestError
 pub fn db_core::storage::ingest::manifest::ManifestError::from(core::io::error::Error) -> Self
-impl core::convert::From<db_core::storage::ingest::manifest::ManifestError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::ingest::manifest::ManifestError) -> Self
+impl core::convert::From<db_core::storage::ingest::manifest::ManifestError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::ingest::manifest::ManifestError) -> Self
 impl core::error::Error for db_core::storage::ingest::manifest::ManifestError
 impl core::fmt::Debug for db_core::storage::ingest::manifest::ManifestError
 pub fn db_core::storage::ingest::manifest::ManifestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -3686,7 +3789,7 @@ pub db_core::storage::ingest::manifest::Manifest::files: alloc::vec::Vec<db_core
 pub db_core::storage::ingest::manifest::Manifest::flushed_lsn: u64
 pub db_core::storage::ingest::manifest::Manifest::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::manifest::Manifest::layout: db_core::storage::ingest::layout::LayoutKind
-pub db_core::storage::ingest::manifest::Manifest::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>>
+pub db_core::storage::ingest::manifest::Manifest::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>>
 impl db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::check(&self) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::dropping(&self, usize) -> db_core::storage::ingest::manifest::Manifest
@@ -3749,31 +3852,31 @@ pub fn db_core::storage::ingest::record::RecordValue::fmt(&self, &mut core::fmt:
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::record::RecordValue
 pub struct db_core::storage::ingest::record::RowPage
 impl db_core::storage::ingest::record::RowPage
-pub fn db_core::storage::ingest::record::RowPage::columns(&self) -> &[db_core::storage::parquet::writer::ColumnValues]
+pub fn db_core::storage::ingest::record::RowPage::columns(&self) -> &[db_core::storage::parquet::schema::ColumnValues]
 pub fn db_core::storage::ingest::record::RowPage::is_empty(&self) -> bool
 pub fn db_core::storage::ingest::record::RowPage::len(&self) -> usize
 pub fn db_core::storage::ingest::record::RowPage::observed_ts_ns(&self) -> &[i64]
-pub fn db_core::storage::ingest::record::RowPage::schema(&self) -> &[db_core::storage::parquet::writer::ColumnSpec]
+pub fn db_core::storage::ingest::record::RowPage::schema(&self) -> &[db_core::storage::parquet::schema::ColumnSpec]
 impl core::clone::Clone for db_core::storage::ingest::record::RowPage
 pub fn db_core::storage::ingest::record::RowPage::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::record::RowPage
 pub fn db_core::storage::ingest::record::RowPage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub fn db_core::storage::ingest::record::type_from_name(&str) -> core::option::Option<db_core::storage::parquet::writer::ColumnType>
-pub fn db_core::storage::ingest::record::type_name(db_core::storage::parquet::writer::ColumnType) -> alloc::string::String
+pub fn db_core::storage::ingest::record::type_from_name(&str) -> core::option::Option<db_core::storage::parquet::schema::ColumnType>
+pub fn db_core::storage::ingest::record::type_name(db_core::storage::parquet::schema::ColumnType) -> alloc::string::String
 pub mod db_core::storage::ingest::snapshot
 pub struct db_core::storage::ingest::snapshot::Snapshot
 impl db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&db_core::storage::ingest::manifest::FileEntry, &[u8])>
 pub fn db_core::storage::ingest::snapshot::Snapshot::last_lsn(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
-pub fn db_core::storage::ingest::snapshot::Snapshot::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::snapshot::Snapshot::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::snapshot::Snapshot::pages(&self) -> &[db_core::storage::ingest::page::Page]
 pub fn db_core::storage::ingest::snapshot::Snapshot::rows(&self) -> u64
-pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>, db_core::storage::ingest::error::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-pub fn db_core::storage::ingest::snapshot::cast(db_core::vm::batch::Value, db_core::storage::parquet::writer::ColumnType) -> db_core::vm::batch::Value
-pub fn db_core::storage::ingest::snapshot::physical_type(db_core::storage::parquet::writer::ColumnType) -> db_core::storage::parquet::footer::PhysicalType
+pub fn db_core::storage::ingest::snapshot::cast(db_core::vm::batch::Value, db_core::storage::parquet::schema::ColumnType) -> db_core::vm::batch::Value
+pub fn db_core::storage::ingest::snapshot::physical_type(db_core::storage::parquet::schema::ColumnType) -> db_core::storage::parquet::footer::PhysicalType
 pub mod db_core::storage::ingest::table
 pub enum db_core::storage::ingest::table::IngestError
 pub db_core::storage::ingest::table::IngestError::Corrupt(alloc::string::String)
@@ -3791,25 +3894,25 @@ pub db_core::storage::ingest::table::IngestError::Parquet(db_core::storage::parq
 pub db_core::storage::ingest::table::IngestError::SchemaMismatch
 pub db_core::storage::ingest::table::IngestError::Unsupported(alloc::string::String)
 pub db_core::storage::ingest::table::IngestError::Wal(db_core::storage::ingest::wal::WalError)
-impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(core::io::error::Error) -> Self
-impl core::convert::From<db_core::storage::ingest::manifest::ManifestError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::ingest::manifest::ManifestError) -> Self
-impl core::convert::From<db_core::storage::ingest::wal::WalError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::ingest::wal::WalError) -> Self
-impl core::convert::From<db_core::storage::parquet::writer::WriteError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::parquet::writer::WriteError) -> Self
-impl core::error::Error for db_core::storage::ingest::table::IngestError
-impl core::fmt::Debug for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(core::io::error::Error) -> Self
+impl core::convert::From<db_core::storage::ingest::manifest::ManifestError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::ingest::manifest::ManifestError) -> Self
+impl core::convert::From<db_core::storage::ingest::wal::WalError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::ingest::wal::WalError) -> Self
+impl core::convert::From<db_core::storage::parquet::writer::WriteError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::parquet::writer::WriteError) -> Self
+impl core::error::Error for db_core::storage::ingest::error::IngestError
+impl core::fmt::Debug for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::table::TableOptions
 pub db_core::storage::ingest::table::TableOptions::clock: fn() -> i64
 pub db_core::storage::ingest::table::TableOptions::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::table::TableOptions::layout: db_core::storage::ingest::layout::Layout
 pub db_core::storage::ingest::table::TableOptions::parquet: db_core::storage::parquet::writer::WriterOptions
-pub db_core::storage::ingest::table::TableOptions::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>>
+pub db_core::storage::ingest::table::TableOptions::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>>
 pub db_core::storage::ingest::table::TableOptions::wal: db_core::storage::ingest::wal::WalOptions
 impl core::clone::Clone for db_core::storage::ingest::table::TableOptions
 pub fn db_core::storage::ingest::table::TableOptions::clone(&self) -> Self
@@ -3819,21 +3922,21 @@ impl core::fmt::Debug for db_core::storage::ingest::table::TableOptions
 pub fn db_core::storage::ingest::table::TableOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::table::TableWriter
 impl db_core::storage::ingest::table::TableWriter
-pub fn db_core::storage::ingest::table::TableWriter::append(&mut self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::table::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::append_row(&mut self, alloc::vec::Vec<db_core::storage::ingest::record::RecordValue>, db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::table::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::close(self) -> core::result::Result<(), db_core::storage::ingest::table::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::compact(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::append(&mut self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::append_row(&mut self, alloc::vec::Vec<db_core::storage::ingest::record::RecordValue>, db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::close(self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::compact(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::dir(&self) -> &std::path::Path
-pub fn db_core::storage::ingest::table::TableWriter::flush(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::table::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::flush_all(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::flush(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::flush_all(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::head_page(&self) -> core::option::Option<db_core::storage::ingest::page::Page>
 pub fn db_core::storage::ingest::table::TableWriter::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
-pub fn db_core::storage::ingest::table::TableWriter::open(&std::path::Path, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::open(&std::path::Path, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::pending_deletes(&self) -> impl core::iter::traits::iterator::Iterator<Item = &std::path::Path>
-pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::sealed_pages(&self) -> &[db_core::storage::ingest::page::Page]
-pub fn db_core::storage::ingest::table::TableWriter::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::table::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::error::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::table::TableWriter
 pub fn db_core::storage::ingest::table::TableWriter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const db_core::storage::ingest::table::DATA_DIR: &str
@@ -3867,28 +3970,28 @@ pub db_core::storage::ingest::wal::WalError::Locked
 pub db_core::storage::ingest::wal::WalError::TooLarge
 impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::wal::WalError
 pub fn db_core::storage::ingest::wal::WalError::from(core::io::error::Error) -> Self
-impl core::convert::From<db_core::storage::ingest::wal::WalError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::ingest::wal::WalError) -> Self
+impl core::convert::From<db_core::storage::ingest::wal::WalError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::ingest::wal::WalError) -> Self
 impl core::error::Error for db_core::storage::ingest::wal::WalError
 impl core::fmt::Debug for db_core::storage::ingest::wal::WalError
 pub fn db_core::storage::ingest::wal::WalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::ingest::wal::WalError
 pub fn db_core::storage::ingest::wal::WalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::wal::Wal
-impl db_core::storage::ingest::wal::Wal
-pub fn db_core::storage::ingest::wal::Wal::append(&self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::close(self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::dir(&self) -> &std::path::Path
-pub fn db_core::storage::ingest::wal::Wal::mark_flushed(&self, u64) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::open(&std::path::Path, u64, db_core::storage::ingest::wal::WalOptions) -> core::result::Result<(db_core::storage::ingest::wal::Wal, alloc::vec::Vec<db_core::storage::ingest::wal::Record>), db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::open_locked(db_core::storage::ingest::lock::TableLock, &std::path::Path, u64, db_core::storage::ingest::wal::WalOptions) -> core::result::Result<(db_core::storage::ingest::wal::Wal, alloc::vec::Vec<db_core::storage::ingest::wal::Record>), db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::roll(&self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::wal::WalError>
-impl core::fmt::Debug for db_core::storage::ingest::wal::Wal
-pub fn db_core::storage::ingest::wal::Wal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::ops::drop::Drop for db_core::storage::ingest::wal::Wal
-pub fn db_core::storage::ingest::wal::Wal::drop(&mut self)
+impl db_core::storage::ingest::Wal
+pub fn db_core::storage::ingest::Wal::append(&self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::close(self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::dir(&self) -> &std::path::Path
+pub fn db_core::storage::ingest::Wal::mark_flushed(&self, u64) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::open(&std::path::Path, u64, db_core::storage::ingest::wal::WalOptions) -> core::result::Result<(db_core::storage::ingest::Wal, alloc::vec::Vec<db_core::storage::ingest::wal::Record>), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::open_locked(db_core::storage::ingest::lock::TableLock, &std::path::Path, u64, db_core::storage::ingest::wal::WalOptions) -> core::result::Result<(db_core::storage::ingest::Wal, alloc::vec::Vec<db_core::storage::ingest::wal::Record>), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::roll(&self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::wal::WalError>
+impl core::fmt::Debug for db_core::storage::ingest::Wal
+pub fn db_core::storage::ingest::Wal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for db_core::storage::ingest::Wal
+pub fn db_core::storage::ingest::Wal::drop(&mut self)
 pub struct db_core::storage::ingest::wal::WalOptions
 pub db_core::storage::ingest::wal::WalOptions::segment_bytes: u64
 impl core::clone::Clone for db_core::storage::ingest::wal::WalOptions
@@ -3964,19 +4067,19 @@ pub db_core::storage::ingest::IngestError::Parquet(db_core::storage::parquet::wr
 pub db_core::storage::ingest::IngestError::SchemaMismatch
 pub db_core::storage::ingest::IngestError::Unsupported(alloc::string::String)
 pub db_core::storage::ingest::IngestError::Wal(db_core::storage::ingest::wal::WalError)
-impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(core::io::error::Error) -> Self
-impl core::convert::From<db_core::storage::ingest::manifest::ManifestError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::ingest::manifest::ManifestError) -> Self
-impl core::convert::From<db_core::storage::ingest::wal::WalError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::ingest::wal::WalError) -> Self
-impl core::convert::From<db_core::storage::parquet::writer::WriteError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::parquet::writer::WriteError) -> Self
-impl core::error::Error for db_core::storage::ingest::table::IngestError
-impl core::fmt::Debug for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::fmt::Display for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(core::io::error::Error) -> Self
+impl core::convert::From<db_core::storage::ingest::manifest::ManifestError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::ingest::manifest::ManifestError) -> Self
+impl core::convert::From<db_core::storage::ingest::wal::WalError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::ingest::wal::WalError) -> Self
+impl core::convert::From<db_core::storage::parquet::writer::WriteError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::parquet::writer::WriteError) -> Self
+impl core::error::Error for db_core::storage::ingest::error::IngestError
+impl core::fmt::Debug for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum db_core::storage::ingest::Layout
 pub db_core::storage::ingest::Layout::Flat
 pub db_core::storage::ingest::Layout::Tiered(db_core::storage::ingest::layout::TierOptions)
@@ -4018,8 +4121,8 @@ pub db_core::storage::ingest::ManifestError::Io(core::io::error::Error)
 pub db_core::storage::ingest::ManifestError::Malformed(alloc::string::String)
 impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::manifest::ManifestError
 pub fn db_core::storage::ingest::manifest::ManifestError::from(core::io::error::Error) -> Self
-impl core::convert::From<db_core::storage::ingest::manifest::ManifestError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::ingest::manifest::ManifestError) -> Self
+impl core::convert::From<db_core::storage::ingest::manifest::ManifestError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::ingest::manifest::ManifestError) -> Self
 impl core::error::Error for db_core::storage::ingest::manifest::ManifestError
 impl core::fmt::Debug for db_core::storage::ingest::manifest::ManifestError
 pub fn db_core::storage::ingest::manifest::ManifestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -4064,8 +4167,8 @@ pub db_core::storage::ingest::WalError::Locked
 pub db_core::storage::ingest::WalError::TooLarge
 impl core::convert::From<core::io::error::Error> for db_core::storage::ingest::wal::WalError
 pub fn db_core::storage::ingest::wal::WalError::from(core::io::error::Error) -> Self
-impl core::convert::From<db_core::storage::ingest::wal::WalError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::ingest::wal::WalError) -> Self
+impl core::convert::From<db_core::storage::ingest::wal::WalError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::ingest::wal::WalError) -> Self
 impl core::error::Error for db_core::storage::ingest::wal::WalError
 impl core::fmt::Debug for db_core::storage::ingest::wal::WalError
 pub fn db_core::storage::ingest::wal::WalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -4094,7 +4197,7 @@ pub db_core::storage::ingest::Manifest::files: alloc::vec::Vec<db_core::storage:
 pub db_core::storage::ingest::Manifest::flushed_lsn: u64
 pub db_core::storage::ingest::Manifest::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::Manifest::layout: db_core::storage::ingest::layout::LayoutKind
-pub db_core::storage::ingest::Manifest::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>>
+pub db_core::storage::ingest::Manifest::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>>
 impl db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::check(&self) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::dropping(&self, usize) -> db_core::storage::ingest::manifest::Manifest
@@ -4129,11 +4232,11 @@ impl core::fmt::Debug for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::RowPage
 impl db_core::storage::ingest::record::RowPage
-pub fn db_core::storage::ingest::record::RowPage::columns(&self) -> &[db_core::storage::parquet::writer::ColumnValues]
+pub fn db_core::storage::ingest::record::RowPage::columns(&self) -> &[db_core::storage::parquet::schema::ColumnValues]
 pub fn db_core::storage::ingest::record::RowPage::is_empty(&self) -> bool
 pub fn db_core::storage::ingest::record::RowPage::len(&self) -> usize
 pub fn db_core::storage::ingest::record::RowPage::observed_ts_ns(&self) -> &[i64]
-pub fn db_core::storage::ingest::record::RowPage::schema(&self) -> &[db_core::storage::parquet::writer::ColumnSpec]
+pub fn db_core::storage::ingest::record::RowPage::schema(&self) -> &[db_core::storage::parquet::schema::ColumnSpec]
 impl core::clone::Clone for db_core::storage::ingest::record::RowPage
 pub fn db_core::storage::ingest::record::RowPage::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::record::RowPage
@@ -4143,10 +4246,10 @@ impl db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&db_core::storage::ingest::manifest::FileEntry, &[u8])>
 pub fn db_core::storage::ingest::snapshot::Snapshot::last_lsn(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
-pub fn db_core::storage::ingest::snapshot::Snapshot::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::snapshot::Snapshot::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::snapshot::Snapshot::pages(&self) -> &[db_core::storage::ingest::page::Page]
 pub fn db_core::storage::ingest::snapshot::Snapshot::rows(&self) -> u64
-pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>, db_core::storage::ingest::error::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::TableLock
@@ -4159,7 +4262,7 @@ pub db_core::storage::ingest::TableOptions::clock: fn() -> i64
 pub db_core::storage::ingest::TableOptions::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::TableOptions::layout: db_core::storage::ingest::layout::Layout
 pub db_core::storage::ingest::TableOptions::parquet: db_core::storage::parquet::writer::WriterOptions
-pub db_core::storage::ingest::TableOptions::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>>
+pub db_core::storage::ingest::TableOptions::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>>
 pub db_core::storage::ingest::TableOptions::wal: db_core::storage::ingest::wal::WalOptions
 impl core::clone::Clone for db_core::storage::ingest::table::TableOptions
 pub fn db_core::storage::ingest::table::TableOptions::clone(&self) -> Self
@@ -4169,21 +4272,21 @@ impl core::fmt::Debug for db_core::storage::ingest::table::TableOptions
 pub fn db_core::storage::ingest::table::TableOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::TableWriter
 impl db_core::storage::ingest::table::TableWriter
-pub fn db_core::storage::ingest::table::TableWriter::append(&mut self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::table::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::append_row(&mut self, alloc::vec::Vec<db_core::storage::ingest::record::RecordValue>, db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::table::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::close(self) -> core::result::Result<(), db_core::storage::ingest::table::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::compact(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::append(&mut self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::append_row(&mut self, alloc::vec::Vec<db_core::storage::ingest::record::RecordValue>, db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::close(self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::compact(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::dir(&self) -> &std::path::Path
-pub fn db_core::storage::ingest::table::TableWriter::flush(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::table::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::flush_all(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::flush(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::flush_all(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::head_page(&self) -> core::option::Option<db_core::storage::ingest::page::Page>
 pub fn db_core::storage::ingest::table::TableWriter::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
-pub fn db_core::storage::ingest::table::TableWriter::open(&std::path::Path, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::open(&std::path::Path, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::pending_deletes(&self) -> impl core::iter::traits::iterator::Iterator<Item = &std::path::Path>
-pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::sealed_pages(&self) -> &[db_core::storage::ingest::page::Page]
-pub fn db_core::storage::ingest::table::TableWriter::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::table::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::table::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::error::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::table::TableWriter
 pub fn db_core::storage::ingest::table::TableWriter::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::TierOptions
@@ -4204,20 +4307,20 @@ impl core::fmt::Debug for db_core::storage::ingest::layout::TierOptions
 pub fn db_core::storage::ingest::layout::TierOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::layout::TierOptions
 pub struct db_core::storage::ingest::Wal
-impl db_core::storage::ingest::wal::Wal
-pub fn db_core::storage::ingest::wal::Wal::append(&self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::close(self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::dir(&self) -> &std::path::Path
-pub fn db_core::storage::ingest::wal::Wal::mark_flushed(&self, u64) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::open(&std::path::Path, u64, db_core::storage::ingest::wal::WalOptions) -> core::result::Result<(db_core::storage::ingest::wal::Wal, alloc::vec::Vec<db_core::storage::ingest::wal::Record>), db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::open_locked(db_core::storage::ingest::lock::TableLock, &std::path::Path, u64, db_core::storage::ingest::wal::WalOptions) -> core::result::Result<(db_core::storage::ingest::wal::Wal, alloc::vec::Vec<db_core::storage::ingest::wal::Record>), db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::roll(&self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
-pub fn db_core::storage::ingest::wal::Wal::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::wal::WalError>
-impl core::fmt::Debug for db_core::storage::ingest::wal::Wal
-pub fn db_core::storage::ingest::wal::Wal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::ops::drop::Drop for db_core::storage::ingest::wal::Wal
-pub fn db_core::storage::ingest::wal::Wal::drop(&mut self)
+impl db_core::storage::ingest::Wal
+pub fn db_core::storage::ingest::Wal::append(&self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::close(self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::dir(&self) -> &std::path::Path
+pub fn db_core::storage::ingest::Wal::mark_flushed(&self, u64) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::open(&std::path::Path, u64, db_core::storage::ingest::wal::WalOptions) -> core::result::Result<(db_core::storage::ingest::Wal, alloc::vec::Vec<db_core::storage::ingest::wal::Record>), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::open_locked(db_core::storage::ingest::lock::TableLock, &std::path::Path, u64, db_core::storage::ingest::wal::WalOptions) -> core::result::Result<(db_core::storage::ingest::Wal, alloc::vec::Vec<db_core::storage::ingest::wal::Record>), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::roll(&self) -> core::result::Result<(), db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::wal::WalError>
+pub fn db_core::storage::ingest::Wal::watermarks(&self) -> core::result::Result<db_core::storage::ingest::wal::Watermarks, db_core::storage::ingest::wal::WalError>
+impl core::fmt::Debug for db_core::storage::ingest::Wal
+pub fn db_core::storage::ingest::Wal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for db_core::storage::ingest::Wal
+pub fn db_core::storage::ingest::Wal::drop(&mut self)
 pub struct db_core::storage::ingest::WalOptions
 pub db_core::storage::ingest::WalOptions::segment_bytes: u64
 impl core::clone::Clone for db_core::storage::ingest::wal::WalOptions
@@ -4790,6 +4893,79 @@ pub fn db_core::storage::parquet::reader::read_string_column(&[u8], &db_core::st
 pub fn db_core::storage::parquet::reader::read_string_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[alloc::string::String]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::string::String>>>
 pub fn db_core::storage::parquet::reader::split_rep_def_levels<'a>(&'a [u8], &db_core::storage::parquet::page::DataPageHeader, u32, u32) -> db_core::storage::parquet::reader::Result<(alloc::vec::Vec<u32>, alloc::vec::Vec<u32>, &'a [u8])>
 pub type db_core::storage::parquet::reader::Result<T> = core::result::Result<T, db_core::storage::parquet::reader::ReadError>
+pub mod db_core::storage::parquet::schema
+pub enum db_core::storage::parquet::schema::ColumnType
+pub db_core::storage::parquet::schema::ColumnType::Binary
+pub db_core::storage::parquet::schema::ColumnType::Boolean
+pub db_core::storage::parquet::schema::ColumnType::Decimal
+pub db_core::storage::parquet::schema::ColumnType::Decimal::precision: u8
+pub db_core::storage::parquet::schema::ColumnType::Decimal::scale: u8
+pub db_core::storage::parquet::schema::ColumnType::Double
+pub db_core::storage::parquet::schema::ColumnType::FixedLenByteArray(u16)
+pub db_core::storage::parquet::schema::ColumnType::Float
+pub db_core::storage::parquet::schema::ColumnType::Int32
+pub db_core::storage::parquet::schema::ColumnType::Int64
+pub db_core::storage::parquet::schema::ColumnType::MapUtf8
+pub db_core::storage::parquet::schema::ColumnType::TimestampMicros
+pub db_core::storage::parquet::schema::ColumnType::TimestampNanos
+pub db_core::storage::parquet::schema::ColumnType::UInt16
+pub db_core::storage::parquet::schema::ColumnType::UInt32
+pub db_core::storage::parquet::schema::ColumnType::UInt64
+pub db_core::storage::parquet::schema::ColumnType::UInt8
+pub db_core::storage::parquet::schema::ColumnType::Utf8
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::schema::ColumnType
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::schema::ColumnType
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnType
+pub enum db_core::storage::parquet::schema::ColumnValues
+pub db_core::storage::parquet::schema::ColumnValues::Binary(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
+pub db_core::storage::parquet::schema::ColumnValues::Boolean(alloc::vec::Vec<core::option::Option<bool>>)
+pub db_core::storage::parquet::schema::ColumnValues::Decimal(alloc::vec::Vec<core::option::Option<i128>>)
+pub db_core::storage::parquet::schema::ColumnValues::Double(alloc::vec::Vec<core::option::Option<f64>>)
+pub db_core::storage::parquet::schema::ColumnValues::FixedLenByteArray(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
+pub db_core::storage::parquet::schema::ColumnValues::Float(alloc::vec::Vec<core::option::Option<f32>>)
+pub db_core::storage::parquet::schema::ColumnValues::Int32(alloc::vec::Vec<core::option::Option<i32>>)
+pub db_core::storage::parquet::schema::ColumnValues::Int64(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::parquet::schema::ColumnValues::Map(alloc::vec::Vec<core::option::Option<db_core::storage::parquet::parquet_file::MapEntries>>)
+pub db_core::storage::parquet::schema::ColumnValues::TimestampMicros(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::parquet::schema::ColumnValues::TimestampNanos(alloc::vec::Vec<core::option::Option<i64>>)
+pub db_core::storage::parquet::schema::ColumnValues::UInt16(alloc::vec::Vec<core::option::Option<u16>>)
+pub db_core::storage::parquet::schema::ColumnValues::UInt32(alloc::vec::Vec<core::option::Option<u32>>)
+pub db_core::storage::parquet::schema::ColumnValues::UInt64(alloc::vec::Vec<core::option::Option<u64>>)
+pub db_core::storage::parquet::schema::ColumnValues::UInt8(alloc::vec::Vec<core::option::Option<u8>>)
+pub db_core::storage::parquet::schema::ColumnValues::Utf8(alloc::vec::Vec<core::option::Option<alloc::string::String>>)
+impl db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::empty(db_core::storage::parquet::schema::ColumnType) -> Self
+pub fn db_core::storage::parquet::schema::ColumnValues::is_empty(&self) -> bool
+pub fn db_core::storage::parquet::schema::ColumnValues::is_for(&self, db_core::storage::parquet::schema::ColumnType) -> bool
+pub fn db_core::storage::parquet::schema::ColumnValues::len(&self) -> usize
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnValues
+pub struct db_core::storage::parquet::schema::ColumnSpec
+pub db_core::storage::parquet::schema::ColumnSpec::column_type: db_core::storage::parquet::schema::ColumnType
+pub db_core::storage::parquet::schema::ColumnSpec::name: alloc::string::String
+pub db_core::storage::parquet::schema::ColumnSpec::nullable: bool
+impl db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::new(impl core::convert::Into<alloc::string::String>, db_core::storage::parquet::schema::ColumnType, bool) -> Self
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::schema::ColumnSpec
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnSpec
+pub type db_core::storage::parquet::schema::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
 pub mod db_core::storage::parquet::schema_tree
 pub struct db_core::storage::parquet::schema_tree::SchemaNode
 pub db_core::storage::parquet::schema_tree::SchemaNode::children: alloc::vec::Vec<db_core::storage::parquet::schema_tree::SchemaNode>
@@ -4874,15 +5050,15 @@ pub db_core::storage::parquet::writer::ColumnType::UInt32
 pub db_core::storage::parquet::writer::ColumnType::UInt64
 pub db_core::storage::parquet::writer::ColumnType::UInt8
 pub db_core::storage::parquet::writer::ColumnType::Utf8
-impl core::clone::Clone for db_core::storage::parquet::writer::ColumnType
-pub fn db_core::storage::parquet::writer::ColumnType::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::parquet::writer::ColumnType
-impl core::cmp::PartialEq for db_core::storage::parquet::writer::ColumnType
-pub fn db_core::storage::parquet::writer::ColumnType::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::parquet::writer::ColumnType
-pub fn db_core::storage::parquet::writer::ColumnType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::Copy for db_core::storage::parquet::writer::ColumnType
-impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnType
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::schema::ColumnType
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnType
+pub fn db_core::storage::parquet::schema::ColumnType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::schema::ColumnType
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnType
 pub enum db_core::storage::parquet::writer::ColumnValues
 pub db_core::storage::parquet::writer::ColumnValues::Binary(alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>)
 pub db_core::storage::parquet::writer::ColumnValues::Boolean(alloc::vec::Vec<core::option::Option<bool>>)
@@ -4900,18 +5076,18 @@ pub db_core::storage::parquet::writer::ColumnValues::UInt32(alloc::vec::Vec<core
 pub db_core::storage::parquet::writer::ColumnValues::UInt64(alloc::vec::Vec<core::option::Option<u64>>)
 pub db_core::storage::parquet::writer::ColumnValues::UInt8(alloc::vec::Vec<core::option::Option<u8>>)
 pub db_core::storage::parquet::writer::ColumnValues::Utf8(alloc::vec::Vec<core::option::Option<alloc::string::String>>)
-impl db_core::storage::parquet::writer::ColumnValues
-pub fn db_core::storage::parquet::writer::ColumnValues::empty(db_core::storage::parquet::writer::ColumnType) -> Self
-pub fn db_core::storage::parquet::writer::ColumnValues::is_empty(&self) -> bool
-pub fn db_core::storage::parquet::writer::ColumnValues::is_for(&self, db_core::storage::parquet::writer::ColumnType) -> bool
-pub fn db_core::storage::parquet::writer::ColumnValues::len(&self) -> usize
-impl core::clone::Clone for db_core::storage::parquet::writer::ColumnValues
-pub fn db_core::storage::parquet::writer::ColumnValues::clone(&self) -> Self
-impl core::cmp::PartialEq for db_core::storage::parquet::writer::ColumnValues
-pub fn db_core::storage::parquet::writer::ColumnValues::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::parquet::writer::ColumnValues
-pub fn db_core::storage::parquet::writer::ColumnValues::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnValues
+impl db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::empty(db_core::storage::parquet::schema::ColumnType) -> Self
+pub fn db_core::storage::parquet::schema::ColumnValues::is_empty(&self) -> bool
+pub fn db_core::storage::parquet::schema::ColumnValues::is_for(&self, db_core::storage::parquet::schema::ColumnType) -> bool
+pub fn db_core::storage::parquet::schema::ColumnValues::len(&self) -> usize
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnValues
+pub fn db_core::storage::parquet::schema::ColumnValues::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnValues
 pub enum db_core::storage::parquet::writer::Compression
 pub db_core::storage::parquet::writer::Compression::Snappy
 pub db_core::storage::parquet::writer::Compression::Uncompressed
@@ -4963,27 +5139,27 @@ impl core::convert::From<core::io::error::Error> for db_core::storage::parquet::
 pub fn db_core::storage::parquet::writer::WriteError::from(core::io::error::Error) -> Self
 impl core::convert::From<db_core::storage::parquet::writer::EncodeError> for db_core::storage::parquet::writer::WriteError
 pub fn db_core::storage::parquet::writer::WriteError::from(db_core::storage::parquet::writer::EncodeError) -> Self
-impl core::convert::From<db_core::storage::parquet::writer::WriteError> for db_core::storage::ingest::table::IngestError
-pub fn db_core::storage::ingest::table::IngestError::from(db_core::storage::parquet::writer::WriteError) -> Self
+impl core::convert::From<db_core::storage::parquet::writer::WriteError> for db_core::storage::ingest::error::IngestError
+pub fn db_core::storage::ingest::error::IngestError::from(db_core::storage::parquet::writer::WriteError) -> Self
 impl core::error::Error for db_core::storage::parquet::writer::WriteError
 impl core::fmt::Debug for db_core::storage::parquet::writer::WriteError
 pub fn db_core::storage::parquet::writer::WriteError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::writer::WriteError
 pub fn db_core::storage::parquet::writer::WriteError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::parquet::writer::ColumnSpec
-pub db_core::storage::parquet::writer::ColumnSpec::column_type: db_core::storage::parquet::writer::ColumnType
+pub db_core::storage::parquet::writer::ColumnSpec::column_type: db_core::storage::parquet::schema::ColumnType
 pub db_core::storage::parquet::writer::ColumnSpec::name: alloc::string::String
 pub db_core::storage::parquet::writer::ColumnSpec::nullable: bool
-impl db_core::storage::parquet::writer::ColumnSpec
-pub fn db_core::storage::parquet::writer::ColumnSpec::new(impl core::convert::Into<alloc::string::String>, db_core::storage::parquet::writer::ColumnType, bool) -> Self
-impl core::clone::Clone for db_core::storage::parquet::writer::ColumnSpec
-pub fn db_core::storage::parquet::writer::ColumnSpec::clone(&self) -> Self
-impl core::cmp::Eq for db_core::storage::parquet::writer::ColumnSpec
-impl core::cmp::PartialEq for db_core::storage::parquet::writer::ColumnSpec
-pub fn db_core::storage::parquet::writer::ColumnSpec::eq(&self, &Self) -> bool
-impl core::fmt::Debug for db_core::storage::parquet::writer::ColumnSpec
-pub fn db_core::storage::parquet::writer::ColumnSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::ColumnSpec
+impl db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::new(impl core::convert::Into<alloc::string::String>, db_core::storage::parquet::schema::ColumnType, bool) -> Self
+impl core::clone::Clone for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::schema::ColumnSpec
+impl core::cmp::PartialEq for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnSpec
+pub fn db_core::storage::parquet::schema::ColumnSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnSpec
 pub struct db_core::storage::parquet::writer::FileSummary
 pub db_core::storage::parquet::writer::FileSummary::bytes: u64
 pub db_core::storage::parquet::writer::FileSummary::num_rows: u64
@@ -5001,10 +5177,10 @@ impl<W: core::io::write::Write> db_core::storage::parquet::writer::ParquetWriter
 pub fn db_core::storage::parquet::writer::ParquetWriter<W>::bytes_written(&self) -> u64
 pub fn db_core::storage::parquet::writer::ParquetWriter<W>::finish(self) -> core::result::Result<(W, db_core::storage::parquet::writer::FileSummary), db_core::storage::parquet::writer::WriteError>
 pub fn db_core::storage::parquet::writer::ParquetWriter<W>::flush_row_group(&mut self) -> core::result::Result<(), db_core::storage::parquet::writer::WriteError>
-pub fn db_core::storage::parquet::writer::ParquetWriter<W>::new(W, alloc::vec::Vec<db_core::storage::parquet::writer::ColumnSpec>, db_core::storage::parquet::writer::WriterOptions) -> core::result::Result<Self, db_core::storage::parquet::writer::WriteError>
-pub fn db_core::storage::parquet::writer::ParquetWriter<W>::schema(&self) -> &[db_core::storage::parquet::writer::ColumnSpec]
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::new(W, alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>, db_core::storage::parquet::writer::WriterOptions) -> core::result::Result<Self, db_core::storage::parquet::writer::WriteError>
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::schema(&self) -> &[db_core::storage::parquet::schema::ColumnSpec]
 pub fn db_core::storage::parquet::writer::ParquetWriter<W>::set_key_value_metadata(&mut self, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>)
-pub fn db_core::storage::parquet::writer::ParquetWriter<W>::write_columns(&mut self, alloc::vec::Vec<db_core::storage::parquet::writer::ColumnValues>) -> core::result::Result<(), db_core::storage::parquet::writer::WriteError>
+pub fn db_core::storage::parquet::writer::ParquetWriter<W>::write_columns(&mut self, alloc::vec::Vec<db_core::storage::parquet::schema::ColumnValues>) -> core::result::Result<(), db_core::storage::parquet::writer::WriteError>
 pub struct db_core::storage::parquet::writer::WriterOptions
 pub db_core::storage::parquet::writer::WriterOptions::compression: db_core::storage::parquet::writer::Compression
 pub db_core::storage::parquet::writer::WriterOptions::created_by: alloc::string::String

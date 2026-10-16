@@ -37,7 +37,7 @@ use super::{
     OpcodeSection, PlanRow, QueryResult, TableInfo,
 };
 
-#[cfg(feature = "ingest")]
+#[cfg(feature = "ingest-read")]
 pub mod table;
 
 /// A leaf column of the file: display name, index in the schema, physical type.
@@ -527,7 +527,7 @@ fn row_group_segments<'f>(
 /// A segment of an ingested table (`table.rs`): a flushed row group or a
 /// page. Here, with [`table_row_groups`], because it holds a
 /// [`RowGroupSegment`] and its lifetimes.
-#[cfg(feature = "ingest")]
+#[cfg(feature = "ingest-read")]
 enum TableSegment<'a, 'm> {
     RowGroup {
         inner: RowGroupSegment<'a, 'm>,
@@ -549,7 +549,7 @@ enum TableSegment<'a, 'm> {
 /// `file`'s row groups as [`TableSegment`]s decoding `columns` and applying
 /// `fixups`. Footer statistics prune and bound the top-N through the
 /// `comparable` leaves only.
-#[cfg(feature = "ingest")]
+#[cfg(feature = "ingest-read")]
 fn table_row_groups<'f>(
     file: &'f ParquetFile<'f>,
     columns: &[Leaf],
