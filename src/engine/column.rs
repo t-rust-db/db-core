@@ -546,6 +546,96 @@ enum TableSegment<'a, 'm> {
     },
 }
 
+/// A segment of a table directory's [`Snapshot`](crate::storage::ingest::Snapshot)
+/// (ADR 0029): a row group of one of its Parquet files, with the table's
+/// NULL-fill and casts applied, or a page of the records above
+/// `flushed_lsn`. For callers that run the batch engine themselves over a
+/// table directory, as column-rs does for joins and window functions
+/// (t-rust-db/tools#13); see [`snapshot_segments`] and
+/// [`table::read_snapshot`].
+#[cfg(feature = "ingest-read")]
+pub struct SnapshotSegment<'a, 'm>(TableSegment<'a, 'm>);
+
+#[cfg(feature = "ingest-read")]
+impl Segment for SnapshotSegment<'_, '_> {
+    fn load(&self) -> Result<Arc<Batch>, VmError> {
+        self.0.load()
+    }
+
+    fn order_key_bound(&self, descending: bool) -> Option<Value> {
+        self.0.order_key_bound(descending)
+    }
+
+    fn load_columns(&self, columns: &[String]) -> Result<Arc<Batch>, VmError> {
+        self.0.load_columns(columns)
+    }
+
+    fn gather_at(&self, columns: &[String], positions: &[u32]) -> Option<Result<Batch, VmError>> {
+        self.0.gather_at(columns, positions)
+    }
+}
+
+/// Every Parquet file of `snapshot`, oldest first, opened: what the
+/// segments of [`snapshot_segments`] read.
+#[cfg(feature = "ingest-read")]
+pub fn snapshot_files(
+    snapshot: &crate::storage::ingest::Snapshot,
+) -> Result<Vec<ParquetFile<'_>>, EngineError> {
+    snapshot
+        .files()
+        .map(|(entry, bytes)| {
+            ParquetFile::open(bytes)
+                .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", entry.path)))
+        })
+        .collect()
+}
+
+/// `snapshot`'s segments loading `columns`, in LSN order: one per row
+/// group of each of `files` ([`snapshot_files`] of it), then one per page.
+/// A column name resolves as in [`table::query_snapshot`] (`t.col` is the
+/// column `col` unless the table has one named `t.col`) and keys the
+/// batches as given. A row group the file lacks a column for loads it as
+/// NULL, one that stores it with another type casts it, so every segment
+/// has the table's schema ([`Snapshot::schema`]). `program` drives late
+/// materialization where it has a `WHERE` (ADR 0026); an empty program
+/// loads every column eagerly. No row group is pruned.
+///
+/// [`Snapshot::schema`]: crate::storage::ingest::Snapshot::schema
+#[cfg(feature = "ingest-read")]
+pub fn snapshot_segments<'f>(
+    snapshot: &'f crate::storage::ingest::Snapshot,
+    files: &'f [ParquetFile<'f>],
+    columns: &[String],
+    program: &'f Program,
+) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
+    let schema = snapshot
+        .schema()
+        .map_err(|e| EngineError::new(ErrorKind::Open, e))?;
+    let requests = table::resolve(&schema, columns)?;
+    let mut segments: Vec<SnapshotSegment<'f, 'f>> = Vec::new();
+    for file in files {
+        let (leaves, _, fixups) = table::file_plan(&leaf_columns(file), &schema, &requests);
+        segments.extend((0..file.num_row_groups()).map(|i| {
+            SnapshotSegment(TableSegment::RowGroup {
+                inner: RowGroupSegment {
+                    file,
+                    row_group_index: i,
+                    columns: leaves.clone(),
+                    program,
+                    order_leaf: None,
+                },
+                fixups: fixups.clone(),
+            })
+        }));
+    }
+    segments.extend(
+        table::page_segments(snapshot, &requests)
+            .into_iter()
+            .map(SnapshotSegment),
+    );
+    Ok(segments)
+}
+
 /// `file`'s row groups as [`TableSegment`]s decoding `columns` and applying
 /// `fixups`. Footer statistics prune and bound the top-N through the
 /// `comparable` leaves only.

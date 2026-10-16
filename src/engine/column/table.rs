@@ -181,7 +181,10 @@ impl Segment for TableSegment<'_, '_> {
 /// The program's `columns_to_load()` against the table's columns. A name
 /// that is itself a column (a flattened `a.b` field) wins over reading
 /// it as `table.column`.
-fn resolve(schema: &[ColumnSpec], names: &[String]) -> Result<Vec<Request>, EngineError> {
+pub(super) fn resolve(
+    schema: &[ColumnSpec],
+    names: &[String],
+) -> Result<Vec<Request>, EngineError> {
     names
         .iter()
         .map(|name| {
@@ -203,7 +206,7 @@ fn resolve(schema: &[ColumnSpec], names: &[String]) -> Result<Vec<Request>, Engi
 /// How a file serves `requests`: the leaves to decode (keyed by request),
 /// the leaves stored with the table's type, whose statistics bound the
 /// values a query sees, and the fix-ups the rest need.
-fn file_plan(
+pub(super) fn file_plan(
     leaves: &[Leaf],
     schema: &[ColumnSpec],
     requests: &[Request],
@@ -263,20 +266,63 @@ pub fn query_snapshot(
             table_row_groups(file, &columns, &comparable, &select, &program, &fixups)
         })
         .collect();
-    segments.extend(snapshot.pages().iter().map(|page| match &page.body {
-        PageBody::Lines(segment) => TableSegment::Page {
-            segment: Arc::clone(segment),
-            requests: requests.clone(),
-            format: snapshot.format(),
-        },
-        PageBody::Rows(rows) => TableSegment::Rows {
-            rows: Arc::clone(rows),
-            requests: requests.clone(),
-        },
-    }));
+    segments.extend(page_segments(snapshot, &requests));
     let output =
         engine::run(&segments, &program).map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
     Ok(query_result(&select, output))
+}
+
+/// One segment per page of `snapshot`, loading `requests`.
+pub(super) fn page_segments(
+    snapshot: &Snapshot,
+    requests: &[Request],
+) -> Vec<TableSegment<'static, 'static>> {
+    snapshot
+        .pages()
+        .iter()
+        .map(|page| match &page.body {
+            PageBody::Lines(segment) => TableSegment::Page {
+                segment: Arc::clone(segment),
+                requests: requests.to_vec(),
+                format: snapshot.format(),
+            },
+            PageBody::Rows(rows) => TableSegment::Rows {
+                rows: Arc::clone(rows),
+                requests: requests.to_vec(),
+            },
+        })
+        .collect()
+}
+
+/// `snapshot`'s `columns` as one batch, every row of every file and page in
+/// LSN order, keyed and fixed up as [`snapshot_segments`] does: the whole
+/// table, for a join's build side or a window's input
+/// (t-rust-db/tools#13).
+///
+/// [`snapshot_segments`]: super::snapshot_segments
+pub fn read_snapshot(snapshot: &Snapshot, columns: &[String]) -> Result<Batch, EngineError> {
+    let files = super::snapshot_files(snapshot)?;
+    let program = Program::from_opcodes([]);
+    let segments = super::snapshot_segments(snapshot, &files, columns, &program)?;
+    let mut merged: Vec<Vec<Value>> = vec![Vec::new(); columns.len()];
+    let mut rows = 0usize;
+    for segment in &segments {
+        let mut batch = Arc::unwrap_or_clone(
+            segment
+                .load()
+                .map_err(|e| EngineError::new(ErrorKind::Execute, e))?,
+        );
+        rows = rows.saturating_add(batch.num_rows);
+        for (values, key) in merged.iter_mut().zip(columns) {
+            values.extend(take_values(&mut batch, key));
+        }
+    }
+    Ok(columns
+        .iter()
+        .zip(merged)
+        .fold(Batch::new(rows), |batch, (key, values)| {
+            batch.with_column(key.clone(), values)
+        }))
 }
 
 fn column_names(schema: &[ColumnSpec]) -> Vec<String> {
