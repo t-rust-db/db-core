@@ -777,3 +777,98 @@ fn the_table_handle_answers_the_same_before_and_after_a_flush() {
     let err = table.query(sql).unwrap_err();
     assert_eq!(err.kind, ErrorKind::Open, "a closed table: {err:?}");
 }
+
+#[test]
+fn read_snapshot_gives_the_whole_table_with_the_tables_types() {
+    let t = TempTable::new();
+    let mut w = t.writer();
+    // A first file without `m` and `n` an integer, a second where `n` is a
+    // float (so the table's `n` is DOUBLE) and `m` appears, then a page.
+    append(&mut w, &[r#"{"k":"a","n":1}"#, r#"{"k":"b","n":2}"#]);
+    w.flush_all().unwrap();
+    append(&mut w, &[r#"{"k":"c","n":2.5,"m":"x"}"#]);
+    w.flush_all().unwrap();
+    append(&mut w, &[r#"{"k":"d","n":4}"#]);
+    let snapshot = w.snapshot().unwrap();
+    assert_eq!(snapshot.files().count(), 2);
+    assert_eq!(snapshot.pages().len(), 1);
+
+    let columns = ["logs.k".to_string(), "n".to_string(), "m".to_string()];
+    let batch = read_snapshot(&snapshot, &columns).unwrap();
+    assert_eq!(batch.num_rows, 4);
+    let column = |key: &str| -> Vec<Value> {
+        batch
+            .columns
+            .get(key)
+            .map(|c| c.to_vec())
+            .unwrap_or_default()
+    };
+    let s = |x: &str| Value::Str(x.to_string().into());
+    assert_eq!(
+        column("logs.k"),
+        [s("a"), s("b"), s("c"), s("d")],
+        "keyed as asked"
+    );
+    assert_eq!(
+        column("n"),
+        [
+            Value::Float(1.0),
+            Value::Float(2.0),
+            Value::Float(2.5),
+            Value::Float(4.0)
+        ]
+    );
+    assert_eq!(column("m"), [Value::Null, Value::Null, s("x"), Value::Null]);
+
+    let err = read_snapshot(&snapshot, &["nope".to_string()]).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Compile);
+}
+
+#[test]
+fn snapshot_segments_drive_a_join_as_a_caller_runs_one() {
+    use crate::codegen::batch::{self as planner, BuildSourceKind};
+    use crate::engine::column::{snapshot_files, snapshot_segments};
+    use crate::vm::batch::ScanSource;
+    use crate::vm::engine::{self, NoResolver};
+
+    let events = TempTable::new();
+    let mut w = events.writer();
+    append(&mut w, &[r#"{"k":"a","n":1}"#, r#"{"k":"b","n":2}"#]);
+    w.flush_all().unwrap();
+    append(&mut w, &[r#"{"k":"a","n":3}"#]);
+    let left = w.snapshot().unwrap();
+
+    let names = TempTable::new();
+    let mut lookup = names.writer();
+    append(
+        &mut lookup,
+        &[
+            r#"{"k":"a","label":"alpha"}"#,
+            r#"{"k":"b","label":"beta"}"#,
+        ],
+    );
+    lookup.flush_all().unwrap();
+    let right = lookup.snapshot().unwrap();
+
+    let select = crate::parser::column::parse(
+        "SELECT r.label, SUM(l.n) FROM logs l JOIN names r ON l.k = r.k GROUP BY r.label ORDER BY r.label",
+    )
+    .unwrap();
+    let plan = planner::compile_join(&select, BuildSourceKind::InMemory).unwrap();
+    let files = snapshot_files(&left).unwrap();
+    let eager = Program::from_opcodes([]);
+    let probe = snapshot_segments(&left, &files, &plan.left_columns, &eager).unwrap();
+    assert_eq!(probe.len(), 2, "one row group and one page");
+    let build = read_snapshot(&right, &plan.right_columns).unwrap();
+    let output =
+        engine::run_join_segments(probe, ScanSource::InMemory(build), &plan, &NoResolver).unwrap();
+    let rows: Vec<Vec<Value>> = output.rows().collect();
+    let s = |x: &str| Value::Str(x.to_string().into());
+    assert_eq!(
+        rows,
+        [
+            vec![s("alpha"), Value::Float(4.0)],
+            vec![s("beta"), Value::Float(2.0)]
+        ]
+    );
+}
