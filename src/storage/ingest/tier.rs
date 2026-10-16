@@ -405,69 +405,51 @@ fn read_values(
     })
 }
 
-/// One input file's row groups, read as the columns of a merge's `specs`.
-struct Input<'f> {
-    entry: &'f FileEntry,
-    file: ParquetFile<'f>,
-    fields: Vec<Field>,
-}
-
-impl<'f> Input<'f> {
-    fn open(entry: &'f FileEntry, bytes: &'f [u8]) -> Result<Self, IngestError> {
-        let file = ParquetFile::open(bytes).map_err(|e| corrupt(&entry.path, e.to_string()))?;
-        let fields = file.fields();
-        Ok(Input {
-            entry,
-            file,
-            fields,
-        })
-    }
-
-    /// Row group `index` as the columns of `specs`, `None` past the last.
-    /// A record table (`typed`) reads every column as declared; a lines
-    /// table casts each to the widened type, and a column the file lacks
-    /// is NULL.
-    fn row_group(
-        &self,
-        index: usize,
-        specs: &[ColumnSpec],
-        typed: bool,
-    ) -> Result<Option<(Vec<ColumnValues>, u64)>, IngestError> {
-        let path = &self.entry.path;
-        let Some(rg) = self.file.row_group(index) else {
-            return Ok(None);
-        };
-        let rows = u64::try_from(rg.num_rows())
-            .map_err(|_| corrupt(path, "negative row count".to_string()))?;
-        let mut columns = Vec::with_capacity(specs.len());
-        for spec in specs {
-            let field = self.fields.iter().find(|f| f.name == spec.name);
-            if typed {
-                // A record table's file has every column, as declared (a
-                // MAP is a field of two leaves).
-                let field =
-                    field.ok_or_else(|| corrupt(path, format!("has no column {}", spec.name)))?;
-                columns.push(
-                    read_column(&rg, field, spec.column_type)
-                        .map_err(|e| corrupt(path, e.to_string()))?,
-                );
-                continue;
-            }
-            let leaf = field
-                .filter(|f| !f.nested)
-                .and_then(|f| Some((f.leaves.start, f.element.physical_type?)));
-            let values = match leaf {
-                Some((index, pt)) => read_values(&rg, index, pt)
-                    .map_err(|why| corrupt(path, why))?
-                    .into_iter()
-                    .map(|v| cast(v, spec.column_type))
-                    .collect(),
-                None => vec![Value::Null; usize::try_from(rows).unwrap_or(0)],
-            };
-            columns.push(convert(values, spec.column_type));
+/// Row group `index` of `file` (with its `fields`, at `path`) as the
+/// columns of `specs`, `None` past the last. A record table (`typed`)
+/// reads every column as declared; a lines table casts each to the
+/// widened type, and a column the file lacks is NULL.
+fn row_group(
+    file: &ParquetFile<'_>,
+    fields: &[Field],
+    path: &str,
+    index: usize,
+    specs: &[ColumnSpec],
+    typed: bool,
+) -> Result<Option<(Vec<ColumnValues>, u64)>, IngestError> {
+    let Some(rg) = file.row_group(index) else {
+        return Ok(None);
+    };
+    let rows = u64::try_from(rg.num_rows())
+        .map_err(|_| corrupt(path, "negative row count".to_string()))?;
+    let mut columns = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let field = fields.iter().find(|f| f.name == spec.name);
+        if typed {
+            // A record table's file has every column, as declared (a MAP
+            // is a field of two leaves).
+            let field =
+                field.ok_or_else(|| corrupt(path, format!("has no column {}", spec.name)))?;
+            columns.push(
+                read_column(&rg, field, spec.column_type)
+                    .map_err(|e| corrupt(path, e.to_string()))?,
+            );
+            continue;
         }
-        Ok(Some((columns, rows)))
+        let leaf = field
+            .filter(|f| !f.nested)
+            .and_then(|f| Some((f.leaves.start, f.element.physical_type?)));
+        let values = match leaf {
+            Some((index, pt)) => read_values(&rg, index, pt)
+                .map_err(|why| corrupt(path, why))?
+                .into_iter()
+                .map(|v| cast(v, spec.column_type))
+                .collect(),
+            None => vec![Value::Null; usize::try_from(rows).unwrap_or(0)],
+        };
+        columns.push(convert(values, spec.column_type));
     }
+    Ok(Some((columns, rows)))
 }
 
 fn corrupt(path: &str, why: String) -> IngestError {
@@ -476,10 +458,10 @@ fn corrupt(path: &str, why: String) -> IngestError {
 
 /// A lines table's merge schema: the predefined columns, every field of
 /// `inputs` and of `pages`, each widened to fit all of them.
-fn widened_specs(inputs: &[Input<'_>], pages: &[Page]) -> Vec<ColumnSpec> {
+fn widened_specs(files: &[&ParquetFile<'_>], pages: &[Page]) -> Vec<ColumnSpec> {
     let mut specs = predefined_specs();
-    for input in inputs {
-        for element in input.file.metadata().schema.iter().skip(1) {
+    for file in files {
+        for element in file.metadata().schema.iter().skip(1) {
             if let Some(t) = element.physical_type.and_then(column_type) {
                 add_field(&mut specs, &element.name, t);
             }
@@ -503,20 +485,25 @@ pub(crate) fn merge_day(
 ) -> Result<Vec<Output>, IngestError> {
     let opened = inputs
         .iter()
-        .map(|(entry, bytes)| Input::open(entry, bytes))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|(entry, bytes)| {
+            let file = ParquetFile::open(bytes).map_err(|e| corrupt(&entry.path, e.to_string()))?;
+            let fields = file.fields();
+            Ok((*entry, file, fields))
+        })
+        .collect::<Result<Vec<_>, IngestError>>()?;
     let specs = match schema {
         Some(schema) => schema.to_vec(),
-        None => widened_specs(&opened, &[]),
+        None => widened_specs(&opened.iter().map(|o| &o.1).collect::<Vec<_>>(), &[]),
     };
     let mut files = Files::new(dir, specs.clone(), parquet, tier);
     let mut bounds_by_file = Vec::new();
     let mut current: (Bounds, Bounds) = (None, None);
-    for input in &opened {
-        let entry = input.entry;
+    for (entry, file, fields) in &opened {
         let mut next = entry.lsn_lo;
         let mut index = 0usize;
-        while let Some((columns, rows)) = input.row_group(index, &specs, schema.is_some())? {
+        while let Some((columns, rows)) =
+            row_group(file, fields, &entry.path, index, &specs, schema.is_some())?
+        {
             let hi = next.saturating_add(rows).saturating_sub(1);
             files.row_group(columns, next, hi)?;
             next = hi.saturating_add(1);
@@ -555,13 +542,14 @@ pub(crate) fn merge_day(
 
 /// One sorted run of a [`close_hour`] merge: its current chunk of rows,
 /// and the file the next chunks come from (none for the pages' run).
-struct Run<'f> {
+struct Run {
     chunk: Rc<Vec<ColumnValues>>,
     /// The chunk's index in the merge's `held`.
     held: usize,
     pos: usize,
     len: usize,
-    input: Option<&'f Input<'f>>,
+    /// Its file's index in the merge's inputs.
+    input: Option<usize>,
     next_row_group: usize,
 }
 
@@ -589,11 +577,15 @@ pub(crate) fn close_hour(
     let lsn_hi = pages.last().map_or(last.0.lsn_hi, |p| p.lsn_hi);
     let inputs = staging
         .iter()
-        .map(|(entry, bytes)| Input::open(entry, bytes))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|(entry, bytes)| {
+            let file = ParquetFile::open(bytes).map_err(|e| corrupt(&entry.path, e.to_string()))?;
+            let fields = file.fields();
+            Ok((*entry, file, fields))
+        })
+        .collect::<Result<Vec<_>, IngestError>>()?;
     let specs = match schema {
         Some(schema) => schema.to_vec(),
-        None => widened_specs(&inputs, pages),
+        None => widened_specs(&inputs.iter().map(|o| &o.1).collect::<Vec<_>>(), pages),
     };
     let typed = schema.is_some();
     let keys = key_positions(&specs, tier);
@@ -601,16 +593,16 @@ pub(crate) fn close_hour(
     let mut observed = None;
     let mut timestamp = None;
     let mut held: Vec<Rc<Vec<ColumnValues>>> = Vec::new();
-    let mut runs: Vec<Run<'_>> = Vec::new();
-    for input in &inputs {
-        observed = widen_bounds(observed, input.entry.observed_ts);
-        timestamp = widen_bounds(timestamp, input.entry.timestamp);
+    let mut runs: Vec<Run> = Vec::new();
+    for (i, (entry, _, _)) in inputs.iter().enumerate() {
+        observed = widen_bounds(observed, entry.observed_ts);
+        timestamp = widen_bounds(timestamp, entry.timestamp);
         runs.push(Run {
             chunk: Rc::new(Vec::new()),
             held: 0,
             pos: 0,
             len: 0,
-            input: Some(input),
+            input: Some(i),
             next_row_group: 0,
         });
     }
@@ -629,7 +621,7 @@ pub(crate) fn close_hour(
     }
     for run in &mut runs {
         if run.pos == run.len {
-            load(run, &specs, typed)?;
+            load(run, &inputs, &specs, typed)?;
         }
         run.held = held.len();
         held.push(Rc::clone(&run.chunk));
@@ -663,7 +655,7 @@ pub(crate) fn close_hour(
         };
         picks.push((run.held, run.pos));
         run.pos = run.pos.saturating_add(1);
-        if run.pos == run.len && load(run, &specs, typed)? {
+        if run.pos == run.len && load(run, &inputs, &specs, typed)? {
             run.held = held.len();
             held.push(Rc::clone(&run.chunk));
         }
@@ -690,11 +682,18 @@ pub(crate) fn close_hour(
 
 /// Moves `run` to its file's next non-empty row group; returns whether it
 /// has one (a run without a file, or at its file's end, is done).
-fn load(run: &mut Run<'_>, specs: &[ColumnSpec], typed: bool) -> Result<bool, IngestError> {
-    let Some(input) = run.input else {
+fn load(
+    run: &mut Run,
+    inputs: &[(&FileEntry, ParquetFile<'_>, Vec<Field>)],
+    specs: &[ColumnSpec],
+    typed: bool,
+) -> Result<bool, IngestError> {
+    let Some((entry, file, fields)) = run.input.and_then(|i| inputs.get(i)) else {
         return Ok(false);
     };
-    while let Some((columns, rows)) = input.row_group(run.next_row_group, specs, typed)? {
+    while let Some((columns, rows)) =
+        row_group(file, fields, &entry.path, run.next_row_group, specs, typed)?
+    {
         run.next_row_group = run.next_row_group.saturating_add(1);
         if rows > 0 {
             run.chunk = Rc::new(columns);

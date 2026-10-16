@@ -25432,7 +25432,7 @@
   {
     "id": "storage_ingest_tier_row_group_11ad2ae4",
     "file": "src/storage/ingest/tier.rs",
-    "line": 445,
+    "line": 428,
     "decision": "typed",
     "conditions": 1,
     "vectors_required": 2,
@@ -25442,8 +25442,8 @@
   {
     "id": "storage_ingest_tier_row_group_e62bf21e",
     "file": "src/storage/ingest/tier.rs",
-    "line": 459,
-    "decision": "match leaf {\n                Some((index, pt)) => read_values(&rg, index, pt)\n                    .map_err(|why| corrupt(path, why))?\n                    .into_iter()\n                    .map(|v| cast(v, spec.column_type))\n                    .collect(),\n                None => vec![Value::Null; usize::try_from(rows).unwrap_or(0)],\n            }",
+    "line": 442,
+    "decision": "match leaf {\n            Some((index, pt)) => read_values(&rg, index, pt)\n                .map_err(|why| corrupt(path, why))?\n                .into_iter()\n                .map(|v| cast(v, spec.column_type))\n                .collect(),\n            None => vec![Value::Null; usize::try_from(rows).unwrap_or(0)],\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -25452,7 +25452,7 @@
   {
     "id": "storage_ingest_tier_widened_specs_2cf7ecaf",
     "file": "src/storage/ingest/tier.rs",
-    "line": 483,
+    "line": 465,
     "decision": "let Some(t) = element.physical_type.and_then(column_type)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25460,20 +25460,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_tier_merge_day_21feb25b",
+    "id": "storage_ingest_tier_merge_day_59ef71ba",
     "file": "src/storage/ingest/tier.rs",
-    "line": 508,
-    "decision": "match schema {\n        Some(schema) => schema.to_vec(),\n        None => widened_specs(&opened, &[]),\n    }",
+    "line": 494,
+    "decision": "match schema {\n        Some(schema) => schema.to_vec(),\n        None => widened_specs(&opened.iter().map(|o| &o.1).collect::<Vec<_>>(), &[]),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_tier_merge_day_b025b840",
+    "id": "storage_ingest_tier_merge_day_a81bcb5f",
     "file": "src/storage/ingest/tier.rs",
-    "line": 519,
-    "decision": "let Some((columns, rows)) = input.row_group(index, &specs, schema.is_some())?",
+    "line": 504,
+    "decision": "let Some((columns, rows)) =\n            row_group(file, fields, &entry.path, index, &specs, schema.is_some())?",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -25482,7 +25482,7 @@
   {
     "id": "storage_ingest_tier_merge_day_93d8e9a9",
     "file": "src/storage/ingest/tier.rs",
-    "line": 525,
+    "line": 512,
     "decision": "next.saturating_sub(1) != entry.lsn_hi",
     "conditions": 1,
     "vectors_required": 2,
@@ -25492,7 +25492,7 @@
   {
     "id": "storage_ingest_tier_merge_day_7c39fb9d",
     "file": "src/storage/ingest/tier.rs",
-    "line": 541,
+    "line": 528,
     "decision": "files.done.len() > before",
     "conditions": 1,
     "vectors_required": 2,
@@ -25502,7 +25502,7 @@
   {
     "id": "storage_ingest_tier_merge_day_b511161e",
     "file": "src/storage/ingest/tier.rs",
-    "line": 545,
+    "line": 532,
     "decision": "files.open.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25510,10 +25510,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_tier_close_hour_9d378191",
+    "id": "storage_ingest_tier_close_hour_1102f3d0",
     "file": "src/storage/ingest/tier.rs",
-    "line": 594,
-    "decision": "match schema {\n        Some(schema) => schema.to_vec(),\n        None => widened_specs(&inputs, pages),\n    }",
+    "line": 586,
+    "decision": "match schema {\n        Some(schema) => schema.to_vec(),\n        None => widened_specs(&inputs.iter().map(|o| &o.1).collect::<Vec<_>>(), pages),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -25522,7 +25522,7 @@
   {
     "id": "storage_ingest_tier_close_hour_aebd16f3",
     "file": "src/storage/ingest/tier.rs",
-    "line": 617,
+    "line": 609,
     "decision": "!pages.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25532,7 +25532,7 @@
   {
     "id": "storage_ingest_tier_close_hour_f59055c0",
     "file": "src/storage/ingest/tier.rs",
-    "line": 631,
+    "line": 623,
     "decision": "run.pos == run.len",
     "conditions": 1,
     "vectors_required": 2,
@@ -25542,7 +25542,7 @@
   {
     "id": "storage_ingest_tier_close_hour_f59055c0_2",
     "file": "src/storage/ingest/tier.rs",
-    "line": 645,
+    "line": 637,
     "decision": "run.pos == run.len",
     "conditions": 1,
     "vectors_required": 2,
@@ -25552,7 +25552,7 @@
   {
     "id": "storage_ingest_tier_close_hour_3a79fa78",
     "file": "src/storage/ingest/tier.rs",
-    "line": 650,
+    "line": 642,
     "decision": "match (run.chunk.get(k), b.chunk.get(k)) {\n                        (Some(x), Some(y)) => compare_across(x, run.pos, y, b.pos),\n                        _ => std::cmp::Ordering::Equal,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25562,7 +25562,7 @@
   {
     "id": "storage_ingest_tier_close_hour_c6836d5c",
     "file": "src/storage/ingest/tier.rs",
-    "line": 657,
+    "line": 649,
     "decision": "better",
     "conditions": 1,
     "vectors_required": 2,
@@ -25570,10 +25570,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_tier_close_hour_b2b17113",
+    "id": "storage_ingest_tier_close_hour_3856a22b",
     "file": "src/storage/ingest/tier.rs",
-    "line": 666,
-    "decision": "run.pos == run.len && load(run, &specs, typed)?",
+    "line": 658,
+    "decision": "run.pos == run.len && load(run, &inputs, &specs, typed)?",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false,
@@ -25582,7 +25582,7 @@
   {
     "id": "storage_ingest_tier_close_hour_6b6b652e",
     "file": "src/storage/ingest/tier.rs",
-    "line": 670,
+    "line": 662,
     "decision": "picks.len() >= chunk",
     "conditions": 1,
     "vectors_required": 2,
@@ -25592,7 +25592,7 @@
   {
     "id": "storage_ingest_tier_close_hour_7494f37f",
     "file": "src/storage/ingest/tier.rs",
-    "line": 680,
+    "line": 672,
     "decision": "!picks.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25600,10 +25600,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_tier_load_bf7377e2",
+    "id": "storage_ingest_tier_load_d0b2a4ad",
     "file": "src/storage/ingest/tier.rs",
-    "line": 697,
-    "decision": "let Some((columns, rows)) = input.row_group(run.next_row_group, specs, typed)?",
+    "line": 694,
+    "decision": "let Some((columns, rows)) =\n        row_group(file, fields, &entry.path, run.next_row_group, specs, typed)?",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -25612,7 +25612,7 @@
   {
     "id": "storage_ingest_tier_load_90d4b664",
     "file": "src/storage/ingest/tier.rs",
-    "line": 699,
+    "line": 698,
     "decision": "rows > 0",
     "conditions": 1,
     "vectors_required": 2,

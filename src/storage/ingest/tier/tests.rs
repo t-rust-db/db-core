@@ -374,7 +374,7 @@ fn close_one_run(name: &str, run_lines: &[&str], run_rows: usize, pages: &[Page]
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__storage_ingest_tier_close_hour_b2b17113__v1_an_exhausted_row_group_loads_the_next() {
+fn mcdc__storage_ingest_tier_close_hour_3856a22b__v1_an_exhausted_row_group_loads_the_next() {
     // Row groups of one row: each pick ends a chunk with another behind it.
     let k = close_one_run("v1", &[r#"{"k":"b"}"#, r#"{"k":"a"}"#], 1, &[]);
     assert_eq!(k, ["a", "b"]);
@@ -382,7 +382,7 @@ fn mcdc__storage_ingest_tier_close_hour_b2b17113__v1_an_exhausted_row_group_load
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__storage_ingest_tier_close_hour_b2b17113__v2_a_chunk_with_rows_left_is_kept() {
+fn mcdc__storage_ingest_tier_close_hour_3856a22b__v2_a_chunk_with_rows_left_is_kept() {
     // One row group of two: the first pick leaves a row in the chunk.
     let k = close_one_run("v2", &[r#"{"k":"b"}"#, r#"{"k":"a"}"#], 2, &[]);
     assert_eq!(k, ["a", "b"]);
@@ -390,7 +390,7 @@ fn mcdc__storage_ingest_tier_close_hour_b2b17113__v2_a_chunk_with_rows_left_is_k
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__storage_ingest_tier_close_hour_b2b17113__v3_an_exhausted_run_without_more_is_done() {
+fn mcdc__storage_ingest_tier_close_hour_3856a22b__v3_an_exhausted_run_without_more_is_done() {
     // The pages' run has no file: once its row is picked it is done, and
     // the run's row follows.
     let pages = [page(2, &[r#"{"k":"a"}"#])];
