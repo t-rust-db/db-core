@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.132.0] - 2026-10-16
+
+### Added
+
+- **`staging/` spills for tiered tables** (#573). Past `TierOptions.spill_rows` sealed rows (default 1M), a tiered table writes its open hour to `staging/date=D/hour=H/` as a run sorted by the sort key, committed like a flush, so the rows leave memory and the WAL. The hour's close is a k-way merge of its runs and remaining pages into one file in `live/`, holding one row group per run rather than the hour; ties keep arrival order, and a lines table's runs merge under the widened schema. `Ack::Flushed` now works on a tiered table (it spills the open hour). Recovery cleans `staging/`.
+- **Retention for tiered tables** (#573). `TierOptions.retention_days` keeps that many closed days in `archive/`; `compact()` drops older days whole in one commit and deletes their files after the grace period. The manifest records `dropped_lsn` (written only when not 0). DuckDB over `archive/` sees exactly the kept days.
+
+### Changed
+
+- `TierOptions` has two new fields, `spill_rows` and `retention_days`, and `Area` a new variant, `Staging`: code that builds `TierOptions` without `..Default::default()` or matches `Area` exhaustively needs updating. A manifest with a `staging` file or `dropped_lsn` is refused by db-core 0.131 and earlier.
+
 ## [0.131.0] - 2026-10-15
 
 ### Added
