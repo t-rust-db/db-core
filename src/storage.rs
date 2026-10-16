@@ -21,7 +21,7 @@ pub mod column;
 #[cfg(feature = "storage-column")]
 pub mod parquet;
 
-#[cfg(feature = "ingest")]
+#[cfg(feature = "ingest-read")]
 pub mod ingest;
 
 #[cfg(feature = "storage-column")]

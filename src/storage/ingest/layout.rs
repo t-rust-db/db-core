@@ -8,7 +8,7 @@
 //! - [`Layout::Tiered`]: files are partitioned by arrival time
 //!   (`observed_ts`). A closed hour is written to
 //!   `live/date=D/hour=H/` as one file, its rows sorted by `sort_key` and
-//!   cut into row groups; [`compact`](super::TableWriter::compact) merges a closed day's
+//!   cut into row groups; `TableWriter::compact` merges a closed day's
 //!   hours into `archive/date=D/`, which is final. Every output is built
 //!   under `tmp/` and published with one directory rename, so a directory
 //!   listing sees an hour or a day whole or not at all. An open hour with
@@ -50,7 +50,7 @@ pub struct TierOptions {
     /// The memory budget of a tiered table, in rows rather than bytes,
     /// since that is what is counted exactly.
     pub spill_rows: usize,
-    /// Closed days kept in `archive/`: [`compact`](super::TableWriter::compact)
+    /// Closed days kept in `archive/`: `TableWriter::compact`
     /// drops older ones, whole, in one commit, and deletes their files after
     /// the grace period. `None` (the default) keeps everything.
     pub retention_days: Option<u32>,

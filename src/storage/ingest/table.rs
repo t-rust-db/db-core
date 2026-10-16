@@ -34,21 +34,21 @@
 //! typed rows ([`TableWriter::append_row`]) instead of lines; its pages,
 //! files and manifest carry exactly its schema (see [`super::record`]).
 //!
-//! This is the single-threaded core; #574 wraps it as the public `Table`
-//! with an ingest thread and input sources.
+//! This is the single-threaded core; [`super::Table`] (#574) is the
+//! public, cloneable handle over it, with the line sources.
 
-use std::fmt;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub use super::error::IngestError;
 use super::flush;
 use super::layout::{
     archive_dir, day_of_hour, hour_of, live_dir, staging_dir, Area, Layout, LayoutKind, TierOptions,
 };
 use super::lock::{LockError, TableLock};
-use super::manifest::{FileEntry, Manifest, ManifestError};
+use super::manifest::{FileEntry, Manifest};
 use super::page::{decode_record, encode_record, invalid_line, HeadPage, Page};
 use super::record::{
     check_row, decode_row, encode_row, invalid_schema, join_repeated_keys, RecordValue,
@@ -57,7 +57,7 @@ use super::snapshot::Snapshot;
 use super::tier::{self, Output};
 use super::wal::{Ack, Wal, WalError, WalOptions, Watermarks};
 use crate::storage::column::{Vfs, VfsFile};
-use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriteError, WriterOptions};
+use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriterOptions};
 use crate::storage::stream::adapter::now_ns;
 use crate::storage::stream::detect::{DetectedParser, Format};
 use crate::storage::stream::{Source, SourceKind};
@@ -105,101 +105,6 @@ impl Default for TableOptions {
             layout: Layout::Flat,
             clock: now_ns,
         }
-    }
-}
-
-/// Why a table operation failed.
-#[derive(Debug)]
-pub enum IngestError {
-    /// The WAL failed.
-    Wal(WalError),
-    /// The manifest could not be read, written or validated.
-    Manifest(ManifestError),
-    /// Writing a Parquet file failed.
-    Parquet(WriteError),
-    /// File system error.
-    Io(io::Error),
-    /// The record is not one non-empty line.
-    InvalidRecord(String),
-    /// The table exists with another record format.
-    FormatMismatch {
-        /// The table's format.
-        table: Format,
-        /// The format asked for.
-        requested: Format,
-    },
-    /// The table exists with another layout.
-    LayoutMismatch {
-        /// The table's layout.
-        table: LayoutKind,
-        /// The layout asked for.
-        requested: LayoutKind,
-    },
-    /// A record table's schema (or a tiered one's sort key) is not valid.
-    InvalidSchema(String),
-    /// The table exists with another schema, or is a lines table opened
-    /// as a record table or the other way round.
-    SchemaMismatch,
-    /// The operation is not available for this table's layout or kind.
-    Unsupported(String),
-    /// A replayed WAL payload is not a record, or the parser rejected a
-    /// page.
-    Corrupt(String),
-}
-
-impl fmt::Display for IngestError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            IngestError::Wal(e) => write!(f, "{e}"),
-            IngestError::Manifest(e) => write!(f, "{e}"),
-            IngestError::Parquet(e) => write!(f, "{e}"),
-            IngestError::Io(e) => write!(f, "table: {e}"),
-            IngestError::InvalidRecord(why) => write!(f, "invalid record: {why}"),
-            IngestError::FormatMismatch { table, requested } => write!(
-                f,
-                "the table's format is {}, not {}",
-                table.as_str(),
-                requested.as_str()
-            ),
-            IngestError::LayoutMismatch { table, requested } => write!(
-                f,
-                "the table's layout is {}, not {}",
-                table.as_str(),
-                requested.as_str()
-            ),
-            IngestError::InvalidSchema(why) => write!(f, "invalid record schema: {why}"),
-            IngestError::SchemaMismatch => {
-                write!(f, "the table's schema is not the one asked for")
-            }
-            IngestError::Unsupported(why) => write!(f, "unsupported: {why}"),
-            IngestError::Corrupt(why) => write!(f, "table: {why}"),
-        }
-    }
-}
-
-impl std::error::Error for IngestError {}
-
-impl From<WalError> for IngestError {
-    fn from(e: WalError) -> Self {
-        IngestError::Wal(e)
-    }
-}
-
-impl From<ManifestError> for IngestError {
-    fn from(e: ManifestError) -> Self {
-        IngestError::Manifest(e)
-    }
-}
-
-impl From<WriteError> for IngestError {
-    fn from(e: WriteError) -> Self {
-        IngestError::Parquet(e)
-    }
-}
-
-impl From<io::Error> for IngestError {
-    fn from(e: io::Error) -> Self {
-        IngestError::Io(e)
     }
 }
 
@@ -845,6 +750,12 @@ impl TableWriter {
     /// The committed manifest.
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+
+    /// Waits until everything appended is durable; returns the durable
+    /// LSN.
+    pub fn sync(&self) -> Result<u64, IngestError> {
+        Ok(self.wal.sync()?)
     }
 
     /// The WAL watermarks.

@@ -743,3 +743,37 @@ fn json_strings_read_the_same_before_and_after_a_flush() {
     let filtered = rows(&w, "SELECT n FROM logs WHERE user = 'café'");
     assert_eq!(filtered, vec![vec![Cell::Int(1)]]);
 }
+
+#[test]
+fn the_table_handle_answers_the_same_before_and_after_a_flush() {
+    use crate::storage::ingest::Table;
+    let t = TempTable::new();
+    let table = Table::open(&t.0, TableOptions::default()).unwrap();
+    table
+        .append_batch(
+            &[
+                r#"{"k":"a","n":1}"#,
+                r#"{"k":"b","n":2}"#,
+                r#"{"k":"a","n":3}"#,
+            ],
+            Ack::Durable,
+        )
+        .unwrap();
+    // The table is named after its directory.
+    let sql = "SELECT k, sum(n) FROM logs GROUP BY k ORDER BY k";
+    let before = table.query(sql).unwrap();
+    assert_eq!(
+        before.rows,
+        [
+            vec![Cell::Text("a".into()), Cell::Real(4.0)],
+            vec![Cell::Text("b".into()), Cell::Real(2.0)]
+        ]
+    );
+    assert_eq!(table.flush().unwrap().len(), 1);
+    assert_eq!(table.query(sql).unwrap().rows, before.rows);
+    let err = table.query("SELECT nope FROM logs").unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Compile, "{err:?}");
+    table.close().unwrap();
+    let err = table.query(sql).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Open, "a closed table: {err:?}");
+}

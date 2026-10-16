@@ -1,4 +1,5 @@
 use super::*;
+use crate::storage::ingest::fields::widen;
 use crate::storage::ingest::page::HeadPage;
 use crate::storage::parquet::ParquetFile;
 use crate::storage::stream::detect::{DetectedParser, Format};
@@ -181,6 +182,52 @@ fn convert_covers_every_target_type() {
     assert_eq!(
         convert(values.clone(), ColumnType::Int32),
         ColumnValues::Int32(vec![Some(3), None, None, None])
+    );
+    // Unsigned columns keep the integers that fit, the others NULL.
+    let ints = vec![
+        Value::Int(-1),
+        Value::Int(300),
+        Value::Int(70_000),
+        Value::Null,
+    ];
+    assert_eq!(
+        convert(ints.clone(), ColumnType::UInt8),
+        ColumnValues::UInt8(vec![None, None, None, None])
+    );
+    assert_eq!(
+        convert(ints.clone(), ColumnType::UInt16),
+        ColumnValues::UInt16(vec![None, Some(300), None, None])
+    );
+    assert_eq!(
+        convert(ints.clone(), ColumnType::UInt32),
+        ColumnValues::UInt32(vec![None, Some(300), Some(70_000), None])
+    );
+    assert_eq!(
+        convert(ints, ColumnType::UInt64),
+        ColumnValues::UInt64(vec![None, Some(300), Some(70_000), None])
+    );
+    // No `Value` holds a decimal, bytes or a map exactly: all NULL.
+    assert_eq!(
+        convert(
+            values.clone(),
+            ColumnType::Decimal {
+                precision: 9,
+                scale: 2
+            }
+        ),
+        ColumnValues::Decimal(vec![None; 4])
+    );
+    assert_eq!(
+        convert(values.clone(), ColumnType::Binary),
+        ColumnValues::Binary(vec![None; 4])
+    );
+    assert_eq!(
+        convert(values.clone(), ColumnType::FixedLenByteArray(16)),
+        ColumnValues::FixedLenByteArray(vec![None; 4])
+    );
+    assert_eq!(
+        convert(values.clone(), ColumnType::MapUtf8),
+        ColumnValues::Map(vec![None; 4])
     );
     assert_eq!(
         convert(values, ColumnType::Utf8),

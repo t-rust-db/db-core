@@ -18,15 +18,14 @@ use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use super::flush::{
-    add_field, add_page_fields, bounds, convert, predefined_specs, schema, FlushedFile,
-};
+use super::error::IngestError;
+use super::fields::{add_field, add_page_fields, predefined_specs, schema};
+use super::flush::{bounds, convert, FlushedFile};
 use super::layout::{compare, TierOptions};
 use super::manifest::FileEntry;
 use super::page::{Page, PageBody};
 use super::record::{compare_across, compare_rows, concat, gather, read_column};
 use super::snapshot::{cast, column_type};
-use super::table::IngestError;
 use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::parquet::writer::{ColumnSpec, ColumnValues, ParquetWriter, WriterOptions};
 use crate::storage::parquet::{Field, ParquetFile};

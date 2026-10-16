@@ -4,6 +4,20 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.133.0] - 2026-10-16
+
+### Added
+
+- **`ingest-read` feature** (#574, ADR 0029). Reading a table directory (`Snapshot`, the column engine's table reader) no longer compiles the Parquet writer or the WAL writer: `ingest-read` is `storage-column` + `storage-stream` + `vm-batch`, and `ingest` is `ingest-read` + `storage-column-write`. `ColumnType`, `ColumnSpec` and `ColumnValues` live in `storage::parquet::schema` (re-exported from `parquet::writer`), `IngestError` in `storage::ingest::error` (re-exported from `ingest::table`).
+- **`Table`** (#574). A cloneable handle over one `TableWriter` for embedding: `open`, `append`, `append_row`, `append_batch`, `sync`, `flush`, `compact`, `snapshot`, `close`, and `query` (with `engine-column`). It has no threads of its own; clones on other threads interleave call by call.
+- **Line sources** (#574). `Table::ingest_lines` reads lines (stdin, a pipe) until end of input. `Table::follow` follows a log file through the WAL until the table is closed: it resumes where it stopped (`follow/*.offset`), reads a rename-rotated file to its end before switching, and starts again after truncation. Delivery is at least once.
+- `examples/embed_table`: append, query, flush, query again.
+- `TableWriter::sync`.
+
+### Changed
+
+- ADR 0029 is accepted, with an "As built" section. It departs from the proposal: two methods instead of an `Input` enum (`dyn` is outside the qualified subset), no ingest thread, and logfile mode goes through the WAL instead of using the file as the WAL.
+
 ## [0.132.0] - 2026-10-16
 
 ### Added

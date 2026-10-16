@@ -22,14 +22,22 @@
 //! of the join; a key whose values are all NULL keeps a NULL value. Keys
 //! are compared exactly, as a MAP's are.
 
+#[cfg(feature = "ingest")]
 use std::cmp::Ordering;
+#[cfg(feature = "ingest")]
 use std::collections::HashSet;
 use std::sync::Arc;
 
+#[cfg(feature = "engine-column")]
 use crate::storage::column::hex;
+#[cfg(feature = "engine-column")]
 use crate::storage::parquet::decimal::Decimal;
-use crate::storage::parquet::writer::{ColumnSpec, ColumnType, ColumnValues};
-use crate::storage::parquet::{Field, FileError, RowGroupReader};
+use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
+#[cfg(any(feature = "ingest", feature = "engine-column"))]
+use crate::storage::parquet::FileError;
+#[cfg(feature = "ingest")]
+use crate::storage::parquet::{Field, RowGroupReader};
+#[cfg(feature = "engine-column")]
 use crate::vm::batch::Value;
 
 /// One value of a record row.
@@ -119,6 +127,7 @@ pub fn type_from_name(name: &str) -> Option<ColumnType> {
 /// Why `schema` cannot be a record table's: no columns, a duplicate name,
 /// a name the manifest cannot store as a plain string, or a type the
 /// Parquet writer refuses.
+#[cfg(feature = "ingest")]
 pub(crate) fn invalid_schema(schema: &[ColumnSpec]) -> Option<String> {
     if schema.is_empty() {
         return Some("a record table needs at least one column".to_string());
@@ -220,6 +229,7 @@ const TAG_MAP: u8 = 8;
 /// (a string or bytes as a `u32` length and the bytes). Self-describing,
 /// so [`decode_row`] needs no schema; the replay checks the row against
 /// it again. `None` when a string or bytes value is over 4 GiB.
+#[cfg(feature = "ingest")]
 pub(crate) fn encode_row(row: &[RecordValue]) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     for value in row {
@@ -271,6 +281,7 @@ pub(crate) fn encode_row(row: &[RecordValue]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+#[cfg(feature = "ingest")]
 fn length_prefixed(out: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
     out.extend_from_slice(&u32::try_from(bytes.len()).ok()?.to_le_bytes());
     out.extend_from_slice(bytes);
@@ -393,6 +404,7 @@ impl RowPage {
 
     /// Column `name` as the column engine reads it; `None` for a name not
     /// in the schema.
+    #[cfg(feature = "engine-column")]
     pub(crate) fn engine_column(&self, name: &str) -> Option<Result<Vec<Value>, String>> {
         let index = self.schema.iter().position(|s| s.name == name)?;
         let spec = self.schema.get(index)?;
@@ -402,6 +414,7 @@ impl RowPage {
 }
 
 /// `row` with every map's repeated keys joined (see the [module docs](self)).
+#[cfg(feature = "ingest")]
 pub(crate) fn join_repeated_keys(row: Vec<RecordValue>) -> Vec<RecordValue> {
     row.into_iter()
         .map(|value| match value {
@@ -411,6 +424,7 @@ pub(crate) fn join_repeated_keys(row: Vec<RecordValue>) -> Vec<RecordValue> {
         .collect()
 }
 
+#[cfg(feature = "ingest")]
 fn join_entries(entries: Vec<(String, Option<String>)>) -> Vec<(String, Option<String>)> {
     let mut out: Vec<(String, Option<String>)> = Vec::with_capacity(entries.len());
     for (key, value) in entries {
@@ -490,6 +504,7 @@ fn push_value(column: &mut ColumnValues, value: RecordValue) {
 /// from Parquet (`storage::column::decode`): integers and unsigned values
 /// as `Int` (a `UINT_64` above `i64::MAX` is an error, as there), a
 /// decimal as [`Decimal::to_f64`], bytes as lowercase hex.
+#[cfg(feature = "engine-column")]
 pub(crate) fn engine_values(
     values: &ColumnValues,
     column_type: ColumnType,
@@ -543,6 +558,7 @@ pub(crate) fn engine_values(
 }
 
 /// `values` at the positions in `order` (each in range).
+#[cfg(feature = "ingest")]
 pub(crate) fn gather(values: &ColumnValues, order: &[usize]) -> ColumnValues {
     fn pick<T: Clone>(v: &[Option<T>], order: &[usize]) -> Vec<Option<T>> {
         order.iter().map(|&i| v.get(i).cloned().flatten()).collect()
@@ -568,6 +584,7 @@ pub(crate) fn gather(values: &ColumnValues, order: &[usize]) -> ColumnValues {
 }
 
 /// The values of `parts` (all of `column_type`) one after another.
+#[cfg(feature = "ingest")]
 pub(crate) fn concat(column_type: ColumnType, parts: &[&ColumnValues]) -> ColumnValues {
     let mut out = ColumnValues::empty(column_type);
     for part in parts {
@@ -579,6 +596,7 @@ pub(crate) fn concat(column_type: ColumnType, parts: &[&ColumnValues]) -> Column
 /// Rows `a` and `b` of `values` in a tiered table's sort order: NULL
 /// first, then by value (unsigned values unsigned, decimals by unscaled
 /// value, floats in IEEE total order, bytes byte-wise).
+#[cfg(feature = "ingest")]
 pub(crate) fn compare_rows(values: &ColumnValues, a: usize, b: usize) -> Ordering {
     compare_across(values, a, values, b)
 }
@@ -586,6 +604,7 @@ pub(crate) fn compare_rows(values: &ColumnValues, a: usize, b: usize) -> Orderin
 /// Row `a` of `x` against row `b` of `y` (two chunks of one column, so of
 /// one type) in [`compare_rows`]' order; chunks of different types compare
 /// equal.
+#[cfg(feature = "ingest")]
 pub(crate) fn compare_across(x: &ColumnValues, a: usize, y: &ColumnValues, b: usize) -> Ordering {
     fn by<T>(
         v: &[Option<T>],
@@ -627,6 +646,7 @@ pub(crate) fn compare_across(x: &ColumnValues, a: usize, y: &ColumnValues, b: us
 
 /// Field `field` of a record table's file, read back as the
 /// `column_type` it was written as (a day merge's input).
+#[cfg(feature = "ingest")]
 pub(crate) fn read_column(
     rg: &RowGroupReader<'_, '_>,
     field: &Field,

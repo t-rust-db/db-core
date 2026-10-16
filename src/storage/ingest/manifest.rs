@@ -35,7 +35,7 @@ use std::path::Path;
 use super::layout::{Area, LayoutKind};
 use super::record::{type_from_name, type_name};
 use crate::json_path::{parse_object, JsonValue};
-use crate::storage::parquet::writer::ColumnSpec;
+use crate::storage::parquet::schema::ColumnSpec;
 use crate::storage::stream::detect::Format;
 
 /// The manifest's file name inside the table directory.

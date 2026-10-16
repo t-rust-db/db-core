@@ -31,6 +31,7 @@ fn checksum(len: [u8; 4], lsn: [u8; 8], payload: &[u8]) -> u32 {
 
 /// Appends one frame; `None` (and nothing appended) when the payload is
 /// longer than a `u32` length can describe.
+#[cfg(feature = "ingest")]
 pub(crate) fn encode(out: &mut Vec<u8>, lsn: u64, payload: &[u8]) -> Option<()> {
     let len = u32::try_from(payload.len()).ok()?.to_le_bytes();
     let lsn = lsn.to_le_bytes();

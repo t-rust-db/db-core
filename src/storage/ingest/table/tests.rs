@@ -1,4 +1,6 @@
 use super::*;
+use crate::storage::ingest::manifest::ManifestError;
+use crate::storage::parquet::writer::WriteError;
 use crate::storage::parquet::ParquetFile;
 use std::sync::atomic::{AtomicU64, Ordering};
 

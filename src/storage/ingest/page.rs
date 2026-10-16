@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use super::record::{RecordValue, RowPage};
-use crate::storage::parquet::writer::ColumnSpec;
+use crate::storage::parquet::schema::ColumnSpec;
 use crate::storage::stream::detect::DetectedParser;
 use crate::storage::stream::segment::SEGMENT_MAX_ROWS;
 use crate::storage::stream::{Segment, Source};
@@ -79,6 +79,7 @@ impl Page {
 }
 
 /// The WAL payload for a record.
+#[cfg(feature = "ingest")]
 pub(crate) fn encode_record(observed_ts_ns: i64, line: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(line.len().saturating_add(8));
     out.extend_from_slice(&observed_ts_ns.to_le_bytes());
@@ -94,6 +95,7 @@ pub(crate) fn decode_record(payload: &[u8]) -> Option<(i64, &[u8])> {
 }
 
 /// Why a line cannot be a record.
+#[cfg(feature = "ingest")]
 pub(crate) fn invalid_line(line: &[u8]) -> Option<String> {
     if line.is_empty() {
         return Some("a record is one non-empty line".to_string());
@@ -141,6 +143,7 @@ impl HeadPage {
     }
 
     /// The first row's arrival time, if any.
+    #[cfg(feature = "ingest")]
     pub(crate) fn first_observed(&self) -> Option<i64> {
         self.observed.first().copied()
     }

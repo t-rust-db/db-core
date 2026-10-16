@@ -177,7 +177,7 @@ check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see
 # nothing else). `--all-features` hides a missing implication; a consumer
 # enabling one feature finds it. 0.78.0 shipped `storage-row` without
 # `parser-row` this way.
-FEATURES := storage-row storage-column storage-column-write ingest storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
+FEATURES := storage-row storage-column storage-column-write ingest-read ingest storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
 
 check-features: ## Each Cargo feature builds standalone (cargo check --no-default-features --features X)
 	@for f in $(FEATURES); do \

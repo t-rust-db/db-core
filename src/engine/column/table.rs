@@ -26,7 +26,7 @@ use super::{
 };
 use crate::storage::ingest::snapshot::{cast, physical_type};
 use crate::storage::ingest::{PageBody, RowPage, Snapshot};
-use crate::storage::parquet::writer::{ColumnSpec, ColumnType};
+use crate::storage::parquet::schema::{ColumnSpec, ColumnType};
 use crate::storage::stream::adapter::stored_column_values;
 use crate::storage::stream::detect::Format;
 use crate::storage::stream::segment::Segment as StreamSegment;
@@ -357,18 +357,32 @@ impl TableEngine {
     }
 }
 
+/// A table directory's name in SQL: the directory's name.
+fn table_name(dir: &Path) -> String {
+    dir.file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("data")
+        .to_string()
+}
+
+#[cfg(feature = "ingest")]
+impl crate::storage::ingest::Table {
+    /// Runs one `SELECT` over a snapshot of everything appended so far,
+    /// the table named after its directory, as
+    /// [`query_snapshot`] does.
+    pub fn query(&self, sql: &str) -> Result<QueryResult, EngineError> {
+        let snapshot = self.snapshot().map_err(open_error)?;
+        query_snapshot(&snapshot, &table_name(self.dir()), sql)
+    }
+}
+
 impl Engine for TableEngine {
     fn open(path: &Path) -> Result<Self, EngineError> {
         let snapshot = Snapshot::open(path).map_err(open_error)?;
         let schema = snapshot.schema().map_err(open_error)?;
-        let table = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("data")
-            .to_string();
         Ok(TableEngine {
             dir: path.to_path_buf(),
-            table,
+            table: table_name(path),
             snapshot,
             schema,
         })
