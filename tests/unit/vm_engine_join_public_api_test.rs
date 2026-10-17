@@ -41,7 +41,7 @@ fn finalize_merges_groups_sorts_and_limits() {
     // original `Int`.
     assert_eq!(out.len(), 2);
     let out = out.into_rows();
-    assert!(out.contains(&vec![Value::Str("a".into()), Value::Float(3.0)]));
+    assert!(out.contains(&vec![Value::Str("a".into()), Value::Int(3)]));
     assert!(out.contains(&vec![Value::Str("b".into()), Value::Int(5)]));
 }
 

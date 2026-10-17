@@ -7715,6 +7715,7 @@ pub mod db_core::vm
 pub mod db_core::vm::batch
 pub enum db_core::vm::batch::AggFunc
 pub db_core::vm::batch::AggFunc::Avg
+pub db_core::vm::batch::AggFunc::AvgSum
 pub db_core::vm::batch::AggFunc::Count
 pub db_core::vm::batch::AggFunc::Max
 pub db_core::vm::batch::AggFunc::Min
@@ -7980,6 +7981,8 @@ pub fn db_core::vm::batch::ValueSource::fmt(&self, &mut core::fmt::Formatter<'_>
 impl core::marker::Copy for db_core::vm::batch::ValueSource
 impl core::marker::StructuralPartialEq for db_core::vm::batch::ValueSource
 pub enum db_core::vm::batch::VmError
+pub db_core::vm::batch::VmError::IntegerOverflow
+pub db_core::vm::batch::VmError::IntegerOverflow::opcode: &'static str
 pub db_core::vm::batch::VmError::MalformedProgram
 pub db_core::vm::batch::VmError::MalformedProgram::opcode: &'static str
 pub db_core::vm::batch::VmError::MalformedProgram::reason: alloc::string::String

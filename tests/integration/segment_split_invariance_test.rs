@@ -350,9 +350,11 @@ fn batch_aggregate_arithmetic_matches_the_expected_value() {
     // (sum = 780, count = 12).
     let (grp, amt) = synthetic_dataset();
     let cases: [(&str, Value); 4] = [
+        // An integer SUM is exact (#631); a literal in an aggregate
+        // expression is still a float, so `* 2` and `+ 1` are DOUBLE.
         ("SELECT sum(amt) * 2 FROM t", Value::Float(1560.0)),
         ("SELECT sum(amt) + 1 FROM t", Value::Float(781.0)),
-        ("SELECT sum(amt) + sum(amt) FROM t", Value::Float(1560.0)),
+        ("SELECT sum(amt) + sum(amt) FROM t", Value::Int(1560)),
         ("SELECT sum(amt) / count(*) FROM t", Value::Float(65.0)),
     ];
     for (sql, expected) in cases {
@@ -1078,4 +1080,152 @@ fn run_streaming_propagates_a_sink_error_instead_of_panicking() {
         Err(db_core::vm::batch::VmError::SegmentLoad { .. })
     ));
     assert!(calls >= 1, "sink should have been invoked at least once");
+}
+
+/// [`run_batch`], keeping the error: for queries that must fail under every
+/// segmentation.
+fn try_run_batch(
+    sql: &str,
+    sizes: &[usize],
+    col_a: (&str, &[Value]),
+    col_b: (&str, &[Value]),
+) -> Result<Vec<Vec<Value>>, String> {
+    let program = compile(&parse(sql).unwrap_or_else(|e| panic!("{sql}: parse error {e}")))
+        .unwrap_or_else(|e| panic!("{sql}: compile error {e}"));
+    let segments = segments_for(sizes, col_a, col_b);
+    run(&segments, &program)
+        .map(|out| out.into_rows())
+        .map_err(|e| e.to_string())
+}
+
+/// Asserts `sql` gives `expected` under every segmentation of `n` rows.
+fn assert_everywhere(
+    sql: &str,
+    n: usize,
+    a: (&str, &[Value]),
+    b: (&str, &[Value]),
+    expected: Vec<Vec<Value>>,
+) {
+    for sizes in segmentations(n) {
+        assert_eq!(
+            run_batch(sql, &sizes, a, b),
+            expected,
+            "{sql} over {sizes:?}"
+        );
+    }
+}
+
+#[test]
+fn integer_aggregates_are_exact_past_2_pow_53_under_every_segmentation() {
+    // #631: ids above 2^53, as a session id with a timestamp in its high
+    // bits is. Before, MAX came back as the nearest f64 and SUM as DOUBLE.
+    let base: i64 = 7_695_193_303_586_975_000;
+    let grp: Vec<Value> = (0..12)
+        .map(|i| Value::Str(["a", "b"][i % 2].into()))
+        .collect();
+    let ids: Vec<Value> = (0..12).map(|i| Value::Int(base + i * 7 + 1)).collect();
+    let small: Vec<Value> = (0..12).map(|i| Value::Int((1_i64 << 50) + i)).collect();
+    assert_everywhere(
+        "SELECT min(id), max(id) FROM t",
+        12,
+        ("grp", &grp),
+        ("id", &ids),
+        vec![vec![Value::Int(base + 1), Value::Int(base + 78)]],
+    );
+    assert_everywhere(
+        "SELECT grp, max(id) FROM t GROUP BY grp ORDER BY grp",
+        12,
+        ("grp", &grp),
+        ("id", &ids),
+        vec![
+            vec![Value::Str("a".into()), Value::Int(base + 71)],
+            vec![Value::Str("b".into()), Value::Int(base + 78)],
+        ],
+    );
+    // 12 values near 2^50 sum to about 2^53.6: exact, as an integer.
+    let total: i64 = (0..12).map(|i| (1_i64 << 50) + i).sum();
+    assert_everywhere(
+        "SELECT sum(n), count(*) FROM t",
+        12,
+        ("grp", &grp),
+        ("n", &small),
+        vec![vec![Value::Int(total), Value::Int(12)]],
+    );
+}
+
+#[test]
+fn min_and_max_of_text_under_every_segmentation() {
+    // #631: text never reached MIN/MAX's f64 state, so both were NULL.
+    let grp: Vec<Value> = (0..12)
+        .map(|i| Value::Str(["x", "y", "z"][i % 3].into()))
+        .collect();
+    let names: Vec<Value> = (0..12)
+        .map(|i| match i {
+            4 => Value::Null,
+            _ => Value::Str(format!("ev_{:02}", (i * 5) % 12).into()),
+        })
+        .collect();
+    assert_everywhere(
+        "SELECT min(name), max(name), count(name) FROM t",
+        12,
+        ("grp", &grp),
+        ("name", &names),
+        vec![vec![
+            Value::Str("ev_00".into()),
+            Value::Str("ev_11".into()),
+            Value::Int(11),
+        ]],
+    );
+    assert_split_invariant(
+        "SELECT grp, min(name), max(name) FROM t GROUP BY grp ORDER BY grp",
+        12,
+        ("grp", &grp),
+        ("name", &names),
+    );
+}
+
+#[test]
+fn a_float_anywhere_makes_sum_a_float_and_avg_stays_a_float() {
+    let grp: Vec<Value> = (0..12)
+        .map(|i| Value::Str(["a", "b"][i % 2].into()))
+        .collect();
+    let mixed: Vec<Value> = (0..12)
+        .map(|i| {
+            if i == 9 {
+                Value::Float(0.5)
+            } else {
+                Value::Int(i)
+            }
+        })
+        .collect();
+    // 0 + 1 + .. + 11 - 9 + 0.5
+    assert_everywhere(
+        "SELECT sum(n), avg(n) FROM t",
+        12,
+        ("grp", &grp),
+        ("n", &mixed),
+        vec![vec![Value::Float(57.5), Value::Float(57.5 / 12.0)]],
+    );
+}
+
+#[test]
+fn integer_sum_overflow_is_an_error_and_avg_is_not() {
+    // #631: as in SQLite, an integer SUM past 64 bits is an error, never a
+    // wrapped or rounded total. AVG sums as a float and never fails.
+    let grp: Vec<Value> = (0..12).map(|_| Value::Str("a".into())).collect();
+    let huge: Vec<Value> = (0..12).map(|_| Value::Int(i64::MAX / 4)).collect();
+    for sizes in segmentations(12) {
+        let err = try_run_batch("SELECT sum(n) FROM t", &sizes, ("grp", &grp), ("n", &huge))
+            .expect_err("SUM past i64 overflows");
+        assert!(err.contains("integer overflow"), "{sizes:?}: {err}");
+        let rows =
+            try_run_batch("SELECT avg(n) FROM t", &sizes, ("grp", &grp), ("n", &huge)).unwrap();
+        let Value::Float(avg) = rows[0][0] else {
+            panic!("{rows:?}")
+        };
+        assert!(
+            (avg - (i64::MAX / 4) as f64).abs() < 1e6,
+            "{sizes:?}: {avg}"
+        );
+    }
 }

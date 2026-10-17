@@ -43,6 +43,11 @@ pub enum AggFunc {
     Min,
     /// `MAX(x)`: largest non-null value.
     Max,
+    /// `AVG`'s sum partial (#631): the non-null values' total as a float,
+    /// which never overflows the way an integer `SUM` does. Internal: the
+    /// planner lowers `AVG(x)` into this and a `COUNT(x)`; no SQL name
+    /// parses to it.
+    AvgSum,
 }
 
 impl AggFunc {
@@ -59,6 +64,7 @@ impl AggFunc {
             AggFunc::Avg => "AVG",
             AggFunc::Min => "MIN",
             AggFunc::Max => "MAX",
+            AggFunc::AvgSum => "SUM",
         }
     }
 
@@ -2141,6 +2147,12 @@ pub enum VmError {
         /// Which finalize step needs the whole result.
         reason: String,
     },
+    /// An integer `SUM` does not fit in 64 bits (#631): an error, as in
+    /// SQLite, rather than a rounded or wrapped total.
+    IntegerOverflow {
+        /// Name of the [`Opcode`] variant (or engine phase) that failed.
+        opcode: &'static str,
+    },
 }
 
 impl fmt::Display for VmError {
@@ -2172,6 +2184,7 @@ impl fmt::Display for VmError {
             }
             VmError::SegmentLoad { reason } => write!(f, "segment load failed: {reason}"),
             VmError::NotStreamable { reason } => write!(f, "cannot stream this program: {reason}"),
+            VmError::IntegerOverflow { opcode } => write!(f, "{opcode}: integer overflow"),
         }
     }
 }
@@ -2926,14 +2939,21 @@ pub enum ValueSource {
 /// (e.g. a `Str`) counts for the former but not the latter -- exactly
 /// [`reduce_values`]'s own distinction between its `values` and `non_null`
 /// slices.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct RunningAgg {
     row_count: i64,
     non_null_count: i64,
     numeric_count: i64,
-    sum: f64,
-    min: Option<f64>,
-    max: Option<f64>,
+    /// The integer inputs' total, exact (#631).
+    int_sum: i128,
+    /// The float inputs' total.
+    float_sum: f64,
+    /// Whether any input was a float: then `SUM` is a float.
+    saw_float: bool,
+    /// The smallest and largest non-`Null` input, in [`agg_cmp`]'s order:
+    /// integers stay exact and text compares byte-wise (#631).
+    min: Option<Value>,
+    max: Option<Value>,
 }
 
 impl RunningAgg {
@@ -2941,35 +2961,43 @@ impl RunningAgg {
     /// `None` for `COUNT(*)` (no source column -- only `row_count`
     /// matters); `Some` for every other case, `Value::Null` included.
     fn push(&mut self, value: Option<&Value>) {
-        let Some(value) = value else {
-            self.push_null();
-            return;
-        };
-        if matches!(value, Value::Null) {
-            self.push_null();
-            return;
-        }
-        match value.as_f64() {
-            Some(x) => self.push_f64(x),
-            None => {
+        match value {
+            None | Some(Value::Null) => self.push_null(),
+            Some(Value::Int(i)) => self.push_i64(*i),
+            Some(Value::Float(x)) => self.push_f64(*x),
+            // Not summed, but counted and ordered: `MIN`/`MAX` of text.
+            Some(other) => {
                 self.row_count = self.row_count.saturating_add(1);
                 self.non_null_count = self.non_null_count.saturating_add(1);
+                keep_extreme(&mut self.min, other, std::cmp::Ordering::Less);
+                keep_extreme(&mut self.max, other, std::cmp::Ordering::Greater);
             }
         }
     }
 
-    /// Folds one more non-`Null` numeric row, read straight from a typed
-    /// [`Column`]'s packed `data`/`valid` instead of via a boxed [`Value`]
-    /// (#477) -- equivalent to `push(Some(&Value::Float(x)))` /
-    /// `push(Some(&Value::Int(x as i64)))`, without the `f64`/`i64` first
-    /// being wrapped just to be immediately unwrapped by `as_f64`.
+    /// Folds one more non-`Null` integer, read straight from a typed
+    /// [`Column`]'s packed `data` (#477) without a boxed [`Value`].
+    fn push_i64(&mut self, x: i64) {
+        self.row_count = self.row_count.saturating_add(1);
+        self.non_null_count = self.non_null_count.saturating_add(1);
+        self.numeric_count = self.numeric_count.saturating_add(1);
+        self.int_sum = self.int_sum.saturating_add(i128::from(x));
+        let value = Value::Int(x);
+        keep_extreme(&mut self.min, &value, std::cmp::Ordering::Less);
+        keep_extreme(&mut self.max, &value, std::cmp::Ordering::Greater);
+    }
+
+    /// Folds one more non-`Null` float, read straight from a typed
+    /// [`Column`]'s packed `data` (#477) without a boxed [`Value`].
     fn push_f64(&mut self, x: f64) {
         self.row_count = self.row_count.saturating_add(1);
         self.non_null_count = self.non_null_count.saturating_add(1);
-        self.sum += x;
         self.numeric_count = self.numeric_count.saturating_add(1);
-        self.min = Some(self.min.map_or(x, |m| m.min(x)));
-        self.max = Some(self.max.map_or(x, |m| m.max(x)));
+        self.float_sum += x;
+        self.saw_float = true;
+        let value = Value::Float(x);
+        keep_extreme(&mut self.min, &value, std::cmp::Ordering::Less);
+        keep_extreme(&mut self.max, &value, std::cmp::Ordering::Greater);
     }
 
     /// Folds one more row whose value is absent -- either no source
@@ -2980,38 +3008,95 @@ impl RunningAgg {
         self.row_count = self.row_count.saturating_add(1);
     }
 
-    /// The aggregate's final value, matching [`reduce_values`] exactly.
-    /// `is_count_star` is `src.is_none()` on the originating `(AggFunc,
-    /// Option<ValueSource>)` pair -- `COUNT(*)` counts every row
-    /// regardless of `func`, `COUNT(x)` counts `x`'s non-`Null` rows.
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "numeric_count only grows by +1 per row (`push`), so at any batch/segment-sized row count it converts to f64 without a precision-affecting magnitude"
-    )]
-    fn finalize(&self, func: AggFunc, is_count_star: bool) -> Value {
-        match func {
+    /// The aggregate's final value, the one definition every reduce path
+    /// shares (#631). `is_count_star` is `src.is_none()` on the
+    /// originating `(AggFunc, Option<ValueSource>)` pair -- `COUNT(*)`
+    /// counts every row regardless of `func`, `COUNT(x)` counts `x`'s
+    /// non-`Null` rows. `SUM` over integers only is an exact integer (an
+    /// error past 64 bits, as in SQLite), over any float a float; `AVG` is
+    /// always a float; `MIN`/`MAX` keep their input's type.
+    fn finalize(&self, func: AggFunc, is_count_star: bool, opcode: &'static str) -> Result<Value> {
+        Ok(match func {
             AggFunc::Count => Value::Int(if is_count_star {
                 self.row_count
             } else {
                 self.non_null_count
             }),
-            AggFunc::Sum => {
-                if self.numeric_count == 0 {
-                    Value::Null
-                } else {
-                    Value::Float(self.sum)
-                }
-            }
+            AggFunc::Sum | AggFunc::AvgSum if self.numeric_count == 0 => Value::Null,
+            AggFunc::AvgSum => Value::Float(self.total()),
+            AggFunc::Sum if self.saw_float => Value::Float(self.total()),
+            AggFunc::Sum => Value::Int(
+                i64::try_from(self.int_sum).map_err(|_| VmError::IntegerOverflow { opcode })?,
+            ),
+            AggFunc::Avg if self.numeric_count == 0 => Value::Null,
             AggFunc::Avg => {
-                if self.numeric_count == 0 {
-                    Value::Null
-                } else {
-                    Value::Float(self.sum / self.numeric_count as f64)
-                }
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "AVG is a float: numeric_count grows by one per row, far below 2^53"
+                )]
+                let count = self.numeric_count as f64;
+                Value::Float(self.total() / count)
             }
-            AggFunc::Min => self.min.map_or(Value::Null, Value::Float),
-            AggFunc::Max => self.max.map_or(Value::Null, Value::Float),
+            AggFunc::Min => self.min.clone().unwrap_or(Value::Null),
+            AggFunc::Max => self.max.clone().unwrap_or(Value::Null),
+        })
+    }
+
+    /// The sum as a float: integers and floats together.
+    fn total(&self) -> f64 {
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "a float SUM or an AVG: the integer part joins a float result"
+        )]
+        let ints = self.int_sum as f64;
+        ints + self.float_sum
+    }
+}
+
+/// Replaces `slot` with `value` if `value` is further in direction `want`
+/// ([`agg_cmp`]) -- cloning only when it does, so a run of text values
+/// costs no allocation per row.
+fn keep_extreme(slot: &mut Option<Value>, value: &Value, want: std::cmp::Ordering) {
+    let replace = match slot {
+        None => true,
+        Some(current) => agg_cmp(value, current) == want,
+    };
+    if replace {
+        *slot = Some(value.clone());
+    }
+}
+
+/// The order `MIN`/`MAX` compare in (#631), SQLite's: booleans, then
+/// numbers (integers exactly, an integer against a float as floats, NaN
+/// last), then text byte-wise, then maps. `Null` sorts first and never
+/// reaches an aggregate.
+pub(crate) fn agg_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+    fn rank(v: &Value) -> u8 {
+        match v {
+            Value::Null => 0,
+            Value::Bool(_) => 1,
+            Value::Int(_) | Value::Float(_) => 2,
+            Value::Str(_) => 3,
+            Value::Map(_) => 4,
         }
+    }
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Float(x), Value::Float(y)) => x.total_cmp(y),
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "an integer against a float compares as floats, as SQLite does"
+        )]
+        (Value::Int(x), Value::Float(y)) => (*x as f64).total_cmp(y),
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "an integer against a float compares as floats, as SQLite does"
+        )]
+        (Value::Float(x), Value::Int(y)) => x.total_cmp(&(*y as f64)),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+        (Value::Map(x), Value::Map(y)) => x.cmp(y),
+        _ => rank(a).cmp(&rank(b)),
     }
 }
 
@@ -3859,10 +3944,10 @@ impl Vm {
                             .get(reg)
                             .and_then(|column| typed_reduce_values(*func, column));
                         match typed {
-                            Some(result) => result,
+                            Some(result) => result?,
                             None => {
                                 self.ensure_materialized(*reg);
-                                reduce_values(*func, self.reg(*reg, opcode)?)
+                                reduce_values(*func, self.reg(*reg, opcode)?)?
                             }
                         }
                     }
@@ -4065,11 +4150,7 @@ impl Vm {
                                     for (row, group) in row_group.iter().enumerate() {
                                         let p = physical(row);
                                         if valid.get(p) {
-                                            #[allow(
-                                                clippy::cast_precision_loss,
-                                                reason = "matches Value::Int's own as_f64 widening; RunningAgg's sum/min/max are f64 for every numeric AggFunc"
-                                            )]
-                                            accs[*group].push_f64(data[p] as f64);
+                                            accs[*group].push_i64(data[p]);
                                         } else {
                                             accs[*group].push_null();
                                         }
@@ -4104,8 +4185,8 @@ impl Vm {
                     let is_count_star = src.is_none();
                     let result: Vec<Value> = accs
                         .iter()
-                        .map(|acc| acc.finalize(*func, is_count_star))
-                        .collect();
+                        .map(|acc| acc.finalize(*func, is_count_star, opcode))
+                        .collect::<Result<_>>()?;
                     self.registers.insert(*dst, Arc::new(result));
                 }
             }
@@ -4568,8 +4649,8 @@ impl Vm {
                     let is_count_star = src.is_none();
                     let result: Vec<Value> = accumulators[i]
                         .iter()
-                        .map(|acc| acc.finalize(*func, is_count_star))
-                        .collect();
+                        .map(|acc| acc.finalize(*func, is_count_star, opcode))
+                        .collect::<Result<_>>()?;
                     self.registers.insert(agg_dst[i], Arc::new(result));
                 }
             }
@@ -4867,39 +4948,24 @@ fn compute_window(
                         output[row] = agg.clone();
                     }
                 } else {
-                    let mut running_sum = 0.0;
-                    let mut running_count = 0i64;
+                    // Running frame: every row up to and including this
+                    // one counts, through the same accumulator as a
+                    // plain aggregate (#631): an exact integer SUM, a
+                    // float AVG, NULL over an empty frame.
+                    let mut running = RunningAgg::default();
                     for &row in &indices {
-                        // Running frame: every row up to and including this one counts.
-                        let counted = match arg_col {
-                            Some(a) => !matches!(a[row], Value::Null),
-                            None => true,
-                        };
-                        if counted {
-                            running_count += 1;
-                            if let Some(a) = arg_col {
-                                if let Some(v) = a[row].as_f64() {
-                                    running_sum += v;
-                                }
-                            }
+                        match arg_col {
+                            Some(a) => running.push(Some(&a[row])),
+                            None => running.push(None),
                         }
                         output[row] = match func {
-                            WindowFunc::Count => Value::Int(running_count),
-                            WindowFunc::Sum => {
-                                if running_count > 0 {
-                                    Value::Float(running_sum)
-                                } else {
-                                    Value::Null
-                                }
-                            }
-                            WindowFunc::Avg => {
-                                // AVG over an empty running frame is NULL, never a division by zero.
-                                if running_count > 0 {
-                                    Value::Float(running_sum / running_count as f64)
-                                } else {
-                                    Value::Null
-                                }
-                            }
+                            WindowFunc::Count => Value::Int(if arg_col.is_some() {
+                                running.non_null_count
+                            } else {
+                                running.row_count
+                            }),
+                            WindowFunc::Sum => running.finalize(AggFunc::Sum, false, "Window")?,
+                            WindowFunc::Avg => running.finalize(AggFunc::Avg, false, "Window")?,
                             other => {
                                 return Err(VmError::UnsupportedOp {
                                     opcode: "Window",
@@ -4937,18 +5003,15 @@ fn whole_partition_aggregate(
         };
         return Ok(Value::Int(len_to_i64(count)));
     }
-    let values: Vec<f64> = indices
-        .iter()
-        .filter_map(|&row| arg_col.and_then(|a| a[row].as_f64()))
-        .collect();
-    if values.is_empty() {
-        return Ok(Value::Null);
+    let mut acc = RunningAgg::default();
+    if let Some(a) = arg_col {
+        for &row in indices {
+            acc.push(Some(&a[row]));
+        }
     }
     match func {
-        WindowFunc::Sum => Ok(Value::Float(values.iter().sum())),
-        WindowFunc::Avg => Ok(Value::Float(
-            values.iter().sum::<f64>() / values.len() as f64,
-        )),
+        WindowFunc::Sum => acc.finalize(AggFunc::Sum, false, "Window"),
+        WindowFunc::Avg => acc.finalize(AggFunc::Avg, false, "Window"),
         other => Err(VmError::UnsupportedOp {
             opcode: "Window",
             op: format!("{other:?} as a partition aggregate"),
@@ -4967,85 +5030,45 @@ fn reduce_count_star(func: AggFunc, num_rows: usize) -> Value {
 /// Fast path for [`Opcode::Reduce`]'s global (non-grouped) aggregate
 /// when `src` is a typed `Int`/`Float` [`Column`] (#130 child 4 slice 3,
 /// db-core#433): iterates the packed buffer + validity bitmap directly
-/// instead of boxing every value into `Value` and coercing through
-/// `Value::as_f64`. Matches [`reduce_values`]'s output shape exactly --
-/// `Sum`/`Avg`/`Min`/`Max` always produce `Value::Float` (even over
-/// `Int` data), `Count` stays `Value::Int`, and an all-NULL/all-invalid
-/// column yields `Value::Null` for `Sum`/`Avg`/`Min`/`Max` (never `0`).
-/// `None` when `column` isn't `Int`/`Float`, so the caller falls back to
-/// [`reduce_values`] over the materialized register.
-fn typed_reduce_values(func: AggFunc, column: &Column) -> Option<Value> {
-    if !matches!(column, Column::Int { .. } | Column::Float { .. }) {
-        return None;
+/// instead of boxing every value into `Value`, through the same
+/// [`RunningAgg`] as every other path (#631), so its results are
+/// [`reduce_values`]'s exactly. `None` when `column` isn't `Int`/`Float`,
+/// so the caller falls back to [`reduce_values`] over the materialized
+/// register.
+fn typed_reduce_values(func: AggFunc, column: &Column) -> Option<Result<Value>> {
+    let mut acc = RunningAgg::default();
+    match column {
+        Column::Int { data, valid } => {
+            for (i, x) in data.iter().enumerate() {
+                if valid.get(i) {
+                    acc.push_i64(*x);
+                } else {
+                    acc.push_null();
+                }
+            }
+        }
+        Column::Float { data, valid } => {
+            for (i, x) in data.iter().enumerate() {
+                if valid.get(i) {
+                    acc.push_f64(*x);
+                } else {
+                    acc.push_null();
+                }
+            }
+        }
+        _ => return None,
     }
-    let len = column.len();
-    let non_null = || (0..len).filter_map(|i| column_num_at(column, i).map(|(x, _)| x));
-    Some(match func {
-        AggFunc::Count => Value::Int(len_to_i64((0..len).filter(|&i| !column.is_null(i)).count())),
-        AggFunc::Sum => {
-            let (sum, count) =
-                non_null().fold((0.0, 0usize), |(s, c), x| (s + x, c.saturating_add(1)));
-            if count == 0 {
-                Value::Null
-            } else {
-                Value::Float(sum)
-            }
-        }
-        AggFunc::Avg => {
-            let (sum, count) =
-                non_null().fold((0.0, 0usize), |(s, c), x| (s + x, c.saturating_add(1)));
-            if count == 0 {
-                Value::Null
-            } else {
-                Value::Float(sum / count as f64)
-            }
-        }
-        AggFunc::Min => non_null()
-            .fold(None, |acc: Option<f64>, v| {
-                Some(acc.map_or(v, |a| a.min(v)))
-            })
-            .map_or(Value::Null, Value::Float),
-        AggFunc::Max => non_null()
-            .fold(None, |acc: Option<f64>, v| {
-                Some(acc.map_or(v, |a| a.max(v)))
-            })
-            .map_or(Value::Null, Value::Float),
-    })
+    Some(acc.finalize(func, false, "Reduce"))
 }
 
-fn reduce_values(func: AggFunc, values: &[Value]) -> Value {
-    let non_null: Vec<f64> = values.iter().filter_map(Value::as_f64).collect();
-    match func {
-        AggFunc::Count => Value::Int(len_to_i64(
-            values.iter().filter(|v| !matches!(v, Value::Null)).count(),
-        )),
-        AggFunc::Sum => {
-            if non_null.is_empty() {
-                Value::Null
-            } else {
-                Value::Float(non_null.iter().sum())
-            }
-        }
-        AggFunc::Avg => {
-            if non_null.is_empty() {
-                Value::Null
-            } else {
-                Value::Float(non_null.iter().sum::<f64>() / non_null.len() as f64)
-            }
-        }
-        AggFunc::Min => non_null
-            .into_iter()
-            .fold(None, |acc: Option<f64>, v| {
-                Some(acc.map_or(v, |a| a.min(v)))
-            })
-            .map_or(Value::Null, Value::Float),
-        AggFunc::Max => non_null
-            .into_iter()
-            .fold(None, |acc: Option<f64>, v| {
-                Some(acc.map_or(v, |a| a.max(v)))
-            })
-            .map_or(Value::Null, Value::Float),
+/// One aggregate over `values` (`Null`s included, as a register holds
+/// them), through [`RunningAgg`].
+fn reduce_values(func: AggFunc, values: &[Value]) -> Result<Value> {
+    let mut acc = RunningAgg::default();
+    for value in values {
+        acc.push(Some(value));
     }
+    acc.finalize(func, false, "Reduce")
 }
 
 pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
@@ -6519,10 +6542,10 @@ mod tests {
         .unwrap();
 
         for (func, expected) in [
-            (AggFunc::Sum, Value::Float(60.0)),
+            (AggFunc::Sum, Value::Int(60)),
             (AggFunc::Avg, Value::Float(20.0)),
-            (AggFunc::Min, Value::Float(10.0)),
-            (AggFunc::Max, Value::Float(30.0)),
+            (AggFunc::Min, Value::Int(10)),
+            (AggFunc::Max, Value::Int(30)),
             (AggFunc::Count, Value::Int(3)),
         ] {
             vm.step(
@@ -6603,10 +6626,10 @@ mod tests {
         assert!(matches!(vm.typed_register(0), Some(Column::Int { .. })));
 
         for (func, expected) in [
-            (AggFunc::Sum, Value::Float(60.0)),
+            (AggFunc::Sum, Value::Int(60)),
             (AggFunc::Avg, Value::Float(20.0)),
-            (AggFunc::Min, Value::Float(10.0)),
-            (AggFunc::Max, Value::Float(30.0)),
+            (AggFunc::Min, Value::Int(10)),
+            (AggFunc::Max, Value::Int(30)),
             (AggFunc::Count, Value::Int(3)),
         ] {
             vm.step(
@@ -6690,10 +6713,7 @@ mod tests {
             vm.register(0).unwrap(),
             &[Value::Str("east".into()), Value::Str("west".into())]
         );
-        assert_eq!(
-            vm.register(2).unwrap(),
-            &[Value::Float(30.0), Value::Float(20.0)]
-        );
+        assert_eq!(vm.register(2).unwrap(), &[Value::Int(30), Value::Int(20)]);
         assert_eq!(vm.register(3).unwrap(), &[Value::Int(2), Value::Int(2)]);
     }
 
@@ -6760,10 +6780,7 @@ mod tests {
             vm.register(0).unwrap(),
             &[Value::Str("east".into()), Value::Str("west".into())]
         );
-        assert_eq!(
-            vm.register(3).unwrap(),
-            &[Value::Float(30.0), Value::Float(15.0)]
-        );
+        assert_eq!(vm.register(3).unwrap(), &[Value::Int(30), Value::Int(15)]);
     }
 
     #[test]
@@ -6808,10 +6825,7 @@ mod tests {
             vm.register(0).unwrap(),
             &[Value::Null, Value::Str("east".into())]
         );
-        assert_eq!(
-            vm.register(2).unwrap(),
-            &[Value::Float(8.0), Value::Float(2.0)]
-        );
+        assert_eq!(vm.register(2).unwrap(), &[Value::Int(8), Value::Int(2)]);
     }
 
     #[test]
@@ -6860,10 +6874,7 @@ mod tests {
             vm.register(0).unwrap(),
             &[Value::Str("east".into()), Value::Str("west".into())]
         );
-        assert_eq!(
-            vm.register(2).unwrap(),
-            &[Value::Float(30.0), Value::Float(20.0)]
-        );
+        assert_eq!(vm.register(2).unwrap(), &[Value::Int(30), Value::Int(20)]);
         assert_eq!(vm.register(3).unwrap(), &[Value::Int(2), Value::Int(2)]);
     }
 
@@ -6908,10 +6919,7 @@ mod tests {
             vm.register(0).unwrap(),
             &[Value::Null, Value::Str("east".into())]
         );
-        assert_eq!(
-            vm.register(2).unwrap(),
-            &[Value::Float(8.0), Value::Float(2.0)]
-        );
+        assert_eq!(vm.register(2).unwrap(), &[Value::Int(8), Value::Int(2)]);
     }
 
     #[test]
@@ -6975,10 +6983,7 @@ mod tests {
             vm.register(0).unwrap(),
             &[Value::Str("east".into()), Value::Str("west".into())]
         );
-        assert_eq!(
-            vm.register(3).unwrap(),
-            &[Value::Float(30.0), Value::Float(15.0)]
-        );
+        assert_eq!(vm.register(3).unwrap(), &[Value::Int(30), Value::Int(15)]);
     }
 
     #[test]
@@ -7649,10 +7654,7 @@ mod tests {
                 dst: 10,
             },
         );
-        assert_eq!(
-            sums,
-            vec![Value::Float(30.0), Value::Float(30.0), Value::Float(30.0)]
-        );
+        assert_eq!(sums, vec![Value::Int(30), Value::Int(30), Value::Int(30)]);
     }
 
     #[test]
@@ -7673,7 +7675,7 @@ mod tests {
         );
         assert_eq!(
             running,
-            vec![Value::Float(10.0), Value::Float(30.0), Value::Float(60.0)]
+            vec![Value::Int(10), Value::Int(30), Value::Int(60)]
         );
     }
 
@@ -9393,10 +9395,7 @@ mod tests {
         .unwrap();
         // Row 1 (key 2, 5) is filtered out.
         assert_eq!(vm.register(0).unwrap(), &[Value::Int(1), Value::Int(2)]);
-        assert_eq!(
-            vm.register(3).unwrap(),
-            &[Value::Float(30.0), Value::Float(15.0)]
-        );
+        assert_eq!(vm.register(3).unwrap(), &[Value::Int(30), Value::Int(15)]);
         assert_eq!(vm.register(4).unwrap(), &[Value::Int(2), Value::Int(1)]);
     }
 
@@ -9665,10 +9664,7 @@ mod tests {
             vm.register(1).unwrap(),
             &[Value::Str("x".into()), Value::Str("y".into())]
         );
-        assert_eq!(
-            vm.register(4).unwrap(),
-            &[Value::Float(30.0), Value::Float(15.0)]
-        );
+        assert_eq!(vm.register(4).unwrap(), &[Value::Int(30), Value::Int(15)]);
     }
 
     /// #479: the inline per-value hash keeps the variant separation the
@@ -9759,7 +9755,7 @@ mod tests {
         );
         let (keys, sums, counts) = group_sum_count(&batch, "k");
         assert_eq!(keys, vec![Value::Int(7), Value::Int(3)]);
-        assert_eq!(sums, vec![Value::Float(6.0), Value::Float(30.0)]);
+        assert_eq!(sums, vec![Value::Int(6), Value::Int(30)]);
         assert_eq!(counts, vec![Value::Int(3), Value::Int(2)]);
     }
 
@@ -9780,7 +9776,7 @@ mod tests {
             keys,
             vec![Value::Str("west".into()), Value::Str("east".into())]
         );
-        assert_eq!(sums, vec![Value::Float(5.0), Value::Float(2.0)]);
+        assert_eq!(sums, vec![Value::Int(5), Value::Int(2)]);
         assert_eq!(counts, vec![Value::Int(2), Value::Int(1)]);
     }
 
@@ -9802,7 +9798,7 @@ mod tests {
             keys,
             vec![Value::Str("west".into()), Value::Str("east".into())]
         );
-        assert_eq!(sums, vec![Value::Float(5.0), Value::Float(2.0)]);
+        assert_eq!(sums, vec![Value::Int(5), Value::Int(2)]);
         assert_eq!(counts, vec![Value::Int(2), Value::Int(1)]);
     }
 }

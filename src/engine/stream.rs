@@ -532,7 +532,16 @@ impl StreamEngine {
         };
         let summaries = self.ring.summaries_overlapping(&range);
         if summaries.is_empty() {
-            return rows;
+            // Evicted segments' summaries are f64 (#634), so a range
+            // aggregate that folds them is DOUBLE; one that has none to
+            // fold is too, so the type never depends on eviction.
+            return match agg {
+                AggFunc::Sum | AggFunc::Min | AggFunc::Max => rows
+                    .into_iter()
+                    .map(|row| row.into_iter().map(as_double).collect())
+                    .collect(),
+                _ => rows,
+            };
         }
         let live = rows.into_iter().next().and_then(|r| r.into_iter().next());
         let merged = fold_summaries_into(agg, column.as_deref(), &summaries, live);
@@ -1029,6 +1038,19 @@ fn single_ungrouped_aggregate(select: &Select) -> Option<(AggFunc, Option<String
     }
 }
 
+/// An integer as the DOUBLE a range aggregate over evicted summaries
+/// gives (#634); anything else unchanged.
+fn as_double(value: Value) -> Value {
+    match value {
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "range aggregates over evicted f64 summaries are DOUBLE until #634"
+        )]
+        Value::Int(i) => Value::Float(i as f64),
+        other => other,
+    }
+}
+
 /// Combines `live` (the ring's already-finalized single-row aggregate,
 /// `None` if the ring held no matching row) with every retained
 /// [`EvictedSummary`] overlapping the query's range, using the same
@@ -1093,9 +1115,10 @@ fn fold_summaries_into(
             .map_or(Value::Null, Value::Float),
         // `single_ungrouped_aggregate` never returns `Avg` (its own
         // finalized sum/count can't be re-merged, see this fn's doc
-        // comment) -- a non-panicking fallback here costs nothing and
-        // keeps this helper safe to call with any `AggFunc` value.
-        AggFunc::Avg => Value::Null,
+        // comment), nor the planner-internal `AvgSum` -- a non-panicking
+        // fallback here costs nothing and keeps this helper safe to call
+        // with any `AggFunc` value.
+        AggFunc::Avg | AggFunc::AvgSum => Value::Null,
     }
 }
 

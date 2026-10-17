@@ -33,8 +33,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::batch::{
-    apply_map_op, chunk_len, hash_columns_by_row, AggOperand, AggPart, Chunk, HiddenPart, MapOp,
-    QueryOutput, Result, Value, VmError,
+    agg_cmp, apply_map_op, chunk_len, hash_columns_by_row, AggOperand, AggPart, Chunk, HiddenPart,
+    MapOp, QueryOutput, Result, Value, VmError,
 };
 use super::int_key_table::IntKeyTable;
 
@@ -140,7 +140,13 @@ pub(crate) fn eval_agg_expr(
 pub(crate) fn merge_slot(op: SlotOp, into: &mut Value, from: &Value) -> Result<()> {
     match op {
         SlotOp::Key => {}
-        SlotOp::Sum | SlotOp::AvgSum => *into = merge_sum_partials(into, from)?,
+        SlotOp::Sum => *into = merge_sum_partials(into, from)?,
+        // `AVG`'s sum is a float (#631): it never fails on overflow.
+        SlotOp::AvgSum => {
+            if !(matches!(into, Value::Null) && matches!(from, Value::Null)) {
+                *into = Value::Float(partial_f64(into)? + partial_f64(from)?);
+            }
+        }
         // A merged COUNT stays an integer, as a single segment's does
         // (#272): before, it came back as `Float`, so the *type* of
         // `COUNT(*)` depended on how many segments the scan had.
@@ -153,20 +159,10 @@ pub(crate) fn merge_slot(op: SlotOp, into: &mut Value, from: &Value) -> Result<(
                 })?;
             *into = Value::Int(total);
         }
-        SlotOp::Min => {
-            if let (Some(a), Some(b)) = (into.as_f64(), from.as_f64()) {
-                *into = Value::Float(a.min(b));
-            } else if matches!(into, Value::Null) {
-                *into = from.clone();
-            }
-        }
-        SlotOp::Max => {
-            if let (Some(a), Some(b)) = (into.as_f64(), from.as_f64()) {
-                *into = Value::Float(a.max(b));
-            } else if matches!(into, Value::Null) {
-                *into = from.clone();
-            }
-        }
+        // MIN/MAX keep their type and compare as one segment does (#631):
+        // a segment with no rows contributes `Null`, which never wins.
+        SlotOp::Min => keep_partial_extreme(into, from, std::cmp::Ordering::Less),
+        SlotOp::Max => keep_partial_extreme(into, from, std::cmp::Ordering::Greater),
         // Previously a no-op (db-core#404): with more than one segment,
         // `AVG` silently returned the first segment's local average. The
         // per-segment count is a `Value::Int` in real execution but is
@@ -175,6 +171,17 @@ pub(crate) fn merge_slot(op: SlotOp, into: &mut Value, from: &Value) -> Result<(
         SlotOp::AvgCount => *into = Value::Float(partial_f64(into)? + partial_f64(from)?),
     }
     Ok(())
+}
+
+/// Replaces `into` with `from` when `from` is further in direction `want`
+/// ([`agg_cmp`]); a `Null` partial (a segment with no rows) never wins.
+fn keep_partial_extreme(into: &mut Value, from: &Value, want: std::cmp::Ordering) {
+    if matches!(from, Value::Null) {
+        return;
+    }
+    if matches!(into, Value::Null) || agg_cmp(from, into) == want {
+        *into = from.clone();
+    }
 }
 
 /// A partial COUNT slot as an integer. NULL is the additive identity (a
@@ -204,14 +211,20 @@ pub(crate) fn partial_f64(v: &Value) -> Result<f64> {
     }
 }
 
-/// Merges two partial `SUM`s (also `AVG`'s sum slot). A segment with no
-/// surviving rows emits `Null` (#452: `Reduce` always emits one row), and
-/// `Null` must be the identity here -- `Null` with `Null` stays `Null`, so
-/// a `SUM` over zero rows across every segment is `NULL` as SQL requires,
-/// not `0.0`; `Null` with a number is that number.
+/// Merges two partial `SUM`s. A segment with no surviving rows emits
+/// `Null` (#452: `Reduce` always emits one row), and `Null` must be the
+/// identity here -- `Null` with `Null` stays `Null`, so a `SUM` over zero
+/// rows across every segment is `NULL` as SQL requires, not `0`; `Null`
+/// with a number is that number. Two integers add exactly, an error past
+/// 64 bits as in one segment (#631); a float on either side makes a float.
 pub(crate) fn merge_sum_partials(into: &Value, from: &Value) -> Result<Value> {
     match (into, from) {
         (Value::Null, Value::Null) => Ok(Value::Null),
+        (Value::Int(a), Value::Int(b)) => a
+            .checked_add(*b)
+            .map(Value::Int)
+            .ok_or(VmError::IntegerOverflow { opcode: "Combine" }),
+        (Value::Null, Value::Int(n)) | (Value::Int(n), Value::Null) => Ok(Value::Int(*n)),
         _ => Ok(Value::Float(partial_f64(into)? + partial_f64(from)?)),
     }
 }
@@ -796,10 +809,10 @@ mod tests {
             rows[0][2..],
             [
                 Value::Float(4.5),
-                Value::Float(105.0),
+                Value::Int(105),
                 Value::Int(9),
-                Value::Float(0.0),
-                Value::Float(100.0)
+                Value::Int(0),
+                Value::Int(100)
             ]
         );
     }
@@ -841,7 +854,7 @@ mod tests {
         let out = combine_chunks(&parts, 1, &chunks).unwrap();
         assert_eq!(
             out.into_rows(),
-            vec![vec![Value::Int(1), Value::Float(3.0), Value::Int(2)]]
+            vec![vec![Value::Int(1), Value::Int(3), Value::Int(2)]]
         );
         let all_null = vec![
             chunk(vec![
@@ -939,7 +952,7 @@ mod tests {
         merge_slot(SlotOp::Min, &mut min, &Value::Null).unwrap();
         assert_eq!(min, Value::Int(3), "a Null partial leaves the min alone");
         merge_slot(SlotOp::Min, &mut min, &Value::Int(1)).unwrap();
-        assert_eq!(min, Value::Float(1.0));
+        assert_eq!(min, Value::Int(1));
         let mut max = Value::Int(3);
         merge_slot(SlotOp::Max, &mut max, &Value::Float(9.5)).unwrap();
         assert_eq!(max, Value::Float(9.5));
@@ -982,12 +995,9 @@ mod tests {
         // that recurs: `(2756 - 2500) << 32 | 0 == 1 << 40`.
         assert_eq!(got.num_rows(), 4 + 3 * 5_000 - 1);
         let rows = got.into_rows();
-        assert_eq!(
-            rows[0],
-            vec![Value::Int(7), Value::Float(1.0 + 3.0 * 5_001.0)]
-        );
+        assert_eq!(rows[0], vec![Value::Int(7), Value::Int(1 + 3 * 5_001)]);
         assert_eq!(rows[1][0], Value::Null, "Null keys are one group");
-        assert_eq!(rows[1][1], Value::Float(2.0 + 3.0 * 5_000.0));
+        assert_eq!(rows[1][1], Value::Int(2 + 3 * 5_000));
     }
 
     /// A later chunk whose key is not an `Int` demotes the integer table
@@ -1142,9 +1152,52 @@ mod tests {
                 // A `SUM` merged across partials is finalized as a Float,
                 // like `finalize`'s own cross-segment merge; a group seen
                 // by one partial keeps its integer slot.
-                vec![Value::Int(1), Value::Float(8.0)],
+                vec![Value::Int(1), Value::Int(8)],
                 vec![Value::Int(2), Value::Int(7)],
             ]
         );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_keep_partial_extreme_afe02b47__v1_an_empty_slot_takes_the_partial() {
+        let mut min = Value::Null;
+        merge_slot(SlotOp::Min, &mut min, &Value::Str("b".into())).unwrap();
+        assert_eq!(min, Value::Str("b".into()));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_keep_partial_extreme_afe02b47__v2_a_further_partial_replaces_it() {
+        let mut max = Value::Int(i64::MAX - 1);
+        merge_slot(SlotOp::Max, &mut max, &Value::Int(i64::MAX)).unwrap();
+        assert_eq!(max, Value::Int(i64::MAX), "exact, not through f64");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_keep_partial_extreme_afe02b47__v3_a_nearer_partial_is_ignored() {
+        let mut min = Value::Str("a".into());
+        merge_slot(SlotOp::Min, &mut min, &Value::Str("b".into())).unwrap();
+        assert_eq!(min, Value::Str("a".into()));
+        // Numbers sort before text, as in SQLite.
+        let mut max = Value::Str("a".into());
+        merge_slot(SlotOp::Max, &mut max, &Value::Int(9)).unwrap();
+        assert_eq!(max, Value::Str("a".into()));
+    }
+
+    #[test]
+    fn integer_sum_partials_add_exactly_or_overflow() {
+        let mut sum = Value::Int(i64::MAX - 1);
+        merge_slot(SlotOp::Sum, &mut sum, &Value::Int(1)).unwrap();
+        assert_eq!(sum, Value::Int(i64::MAX));
+        let err = merge_slot(SlotOp::Sum, &mut sum, &Value::Int(1)).unwrap_err();
+        assert_eq!(err, VmError::IntegerOverflow { opcode: "Combine" });
+        let mut avg_sum = Value::Float(f64::from(i32::MAX));
+        merge_slot(SlotOp::AvgSum, &mut avg_sum, &Value::Float(1.0)).unwrap();
+        assert!(matches!(avg_sum, Value::Float(_)), "AVG's sum is a float");
+        let mut mixed = Value::Int(2);
+        merge_slot(SlotOp::Sum, &mut mixed, &Value::Float(0.5)).unwrap();
+        assert_eq!(mixed, Value::Float(2.5));
     }
 }
