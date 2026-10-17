@@ -117,6 +117,14 @@ pub enum Cell {
     Text(String),
     /// Uninterpreted bytes.
     Blob(Vec<u8>),
+    /// An exact decimal, `unscaled / 10^scale` (#632), printed at its
+    /// scale as DuckDB prints it (`123.45`).
+    Decimal {
+        /// The value times `10^scale`.
+        unscaled: i128,
+        /// Digits after the decimal point.
+        scale: u8,
+    },
 }
 
 impl fmt::Display for Cell {
@@ -130,6 +138,9 @@ impl fmt::Display for Cell {
             Cell::Real(x) => f.write_str(&crate::value::format_real(*x)),
             Cell::Bool(b) => f.write_str(if *b { "1" } else { "0" }),
             Cell::Text(s) => f.write_str(s),
+            Cell::Decimal { unscaled, scale } => {
+                f.write_str(&crate::value::format_decimal(*unscaled, *scale))
+            }
             Cell::Blob(bytes) => {
                 f.write_str("X'")?;
                 for b in bytes {
@@ -176,6 +187,9 @@ impl From<crate::vm::batch::Value> for Cell {
             crate::vm::batch::Value::Str(s) => Cell::Text(s.into_owned()),
             // As DuckDB prints a map: `{a=1, b=NULL}`.
             m @ crate::vm::batch::Value::Map(_) => Cell::Text(m.to_string()),
+            crate::vm::batch::Value::Decimal { unscaled, scale } => {
+                Cell::Decimal { unscaled, scale }
+            }
         }
     }
 }
@@ -195,6 +209,9 @@ impl From<Cell> for crate::vm::batch::Value {
             Cell::Real(x) => crate::vm::batch::Value::Float(x),
             Cell::Bool(b) => crate::vm::batch::Value::Bool(b),
             Cell::Text(s) => crate::vm::batch::Value::Str(s.into()),
+            Cell::Decimal { unscaled, scale } => {
+                crate::vm::batch::Value::Decimal { unscaled, scale }
+            }
         }
     }
 }

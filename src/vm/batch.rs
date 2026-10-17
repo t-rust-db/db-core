@@ -88,7 +88,7 @@ impl AggFunc {
 /// literals with no heap allocation, while runtime column data (decoded
 /// from arbitrary Parquet `BYTE_ARRAY` bytes) still owns its `String` via
 /// `Cow::Owned`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     /// A 64-bit signed integer.
     Int(i64),
@@ -104,10 +104,137 @@ pub enum Value {
     /// unique keys, a value may be NULL. Read from a Parquet MAP column;
     /// queried with `m['k']` and the map functions.
     Map(Arc<MapEntries>),
+    /// An exact `DECIMAL` (#632): `unscaled / 10^scale`, as a Parquet
+    /// DECIMAL or a record table's column stores it. Equal to another
+    /// decimal of the same value whatever their scales (`1.50 == 1.5`).
+    Decimal {
+        /// The value times `10^scale`.
+        unscaled: i128,
+        /// Digits after the decimal point (at most 38).
+        scale: u8,
+    },
 }
 
 /// A map value's `(key, value)` entries, in order.
 pub type MapEntries = Vec<(String, Option<String>)>;
+
+/// Structural equality, except that two decimals are equal when their
+/// values are (`1.50 == 1.5`, #632): what `GROUP BY` and join keys need.
+/// A decimal never equals an `Int` or a `Float` here, as `Int(1)` never
+/// equals `Float(1.0)`.
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Null, Value::Null) => true,
+            (Value::Map(a), Value::Map(b)) => a == b,
+            (
+                Value::Decimal {
+                    unscaled: a,
+                    scale: sa,
+                },
+                Value::Decimal {
+                    unscaled: b,
+                    scale: sb,
+                },
+            ) => decimal_canonical(*a, *sa) == decimal_canonical(*b, *sb),
+            _ => false,
+        }
+    }
+}
+
+/// `10^n` for a decimal scale, `None` past `i128`.
+pub(crate) fn pow10(n: u32) -> Option<i128> {
+    10_i128.checked_pow(n)
+}
+
+/// `(unscaled, scale)` without trailing zeros: one form per value, for
+/// equality and hashing (#632).
+pub(crate) fn decimal_canonical(mut unscaled: i128, mut scale: u8) -> (i128, u8) {
+    while scale > 0 && unscaled % 10 == 0 {
+        unscaled /= 10;
+        scale = scale.saturating_sub(1);
+    }
+    if unscaled == 0 {
+        scale = 0;
+    }
+    (unscaled, scale)
+}
+
+/// A decimal as the nearest `f64` (for `AVG`, and a decimal mixed with a
+/// float).
+pub(crate) fn decimal_to_f64(unscaled: i128, scale: u8) -> f64 {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a decimal leaves exactness only where a float result is asked for"
+    )]
+    let x = unscaled as f64;
+    x / 10_f64.powi(i32::from(scale))
+}
+
+/// `a` against `b`, two decimals, exactly: the one with fewer digits after
+/// the point is rescaled to the other's. If that overflows `i128`, as
+/// floats.
+pub(crate) fn decimal_cmp(a: i128, sa: u8, b: i128, sb: u8) -> std::cmp::Ordering {
+    let (a2, b2) = if sa < sb {
+        (
+            pow10(u32::from(sb.abs_diff(sa))).and_then(|p| a.checked_mul(p)),
+            Some(b),
+        )
+    } else {
+        (
+            Some(a),
+            pow10(u32::from(sa.abs_diff(sb))).and_then(|p| b.checked_mul(p)),
+        )
+    };
+    match (a2, b2) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        _ => decimal_to_f64(a, sa).total_cmp(&decimal_to_f64(b, sb)),
+    }
+}
+
+/// Two numbers in order (#632): integers exactly, a decimal against a
+/// decimal or an integer exactly (rescaled), anything with a float as
+/// floats (NaN last). `None` unless both are numbers.
+pub fn numeric_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "an integer against a float compares as floats, as SQLite does"
+    )]
+    let as_float = |i: i64| i as f64;
+    Some(match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Float(x), Value::Float(y)) => x.total_cmp(y),
+        (Value::Int(x), Value::Float(y)) => as_float(*x).total_cmp(y),
+        (Value::Float(x), Value::Int(y)) => x.total_cmp(&as_float(*y)),
+        (
+            Value::Decimal {
+                unscaled: x,
+                scale: sx,
+            },
+            Value::Decimal {
+                unscaled: y,
+                scale: sy,
+            },
+        ) => decimal_cmp(*x, *sx, *y, *sy),
+        (Value::Decimal { unscaled, scale }, Value::Int(i)) => {
+            decimal_cmp(*unscaled, *scale, i128::from(*i), 0)
+        }
+        (Value::Int(i), Value::Decimal { unscaled, scale }) => {
+            decimal_cmp(i128::from(*i), 0, *unscaled, *scale)
+        }
+        (Value::Decimal { unscaled, scale }, Value::Float(y)) => {
+            decimal_to_f64(*unscaled, *scale).total_cmp(y)
+        }
+        (Value::Float(x), Value::Decimal { unscaled, scale }) => {
+            x.total_cmp(&decimal_to_f64(*unscaled, *scale))
+        }
+        _ => return None,
+    })
+}
 
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -117,6 +244,9 @@ impl fmt::Display for Value {
             Value::Bool(v) => write!(f, "{v}"),
             Value::Str(v) => write!(f, "{v}"),
             Value::Null => write!(f, "NULL"),
+            Value::Decimal { unscaled, scale } => {
+                f.write_str(&crate::value::format_decimal(*unscaled, *scale))
+            }
             // As DuckDB prints a map: `{a=1, b=NULL}`.
             Value::Map(entries) => {
                 write!(f, "{{")?;
@@ -142,6 +272,7 @@ impl Value {
         match self {
             Value::Int(v) => Some(*v as f64),
             Value::Float(v) => Some(*v),
+            Value::Decimal { unscaled, scale } => Some(decimal_to_f64(*unscaled, *scale)),
             _ => None,
         }
     }
@@ -695,6 +826,11 @@ fn to_scalar_value(v: &Value) -> crate::value::Value {
         Value::Null => crate::value::Value::Null,
         // The row functions have no map type: its rendered text.
         Value::Map(_) => crate::value::Value::Text(v.to_string().into()),
+        // SQLite reads a DECIMAL as REAL (its affinity), so the row
+        // functions see the nearest float.
+        Value::Decimal { unscaled, scale } => {
+            crate::value::Value::Real(decimal_to_f64(*unscaled, *scale))
+        }
     }
 }
 
@@ -1539,7 +1675,11 @@ pub fn compare_for_order(a: &Value, b: &Value, descending: bool) -> std::cmp::Or
         (true, false) => Ordering::Greater,
         (false, true) => Ordering::Less,
         (false, false) => {
+            let decimal = matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. });
             let ord = match (a.as_f64(), b.as_f64()) {
+                // A decimal compares exactly (#632), never through f64 or
+                // as text.
+                (Some(_), Some(_)) if decimal => numeric_cmp(a, b).unwrap_or(Ordering::Equal),
                 (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
                 // #266: compare `Str`/`Str` directly -- `Value`'s `Display`
                 // prints a `Str`'s contents verbatim (no quoting), so this
@@ -2243,6 +2383,12 @@ fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
             5u8.hash(state);
             entries.hash(state);
         }
+        // One hash per value, whatever the scale (#632): `PartialEq` says
+        // `1.50 == 1.5`.
+        Value::Decimal { unscaled, scale } => {
+            6u8.hash(state);
+            decimal_canonical(*unscaled, *scale).hash(state);
+        }
     }
 }
 
@@ -2257,6 +2403,7 @@ const TAG_BOOL: u64 = 0xC2B2_AE3D_27D4_EB4F;
 const TAG_STR: u64 = 0x1656_67B1_9E37_79F9;
 const TAG_NULL: u64 = 0x2545_F491_4F6C_DD1D;
 const TAG_MAP: u64 = 0x4CF5_AD43_2745_937F;
+const TAG_DECIMAL: u64 = 0x7FB5_D329_728E_A185;
 /// Dictionary codes are hashed within one segment only (the code -> string
 /// map is per column chunk), so their tag just has to stay clear of the
 /// scalar tags above.
@@ -2279,6 +2426,17 @@ fn hash_one_value(value: &Value) -> u64 {
         Value::Null => murmur_finalize(TAG_NULL),
         // Rare as a key: the rendered entries, kept apart from strings.
         Value::Map(_) => murmur_finalize(hash_str_bytes(value.to_string().as_bytes()) ^ TAG_MAP),
+        // The canonical form, so `1.50` and `1.5` (equal) hash alike.
+        Value::Decimal { unscaled, scale } => {
+            let (u, s) = decimal_canonical(*unscaled, *scale);
+            let bits = u.cast_unsigned();
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "folding a 128-bit value into a 64-bit hash"
+            )]
+            let folded = (bits as u64) ^ ((bits >> 64) as u64).rotate_left(17);
+            murmur_finalize(mix_hash(folded ^ TAG_DECIMAL, u64::from(s)))
+        }
     }
 }
 
@@ -2950,6 +3108,14 @@ struct RunningAgg {
     float_sum: f64,
     /// Whether any input was a float: then `SUM` is a float.
     saw_float: bool,
+    /// The decimal inputs' total, exact at `dec_scale` (the largest scale
+    /// seen) (#632); `None` before the first decimal.
+    dec_scale: Option<u8>,
+    dec_sum: i128,
+    /// The exact decimal total left `i128`: `SUM` is then an error.
+    dec_overflow: bool,
+    /// The decimal inputs' total as a float, for `AVG` and mixed input.
+    dec_float: f64,
     /// The smallest and largest non-`Null` input, in [`agg_cmp`]'s order:
     /// integers stay exact and text compares byte-wise (#631).
     min: Option<Value>,
@@ -2965,6 +3131,7 @@ impl RunningAgg {
             None | Some(Value::Null) => self.push_null(),
             Some(Value::Int(i)) => self.push_i64(*i),
             Some(Value::Float(x)) => self.push_f64(*x),
+            Some(Value::Decimal { unscaled, scale }) => self.push_decimal(*unscaled, *scale),
             // Not summed, but counted and ordered: `MIN`/`MAX` of text.
             Some(other) => {
                 self.row_count = self.row_count.saturating_add(1);
@@ -3000,6 +3167,32 @@ impl RunningAgg {
         keep_extreme(&mut self.max, &value, std::cmp::Ordering::Greater);
     }
 
+    /// Folds one more non-`Null` decimal, exactly (#632): the running
+    /// total is kept at the largest scale seen so far.
+    fn push_decimal(&mut self, unscaled: i128, scale: u8) {
+        self.row_count = self.row_count.saturating_add(1);
+        self.non_null_count = self.non_null_count.saturating_add(1);
+        self.numeric_count = self.numeric_count.saturating_add(1);
+        self.dec_float += decimal_to_f64(unscaled, scale);
+        let total_scale = self.dec_scale.unwrap_or(scale).max(scale);
+        let rescale = |value: i128, from: u8| {
+            pow10(u32::from(total_scale.abs_diff(from))).and_then(|p| value.checked_mul(p))
+        };
+        let current = rescale(self.dec_sum, self.dec_scale.unwrap_or(total_scale));
+        let added = rescale(unscaled, scale);
+        match (current, added) {
+            (Some(c), Some(a)) => match c.checked_add(a) {
+                Some(sum) => self.dec_sum = sum,
+                None => self.dec_overflow = true,
+            },
+            _ => self.dec_overflow = true,
+        }
+        self.dec_scale = Some(total_scale);
+        let value = Value::Decimal { unscaled, scale };
+        keep_extreme(&mut self.min, &value, std::cmp::Ordering::Less);
+        keep_extreme(&mut self.max, &value, std::cmp::Ordering::Greater);
+    }
+
     /// Folds one more row whose value is absent -- either no source
     /// column at all (`COUNT(*)`) or a typed column's NULL bit (#477),
     /// equivalent to `push(None)` / `push(Some(&Value::Null))`.
@@ -3025,6 +3218,23 @@ impl RunningAgg {
             AggFunc::Sum | AggFunc::AvgSum if self.numeric_count == 0 => Value::Null,
             AggFunc::AvgSum => Value::Float(self.total()),
             AggFunc::Sum if self.saw_float => Value::Float(self.total()),
+            // Decimals (with any integers at scale 0): exact, at the
+            // largest scale seen, an error past DECIMAL(38) (#632).
+            AggFunc::Sum if self.dec_scale.is_some() => {
+                let scale = self.dec_scale.unwrap_or(0);
+                let overflow = || VmError::IntegerOverflow { opcode };
+                if self.dec_overflow {
+                    return Err(overflow());
+                }
+                let ints = pow10(u32::from(scale))
+                    .and_then(|p| self.int_sum.checked_mul(p))
+                    .ok_or_else(overflow)?;
+                let unscaled = self.dec_sum.checked_add(ints).ok_or_else(overflow)?;
+                if unscaled.unsigned_abs() >= 10_u128.pow(38) {
+                    return Err(overflow());
+                }
+                Value::Decimal { unscaled, scale }
+            }
             AggFunc::Sum => Value::Int(
                 i64::try_from(self.int_sum).map_err(|_| VmError::IntegerOverflow { opcode })?,
             ),
@@ -3049,7 +3259,7 @@ impl RunningAgg {
             reason = "a float SUM or an AVG: the integer part joins a float result"
         )]
         let ints = self.int_sum as f64;
-        ints + self.float_sum
+        ints + self.float_sum + self.dec_float
     }
 }
 
@@ -3075,24 +3285,15 @@ pub(crate) fn agg_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
         match v {
             Value::Null => 0,
             Value::Bool(_) => 1,
-            Value::Int(_) | Value::Float(_) => 2,
+            Value::Int(_) | Value::Float(_) | Value::Decimal { .. } => 2,
             Value::Str(_) => 3,
             Value::Map(_) => 4,
         }
     }
+    if let Some(order) = numeric_cmp(a, b) {
+        return order;
+    }
     match (a, b) {
-        (Value::Int(x), Value::Int(y)) => x.cmp(y),
-        (Value::Float(x), Value::Float(y)) => x.total_cmp(y),
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "an integer against a float compares as floats, as SQLite does"
-        )]
-        (Value::Int(x), Value::Float(y)) => (*x as f64).total_cmp(y),
-        #[allow(
-            clippy::cast_precision_loss,
-            reason = "an integer against a float compares as floats, as SQLite does"
-        )]
-        (Value::Float(x), Value::Int(y)) => x.total_cmp(&(*y as f64)),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Str(x), Value::Str(y)) => x.cmp(y),
         (Value::Map(x), Value::Map(y)) => x.cmp(y),
@@ -5223,6 +5424,8 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
         (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),
+        // A decimal compares exactly (#632).
+        (Value::Decimal { .. }, _) | (_, Value::Decimal { .. }) => numeric_cmp(a, b),
         _ => a.as_f64()?.partial_cmp(&b.as_f64()?),
     }
 }
@@ -9665,6 +9868,112 @@ mod tests {
             &[Value::Str("x".into()), Value::Str("y".into())]
         );
         assert_eq!(vm.register(4).unwrap(), &[Value::Int(30), Value::Int(15)]);
+    }
+
+    fn dec(unscaled: i128, scale: u8) -> Value {
+        Value::Decimal { unscaled, scale }
+    }
+
+    fn group_hash(value: &Value) -> u64 {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        hash_group_value(value, &mut h);
+        h.finish()
+    }
+
+    // vm_batch_decimal_canonical_2a6a8e19 (`decimal_canonical`):
+    // `scale > 0 && unscaled % 10 == 0`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_decimal_canonical_2a6a8e19__v1_a_trailing_zero_is_stripped() {
+        assert_eq!(decimal_canonical(150, 2), (15, 1));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_decimal_canonical_2a6a8e19__v2_scale_zero_keeps_its_zeros() {
+        assert_eq!(decimal_canonical(1500, 0), (1500, 0));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_decimal_canonical_2a6a8e19__v3_a_nonzero_last_digit_stays() {
+        assert_eq!(decimal_canonical(155, 2), (155, 2));
+    }
+
+    /// #632: `1.50` and `1.5` are one value -- equal, hashed alike for
+    /// GROUP BY and joins -- and decimals order exactly against each
+    /// other and against integers, as floats against a float.
+    #[test]
+    fn decimals_are_equal_hashed_and_ordered_by_value_across_scales() {
+        assert_eq!(dec(150, 2), dec(15, 1));
+        assert_eq!(dec(0, 3), dec(0, 0));
+        assert_ne!(dec(150, 2), dec(15, 2));
+        assert_ne!(
+            dec(1, 0),
+            Value::Int(1),
+            "a decimal is not an integer value"
+        );
+        assert_eq!(group_hash(&dec(150, 2)), group_hash(&dec(15, 1)));
+        assert_eq!(hash_one_value(&dec(150, 2)), hash_one_value(&dec(15, 1)));
+        assert_ne!(hash_one_value(&dec(15, 1)), hash_one_value(&dec(15, 2)));
+
+        use std::cmp::Ordering::{Equal, Greater, Less};
+        assert_eq!(numeric_cmp(&dec(150, 2), &dec(15, 1)), Some(Equal));
+        assert_eq!(numeric_cmp(&dec(-5, 2), &dec(1, 1)), Some(Less));
+        assert_eq!(numeric_cmp(&dec(250, 2), &Value::Int(2)), Some(Greater));
+        assert_eq!(numeric_cmp(&Value::Int(3), &dec(250, 2)), Some(Greater));
+        assert_eq!(numeric_cmp(&dec(25, 1), &Value::Float(2.5)), Some(Equal));
+        assert_eq!(numeric_cmp(&Value::Float(2.4), &dec(25, 1)), Some(Less));
+        assert_eq!(numeric_cmp(&dec(1, 0), &Value::Str("1".into())), None);
+        // Rescaling past i128 falls back to floats rather than panicking.
+        assert_eq!(decimal_cmp(i128::MAX, 0, 1, 38), Greater);
+        assert_eq!(agg_cmp(&dec(1, 0), &Value::Str("0".into())), Less);
+        assert_eq!(dec(1234, 2).to_string(), "12.34");
+    }
+
+    /// #632: SUM over decimals is exact at the largest scale seen
+    /// (integers join at scale 0), MIN/MAX keep the decimal, AVG is a
+    /// float, and a total past DECIMAL(38) is an error.
+    #[test]
+    fn running_agg_sums_decimals_exactly_and_errors_past_38_digits() {
+        let mut acc = RunningAgg::default();
+        for v in [dec(10, 2), dec(2, 1), Value::Int(1), Value::Null] {
+            acc.push(Some(&v));
+        }
+        let fin = |acc: &RunningAgg, f| acc.finalize(f, false, "Test").unwrap();
+        assert_eq!(fin(&acc, AggFunc::Sum), dec(130, 2));
+        assert_eq!(fin(&acc, AggFunc::Sum).to_string(), "1.30");
+        assert_eq!(fin(&acc, AggFunc::Min), dec(10, 2));
+        assert_eq!(fin(&acc, AggFunc::Max), Value::Int(1));
+        assert_eq!(fin(&acc, AggFunc::Count), Value::Int(3));
+        let Value::Float(avg) = fin(&acc, AggFunc::Avg) else {
+            panic!("AVG of decimals is a float");
+        };
+        assert!((avg - 1.3 / 3.0).abs() < 1e-12);
+
+        let mut with_float = acc.clone();
+        with_float.push(Some(&Value::Float(0.5)));
+        assert!(matches!(fin(&with_float, AggFunc::Sum), Value::Float(_)));
+
+        let max38 = 10_i128.pow(38) - 1;
+        let mut big = RunningAgg::default();
+        big.push(Some(&dec(max38, 0)));
+        assert_eq!(fin(&big, AggFunc::Sum), dec(max38, 0));
+        big.push(Some(&dec(1, 0)));
+        assert!(matches!(
+            big.finalize(AggFunc::Sum, false, "Test"),
+            Err(VmError::IntegerOverflow { opcode: "Test" })
+        ));
+
+        let mut wrapped = RunningAgg::default();
+        wrapped.push(Some(&dec(i128::MAX, 0)));
+        wrapped.push(Some(&dec(i128::MAX, 0)));
+        assert!(wrapped.finalize(AggFunc::Sum, false, "Test").is_err());
+
+        let mut rescaled = RunningAgg::default();
+        rescaled.push(Some(&dec(i128::MAX / 2, 0)));
+        rescaled.push(Some(&dec(1, 1)));
+        assert!(rescaled.finalize(AggFunc::Sum, false, "Test").is_err());
     }
 
     /// #479: the inline per-value hash keeps the variant separation the

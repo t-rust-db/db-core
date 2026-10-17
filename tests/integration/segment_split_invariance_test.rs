@@ -326,6 +326,30 @@ fn batch_group_by_one_key_is_segment_split_invariant() {
     );
 }
 
+/// #632: decimal SUM/MIN/MAX are exact, so every segmentation agrees to
+/// the last digit -- including mixed scales (`0.1` beside `0.25`) whose
+/// partials merge at the larger scale -- and the total is the exact one.
+#[test]
+fn batch_decimal_aggregates_are_segment_split_invariant_and_exact() {
+    let (grp, _) = synthetic_dataset();
+    let amt: Vec<Value> = (0..12i128)
+        .map(|i| Value::Decimal {
+            unscaled: if i % 2 == 0 { i + 1 } else { (i + 1) * 5 },
+            scale: if i % 2 == 0 { 1 } else { 2 },
+        })
+        .collect();
+    let sql = "SELECT grp, sum(amt), min(amt), max(amt) FROM t GROUP BY grp ORDER BY grp";
+    assert_split_invariant(sql, grp.len(), ("grp", &grp), ("amt", &amt));
+    let total = run_batch(
+        "SELECT sum(amt) FROM t",
+        &[5, 7],
+        ("grp", &grp),
+        ("amt", &amt),
+    );
+    // 0.1+0.3+...+1.1 (=3.6) plus 0.10+0.20+...+0.60 (=2.10).
+    assert_eq!(total[0][0].to_string(), "5.70");
+}
+
 #[test]
 fn batch_aggregate_arithmetic_is_segment_split_invariant() {
     // #496: `SUM(x) * 2`, `SUM(x) + SUM(y)` (`SUM(amt)` against itself,
@@ -537,6 +561,10 @@ fn cell_to_value(c: &Cell) -> Value {
         Cell::Real(f) => Value::Float(*f),
         Cell::Bool(b) => Value::Bool(*b),
         Cell::Text(s) => Value::Str(s.clone().into()),
+        Cell::Decimal { unscaled, scale } => Value::Decimal {
+            unscaled: *unscaled,
+            scale: *scale,
+        },
         Cell::Blob(_) => panic!("unexpected BLOB in production.parquet"),
     }
 }

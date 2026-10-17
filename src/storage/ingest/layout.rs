@@ -21,7 +21,7 @@
 
 use std::cmp::Ordering;
 
-use crate::vm::batch::Value;
+use crate::vm::batch::{numeric_cmp, Value};
 
 /// Nanoseconds in an hour.
 pub const HOUR_NS: i64 = 3_600_000_000_000;
@@ -218,23 +218,23 @@ pub fn archive_dir(day: i64) -> String {
     format!("{}/date={}", Area::Archive.as_str(), date_string(day))
 }
 
-/// The order rows are sorted in: NULL first, then numbers (integers and
-/// floats compared as numbers; NaN last), booleans, strings, maps.
+/// The order rows are sorted in: NULL first, then numbers (integers,
+/// floats and decimals compared as numbers, per [`numeric_cmp`]; NaN last),
+/// booleans, strings, maps.
 pub fn compare(a: &Value, b: &Value) -> Ordering {
     fn rank(v: &Value) -> u8 {
         match v {
             Value::Null => 0,
-            Value::Int(_) | Value::Float(_) => 1,
+            Value::Int(_) | Value::Float(_) | Value::Decimal { .. } => 1,
             Value::Bool(_) => 2,
             Value::Str(_) => 3,
             Value::Map(_) => 4,
         }
     }
+    if let Some(order) = numeric_cmp(a, b) {
+        return order;
+    }
     match (a, b) {
-        (Value::Int(x), Value::Int(y)) => x.cmp(y),
-        (Value::Int(x), Value::Float(y)) => (*x as f64).total_cmp(y),
-        (Value::Float(x), Value::Int(y)) => x.total_cmp(&(*y as f64)),
-        (Value::Float(x), Value::Float(y)) => x.total_cmp(y),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Str(x), Value::Str(y)) => x.cmp(y),
         (Value::Map(x), Value::Map(y)) => x.cmp(y),

@@ -83,6 +83,20 @@ pub fn compare_text(a: &str, b: &str, collation: Collation) -> Ordering {
     }
 }
 
+/// A decimal (`unscaled / 10^scale`) at `scale` digits after the point,
+/// as DuckDB prints one: `123.45`, `-0.05`, `42` (scale 0) (#632).
+pub fn format_decimal(unscaled: i128, scale: u8) -> String {
+    let digits = unscaled.unsigned_abs().to_string();
+    let sign = if unscaled < 0 { "-" } else { "" };
+    let scale = usize::from(scale);
+    if scale == 0 {
+        return format!("{sign}{digits}");
+    }
+    let padded = format!("{digits:0>width$}", width = scale.saturating_add(1));
+    let (int, frac) = padded.split_at(padded.len().saturating_sub(scale));
+    format!("{sign}{int}.{frac}")
+}
+
 /// Renders a REAL the way `sqlite3`'s `-list`/`-csv` modes do: 15
 /// significant digits (`%.15g`-equivalent), switching to scientific
 /// notation when the decimal exponent is `< -4` or `>= 15`, and always
@@ -194,6 +208,16 @@ mod tests {
             compare_text(" abc", "abc", Collation::RTrim),
             Ordering::Equal
         );
+    }
+
+    #[test]
+    fn decimal_prints_at_its_scale() {
+        assert_eq!(format_decimal(12345, 2), "123.45");
+        assert_eq!(format_decimal(-5, 2), "-0.05");
+        assert_eq!(format_decimal(150, 2), "1.50");
+        assert_eq!(format_decimal(42, 0), "42");
+        assert_eq!(format_decimal(0, 3), "0.000");
+        assert_eq!(format_decimal(i128::MIN, 0), i128::MIN.to_string());
     }
 
     #[test]

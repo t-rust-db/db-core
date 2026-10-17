@@ -1217,15 +1217,25 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             }
             footer::PhysicalType::FixedLenByteArray => {
                 let raw = self.read_fixed_len_byte_array_column(column_index)?;
-                Ok(raw
-                    .into_iter()
+                raw.into_iter()
                     .map(|v| {
-                        v.map(|bytes| crate::storage::parquet::decimal::Decimal {
-                            unscaled: crate::storage::parquet::decimal::from_be_bytes(&bytes),
-                            scale,
+                        v.map(|bytes| {
+                            // More than 16 bytes would lose the high bits in
+                            // an i128 (#632): beyond DECIMAL(38), refused.
+                            if bytes.len() > 16 {
+                                return Err(FileError::InvalidMetadata {
+                                    field: "DECIMAL fixed_len_byte_array length",
+                                    value: i64::try_from(bytes.len()).unwrap_or(i64::MAX),
+                                });
+                            }
+                            Ok(crate::storage::parquet::decimal::Decimal {
+                                unscaled: crate::storage::parquet::decimal::from_be_bytes(&bytes),
+                                scale,
+                            })
                         })
+                        .transpose()
                     })
-                    .collect())
+                    .collect()
             }
             other => Err(FileError::UnsupportedDecimalPhysicalType(other)),
         }
@@ -2282,6 +2292,25 @@ mod tests {
         let d = rg.read_decimal_column(0).unwrap();
         assert_eq!(d[0].as_ref().unwrap().unscaled, 256);
         assert_eq!(d[0].as_ref().unwrap().scale, 1);
+    }
+
+    /// #632: a DECIMAL wider than 16 bytes would lose its high bits in an
+    /// `i128`, so it is refused rather than silently truncated.
+    #[test]
+    fn read_decimal_column_refuses_a_fixed_len_byte_array_past_16_bytes() {
+        let flba_body = vec![0_u8; 17];
+        let (page_bytes, meta_bytes) = build_typed_chunk(7, &flba_body, 1, 4);
+        let file_bytes =
+            build_file_from_chunk_annotated(&page_bytes, meta_bytes, 1, 7, Some(17), 5, Some(0));
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        match rg.read_decimal_column(0) {
+            Err(FileError::InvalidMetadata { field, value }) => {
+                assert_eq!(field, "DECIMAL fixed_len_byte_array length");
+                assert_eq!(value, 17);
+            }
+            other => panic!("expected InvalidMetadata, got {other:?}"),
+        }
     }
 }
 

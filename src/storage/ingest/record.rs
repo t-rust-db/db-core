@@ -30,8 +30,6 @@ use std::sync::Arc;
 
 #[cfg(feature = "engine-column")]
 use crate::storage::column::hex;
-#[cfg(feature = "engine-column")]
-use crate::storage::parquet::decimal::Decimal;
 use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
 #[cfg(any(feature = "ingest", feature = "engine-column"))]
 use crate::storage::parquet::FileError;
@@ -539,19 +537,15 @@ pub(crate) fn engine_values(
             })
             .collect::<Result<_, _>>()?,
         ColumnValues::Map(v) => map(v, |entries| Value::Map(Arc::new(entries.clone()))),
+        // Exact, as a flushed file's DECIMAL reads (#632).
         ColumnValues::Decimal(v) => {
             let scale = match column_type {
-                ColumnType::Decimal { scale, .. } => i32::from(scale),
+                ColumnType::Decimal { scale, .. } => scale,
                 _ => 0,
             };
-            map(v, |unscaled| {
-                Value::Float(
-                    Decimal {
-                        unscaled: *unscaled,
-                        scale,
-                    }
-                    .to_f64(),
-                )
+            map(v, |unscaled| Value::Decimal {
+                unscaled: *unscaled,
+                scale,
             })
         }
     })

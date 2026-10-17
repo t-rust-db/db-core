@@ -1023,6 +1023,9 @@ fn render_value(value: &Value) -> String {
         Value::Null => "Value::Null".to_string(),
         // Programs hold literals only; a map is only ever column data.
         Value::Map(_) => "Value::Null".to_string(),
+        Value::Decimal { unscaled, scale } => {
+            format!("Value::Decimal {{ unscaled: {unscaled}, scale: {scale} }}")
+        }
     }
 }
 
