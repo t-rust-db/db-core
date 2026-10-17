@@ -995,7 +995,7 @@ fn finalize_rejects_a_non_numeric_partial_aggregate() {
         vec![vec![Value::Null], vec![Value::Int(3)]],
     )
     .unwrap();
-    assert_eq!(ok, vec![vec![Value::Float(3.0)]]);
+    assert_eq!(ok, vec![vec![Value::Int(3)]]);
     assert!(matches!(
         finalize(
             &[AggPart::Sum],

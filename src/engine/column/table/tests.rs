@@ -87,9 +87,9 @@ fn queries_span_files_and_pages() {
         rows(&w, "SELECT COUNT(*), SUM(n), MIN(n), MAX(n) FROM logs"),
         vec![vec![
             Cell::Int(4),
-            Cell::Real(10.0),
-            Cell::Real(1.0),
-            Cell::Real(4.0)
+            Cell::Int(10),
+            Cell::Int(1),
+            Cell::Int(4)
         ]]
     );
     assert_eq!(
@@ -522,7 +522,7 @@ fn the_engine_sees_new_records_on_every_query() {
     let count = "SELECT COUNT(*), MAX(n) FROM logs";
     assert_eq!(
         engine.run_query(count).unwrap().rows,
-        vec![vec![Cell::Int(2), Cell::Real(2.0)]]
+        vec![vec![Cell::Int(2), Cell::Int(2)]]
     );
     assert_eq!(engine.snapshot().last_lsn(), 2);
     assert_eq!(
@@ -765,8 +765,8 @@ fn the_table_handle_answers_the_same_before_and_after_a_flush() {
     assert_eq!(
         before.rows,
         [
-            vec![Cell::Text("a".into()), Cell::Real(4.0)],
-            vec![Cell::Text("b".into()), Cell::Real(2.0)]
+            vec![Cell::Text("a".into()), Cell::Int(4)],
+            vec![Cell::Text("b".into()), Cell::Int(2)]
         ]
     );
     assert_eq!(table.flush().unwrap().len(), 1);
@@ -867,8 +867,8 @@ fn snapshot_segments_drive_a_join_as_a_caller_runs_one() {
     assert_eq!(
         rows,
         [
-            vec![s("alpha"), Value::Float(4.0)],
-            vec![s("beta"), Value::Float(2.0)]
+            vec![s("alpha"), Value::Int(4)],
+            vec![s("beta"), Value::Int(2)]
         ]
     );
 }

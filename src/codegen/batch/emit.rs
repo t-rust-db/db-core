@@ -1007,6 +1007,7 @@ fn render_agg_func(func: AggFunc) -> &'static str {
         AggFunc::Avg => "Avg",
         AggFunc::Min => "Min",
         AggFunc::Max => "Max",
+        AggFunc::AvgSum => "AvgSum",
     }
 }
 

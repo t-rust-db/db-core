@@ -924,8 +924,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                vec![Value::Int(1), Value::Float(13.0)],
-                vec![Value::Int(2), Value::Float(5.0)],
+                vec![Value::Int(1), Value::Int(13)],
+                vec![Value::Int(2), Value::Int(5)],
             ]
         );
     }
@@ -1156,8 +1156,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                vec![Value::Int(1), Value::Float(13.0)],
-                vec![Value::Int(2), Value::Float(5.0)],
+                vec![Value::Int(1), Value::Int(13)],
+                vec![Value::Int(2), Value::Int(5)],
             ]
         );
     }
@@ -1292,8 +1292,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                vec![Value::Int(1), Value::Float(13.0)],
-                vec![Value::Int(2), Value::Float(5.0)],
+                vec![Value::Int(1), Value::Int(13)],
+                vec![Value::Int(2), Value::Int(5)],
             ]
         );
     }
@@ -1324,8 +1324,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                vec![Value::Int(2), Value::Float(5.0)],
-                vec![Value::Int(1), Value::Float(13.0)],
+                vec![Value::Int(2), Value::Int(5)],
+                vec![Value::Int(1), Value::Int(13)],
             ]
         );
     }

@@ -399,7 +399,7 @@ fn compile_agg_operand(
             if func == AggFunc::Avg {
                 let sum_dst = ctx.alloc();
                 let count_dst = ctx.alloc();
-                aggs.push((AggFunc::Sum, src));
+                aggs.push((AggFunc::AvgSum, src));
                 agg_dst.push(sum_dst);
                 aggs.push((AggFunc::Count, src));
                 agg_dst.push(count_dst);
@@ -418,7 +418,8 @@ fn compile_agg_operand(
                     AggFunc::Count => HiddenPart::Count,
                     AggFunc::Min => HiddenPart::Min,
                     AggFunc::Max => HiddenPart::Max,
-                    AggFunc::Avg => HiddenPart::Sum, // unreachable, handled above
+                    // `Avg` is handled above; `AvgSum` is only ever its partial.
+                    AggFunc::Avg | AggFunc::AvgSum => HiddenPart::Sum,
                 };
                 let slot = emit_regs.len();
                 agg_parts.push(AggPart::Hidden(hidden));
@@ -1306,7 +1307,8 @@ pub fn compile(select: &Select) -> Result<Program> {
                 AggFunc::Count => Some(AggPart::Count),
                 AggFunc::Min => Some(AggPart::Min),
                 AggFunc::Max => Some(AggPart::Max),
-                AggFunc::Avg => None,
+                // `AvgSum` never comes from SQL; it is `Avg`'s partial.
+                AggFunc::Avg | AggFunc::AvgSum => None,
             };
             match simple_part {
                 Some(part) => {
@@ -1319,7 +1321,7 @@ pub fn compile(select: &Select) -> Result<Program> {
                 None => {
                     let sum_dst = ctx.alloc();
                     let count_dst = ctx.alloc();
-                    aggs.push((AggFunc::Sum, src));
+                    aggs.push((AggFunc::AvgSum, src));
                     agg_dst.push(sum_dst);
                     aggs.push((AggFunc::Count, src));
                     agg_dst.push(count_dst);
@@ -3993,8 +3995,8 @@ mod tests {
                     segments
                 )),
                 vec![
-                    vec![Value::Float(3.0), Value::Str("b".into())],
-                    vec![Value::Float(5.0), Value::Str("a".into())],
+                    vec![Value::Int(3), Value::Str("b".into())],
+                    vec![Value::Int(5), Value::Str("a".into())],
                 ],
             );
             assert_eq!(
@@ -4006,25 +4008,25 @@ mod tests {
                     vec![
                         Value::Int(n),
                         Value::Str("a".into()),
-                        Value::Float(5.0 * n as f64),
+                        Value::Int(5 * n),
                         Value::Int(5)
                     ],
                     vec![
                         Value::Int(n),
                         Value::Str("a".into()),
-                        Value::Float(20.0 * n as f64),
+                        Value::Int(20 * n),
                         Value::Int(20)
                     ],
                     vec![
                         Value::Int(n),
                         Value::Str("b".into()),
-                        Value::Float(3.0 * n as f64),
+                        Value::Int(3 * n),
                         Value::Int(3)
                     ],
                     vec![
                         Value::Int(n),
                         Value::Str("b".into()),
-                        Value::Float(30.0 * n as f64),
+                        Value::Int(30 * n),
                         Value::Int(30)
                     ],
                 ]),
@@ -4075,8 +4077,8 @@ mod tests {
                 1
             ),
             vec![
-                vec![Value::Float(33.0), Value::Str("b".into())],
-                vec![Value::Float(25.0), Value::Str("a".into())],
+                vec![Value::Int(33), Value::Str("b".into())],
+                vec![Value::Int(25), Value::Str("a".into())],
             ],
         );
         assert_eq!(
@@ -4084,7 +4086,7 @@ mod tests {
                 "SELECT MAX(amount) AS m, region FROM t GROUP BY region ORDER BY m LIMIT 1",
                 1
             ),
-            vec![vec![Value::Float(20.0), Value::Str("a".into())]],
+            vec![vec![Value::Int(20), Value::Str("a".into())]],
         );
     }
 
@@ -4144,7 +4146,7 @@ mod tests {
     fn flat_sum_filter_excludes_non_matching_rows() {
         let query = sql::parse("SELECT SUM(amount) FILTER (WHERE amount > 10) FROM t").unwrap();
         let program = compile(&query).unwrap();
-        assert_eq!(run_program(&program), vec![vec![Value::Float(50.0)]]);
+        assert_eq!(run_program(&program), vec![vec![Value::Int(50)]]);
     }
 
     #[test]
@@ -4166,8 +4168,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                vec![Value::Str("a".into()), Value::Float(20.0)],
-                vec![Value::Str("b".into()), Value::Float(30.0)],
+                vec![Value::Str("a".into()), Value::Int(20)],
+                vec![Value::Str("b".into()), Value::Int(30)],
             ]
         );
     }
@@ -4182,10 +4184,10 @@ mod tests {
         assert_eq!(
             run_program(&program),
             vec![
-                vec![Value::Float(20.0)],
-                vec![Value::Float(20.0)],
-                vec![Value::Float(30.0)],
-                vec![Value::Float(30.0)],
+                vec![Value::Int(20)],
+                vec![Value::Int(20)],
+                vec![Value::Int(30)],
+                vec![Value::Int(30)],
             ]
         );
     }
@@ -4345,8 +4347,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                vec![Value::Str("b".into()), Value::Float(30.0)],
-                vec![Value::Str("c".into()), Value::Float(100.0)],
+                vec![Value::Str("b".into()), Value::Int(30)],
+                vec![Value::Str("c".into()), Value::Int(100)],
             ]
         );
     }

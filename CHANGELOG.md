@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.135.0] - 2026-10-17
+
+### Changed
+
+- **Integer aggregates are exact, and text MIN/MAX works** (#631). `SUM`, `MIN` and `MAX` over integers return exact `Int`s instead of rounded `Float`s: `MAX(session_id)` above 2^53 is no longer off. `MIN`/`MAX` over text return the smallest/largest string instead of NULL. `SUM` over integers that overflows 64 bits is an error (`VmError::IntegerOverflow`), as in SQLite; a float input makes `SUM` a float; `AVG` is always a float. Window `SUM`/`AVG` follow the same rules. A new `VmError` variant and an internal `AggFunc::AvgSum` (not reachable from SQL) are public. Result types change for integer input: a client that matched `Float` for `SUM`/`MIN`/`MAX` must accept `Int`.
+
+### Known limits
+
+- Arithmetic on aggregate results (`SUM(x) * 2`) is still float (#635); the stream engine's `SINCE`-range aggregates stay DOUBLE (#634).
+
 ## [0.134.0] - 2026-10-16
 
 ### Added

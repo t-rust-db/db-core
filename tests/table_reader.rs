@@ -99,10 +99,14 @@ fn check_sql(engine: &mut TableEngine) -> u64 {
     };
     let n = u64::try_from(n).unwrap();
     if n > 0 {
-        let sum = (n * (n - 1) / 2) as f64;
+        let sum = i64::try_from(n * (n - 1) / 2).unwrap();
         assert_eq!(
             result.rows[0][1..],
-            [Cell::Real(0.0), Cell::Real((n - 1) as f64), Cell::Real(sum)],
+            [
+                Cell::Int(0),
+                Cell::Int(i64::try_from(n - 1).unwrap()),
+                Cell::Int(sum)
+            ],
             "{n} records"
         );
     }
