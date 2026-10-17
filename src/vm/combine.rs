@@ -91,7 +91,7 @@ pub(crate) fn slot_ops(parts: &[AggPart], num_slots: usize) -> Result<Vec<SlotOp
             other => {
                 if let Some(slot) = ops.get_mut(cursor) {
                     *slot = match other {
-                        AggPart::GroupKey => SlotOp::Key,
+                        AggPart::GroupKey | AggPart::DistinctKey => SlotOp::Key,
                         AggPart::Sum | AggPart::Hidden(HiddenPart::Sum) => SlotOp::Sum,
                         AggPart::Count | AggPart::Hidden(HiddenPart::Count) => SlotOp::Count,
                         AggPart::Min | AggPart::Hidden(HiddenPart::Min) => SlotOp::Min,
@@ -104,6 +104,16 @@ pub(crate) fn slot_ops(parts: &[AggPart], num_slots: usize) -> Result<Vec<SlotOp
         }
     }
     Ok(ops)
+}
+
+/// How many slots an emitted row of `parts` has: one per part, an `Avg`
+/// up to its count slot, an `Expr` none -- the walk [`slot_ops`] makes.
+fn slot_count(parts: &[AggPart]) -> usize {
+    parts.iter().fold(0usize, |cursor, part| match part {
+        AggPart::Avg(_, count_i) => count_i.saturating_add(1),
+        AggPart::Expr(..) => cursor,
+        _ => cursor.saturating_add(1),
+    })
 }
 
 /// Resolves one [`AggOperand`] against a slot accessor -- shared by
@@ -627,11 +637,61 @@ impl Combiner {
     /// The finalized result (`AVG` divided, `parts` order), groups in
     /// first-seen order.
     pub(crate) fn finish(self) -> Result<QueryOutput> {
+        if self.parts.contains(&AggPart::DistinctKey) {
+            return self.finish_distinct();
+        }
         if self.num_slots.is_none() {
             return Ok(QueryOutput::default());
         }
         let acc = reorder_by_first_seen(self.acc, &self.first_seen);
         Ok(QueryOutput::new(output_columns(&self.parts, acc)?))
+    }
+
+    /// `COUNT(DISTINCT x)`'s second grouping (#633). Every partial is
+    /// merged, so each `(keys, x)` group is one distinct `x`: its slot
+    /// becomes a partial count (1, or 0 for `x` NULL), and a second
+    /// `Combiner` groups by the real keys alone -- the `DistinctKey` part
+    /// a plain `Count` there, every other part merged as before. Without
+    /// `GROUP BY` the result is one row even over no rows, as for any
+    /// other aggregate.
+    fn finish_distinct(self) -> Result<QueryOutput> {
+        let keys = self.num_group_keys.saturating_sub(1);
+        let parts: Vec<AggPart> = self
+            .parts
+            .iter()
+            .map(|p| match p {
+                AggPart::DistinctKey => AggPart::Count,
+                other => *other,
+            })
+            .collect();
+        let mut regroup = Combiner::new(&parts, keys);
+        if self.num_slots.is_some() {
+            let first_seen = self.first_seen;
+            let mut acc = self.acc;
+            if let Some(column) = acc.get_mut(keys) {
+                for value in column.iter_mut() {
+                    *value = Value::Int(i64::from(!matches!(value, Value::Null)));
+                }
+            }
+            let chunk: Chunk = acc.into_iter().map(Arc::new).collect();
+            regroup.push_chunk(&chunk, |row| {
+                first_seen.get(row).copied().unwrap_or(u64::MAX)
+            })?;
+        }
+        if keys > 0 || regroup.num_slots.is_some() {
+            return regroup.finish();
+        }
+        let ops = slot_ops(&parts, slot_count(&parts))?;
+        let empty_row: Vec<Vec<Value>> = ops
+            .iter()
+            .map(|op| {
+                vec![match op {
+                    SlotOp::Count | SlotOp::AvgCount => Value::Int(0),
+                    _ => Value::Null,
+                }]
+            })
+            .collect();
+        Ok(QueryOutput::new(output_columns(&parts, empty_row)?))
     }
 
     /// The still-mergeable state: the raw accumulator slots as one chunk
@@ -754,6 +814,109 @@ mod tests {
 
     fn s(v: &str) -> Value {
         Value::Str(v.to_string().into())
+    }
+
+    // vm_combine_finish_distinct_f71d60b5 (`finish_distinct`):
+    // `keys > 0 || regroup.num_slots.is_some()`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_finish_distinct_f71d60b5__v1_grouped_over_nothing_is_empty() {
+        let parts = [AggPart::GroupKey, AggPart::DistinctKey];
+        assert!(combine_chunks(&parts, 2, &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_finish_distinct_f71d60b5__v2_ungrouped_rows_are_counted() {
+        let x = chunk(vec![vec![Value::Int(1), Value::Int(1), Value::Int(2)]]);
+        let out = combine_chunks(&[AggPart::DistinctKey], 1, &[x]).unwrap();
+        assert_eq!(out.into_rows(), vec![vec![Value::Int(2)]]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_finish_distinct_f71d60b5__v3_ungrouped_nothing_is_one_zero_row() {
+        let out = combine_chunks(&[AggPart::DistinctKey], 1, &[]).unwrap();
+        assert_eq!(out.into_rows(), vec![vec![Value::Int(0)]]);
+    }
+
+    /// #633: `[k, x, SUM, AVG sum, AVG count]` partials keyed on `(k, x)`
+    /// from two workers. The same `(k, x)` from both counts once, a NULL
+    /// `x` never, and SUM/AVG still add every partial -- the same through
+    /// `combine_partials`, `combine_chunks` and the row form `finalize`.
+    #[test]
+    fn count_distinct_regroups_merged_partials_by_the_real_keys() {
+        let parts = [
+            AggPart::GroupKey,
+            AggPart::DistinctKey,
+            AggPart::Sum,
+            AggPart::Avg(3, 4),
+        ];
+        let rows = |r: &[(&str, Option<i64>, i64)]| {
+            chunk(vec![
+                r.iter().map(|t| s(t.0)).collect(),
+                r.iter()
+                    .map(|t| t.1.map_or(Value::Null, Value::Int))
+                    .collect(),
+                r.iter().map(|t| Value::Int(t.2)).collect(),
+                r.iter().map(|t| Value::Int(t.2)).collect(),
+                r.iter().map(|_| Value::Int(1)).collect(),
+            ])
+        };
+        let a = rows(&[("a", Some(1), 10), ("b", Some(7), 1), ("a", None, 5)]);
+        let b = rows(&[("a", Some(1), 20), ("a", Some(2), 30), ("b", Some(7), 2)]);
+        let expected = vec![
+            vec![
+                s("a"),
+                Value::Int(2),
+                Value::Int(65),
+                Value::Float(65.0 / 4.0),
+            ],
+            vec![s("b"), Value::Int(1), Value::Int(3), Value::Float(1.5)],
+        ];
+        let direct = combine_chunks(&parts, 2, &[a.clone(), b.clone()]).unwrap();
+        assert_eq!(direct.into_rows(), expected);
+        let worker = |c: &Chunk, segment| {
+            let mut w = Combiner::new(&parts, 2);
+            w.push_chunk(c, |row| order_key(segment, row)).unwrap();
+            w.finish_partial()
+        };
+        let merged = combine_partials(&parts, 2, &[worker(&b, 1), worker(&a, 0)]).unwrap();
+        assert_eq!(merged.into_rows(), expected, "first-seen order is kept");
+        let mut all = rows_of(&[a, b]);
+        all.rotate_left(1);
+        let reference = finalize(&parts, 2, false, Some((0, false)), None, all).unwrap();
+        assert_eq!(reference.into_rows(), expected);
+    }
+
+    /// Without `GROUP BY`, `COUNT(DISTINCT x)` is one row even over no
+    /// rows: 0, with `COUNT` 0 and everything else NULL.
+    #[test]
+    fn count_distinct_without_group_by_is_one_row_over_nothing() {
+        let parts = [
+            AggPart::DistinctKey,
+            AggPart::Count,
+            AggPart::Sum,
+            AggPart::Avg(3, 4),
+            AggPart::Hidden(HiddenPart::Count),
+            AggPart::Expr(MapOp::Add, AggOperand::Slot(5), AggOperand::Literal(1.0)),
+        ];
+        assert_eq!(slot_count(&parts), 6);
+        let out = combine_chunks(&parts, 1, &[]).unwrap();
+        assert_eq!(
+            out.into_rows(),
+            vec![vec![
+                Value::Int(0),
+                Value::Int(0),
+                Value::Null,
+                Value::Null,
+                Value::Float(1.0)
+            ]]
+        );
+        let reference = finalize(&parts, 1, false, None, None, Vec::new()).unwrap();
+        assert_eq!(reference.num_rows(), 1);
+        let grouped = [AggPart::GroupKey, AggPart::DistinctKey];
+        assert!(combine_chunks(&grouped, 2, &[]).unwrap().is_empty());
     }
 
     /// #632: decimal SUM partials merge exactly at the larger scale, an

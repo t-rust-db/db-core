@@ -306,6 +306,7 @@ pub fn render_flat(
 fn render_agg_part(part: &AggPart) -> String {
     match part {
         AggPart::GroupKey => "AggPart::GroupKey".to_string(),
+        AggPart::DistinctKey => "AggPart::DistinctKey".to_string(),
         AggPart::Sum => "AggPart::Sum".to_string(),
         AggPart::Count => "AggPart::Count".to_string(),
         AggPart::Min => "AggPart::Min".to_string(),

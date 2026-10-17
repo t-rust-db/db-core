@@ -213,9 +213,10 @@ pub type Result<T> = std::result::Result<T, PlanError>;
 enum Item {
     Column(String),
     Star,
-    /// `agg(arg) [FILTER (WHERE ...)]`; the third field is the filter
-    /// predicate, if any.
-    Agg(AggFunc, Option<AggArg>, Option<AstExpr>),
+    /// `agg([DISTINCT] arg) [FILTER (WHERE ...)]`; the third field is the
+    /// filter predicate, if any, the fourth whether it is `DISTINCT` (only
+    /// ever `COUNT(DISTINCT x)`, #633).
+    Agg(AggFunc, Option<AggArg>, Option<AstExpr>, bool),
     Window(WindowSpec),
     Expr(AstExpr),
     /// A scalar expression over one or more aggregate calls (#496: `SUM(x)
@@ -559,10 +560,15 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
             }),
             ExprKind::FunctionCall {
                 name,
-                distinct: _,
+                distinct,
                 args,
                 tail,
             } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
+                if *distinct {
+                    return Err(PlanError::UnsupportedSelectItem(format!(
+                        "DISTINCT in the window function {name}"
+                    )));
+                }
                 // The guard above makes the `else` unreachable; a typed
                 // error keeps it total without an `expect` (db-core#231).
                 let Some(window_def) = tail.as_deref().and_then(|t| t.over.as_ref()) else {
@@ -598,14 +604,19 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
             }
             ExprKind::FunctionCall {
                 name,
-                distinct: _,
+                distinct,
                 args,
                 tail,
             } => match AggFunc::from_name(name) {
                 Some(agg) => {
                     let arg = agg_arg(expr, agg, args)?;
+                    if *distinct && (agg != AggFunc::Count || arg.is_none()) {
+                        return Err(PlanError::UnsupportedSelectItem(format!(
+                            "{name}(DISTINCT ...): only COUNT(DISTINCT x) is supported"
+                        )));
+                    }
                     let filter = tail.as_deref().and_then(|t| t.filter.clone());
-                    Ok(Item::Agg(agg, arg, filter))
+                    Ok(Item::Agg(agg, arg, filter, *distinct))
                 }
                 // Not an aggregate: a scalar call (#307) compiles like any
                 // other expression (`compile_expr`'s `FunctionCall` arm);
@@ -751,13 +762,14 @@ fn select_limit(select: &Select) -> Option<usize> {
 /// the same output label [`select_item_label`] would render for it (via
 /// [`AggFunc::name`]) -- used to resolve an `ORDER BY` reference to a
 /// `SELECT`-list aggregate (#131) against that same label.
-fn aggregate_call_label(name: &str, args: &FunctionArgs) -> Option<String> {
+fn aggregate_call_label(name: &str, distinct: bool, args: &FunctionArgs) -> Option<String> {
     let agg = AggFunc::from_name(name)?;
+    let distinct = if distinct { "DISTINCT " } else { "" };
     match args {
         FunctionArgs::Star if agg == AggFunc::Count => Some(format!("{}(*)", agg.name())),
         FunctionArgs::Star => None,
         FunctionArgs::List(list) => match list.as_slice() {
-            [one] => expr_column_name(one).map(|col| format!("{}({col})", agg.name())),
+            [one] => expr_column_name(one).map(|col| format!("{}({distinct}{col})", agg.name())),
             _ => None,
         },
     }
@@ -772,9 +784,12 @@ fn select_order_by(select: &Select) -> Option<(String, bool)> {
     let column = match &term.expr.kind {
         ExprKind::Column { .. } => expr_column_name(&term.expr)?,
         ExprKind::FunctionCall {
-            name, args, tail, ..
+            name,
+            distinct,
+            args,
+            tail,
         } if !matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
-            aggregate_call_label(name, args)?
+            aggregate_call_label(name, *distinct, args)?
         }
         _ => return None,
     };
@@ -1212,8 +1227,23 @@ pub fn compile(select: &Select) -> Result<Program> {
     let mut agg_srcs: Vec<Vec<Option<usize>>> = Vec::new();
     for item in &items {
         match item {
-            Item::Agg(_, arg, filter) => {
+            Item::Agg(_, arg, filter, distinct) => {
                 let base = arg.as_ref().map(|a| match a {
+                    // `COUNT(DISTINCT x)`'s `x` becomes a group key, which
+                    // `GroupReduce` overwrites with the groups' keys: it
+                    // gets a register of its own, not one an aggregate or
+                    // a real key also reads (#633).
+                    AggArg::Column(name) if *distinct => {
+                        let reg = ctx.alloc();
+                        ctx.push_commented(
+                            Opcode::LoadColumn {
+                                reg,
+                                column: name.clone().into(),
+                            },
+                            format!("r{reg} = {name} (COUNT DISTINCT key)"),
+                        );
+                        reg
+                    }
                     AggArg::Column(name) => ctx.load_column(name),
                     AggArg::Expr(expr) => compile_expr(expr, &mut ctx),
                 });
@@ -1229,13 +1259,21 @@ pub fn compile(select: &Select) -> Result<Program> {
                     .into_iter()
                     .map(|call| {
                         let ExprKind::FunctionCall {
-                            name, args, tail, ..
+                            name,
+                            distinct,
+                            args,
+                            tail,
                         } = &call.kind
                         else {
                             return Err(PlanError::UnsupportedSelectItem(
                                 "internal: agg_expr_calls returned a non-FunctionCall node".into(),
                             ));
                         };
+                        if *distinct {
+                            return Err(PlanError::UnsupportedSelectItem(format!(
+                                "{name}(DISTINCT ...) inside an expression"
+                            )));
+                        }
                         let func = AggFunc::from_name(name).unwrap_or(AggFunc::Count);
                         let base = agg_arg(call, func, args)?.map(|a| match a {
                             AggArg::Column(name) => ctx.load_column(&name),
@@ -1291,13 +1329,36 @@ pub fn compile(select: &Select) -> Result<Program> {
     for _ in &group_by {
         agg_parts.push(AggPart::GroupKey);
     }
+    // #633: `COUNT(DISTINCT x)` groups by `x` as one more, hidden key; see
+    // `AggPart::DistinctKey`. One per query: a second distinct argument
+    // would need a second grouping.
+    let mut distinct_srcs = items
+        .iter()
+        .zip(&agg_srcs)
+        .filter(|(item, _)| matches!(item, Item::Agg(_, _, _, true)))
+        .map(|(_, src)| src.first().copied().flatten());
+    let distinct_src = distinct_srcs.next();
+    if distinct_srcs.next().is_some() {
+        return Err(PlanError::UnsupportedSelectItem(
+            "more than one COUNT(DISTINCT ...) in a query".into(),
+        ));
+    }
+    if let Some(src) = distinct_src {
+        let src = src
+            .ok_or_else(|| PlanError::Internal("COUNT(DISTINCT ...) without an argument".into()))?;
+        group_by_regs.push(src);
+        agg_parts.push(AggPart::DistinctKey);
+    }
+    let num_group_keys = group_by_regs.len();
 
     let mut aggs: Vec<(AggFunc, Option<usize>)> = Vec::new();
     let mut agg_dst = Vec::new();
     let mut emit_regs = group_by_regs.clone();
 
     for (item, agg_src) in items.iter().zip(&agg_srcs) {
-        if let Item::Agg(func, _, _) = item {
+        if let Item::Agg(_, _, _, true) = item {
+            // Its value is the hidden key's count, emitted with the keys.
+        } else if let Item::Agg(func, _, _, false) = item {
             let src = agg_src.first().copied().flatten();
             // Resolved up front so the dispatch below has no "can't happen"
             // arm: `None` *is* the `Avg` case (the only aggregate that
@@ -1416,7 +1477,11 @@ pub fn compile(select: &Select) -> Result<Program> {
                 aggs: aggs.into(),
                 agg_dst: agg_dst.into(),
             },
-            format!("GROUP BY {}", group_by.join(", ")),
+            if group_by.is_empty() {
+                "COUNT(DISTINCT ...)".to_string()
+            } else {
+                format!("GROUP BY {}", group_by.join(", "))
+            },
         );
     }
 
@@ -1452,7 +1517,7 @@ pub fn compile(select: &Select) -> Result<Program> {
     ctx.push_commented(
         Opcode::Combine {
             agg_parts: agg_parts.into(),
-            num_group_keys: group_by.len(),
+            num_group_keys,
             distinct: matches!(select.distinct, Some(Distinctness::Distinct)),
             output_order: grouped_output_order(&items, group_by.len()).into(),
         },
@@ -2274,15 +2339,20 @@ fn map_window_func(func: WindowFunc) -> crate::vm::batch::WindowFunc {
 /// when there is no `GROUP BY`, or for any item shape this mapping does
 /// not cover, which keeps the merged order.
 fn grouped_output_order(items: &[Item], num_group_keys: usize) -> Vec<usize> {
-    if num_group_keys == 0 {
+    // #633: a `COUNT(DISTINCT x)` is merged right after the keys, in the
+    // hidden key's slot, ahead of every other aggregate.
+    let has_distinct = items.iter().any(|i| matches!(i, Item::Agg(_, _, _, true)));
+    if num_group_keys == 0 && !has_distinct {
         return Vec::new();
     }
     let mut next_key = 0usize;
-    let mut next_agg = num_group_keys;
+    let mut distinct_slot = num_group_keys;
+    let mut next_agg = num_group_keys.saturating_add(usize::from(has_distinct));
     let mut order = Vec::with_capacity(items.len());
     for item in items {
         let slot = match item {
             Item::Column(_) | Item::Expr(_) => &mut next_key,
+            Item::Agg(_, _, _, true) => &mut distinct_slot,
             Item::Agg(..) | Item::AggExpr(_) => &mut next_agg,
             Item::Star | Item::Window(_) => return Vec::new(),
         };
@@ -2850,7 +2920,17 @@ fn select_item_label(item: &ResultColumn) -> String {
     match classify_item(item) {
         Ok(Item::Column(name)) => name,
         Ok(Item::Star) => "*".to_string(),
-        Ok(Item::Agg(func, arg, _)) => match arg {
+        Ok(Item::Agg(func, Some(AggArg::Column(col)), _, true)) => {
+            format!("{}(DISTINCT {col})", agg_func_name(func))
+        }
+        Ok(Item::Agg(func, Some(AggArg::Expr(expr)), _, true)) => {
+            format!(
+                "{}(DISTINCT {})",
+                agg_func_name(func),
+                expr_to_string(&expr)
+            )
+        }
+        Ok(Item::Agg(func, arg, _, _)) => match arg {
             Some(AggArg::Column(col)) => format!("{}({col})", agg_func_name(func)),
             Some(AggArg::Expr(expr)) => {
                 format!("{}({})", agg_func_name(func), expr_to_string(&expr))
@@ -3056,7 +3136,7 @@ fn referenced_columns(select: &Select) -> Result<Vec<String>> {
         match item {
             Item::Column(name) => push_unique(&mut out, name.clone()),
             Item::Star => {}
-            Item::Agg(_, arg, filter) => {
+            Item::Agg(_, arg, filter, _) => {
                 match arg {
                     Some(AggArg::Column(name)) => push_unique(&mut out, name.clone()),
                     Some(AggArg::Expr(expr)) => collect_expr_columns(expr, &mut out),
@@ -3984,6 +4064,170 @@ mod tests {
         rows
     }
 
+    /// #633: every segment holds the same rows, so a distinct count is
+    /// the same over 1 segment (merged directly) as over 256 (pre-
+    /// aggregated per worker), while `COUNT(*)` grows with them.
+    #[test]
+    fn count_distinct_dedups_across_segments_and_workers() {
+        for segments in [1, 256] {
+            let n = i64::try_from(segments).unwrap();
+            let s = |v: &str| Value::Str(v.to_string().into());
+            assert_eq!(
+                run_grouped(
+                    "SELECT region, COUNT(DISTINCT amount), COUNT(*) FROM t \
+                     GROUP BY region ORDER BY region",
+                    segments
+                ),
+                vec![
+                    vec![s("a"), Value::Int(2), Value::Int(2 * n)],
+                    vec![s("b"), Value::Int(2), Value::Int(2 * n)],
+                ],
+            );
+            // An expression argument, the key column itself, a FILTER
+            // (masked rows become NULL, which is not counted).
+            assert_eq!(
+                run_grouped(
+                    "SELECT COUNT(DISTINCT amount * 0), SUM(amount) FROM t",
+                    segments
+                ),
+                vec![vec![Value::Int(1), Value::Int(58 * n)]],
+            );
+            assert_eq!(
+                run_grouped("SELECT COUNT(DISTINCT region) FROM t", segments),
+                vec![vec![Value::Int(2)]],
+            );
+            assert_eq!(
+                run_grouped(
+                    "SELECT region, COUNT(DISTINCT region) FROM t GROUP BY region ORDER BY region",
+                    segments
+                ),
+                vec![vec![s("a"), Value::Int(1)], vec![s("b"), Value::Int(1)]],
+            );
+            assert_eq!(
+                run_grouped(
+                    "SELECT COUNT(DISTINCT amount) FILTER (WHERE amount > 4) FROM t",
+                    segments
+                ),
+                vec![vec![Value::Int(3)]],
+            );
+            assert_eq!(
+                run_grouped(
+                    "SELECT region, COUNT(DISTINCT amount) AS n FROM t GROUP BY region \
+                     ORDER BY COUNT(DISTINCT amount) DESC",
+                    segments
+                )
+                .len(),
+                2,
+            );
+        }
+    }
+
+    fn first_item(sql_text: &str, distinct: bool) -> Result<Item> {
+        let mut select = sql::parse(sql_text).unwrap();
+        if let ResultColumn::Expr { expr, .. } = &mut select.columns[0] {
+            if let ExprKind::FunctionCall { distinct: d, .. } = &mut expr.kind {
+                *d = distinct;
+            }
+        }
+        classify_item(&select.columns[0])
+    }
+
+    // codegen_batch_classify_item_96783126 (`classify_item`):
+    // `*distinct && (agg != AggFunc::Count || arg.is_none())`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_classify_item_96783126__v1_sum_distinct_is_refused() {
+        assert!(first_item("SELECT SUM(amount) FROM t", true).is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_classify_item_96783126__v2_a_plain_aggregate_is_kept() {
+        assert!(matches!(
+            first_item("SELECT SUM(amount) FROM t", false),
+            Ok(Item::Agg(AggFunc::Sum, _, _, false))
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_classify_item_96783126__v3_count_distinct_of_a_column_is_kept() {
+        assert!(matches!(
+            first_item("SELECT COUNT(amount) FROM t", true),
+            Ok(Item::Agg(AggFunc::Count, Some(_), _, true))
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_classify_item_96783126__v4_count_distinct_star_is_refused() {
+        assert!(first_item("SELECT COUNT(*) FROM t", true).is_err());
+    }
+
+    fn distinct_item() -> Item {
+        Item::Agg(AggFunc::Count, Some(AggArg::Column("x".into())), None, true)
+    }
+
+    // codegen_batch_grouped_output_order_c4d07137 (`grouped_output_order`):
+    // `num_group_keys == 0 && !has_distinct`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_grouped_output_order_c4d07137__v1_no_keys_no_distinct_is_identity() {
+        assert!(grouped_output_order(&[count_item(), count_item()], 0).is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_grouped_output_order_c4d07137__v2_keys_are_reordered() {
+        let items = [count_item(), Item::Column("k".into())];
+        assert_eq!(grouped_output_order(&items, 1), [1, 0]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_grouped_output_order_c4d07137__v3_a_distinct_count_moves_first() {
+        // Merged as [COUNT(DISTINCT x), COUNT(*)]: the select list's
+        // COUNT(*) first is merged column 1.
+        assert_eq!(
+            grouped_output_order(&[count_item(), distinct_item()], 0),
+            [1, 0]
+        );
+    }
+
+    #[test]
+    fn count_distinct_is_labelled_and_other_distinct_aggregates_are_refused() {
+        let select =
+            sql::parse("SELECT region, COUNT(DISTINCT amount) FROM t GROUP BY region").unwrap();
+        assert_eq!(
+            output_column_names(&select),
+            ["region", "COUNT(DISTINCT amount)"]
+        );
+        for sql_text in [
+            "SELECT SUM(DISTINCT amount) FROM t",
+            "SELECT COUNT(DISTINCT amount) * 2 FROM t",
+        ] {
+            assert!(sql::parse(sql_text).is_err(), "{sql_text}");
+        }
+        // The planner refuses the same shapes on its own, for an AST that
+        // did not come through the column parser.
+        for sql_text in [
+            "SELECT SUM(DISTINCT amount) FROM t",
+            "SELECT COUNT(DISTINCT amount) * 2 FROM t",
+            "SELECT COUNT(DISTINCT amount), COUNT(DISTINCT region) FROM t",
+            "SELECT COUNT(DISTINCT amount) OVER (PARTITION BY region) FROM t",
+        ] {
+            let crate::parser::row::error::ParseOutcome::Accepted(select) =
+                crate::parser::row::error::parse_select(sql_text)
+            else {
+                panic!("{sql_text} did not parse");
+            };
+            assert!(
+                matches!(compile(&select), Err(PlanError::UnsupportedSelectItem(_))),
+                "{sql_text}"
+            );
+        }
+    }
+
     #[test]
     fn grouped_output_follows_the_select_list_when_an_aggregate_comes_first() {
         // One segment merges chunks directly, 256 pre-aggregate per worker.
@@ -4093,7 +4337,7 @@ mod tests {
     // codegen_batch_grouped_output_order_476ef2ae:
     // `next_key != num_group_keys || identity`
     fn count_item() -> Item {
-        Item::Agg(AggFunc::Count, None, None)
+        Item::Agg(AggFunc::Count, None, None, false)
     }
 
     #[test]

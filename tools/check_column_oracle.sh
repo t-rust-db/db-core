@@ -34,6 +34,9 @@ QUERIES=(
   "SELECT region, avg(amount) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, avg(amount)::DECIMAL(18,2) FROM __TABLE__ GROUP BY region ORDER BY region"
   "SELECT region, min(amount), max(amount) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, min(amount)::DECIMAL(18,2), max(amount)::DECIMAL(18,2) FROM __TABLE__ GROUP BY region ORDER BY region"
   "SELECT id, amount FROM __TABLE__ WHERE id > 4990 ORDER BY id|SELECT id, amount::DECIMAL(18,2) FROM __TABLE__ WHERE id > 4990 ORDER BY id"
+  "SELECT count(DISTINCT region) FROM __TABLE__|SELECT count(DISTINCT region) FROM __TABLE__"
+  "SELECT region, count(DISTINCT amount), count(*) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, count(DISTINCT amount), count(*) FROM __TABLE__ GROUP BY region ORDER BY region"
+  "SELECT region, count(DISTINCT id) FROM __TABLE__ WHERE id > 2500 GROUP BY region ORDER BY region|SELECT region, count(DISTINCT id) FROM __TABLE__ WHERE id > 2500 GROUP BY region ORDER BY region"
 )
 
 echo "building examples/column_oracle (release)..."

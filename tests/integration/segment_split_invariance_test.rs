@@ -11,11 +11,8 @@
 //! interleaved, maximally uneven splits, one row per segment) -- and
 //! demands bit-identical output.
 //!
-//! `COUNT(DISTINCT ...)` is *not* covered here: the column parser rejects
-//! `DISTINCT` inside any aggregate call at parse time
-//! (`src/parser/column.rs:507-511,790-793`, "DISTINCT inside an
-//! aggregate"), so there is no such query to run a segmentation harness
-//! over in `vm::batch` today.
+//! `COUNT(DISTINCT ...)` (#633) is covered too: copies of one value in
+//! different segments must count once.
 //!
 //! While building this harness, it caught a real, pre-existing bug: `AVG`
 //! never merged across segments at all (`merge_rows`'s `AggPart::Avg`
@@ -348,6 +345,121 @@ fn batch_decimal_aggregates_are_segment_split_invariant_and_exact() {
     );
     // 0.1+0.3+...+1.1 (=3.6) plus 0.10+0.20+...+0.60 (=2.10).
     assert_eq!(total[0][0].to_string(), "5.70");
+}
+
+/// #633: 12 rows over groups `a`/`b`/`c` whose `amt`s repeat within and
+/// across groups, with NULLs: `a` = {1, 2, 1, NULL}, `b` = {2, 2, 3, 4},
+/// `c` = {NULL, NULL, 5, 5}. Rows of a group are spread out, so every
+/// uneven split puts copies of one value in different segments.
+fn distinct_dataset() -> (Vec<Value>, Vec<Value>) {
+    let amts = [
+        Some(1),
+        Some(2),
+        None,
+        Some(2),
+        Some(2),
+        None,
+        Some(1),
+        Some(3),
+        Some(5),
+        None,
+        Some(4),
+        Some(5),
+    ];
+    let groups = ["a", "b", "c"];
+    let grp = (0..12).map(|i| Value::Str(groups[i % 3].into())).collect();
+    let amt = amts
+        .iter()
+        .map(|a| a.map_or(Value::Null, Value::Int))
+        .collect();
+    (grp, amt)
+}
+
+#[test]
+fn batch_count_distinct_is_segment_split_invariant_and_exact() {
+    let (grp, amt) = distinct_dataset();
+    let cases: [(&str, Vec<Vec<Value>>); 4] = [
+        (
+            "SELECT grp, count(DISTINCT amt) FROM t GROUP BY grp ORDER BY grp",
+            vec![
+                vec![Value::Str("a".into()), Value::Int(2)],
+                vec![Value::Str("b".into()), Value::Int(3)],
+                vec![Value::Str("c".into()), Value::Int(1)],
+            ],
+        ),
+        // Every other aggregate still sees every row, duplicates included,
+        // and the select list keeps its order.
+        (
+            "SELECT sum(amt), count(DISTINCT amt), grp, count(*), avg(amt), min(amt), max(amt) \
+             FROM t GROUP BY grp ORDER BY grp",
+            vec![
+                vec![
+                    Value::Int(4),
+                    Value::Int(2),
+                    Value::Str("a".into()),
+                    Value::Int(4),
+                    Value::Float(4.0 / 3.0),
+                    Value::Int(1),
+                    Value::Int(2),
+                ],
+                vec![
+                    Value::Int(11),
+                    Value::Int(3),
+                    Value::Str("b".into()),
+                    Value::Int(4),
+                    Value::Float(2.75),
+                    Value::Int(2),
+                    Value::Int(4),
+                ],
+                vec![
+                    Value::Int(10),
+                    Value::Int(1),
+                    Value::Str("c".into()),
+                    Value::Int(4),
+                    Value::Float(5.0),
+                    Value::Int(5),
+                    Value::Int(5),
+                ],
+            ],
+        ),
+        (
+            "SELECT count(DISTINCT amt), count(amt), count(*) FROM t",
+            vec![vec![Value::Int(5), Value::Int(9), Value::Int(12)]],
+        ),
+        (
+            "SELECT count(DISTINCT amt) FROM t WHERE grp = 'b' OR grp = 'c'",
+            vec![vec![Value::Int(4)]],
+        ),
+    ];
+    for (sql, expected) in cases {
+        assert_split_invariant(sql, grp.len(), ("grp", &grp), ("amt", &amt));
+        assert_eq!(
+            run_batch(sql, &[5, 7], ("grp", &grp), ("amt", &amt)),
+            expected,
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn batch_count_distinct_over_no_rows_is_one_zero_row() {
+    let (grp, amt) = distinct_dataset();
+    assert_eq!(
+        run_batch(
+            "SELECT count(DISTINCT amt), sum(amt), count(*) FROM t WHERE grp = 'z'",
+            &[5, 7],
+            ("grp", &grp),
+            ("amt", &amt),
+        ),
+        vec![vec![Value::Int(0), Value::Null, Value::Int(0)]]
+    );
+    assert!(run_batch(
+        "SELECT grp, count(DISTINCT amt) FROM t WHERE grp = 'z' GROUP BY grp",
+        &[5, 7],
+        ("grp", &grp),
+        ("amt", &amt),
+    )
+    .is_empty());
 }
 
 #[test]
@@ -735,6 +847,47 @@ fn stream_aggregates_are_invariant_to_seal_boundaries() {
             got, expected,
             "seal boundaries {sizes:?} disagree with the single-chunk oracle"
         );
+    }
+}
+
+/// #633: the stream engine counts each distinct value once wherever the
+/// seal boundaries fall, against a GROUP BY of the same column.
+#[test]
+fn stream_count_distinct_counts_each_value_once() {
+    for sizes in [&[24][..], &[1; 24], &[3, 9, 0, 12]] {
+        let path = temp_log(&format!("count-distinct-{sizes:?}"));
+        let mut e = ingest_in_batches(&path, 64 * 1024 * 1024, sizes);
+        // The reference: one row per distinct value, by GROUP BY.
+        let values = rows(&mut e, "SELECT severity FROM log GROUP BY severity").len();
+        assert!(values > 1 && values < 24, "{sizes:?}: {values}");
+        let values = i64::try_from(values).unwrap();
+        assert_eq!(
+            rows(&mut e, "SELECT count(DISTINCT severity), count(*) FROM log"),
+            vec![vec![Cell::Int(values), Cell::Int(24)]],
+            "{sizes:?}"
+        );
+        let pairs = rows(
+            &mut e,
+            "SELECT facility, severity FROM log GROUP BY facility, severity",
+        );
+        let mut expected: Vec<Vec<Cell>> = Vec::new();
+        for pair in &pairs {
+            match expected.iter_mut().find(|r| r[0] == pair[0]) {
+                Some(r) => {
+                    if let Cell::Int(n) = &mut r[1] {
+                        *n += 1;
+                    }
+                }
+                None => expected.push(vec![pair[0].clone(), Cell::Int(1)]),
+            }
+        }
+        expected.sort_by_key(|r| r[0].to_string());
+        let mut got = rows(
+            &mut e,
+            "SELECT facility, count(DISTINCT severity) FROM log GROUP BY facility",
+        );
+        got.sort_by_key(|r| r[0].to_string());
+        assert_eq!(got, expected, "{sizes:?}");
     }
 }
 

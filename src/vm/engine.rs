@@ -418,6 +418,21 @@ pub fn finalize(
     limit: Option<usize>,
     rows: Vec<Vec<Value>>,
 ) -> Result<QueryOutput> {
+    // `COUNT(DISTINCT x)` groups twice (#633); `Combiner` holds that
+    // logic once, so the row form goes through it.
+    if agg_parts.contains(&AggPart::DistinctKey) {
+        let width = rows.first().map_or(0, Vec::len);
+        let mut columns: Vec<Vec<Value>> = vec![Vec::with_capacity(rows.len()); width];
+        for row in rows {
+            for (column, value) in columns.iter_mut().zip(row) {
+                column.push(value);
+            }
+        }
+        let chunk: Chunk = columns.into_iter().map(Arc::new).collect();
+        let chunks = if width == 0 { Vec::new() } else { vec![chunk] };
+        let merged = combine_chunks(agg_parts, num_group_keys, &chunks)?;
+        return finalize(&[], 0, distinct, order_by, limit, merged.into_rows());
+    }
     let mut result_rows = if !agg_parts.is_empty() {
         // #478: a typed, variant-tagged hash over the raw `Value`s
         // (`GroupKey`'s scheme, #263/#266) instead of stringifying+joining
