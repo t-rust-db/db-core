@@ -225,8 +225,37 @@ pub(crate) fn merge_sum_partials(into: &Value, from: &Value) -> Result<Value> {
             .map(Value::Int)
             .ok_or(VmError::IntegerOverflow { opcode: "Combine" }),
         (Value::Null, Value::Int(n)) | (Value::Int(n), Value::Null) => Ok(Value::Int(*n)),
+        // Decimals (and an integer at scale 0) add exactly (#632).
+        (Value::Null, d @ Value::Decimal { .. }) | (d @ Value::Decimal { .. }, Value::Null) => {
+            Ok(d.clone())
+        }
+        (Value::Decimal { .. }, Value::Decimal { .. } | Value::Int(_))
+        | (Value::Int(_), Value::Decimal { .. }) => add_decimals(into, from),
         _ => Ok(Value::Float(partial_f64(into)? + partial_f64(from)?)),
     }
+}
+
+/// Two exact partials, a decimal and a decimal or an integer, added at the
+/// larger scale; an error past `i128` or DECIMAL(38) (#632).
+fn add_decimals(a: &Value, b: &Value) -> Result<Value> {
+    let parts = |v: &Value| match v {
+        Value::Decimal { unscaled, scale } => (*unscaled, *scale),
+        Value::Int(i) => (i128::from(*i), 0),
+        _ => (0, 0),
+    };
+    let ((x, sx), (y, sy)) = (parts(a), parts(b));
+    let scale = sx.max(sy);
+    let overflow = || VmError::IntegerOverflow { opcode: "Combine" };
+    let at = |v: i128, s: u8| {
+        crate::vm::batch::pow10(u32::from(scale.abs_diff(s)))
+            .and_then(|p| v.checked_mul(p))
+            .ok_or_else(overflow)
+    };
+    let unscaled = at(x, sx)?.checked_add(at(y, sy)?).ok_or_else(overflow)?;
+    if unscaled.unsigned_abs() >= 10_u128.pow(38) {
+        return Err(overflow());
+    }
+    Ok(Value::Decimal { unscaled, scale })
 }
 
 /// `AVG`'s final value from its merged `(sum, count)` slots: `NULL` over
@@ -725,6 +754,28 @@ mod tests {
 
     fn s(v: &str) -> Value {
         Value::Str(v.to_string().into())
+    }
+
+    /// #632: decimal SUM partials merge exactly at the larger scale, an
+    /// integer partial joining at scale 0, and a total past DECIMAL(38)
+    /// is an error.
+    #[test]
+    fn merge_sum_partials_adds_decimals_exactly() {
+        let dec = |unscaled, scale| Value::Decimal { unscaled, scale };
+        let merge = |a: &Value, b: &Value| merge_sum_partials(a, b).unwrap();
+        assert_eq!(merge(&dec(10, 2), &dec(2, 1)), dec(30, 2));
+        assert_eq!(merge(&dec(10, 2), &Value::Int(1)), dec(110, 2));
+        assert_eq!(merge(&Value::Int(1), &dec(5, 1)), dec(15, 1));
+        assert_eq!(merge(&Value::Null, &dec(5, 1)), dec(5, 1));
+        assert_eq!(merge(&dec(5, 1), &Value::Null), dec(5, 1));
+        assert!(matches!(
+            merge(&dec(5, 1), &Value::Float(0.5)),
+            Value::Float(_)
+        ));
+        let max38 = 10_i128.pow(38) - 1;
+        assert!(merge_sum_partials(&dec(max38, 0), &dec(1, 0)).is_err());
+        assert!(merge_sum_partials(&dec(i128::MAX, 0), &dec(1, 1)).is_err());
+        assert!(merge_sum_partials(&dec(i128::MAX, 0), &dec(i128::MAX, 0)).is_err());
     }
 
     /// The differential obligation: the column-major merge must produce

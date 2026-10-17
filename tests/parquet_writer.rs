@@ -1034,7 +1034,7 @@ fn query(engine: &mut db_core::engine::column::BatchEngine, sql: &str) -> Vec<St
 
 #[cfg(feature = "engine-column")]
 #[test]
-fn the_column_engine_reads_bytes_as_hex_decimals_as_floats_and_unsigned_values_unsigned() {
+fn the_column_engine_reads_bytes_as_hex_decimals_exactly_and_unsigned_values_unsigned() {
     let schema = vec![
         ColumnSpec::new("blob", ColumnType::Binary, true),
         ColumnSpec::new("ip", ColumnType::FixedLenByteArray(4), true),
@@ -1058,7 +1058,8 @@ fn the_column_engine_reads_bytes_as_hex_decimals_as_floats_and_unsigned_values_u
             "SELECT blob, ip, price, big, u32, u64 FROM typed"
         ),
         [
-            format!("80ff|c0a80107|12.34|-1.5|4294967295|{}", i64::MAX),
+            // A DECIMAL prints at its scale, as DuckDB prints it (#632).
+            format!("80ff|c0a80107|12.34|-1.500|4294967295|{}", i64::MAX),
             "||-0.05||1|0".to_string(),
         ]
     );
@@ -1069,6 +1070,75 @@ fn the_column_engine_reads_bytes_as_hex_decimals_as_floats_and_unsigned_values_u
         ),
         ["1"]
     );
+    std::fs::remove_dir_all(dir).ok();
+}
+
+/// DECIMAL aggregates stay exact (#632): `0.10 + 0.20` sums to `0.30`
+/// rather than f64's `0.30000000000000004`, MIN/MAX/ORDER BY rank by
+/// value, GROUP BY keys on the decimal, and a SUM past 38 digits is an
+/// error rather than a rounded DOUBLE.
+#[cfg(feature = "engine-column")]
+#[test]
+fn the_column_engine_aggregates_decimals_exactly() {
+    let schema = vec![
+        ColumnSpec::new("k", ColumnType::Int64, false),
+        ColumnSpec::new("price", decimal(9, 2), true),
+        ColumnSpec::new("huge", decimal(38, 0), true),
+    ];
+    let max38 = 10_i128.pow(38) - 1;
+    let batches = vec![
+        vec![
+            ColumnValues::Int64(vec![Some(1), Some(1)]),
+            ColumnValues::Decimal(vec![Some(10), Some(20)]),
+            ColumnValues::Decimal(vec![Some(max38), Some(max38)]),
+        ],
+        vec![
+            ColumnValues::Int64(vec![Some(2), Some(2)]),
+            ColumnValues::Decimal(vec![Some(-150), None]),
+            ColumnValues::Decimal(vec![Some(1), None]),
+        ],
+    ];
+    let (mut engine, dir) = engine_over("decimals", schema, batches);
+    assert_eq!(
+        query(&mut engine, "SELECT sum(price) FROM decimals WHERE k = 1"),
+        ["0.30"]
+    );
+    assert_eq!(
+        query(
+            &mut engine,
+            "SELECT min(price), max(price), sum(price) FROM decimals"
+        ),
+        ["-1.50|0.20|-1.20"]
+    );
+    assert_eq!(
+        query(
+            &mut engine,
+            "SELECT k, sum(price) FROM decimals GROUP BY k ORDER BY k"
+        ),
+        ["1|0.30", "2|-1.50"]
+    );
+    assert_eq!(
+        query(
+            &mut engine,
+            "SELECT price FROM decimals WHERE price IS NOT NULL ORDER BY price"
+        ),
+        ["-1.50", "0.10", "0.20"]
+    );
+    assert_eq!(
+        query(
+            &mut engine,
+            "SELECT price, count(*) FROM decimals GROUP BY price ORDER BY price"
+        ),
+        // NULLS LAST, DuckDB's default.
+        ["-1.50|1", "0.10|1", "0.20|1", "|1"]
+    );
+    {
+        use db_core::engine::Engine as _;
+        assert!(
+            engine.run_query("SELECT sum(huge) FROM decimals").is_err(),
+            "a SUM past 38 digits must error, not round"
+        );
+    }
     std::fs::remove_dir_all(dir).ok();
 }
 

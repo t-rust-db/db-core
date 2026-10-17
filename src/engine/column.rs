@@ -428,22 +428,48 @@ fn segment_error(row_group_index: usize, column_name: &str, e: &impl std::fmt::D
     }
 }
 
-/// A leaf's rows as the engine loads them: a typed column, or a MAP
-/// field's values (#621), which a typed column cannot hold.
+/// A leaf's rows as the engine loads them: a typed column, or values a
+/// typed column cannot hold: a MAP field's (#621) or a DECIMAL's (#632).
 enum Loaded {
     Typed(Decoded),
-    Map(Vec<Value>),
+    Values(Vec<Value>),
+}
+
+/// Leaf `index`'s DECIMAL values, exact (#632).
+fn decimal_values(rg: &RowGroupReader<'_, '_>, index: usize) -> Result<Vec<Value>, FileError> {
+    rg.read_decimal_column(index)?
+        .into_iter()
+        .map(|d| {
+            let Some(d) = d else {
+                return Ok(Value::Null);
+            };
+            let scale = u8::try_from(d.scale).ok().filter(|s| *s <= 38).ok_or(
+                FileError::InvalidMetadata {
+                    field: "DECIMAL scale",
+                    value: i64::from(d.scale),
+                },
+            )?;
+            Ok(Value::Decimal {
+                unscaled: d.unscaled,
+                scale,
+            })
+        })
+        .collect()
 }
 
 /// Leaf `index` decoded for every row: a MAP field (at its first leaf) as
-/// map values, anything else as its typed column.
+/// map values, a DECIMAL as exact decimals, anything else as its typed
+/// column.
 fn load_leaf(
     rg: &RowGroupReader<'_, '_>,
     index: usize,
     physical_type: PhysicalType,
 ) -> Result<Loaded, FileError> {
     match rg.nested_field_at(index) {
-        Some(field) => map_values(rg, &field).map(Loaded::Map),
+        Some(field) => map_values(rg, &field).map(Loaded::Values),
+        None if annotation(rg, index) == Annotation::Decimal => {
+            decimal_values(rg, index).map(Loaded::Values)
+        }
         None => decode_column_full(rg, index, physical_type).map(Loaded::Typed),
     }
 }
@@ -455,20 +481,22 @@ fn load_leaf_at(
     physical_type: PhysicalType,
     positions: &[u32],
 ) -> Result<Loaded, FileError> {
-    match rg.nested_field_at(index) {
-        Some(field) => {
-            let all = map_values(rg, &field)?;
-            positions
-                .iter()
-                .map(|&p| {
-                    usize::try_from(p)
-                        .ok()
-                        .and_then(|i| all.get(i).cloned())
-                        .ok_or(FileError::RowPositionOutOfRange(p))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(Loaded::Map)
-        }
+    let all = match rg.nested_field_at(index) {
+        Some(field) => Some(map_values(rg, &field)?),
+        None if annotation(rg, index) == Annotation::Decimal => Some(decimal_values(rg, index)?),
+        None => None,
+    };
+    match all {
+        Some(all) => positions
+            .iter()
+            .map(|&p| {
+                usize::try_from(p)
+                    .ok()
+                    .and_then(|i| all.get(i).cloned())
+                    .ok_or(FileError::RowPositionOutOfRange(p))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Loaded::Values),
         None => decode_column_at(rg, index, physical_type, positions).map(Loaded::Typed),
     }
 }
@@ -486,7 +514,7 @@ fn map_values(rg: &RowGroupReader<'_, '_>, field: &Field) -> Result<Vec<Value>, 
 fn apply_loaded(batch: Batch, name: &str, loaded: Loaded) -> Batch {
     match loaded {
         Loaded::Typed(Decoded::Column(column)) => batch.with_typed_column(name.to_string(), column),
-        Loaded::Map(values) => batch.with_column(name.to_string(), values),
+        Loaded::Values(values) => batch.with_column(name.to_string(), values),
     }
 }
 

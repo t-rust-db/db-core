@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.136.0] - 2026-10-17
+
+### Changed
+
+- **DECIMAL is exact** (#632). A Parquet DECIMAL column reads as a new `Value::Decimal { unscaled: i128, scale: u8 }` (and `engine::Cell::Decimal`), not a rounded `Float`. It prints at its scale, as DuckDB prints it (`12.34`, `-1.500`). `SUM` over decimals is exact at the largest scale seen (`0.10 + 0.20` is `0.30`, not `0.30000000000000004`), and an error (`VmError::IntegerOverflow`) past DECIMAL(38). `MIN`/`MAX` return the decimal; `AVG` is a float. Comparison, `ORDER BY`, `GROUP BY` and join keys work by value across scales (`1.50 = 1.5`). A FIXED_LEN_BYTE_ARRAY decimal wider than 16 bytes is refused (`FileError::InvalidMetadata`) rather than truncated. New public items: `Value::Decimal`, `Cell::Decimal`, `vm::batch::numeric_cmp` and `value::format_decimal`. A client that matches `Value` or `Cell` exhaustively needs a `Decimal` arm.
+
+### Known limits
+
+- Arithmetic on decimals (`price * 2`) is still float (#635). Statistics pruning skips DECIMAL columns, so it reads them in full.
+
 ## [0.135.0] - 2026-10-17
 
 ### Changed

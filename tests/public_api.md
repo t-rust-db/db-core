@@ -922,6 +922,9 @@ pub const db_core::engine::stream::TABLE: &str
 pub enum db_core::engine::Cell
 pub db_core::engine::Cell::Blob(alloc::vec::Vec<u8>)
 pub db_core::engine::Cell::Bool(bool)
+pub db_core::engine::Cell::Decimal
+pub db_core::engine::Cell::Decimal::scale: u8
+pub db_core::engine::Cell::Decimal::unscaled: i128
 pub db_core::engine::Cell::Int(i64)
 pub db_core::engine::Cell::Null
 pub db_core::engine::Cell::Real(f64)
@@ -7710,6 +7713,7 @@ impl core::fmt::Debug for db_core::value::Value
 pub fn db_core::value::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::value::Value
 pub fn db_core::value::compare_text(&str, &str, db_core::value::Collation) -> core::cmp::Ordering
+pub fn db_core::value::format_decimal(i128, u8) -> alloc::string::String
 pub fn db_core::value::format_real(f64) -> alloc::string::String
 pub mod db_core::vm
 pub mod db_core::vm::batch
@@ -7948,6 +7952,9 @@ pub fn db_core::vm::batch::ScanSource::fmt(&self, &mut core::fmt::Formatter<'_>)
 impl core::marker::StructuralPartialEq for db_core::vm::batch::ScanSource
 pub enum db_core::vm::batch::Value
 pub db_core::vm::batch::Value::Bool(bool)
+pub db_core::vm::batch::Value::Decimal
+pub db_core::vm::batch::Value::Decimal::scale: u8
+pub db_core::vm::batch::Value::Decimal::unscaled: i128
 pub db_core::vm::batch::Value::Float(f64)
 pub db_core::vm::batch::Value::Int(i64)
 pub db_core::vm::batch::Value::Map(alloc::rcs::arc::Arc<db_core::vm::batch::MapEntries>)
@@ -7967,7 +7974,6 @@ impl core::fmt::Debug for db_core::vm::batch::Value
 pub fn db_core::vm::batch::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::vm::batch::Value
 pub fn db_core::vm::batch::Value::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for db_core::vm::batch::Value
 pub enum db_core::vm::batch::ValueSource
 pub db_core::vm::batch::ValueSource::Payload(usize)
 pub db_core::vm::batch::ValueSource::Probe(usize)
@@ -8207,6 +8213,7 @@ pub fn db_core::engine::cross_mode::RowTableSource::next_batch(&mut self) -> cor
 impl db_core::vm::batch::Source for db_core::storage::stream::adapter::TailSource
 pub fn db_core::storage::stream::adapter::TailSource::next_batch(&mut self) -> core::option::Option<db_core::vm::batch::Batch>
 pub fn db_core::vm::batch::compare_for_order(&db_core::vm::batch::Value, &db_core::vm::batch::Value, bool) -> core::cmp::Ordering
+pub fn db_core::vm::batch::numeric_cmp(&db_core::vm::batch::Value, &db_core::vm::batch::Value) -> core::option::Option<core::cmp::Ordering>
 pub fn db_core::vm::batch::run_parallel<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::batch::run_parallel_streaming<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], impl core::ops::function::FnMut(db_core::vm::batch::Chunk) -> db_core::vm::batch::Result<()>) -> db_core::vm::batch::Result<()>
 pub fn db_core::vm::batch::run_parallel_top_n<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], &db_core::vm::batch::TopN) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>

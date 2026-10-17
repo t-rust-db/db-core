@@ -180,7 +180,17 @@ fn a_page_reads_as_the_engine_decodes_its_flushed_file() {
     assert_eq!(page.observed_ts_ns(), &[7, 8]);
     let col = |name: &str| page.engine_column(name).unwrap().unwrap();
     assert_eq!(col("u"), [Value::Int(5), Value::Null]);
-    assert_eq!(col("d"), [Value::Float(-12.34), Value::Null]);
+    assert_eq!(
+        col("d"),
+        [
+            Value::Decimal {
+                unscaled: -1234,
+                scale: 2
+            },
+            Value::Null
+        ],
+        "exact, as the flushed file reads (#632)"
+    );
     assert_eq!(col("b"), [Value::Str("ab01".into()), Value::Null]);
     assert_eq!(col("f"), [Value::Float(1.5), Value::Null]);
     assert_eq!(col("u8"), [Value::Int(200), Value::Null]);

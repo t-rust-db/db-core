@@ -191,6 +191,7 @@ fn quote(row: &[Cell]) -> String {
             Cell::Real(f) => format!("{f:?}"),
             Cell::Bool(b) => i64::from(*b).to_string(),
             Cell::Text(s) => format!("'{}'", s.replace('\'', "''")),
+            Cell::Decimal { .. } => c.to_string(),
             Cell::Blob(b) => format!(
                 "X'{}'",
                 b.iter().map(|x| format!("{x:02X}")).collect::<String>()
