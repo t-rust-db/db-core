@@ -438,6 +438,13 @@ pub enum WindowFunc {
 pub enum AggPart {
     /// A `GROUP BY` key column: identifies the group, never merged.
     GroupKey,
+    /// `COUNT(DISTINCT x)`'s argument as one more, hidden, group key
+    /// (#633): the last of the `num_group_keys` leading columns. Segments
+    /// and morsels group by `(keys, x)`, so merging their partials removes
+    /// duplicates of `x` across them; once everything is merged,
+    /// `Combine` groups again by the real keys alone, counting non-`NULL`
+    /// `x`s and merging every other part as usual.
+    DistinctKey,
     /// A partial `SUM`: merged by adding across segments.
     Sum,
     /// A partial `COUNT`: merged by adding across segments.

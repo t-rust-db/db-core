@@ -253,7 +253,7 @@ fn random_line(rng: &mut Rng, i: u64, switch: (u64, u64)) -> String {
     format!("{{{}}}", fields.join(","))
 }
 
-const INVARIANCE_QUERIES: [&str; 9] = [
+const INVARIANCE_QUERIES: [&str; 11] = [
     "SELECT COUNT(*), COUNT(n), SUM(n), MIN(f), MAX(f), COUNT(s), COUNT(b), SUM(g) FROM logs",
     "SELECT raw, i, n, f, s, b, k, g, m, severity, severity_text, message, timestamp \
      FROM logs ORDER BY raw",
@@ -264,6 +264,10 @@ const INVARIANCE_QUERIES: [&str; 9] = [
     "SELECT raw, f FROM logs WHERE f >= 10 ORDER BY raw DESC LIMIT 7",
     "SELECT b, COUNT(*) FROM logs WHERE s IS NULL GROUP BY b ORDER BY b",
     "SELECT severity, MAX(n) FROM logs GROUP BY severity ORDER BY severity",
+    // #633: a distinct value is counted once whichever file, page or row
+    // group its copies landed in.
+    "SELECT COUNT(DISTINCT n), COUNT(*) FROM logs",
+    "SELECT s, COUNT(DISTINCT k), SUM(n) FROM logs GROUP BY s ORDER BY s",
 ];
 
 /// A record table's (#594) schema for the flush-timing test: unsigned,
@@ -338,7 +342,7 @@ fn random_map(rng: &mut Rng) -> RecordValue {
     RecordValue::Map(entries)
 }
 
-const RECORD_INVARIANCE_QUERIES: [&str; 10] = [
+const RECORD_INVARIANCE_QUERIES: [&str; 11] = [
     "SELECT COUNT(*), COUNT(n), SUM(n), MIN(amount), MAX(amount), SUM(u), COUNT(blob), SUM(f) \
      FROM logs",
     "SELECT id, kind, n, amount, u, blob, ts, f FROM logs ORDER BY id",
@@ -351,6 +355,7 @@ const RECORD_INVARIANCE_QUERIES: [&str; 10] = [
      ORDER BY id",
     "SELECT h['a'] AS a, count(*) FROM logs GROUP BY a ORDER BY a",
     "SELECT id FROM logs WHERE h['B'] = 'v1' ORDER BY id",
+    "SELECT kind, COUNT(DISTINCT amount), COUNT(n) FROM logs GROUP BY kind ORDER BY kind",
 ];
 
 /// What the flush-timing test appends: a lines table's lines or a record
@@ -495,6 +500,9 @@ fn flush_timing_invariance(kind: Kind) {
             );
         }
         let mut engine = TableEngine::open(&t.0).unwrap();
+        for &sql in queries.iter().filter(|q| q.contains("DISTINCT")) {
+            assert!(answer(&never, sql).is_ok(), "seed {seed}: {sql}");
+        }
         for &sql in queries {
             assert_eq!(
                 engine
@@ -871,4 +879,30 @@ fn snapshot_segments_drive_a_join_as_a_caller_runs_one() {
             vec![s("beta"), Value::Int(2)]
         ]
     );
+
+    // #633: COUNT(DISTINCT ...) through the fused probe-and-group, over a
+    // build-side column and a probe-side one.
+    for (sql, expected) in [
+        (
+            "SELECT COUNT(DISTINCT r.label), COUNT(*) FROM logs l JOIN names r ON l.k = r.k",
+            vec![vec![Value::Int(2), Value::Int(3)]],
+        ),
+        (
+            "SELECT r.label, COUNT(DISTINCT l.n) FROM logs l JOIN names r ON l.k = r.k \
+             GROUP BY r.label ORDER BY r.label",
+            vec![
+                vec![s("alpha"), Value::Int(2)],
+                vec![s("beta"), Value::Int(1)],
+            ],
+        ),
+    ] {
+        let select = crate::parser::column::parse(sql).unwrap();
+        let plan = planner::compile_join(&select, BuildSourceKind::InMemory).unwrap();
+        let probe = snapshot_segments(&left, &files, &plan.left_columns, &eager).unwrap();
+        let build = read_snapshot(&right, &plan.right_columns).unwrap();
+        let output =
+            engine::run_join_segments(probe, ScanSource::InMemory(build), &plan, &NoResolver)
+                .unwrap();
+        assert_eq!(output.rows().collect::<Vec<_>>(), expected, "{sql}");
+    }
 }

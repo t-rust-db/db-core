@@ -278,6 +278,19 @@ fn is_known_agg_name(name: &str) -> bool {
 
 /// Validates an aggregate `FunctionCall` (`COUNT(x)`, `COUNT(*)`, ...):
 /// a known aggregate name, and exactly one column or `(*)` (`COUNT` only).
+/// `DISTINCT` inside an aggregate is `COUNT(DISTINCT x)` only (#633):
+/// `COUNT(DISTINCT *)` has nothing to be distinct over, and `SUM`/`AVG`/
+/// `MIN`/`MAX(DISTINCT ...)` are not implemented.
+fn validate_distinct(span: Span, name: &str, distinct: bool, args: &FunctionArgs) -> Result<()> {
+    if distinct && !(name.eq_ignore_ascii_case("COUNT") && matches!(args, FunctionArgs::List(_))) {
+        return Err(unsupported(
+            span,
+            format!("{name}(DISTINCT ...): only COUNT(DISTINCT x) is supported"),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_aggregate_call(span: Span, name: &str, args: &FunctionArgs) -> Result<()> {
     if !is_known_agg_name(name) {
         return Err(unsupported(span, format!("unknown function {name}")));
@@ -525,12 +538,7 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
                 ..
             } => {
                 if is_known_agg_name(name) {
-                    if *distinct {
-                        return Err(unsupported(
-                            expr.span,
-                            "DISTINCT inside an aggregate".into(),
-                        ));
-                    }
+                    validate_distinct(expr.span, name, *distinct, args)?;
                     return validate_aggregate_call(expr.span, name, args);
                 }
                 // Not an aggregate: a scalar call (#307) -- its arguments
@@ -870,12 +878,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 args,
                 tail,
             } if !matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
-                if *distinct {
-                    return Err(unsupported(
-                        term.expr.span,
-                        "DISTINCT inside an aggregate".into(),
-                    ));
-                }
+                validate_distinct(term.expr.span, name, *distinct, args)?;
                 validate_aggregate_call(term.expr.span, name, args)?;
             }
             _ => {
@@ -1325,6 +1328,59 @@ mod tests {
         let err =
             parse("SELECT year, region, SUM(amount) FROM t GROUP BY region, year").unwrap_err();
         assert!(matches!(err, ParseError::Unexpected { .. }));
+    }
+
+    // parser_column_validate_distinct_eac99047 (`validate_distinct`):
+    // `distinct && !(name.eq_ignore_ascii_case("COUNT") && matches!(args, List))`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_distinct_eac99047__v1_not_distinct_passes() {
+        assert!(parse("SELECT SUM(amount) FROM t").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_distinct_eac99047__v2_distinct_sum_is_refused() {
+        assert!(parse("SELECT SUM(DISTINCT amount) FROM t").is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_distinct_eac99047__v3_distinct_count_passes() {
+        assert!(parse("SELECT COUNT(DISTINCT amount) FROM t").is_ok());
+    }
+
+    /// #633: `COUNT(DISTINCT x)` parses in the select list and `ORDER BY`;
+    /// every other `DISTINCT` aggregate is refused by name.
+    #[test]
+    fn count_distinct_is_the_one_distinct_aggregate() {
+        for ok in [
+            "SELECT COUNT(DISTINCT amount) FROM t",
+            "SELECT region, count(distinct amount) FROM t GROUP BY region",
+            "SELECT region, COUNT(DISTINCT amount) FROM t GROUP BY region \
+             ORDER BY COUNT(DISTINCT amount) DESC",
+            "SELECT COUNT(DISTINCT amount * 2) FROM t",
+        ] {
+            assert!(parse(ok).is_ok(), "{ok}");
+        }
+        for (bad, message) in [
+            (
+                "SELECT SUM(DISTINCT amount) FROM t",
+                "only COUNT(DISTINCT x)",
+            ),
+            ("SELECT COUNT(DISTINCT *) FROM t", ""),
+            (
+                "SELECT COUNT(*) FROM t ORDER BY MAX(DISTINCT amount)",
+                "only COUNT(DISTINCT x)",
+            ),
+            (
+                "SELECT COUNT(DISTINCT amount) + 1 FROM t",
+                "DISTINCT inside an aggregate",
+            ),
+        ] {
+            let err = parse(bad).unwrap_err();
+            assert!(err.to_string().contains(message), "{bad}: {err}");
+        }
     }
 
     #[test]

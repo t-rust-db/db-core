@@ -7751,6 +7751,7 @@ impl core::marker::StructuralPartialEq for db_core::vm::batch::AggOperand
 pub enum db_core::vm::batch::AggPart
 pub db_core::vm::batch::AggPart::Avg(usize, usize)
 pub db_core::vm::batch::AggPart::Count
+pub db_core::vm::batch::AggPart::DistinctKey
 pub db_core::vm::batch::AggPart::Expr(db_core::vm::batch::MapOp, db_core::vm::batch::AggOperand, db_core::vm::batch::AggOperand)
 pub db_core::vm::batch::AggPart::GroupKey
 pub db_core::vm::batch::AggPart::Hidden(db_core::vm::batch::HiddenPart)

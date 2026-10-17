@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.137.0] - 2026-10-17
+
+### Added
+
+- **`COUNT(DISTINCT x)` in the batch engine** (#633). It works over Parquet files, table directories, the stream engine and joins, with or without `GROUP BY`, `FILTER` and `ORDER BY COUNT(DISTINCT x)`. The result does not depend on how the input splits into segments and morsels, and matches DuckDB (`make check-column-oracle`). NULLs are not counted, and over no rows the count is 0. It runs as a second grouping: segments group by `(keys, x)`, so merging them removes copies of `x`, and `Combine` then groups by the keys alone. Memory grows with the distinct values per group. A new public `AggPart::DistinctKey` marks the hidden key.
+
+### Known limits
+
+- One `COUNT(DISTINCT ...)` per query, and not inside an expression (`COUNT(DISTINCT x) * 2`) or a window. `SUM`/`AVG`/`MIN`/`MAX(DISTINCT ...)` are refused with a clear error. For high cardinality, use `approx_count_distinct` (#603, planned).
+
 ## [0.136.0] - 2026-10-17
 
 ### Changed

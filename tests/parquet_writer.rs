@@ -1142,6 +1142,50 @@ fn the_column_engine_aggregates_decimals_exactly() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+/// #633: `COUNT(DISTINCT x)` over a Parquet file, through the column
+/// engine end to end: values repeat across row groups, NULLs are not
+/// counted, and the other aggregates still see every row.
+#[cfg(feature = "engine-column")]
+#[test]
+fn the_column_engine_counts_distinct_values_across_row_groups() {
+    let schema = vec![
+        ColumnSpec::new("k", ColumnType::Utf8, false),
+        ColumnSpec::new("user", ColumnType::Int64, true),
+    ];
+    let batch = |k: [&str; 3], user: [Option<i64>; 3]| {
+        vec![
+            ColumnValues::Utf8(k.iter().map(|s| Some(s.to_string())).collect()),
+            ColumnValues::Int64(user.to_vec()),
+        ]
+    };
+    let batches = vec![
+        batch(["a", "a", "b"], [Some(1), Some(2), Some(7)]),
+        batch(["a", "b", "b"], [Some(1), None, Some(7)]),
+        batch(["a", "b", "a"], [None, Some(8), Some(3)]),
+    ];
+    let (mut engine, dir) = engine_over("visits", schema, batches);
+    assert_eq!(
+        query(
+            &mut engine,
+            "SELECT k, count(DISTINCT user), count(user), count(*) FROM visits \
+             GROUP BY k ORDER BY k"
+        ),
+        ["a|3|4|5", "b|2|3|4"]
+    );
+    assert_eq!(
+        query(&mut engine, "SELECT count(DISTINCT user) FROM visits"),
+        ["5"]
+    );
+    assert_eq!(
+        query(
+            &mut engine,
+            "SELECT count(DISTINCT user) FROM visits WHERE k = 'zzz'"
+        ),
+        ["0"]
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
 /// A footer bound above the signed range must not be read as a negative
 /// number: before #595 the row group holding `u32::MAX` was pruned for
 /// `u32 > 3000000000`.
