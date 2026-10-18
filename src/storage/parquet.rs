@@ -33,26 +33,8 @@ pub mod footer;
     reason = "reader lint burn-down, see storage::parquet"
 )]
 pub mod nested;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod page;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod parquet_file;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod reader;
 pub mod schema;
 pub mod schema_tree;

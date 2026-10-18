@@ -2932,6 +2932,7 @@ pub db_core::storage::column::parquet::parquet_file::FileError::NotAStringMap(al
 pub db_core::storage::column::parquet::parquet_file::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::column::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::column::parquet::parquet_file::FileError::TimestampOutOfRange
 pub db_core::storage::column::parquet::parquet_file::FileError::UnexpectedDictionaryPage
 pub db_core::storage::column::parquet::parquet_file::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::column::parquet::parquet_file::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -3413,6 +3414,7 @@ pub db_core::storage::column::parquet::FileError::NotAStringMap(alloc::string::S
 pub db_core::storage::column::parquet::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::column::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::parquet::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::column::parquet::FileError::TimestampOutOfRange
 pub db_core::storage::column::parquet::FileError::UnexpectedDictionaryPage
 pub db_core::storage::column::parquet::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::column::parquet::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -3564,6 +3566,7 @@ pub db_core::storage::column::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::column::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::column::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::column::FileError::TimestampOutOfRange
 pub db_core::storage::column::FileError::UnexpectedDictionaryPage
 pub db_core::storage::column::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::column::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -4828,6 +4831,7 @@ pub db_core::storage::parquet::parquet_file::FileError::NotAStringMap(alloc::str
 pub db_core::storage::parquet::parquet_file::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::parquet::parquet_file::FileError::TimestampOutOfRange
 pub db_core::storage::parquet::parquet_file::FileError::UnexpectedDictionaryPage
 pub db_core::storage::parquet::parquet_file::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::parquet::parquet_file::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -5309,6 +5313,7 @@ pub db_core::storage::parquet::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::parquet::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::parquet::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::parquet::FileError::TimestampOutOfRange
 pub db_core::storage::parquet::FileError::UnexpectedDictionaryPage
 pub db_core::storage::parquet::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::parquet::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -7441,6 +7446,7 @@ pub db_core::storage::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::FileError::TimestampOutOfRange
 pub db_core::storage::FileError::UnexpectedDictionaryPage
 pub db_core::storage::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
