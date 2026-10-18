@@ -293,6 +293,11 @@ name = "wal_commit"
 harness = false
 required-features = ["storage-row"]
 
+[[bench]]
+name = "events"
+harness = false
+required-features = ["ingest", "engine-column"]
+
 [features]
 # Every feature on by default (db-core#111): `cargo-mvl-mcdc harvest`
 # (the MC/DC discharge tool -- see `make test-mcdc`) hardcodes a
