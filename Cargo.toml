@@ -25,6 +25,11 @@ name = "unit_mcdc_discharge"
 path = "tests/unit/mcdc_discharge_test.rs"
 
 [[test]]
+name = "unit_parquet_file_corruption"
+path = "tests/unit/parquet_file_corruption_test.rs"
+required-features = ["storage-column"]
+
+[[test]]
 name = "unit_vm_row_hooks"
 path = "tests/unit/vm_row_hooks_test.rs"
 
