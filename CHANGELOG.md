@@ -10,7 +10,7 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 - **`DROP VIEW` (and `DROP TABLE`/`DROP INDEX`) delete the `sqlite_master` row by type and name** (#658). `btree::delete_master_row` and `SchemaStorage::delete_master_row` take a `kind` and match the type too, so a same-named object of another kind is never the row removed (a trigger named like a view, in a file sqlite3 wrote). A `SchemaStorage` implementation outside the crate needs the new `kind` argument.
 - **No memory is leaked per error** (#658). `BtreeError::MasterEntryNotFound` and `BtreeError::InvalidRootPage` carried a name leaked with `Box::leak`. They now carry no name: `BtreeError` stays free of drop glue for the hot seek path (#679), and the row engine's storage adapter, which knows the name, adds it to its message.
-- **`zeroblob(N)` past 1e9 is "string or blob too big"** (#659), as in sqlite3, instead of a clamped 1 GB allocation. The limit is the new public `functions::MAX_LENGTH`, sqlite3's `SQLITE_MAX_LENGTH`, and the error is the new `FunctionError::TooBig`.
+- **`zeroblob(N)` past 1e9 is "string or blob too big"** (#659), as in sqlite3, instead of a clamped 1 GB allocation. The limit is the new public `functions::MAX_LENGTH`, sqlite3's `SQLITE_MAX_LENGTH`, and the error is the new `FunctionError::TooBig`. The row engine reports it in sqlite3's words (new `ExecError::TooBig`).
 
 ## [0.143.0] - 2026-10-18
 

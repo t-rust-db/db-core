@@ -141,6 +141,10 @@ pub enum ExecError {
     /// SQLite refuses with "Safety level may not be changed inside a
     /// transaction" (#563).
     SynchronousChangeDuringTransaction,
+    /// A function would build a string or blob past
+    /// [`crate::functions::MAX_LENGTH`]; sqlite3's "string or blob too
+    /// big" (#659).
+    TooBig,
     /// `Transaction` while one is already open (sqlite-rs, #134).
     TransactionAlreadyActive,
     /// `AutoCommit` commit with no open transaction (#134).
@@ -221,6 +225,7 @@ impl std::fmt::Display for ExecError {
                 f,
                 "SetJournalMode: cannot change journal mode within a transaction"
             ),
+            ExecError::TooBig => write!(f, "string or blob too big"),
             ExecError::SynchronousChangeDuringTransaction => {
                 write!(f, "Safety level may not be changed inside a transaction")
             }
@@ -1850,11 +1855,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     })?;
                 args.push(vm.register(reg)?.clone());
             }
-            let result =
-                functions::call(name, &args).map_err(|e| ExecError::MalformedInstruction {
+            let result = functions::call(name, &args).map_err(|e| match e {
+                // A limit sqlite3 reports in its own words (#659).
+                functions::FunctionError::TooBig => ExecError::TooBig,
+                e => ExecError::MalformedInstruction {
                     opcode: "Function",
                     reason: e.to_string(),
-                })?;
+                },
+            })?;
             vm.set_register(instr.p3, result)?;
             Ok(Step::Next)
         }

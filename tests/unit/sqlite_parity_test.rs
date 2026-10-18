@@ -1240,3 +1240,18 @@ fn expression_height_limit() {
         assert!(err.contains("Expression tree is too large"), "{err}");
     }
 }
+
+/// #659: past `functions::MAX_LENGTH` sqlite3 says "string or blob too
+/// big", and so does the row engine -- not a 1 GB allocation.
+#[test]
+fn zeroblob_past_max_length_is_too_big() {
+    let db = TempDb::new("zeroblob");
+    let mut e = engine(&db);
+    let err = e
+        .run_query("SELECT length(zeroblob(1000000001))")
+        .unwrap_err()
+        .to_string();
+    assert!(err.ends_with("string or blob too big"), "{err}");
+    let rows = e.run_query("SELECT length(zeroblob(5))").unwrap().rows;
+    assert_eq!(rows, vec![vec![Cell::Int(5)]]);
+}

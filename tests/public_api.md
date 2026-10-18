@@ -9662,6 +9662,7 @@ pub db_core::vm::row::vm::ExecError::SchemaStorageMissing
 pub db_core::vm::row::vm::ExecError::SchemaStorageMissing::opcode: &'static str
 pub db_core::vm::row::vm::ExecError::StepLimitExceeded
 pub db_core::vm::row::vm::ExecError::SynchronousChangeDuringTransaction
+pub db_core::vm::row::vm::ExecError::TooBig
 pub db_core::vm::row::vm::ExecError::TransactionAlreadyActive
 pub db_core::vm::row::vm::ExecError::TransactionFailed(db_core::vm::row::transaction::TransactionError)
 pub db_core::vm::row::vm::ExecError::TypeMismatch
@@ -9797,6 +9798,7 @@ pub db_core::vm::row::ExecError::SchemaStorageMissing
 pub db_core::vm::row::ExecError::SchemaStorageMissing::opcode: &'static str
 pub db_core::vm::row::ExecError::StepLimitExceeded
 pub db_core::vm::row::ExecError::SynchronousChangeDuringTransaction
+pub db_core::vm::row::ExecError::TooBig
 pub db_core::vm::row::ExecError::TransactionAlreadyActive
 pub db_core::vm::row::ExecError::TransactionFailed(db_core::vm::row::transaction::TransactionError)
 pub db_core::vm::row::ExecError::TypeMismatch
