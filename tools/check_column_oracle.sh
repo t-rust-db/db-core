@@ -37,6 +37,20 @@ QUERIES=(
   "SELECT count(DISTINCT region) FROM __TABLE__|SELECT count(DISTINCT region) FROM __TABLE__"
   "SELECT region, count(DISTINCT amount), count(*) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, count(DISTINCT amount), count(*) FROM __TABLE__ GROUP BY region ORDER BY region"
   "SELECT region, count(DISTINCT id) FROM __TABLE__ WHERE id > 2500 GROUP BY region ORDER BY region|SELECT region, count(DISTINCT id) FROM __TABLE__ WHERE id > 2500 GROUP BY region ORDER BY region"
+  # #623: GROUP BY a real column that an alias shadows, expressions over
+  # keys and aggregates, and a select list that is not keys-first.
+  "SELECT id - id AS id, count(*) FROM __TABLE__ WHERE id <= 5 GROUP BY id|SELECT id - id AS id, count(*) FROM __TABLE__ WHERE id <= 5 GROUP BY id"
+  "SELECT count(*), region FROM __TABLE__ GROUP BY region ORDER BY region|SELECT count(*), region FROM __TABLE__ GROUP BY region ORDER BY region"
+  "SELECT region, sum(id) * 2, count(*) + 1 FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, sum(id) * 2, count(*) + 1 FROM __TABLE__ GROUP BY region ORDER BY region"
+  "SELECT region, max(id) - min(id) + count(*) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, max(id) - min(id) + count(*) FROM __TABLE__ GROUP BY region ORDER BY region"
+  "SELECT count(*) * 2 + sum(id) FROM __TABLE__|SELECT count(*) * 2 + sum(id) FROM __TABLE__"
+  # #623 review: a column grouped by its alias, an aggregate aliased like
+  # a real column (which wins), COUNT(DISTINCT) with its key left out,
+  # LIKE over an aggregate (cast: DuckDB prints a BOOLEAN as true/false).
+  "SELECT region AS r, count(*) FROM __TABLE__ GROUP BY r ORDER BY r|SELECT region AS r, count(*) FROM __TABLE__ GROUP BY r ORDER BY r"
+  "SELECT sum(id) AS id, count(*) FROM __TABLE__ WHERE id <= 3 GROUP BY id ORDER BY id|SELECT sum(id) AS id, count(*) FROM __TABLE__ WHERE id <= 3 GROUP BY id ORDER BY id"
+  "SELECT max(id) AS m, count(DISTINCT amount) FROM __TABLE__ GROUP BY region ORDER BY m|SELECT max(id) AS m, count(DISTINCT amount) FROM __TABLE__ GROUP BY region ORDER BY m"
+  "SELECT region, min(region) LIKE 'e%', count(*) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, (min(region) LIKE 'e%')::INT, count(*) FROM __TABLE__ GROUP BY region ORDER BY region"
 )
 
 echo "building examples/column_oracle (release)..."

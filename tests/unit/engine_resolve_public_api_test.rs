@@ -186,6 +186,60 @@ fn cross_mode_engine_routes_run_query_and_explain_opcodes() {
     assert_eq!(body.lane, "batch");
 }
 
+/// #623 review: a join resolves `GROUP BY` names against the joined
+/// tables' columns, like a single-table query: an alias that is no column
+/// groups by its expression, and a name that is a real column (`region`
+/// is a `hosts` column) is that column, so an ungrouped item is refused.
+#[test]
+fn cross_mode_group_by_resolves_an_alias_against_the_joined_columns() {
+    let db = HostsDb::new("group-by-alias");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+    let join = "FROM log JOIN hosts ON log.hostname = hosts.name";
+
+    let by_alias = run_query(
+        &driving,
+        &lookup,
+        &format!("SELECT hosts.region AS r, COUNT(*) {join} GROUP BY r ORDER BY r"),
+    )
+    .expect("GROUP BY an alias in a join");
+    let by_column = run_query(
+        &driving,
+        &lookup,
+        &format!(
+            "SELECT hosts.region, COUNT(*) {join} GROUP BY hosts.region ORDER BY hosts.region"
+        ),
+    )
+    .expect("GROUP BY the column in a join");
+    assert_eq!(by_alias.rows, by_column.rows);
+    assert!(by_alias.rows.len() >= 2, "{:?}", by_alias.rows);
+
+    let err = run_query(
+        &driving,
+        &lookup,
+        &format!("SELECT log.hostname AS region, COUNT(*) {join} GROUP BY region"),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("must be a GROUP BY key"), "{err}");
+
+    let mut engine = CrossModeEngine::open_stream_sqlite(Path::new(LOG_FIXTURE), db.path())
+        .expect("open cross-mode engine");
+    assert!(engine
+        .explain_opcodes(&format!(
+            "SELECT hosts.region AS r, COUNT(*) {join} GROUP BY r"
+        ))
+        .is_ok());
+    assert_eq!(
+        engine
+            .run_query(&format!(
+                "SELECT hosts.region AS r, COUNT(*) {join} GROUP BY r ORDER BY r"
+            ))
+            .expect("via Engine")
+            .rows,
+        by_alias.rows
+    );
+}
+
 /// `Engine::open`'s single `path` cannot express a cross-mode engine's two
 /// files -- it must fail with a typed error, not panic or silently open
 /// only one side.

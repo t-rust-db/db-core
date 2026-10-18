@@ -466,8 +466,9 @@ fn batch_count_distinct_over_no_rows_is_one_zero_row() {
 fn batch_aggregate_arithmetic_is_segment_split_invariant() {
     // #496: `SUM(x) * 2`, `SUM(x) + SUM(y)` (`SUM(amt)` against itself,
     // since `synthetic_dataset` only has one numeric column), and
-    // `SUM(x) / COUNT(*)` -- each computed by `AggPart::Expr` post-Combine,
-    // over the same rows an ordinary `SUM`/`COUNT` already covers above.
+    // `SUM(x) / COUNT(*)` -- each computed by `Combine`'s projection over
+    // the merged aggregates (#623), over the same rows an ordinary
+    // `SUM`/`COUNT` already covers above.
     let (grp, amt) = synthetic_dataset();
     for sql in [
         "SELECT sum(amt) * 2 FROM t",
@@ -486,10 +487,10 @@ fn batch_aggregate_arithmetic_matches_the_expected_value() {
     // (sum = 780, count = 12).
     let (grp, amt) = synthetic_dataset();
     let cases: [(&str, Value); 4] = [
-        // An integer SUM is exact (#631); a literal in an aggregate
-        // expression is still a float, so `* 2` and `+ 1` are DOUBLE.
-        ("SELECT sum(amt) * 2 FROM t", Value::Float(1560.0)),
-        ("SELECT sum(amt) + 1 FROM t", Value::Float(781.0)),
+        // An integer SUM is exact (#631), and an integer literal keeps
+        // the expression an integer (#623), as in DuckDB.
+        ("SELECT sum(amt) * 2 FROM t", Value::Int(1560)),
+        ("SELECT sum(amt) + 1 FROM t", Value::Int(781)),
         ("SELECT sum(amt) + sum(amt) FROM t", Value::Int(1560)),
         ("SELECT sum(amt) / count(*) FROM t", Value::Float(65.0)),
     ];

@@ -707,6 +707,16 @@ pub enum Opcode {
         /// select order. Applied before `DISTINCT`/[`Opcode::Sort`], whose
         /// column positions are select-list positions.
         output_order: Cow<'static, [usize]>,
+        /// Post-aggregation projection (#623): a program of
+        /// [`Opcode::LoadColumn`]/[`Opcode::LoadConst`]/[`Opcode::Map`]/
+        /// [`Opcode::Call`] ending in [`Opcode::Emit`], run over the merged
+        /// rows as one batch whose columns are named `#0`, `#1`, ... after
+        /// their position. It computes select items that are expressions
+        /// over the group keys and aggregates (`b - b`, `SUM(x) * 2`,
+        /// `region || ':' || COUNT(*)`). Empty when the merged columns
+        /// already are the output. Applied after `output_order` and before
+        /// `DISTINCT`/[`Opcode::Sort`].
+        project: Cow<'static, [Opcode]>,
     },
     /// Final `ORDER BY` over the whole (already merged) result: sorts by
     /// output column `col`, `descending` or ascending. A sequential-phase
@@ -4324,11 +4334,6 @@ impl Vm {
                 };
                 let num_groups = group_keys.len();
 
-                for (i, reg) in group_by.iter().enumerate() {
-                    let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
-                    self.registers.insert(*reg, Arc::new(column));
-                }
-
                 for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {
                     // #477: one `RunningAgg` per group instead of
                     // `per_group: Vec<Vec<Value>>` + a final
@@ -4396,6 +4401,14 @@ impl Vm {
                         .map(|acc| acc.finalize(*func, is_count_star, opcode))
                         .collect::<Result<_>>()?;
                     self.registers.insert(*dst, Arc::new(result));
+                }
+
+                // After the aggregates, which may read a key register as
+                // their source (`MIN(k) ... GROUP BY k`): overwriting it
+                // first left them the per-group keys, not the rows.
+                for (i, reg) in group_by.iter().enumerate() {
+                    let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
+                    self.registers.insert(*reg, Arc::new(column));
                 }
             }
             Opcode::HashBuild {

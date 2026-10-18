@@ -184,10 +184,41 @@ pub fn generate(crate_name: &str, sql_text: &str) -> Result<String> {
         return render_semi_join(crate_name, sql_text, &select, subquery_from);
     }
 
+    if groups_by_an_alias(&select) {
+        return Err(EmitError::Unsupported(
+            "GROUP BY a SELECT alias: the emitter has no table schema to tell an alias from a \
+             column (#623); group by the column, or run the query through the engine",
+        ));
+    }
     let program = compile(&select)?;
     let columns = output_column_names(&select);
     let from = main_table_name(&select)?;
     Ok(render_flat(crate_name, sql_text, from, &program, &columns))
+}
+
+/// Whether a `GROUP BY` name is also a `SELECT`-list alias (#307) of
+/// anything but that same column (`region AS region` reads the same
+/// either way). The engine resolves such a name against the table's
+/// columns (`planner::expand_star`, #623); the emitter plans from SQL
+/// alone, so it cannot, and refuses rather than guess.
+fn groups_by_an_alias(select: &Select) -> bool {
+    select.group_by.iter().any(|term| match &term.kind {
+        ExprKind::Column {
+            table: None, name, ..
+        } => select.columns.iter().any(|col| match col {
+            ResultColumn::Expr {
+                expr,
+                alias: Some(alias),
+            } => alias == name && !is_bare_column(expr, name),
+            _ => false,
+        }),
+        _ => false,
+    })
+}
+
+/// Whether `expr` is the unqualified column `name`.
+fn is_bare_column(expr: &crate::parser::ast::Expr, name: &str) -> bool {
+    matches!(&expr.kind, ExprKind::Column { table: None, name: n, .. } if n == name)
 }
 
 /// A path or a simple `*`-glob (one wildcard, in the file name only --
@@ -920,12 +951,15 @@ fn render_opcode(op: &Opcode) -> String {
             num_group_keys,
             distinct,
             output_order,
+            project,
         } => {
             let parts: Vec<String> = agg_parts.iter().map(render_agg_part).collect();
+            let project: Vec<String> = project.iter().map(render_opcode).collect();
             format!(
-                "Opcode::Combine {{ agg_parts: std::borrow::Cow::Borrowed(&[{}]), num_group_keys: {num_group_keys}, distinct: {distinct}, output_order: std::borrow::Cow::Borrowed(&{}) }}",
+                "Opcode::Combine {{ agg_parts: std::borrow::Cow::Borrowed(&[{}]), num_group_keys: {num_group_keys}, distinct: {distinct}, output_order: std::borrow::Cow::Borrowed(&{}), project: std::borrow::Cow::Borrowed(&[{}]) }}",
                 parts.join(", "),
                 render_usize_slice(output_order),
+                project.join(", "),
             )
         }
         Opcode::Sort { col, descending } => {
@@ -1112,6 +1146,7 @@ mod tests {
                     num_group_keys: 1,
                     distinct: false,
                     output_order: Vec::new().into(),
+                    project: Vec::new().into(),
                 },
                 "merge partial aggregates",
             ),
@@ -1132,7 +1167,7 @@ mod tests {
             &["region".to_string(), "sum".to_string()],
         );
         assert!(
-            src.contains("Opcode::Combine { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, distinct: false, output_order: std::borrow::Cow::Borrowed(&[]) }, // merge partial aggregates"),
+            src.contains("Opcode::Combine { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, distinct: false, output_order: std::borrow::Cow::Borrowed(&[]), project: std::borrow::Cow::Borrowed(&[]) }, // merge partial aggregates"),
             "{src}"
         );
         assert!(
@@ -1249,7 +1284,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            src.contains("Opcode::Combine { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, distinct: false, output_order: std::borrow::Cow::Borrowed(&[]) }"),
+            src.contains("Opcode::Combine { agg_parts: std::borrow::Cow::Borrowed(&[AggPart::GroupKey, AggPart::Sum]), num_group_keys: 1, distinct: false, output_order: std::borrow::Cow::Borrowed(&[]), project: std::borrow::Cow::Borrowed(&[]) }"),
             "{src}"
         );
         assert!(src.contains("Opcode::GroupReduce {"), "{src}");
@@ -1365,6 +1400,7 @@ mod tests {
                 num_group_keys: 0,
                 distinct: false,
                 output_order: Vec::new().into(),
+                project: Vec::new().into(),
             },
             Opcode::Sort {
                 col: 0,

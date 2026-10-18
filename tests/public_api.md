@@ -202,6 +202,7 @@ pub fn db_core::codegen::batch::expand_star(&db_core::parser::ast::Select, &[all
 pub fn db_core::codegen::batch::explain(&db_core::parser::ast::Select, impl core::ops::function::Fn(&str) -> db_core::codegen::batch::TableStats) -> db_core::codegen::batch::Result<alloc::vec::Vec<db_core::codegen::batch::PlanNode>>
 pub fn db_core::codegen::batch::explain_opcodes(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<alloc::vec::Vec<db_core::codegen::batch::OpcodeSection>>
 pub fn db_core::codegen::batch::output_column_names(&db_core::parser::ast::Select) -> alloc::vec::Vec<alloc::string::String>
+pub fn db_core::codegen::batch::resolve_group_by(&db_core::parser::ast::Select, &[alloc::string::String]) -> db_core::codegen::batch::Result<db_core::parser::ast::Select>
 pub fn db_core::codegen::batch::split_qualified(&str) -> (core::option::Option<&str>, &str)
 pub type db_core::codegen::batch::Result<T> = core::result::Result<T, db_core::codegen::batch::PlanError>
 pub mod db_core::codegen::row
@@ -7870,6 +7871,7 @@ pub db_core::vm::batch::Opcode::Combine::agg_parts: alloc::borrow::Cow<'static, 
 pub db_core::vm::batch::Opcode::Combine::distinct: bool
 pub db_core::vm::batch::Opcode::Combine::num_group_keys: usize
 pub db_core::vm::batch::Opcode::Combine::output_order: alloc::borrow::Cow<'static, [usize]>
+pub db_core::vm::batch::Opcode::Combine::project: alloc::borrow::Cow<'static, [db_core::vm::batch::Opcode]>
 pub db_core::vm::batch::Opcode::Emit
 pub db_core::vm::batch::Opcode::Emit::registers: alloc::borrow::Cow<'static, [usize]>
 pub db_core::vm::batch::Opcode::Filter
