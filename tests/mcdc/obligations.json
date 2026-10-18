@@ -21062,7 +21062,7 @@
   {
     "id": "parser_row_grammar_bool_expr_56d55d9f",
     "file": "src/parser/row/grammar.rs",
-    "line": 1880,
+    "line": 1881,
     "decision": "self.at_kw(Keyword::AND)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21072,7 +21072,7 @@
   {
     "id": "parser_row_grammar_bool_expr_b82160ce",
     "file": "src/parser/row/grammar.rs",
-    "line": 1881,
+    "line": 1882,
     "decision": "min_prec > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -21082,7 +21082,7 @@
   {
     "id": "parser_row_grammar_bool_expr_a1d3e530",
     "file": "src/parser/row/grammar.rs",
-    "line": 1888,
+    "line": 1887,
     "decision": "self.at_kw(Keyword::OR)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21092,7 +21092,7 @@
   {
     "id": "parser_row_grammar_bool_expr_b821619d",
     "file": "src/parser/row/grammar.rs",
-    "line": 1889,
+    "line": 1888,
     "decision": "min_prec > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -21100,9 +21100,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_row_grammar_cap_height_266c6e69",
+    "id": "parser_row_grammar_cap_chain_266c6e69",
     "file": "src/parser/row/grammar.rs",
-    "line": 1916,
+    "line": 1917,
     "decision": "!self.too_tall",
     "conditions": 1,
     "vectors_required": 2,
@@ -21110,29 +21110,19 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_row_grammar_cap_height_e9c3c5f7",
+    "id": "parser_row_grammar_cap_chain_09ea65a2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1920,
-    "decision": "self.too_tall",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
+    "line": 1919,
+    "decision": "match (*height, children.split_first()) {\n                (0, _) | (_, None) => expr_height(node),\n                (known, Some((_, rest))) => rest\n                    .iter()\n                    .map(|c| expr_height(c))\n                    .fold(known, usize::max)\n                    .saturating_add(1),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "parser_row_grammar_cap_built_266c6e69",
+    "id": "parser_row_grammar_cap_chain_e9c3c5f7",
     "file": "src/parser/row/grammar.rs",
-    "line": 1929,
-    "decision": "!self.too_tall",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "parser_row_grammar_cap_built_e9c3c5f7",
-    "file": "src/parser/row/grammar.rs",
-    "line": 1932,
+    "line": 1930,
     "decision": "self.too_tall",
     "conditions": 1,
     "vectors_required": 2,
@@ -21142,7 +21132,7 @@
   {
     "id": "parser_row_grammar_not_expr_aeca0d40",
     "file": "src/parser/row/grammar.rs",
-    "line": 1939,
+    "line": 1938,
     "decision": "this.at_kw(Keyword::NOT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21152,7 +21142,7 @@
   {
     "id": "parser_row_grammar_not_expr_028d44e2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1941,
+    "line": 1940,
     "decision": "this.at_kw(Keyword::EXISTS)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21162,7 +21152,7 @@
   {
     "id": "parser_row_grammar_equality_expr_9fd175c2",
     "file": "src/parser/row/grammar.rs",
-    "line": 1960,
+    "line": 1959,
     "decision": "let Some(multi_in) = self.try_tuple_in_subquery()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -21382,7 +21372,7 @@
   {
     "id": "parser_row_grammar_binary_expr_4bd4b69d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2322,
+    "line": 2323,
     "decision": "let Some((op, prec)) = Self::binary_op(&self.peek().kind)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21392,7 +21382,7 @@
   {
     "id": "parser_row_grammar_binary_expr_41e08d0e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2323,
+    "line": 2324,
     "decision": "prec < min_prec",
     "conditions": 1,
     "vectors_required": 2,
@@ -21402,7 +21392,7 @@
   {
     "id": "parser_row_grammar_binary_op_628a1458",
     "file": "src/parser/row/grammar.rs",
-    "line": 2335,
+    "line": 2336,
     "decision": "match kind {\n            TokenKind::Lt => (BinaryOp::Lt, 1),\n            TokenKind::Le => (BinaryOp::Le, 1),\n            TokenKind::Gt => (BinaryOp::Gt, 1),\n            TokenKind::Ge => (BinaryOp::Ge, 1),\n            TokenKind::BitAnd => (BinaryOp::BitAnd, 2),\n            TokenKind::BitOr => (BinaryOp::BitOr, 2),\n            TokenKind::Shl => (BinaryOp::Shl, 2),\n            TokenKind::Shr => (BinaryOp::Shr, 2),\n            TokenKind::Plus => (BinaryOp::Add, 3),\n            TokenKind::Minus => (BinaryOp::Sub, 3),\n            TokenKind::Star => (BinaryOp::Mul, 4),\n            TokenKind::Slash => (BinaryOp::Div, 4),\n            TokenKind::Percent => (BinaryOp::Mod, 4),\n            TokenKind::Concat => (BinaryOp::Concat, 5),\n            _ => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21412,7 +21402,7 @@
   {
     "id": "parser_row_grammar_arrow_expr_505e4cbe",
     "file": "src/parser/row/grammar.rs",
-    "line": 2359,
+    "line": 2360,
     "decision": "matches!(self.peek().kind, TokenKind::Arrow | TokenKind::ArrowArrow)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21422,7 +21412,7 @@
   {
     "id": "parser_row_grammar_collate_expr_4a6546b9",
     "file": "src/parser/row/grammar.rs",
-    "line": 2367,
+    "line": 2369,
     "decision": "self.eat_kw(Keyword::COLLATE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21432,7 +21422,7 @@
   {
     "id": "parser_row_grammar_unary_expr_284bde8c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2384,
+    "line": 2386,
     "decision": "match this.peek().kind {\n                TokenKind::Plus => Some(UnaryOp::Plus),\n                TokenKind::Minus => Some(UnaryOp::Minus),\n                TokenKind::BitNot => Some(UnaryOp::BitNot),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21442,7 +21432,7 @@
   {
     "id": "parser_row_grammar_unary_expr_00220ef9",
     "file": "src/parser/row/grammar.rs",
-    "line": 2390,
+    "line": 2392,
     "decision": "let Some(op) = op",
     "conditions": 1,
     "vectors_required": 2,
@@ -21452,7 +21442,7 @@
   {
     "id": "parser_row_grammar_unary_expr_97843e2a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2399,
+    "line": 2401,
     "decision": "matches!(op, UnaryOp::Minus)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21462,7 +21452,7 @@
   {
     "id": "parser_row_grammar_unary_expr_6cf76295",
     "file": "src/parser/row/grammar.rs",
-    "line": 2400,
+    "line": 2402,
     "decision": "let ExprKind::Literal(Literal::Float(f)) = inner.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -21472,7 +21462,7 @@
   {
     "id": "parser_row_grammar_unary_expr_77230782",
     "file": "src/parser/row/grammar.rs",
-    "line": 2401,
+    "line": 2403,
     "decision": "f == 9_223_372_036_854_775_808.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -21482,7 +21472,7 @@
   {
     "id": "parser_row_grammar_postfix_expr_2ba03a81",
     "file": "src/parser/row/grammar.rs",
-    "line": 2427,
+    "line": 2430,
     "decision": "matches!(self.peek().kind, TokenKind::LBracket)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21492,7 +21482,7 @@
   {
     "id": "parser_row_grammar_primary_expr_ee4603ca",
     "file": "src/parser/row/grammar.rs",
-    "line": 2456,
+    "line": 2462,
     "decision": "match &self.peek().kind {\n            TokenKind::Integer(v) => {\n                let v = *v;\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Integer(v)),\n                    span,\n                })\n            }\n            TokenKind::Float(v) => {\n                let v = *v;\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Float(v)),\n                    span,\n                })\n            }\n            TokenKind::String(s) => {\n                let s = s.clone();\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Str(s)),\n                    span,\n                })\n            }\n            TokenKind::Blob(b) => {\n                let b = (**b).clone();\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Blob(b)),\n                    span,\n                })\n            }\n            TokenKind::Null => {\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Null),\n                    span,\n                })\n            }\n            TokenKind::True => {\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::True),\n                    span,\n                })\n            }\n            TokenKind::False => {\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::False),\n                    span,\n                })\n            }\n            TokenKind::Param(p) => {\n                let kind = match p.as_ref() {\n                    Param::Anonymous => ParamKind::Anonymous,\n                    Param::Numbered(n) => ParamKind::Numbered(*n),\n                    Param::Colon(s) => ParamKind::Colon(s.clone()),\n                    Param::At(s) => ParamKind::At(s.clone()),\n                    Param::Dollar(s) => ParamKind::Dollar(s.clone()),\n                };\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Param(kind),\n                    span,\n                })\n            }\n            TokenKind::Keyword(Keyword::CURRENT_TIME)\n            | TokenKind::Keyword(Keyword::CURRENT_DATE)\n            | TokenKind::Keyword(Keyword::CURRENT_TIMESTAMP) => {\n                self.unsupported(\"CURRENT_TIME/CURRENT_DATE/CURRENT_TIMESTAMP not yet supported\")\n            }\n            TokenKind::Keyword(Keyword::CASE) => self.case_expr(),\n            TokenKind::Keyword(Keyword::CAST) => self.cast_expr(),\n            TokenKind::Keyword(Keyword::EXISTS) => {\n                let start = self.advance_span();\n                self.exists_tail(start, false)\n            }\n            TokenKind::Identifier(name) => {\n                let name = name.clone();\n                let start = self.advance_span();\n                if matches!(self.peek().kind, TokenKind::LParen) {\n                    return self.function_call(name, start);\n                }\n                let mut parts = vec![name];\n                while matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3 {\n                    self.advance();\n                    let (part, _) = self.identifier()?;\n                    parts.push(part);\n                }\n                let end = self\n                    .tokens\n                    .get(self.pos.saturating_sub(1))\n                    .map_or(start, |t| t.span);\n                let span = join_span(start, end);\n                // Exactly one, two or three parts (db-core#232): the old\n                // wildcard arm also matched `a.b.c.d`, silently dropping\n                // the trailing parts, and `unwrap_or_default()` could\n                // mint an empty identifier. Moved out of `parts` by\n                // value (db-core#486: `parts.as_slice()` forced a\n                // `.clone()` of every identifier `String` here -- a\n                // second heap copy on top of the one `self.identifier()`/\n                // the `Identifier(name)` match already produced --\n                // instead of just moving the `String`s `parts` already\n                // owns.\n                let len = parts.len();\n                let mut parts = parts.into_iter();\n                let kind = match len {\n                    1..=3 => {\n                        let catalog = if len == 3 { parts.next() } else { None };\n                        let table = if len >= 2 { parts.next() } else { None };\n                        let Some(name) = parts.next() else {\n                            return self\n                                .invalid(\"a column reference has at most three dotted parts\");\n                        };\n                        ExprKind::Column {\n                            catalog,\n                            table,\n                            name,\n                        }\n                    }\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                };\n                Ok(Expr { kind, span })\n            }\n            // SQLite treats most keywords as usable function names when\n            // followed by `(` (e.g. `replace(...)`, `glob(...)`) — only\n            // the handful matched above (CASE/CAST/EXISTS/CURRENT_*)\n            // are true reserved words in expression position.\n            TokenKind::Keyword(kw) if matches!(self.peek_at(1).kind, TokenKind::LParen) => {\n                let kw = *kw;\n                let span = self.advance_span();\n                self.function_call(format!(\"{kw:?}\"), span)\n            }\n            TokenKind::LParen => {\n                let start = self.advance_span();\n                if self.at_kw(Keyword::SELECT) {\n                    let subquery = self.parse_select_stmt()?;\n                    if matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    ) {\n                        return self.unsupported(\n                            \"compound SELECT (UNION/INTERSECT/EXCEPT) not yet supported\",\n                        );\n                    }\n                    let end = self.expect_punct(TokenKind::RParen, \"')' to close subquery\")?;\n                    let span = join_span(start, end);\n                    return Ok(Expr {\n                        kind: ExprKind::Subquery(Box::new(subquery)),\n                        span,\n                    });\n                }\n                let inner = self.expr()?;\n                let end = self.expect_punct(TokenKind::RParen, \"')' to close expression\")?;\n                let span = join_span(start, end);\n                Ok(Expr {\n                    kind: ExprKind::Paren(Box::new(inner)),\n                    span,\n                })\n            }\n            other => Err(ParseFail::Invalid {\n                message: format!(\"expected column or expression, found {other:?}\"),\n                span: self.peek().span,\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21502,7 +21492,7 @@
   {
     "id": "parser_row_grammar_primary_expr_d95902fa",
     "file": "src/parser/row/grammar.rs",
-    "line": 2586,
+    "line": 2592,
     "decision": "matches!(self.peek_at(1).kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21512,7 +21502,7 @@
   {
     "id": "parser_row_grammar_primary_expr_218f77c8",
     "file": "src/parser/row/grammar.rs",
-    "line": 2511,
+    "line": 2517,
     "decision": "match p.as_ref() {\n                    Param::Anonymous => ParamKind::Anonymous,\n                    Param::Numbered(n) => ParamKind::Numbered(*n),\n                    Param::Colon(s) => ParamKind::Colon(s.clone()),\n                    Param::At(s) => ParamKind::At(s.clone()),\n                    Param::Dollar(s) => ParamKind::Dollar(s.clone()),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21522,7 +21512,7 @@
   {
     "id": "parser_row_grammar_primary_expr_dbaa03a3",
     "file": "src/parser/row/grammar.rs",
-    "line": 2538,
+    "line": 2544,
     "decision": "matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21532,7 +21522,7 @@
   {
     "id": "parser_row_grammar_primary_expr_c99e92d7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2542,
+    "line": 2548,
     "decision": "matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3",
     "conditions": 2,
     "vectors_required": 3,
@@ -21542,7 +21532,7 @@
   {
     "id": "parser_row_grammar_primary_expr_cca4606b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2564,
+    "line": 2570,
     "decision": "match len {\n                    1..=3 => {\n                        let catalog = if len == 3 { parts.next() } else { None };\n                        let table = if len >= 2 { parts.next() } else { None };\n                        let Some(name) = parts.next() else {\n                            return self\n                                .invalid(\"a column reference has at most three dotted parts\");\n                        };\n                        ExprKind::Column {\n                            catalog,\n                            table,\n                            name,\n                        }\n                    }\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21552,7 +21542,7 @@
   {
     "id": "parser_row_grammar_primary_expr_c2cb254b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2566,
+    "line": 2572,
     "decision": "len == 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -21562,7 +21552,7 @@
   {
     "id": "parser_row_grammar_primary_expr_1511b2a6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2567,
+    "line": 2573,
     "decision": "len >= 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -21572,7 +21562,7 @@
   {
     "id": "parser_row_grammar_primary_expr_2a50be6e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2593,
+    "line": 2599,
     "decision": "self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21582,7 +21572,7 @@
   {
     "id": "parser_row_grammar_primary_expr_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2595,
+    "line": 2601,
     "decision": "matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    )",
     "conditions": 1,
     "vectors_required": 2,
@@ -21592,7 +21582,7 @@
   {
     "id": "parser_row_grammar_function_call_9105415c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2630,
+    "line": 2636,
     "decision": "self.eat_punct(&TokenKind::Star)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21602,7 +21592,7 @@
   {
     "id": "parser_row_grammar_function_call_2629d5b7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2632,
+    "line": 2638,
     "decision": "matches!(self.peek().kind, TokenKind::RParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21612,7 +21602,7 @@
   {
     "id": "parser_row_grammar_function_tail_3403c85a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2675,
+    "line": 2681,
     "decision": "self.eat_kw(Keyword::RANGE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21622,7 +21612,7 @@
   {
     "id": "parser_row_grammar_function_tail_f75851c6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2680,
+    "line": 2686,
     "decision": "let Some(r) = &range",
     "conditions": 1,
     "vectors_required": 2,
@@ -21632,7 +21622,7 @@
   {
     "id": "parser_row_grammar_function_tail_2258eb7c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2683,
+    "line": 2689,
     "decision": "self.eat_kw(Keyword::FILTER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21642,7 +21632,7 @@
   {
     "id": "parser_row_grammar_function_tail_87133733",
     "file": "src/parser/row/grammar.rs",
-    "line": 2692,
+    "line": 2698,
     "decision": "self.eat_kw(Keyword::OVER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21652,7 +21642,7 @@
   {
     "id": "parser_row_grammar_function_tail_b001c5a8",
     "file": "src/parser/row/grammar.rs",
-    "line": 2699,
+    "line": 2705,
     "decision": "filter.is_none() && over.is_none() && range.is_none()",
     "conditions": 3,
     "vectors_required": 4,
@@ -21662,7 +21652,7 @@
   {
     "id": "parser_row_grammar_window_def_849b6473",
     "file": "src/parser/row/grammar.rs",
-    "line": 2716,
+    "line": 2722,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21672,7 +21662,7 @@
   {
     "id": "parser_row_grammar_window_def_c4d1976d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2724,
+    "line": 2730,
     "decision": "self.eat_kw(Keyword::PARTITION)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21682,7 +21672,7 @@
   {
     "id": "parser_row_grammar_window_def_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2727,
+    "line": 2733,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21692,7 +21682,7 @@
   {
     "id": "parser_row_grammar_window_def_980f2400",
     "file": "src/parser/row/grammar.rs",
-    "line": 2733,
+    "line": 2739,
     "decision": "self.eat_kw(Keyword::ORDER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21702,7 +21692,7 @@
   {
     "id": "parser_row_grammar_window_def_e9025c84_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 2736,
+    "line": 2742,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21712,7 +21702,7 @@
   {
     "id": "parser_row_grammar_window_def_6907c266",
     "file": "src/parser/row/grammar.rs",
-    "line": 2741,
+    "line": 2747,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::ROWS)\n                | TokenKind::Keyword(Keyword::RANGE)\n                | TokenKind::Keyword(Keyword::GROUPS)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -21722,7 +21712,7 @@
   {
     "id": "parser_row_grammar_case_expr_d359b45c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2762,
+    "line": 2768,
     "decision": "self.at_kw(Keyword::WHEN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21732,7 +21722,7 @@
   {
     "id": "parser_row_grammar_case_expr_47ae9dae",
     "file": "src/parser/row/grammar.rs",
-    "line": 2768,
+    "line": 2774,
     "decision": "self.eat_kw(Keyword::WHEN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21742,7 +21732,7 @@
   {
     "id": "parser_row_grammar_case_expr_2c73542b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2774,
+    "line": 2780,
     "decision": "whens.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -21752,7 +21742,7 @@
   {
     "id": "parser_row_grammar_case_expr_9ca297d5",
     "file": "src/parser/row/grammar.rs",
-    "line": 2777,
+    "line": 2783,
     "decision": "self.eat_kw(Keyword::ELSE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21762,7 +21752,7 @@
   {
     "id": "parser_row_grammar_type_name_ac37c31a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2813,
+    "line": 2819,
     "decision": "let TokenKind::Identifier(_) = self.peek().kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -21772,7 +21762,7 @@
   {
     "id": "parser_row_grammar_type_name_bffb0a0b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2818,
+    "line": 2824,
     "decision": "self.eat_punct(&TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21782,7 +21772,7 @@
   {
     "id": "parser_row_grammar_type_name_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2822,
+    "line": 2828,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21792,7 +21782,7 @@
   {
     "id": "parser_row_grammar_number_literal_84884d30",
     "file": "src/parser/row/grammar.rs",
-    "line": 2834,
+    "line": 2840,
     "decision": "match self.peek().kind.clone() {\n            TokenKind::Integer(v) => {\n                self.advance();\n                Ok(v.to_string())\n            }\n            other => {\n                let span = self.peek().span;\n                Err(ParseFail::Invalid {\n                    message: format!(\"expected number, found {other:?}\"),\n                    span,\n                })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21802,7 +21792,7 @@
   {
     "id": "parser_row_grammar_expr_list_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2851,
+    "line": 2857,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21812,8 +21802,18 @@
   {
     "id": "parser_row_grammar_expr_height_8db688f6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2876,
+    "line": 2882,
     "decision": "let Some((e, h)) = stack.pop()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_row_grammar_expr_height_66b87bd9",
+    "file": "src/parser/row/grammar.rs",
+    "line": 2885,
+    "decision": "matches!(e.kind, ExprKind::Paren(_))",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -21822,7 +21822,7 @@
   {
     "id": "parser_row_grammar_children_8a8586eb",
     "file": "src/parser/row/grammar.rs",
-    "line": 2886,
+    "line": 2897,
     "decision": "match &e.kind {\n        ExprKind::Unary { expr, .. }\n        | ExprKind::IsNull { expr, .. }\n        | ExprKind::Cast { expr, .. }\n        | ExprKind::Collate { expr, .. }\n        | ExprKind::Paren(expr)\n        | ExprKind::InSubquery { expr, .. } => vec![expr],\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => vec![lhs, rhs],\n        ExprKind::Between { expr, lo, hi, .. } => vec![expr, lo, hi],\n        ExprKind::In { expr, list, .. } => std::iter::once(&**expr).chain(list).collect(),\n        ExprKind::Like {\n            expr,\n            pattern,\n            escape,\n            ..\n        } => [Some(&**expr), Some(&**pattern), escape.as_deref()]\n            .into_iter()\n            .flatten()\n            .collect(),\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => operand\n            .as_deref()\n            .into_iter()\n            .chain(whens.iter().flat_map(|(w, t)| [w, t]))\n            .chain(else_.as_deref())\n            .collect(),\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        }\n        | ExprKind::InSubqueryMulti { exprs: list, .. } => list.iter().collect(),\n        _ => Vec::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21832,7 +21832,7 @@
   {
     "id": "parser_row_grammar_operator_chains_are_capped_at_sqlite3s_expression_height_acbcd3da",
     "file": "src/parser/row/grammar.rs",
-    "line": 3697,
+    "line": 3708,
     "decision": "match parse(&over) {\n                    crate::parser::row::ParseOutcome::Invalid { message, .. } => assert!(\n                        message.contains(\"Expression tree is too large (maximum depth 1000)\"),\n                        \"{message}\"\n                    ),\n                    other => panic!(\"{term}{op} x {n}: {other:?}\"),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21842,7 +21842,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_e4a5bc85",
     "file": "src/parser/row/grammar.rs",
-    "line": 3718,
+    "line": 3763,
     "decision": "match crate::parser::row::parse_select(sql) {\n            crate::parser::row::ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21852,7 +21852,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_20abd9ee",
     "file": "src/parser/row/grammar.rs",
-    "line": 3722,
+    "line": 3767,
     "decision": "match &select.columns[0] {\n            ResultColumn::Expr { expr, .. } => match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            },\n            other => panic!(\"expected an expression column, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21862,7 +21862,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_0bdb902e",
     "file": "src/parser/row/grammar.rs",
-    "line": 3723,
+    "line": 3768,
     "decision": "match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21872,7 +21872,7 @@
   {
     "id": "parser_row_grammar_parse_select_stmt_aa58f6cd",
     "file": "src/parser/row/grammar.rs",
-    "line": 3787,
+    "line": 3832,
     "decision": "self.depth > MAX_EXPR_DEPTH",
     "conditions": 1,
     "vectors_required": 2,

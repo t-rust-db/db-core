@@ -10,6 +10,9 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 - **A long operator chain no longer crashes the process** (#655, security). Before, `SELECT 1+1+...` or `WHERE a AND b AND ...` with about 10,000 terms overflowed the stack and aborted the whole process. The parser's `MAX_EXPR_DEPTH` (200) bounds its own recursion only, while a flat chain is parsed by a loop into a left-deep tree as tall as the chain, and validation, planning, the VMs and `Drop` all recurse over that tree.
   - The parser now caps expression height at sqlite3's `SQLITE_MAX_EXPR_DEPTH` of 1000, with sqlite3's message, `Expression tree is too large (maximum depth 1000)`. sqlite3 3.53.4 accepts the same boundary: 1000 `+` terms, 999 `AND`-ed comparisons.
+  - The cap covers every flat loop: AND/OR, comparisons and postfix operators, arithmetic and `||`, `COLLATE`, and column-dialect subscript chains (`m['a']['b']...`).
+  - As in sqlite3, parentheses are not a level.
+  - Each operand is measured once, so a very wide operand (a 100k-element `IN` list) costs no more than it did before.
   - Once a statement is too tall the parser builds nothing taller, so a 100k-term chain is refused in milliseconds.
   - A release build runs an expression at the limit in under 1 MiB of stack.
 
