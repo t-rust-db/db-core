@@ -2405,11 +2405,16 @@ pub enum VmError {
         /// Which finalize step needs the whole result.
         reason: String,
     },
-    /// An integer `SUM` does not fit in 64 bits (#631), or integer or
-    /// decimal arithmetic leaves its type's range (#635: `BIGINT` past 64
-    /// bits, `DECIMAL` past 38 digits): an error, as in SQLite and DuckDB,
-    /// rather than a rounded or wrapped result.
+    /// An integer `SUM` does not fit in 64 bits (#631), or integer
+    /// arithmetic leaves `BIGINT` (#635): an error, as in SQLite and
+    /// DuckDB, rather than a rounded or wrapped result.
     IntegerOverflow {
+        /// Name of the [`Opcode`] variant (or engine phase) that failed.
+        opcode: &'static str,
+    },
+    /// A decimal `SUM` or decimal arithmetic leaves `DECIMAL(38)` -- more
+    /// than 38 digits, or a scale above 38 (#632, #635, #660).
+    DecimalOverflow {
         /// Name of the [`Opcode`] variant (or engine phase) that failed.
         opcode: &'static str,
     },
@@ -2445,6 +2450,9 @@ impl fmt::Display for VmError {
             VmError::SegmentLoad { reason } => write!(f, "segment load failed: {reason}"),
             VmError::NotStreamable { reason } => write!(f, "cannot stream this program: {reason}"),
             VmError::IntegerOverflow { opcode } => write!(f, "{opcode}: integer overflow"),
+            VmError::DecimalOverflow { opcode } => {
+                write!(f, "{opcode}: decimal overflow (past DECIMAL(38))")
+            }
         }
     }
 }
@@ -3342,7 +3350,7 @@ impl RunningAgg {
             // largest scale seen, an error past DECIMAL(38) (#632).
             AggFunc::Sum if self.dec_scale.is_some() => {
                 let scale = self.dec_scale.unwrap_or(0);
-                let overflow = || VmError::IntegerOverflow { opcode };
+                let overflow = || VmError::DecimalOverflow { opcode };
                 if self.dec_overflow {
                     return Err(overflow());
                 }
@@ -5429,7 +5437,13 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     use std::cmp::Ordering::{Equal, Greater, Less};
     Ok(match op {
         MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div => {
-            return arithmetic(op, a, b).ok_or(VmError::IntegerOverflow { opcode: "Map" });
+            return arithmetic(op, a, b).ok_or_else(|| {
+                if matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. }) {
+                    VmError::DecimalOverflow { opcode: "Map" }
+                } else {
+                    VmError::IntegerOverflow { opcode: "Map" }
+                }
+            });
         }
         MapOp::Eq => comparison(a, b, |o| o == Some(Equal)),
         MapOp::Ne => comparison(a, b, |o| o != Some(Equal)),
@@ -6252,7 +6266,7 @@ mod tests {
         let max = 10_i128.pow(38) - 1;
         assert!(matches!(
             apply_map_op(MapOp::Add, &dec(max, 0), &Value::Int(1)),
-            Err(VmError::IntegerOverflow { .. })
+            Err(VmError::DecimalOverflow { .. })
         ));
         assert!(matches!(
             apply_map_op(
@@ -6260,7 +6274,7 @@ mod tests {
                 &dec(10_i128.pow(20), 0),
                 &dec(10_i128.pow(20), 0)
             ),
-            Err(VmError::IntegerOverflow { .. })
+            Err(VmError::DecimalOverflow { .. })
         ));
     }
 
@@ -10374,7 +10388,7 @@ mod tests {
         big.push(Some(&dec(1, 0)));
         assert!(matches!(
             big.finalize(AggFunc::Sum, false, "Test"),
-            Err(VmError::IntegerOverflow { opcode: "Test" })
+            Err(VmError::DecimalOverflow { opcode: "Test" })
         ));
 
         let mut wrapped = RunningAgg::default();
