@@ -41,20 +41,6 @@ use std::cell::{Cell, RefCell};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::Once;
 
-/// Reader modules whose own lint burn-down (#657) has not landed yet: a
-/// panic located in one of these is printed, not failed on. Remove an
-/// entry once its module returns errors on corrupt input; the list should
-/// end up empty.
-const NOT_YET_HARDENED: &[&str] = &[
-    "src/storage/parquet/compression.rs",
-    "src/storage/parquet/decimal.rs",
-    "src/storage/parquet/encoding.rs",
-    "src/storage/parquet/footer.rs",
-    "src/storage/parquet/nested.rs",
-    "src/storage/parquet/schema_tree.rs",
-    "src/storage/parquet/thrift.rs",
-];
-
 const FIXTURES: &[&str] = &[
     "production.parquet",
     "production_snappy.parquet",
@@ -294,7 +280,7 @@ fn install_quiet_hook() {
 }
 
 /// Runs `read_everything` on every mutation of `name` and fails, listing
-/// each one, if any panicked outside the [`NOT_YET_HARDENED`] modules.
+/// each one, if any panicked.
 fn assert_no_panics(name: &str) {
     let bytes = fixture(name);
     // The unmutated file must read: otherwise the mutations test nothing.
@@ -326,18 +312,12 @@ fn assert_no_panics(name: &str) {
     }
     CATCHING.with(|c| c.set(false));
 
-    let (pending, failures): (Vec<String>, Vec<String>) = panics
-        .into_iter()
-        .partition(|f| NOT_YET_HARDENED.iter().any(|m| f.contains(m)));
-    for p in &pending {
-        eprintln!("panic in a module not yet hardened (#657): {p}");
-    }
     assert!(
-        failures.is_empty(),
+        panics.is_empty(),
         "{} of {} mutation(s) panicked:\n{}",
-        failures.len(),
+        panics.len(),
         mutations.len(),
-        failures.join("\n")
+        panics.join("\n")
     );
 }
 

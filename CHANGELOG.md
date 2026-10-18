@@ -4,6 +4,19 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.146.0] - 2026-10-18
+
+### Fixed
+
+- **Corrupt Parquet files return errors instead of panicking** (#657). The Parquet reader has met the crate-wide lint bar since this release: no unchecked arithmetic, indexing or casts, and no module-level allows. Crafted or damaged input that used to panic now gets an error:
+  - footer and schema: an empty schema, `num_children` past the element count or `i32::MAX`, deep schema chains, deep Thrift nesting, and huge decimal scales;
+  - RLE/bit-packed and delta encodings: bit widths over 32/64, run-length overflow, and huge header counts or block sizes;
+  - nested columns: level or value streams shorter than the rows need;
+  - timestamps: `TIMESTAMP_MILLIS` and INT96 values outside `i64` microseconds, which give the new `FileError::TimestampOutOfRange`.
+- **Allocations are bounded by the input** (#657). Snappy sizes its buffer from the block's own bytes, ZSTD's up-front buffer is capped at 64 MiB, and page assembly no longer reserves `num_values` slots taken straight from the header. Delta streams with a block size above 65,536 are rejected.
+- New error variants: `EncodingError::InvalidBitWidth` and `NestedError::TruncatedLeafData`.
+- A mutation test (`unit_parquet_file_corruption`) and per-decoder fuzz tests run hundreds of mutations of every fixture through every reader and fail on any panic.
+
 ## [0.145.0] - 2026-10-18
 
 ### Changed

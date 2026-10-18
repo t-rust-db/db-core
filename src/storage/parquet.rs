@@ -6,10 +6,9 @@
 
 #![forbid(unsafe_code)]
 
-// The reader predates the crate-wide lint bar (#9): these three lints are
-// allowed per reader module (moved from `storage::column`, where they were
-// module-wide) until the burn-down lands. Per module, not here at the
-// top, so new modules in `parquet` (the writer, #566) get the full bar.
+// Every module meets the crate-wide lint bar (#9, burned down in #657):
+// file bytes are untrusted, so corrupt input returns an error, never a
+// panic (`tests/unit/parquet_file_corruption_test.rs`).
 pub mod compression;
 pub mod decimal;
 pub mod encoding;

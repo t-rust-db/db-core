@@ -2611,6 +2611,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::decimal::D
 pub fn db_core::storage::column::parquet::decimal::from_be_bytes(&[u8]) -> i128
 pub mod db_core::storage::column::parquet::encoding
 pub enum db_core::storage::column::parquet::encoding::EncodingError
+pub db_core::storage::column::parquet::encoding::EncodingError::InvalidBitWidth(u32)
 pub db_core::storage::column::parquet::encoding::EncodingError::InvalidLength(u64)
 pub db_core::storage::column::parquet::encoding::EncodingError::InvalidVarint
 pub db_core::storage::column::parquet::encoding::EncodingError::UnexpectedEof
@@ -2803,6 +2804,7 @@ pub type db_core::storage::column::parquet::footer::Result<T> = core::result::Re
 pub mod db_core::storage::column::parquet::nested
 pub enum db_core::storage::column::parquet::nested::NestedError
 pub db_core::storage::column::parquet::nested::NestedError::MissingLeafData(alloc::string::String)
+pub db_core::storage::column::parquet::nested::NestedError::TruncatedLeafData(alloc::string::String)
 pub db_core::storage::column::parquet::nested::NestedError::UnsupportedListElement(alloc::string::String)
 pub db_core::storage::column::parquet::nested::NestedError::UnsupportedMapShape(alloc::string::String)
 impl core::convert::From<db_core::storage::parquet::nested::NestedError> for db_core::storage::parquet::parquet_file::FileError
@@ -4510,6 +4512,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::decimal::D
 pub fn db_core::storage::parquet::decimal::from_be_bytes(&[u8]) -> i128
 pub mod db_core::storage::parquet::encoding
 pub enum db_core::storage::parquet::encoding::EncodingError
+pub db_core::storage::parquet::encoding::EncodingError::InvalidBitWidth(u32)
 pub db_core::storage::parquet::encoding::EncodingError::InvalidLength(u64)
 pub db_core::storage::parquet::encoding::EncodingError::InvalidVarint
 pub db_core::storage::parquet::encoding::EncodingError::UnexpectedEof
@@ -4702,6 +4705,7 @@ pub type db_core::storage::parquet::footer::Result<T> = core::result::Result<T, 
 pub mod db_core::storage::parquet::nested
 pub enum db_core::storage::parquet::nested::NestedError
 pub db_core::storage::parquet::nested::NestedError::MissingLeafData(alloc::string::String)
+pub db_core::storage::parquet::nested::NestedError::TruncatedLeafData(alloc::string::String)
 pub db_core::storage::parquet::nested::NestedError::UnsupportedListElement(alloc::string::String)
 pub db_core::storage::parquet::nested::NestedError::UnsupportedMapShape(alloc::string::String)
 impl core::convert::From<db_core::storage::parquet::nested::NestedError> for db_core::storage::parquet::parquet_file::FileError
