@@ -172,7 +172,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
         }
         let combined = if preaggregation_pays(segments.len()) {
             let partials = run_parallel_preaggregate(segments, &body, agg_parts, *num_group_keys)?;
-            combine_partials(agg_parts, *num_group_keys, &partials)?
+            combine_partials(agg_parts, *num_group_keys, partials)?
         } else {
             let output = run_parallel(segments, &body)?;
             combine_chunks(agg_parts, *num_group_keys, output.chunks())?
@@ -245,12 +245,14 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
         || Combiner::new(agg_parts, num_group_keys),
         |combiner, (segment_index, segment)| {
             let batch = segment.load()?;
-            let mut vm = Vm::new();
-            vm.execute(&batch, body)?;
-            for chunk in vm.take_output().into_chunks() {
-                combiner.push_chunk(&chunk, |row| order_key(*segment_index, row))?;
-            }
-            Ok(())
+            crate::vm::batch::execute_in_slices(&batch, body, |offset, output| {
+                for chunk in output.into_chunks() {
+                    combiner.push_chunk(&chunk, |row| {
+                        order_key(*segment_index, offset.saturating_add(row))
+                    })?;
+                }
+                Ok(())
+            })
         },
         |combiner| Ok(combiner.finish_partial()),
     )

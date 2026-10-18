@@ -239,6 +239,61 @@ impl Column {
         self.len() == 0
     }
 
+    /// Rows `start..start + len` (clamped to the column) as a column of
+    /// their own (#643: a segment runs in slices). A dictionary column
+    /// keeps its dictionary while it is small next to the slice; a large
+    /// one is decoded to `Str` instead, so slicing never copies a big
+    /// dictionary once per slice.
+    pub(crate) fn slice(&self, start: usize, len: usize) -> Column {
+        let end = start.saturating_add(len).min(self.len());
+        let start = start.min(end);
+        let range = start..end;
+        let valid = |v: &Bitmap| Bitmap::from_bools(range.clone().map(|i| v.get(i)));
+        match self {
+            Column::Int { data, valid: v } => Column::Int {
+                data: data.get(range.clone()).unwrap_or_default().to_vec(),
+                valid: valid(v),
+            },
+            Column::Float { data, valid: v } => Column::Float {
+                data: data.get(range.clone()).unwrap_or_default().to_vec(),
+                valid: valid(v),
+            },
+            Column::Bool { data, valid: v } => Column::Bool {
+                data: data.get(range.clone()).unwrap_or_default().to_vec(),
+                valid: valid(v),
+            },
+            Column::Dict {
+                dict,
+                indices,
+                valid: v,
+            } if dict.len() <= end.saturating_sub(start).saturating_mul(4) => Column::Dict {
+                dict: dict.clone(),
+                indices: indices.get(range.clone()).unwrap_or_default().to_vec(),
+                valid: valid(v),
+            },
+            Column::Str { .. } | Column::Dict { .. } => {
+                let mut offsets = Vec::with_capacity(end.saturating_sub(start).saturating_add(1));
+                let mut data = String::new();
+                offsets.push(0);
+                for i in range.clone() {
+                    if let Value::Str(s) = self.get(i) {
+                        data.push_str(&s);
+                    }
+                    offsets.push(u32::try_from(data.len()).unwrap_or(u32::MAX));
+                }
+                let v = match self {
+                    Column::Str { valid: v, .. } | Column::Dict { valid: v, .. } => valid(v),
+                    _ => Bitmap::new(0, true),
+                };
+                Column::Str {
+                    offsets,
+                    data,
+                    valid: v,
+                }
+            }
+        }
+    }
+
     /// Whether row `i` is NULL. `i >= len()` reads as NULL rather than
     /// panicking.
     pub fn is_null(&self, i: usize) -> bool {
@@ -387,6 +442,55 @@ impl From<Vec<Value>> for Column {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #643: a slice of each column shape keeps its rows and NULLs; a
+    /// dictionary large next to the slice becomes `Str`.
+    #[test]
+    fn slice_keeps_rows_nulls_and_small_dictionaries() {
+        let ints = Column::from(vec![
+            Value::Int(1),
+            Value::Null,
+            Value::Int(3),
+            Value::Int(4),
+        ]);
+        let s = ints.slice(1, 2);
+        assert_eq!(
+            (s.len(), s.get(0), s.get(1)),
+            (2, Value::Null, Value::Int(3))
+        );
+        let floats = Column::Float {
+            data: vec![0.5, 1.5, 2.5],
+            valid: Bitmap::new(3, true),
+        };
+        assert_eq!(floats.slice(2, 10).get(0), Value::Float(2.5));
+        let bools = Column::Bool {
+            data: vec![true, false],
+            valid: Bitmap::new(2, true),
+        };
+        assert_eq!(bools.slice(1, 1).get(0), Value::Bool(false));
+        let strs = Column::Str {
+            offsets: vec![0, 1, 3, 3],
+            data: "abc".to_string(),
+            valid: Bitmap::from_bools([true, true, false].into_iter()),
+        };
+        let s = strs.slice(1, 2);
+        assert_eq!((s.get(0), s.get(1)), (Value::Str("bc".into()), Value::Null));
+        let dict = |n: usize| Column::Dict {
+            dict: (0..n)
+                .map(|i| Arc::from(format!("v{i}").as_str()))
+                .collect(),
+            indices: vec![0, 1, 0, 1],
+            valid: Bitmap::new(4, true),
+        };
+        assert!(matches!(dict(2).slice(0, 2), Column::Dict { .. }));
+        let big = dict(100).slice(1, 2);
+        assert!(matches!(big, Column::Str { .. }));
+        assert_eq!(
+            (big.get(0), big.get(1)),
+            (Value::Str("v1".into()), Value::Str("v0".into()))
+        );
+        assert!(ints.slice(9, 3).is_empty());
+    }
 
     #[test]
     fn bitmap_all_valid_default() {
