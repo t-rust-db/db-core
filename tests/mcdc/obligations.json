@@ -40782,7 +40782,7 @@
   {
     "id": "vm_engine_count_program_0ac42f8a",
     "file": "src/vm/engine.rs",
-    "line": 1547,
+    "line": 1588,
     "decision": "grouped",
     "conditions": 1,
     "vectors_required": 2,
