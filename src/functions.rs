@@ -41,6 +41,13 @@ use std::cmp::Ordering;
 use crate::compare::compare;
 use crate::value::{len_to_i64, Collation, Value};
 
+// sqlite3 built-ins by family (#651); each adds its own names to
+// [`lookup`] through its own `lookup`.
+mod datetime;
+mod json;
+mod math;
+mod text;
+
 /// The ways a scalar function call can fail to evaluate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionError {
@@ -53,6 +60,9 @@ pub enum FunctionError {
     },
     /// An arithmetic result overflowed `i64`.
     IntegerOverflow,
+    /// A runtime error sqlite3 raises from the function itself, with its
+    /// message (`malformed JSON`, ...) (#651).
+    Sql(String),
 }
 
 impl std::fmt::Display for FunctionError {
@@ -62,6 +72,7 @@ impl std::fmt::Display for FunctionError {
                 write!(f, "unknown function {name} with {arity} argument(s)")
             }
             FunctionError::IntegerOverflow => write!(f, "integer overflow"),
+            FunctionError::Sql(message) => write!(f, "{message}"),
         }
     }
 }
@@ -1464,7 +1475,17 @@ pub fn prepare_error(name: &str, arity: usize) -> Option<String> {
 
 /// The registry entry for `name` (any case) at `arity`.
 fn lookup(name: &str, arity: usize) -> Option<ScalarFn> {
-    match (name.to_ascii_lowercase().as_str(), arity) {
+    let lower = name.to_ascii_lowercase();
+    core_lookup(&lower, arity)
+        .or_else(|| text::lookup(&lower, arity))
+        .or_else(|| math::lookup(&lower, arity))
+        .or_else(|| datetime::lookup(&lower, arity))
+        .or_else(|| json::lookup(&lower, arity))
+}
+
+/// The functions ported from sqlite-rs (#64, #68, #90) and #307's.
+fn core_lookup(name: &str, arity: usize) -> Option<ScalarFn> {
+    match (name, arity) {
         ("length", 1) => Some(length),
         ("upper", 1) => Some(upper),
         ("lower", 1) => Some(lower),
