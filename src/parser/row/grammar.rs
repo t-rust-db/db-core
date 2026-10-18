@@ -36,12 +36,23 @@ pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     depth: usize,
+    /// An expression grew past [`MAX_EXPR_HEIGHT`]; reported by
+    /// [`Self::expect_end`], which every statement parse ends with.
+    too_tall: bool,
 }
 
 /// Recursion-depth cap for `expr`/`not_expr`/`unary_expr`, so pathological
 /// input (many nested `(`, or repeated `NOT`/unary operators) returns a
 /// clean `ParseFail::Invalid` instead of overflowing the stack.
 const MAX_EXPR_DEPTH: usize = 200;
+
+/// Height cap for a parsed expression tree, sqlite3's
+/// `SQLITE_MAX_EXPR_DEPTH` (#655). `MAX_EXPR_DEPTH` bounds the parser's
+/// own recursion, but a flat operator chain (`1+1+...`, `a AND b AND
+/// ...`) is parsed by a loop into a left-deep tree as tall as the chain,
+/// and everything after the parser (validation, planning, the VMs, even
+/// `Drop`) recurses over that tree.
+const MAX_EXPR_HEIGHT: usize = 1000;
 
 /// Case-insensitive `SINCE`/`UNTIL` unit name -> `(ScopeUnit, multiplier)`.
 /// Byte units fold their multiplier into the returned amount so
@@ -82,6 +93,7 @@ impl Parser {
             tokens,
             pos: 0,
             depth: 0,
+            too_tall: false,
         }
     }
 
@@ -230,6 +242,11 @@ impl Parser {
     /// After a full statement is parsed, only a trailing `;` (optionally
     /// repeated) and EOF are allowed.
     pub(super) fn expect_end(&mut self) -> PResult<()> {
+        if self.too_tall {
+            return self.invalid(format!(
+                "Expression tree is too large (maximum depth {MAX_EXPR_HEIGHT})"
+            ));
+        }
         while self.eat_punct(&TokenKind::Semicolon) {}
         match &self.peek().kind {
             TokenKind::Eof => Ok(()),
@@ -1855,6 +1872,7 @@ impl Parser {
     /// (#118); see `binary_expr` for the larger half of that collapse.
     fn bool_expr(&mut self, min_prec: u8) -> PResult<Expr> {
         let mut lhs = self.not_expr()?;
+        let mut height = 0;
         loop {
             // AND binds tighter than OR, so AND's rhs only ever needs
             // `not_expr` (nothing tighter exists in this pair); OR's rhs
@@ -1875,8 +1893,44 @@ impl Parser {
             } else {
                 break;
             };
+            self.cap_chain(&mut lhs, &mut height);
         }
         Ok(lhs)
+    }
+
+    /// The height of `lhs op rhs` given `lhs`'s height; `Invalid` past
+    /// [`MAX_EXPR_HEIGHT`], with sqlite3's message, before the taller tree
+    /// is built.
+    /// Caps a node an operator loop just built (`lhs op rhs`, a postfix
+    /// or comparison node, a subscript) at [`MAX_EXPR_HEIGHT`]. Its first
+    /// child is the loop's previous value, whose height `height` carries
+    /// (0 = not yet known, measured once), so only the new operands are
+    /// measured: linear in the statement, however wide an operand is.
+    /// Past the limit the statement is refused at [`Self::expect_end`] and
+    /// the node becomes a NULL leaf, so the tree stops growing while
+    /// parsing runs on. One out-of-line call with nothing to return: this
+    /// runs inside the recursive-descent frames, whose size
+    /// `MAX_EXPR_DEPTH` must fit on a debug (and coverage) build's 2 MiB
+    /// test stack (#118).
+    #[inline(never)]
+    fn cap_chain(&mut self, node: &mut Expr, height: &mut usize) {
+        if !self.too_tall {
+            let children = children(node);
+            let next = match (*height, children.split_first()) {
+                (0, _) | (_, None) => expr_height(node),
+                (known, Some((_, rest))) => rest
+                    .iter()
+                    .map(|c| expr_height(c))
+                    .fold(known, usize::max)
+                    .saturating_add(1),
+            };
+            self.too_tall = next > MAX_EXPR_HEIGHT;
+            *height = next;
+        }
+        if self.too_tall {
+            *node = null_leaf(node.span);
+            *height = 1;
+        }
     }
 
     fn not_expr(&mut self) -> PResult<Expr> {
@@ -1906,6 +1960,7 @@ impl Parser {
             return Ok(multi_in);
         }
         let mut lhs = self.binary_expr(1)?;
+        let mut height = 0;
         loop {
             lhs = match self.peek().kind.clone() {
                 TokenKind::Eq => {
@@ -2021,6 +2076,7 @@ impl Parser {
                 },
                 _ => break,
             };
+            self.cap_chain(&mut lhs, &mut height);
         }
         Ok(lhs)
     }
@@ -2263,6 +2319,7 @@ impl Parser {
     /// `MAX_EXPR_DEPTH` guard (#118).
     fn binary_expr(&mut self, min_prec: u8) -> PResult<Expr> {
         let mut lhs = self.arrow_expr()?;
+        let mut height = 0;
         while let Some((op, prec)) = Self::binary_op(&self.peek().kind) {
             if prec < min_prec {
                 break;
@@ -2270,6 +2327,7 @@ impl Parser {
             self.advance();
             let rhs = self.binary_expr(prec.saturating_add(1))?;
             lhs = bin(op, lhs, rhs);
+            self.cap_chain(&mut lhs, &mut height);
         }
         Ok(lhs)
     }
@@ -2307,6 +2365,7 @@ impl Parser {
 
     fn collate_expr(&mut self) -> PResult<Expr> {
         let mut lhs = self.unary_expr()?;
+        let mut height = 0;
         while self.eat_kw(Keyword::COLLATE) {
             let (name, end) = self.identifier()?;
             let span = join_span(lhs.span, end);
@@ -2317,6 +2376,7 @@ impl Parser {
                 },
                 span,
             };
+            self.cap_chain(&mut lhs, &mut height);
         }
         Ok(lhs)
     }
@@ -2366,6 +2426,7 @@ impl Parser {
     /// and parses as that call, so no expression walker sees a new form.
     fn postfix_expr(&mut self) -> PResult<Expr> {
         let mut expr = self.primary_expr()?;
+        let mut height = 0;
         while matches!(self.peek().kind, TokenKind::LBracket) {
             self.advance_span();
             let index = self.expr()?;
@@ -2380,6 +2441,9 @@ impl Parser {
                 },
                 span,
             };
+            // A subscript chain (`m['a']['b']...`) is as tall as it is
+            // long, like an operator chain (#655).
+            self.cap_chain(&mut expr, &mut height);
         }
         Ok(expr)
     }
@@ -2794,6 +2858,77 @@ impl Parser {
             list.push(self.expr()?);
         }
         Ok(list)
+    }
+}
+
+/// A NULL literal at `span`: what a refused, too-tall operand is replaced
+/// with while parsing continues to the error at the end (#655).
+#[inline(never)]
+fn null_leaf(span: Span) -> Expr {
+    Expr {
+        kind: ExprKind::Literal(Literal::Null),
+        span,
+    }
+}
+
+/// The height of `e`'s expression tree (a leaf is 1), walked with an
+/// explicit stack so measuring a tall tree cannot overflow either.
+/// Subqueries count as leaves: their own expressions were capped as they
+/// were parsed.
+#[inline(never)]
+fn expr_height(e: &Expr) -> usize {
+    let mut max = 0;
+    let mut stack = vec![(e, 1_usize)];
+    while let Some((e, h)) = stack.pop() {
+        max = max.max(h);
+        // sqlite3 has no parenthesis node: `((x))` is as tall as `x`.
+        let below = if matches!(e.kind, ExprKind::Paren(_)) {
+            h
+        } else {
+            h.saturating_add(1)
+        };
+        stack.extend(children(e).into_iter().map(|child| (child, below)));
+    }
+    max
+}
+
+/// `e`'s direct sub-expressions (subqueries excluded).
+fn children(e: &Expr) -> Vec<&Expr> {
+    match &e.kind {
+        ExprKind::Unary { expr, .. }
+        | ExprKind::IsNull { expr, .. }
+        | ExprKind::Cast { expr, .. }
+        | ExprKind::Collate { expr, .. }
+        | ExprKind::Paren(expr)
+        | ExprKind::InSubquery { expr, .. } => vec![expr],
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => vec![lhs, rhs],
+        ExprKind::Between { expr, lo, hi, .. } => vec![expr, lo, hi],
+        ExprKind::In { expr, list, .. } => std::iter::once(&**expr).chain(list).collect(),
+        ExprKind::Like {
+            expr,
+            pattern,
+            escape,
+            ..
+        } => [Some(&**expr), Some(&**pattern), escape.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect(),
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => operand
+            .as_deref()
+            .into_iter()
+            .chain(whens.iter().flat_map(|(w, t)| [w, t]))
+            .chain(else_.as_deref())
+            .collect(),
+        ExprKind::FunctionCall {
+            args: FunctionArgs::List(list),
+            ..
+        }
+        | ExprKind::InSubqueryMulti { exprs: list, .. } => list.iter().collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -3547,6 +3682,77 @@ mod tests {
                 "{depth} levels must be rejected by the depth guard"
             );
         }
+    }
+
+    /// #655: a flat operator chain is capped at sqlite3's expression
+    /// height, 1000, with its message -- not built as a tree so tall that
+    /// later recursion overflows the stack. 100k terms is refused quickly.
+    #[test]
+    fn operator_chains_are_capped_at_sqlite3s_expression_height() {
+        let parse = |sql: &str| crate::parser::row::parse_select(sql);
+        let chain = |n: usize, term: &str, op: &str| vec![term; n].join(op);
+        for (term, op, ok) in [
+            ("1", "+", 1000),
+            ("1", " || ", 1000),
+            ("1=1", " AND ", 999),
+            ("1=1", " OR ", 999),
+            ("x", " * ", 1000),
+        ] {
+            let at = format!("SELECT {} FROM t", chain(ok, term, op));
+            assert!(
+                matches!(parse(&at), crate::parser::row::ParseOutcome::Accepted(_)),
+                "{term}{op} x {ok} must parse"
+            );
+            for n in [ok + 1, 100_000] {
+                let over = format!("SELECT {} FROM t", chain(n, term, op));
+                match parse(&over) {
+                    crate::parser::row::ParseOutcome::Invalid { message, .. } => assert!(
+                        message.contains("Expression tree is too large (maximum depth 1000)"),
+                        "{message}"
+                    ),
+                    other => panic!("{term}{op} x {n}: {other:?}"),
+                }
+            }
+        }
+        // #662 review: a column-dialect subscript chain is capped too.
+        let subscripts = |n: usize| format!("SELECT m{} FROM t", "['k']".repeat(n));
+        assert!(matches!(
+            crate::parser::row::parse_select_with_subscripts(&subscripts(999)),
+            crate::parser::row::ParseOutcome::Accepted(_)
+        ));
+        for n in [1001, 100_000] {
+            assert!(matches!(
+                crate::parser::row::parse_select_with_subscripts(&subscripts(n)),
+                crate::parser::row::ParseOutcome::Invalid { .. }
+            ));
+        }
+        // Parentheses are not a level, as in sqlite3: 1000 `(1)` terms parse.
+        let parens = format!("SELECT {} FROM t", vec!["(1)"; 1000].join("+"));
+        assert!(matches!(
+            parse(&parens),
+            crate::parser::row::ParseOutcome::Accepted(_)
+        ));
+        // A very wide operand is measured once, not once per operator.
+        let wide = format!(
+            "SELECT 1 FROM t WHERE (x IN ({})) {}",
+            vec!["1"; 100_000].join(","),
+            " AND 1=1".repeat(998)
+        );
+        let started = std::time::Instant::now();
+        assert!(matches!(
+            parse(&wide),
+            crate::parser::row::ParseOutcome::Accepted(_)
+        ));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        let collate = format!("SELECT x{} FROM t", " COLLATE nocase".repeat(100_000));
+        assert!(matches!(
+            parse(&collate),
+            crate::parser::row::ParseOutcome::Invalid { .. }
+        ));
     }
 
     /// db-core#219 tagged MC/DC vectors (obligation `parser_row_grammar_function_tail_b001c5a8`, the
