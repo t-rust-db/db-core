@@ -21,9 +21,10 @@
 //! it isn't. And [`semi_filter`].
 
 use super::batch::{
-    chunk_len, compare_for_order, hash_group_key, run_morsels_fold, run_parallel,
-    run_parallel_streaming, run_parallel_top_n, AggPart, Batch, Chunk, GroupKey, JoinTables,
-    Opcode, Program, QueryOutput, Result, ScanSource, Segment, TopN, Value, Vm, VmError,
+    chunk_len, compare_for_order, execute_in_slices, hash_group_key, run_morsels, run_morsels_fold,
+    run_parallel, run_parallel_streaming, run_parallel_top_n, sliceable, AggPart, Batch, Chunk,
+    GroupKey, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource, Segment, TopN, Value,
+    Vm, VmError, SLICE_ROWS,
 };
 use super::combine::{
     combine_chunks, combine_partials, eval_agg_expr, finish_avg, merge_slot, order_key, slot_ops,
@@ -172,9 +173,10 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
         }
         let combined = if preaggregation_pays(segments.len()) {
             let partials = run_parallel_preaggregate(segments, &body, agg_parts, *num_group_keys)?;
-            combine_partials(agg_parts, *num_group_keys, &partials)?
+            combine_partials(agg_parts, *num_group_keys, partials)?
         } else {
-            let output = run_parallel(segments, &body)?;
+            let output =
+                run_parallel_segment_partials(segments, &body, agg_parts, *num_group_keys)?;
             combine_chunks(agg_parts, *num_group_keys, output.chunks())?
         };
         let combined = apply_projection(combined.project(output_order)?, project)?;
@@ -245,15 +247,56 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
         || Combiner::new(agg_parts, num_group_keys),
         |combiner, (segment_index, segment)| {
             let batch = segment.load()?;
-            let mut vm = Vm::new();
-            vm.execute(&batch, body)?;
-            for chunk in vm.take_output().into_chunks() {
-                combiner.push_chunk(&chunk, |row| order_key(*segment_index, row))?;
-            }
-            Ok(())
+            crate::vm::batch::execute_in_slices(&batch, body, |offset, output| {
+                for chunk in output.into_chunks() {
+                    combiner.push_chunk(&chunk, |row| {
+                        order_key(*segment_index, offset.saturating_add(row))
+                    })?;
+                }
+                Ok(())
+            })
         },
         |combiner| Ok(combiner.finish_partial()),
     )
+}
+
+/// [`run_parallel`] for an aggregate body that is not pre-aggregated per
+/// worker: one partial chunk per segment, as before slicing -- a segment
+/// run in slices folds its slices' partials into one first, so the merge
+/// never sees a group once per slice (#643).
+fn run_parallel_segment_partials<S: Segment>(
+    segments: &[S],
+    body: &[Opcode],
+    agg_parts: &[AggPart],
+    num_group_keys: usize,
+) -> Result<QueryOutput> {
+    let per_segment: Vec<Result<QueryOutput>> = run_morsels(segments, |segment| {
+        let batch = segment.load()?;
+        if batch.num_rows <= SLICE_ROWS || !sliceable(body) {
+            let mut vm = Vm::new();
+            vm.execute(&batch, body)?;
+            return Ok(vm.take_output());
+        }
+        let mut combiner = Combiner::new(agg_parts, num_group_keys);
+        execute_in_slices(&batch, body, |offset, output| {
+            for chunk in output.into_chunks() {
+                combiner.push_chunk(&chunk, |row| order_key(0, offset.saturating_add(row)))?;
+            }
+            Ok(())
+        })?;
+        let (chunk, _) = combiner.finish_partial();
+        // No slice emitted a chunk (every row filtered out): no partial.
+        Ok(if chunk.is_empty() {
+            QueryOutput::default()
+        } else {
+            QueryOutput::from_chunk(chunk)
+        })
+    });
+    let mut all = QueryOutput::default();
+    for output in per_segment {
+        all.extend(output?);
+    }
+    Ok(all)
 }
 
 /// Whether `program`'s finalize step (a `Combine` plus optional `Sort`/
@@ -937,6 +980,75 @@ pub fn semi_filter(batch: &Batch, key_column: &str, allowed: &HashSet<String>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #643 review: one segment of several `SLICE_ROWS` slices, whose keys
+    /// first appear in different slices, merges to the same groups, in
+    /// first-seen order, through both aggregate paths -- per-worker
+    /// pre-aggregation and the per-segment fold -- whatever the core count
+    /// that picks between them in `run`.
+    #[test]
+    fn a_sliced_segment_merges_the_same_on_both_aggregate_paths() {
+        use crate::vm::batch::SLICE_ROWS;
+        let schema = ["k".to_string(), "v".to_string()];
+        let select = crate::codegen::batch::expand_star(
+            &crate::parser::parse("SELECT k, COUNT(*), SUM(v) FROM t GROUP BY k").unwrap(),
+            &schema,
+        )
+        .unwrap();
+        let program = crate::codegen::batch::compile(&select).unwrap();
+        let (body, combine, _, _) = program.split_finalize();
+        let Some(Opcode::Combine {
+            agg_parts,
+            num_group_keys,
+            ..
+        }) = combine
+        else {
+            panic!("no Combine");
+        };
+        let n = SLICE_ROWS * 2 + 500;
+        let key = |i: usize| i64::try_from(i / 3000).unwrap();
+        let big = InMemorySegment(
+            Batch::new(n)
+                .with_column("k", (0..n).map(|i| Value::Int(key(i))).collect())
+                .with_column("v", (0..n).map(|_| Value::Int(1)).collect()),
+        );
+        let mut expected: Vec<Vec<Value>> = Vec::new();
+        for i in 0..n {
+            match expected.last_mut() {
+                Some(row) if row[0] == Value::Int(key(i)) => {
+                    let Value::Int(c) = row[1] else {
+                        panic!("count")
+                    };
+                    row[1] = Value::Int(c + 1);
+                    row[2] = Value::Int(c + 1);
+                }
+                _ => expected.push(vec![Value::Int(key(i)), Value::Int(1), Value::Int(1)]),
+            }
+        }
+        let body: Vec<Opcode> = body.to_vec();
+        let pre = combine_partials(
+            agg_parts,
+            *num_group_keys,
+            run_parallel_preaggregate(
+                std::slice::from_ref(&big),
+                &body,
+                agg_parts,
+                *num_group_keys,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(pre.into_rows(), expected);
+        let folded = run_parallel_segment_partials(
+            std::slice::from_ref(&big),
+            &body,
+            agg_parts,
+            *num_group_keys,
+        )
+        .unwrap();
+        let folded = combine_chunks(agg_parts, *num_group_keys, folded.chunks()).unwrap();
+        assert_eq!(folded.into_rows(), expected);
+    }
     use crate::vm::batch::AggFunc;
     use crate::vm::batch::Instruction;
 

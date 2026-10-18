@@ -4,6 +4,31 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.141.0] - 2026-10-18
+
+### Changed
+
+- **Lower peak memory for scans and aggregates** (#643). Measured on 10M events (`make bench-events` data, macOS peak footprint):
+
+  | query | before | after | DuckDB |
+  |---|---:|---:|---:|
+  | `count(*) WHERE day = X` | 97 MB | 41 MB | |
+  | `count(*) WHERE name = 'a' OR name = 'b'` | 167 MB | 54 MB | |
+  | sessions with events A and B (`COUNT(DISTINCT)`, 504k groups) | 586 MB RSS | 292 MB (324 MB RSS) | 140 MB (154 MB RSS) |
+  | `GROUP BY session_id` (648k groups) | 400 MB | 338 MB | 102 MB |
+
+  The changes:
+  - **A segment's body runs in slices of `SLICE_ROWS` (16,384) rows** (for filters, expressions and aggregates; `ORDER BY ... LIMIT` and bare `LIMIT` scans still read a segment whole). The VM materializes its registers row by row, so a worker used to hold a whole row group's worth of every register: up to `row_group_max_rows`, 1M by default. It now holds one slice's worth, so memory no longer grows with the row-group size. Only bodies of row-wise and partial-aggregate opcodes slice; joins, windows and sources still see the segment whole. Partials merge as per-segment ones do, and group order is unchanged.
+  - **New crate-internal helpers:** `Column::slice` and `Batch::slice`.
+  - **A segment's slices fold into one partial before the merge**, on the path that does not pre-aggregate per worker, so the merge never sees a group once per slice.
+  - **The final merge sizes its accumulators once**, frees each worker's partial as soon as it is merged, and orders groups in place instead of copying the columns.
+  - **The generic group-key index keeps one map entry per group** instead of allocating a `Vec` for each.
+
+### Known limits
+
+- High-cardinality `GROUP BY` still uses 2-3x DuckDB's memory. Group keys and accumulators are 32-byte `Value`s; typed accumulators are a follow-up.
+- `... WHERE ... LIMIT n` without `ORDER BY` still collects every matching row before cutting to `n`.
+
 ## [0.140.0] - 2026-10-18
 
 ### Fixed

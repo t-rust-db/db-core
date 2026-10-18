@@ -300,6 +300,34 @@ pub struct Batch {
 }
 
 impl Batch {
+    /// Rows `start..start + len` of every column (clamped to the batch),
+    /// as a batch of their own (#643).
+    pub(crate) fn slice(&self, start: usize, len: usize) -> Batch {
+        let end = start.saturating_add(len).min(self.num_rows);
+        let start = start.min(end);
+        Batch {
+            columns: self
+                .columns
+                .iter()
+                .map(|(k, v)| {
+                    let rows = v.get(start..end).unwrap_or_default().to_vec();
+                    (k.clone(), Arc::new(rows))
+                })
+                .collect(),
+            typed_columns: self
+                .typed_columns
+                .iter()
+                .map(|(k, c)| {
+                    (
+                        k.clone(),
+                        Arc::new(c.slice(start, end.saturating_sub(start))),
+                    )
+                })
+                .collect(),
+            num_rows: end.saturating_sub(start),
+        }
+    }
+
     /// An empty batch of `num_rows` rows with no columns yet.
     pub fn new(num_rows: usize) -> Self {
         Batch {
@@ -1396,7 +1424,7 @@ pub trait Segment: Send + Sync {
 /// sitting on a statically pre-assigned share -- the morsel-driven property
 /// `run_parallel`/`run_parallel_top_n`'s doc comments require, without a
 /// work-stealing dependency.
-fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
+pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -1610,6 +1638,73 @@ fn run_morsels_ordered<I: Sync, T: Send>(
     outcome
 }
 
+/// Rows a segment's body runs over at a time (#643). The VM materializes
+/// registers row by row (a `Value` is 32 bytes), so a worker's memory is
+/// this many rows times the program's live registers -- not a whole row
+/// group's (up to `row_group_max_rows`, 1M by default) -- and the pool's
+/// is that times its threads.
+pub(crate) const SLICE_ROWS: usize = 16_384;
+
+/// Whether running `program` over a segment slice by slice gives the
+/// same rows as over the whole segment, and is worth it: row-wise
+/// opcodes and partial aggregates only (`Reduce`/`GroupReduce`, whose
+/// per-slice partials `Combine` merges as it merges per-segment ones --
+/// every aggregate body codegen emits ends in such a `Combine`), and at
+/// least one opcode that materializes registers. A pure projection
+/// (`LoadColumn ... Emit`) hands out the batch's own columns, so slicing
+/// it would only copy them. Joins, windows and sources see the segment
+/// whole.
+pub(crate) fn sliceable(program: &[Opcode]) -> bool {
+    let materializes = program.iter().any(|op| {
+        matches!(
+            op,
+            Opcode::Map { .. }
+                | Opcode::Call { .. }
+                | Opcode::Filter { .. }
+                | Opcode::Reduce { .. }
+                | Opcode::GroupReduce { .. }
+        )
+    });
+    materializes
+        && program.iter().all(|op| {
+            matches!(
+                op,
+                Opcode::LoadColumn { .. }
+                    | Opcode::LoadConst { .. }
+                    | Opcode::Map { .. }
+                    | Opcode::Call { .. }
+                    | Opcode::Filter { .. }
+                    | Opcode::Reduce { .. }
+                    | Opcode::GroupReduce { .. }
+                    | Opcode::Emit { .. }
+            )
+        })
+}
+
+/// Runs `program` over `batch`, in [`SLICE_ROWS`]-row slices when
+/// [`sliceable`], handing each slice's output and first row to `sink`
+/// in row order.
+pub(crate) fn execute_in_slices(
+    batch: &Batch,
+    program: &[Opcode],
+    mut sink: impl FnMut(usize, QueryOutput) -> Result<()>,
+) -> Result<()> {
+    if batch.num_rows <= SLICE_ROWS || !sliceable(program) {
+        let mut vm = Vm::new();
+        vm.execute(batch, program)?;
+        return sink(0, vm.take_output());
+    }
+    let mut start = 0;
+    while start < batch.num_rows {
+        let slice = batch.slice(start, SLICE_ROWS);
+        let mut vm = Vm::new();
+        vm.execute(&slice, program)?;
+        sink(start, vm.take_output())?;
+        start = start.saturating_add(SLICE_ROWS);
+    }
+    Ok(())
+}
+
 /// Run `program` (a flat, non-looping instruction list ending in
 /// [`Opcode::Emit`]) against every segment in parallel (morsel-driven: a
 /// fixed thread pool dynamically pulls one segment per task off a shared
@@ -1621,9 +1716,12 @@ fn run_morsels_ordered<I: Sync, T: Send>(
 pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<QueryOutput> {
     let per_segment: Vec<Result<QueryOutput>> = run_morsels(segments, |segment| {
         let batch = segment.load()?;
-        let mut vm = Vm::new();
-        vm.execute(&batch, program)?;
-        Ok(std::mem::take(&mut vm.output))
+        let mut output = QueryOutput::default();
+        execute_in_slices(&batch, program, |_, part| {
+            output.extend(part);
+            Ok(())
+        })?;
+        Ok(output)
     });
 
     // #436: column-wise `Vec::extend` per segment, not a per-row rebuild.
@@ -1656,9 +1754,12 @@ pub fn run_parallel_streaming<S: Segment>(
         segments,
         |segment| -> Result<QueryOutput> {
             let batch = segment.load()?;
-            let mut vm = Vm::new();
-            vm.execute(&batch, program)?;
-            Ok(std::mem::take(&mut vm.output))
+            let mut output = QueryOutput::default();
+            execute_in_slices(&batch, program, |_, part| {
+                output.extend(part);
+                Ok(())
+            })?;
+            Ok(output)
         },
         |output| {
             for chunk in output?.into_chunks() {
