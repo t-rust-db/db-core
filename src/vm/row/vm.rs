@@ -341,6 +341,9 @@ pub struct Vm {
     connection: ConnectionState,
     /// Rows this program's `OPFLAG_NCHANGE` writes changed so far.
     statement_changes: i64,
+    /// What `'now'` means while this program runs (#651), set by
+    /// [`execute`].
+    statement_now_ns: i64,
     /// A consumer's pager, installed via
     /// [`Self::set_transaction_hook`], observing/driving real
     /// transaction semantics when `Opcode::Transaction`/`AutoCommit`
@@ -399,6 +402,7 @@ impl Default for Vm {
             autocommit: true,
             connection: ConnectionState::default(),
             statement_changes: 0,
+            statement_now_ns: 0,
             transaction_hook: None,
             cursor_factory: None,
             cursor_roots: Vec::new(),
@@ -1921,11 +1925,12 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     })?;
                 args.push(vm.register(reg)?.clone());
             }
-            let result =
-                functions::call(name, &args).map_err(|e| ExecError::MalformedInstruction {
+            let result = functions::call_at(name, &args, vm.statement_now_ns).map_err(|e| {
+                ExecError::MalformedInstruction {
                     opcode: "Function",
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
             vm.set_register(instr.p3, result)?;
             Ok(Step::Next)
         }
@@ -2508,10 +2513,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
 /// returning the rows [`Opcode::ResultRow`] emitted.
 pub fn execute(vm: &mut Vm, program: &Program) -> Result<Vec<Vec<Value>>, ExecError> {
     // `'now'` is one instant for the whole statement, as in sqlite3 (#651).
-    crate::functions::with_statement_time(|| execute_program(vm, program))
-}
-
-fn execute_program(vm: &mut Vm, program: &Program) -> Result<Vec<Vec<Value>>, ExecError> {
+    use crate::clock::{Clock, SystemClock};
+    vm.statement_now_ns = SystemClock.now_ns();
     // Sizing the register file to the highest register the program
     // names is a cheap linear pass that keeps `set_register` from
     // resizing inside the loop (#254). Only register operands count:

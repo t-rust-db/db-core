@@ -10,8 +10,8 @@
 //!
 //! One deliberate approximation: `localtime` and `utc` treat the local
 //! zone as UTC (sqlite3 run under `TZ=UTC` behaves identically). `'now'`
-//! is one instant per statement: the row VM fixes it
-//! ([`super::with_statement_time`]).
+//! is one instant per statement: the row VM passes it
+//! ([`super::call_at`]).
 //!
 //! Integer arithmetic on calendar fields uses `std::num::Wrapping`: every field
 //! is bounded (years -4713..=9999 before any formula runs, julian days
@@ -76,16 +76,40 @@ struct DateTime {
 /// it. sqlite3 registers all but `timediff` as variadic (`-1`), so even
 /// `strftime()` with no format is accepted and returns NULL.
 pub(super) fn lookup(name: &str, arity: usize) -> Option<ScalarFn> {
-    match (name, arity) {
-        ("date", _) => Some(date),
-        ("time", _) => Some(time),
-        ("datetime", _) => Some(datetime),
-        ("julianday", _) => Some(julianday),
-        ("unixepoch", _) => Some(unixepoch),
-        ("strftime", _) => Some(strftime),
-        ("timediff", 2) => Some(timediff),
-        _ => None,
-    }
+    let f: ScalarFn = match (name, arity) {
+        ("date", _) => |a| date(a, now()),
+        ("time", _) => |a| time(a, now()),
+        ("datetime", _) => |a| datetime(a, now()),
+        ("julianday", _) => |a| julianday(a, now()),
+        ("unixepoch", _) => |a| unixepoch(a, now()),
+        ("strftime", _) => |a| strftime(a, now()),
+        ("timediff", 2) => |a| timediff(a, now()),
+        _ => return None,
+    };
+    Some(f)
+}
+
+/// The function named `name` (lowercase) at `arity`, taking `'now'` as an
+/// argument: the row VM passes one instant for the whole statement, as
+/// sqlite3 does (`sqlite3StmtCurrentTime`).
+pub(super) fn lookup_at(name: &str, arity: usize) -> Option<super::ScalarAtFn> {
+    let f: super::ScalarAtFn = match (name, arity) {
+        ("date", _) => date,
+        ("time", _) => time,
+        ("datetime", _) => datetime,
+        ("julianday", _) => julianday,
+        ("unixepoch", _) => unixepoch,
+        ("strftime", _) => strftime,
+        ("timediff", 2) => timediff,
+        _ => return None,
+    };
+    Some(f)
+}
+
+/// The clock, for a call outside a statement.
+fn now() -> i64 {
+    use crate::clock::{Clock, SystemClock};
+    SystemClock.now_ns()
 }
 
 // ---------------------------------------------------------------------
@@ -463,13 +487,13 @@ fn parse_yyyymmdd(z: &[u8], p: &mut DateTime) -> bool {
 }
 
 /// The current time as a julian day in ms (`sqlite3StmtCurrentTime`).
-fn now_jd_ms() -> i64 {
-    (super::statement_now_ns() / 1_000_000).saturating_add(UNIX_EPOCH_JD_MS)
+fn now_jd_ms(now_ns: i64) -> i64 {
+    (now_ns / 1_000_000).saturating_add(UNIX_EPOCH_JD_MS)
 }
 
 /// Set `p` to the current time (`setDateTimeToCurrent`).
-fn set_to_current(p: &mut DateTime) {
-    p.ijd = now_jd_ms();
+fn set_to_current(p: &mut DateTime, now_ns: i64) {
+    p.ijd = now_jd_ms(now_ns);
     p.valid_jd = true;
     p.is_utc = true;
     p.is_local = false;
@@ -489,12 +513,12 @@ fn set_raw_date_number(p: &mut DateTime, r: f64) {
 
 /// Parse a time-value string (`parseDateOrTime`): a date and/or time,
 /// `now`, a number, or `subsec`. Returns true on a parse error.
-fn parse_date_or_time(z: &[u8], p: &mut DateTime) -> bool {
+fn parse_date_or_time(z: &[u8], p: &mut DateTime, now_ns: i64) -> bool {
     if !parse_yyyymmdd(z, p) || !parse_hhmmss(z, p) {
         return false;
     }
     if z.eq_ignore_ascii_case(b"now") {
-        set_to_current(p);
+        set_to_current(p, now_ns);
         return false;
     }
     if let Some(r) = atof(z) {
@@ -503,7 +527,7 @@ fn parse_date_or_time(z: &[u8], p: &mut DateTime) -> bool {
     }
     if z.eq_ignore_ascii_case(b"subsec") || z.eq_ignore_ascii_case(b"subsecond") {
         p.use_subsec = true;
-        set_to_current(p);
+        set_to_current(p, now_ns);
         return false;
     }
     true
@@ -895,10 +919,10 @@ fn modifier_numeric(z: &[u8], p: &mut DateTime) -> bool {
 
 /// Parse a time value and its modifiers (`isDate`); `None` means NULL.
 /// No arguments at all means `'now'`.
-fn is_date(args: &[Value]) -> Option<DateTime> {
+fn is_date(args: &[Value], now_ns: i64) -> Option<DateTime> {
     let mut p = DateTime::default();
     let Some(first) = args.first() else {
-        set_to_current(&mut p);
+        set_to_current(&mut p, now_ns);
         return Some(p);
     };
     match first {
@@ -906,7 +930,7 @@ fn is_date(args: &[Value]) -> Option<DateTime> {
         Value::Real(r) => set_raw_date_number(&mut p, *r),
         other => {
             let z = arg_text(other)?;
-            if parse_date_or_time(&z, &mut p) {
+            if parse_date_or_time(&z, &mut p, now_ns) {
                 return None;
             }
         }
@@ -1082,32 +1106,32 @@ fn fmt_g16(x: f64) -> String {
 // ---------------------------------------------------------------------
 
 /// `date(TIMEVALUE, MOD...)`: `YYYY-MM-DD`.
-fn date(args: &[Value]) -> Result<Value, FunctionError> {
-    Ok(is_date(args).map_or(Value::Null, |mut p| {
+fn date(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
+    Ok(is_date(args, now_ns).map_or(Value::Null, |mut p| {
         compute_ymd(&mut p);
         text(ymd_string(&p))
     }))
 }
 
 /// `time(TIMEVALUE, MOD...)`: `HH:MM:SS`.
-fn time(args: &[Value]) -> Result<Value, FunctionError> {
-    Ok(is_date(args).map_or(Value::Null, |mut p| {
+fn time(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
+    Ok(is_date(args, now_ns).map_or(Value::Null, |mut p| {
         compute_hms(&mut p);
         text(hms_string(&p))
     }))
 }
 
 /// `datetime(TIMEVALUE, MOD...)`: `YYYY-MM-DD HH:MM:SS`.
-fn datetime(args: &[Value]) -> Result<Value, FunctionError> {
-    Ok(is_date(args).map_or(Value::Null, |mut p| {
+fn datetime(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
+    Ok(is_date(args, now_ns).map_or(Value::Null, |mut p| {
         compute_ymd_hms(&mut p);
         text(format!("{} {}", ymd_string(&p), hms_string(&p)))
     }))
 }
 
 /// `julianday(TIMEVALUE, MOD...)`: the julian day number, a REAL.
-fn julianday(args: &[Value]) -> Result<Value, FunctionError> {
-    Ok(is_date(args).map_or(Value::Null, |mut p| {
+fn julianday(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
+    Ok(is_date(args, now_ns).map_or(Value::Null, |mut p| {
         compute_jd(&mut p);
         Value::Real(p.ijd as f64 / 86_400_000.0)
     }))
@@ -1115,8 +1139,8 @@ fn julianday(args: &[Value]) -> Result<Value, FunctionError> {
 
 /// `unixepoch(TIMEVALUE, MOD...)`: seconds since 1970, an INTEGER, or a
 /// REAL with millisecond precision under `subsec`.
-fn unixepoch(args: &[Value]) -> Result<Value, FunctionError> {
-    Ok(is_date(args).map_or(Value::Null, |mut p| {
+fn unixepoch(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
+    Ok(is_date(args, now_ns).map_or(Value::Null, |mut p| {
         compute_jd(&mut p);
         if p.use_subsec {
             Value::Real((W(p.ijd) - W(UNIX_EPOCH_JD_MS)).0 as f64 / 1000.0)
@@ -1221,14 +1245,14 @@ fn pad6(s: String) -> String {
 
 /// `strftime(FORMAT, TIMEVALUE, MOD...)`: `FORMAT` with each `%`
 /// conversion substituted; an unknown conversion gives NULL.
-fn strftime(args: &[Value]) -> Result<Value, FunctionError> {
+fn strftime(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
     let Some((fmt, rest)) = args.split_first() else {
         return Ok(Value::Null);
     };
     let Some(fmt) = arg_text(fmt) else {
         return Ok(Value::Null);
     };
-    let Some(mut x) = is_date(rest) else {
+    let Some(mut x) = is_date(rest, now_ns) else {
         return Ok(Value::Null);
     };
     compute_jd(&mut x);
@@ -1251,13 +1275,13 @@ fn strftime(args: &[Value]) -> Result<Value, FunctionError> {
 
 /// `timediff(A, B)`: what to add to B to reach A, as
 /// `±YYYY-MM-DD HH:MM:SS.SSS`.
-fn timediff(args: &[Value]) -> Result<Value, FunctionError> {
+fn timediff(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
     let (Some(a), Some(b)) = (args.first(), args.get(1)) else {
         return Ok(Value::Null);
     };
     let (Some(mut d1), Some(mut d2)) = (
-        is_date(std::slice::from_ref(a)),
-        is_date(std::slice::from_ref(b)),
+        is_date(std::slice::from_ref(a), now_ns),
+        is_date(std::slice::from_ref(b), now_ns),
     ) else {
         return Ok(Value::Null);
     };

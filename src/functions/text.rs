@@ -740,9 +740,9 @@ fn to_radix(mut n: u128, radix: u32) -> String {
     let mut out = Vec::new();
     let r = u128::from(radix);
     while n > 0 {
-        let d = u32::try_from(n % r).unwrap_or(0);
+        let d = u32::try_from(n.checked_rem(r).unwrap_or(0)).unwrap_or(0);
         out.push(char::from_digit(d, radix).unwrap_or('0'));
-        n /= r;
+        n = n.checked_div(r).unwrap_or(0);
     }
     out.iter().rev().collect()
 }
@@ -859,12 +859,12 @@ mod tests {
             (
                 vec![
                     t("%f|%.2f|%10.3f|%-10.1f|"),
-                    r(3.14159),
+                    r(3.14158),
                     r(2.5),
                     r(1.0),
                     r(-1.25),
                 ],
-                "3.141590|2.50|     1.000|-1.3      |",
+                "3.141580|2.50|     1.000|-1.3      |",
             ),
             (
                 vec![t("%e|%E|%.3e"), r(12345.678), r(0.00012), r(1.5)],
@@ -915,7 +915,7 @@ mod tests {
                 "1,234,567|-1,234|1,234,567.89",
             ),
             (
-                vec![t("%*d|%-*d|%.*f"), i(5), i(1), i(5), i(2), i(2), r(3.14159)],
+                vec![t("%*d|%-*d|%.*f"), i(5), i(1), i(5), i(2), i(2), r(3.14158)],
                 "    1|2    |3.14",
             ),
             (vec![t("%!.3g|%!g"), r(2.0), r(1e30)], "2.0|1.0e+30"),
@@ -932,7 +932,7 @@ mod tests {
                     t("%.3d|%+.3e|%08.3f|%-08d|"),
                     i(7),
                     r(1.5),
-                    r(-3.14159),
+                    r(-3.14158),
                     i(42),
                 ],
                 "007|+1.500e+00|-003.142|00000042|",
