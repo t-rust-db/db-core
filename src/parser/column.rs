@@ -592,11 +592,11 @@ enum ItemKind {
     Expr,
 }
 
-/// True if `expr` contains an aggregate call anywhere in its tree (`SUM(x)
-/// * 2`, `SUM(x) / COUNT(*)`, #496) -- used by [`item_kind`] to treat such
-/// an expression the same as a bare aggregate for the "non-aggregated
-/// `SELECT` columns must match `GROUP BY`" check below, since it's derived
-/// from aggregates the same way a bare `SUM(x)` is.
+/// True if `expr` contains an aggregate call anywhere in its tree
+/// (`SUM(x) * 2`, `SUM(x) / COUNT(*)`, #496) -- used by [`item_kind`] to
+/// classify such an expression as aggregate, so the query is checked (and
+/// planned) as an aggregation. It walks every node [`validate_expr`] lets
+/// an aggregate sit under.
 fn expr_contains_agg(expr: &AstExpr) -> bool {
     match &expr.kind {
         ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => true,
@@ -604,9 +604,13 @@ fn expr_contains_agg(expr: &AstExpr) -> bool {
             args: FunctionArgs::List(list),
             ..
         } => list.iter().any(expr_contains_agg),
-        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
-            expr_contains_agg(lhs) || expr_contains_agg(rhs)
-        }
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Is { lhs, rhs, .. }
+        | ExprKind::Like {
+            expr: lhs,
+            pattern: rhs,
+            ..
+        } => expr_contains_agg(lhs) || expr_contains_agg(rhs),
         ExprKind::Unary { expr: inner, .. }
         | ExprKind::IsNull { expr: inner, .. }
         | ExprKind::Paren(inner) => expr_contains_agg(inner),
@@ -726,7 +730,10 @@ fn validate_expr(expr: &mut AstExpr, allow_agg: bool) -> Result<()> {
             subquery,
             negated: false,
         } => {
-            validate_expr(inner, allow_agg)?;
+            // The planner compiles `x IN (SELECT ...)` as a per-row semi-
+            // join; an aggregate on its left would be evaluated per row
+            // and never merged.
+            validate_expr(inner, false)?;
             validate_select(subquery)
         }
         ExprKind::InSubquery { negated: true, .. } => {
@@ -961,17 +968,8 @@ fn validate_select(select: &mut Select) -> Result<()> {
         validate_result_column(col)?;
     }
 
-    // `codegen::batch::compile` emits every non-aggregated SELECT column
-    // via GROUP BY's own key registers, in GROUP BY's stated order -- not
-    // by re-checking each SELECT column against `group_by` itself. A
-    // `SELECT` whose bare columns don't match `group_by` exactly (extra
-    // column, missing key, or different order) desyncs from that
-    // assumption: previously this either silently produced wrong values
-    // (order mismatch) or crashed outright (a bare column with no GROUP BY
-    // at all -- its full-length register got zipped against an
-    // aggregate's single-row one in `Emit`, indexing past the end).
-    // Window queries have their own, separate semantics and never reach
-    // `compile` this way, so they're exempt.
+    // Classify the select items for the grouping rule below. Window
+    // queries have their own, separate semantics and are exempt.
     let items: Vec<ItemKind> = select
         .columns
         .iter()
@@ -989,8 +987,10 @@ fn validate_select(select: &mut Select) -> Result<()> {
     if has_agg && !has_window {
         // Standard SQL (#623): every column a select item reads outside an
         // aggregate must be a `GROUP BY` key, so the item is a function of
-        // its group. A computed expression may also be grouped by its own
-        // `AS <alias>` (#307). Order and repetition are free; the planner
+        // its group. A column or computed expression may also be grouped
+        // by its own `AS <alias>` (#307); whether that name is the alias or
+        // a real column is the planner's call (`resolve_group_by`), which
+        // has the schema. Order and repetition are free; the planner
         // projects the select list from the merged keys and aggregates.
         // Without `GROUP BY` the whole input is one group, and only
         // aggregates (and expressions over them) describe it.
@@ -1006,7 +1006,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
             let grouped_by_alias = alias.as_ref().is_some_and(|a| group_by.contains(a));
             let message = match item {
                 ItemKind::Star | ItemKind::Window => continue,
-                ItemKind::Expr if grouped_by_alias => continue,
+                ItemKind::Column | ItemKind::Expr if grouped_by_alias => continue,
                 ItemKind::Column if group_by.is_empty() => {
                     "a plain column alongside an aggregate requires GROUP BY".to_string()
                 }
@@ -1363,6 +1363,21 @@ mod tests {
     fn select_list_group_by_keys_in_any_order_or_computed_are_accepted() {
         assert!(parse("SELECT year, region, SUM(amount) FROM t GROUP BY region, year").is_ok());
         assert!(parse("SELECT year - 1 AS y, SUM(amount) FROM t GROUP BY year").is_ok());
+        // A column grouped by its own alias; the planner decides whether
+        // the name is the alias or a real column.
+        assert!(parse("SELECT region AS r, COUNT(*) FROM t GROUP BY r").is_ok());
+    }
+
+    /// #623 review: `LIKE` over an aggregate is an aggregate expression
+    /// (it used to classify as a per-row one and reach the planner
+    /// unmerged); an aggregate inside `IN (SELECT ...)` is refused rather
+    /// than evaluated per row.
+    #[test]
+    fn like_over_an_aggregate_parses_and_in_subquery_over_one_is_refused() {
+        assert!(parse("SELECT region, MIN(region) LIKE 'a%' FROM t GROUP BY region").is_ok());
+        assert!(parse("SELECT MIN(region) LIKE 'a%', amount FROM t").is_err());
+        let err = parse("SELECT SUM(amount) IN (SELECT amount FROM t) FROM t").unwrap_err();
+        assert!(err.to_string().contains("not allowed here"), "{err}");
     }
 
     // parser_column_validate_distinct_eac99047 (`validate_distinct`):

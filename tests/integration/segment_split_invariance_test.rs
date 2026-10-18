@@ -466,8 +466,9 @@ fn batch_count_distinct_over_no_rows_is_one_zero_row() {
 fn batch_aggregate_arithmetic_is_segment_split_invariant() {
     // #496: `SUM(x) * 2`, `SUM(x) + SUM(y)` (`SUM(amt)` against itself,
     // since `synthetic_dataset` only has one numeric column), and
-    // `SUM(x) / COUNT(*)` -- each computed by `AggPart::Expr` post-Combine,
-    // over the same rows an ordinary `SUM`/`COUNT` already covers above.
+    // `SUM(x) / COUNT(*)` -- each computed by `Combine`'s projection over
+    // the merged aggregates (#623), over the same rows an ordinary
+    // `SUM`/`COUNT` already covers above.
     let (grp, amt) = synthetic_dataset();
     for sql in [
         "SELECT sum(amt) * 2 FROM t",

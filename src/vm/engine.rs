@@ -392,9 +392,10 @@ pub fn run_streaming<S: Segment>(
                 (Some(_), None) => "query has ORDER BY".to_string(),
                 (None, Some(_)) => "query has LIMIT".to_string(),
                 // Only a non-empty `output_order` or `project` is left
-                // (#585, #623); codegen                // sets one only alongside aggregates, but a hand-built
-                // program can carry one on its own.
-                (None, None) => "query reorders its output columns".to_string(),
+                // (#585, #623); codegen sets one only alongside
+                // aggregates, but a hand-built program can carry one on
+                // its own.
+                (None, None) => "query reorders or projects its output columns".to_string(),
             }
         };
         return Err(VmError::NotStreamable { reason });
@@ -405,12 +406,16 @@ pub fn run_streaming<S: Segment>(
 /// The `LIMIT` when `program` can be satisfied by a sequential prefix scan
 /// (#108): a trailing `Combine` with no aggregates and no `Sort`, followed
 /// by a `Limit`, and no [`Opcode::Filter`] in the body -- i.e. the first
-/// `limit` rows of the first however-many segments *are* the answer.
+/// `limit` rows of the first however-many segments *are* the answer. A
+/// `Combine` that reorders or projects its rows (#585, #623) is not a
+/// prefix scan either: the bounded scan returns the body's rows as-is.
 pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
     let (body, combine, sort, limit_op) = program.split_finalize();
     let Some(Opcode::Combine {
         agg_parts,
         distinct,
+        output_order,
+        project,
         ..
     }) = combine
     else {
@@ -424,6 +429,8 @@ pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
     };
     if *distinct
         || !agg_parts.is_empty()
+        || !output_order.is_empty()
+        || !project.is_empty()
         || body.iter().any(|op| matches!(op, Opcode::Filter { .. }))
     {
         return None;
@@ -1020,7 +1027,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_bounded_scan_limit_88675f4d__v1_distinct_disqualifies_bounded_scan() {
+    fn mcdc__vm_engine_bounded_scan_limit_72191bdf__v1_distinct_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -1039,7 +1046,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_bounded_scan_limit_88675f4d__v2_non_empty_agg_parts_disqualifies_bounded_scan(
+    fn mcdc__vm_engine_bounded_scan_limit_72191bdf__v2_non_empty_agg_parts_disqualifies_bounded_scan(
     ) {
         let program = scan_program(
             vec![
@@ -1059,7 +1066,48 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_bounded_scan_limit_88675f4d__v3_filter_in_body_disqualifies_bounded_scan() {
+    fn mcdc__vm_engine_bounded_scan_limit_72191bdf__v3_output_order_disqualifies_bounded_scan() {
+        let program = scan_program(
+            vec![
+                Opcode::Combine {
+                    agg_parts: vec![].into(),
+                    num_group_keys: 0,
+                    distinct: false,
+                    output_order: vec![1, 0].into(),
+                    project: Vec::new().into(),
+                },
+                Opcode::Limit { n: 5 },
+            ],
+            false,
+        );
+        assert_eq!(bounded_scan_limit(&program), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_bounded_scan_limit_72191bdf__v4_project_disqualifies_bounded_scan() {
+        let program = scan_program(
+            vec![
+                Opcode::Combine {
+                    agg_parts: vec![].into(),
+                    num_group_keys: 0,
+                    distinct: false,
+                    output_order: Vec::new().into(),
+                    project: vec![Opcode::Emit {
+                        registers: vec![0].into(),
+                    }]
+                    .into(),
+                },
+                Opcode::Limit { n: 5 },
+            ],
+            false,
+        );
+        assert_eq!(bounded_scan_limit(&program), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_bounded_scan_limit_72191bdf__v5_filter_in_body_disqualifies_bounded_scan() {
         let program = scan_program(
             vec![
                 Opcode::Combine {
@@ -1078,7 +1126,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_bounded_scan_limit_88675f4d__v4_no_distinct_no_aggs_no_filter_allows_bounded_scan(
+    fn mcdc__vm_engine_bounded_scan_limit_72191bdf__v6_no_distinct_no_aggs_no_filter_allows_bounded_scan(
     ) {
         let program = scan_program(
             vec![

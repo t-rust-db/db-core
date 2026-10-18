@@ -262,6 +262,38 @@ fn requalify(batch: Batch, raw: &[String], qualified: &[String]) -> Batch {
     out
 }
 
+/// `select` with its `GROUP BY` names resolved against `columns`, the
+/// joined tables' columns: a real column wins over a `SELECT`-list alias
+/// (#623), as [`planner::expand_star`] does for a single table.
+fn resolve_group_by(select: Select, columns: Vec<String>) -> Result<Select, EngineError> {
+    planner::resolve_group_by(&select, &columns).map_err(plan_err)
+}
+
+/// [`resolve_group_by`] for a cross-mode join: `log`'s columns plus those
+/// of every SQLite table the query names.
+fn resolve_cross_mode_group_by(
+    select: Select,
+    driving: &StreamEngine,
+    lookup: &RowEngine,
+) -> Result<Select, EngineError> {
+    if select.group_by.is_empty() {
+        return Ok(select);
+    }
+    let named: Vec<&str> = select
+        .from
+        .iter()
+        .flat_map(|f| std::iter::once(&f.first).chain(f.joins.iter().map(|j| &j.table)))
+        .filter_map(|t| t.name())
+        .collect();
+    let mut columns = driving.columns();
+    for table in lookup.tables()? {
+        if named.iter().any(|n| n.eq_ignore_ascii_case(&table.name)) {
+            columns.extend(table.columns.into_iter().map(|c| c.name));
+        }
+    }
+    resolve_group_by(select, columns)
+}
+
 /// Runs a cross-mode `SELECT`: `log` (the stream engine's table) joined to
 /// one SQLite lookup table on `lookup`. See the module docs for the
 /// exactly-one-JOIN, stream-drives-lookup-builds v1 scope.
@@ -270,7 +302,7 @@ pub fn run_query(
     lookup: &RowEngine,
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
-    let select = parse(sql)?;
+    let select = resolve_cross_mode_group_by(parse(sql)?, driving, lookup)?;
     let from = select
         .from
         .as_ref()
@@ -631,7 +663,7 @@ pub fn run_stream_stream_query(
     right: &StreamEngine,
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
-    let select = parse(sql)?;
+    let select = resolve_group_by(parse(sql)?, left.columns())?;
     let (left_alias, right_alias) = resolve_stream_stream_sides(&select)?;
     let scope = super::stream::resolve_scope(&select);
     let normalized = alias_normalize(select, &left_alias, &right_alias);
@@ -735,10 +767,11 @@ pub fn explain_stream_stream_plan(
 /// its probe side the driving tail (`"stream"`), its body always `vm::batch`
 /// (`"batch"`) regardless of either side's origin.
 fn explain_opcodes_query(
+    driving: &StreamEngine,
     lookup: &RowEngine,
     sql: &str,
 ) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
-    let select = parse(sql)?;
+    let select = resolve_cross_mode_group_by(parse(sql)?, driving, lookup)?;
     if select.from.as_ref().is_some_and(|f| f.joins.len() > 1) {
         return Err(EngineError::new(
             ErrorKind::Unsupported,
@@ -779,9 +812,10 @@ fn explain_opcodes_query(
 /// Both sides are `"stream"` here (ADR-0022 has no SQLite side); the body
 /// is still `"batch"`.
 fn explain_opcodes_stream_stream_query(
+    left: &StreamEngine,
     sql: &str,
 ) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
-    let select = parse(sql)?;
+    let select = resolve_group_by(parse(sql)?, left.columns())?;
     let (left_alias, right_alias) = resolve_stream_stream_sides(&select)?;
     let normalized = alias_normalize(select, &left_alias, &right_alias);
     let plan =
@@ -945,8 +979,12 @@ impl Engine for CrossModeEngine {
 
     fn explain_opcodes(&self, sql: &str) -> Result<Vec<OpcodeSection>, EngineError> {
         let sections = match self {
-            CrossModeEngine::StreamSqlite { lookup, .. } => explain_opcodes_query(lookup, sql)?,
-            CrossModeEngine::StreamStream { .. } => explain_opcodes_stream_stream_query(sql)?,
+            CrossModeEngine::StreamSqlite {
+                driving, lookup, ..
+            } => explain_opcodes_query(driving, lookup, sql)?,
+            CrossModeEngine::StreamStream { left, .. } => {
+                explain_opcodes_stream_stream_query(left, sql)?
+            }
         };
         Ok(to_engine_opcode_sections(sections))
     }

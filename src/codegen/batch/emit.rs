@@ -196,19 +196,29 @@ pub fn generate(crate_name: &str, sql_text: &str) -> Result<String> {
     Ok(render_flat(crate_name, sql_text, from, &program, &columns))
 }
 
-/// Whether a `GROUP BY` name is also a `SELECT`-list alias (#307). The
-/// engine resolves such a name against the table's columns
-/// (`planner::expand_star`, #623); the emitter plans from SQL alone, so it
-/// cannot, and refuses rather than guess.
+/// Whether a `GROUP BY` name is also a `SELECT`-list alias (#307) of
+/// anything but that same column (`region AS region` reads the same
+/// either way). The engine resolves such a name against the table's
+/// columns (`planner::expand_star`, #623); the emitter plans from SQL
+/// alone, so it cannot, and refuses rather than guess.
 fn groups_by_an_alias(select: &Select) -> bool {
     select.group_by.iter().any(|term| match &term.kind {
         ExprKind::Column {
             table: None, name, ..
-        } => select.columns.iter().any(
-            |col| matches!(col, ResultColumn::Expr { alias: Some(alias), .. } if alias == name),
-        ),
+        } => select.columns.iter().any(|col| match col {
+            ResultColumn::Expr {
+                expr,
+                alias: Some(alias),
+            } => alias == name && !is_bare_column(expr, name),
+            _ => false,
+        }),
         _ => false,
     })
+}
+
+/// Whether `expr` is the unqualified column `name`.
+fn is_bare_column(expr: &crate::parser::ast::Expr, name: &str) -> bool {
+    matches!(&expr.kind, ExprKind::Column { table: None, name: n, .. } if n == name)
 }
 
 /// A path or a simple `*`-glob (one wildcard, in the file name only --

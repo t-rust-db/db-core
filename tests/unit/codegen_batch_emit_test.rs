@@ -142,6 +142,12 @@ fn generate_refuses_group_by_an_alias() {
         "SELECT region || '!', COUNT(*) FROM t GROUP BY region"
     )
     .is_ok());
+    // An alias that renames a column to itself is no ambiguity.
+    assert!(generate(
+        "column_rs",
+        "SELECT region AS region, COUNT(*) FROM t GROUP BY region"
+    )
+    .is_ok());
 }
 
 #[test]

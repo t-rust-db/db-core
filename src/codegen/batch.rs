@@ -225,11 +225,13 @@ enum Item {
 }
 
 /// True if `expr` contains an aggregate call anywhere in its tree (#496).
-/// Mirrors `parser::column::expr_contains_agg`, which already had to
-/// classify the same shape for the "non-aggregated `SELECT` columns must
-/// match `GROUP BY`" check -- kept as its own small copy here rather than
-/// shared across the parser/planner boundary, like `is_known_agg_name`
-/// and `AggFunc` already are for "is this name an aggregate".
+/// Mirrors `parser::column::expr_contains_agg`, which classifies the same
+/// shape for its "columns outside an aggregate must be `GROUP BY` keys"
+/// check -- kept as its own small copy here rather than shared across the
+/// parser/planner boundary, like `is_known_agg_name` and `AggFunc` already
+/// are for "is this name an aggregate". It walks the same nodes as
+/// [`agg_expr_calls`]: an aggregate it misses is compiled as a per-row
+/// expression and never merged.
 fn expr_contains_agg(expr: &AstExpr) -> bool {
     match &expr.kind {
         ExprKind::FunctionCall { name, .. } if AggFunc::from_name(name).is_some() => true,
@@ -237,9 +239,13 @@ fn expr_contains_agg(expr: &AstExpr) -> bool {
             args: FunctionArgs::List(list),
             ..
         } => list.iter().any(expr_contains_agg),
-        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
-            expr_contains_agg(lhs) || expr_contains_agg(rhs)
-        }
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Is { lhs, rhs, .. }
+        | ExprKind::Like {
+            expr: lhs,
+            pattern: rhs,
+            ..
+        } => expr_contains_agg(lhs) || expr_contains_agg(rhs),
         ExprKind::Unary { expr: inner, .. }
         | ExprKind::IsNull { expr: inner, .. }
         | ExprKind::Paren(inner) => expr_contains_agg(inner),
@@ -425,12 +431,12 @@ fn is_group_term(item_expr: &AstExpr, term: &AstExpr) -> bool {
 /// and for a `GROUP BY` select list that is not exactly its keys, in
 /// order, followed by plain aggregates (a key computed on, reordered,
 /// repeated or left out).
-fn needs_projection(select: &Select, items: &[Item]) -> Result<bool> {
+fn needs_projection(select: &Select, items: &[Item]) -> bool {
     if items.iter().any(|i| matches!(i, Item::AggExpr(_))) {
-        return Ok(true);
+        return true;
     }
     if select.group_by.is_empty() {
-        return Ok(false);
+        return false;
     }
     let mut keys = Vec::new();
     for (col, item) in select.columns.iter().zip(items) {
@@ -438,11 +444,11 @@ fn needs_projection(select: &Select, items: &[Item]) -> Result<bool> {
             keys.push(expr);
         }
     }
-    Ok(keys.len() != select.group_by.len()
+    keys.len() != select.group_by.len()
         || keys
             .iter()
             .zip(&select.group_by)
-            .any(|(expr, term)| !is_group_term(expr, term)))
+            .any(|(expr, term)| !is_group_term(expr, term))
 }
 
 /// Builds `Combine`'s projection (#623): each select item rewritten onto
@@ -477,13 +483,6 @@ fn build_projection(
             }
             Item::Star | Item::Window(_) => return Err(PlanError::StarWithAggregation),
         };
-        let mut columns = Vec::new();
-        collect_expr_columns(&rewritten, &mut columns);
-        if let Some(name) = columns.iter().find(|c| !c.starts_with('#')) {
-            return Err(PlanError::UnsupportedSelectItem(format!(
-                "column `{name}` must be a GROUP BY key or inside an aggregate"
-            )));
-        }
         registers.push(compile_expr(&rewritten, &mut ctx));
     }
     ctx.push(Opcode::Emit {
@@ -506,8 +505,10 @@ fn merged_column(slot: usize) -> AstExpr {
 
 /// `expr` with every `GROUP BY` key (`terms[i]` is merged column `i`) and
 /// every aggregate call (`calls[k]` is merged column `slots[k]`) replaced
-/// by a merged-column reference. Anything else is kept; a column left over
-/// is neither a key nor aggregated, and [`build_projection`] refuses it.
+/// by a merged-column reference. Any other node is kept, except a column:
+/// one left over is neither a key nor aggregated, so it is refused here,
+/// before it could be mistaken for a merged column by name (a real column
+/// may be called `#0`).
 fn onto_merged(
     expr: &AstExpr,
     terms: &[AstExpr],
@@ -554,6 +555,17 @@ fn onto_merged(
             for arg in list.iter_mut() {
                 *arg = onto_merged(arg, terms, calls, slots)?;
             }
+        }
+        ExprKind::Column { .. } => {
+            let name = expr_column_name(expr).unwrap_or_default();
+            return Err(PlanError::UnsupportedSelectItem(format!(
+                "column `{name}` must be a GROUP BY key or inside an aggregate"
+            )));
+        }
+        ExprKind::InSubquery { .. } | ExprKind::Exists { .. } => {
+            return Err(PlanError::UnsupportedSelectItem(
+                "a subquery in a grouped or aggregate SELECT list".into(),
+            ));
         }
         _ => {}
     }
@@ -677,7 +689,7 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
         )),
         // `alias` only renames this column's output header
         // ([`output_column_names`]) and, for a `GROUP BY` that names it
-        // exactly, its group key ([`resolve_group_by_alias`]) -- it does
+        // exactly, its group key ([`resolve_group_by`]) -- it does
         // not change how `expr` itself classifies or compiles.
         ResultColumn::Expr { expr, alias: _ } => match &expr.kind {
             ExprKind::Column { .. } => expr_column_name(expr).map(Item::Column).ok_or_else(|| {
@@ -926,7 +938,7 @@ fn select_order_by(select: &Select) -> Option<(String, bool)> {
 /// Returns [`PlanError::StarWithAggregation`] if `*` is combined with
 /// `GROUP BY` or an aggregate/window select item.
 pub fn expand_star(select: &Select, schema: &[String]) -> Result<Select> {
-    let select = &resolve_group_by(select, schema);
+    let select = &resolve_group_by(select, schema)?;
     let items = classify_items(select)?;
     if !items.iter().any(|c| matches!(c, Item::Star)) {
         return Ok(select.clone());
@@ -964,8 +976,14 @@ pub fn expand_star(select: &Select, schema: &[String]) -> Result<Select> {
 
 /// `select` with each `GROUP BY` name that is not a column of `schema`
 /// but is a `SELECT`-list alias replaced by the alias's expression
-/// ([`expand_star`], #307/#623).
-fn resolve_group_by(select: &Select, schema: &[String]) -> Select {
+/// (#307/#623): a real column wins over an alias, as in DuckDB and
+/// PostgreSQL. [`expand_star`] calls it with the table's columns; a join
+/// caller (`engine::resolve`) calls it with every joined table's columns
+/// before planning.
+///
+/// Returns [`PlanError::UnsupportedSelectItem`] for a name that resolves
+/// to an aggregate's alias: `GROUP BY` cannot contain aggregates.
+pub fn resolve_group_by(select: &Select, schema: &[String]) -> Result<Select> {
     let aliases = select_aliases(select);
     let mut resolved = select.clone();
     for term in &mut resolved.group_by {
@@ -976,10 +994,15 @@ fn resolve_group_by(select: &Select, schema: &[String]) -> Select {
             continue;
         }
         if let Some(expr) = aliases.get(&name) {
+            if expr_contains_agg(expr) {
+                return Err(PlanError::UnsupportedSelectItem(format!(
+                    "GROUP BY `{name}` names an aggregate; GROUP BY cannot contain aggregates"
+                )));
+            }
             *term = expr.clone();
         }
     }
-    resolved
+    Ok(resolved)
 }
 
 fn map_bin_op(op: AstBinOp) -> MapOp {
@@ -1322,7 +1345,7 @@ pub fn compile(select: &Select) -> Result<Program> {
     // expressions, already resolved by [`expand_star`] (#623): a real
     // column by name, a `SELECT`-list alias (#307) as its expression.
     let group_by: Vec<String> = select.group_by.iter().map(group_term_label).collect();
-    let projection = needs_projection(select, &items)?;
+    let projection = needs_projection(select, &items);
 
     // Load every column the group-by keys and select-list aggregates need
     // *before* compiling WHERE/Filter: Filter only shrinks registers that
@@ -1474,11 +1497,6 @@ pub fn compile(select: &Select) -> Result<Program> {
             "more than one COUNT(DISTINCT ...) in a query".into(),
         ));
     }
-    if distinct_src.is_some() && projection {
-        return Err(PlanError::UnsupportedSelectItem(
-            "COUNT(DISTINCT ...) alongside a computed SELECT expression".into(),
-        ));
-    }
     if let Some(src) = distinct_src {
         let src = src
             .ok_or_else(|| PlanError::Internal("COUNT(DISTINCT ...) without an argument".into()))?;
@@ -1498,7 +1516,9 @@ pub fn compile(select: &Select) -> Result<Program> {
     for (item, agg_src) in items.iter().zip(&agg_srcs) {
         let mut slots = Vec::new();
         if let Item::Agg(_, _, _, true) = item {
-            // Its value is the hidden key's count, emitted with the keys.
+            // Its value is the hidden key's count, emitted with the keys
+            // and merged right after them.
+            slots.push(group_by.len());
         } else if let Item::Agg(func, _, _, false) = item {
             let src = agg_src.first().copied().flatten();
             slots.push(push_aggregate(
@@ -1511,13 +1531,10 @@ pub fn compile(select: &Select) -> Result<Program> {
                 &mut ctx,
             ));
         } else if let Item::Column(name) = item {
-            // A plain column in the SELECT list: if there's no GROUP BY,
-            // it isn't loaded/emitted anywhere else yet, so load and emit
-            // it directly here. With a GROUP BY, it's expected to already
-            // be one of the group-by columns (already in `emit_regs` via
-            // `group_by_regs` above) -- SQL requires non-aggregated SELECT
-            // columns to be group-by keys, so this doesn't double-emit.
-            // Without GROUP BY the whole input is one group: emit the column as-is.
+            // A plain column in the SELECT list: without GROUP BY it isn't
+            // loaded or emitted anywhere else yet, so load and emit it
+            // here. With GROUP BY it is a key, already in `emit_regs` via
+            // `group_by_regs`, and the projection (#623) places it.
             if group_by.is_empty() {
                 let reg = ctx.load_column(name);
                 emit_regs.push(reg);
@@ -2452,11 +2469,12 @@ fn map_window_func(func: WindowFunc) -> crate::vm::batch::WindowFunc {
 /// `Opcode::Combine`'s `output_order` for a grouped `SELECT` (#585):
 /// merged rows are keys-first, then one column per aggregate item in
 /// select order, so a key item takes the next key position and an
-/// aggregate item the next position after the keys. The parser already
-/// requires the non-aggregate items to be exactly the `GROUP BY` keys in
-/// `GROUP BY` order. Empty when that is the identity (keys listed first),
-/// when there is no `GROUP BY`, or for any item shape this mapping does
-/// not cover, which keeps the merged order.
+/// aggregate item the next position after the keys. Only used when the
+/// non-aggregate items are exactly the `GROUP BY` keys in `GROUP BY`
+/// order; any other select list goes through `Combine`'s projection
+/// ([`needs_projection`], #623). Empty when the order is the identity
+/// (keys listed first), when there is no `GROUP BY`, or for any item shape
+/// this mapping does not cover, which keeps the merged order.
 fn grouped_output_order(items: &[Item], num_group_keys: usize) -> Vec<usize> {
     // #633: a `COUNT(DISTINCT x)` is merged right after the keys, in the
     // hidden key's slot, ahead of every other aggregate.
@@ -4282,6 +4300,254 @@ mod tests {
         );
         let err = sql::parse("SELECT SUM(amount) + amount FROM t GROUP BY region").unwrap_err();
         assert!(err.to_string().contains("column `amount`"), "{err}");
+    }
+
+    /// #623 review: a `GROUP BY` name that resolves to an aggregate's
+    /// alias is refused (DuckDB: "GROUP BY clause cannot contain
+    /// aggregates"); a real column of that name still wins.
+    #[test]
+    fn group_by_an_aggregate_alias_is_refused() {
+        let schema = ["region".to_string(), "amount".to_string()];
+        let query = sql::parse("SELECT SUM(amount) AS s, COUNT(*) FROM t GROUP BY s").unwrap();
+        let err = expand_star(&query, &schema).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("GROUP BY cannot contain aggregates"),
+            "{err}"
+        );
+        assert_eq!(
+            sorted(run_grouped(
+                "SELECT SUM(amount) AS amount, COUNT(*) FROM t GROUP BY amount",
+                1
+            )),
+            vec![
+                vec![Value::Int(20), Value::Int(1)],
+                vec![Value::Int(3), Value::Int(1)],
+                vec![Value::Int(30), Value::Int(1)],
+                vec![Value::Int(5), Value::Int(1)],
+            ],
+        );
+    }
+
+    /// #623 review: `resolve_group_by` swaps in an alias's expression only
+    /// for a name that is not a column, and leaves qualified names and
+    /// expressions alone.
+    #[test]
+    fn resolve_group_by_prefers_a_column_over_an_alias() {
+        let query = sql::parse(
+            "SELECT region || '!' AS region, amount * 2 AS k, COUNT(*) FROM t \
+             GROUP BY region, k",
+        )
+        .unwrap();
+        let resolved = resolve_group_by(&query, &["region".to_string()]).unwrap();
+        assert_eq!(
+            expr_column_name(&resolved.group_by[0]).as_deref(),
+            Some("region")
+        );
+        assert_eq!(expr_to_string(&resolved.group_by[1]), "amount * 2");
+        // With no schema the same name is the alias.
+        let resolved = resolve_group_by(&query, &[]).unwrap();
+        assert_eq!(expr_to_string(&resolved.group_by[0]), "region || '!'");
+    }
+
+    /// #623 review: each projection shape over 1 and 256 segments: `LIKE`
+    /// over an aggregate (was a planner invariant error), `COUNT(DISTINCT)`
+    /// with its key computed on or left out (was refused), `AVG`'s two
+    /// partials taking one merged column, and a column grouped by its own
+    /// alias.
+    #[test]
+    fn projection_covers_like_count_distinct_avg_and_aliases() {
+        for segments in [1, 256] {
+            let n = i64::try_from(segments).unwrap();
+            let s = |v: &str| Value::Str(v.to_string().into());
+            assert_eq!(
+                run_grouped(
+                    "SELECT region, MIN(region) LIKE 'a', COUNT(*) FROM t \
+                     GROUP BY region ORDER BY region",
+                    segments
+                ),
+                vec![
+                    vec![s("a"), Value::Bool(true), Value::Int(2 * n)],
+                    vec![s("b"), Value::Bool(false), Value::Int(2 * n)],
+                ],
+            );
+            assert_eq!(
+                run_grouped(
+                    "SELECT COUNT(DISTINCT amount) FROM t GROUP BY region",
+                    segments
+                ),
+                vec![vec![Value::Int(2)]; 2],
+            );
+            assert_eq!(
+                run_grouped(
+                    "SELECT region || '!' AS r, COUNT(DISTINCT amount), SUM(amount) * 2 \
+                     FROM t GROUP BY region ORDER BY r",
+                    segments
+                ),
+                vec![
+                    vec![s("a!"), Value::Int(2), Value::Int(50 * n)],
+                    vec![s("b!"), Value::Int(2), Value::Int(66 * n)],
+                ],
+            );
+            assert_eq!(
+                run_grouped(
+                    "SELECT AVG(amount) + 0, MAX(amount) - MIN(amount), region \
+                     FROM t GROUP BY region ORDER BY region",
+                    segments
+                ),
+                vec![
+                    vec![Value::Float(12.5), Value::Int(15), s("a")],
+                    vec![Value::Float(16.5), Value::Int(27), s("b")],
+                ],
+            );
+            assert_eq!(
+                run_grouped(
+                    "SELECT region AS r, COUNT(*) FROM t GROUP BY r ORDER BY r",
+                    segments
+                ),
+                vec![
+                    vec![s("a"), Value::Int(2 * n)],
+                    vec![s("b"), Value::Int(2 * n)]
+                ],
+            );
+            // DISTINCT applies to the projected rows.
+            assert_eq!(
+                run_grouped(
+                    "SELECT DISTINCT COUNT(*) + 0 FROM t GROUP BY region",
+                    segments
+                ),
+                vec![vec![Value::Int(2 * n)]],
+            );
+        }
+    }
+
+    /// #623 review: NULL keys group together and project as NULL; over no
+    /// rows a global aggregate expression is one row and a grouped one is
+    /// none.
+    #[test]
+    fn projection_over_null_keys_and_empty_input() {
+        use crate::vm::engine::{run, InMemorySegment};
+        let schema = ["region".to_string(), "amount".to_string()];
+        let program =
+            |q: &str| compile(&expand_star(&sql::parse(q).unwrap(), &schema).unwrap()).unwrap();
+        let batch = crate::vm::batch::Batch::new(3)
+            .with_column(
+                "region",
+                vec![Value::Str("a".into()), Value::Null, Value::Null],
+            )
+            .with_column("amount", vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let rows = run(
+            &[InMemorySegment(batch)],
+            &program("SELECT region || '!' AS r, SUM(amount) FROM t GROUP BY region"),
+        )
+        .unwrap()
+        .into_rows();
+        assert_eq!(
+            sorted(rows),
+            vec![
+                vec![Value::Null, Value::Int(5)],
+                vec![Value::Str("a!".into()), Value::Int(1)],
+            ],
+        );
+        let none: [InMemorySegment; 0] = [];
+        assert_eq!(
+            run(
+                &none,
+                &program("SELECT SUM(amount) * 2, COUNT(*) + 1 FROM t")
+            )
+            .unwrap()
+            .into_rows(),
+            vec![vec![Value::Null, Value::Int(1)]],
+        );
+        assert!(run(
+            &none,
+            &program("SELECT COUNT(*) + 1 FROM t GROUP BY region")
+        )
+        .unwrap()
+        .into_rows()
+        .is_empty());
+    }
+
+    /// #623 review: a projection refuses a leftover column even when it is
+    /// named like a merged column, and refuses a subquery.
+    #[test]
+    fn projection_refuses_a_leftover_column_named_like_a_merged_one() {
+        // Unvalidated: the column parser would refuse `#0` itself.
+        let crate::parser::row::ParseOutcome::Accepted(select) =
+            crate::parser::row::parse_select_with_subscripts(
+                "SELECT \"#0\", COUNT(*) FROM t GROUP BY region",
+            )
+        else {
+            panic!("expected the row parser to accept the query");
+        };
+        let err = compile(&select).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("column `#0` must be a GROUP BY key or inside an aggregate"),
+            "{err}"
+        );
+    }
+
+    /// #623 review: the projection shows in EXPLAIN, keeps the program off
+    /// the streaming and bounded-scan paths, and is absent when the select
+    /// list is exactly the keys then plain aggregates.
+    #[test]
+    fn projection_shows_in_explain_and_disables_streaming() {
+        let schema = ["region".to_string(), "amount".to_string()];
+        let program =
+            |q: &str| compile(&expand_star(&sql::parse(q).unwrap(), &schema).unwrap()).unwrap();
+        let projected = program("SELECT SUM(amount) * 2 FROM t GROUP BY region");
+        let rendered: Vec<String> = render_program(&projected)
+            .into_iter()
+            .map(|row| format!("{row:?}"))
+            .collect();
+        assert!(
+            rendered.iter().any(|r| r.contains("project=[")),
+            "{rendered:?}"
+        );
+        assert!(!crate::vm::engine::is_streamable(&projected));
+        let plain = program("SELECT region, SUM(amount) FROM t GROUP BY region");
+        assert!(plain
+            .opcodes()
+            .any(|op| matches!(op, Opcode::Combine { project, .. } if project.is_empty())));
+        // A hand-built LIMIT scan whose Combine projects is no prefix scan.
+        let mut scan = program("SELECT amount FROM t LIMIT 10");
+        assert_eq!(bounded_scan_limit_of(&scan), Some(10));
+        for instruction in &mut scan.instructions {
+            if let Opcode::Combine { project, .. } = &mut instruction.opcode {
+                *project = vec![Opcode::Emit {
+                    registers: vec![0].into(),
+                }]
+                .into();
+            }
+        }
+        assert_eq!(bounded_scan_limit_of(&scan), None);
+    }
+
+    /// An aggregate over the `GROUP BY` key itself: `GroupReduce` wrote
+    /// the per-group keys back into the key register before reading the
+    /// aggregates' sources, so `MIN(region)` saw 2 keys against 4 rows
+    /// (`RegisterLengthMismatch` on untyped input).
+    #[test]
+    fn an_aggregate_over_the_group_key_reads_the_rows() {
+        let s = |v: &str| Value::Str(v.to_string().into());
+        for segments in [1, 256] {
+            let n = i64::try_from(segments).unwrap();
+            assert_eq!(
+                run_grouped(
+                    "SELECT region, MIN(region), COUNT(*) FROM t GROUP BY region ORDER BY region",
+                    segments
+                ),
+                vec![
+                    vec![s("a"), s("a"), Value::Int(2 * n)],
+                    vec![s("b"), s("b"), Value::Int(2 * n)],
+                ],
+            );
+        }
+    }
+
+    fn bounded_scan_limit_of(program: &Program) -> Option<usize> {
+        crate::vm::engine::bounded_scan_limit(program)
     }
 
     /// #633: every segment holds the same rows, so a distinct count is

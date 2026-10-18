@@ -4334,11 +4334,6 @@ impl Vm {
                 };
                 let num_groups = group_keys.len();
 
-                for (i, reg) in group_by.iter().enumerate() {
-                    let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
-                    self.registers.insert(*reg, Arc::new(column));
-                }
-
                 for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {
                     // #477: one `RunningAgg` per group instead of
                     // `per_group: Vec<Vec<Value>>` + a final
@@ -4406,6 +4401,14 @@ impl Vm {
                         .map(|acc| acc.finalize(*func, is_count_star, opcode))
                         .collect::<Result<_>>()?;
                     self.registers.insert(*dst, Arc::new(result));
+                }
+
+                // After the aggregates, which may read a key register as
+                // their source (`MIN(k) ... GROUP BY k`): overwriting it
+                // first left them the per-group keys, not the rows.
+                for (i, reg) in group_by.iter().enumerate() {
+                    let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
+                    self.registers.insert(*reg, Arc::new(column));
                 }
             }
             Opcode::HashBuild {
