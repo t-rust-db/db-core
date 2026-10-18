@@ -7,16 +7,6 @@
 //! varint or length they land in. Every mutant must decode to `Ok` or
 //! `Err`: a panic fails the test and prints the input.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects,
-    clippy::cast_possible_truncation,
-    reason = "test code: fixed fixtures and a test-local PRNG"
-)]
-
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::storage::parquet::compression::decompress;
