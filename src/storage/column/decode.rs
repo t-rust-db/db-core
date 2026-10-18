@@ -19,6 +19,7 @@ use crate::vm::column::build_str_column;
 /// [`PhysicalType`] arm builds a typed [`Column`] directly (#461) rather
 /// than rebuilding a per-row [`Value`](crate::vm::batch::Value).
 pub enum Decoded {
+    /// The column's values, typed by its physical type and annotation.
     Column(Column),
 }
 
@@ -105,9 +106,11 @@ fn decode_annotated(
 pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len().saturating_mul(2));
+    // A nibble is below 16, so `get` always finds its digit.
+    let digit = |nibble: u8| char::from(DIGITS.get(usize::from(nibble)).copied().unwrap_or(b'0'));
     for b in bytes {
-        out.push(char::from(DIGITS[usize::from(b >> 4)]));
-        out.push(char::from(DIGITS[usize::from(b & 0xf)]));
+        out.push(digit(b >> 4));
+        out.push(digit(b & 0xf));
     }
     out
 }

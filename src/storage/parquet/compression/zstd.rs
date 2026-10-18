@@ -8,11 +8,20 @@
 
 use std::fmt;
 
+/// A ZSTD page that failed to decompress to its declared size.
 #[derive(Debug)]
 pub enum ZstdError {
+    /// The frame header is not a valid ZSTD frame.
     Frame(String),
+    /// The frame body failed to decode.
     Read(String),
-    SizeMismatch { expected: usize, actual: usize },
+    /// The frame decoded to a different length than the page declares.
+    SizeMismatch {
+        /// The page header's declared uncompressed size.
+        expected: usize,
+        /// The decoded length, read at most one byte past `expected`.
+        actual: usize,
+    },
 }
 
 impl fmt::Display for ZstdError {
@@ -34,6 +43,15 @@ impl std::error::Error for ZstdError {}
 
 type Result<T> = std::result::Result<T, ZstdError>;
 
+/// The most output buffer reserved up front from the page header's
+/// declared size alone. The header is untrusted, and a ZSTD frame's
+/// legitimate expansion is unbounded, so a larger page grows its buffer as
+/// the frame actually yields bytes instead of trusting the header with one
+/// allocation.
+const MAX_PREALLOC: usize = 64 << 20;
+
+/// Decompress one ZSTD frame, which must decode to exactly
+/// `uncompressed_size` bytes.
 pub fn decompress(data: &[u8], uncompressed_size: usize) -> Result<Vec<u8>> {
     let decoder = ruzstd::decoding::StreamingDecoder::new(data)
         .map_err(|e| ZstdError::Frame(e.to_string()))?;
@@ -42,7 +60,7 @@ pub fn decompress(data: &[u8], uncompressed_size: usize) -> Result<Vec<u8>> {
     let limit = u64::try_from(uncompressed_size)
         .unwrap_or(u64::MAX)
         .saturating_add(1);
-    let mut out = Vec::with_capacity(uncompressed_size);
+    let mut out = Vec::with_capacity(uncompressed_size.min(MAX_PREALLOC));
     std::io::Read::read_to_end(&mut std::io::Read::take(decoder, limit), &mut out)
         .map_err(|e| ZstdError::Read(e.to_string()))?;
     if out.len() != uncompressed_size {
