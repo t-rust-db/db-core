@@ -142,7 +142,7 @@ pub(crate) fn eval_agg_expr(
 ) -> Result<Value> {
     let a = eval_agg_operand(lhs, &slot)?;
     let b = eval_agg_operand(rhs, &slot)?;
-    Ok(apply_map_op(map_op, &a, &b))
+    apply_map_op(map_op, &a, &b)
 }
 
 /// Merges one partial slot `from` into the accumulated slot `into` per

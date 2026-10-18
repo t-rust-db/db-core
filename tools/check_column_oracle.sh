@@ -51,6 +51,10 @@ QUERIES=(
   "SELECT sum(id) AS id, count(*) FROM __TABLE__ WHERE id <= 3 GROUP BY id ORDER BY id|SELECT sum(id) AS id, count(*) FROM __TABLE__ WHERE id <= 3 GROUP BY id ORDER BY id"
   "SELECT max(id) AS m, count(DISTINCT amount) FROM __TABLE__ GROUP BY region ORDER BY m|SELECT max(id) AS m, count(DISTINCT amount) FROM __TABLE__ GROUP BY region ORDER BY m"
   "SELECT region, min(region) LIKE 'e%', count(*) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, (min(region) LIKE 'e%')::INT, count(*) FROM __TABLE__ GROUP BY region ORDER BY region"
+  # #635: integer arithmetic is exact (past 2^53 too) and `/` is DOUBLE.
+  "SELECT id, id * 3 - 1, id + id FROM __TABLE__ WHERE id > 4995 ORDER BY id|SELECT id, id * 3 - 1, id + id FROM __TABLE__ WHERE id > 4995 ORDER BY id"
+  "SELECT region, sum(id) * 10000000000 + max(id) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, sum(id) * 10000000000 + max(id) FROM __TABLE__ GROUP BY region ORDER BY region"
+  "SELECT id, id / 4 FROM __TABLE__ WHERE id > 4995 ORDER BY id|SELECT id, (id / 4)::DECIMAL(18,2) FROM __TABLE__ WHERE id > 4995 ORDER BY id"
 )
 
 echo "building examples/column_oracle (release)..."

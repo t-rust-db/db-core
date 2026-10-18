@@ -4524,6 +4524,100 @@ mod tests {
         assert_eq!(bounded_scan_limit_of(&scan), None);
     }
 
+    /// A constant loaded after a `Map` already applied `WHERE`'s selection
+    /// (`amount * 3 - 1`: the `- 1` loads after `* 3` compacted the rows)
+    /// is as long as the filtered rows, not the batch (was
+    /// `RegisterLengthMismatch`).
+    #[test]
+    fn a_constant_after_the_filter_is_applied_has_the_filtered_length() {
+        assert_eq!(
+            run_grouped("SELECT amount * 3 - 1 FROM t WHERE amount > 4", 1),
+            vec![
+                vec![Value::Int(14)],
+                vec![Value::Int(59)],
+                vec![Value::Int(89)],
+            ],
+        );
+    }
+
+    /// Runs `sql_text` over one segment per batch, each with `region` and
+    /// `amount` columns.
+    fn run_batches(
+        sql_text: &str,
+        batches: Vec<crate::vm::batch::Batch>,
+    ) -> std::result::Result<Vec<Vec<Value>>, crate::vm::batch::VmError> {
+        use crate::vm::engine::{run, InMemorySegment};
+        let schema = ["region".to_string(), "amount".to_string()];
+        let select = expand_star(&sql::parse(sql_text).unwrap(), &schema).unwrap();
+        let program = compile(&select).unwrap();
+        let segments: Vec<InMemorySegment> = batches.into_iter().map(InMemorySegment).collect();
+        run(&segments, &program).map(|o| o.into_rows())
+    }
+
+    fn amounts(values: Vec<Value>) -> crate::vm::batch::Batch {
+        crate::vm::batch::Batch::new(values.len())
+            .with_column("region", vec![Value::Str("a".into()); values.len()])
+            .with_column("amount", values)
+    }
+
+    /// #635: an integer overflow is a query error -- in a row expression
+    /// (also when only a later segment overflows), and in an expression
+    /// over an aggregate -- never a wrapped or saturated value. A row the
+    /// filter drops never overflows.
+    #[test]
+    fn integer_overflow_is_a_query_error() {
+        let max = || amounts(vec![Value::Int(i64::MAX)]);
+        for sql in ["SELECT amount + 1 FROM t", "SELECT amount * 2 FROM t"] {
+            let err = run_batches(sql, vec![amounts(vec![Value::Int(1)]), max()]).unwrap_err();
+            assert!(err.to_string().contains("integer overflow"), "{sql}: {err}");
+        }
+        let err = run_batches("SELECT MAX(amount) + 1 FROM t", vec![max(), max()]).unwrap_err();
+        assert!(err.to_string().contains("integer overflow"), "{err}");
+        assert!(
+            run_batches("SELECT amount + 1 FROM t WHERE amount < 0", vec![max()])
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// #635: arithmetic over a decimal `SUM` stays a decimal at DuckDB's
+    /// scale; `/` is a float.
+    #[test]
+    fn decimal_sum_projection_keeps_its_scale() {
+        let d = |unscaled| Value::Decimal { unscaled, scale: 2 };
+        let rows = run_batches(
+            "SELECT SUM(amount) + 1, SUM(amount) * 2, -SUM(amount), SUM(amount) / 2 FROM t",
+            vec![amounts(vec![d(110)]), amounts(vec![d(220)])],
+        )
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![vec![d(430), d(660), d(-330), Value::Float(1.65)]]
+        );
+        assert_eq!(rows[0][1].to_string(), "6.60");
+    }
+
+    /// #635: a constant loaded after the selection resolved is sized per
+    /// segment -- segments keep different numbers of rows, one keeps none.
+    #[test]
+    fn a_constant_after_the_filter_is_sized_per_segment() {
+        let ints = |v: &[i64]| amounts(v.iter().map(|&x| Value::Int(x)).collect());
+        let rows = run_batches(
+            "SELECT amount * 3 - 1 FROM t WHERE amount > 10",
+            vec![ints(&[11, 2, 12, 13]), ints(&[1, 2]), ints(&[20])],
+        )
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                vec![Value::Int(32)],
+                vec![Value::Int(35)],
+                vec![Value::Int(38)],
+                vec![Value::Int(59)],
+            ]
+        );
+    }
+
     /// An aggregate over the `GROUP BY` key itself: `GroupReduce` wrote
     /// the per-group keys back into the key register before reading the
     /// aggregates' sources, so `MIN(region)` saw 2 keys against 4 rows
