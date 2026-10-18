@@ -2304,8 +2304,10 @@ pub enum VmError {
         /// Which finalize step needs the whole result.
         reason: String,
     },
-    /// An integer `SUM` does not fit in 64 bits (#631): an error, as in
-    /// SQLite, rather than a rounded or wrapped total.
+    /// An integer `SUM` does not fit in 64 bits (#631), or integer or
+    /// decimal arithmetic leaves its type's range (#635: `BIGINT` past 64
+    /// bits, `DECIMAL` past 38 digits): an error, as in SQLite and DuckDB,
+    /// rather than a rounded or wrapped result.
     IntegerOverflow {
         /// Name of the [`Opcode`] variant (or engine phase) that failed.
         opcode: &'static str,
@@ -3887,22 +3889,28 @@ impl Vm {
             && matches!(b_col.as_ref(), Column::Int { .. })
             && op != MapOp::Div;
         let mut valid_bits = Vec::with_capacity(len);
-        if result_is_int {
+        if let (
+            true,
+            Column::Int {
+                data: xs,
+                valid: x_valid,
+            },
+            Column::Int {
+                data: ys,
+                valid: y_valid,
+            },
+        ) = (result_is_int, a_col.as_ref(), b_col.as_ref())
+        {
+            // Exact over `i64`, an error on overflow (#635), as
+            // [`arithmetic`] does row by row.
             let mut data = Vec::with_capacity(len);
-            for i in 0..len {
-                match (column_num_at(a_col, i), column_num_at(b_col, i)) {
-                    (Some((x, _)), Some((y, _))) => {
-                        #[allow(
-                            clippy::cast_possible_truncation,
-                            reason = "saturating f64 -> i64 is arithmetic's documented overflow semantics, mirrored here for the typed fast path"
-                        )]
-                        data.push(arith_op(op, x, y) as i64);
-                        valid_bits.push(true);
-                    }
-                    _ => {
-                        data.push(0);
-                        valid_bits.push(false);
-                    }
+            for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
+                if x_valid.get(i) && y_valid.get(i) {
+                    data.push(int_arith_op(op, x, y).ok_or(VmError::IntegerOverflow { opcode })?);
+                    valid_bits.push(true);
+                } else {
+                    data.push(0);
+                    valid_bits.push(false);
                 }
             }
             Ok(Some(Column::Int {
@@ -4015,8 +4023,17 @@ impl Vm {
                 }
             }
             Opcode::LoadConst { reg, value } => {
+                // As long as the live rows: a pending selection's base
+                // (compacted with everything else when it resolves), or
+                // the already-filtered row count -- not the batch's, which
+                // a constant loaded after a `Map` resolved the selection
+                // (`id * 3 - 1 ... WHERE`) would outgrow.
+                let len = match &self.selection {
+                    Some(selection) => selection.base_len,
+                    None => self.selected_rows.unwrap_or(batch.num_rows),
+                };
                 self.registers
-                    .insert(*reg, Arc::new(vec![value.clone(); batch.num_rows]));
+                    .insert(*reg, Arc::new(vec![value.clone(); len]));
             }
             Opcode::Map { dst, op, a, b } => {
                 // #265: reads registers elementwise (no row-index
@@ -4046,7 +4063,7 @@ impl Vm {
                         .iter()
                         .zip(b_vals.iter())
                         .map(|(x, y)| apply_map_op(*op, x, y))
-                        .collect();
+                        .collect::<Result<_>>()?;
                     self.registers.insert(*dst, Arc::new(result));
                     self.typed_registers.remove(dst);
                 }
@@ -5292,24 +5309,27 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Result<Value> {
     acc.finalize(func, false, "Reduce")
 }
 
-pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
+/// `a op b` for one row. Arithmetic follows DuckDB (#635): exact and
+/// overflow-checked for integers and decimals, a float if either operand
+/// is one, and `/` always a float. Returns
+/// [`VmError::IntegerOverflow`] when an exact result leaves its type.
+pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     // `IsNull`/`IsNotNull` must observe a `Null` operand, so they run
     // before the null-propagation rule below.
     if matches!(op, MapOp::IsNull) {
-        return Value::Bool(matches!(a, Value::Null));
+        return Ok(Value::Bool(matches!(a, Value::Null)));
     }
     if matches!(op, MapOp::IsNotNull) {
-        return Value::Bool(!matches!(a, Value::Null));
+        return Ok(Value::Bool(!matches!(a, Value::Null)));
     }
     if matches!(a, Value::Null) || matches!(b, Value::Null) {
-        return Value::Null;
+        return Ok(Value::Null);
     }
     use std::cmp::Ordering::{Equal, Greater, Less};
-    match op {
-        MapOp::Add => arithmetic(op, a, b, |x, y| x + y),
-        MapOp::Sub => arithmetic(op, a, b, |x, y| x - y),
-        MapOp::Mul => arithmetic(op, a, b, |x, y| x * y),
-        MapOp::Div => arithmetic(op, a, b, |x, y| x / y),
+    Ok(match op {
+        MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div => {
+            return arithmetic(op, a, b).ok_or(VmError::IntegerOverflow { opcode: "Map" });
+        }
         MapOp::Eq => comparison(a, b, |o| o == Some(Equal)),
         MapOp::Ne => comparison(a, b, |o| o != Some(Equal)),
         MapOp::Lt => comparison(a, b, |o| o == Some(Less)),
@@ -5327,6 +5347,11 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
                 .checked_neg()
                 .map_or(Value::Float(-(*v as f64)), Value::Int),
             Value::Float(v) => Value::Float(-v),
+            // In range by construction: |unscaled| < 10^38 both ways.
+            Value::Decimal { unscaled, scale } => Value::Decimal {
+                unscaled: unscaled.saturating_neg(),
+                scale: *scale,
+            },
             _ => Value::Null,
         },
         // Already answered by the early returns above (they must see
@@ -5350,27 +5375,73 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Value {
             let matched = crate::functions::glob_match(&a.to_string(), &b.to_string());
             Value::Bool(matched != negated)
         }
+    })
+}
+
+/// `a op b` for the four arithmetic operators, as DuckDB types them
+/// (#635): `/` is always a float (`7 / 2` is `3.5`); otherwise a float
+/// operand makes a float, two integers an exact `Int`, and a decimal with
+/// a decimal or an integer (scale 0) an exact `Decimal` -- `+`/`-` at the
+/// larger scale, `*` at the sum of the scales. `None` when an exact
+/// result overflows (`BIGINT` past 64 bits, `DECIMAL` past 38 digits); a
+/// non-numeric operand gives `Null`.
+fn arithmetic(op: MapOp, a: &Value, b: &Value) -> Option<Value> {
+    let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) else {
+        return Some(Value::Null);
+    };
+    match (op, decimal_parts(a), decimal_parts(b)) {
+        (MapOp::Div, ..) | (_, None, _) | (_, _, None) => Some(Value::Float(arith_op(op, x, y))),
+        (_, Some((u1, 0)), Some((u2, 0)))
+            if matches!(a, Value::Int(_)) && matches!(b, Value::Int(_)) =>
+        {
+            let (x, y) = (i64::try_from(u1).ok()?, i64::try_from(u2).ok()?);
+            int_arith_op(op, x, y).map(Value::Int)
+        }
+        (_, Some(l), Some(r)) => decimal_arith_op(op, l, r),
     }
 }
 
-/// `a op b` for the four arithmetic operators: `Int` when both operands
-/// are `Int` and the result is exact (`Div` always yields `Float`).
-fn arithmetic(op: MapOp, a: &Value, b: &Value, f: impl Fn(f64, f64) -> f64) -> Value {
-    let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) else {
-        return Value::Null;
-    };
-    let result = f(x, y);
-    if matches!(a, Value::Int(_)) && matches!(b, Value::Int(_)) && op != MapOp::Div {
-        // `as` from `f64` saturates at the `i64` bounds and maps NaN to
-        // 0 -- the intended overflow behavior for Int arithmetic here.
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "saturating f64 -> i64 is the documented overflow semantics"
-        )]
-        Value::Int(result as i64)
-    } else {
-        Value::Float(result)
+/// An exact operand as `(unscaled, scale)`: an `Int` at scale 0, a
+/// `Decimal` as is; `None` for anything else (a float, ...).
+fn decimal_parts(v: &Value) -> Option<(i128, u8)> {
+    match v {
+        Value::Int(i) => Some((i128::from(*i), 0)),
+        Value::Decimal { unscaled, scale } => Some((*unscaled, *scale)),
+        _ => None,
     }
+}
+
+/// `x op y` over `i64`, `None` on overflow (and for a non-arithmetic
+/// op, never reached: callers guard on the op).
+fn int_arith_op(op: MapOp, x: i64, y: i64) -> Option<i64> {
+    match op {
+        MapOp::Add => x.checked_add(y),
+        MapOp::Sub => x.checked_sub(y),
+        MapOp::Mul => x.checked_mul(y),
+        _ => None,
+    }
+}
+
+/// `+`, `-` or `*` over two decimals, DuckDB's way (#635): `+`/`-` at the
+/// larger scale, `*` at the sum of the scales. `None` past DECIMAL(38).
+fn decimal_arith_op(op: MapOp, (u1, s1): (i128, u8), (u2, s2): (i128, u8)) -> Option<Value> {
+    let (unscaled, scale) = match op {
+        MapOp::Mul => (u1.checked_mul(u2)?, s1.checked_add(s2)?),
+        MapOp::Add | MapOp::Sub => {
+            let scale = s1.max(s2);
+            let l = u1.checked_mul(pow10(u32::from(scale.saturating_sub(s1)))?)?;
+            let r = u2.checked_mul(pow10(u32::from(scale.saturating_sub(s2)))?)?;
+            let sum = if op == MapOp::Add {
+                l.checked_add(r)?
+            } else {
+                l.checked_sub(r)?
+            };
+            (sum, scale)
+        }
+        _ => return None,
+    };
+    (scale <= 38 && unscaled.unsigned_abs() < 10_u128.pow(38))
+        .then_some(Value::Decimal { unscaled, scale })
 }
 
 fn comparison(a: &Value, b: &Value, pred: impl Fn(Option<std::cmp::Ordering>) -> bool) -> Value {
@@ -6009,6 +6080,125 @@ mod tests {
         assert!(matches!(vm.typed_register(2), Some(Column::Float { .. })));
     }
 
+    /// #635: integer arithmetic is exact past 2^53 and an error past 64
+    /// bits; `/` is always a float (DuckDB: `7 / 2` is `3.5`); a float
+    /// operand makes a float.
+    #[test]
+    fn integer_arithmetic_is_exact_and_overflow_checked() {
+        let big = (1_i64 << 53) + 1;
+        assert_eq!(
+            apply_map_op(MapOp::Add, &Value::Int(big), &Value::Int(2)).unwrap(),
+            Value::Int(big + 2)
+        );
+        assert_eq!(
+            apply_map_op(MapOp::Mul, &Value::Int(big), &Value::Int(3)).unwrap(),
+            Value::Int(big * 3)
+        );
+        assert_eq!(
+            apply_map_op(MapOp::Sub, &Value::Int(i64::MIN + 1), &Value::Int(1)).unwrap(),
+            Value::Int(i64::MIN)
+        );
+        for (op, a, b) in [
+            (MapOp::Add, i64::MAX, 1),
+            (MapOp::Sub, i64::MIN, 1),
+            (MapOp::Mul, 3_000_000_000, 4_000_000_000),
+        ] {
+            assert!(matches!(
+                apply_map_op(op, &Value::Int(a), &Value::Int(b)),
+                Err(VmError::IntegerOverflow { opcode: "Map" })
+            ));
+        }
+        assert_eq!(
+            apply_map_op(MapOp::Div, &Value::Int(7), &Value::Int(2)).unwrap(),
+            Value::Float(3.5)
+        );
+        assert_eq!(
+            apply_map_op(MapOp::Mul, &Value::Int(2), &Value::Float(1.5)).unwrap(),
+            Value::Float(3.0)
+        );
+        assert_eq!(
+            apply_map_op(MapOp::Add, &Value::Int(1), &Value::Null).unwrap(),
+            Value::Null
+        );
+    }
+
+    /// #635: decimal arithmetic follows DuckDB -- `+`/`-` at the larger
+    /// scale, `*` at the sum of the scales, an integer at scale 0, a float
+    /// or `/` makes a float, an error past DECIMAL(38).
+    #[test]
+    fn decimal_arithmetic_follows_duckdb() {
+        let map = |op, a: &Value, b: &Value| apply_map_op(op, a, b).unwrap();
+        // 1.10 * 2 = 2.20, printed at scale 2.
+        let product = map(MapOp::Mul, &dec(110, 2), &Value::Int(2));
+        assert_eq!(product, dec(220, 2));
+        assert_eq!(product.to_string(), "2.20");
+        // 1.10 + 1.005 = 2.105 at scale 3; 1.10 - 1 = 0.10.
+        assert_eq!(map(MapOp::Add, &dec(110, 2), &dec(1005, 3)), dec(2105, 3));
+        assert_eq!(map(MapOp::Sub, &dec(110, 2), &Value::Int(1)), dec(10, 2));
+        // 1.10 * 1.5 = 1.650 at scale 3.
+        assert_eq!(map(MapOp::Mul, &dec(110, 2), &dec(15, 1)), dec(1650, 3));
+        assert_eq!(
+            map(MapOp::Div, &dec(110, 2), &Value::Int(2)),
+            Value::Float(0.55)
+        );
+        assert_eq!(
+            map(MapOp::Add, &dec(110, 2), &Value::Float(0.5)),
+            Value::Float(1.6)
+        );
+        assert_eq!(map(MapOp::Neg, &dec(110, 2), &dec(110, 2)), dec(-110, 2));
+        let max = 10_i128.pow(38) - 1;
+        assert!(matches!(
+            apply_map_op(MapOp::Add, &dec(max, 0), &Value::Int(1)),
+            Err(VmError::IntegerOverflow { .. })
+        ));
+        assert!(matches!(
+            apply_map_op(
+                MapOp::Mul,
+                &dec(10_i128.pow(20), 0),
+                &dec(10_i128.pow(20), 0)
+            ),
+            Err(VmError::IntegerOverflow { .. })
+        ));
+    }
+
+    /// #635: the typed `Int` fast path is exact and overflow-checked too.
+    #[test]
+    fn map_on_typed_int_columns_is_exact_and_overflow_checked() {
+        let program = |op| {
+            [
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "a".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "b".into(),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op,
+                    a: 0,
+                    b: 1,
+                },
+            ]
+        };
+        let big = (1_i64 << 53) + 1;
+        let batch = Batch::new(2)
+            .with_typed_column("a", Column::from(vec![Value::Int(big), Value::Null]))
+            .with_typed_column("b", Column::from(vec![Value::Int(2), Value::Int(1)]));
+        let mut vm = Vm::new();
+        vm.execute(&batch, &program(MapOp::Add)).unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Int(big + 2), Value::Null]);
+        assert!(matches!(vm.typed_register(2), Some(Column::Int { .. })));
+        let batch = Batch::new(1)
+            .with_typed_column("a", Column::from(vec![Value::Int(i64::MAX)]))
+            .with_typed_column("b", Column::from(vec![Value::Int(2)]));
+        assert!(matches!(
+            Vm::new().execute(&batch, &program(MapOp::Mul)),
+            Err(VmError::IntegerOverflow { opcode: "Map" })
+        ));
+    }
+
     #[test]
     fn map_add_on_typed_int_and_typed_float_columns_promotes_to_float() {
         let batch = Batch::new(2)
@@ -6302,7 +6492,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_arithmetic_f08e9d82__v1_both_int_non_div_stays_int() {
+    fn mcdc__vm_batch_arithmetic_d31989c2__v1_both_int_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -6330,7 +6520,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_arithmetic_f08e9d82__v2_a_not_int_promotes_to_float() {
+    fn mcdc__vm_batch_arithmetic_d31989c2__v2_a_decimal_stays_decimal() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -6338,7 +6528,7 @@ mod tests {
             &[
                 Opcode::LoadConst {
                     reg: 0,
-                    value: Value::Float(10.0),
+                    value: dec(10, 0),
                 },
                 Opcode::LoadConst {
                     reg: 1,
@@ -6353,12 +6543,12 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(vm.register(2).unwrap(), &[Value::Float(14.0)]);
+        assert_eq!(vm.register(2).unwrap(), &[dec(14, 0)]);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_arithmetic_f08e9d82__v3_b_not_int_promotes_to_float() {
+    fn mcdc__vm_batch_arithmetic_d31989c2__v3_b_decimal_stays_decimal() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -6370,7 +6560,7 @@ mod tests {
                 },
                 Opcode::LoadConst {
                     reg: 1,
-                    value: Value::Float(4.0),
+                    value: dec(4, 0),
                 },
                 Opcode::Map {
                     dst: 2,
@@ -6381,12 +6571,11 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(vm.register(2).unwrap(), &[Value::Float(14.0)]);
+        assert_eq!(vm.register(2).unwrap(), &[dec(14, 0)]);
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__vm_batch_arithmetic_f08e9d82__v4_div_promotes_to_float_even_with_two_ints() {
+    fn map_div_of_two_ints_is_a_float() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(

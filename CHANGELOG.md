@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.139.0] - 2026-10-18
+
+### Changed
+
+- **Arithmetic is exact and typed as in DuckDB** (#635). Integer `+`, `-` and `*` compute in 64-bit integers: exact past 2^53 (`9007199254740993 + 2` was off by one), and an overflow is an error (`VmError::IntegerOverflow`, "Map: integer overflow") instead of a saturated value. Decimals stay decimals: `+`/`-` at the larger scale, `*` at the sum of the scales, an integer counts as scale 0 (`price * 2` over DECIMAL(9,2) `1.10` is `2.20`, not the DOUBLE `2.2`), and a result past DECIMAL(38) is an error. A float operand makes the result a float, and `/` is always a float (`7 / 2` is `3.5`, `1 / 0` is `inf`), as in DuckDB. This holds for row expressions, the typed column fast path and expressions over aggregates (`SUM(price) * 2`). New `make check-column-oracle` cases (63/63 agree with DuckDB).
+
+### Fixed
+
+- **Negating a decimal** (`-price`) returned NULL; it is the negated decimal.
+- **A constant after a computed term in a filtered query** (`SELECT id * 3 - 1 FROM t WHERE id > 10`) failed with `RegisterLengthMismatch`: a constant loaded after a `Map` had applied the `WHERE` selection got the batch's length, not the filtered rows'. This bug was already on main.
+
 ## [0.138.0] - 2026-10-18
 
 ### Fixed

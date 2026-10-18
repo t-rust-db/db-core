@@ -4524,6 +4524,22 @@ mod tests {
         assert_eq!(bounded_scan_limit_of(&scan), None);
     }
 
+    /// A constant loaded after a `Map` already applied `WHERE`'s selection
+    /// (`amount * 3 - 1`: the `- 1` loads after `* 3` compacted the rows)
+    /// is as long as the filtered rows, not the batch (was
+    /// `RegisterLengthMismatch`).
+    #[test]
+    fn a_constant_after_the_filter_is_applied_has_the_filtered_length() {
+        assert_eq!(
+            run_grouped("SELECT amount * 3 - 1 FROM t WHERE amount > 4", 1),
+            vec![
+                vec![Value::Int(14)],
+                vec![Value::Int(59)],
+                vec![Value::Int(89)],
+            ],
+        );
+    }
+
     /// An aggregate over the `GROUP BY` key itself: `GroupReduce` wrote
     /// the per-group keys back into the key register before reading the
     /// aggregates' sources, so `MIN(region)` saw 2 keys against 4 rows
