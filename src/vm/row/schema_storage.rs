@@ -51,8 +51,10 @@ pub trait SchemaStorage {
         sql: &str,
     ) -> Result<(), SchemaStorageError>;
 
-    /// Deletes `name`'s row from `sqlite_master`.
-    fn delete_master_row(&mut self, name: &str) -> Result<(), SchemaStorageError>;
+    /// Deletes the `sqlite_master` row of type `kind` (`table`, `index`,
+    /// `view`) named `name` -- by type and name, so a same-named object
+    /// of another kind is never the one removed (#658).
+    fn delete_master_row(&mut self, kind: &str, name: &str) -> Result<(), SchemaStorageError>;
 
     /// Bumps the schema cookie, invalidating any cached schema/prepared
     /// statements that read it.

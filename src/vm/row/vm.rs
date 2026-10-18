@@ -141,6 +141,10 @@ pub enum ExecError {
     /// SQLite refuses with "Safety level may not be changed inside a
     /// transaction" (#563).
     SynchronousChangeDuringTransaction,
+    /// A function would build a string or blob past
+    /// [`crate::functions::MAX_LENGTH`]; sqlite3's "string or blob too
+    /// big" (#659).
+    TooBig,
     /// `Transaction` while one is already open (sqlite-rs, #134).
     TransactionAlreadyActive,
     /// `AutoCommit` commit with no open transaction (#134).
@@ -221,6 +225,7 @@ impl std::fmt::Display for ExecError {
                 f,
                 "SetJournalMode: cannot change journal mode within a transaction"
             ),
+            ExecError::TooBig => write!(f, "string or blob too big"),
             ExecError::SynchronousChangeDuringTransaction => {
                 write!(f, "Safety level may not be changed inside a transaction")
             }
@@ -1850,11 +1855,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     })?;
                 args.push(vm.register(reg)?.clone());
             }
-            let result =
-                functions::call(name, &args).map_err(|e| ExecError::MalformedInstruction {
+            let result = functions::call(name, &args).map_err(|e| match e {
+                // A limit sqlite3 reports in its own words (#659).
+                functions::FunctionError::TooBig => ExecError::TooBig,
+                e => ExecError::MalformedInstruction {
                     opcode: "Function",
                     reason: e.to_string(),
-                })?;
+                },
+            })?;
             vm.set_register(instr.p3, result)?;
             Ok(Step::Next)
         }
@@ -2145,7 +2153,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             let name = name.clone();
             let storage = vm.schema_storage("DropView")?;
             storage
-                .delete_master_row(&name)
+                .delete_master_row("view", &name)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
@@ -2211,14 +2219,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     .free_root(*index_root)
                     .map_err(ExecError::SchemaStorageFailed)?;
                 storage
-                    .delete_master_row(index_name)
+                    .delete_master_row("index", index_name)
                     .map_err(ExecError::SchemaStorageFailed)?;
             }
             storage
                 .free_root(root_page)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
-                .delete_master_row(&name)
+                .delete_master_row("table", &name)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
@@ -2238,7 +2246,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 .free_root(root_page)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
-                .delete_master_row(&name)
+                .delete_master_row("index", &name)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
@@ -3623,11 +3631,12 @@ mod tests {
 
         fn delete_master_row(
             &mut self,
+            kind: &str,
             name: &str,
         ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
             self.log
                 .borrow_mut()
-                .push(format!("delete_master_row({name})"));
+                .push(format!("delete_master_row({kind} {name})"));
             Ok(())
         }
 
@@ -3791,9 +3800,9 @@ mod tests {
             *log.borrow(),
             vec![
                 "free_root(6)",
-                "delete_master_row(idx)",
+                "delete_master_row(index idx)",
                 "free_root(5)",
-                "delete_master_row(t)",
+                "delete_master_row(table t)",
                 "bump_schema_cookie",
             ]
         );
@@ -3822,7 +3831,7 @@ mod tests {
             *log.borrow(),
             vec![
                 "free_root(6)",
-                "delete_master_row(idx)",
+                "delete_master_row(index idx)",
                 "bump_schema_cookie"
             ]
         );
@@ -4383,6 +4392,7 @@ mod tests {
             }
             fn delete_master_row(
                 &mut self,
+                _: &str,
                 _: &str,
             ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
                 Err(super::super::schema_storage::SchemaStorageError(

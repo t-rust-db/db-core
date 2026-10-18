@@ -730,7 +730,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::autoincrement_rowid(&m
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_index_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
-pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -1185,6 +1185,7 @@ pub fn db_core::engine::stream::StreamEngine::tables(&self) -> core::result::Res
 pub mod db_core::functions
 pub enum db_core::functions::FunctionError
 pub db_core::functions::FunctionError::IntegerOverflow
+pub db_core::functions::FunctionError::TooBig
 pub db_core::functions::FunctionError::Unknown
 pub db_core::functions::FunctionError::Unknown::arity: usize
 pub db_core::functions::FunctionError::Unknown::name: alloc::string::String
@@ -1199,6 +1200,7 @@ pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'
 impl core::fmt::Display for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::functions::FunctionError
+pub const db_core::functions::MAX_LENGTH: usize
 pub const db_core::functions::SCALAR_FUNCTION_NAMES: &[&str]
 pub fn db_core::functions::call(&str, &[db_core::value::Value]) -> core::result::Result<db_core::value::Value, db_core::functions::FunctionError>
 pub fn db_core::functions::exists(&str, usize) -> bool
@@ -5388,11 +5390,9 @@ pub db_core::storage::row::btree::BtreeError::InvalidCellVarint::page_num: u32
 pub db_core::storage::row::btree::BtreeError::InvalidCellVarint::source: db_core::storage::row::record::RecordError
 pub db_core::storage::row::btree::BtreeError::InvalidKeyRecord(db_core::storage::row::record::RecordError)
 pub db_core::storage::row::btree::BtreeError::InvalidRootPage
-pub db_core::storage::row::btree::BtreeError::InvalidRootPage::name: &'static str
 pub db_core::storage::row::btree::BtreeError::InvalidRootPage::rootpage: i64
 pub db_core::storage::row::btree::BtreeError::KeyNotFound
 pub db_core::storage::row::btree::BtreeError::MasterEntryNotFound
-pub db_core::storage::row::btree::BtreeError::MasterEntryNotFound::name: &'static str
 pub db_core::storage::row::btree::BtreeError::MissingChildRoute
 pub db_core::storage::row::btree::BtreeError::MissingChildRoute::child: u32
 pub db_core::storage::row::btree::BtreeError::MissingChildRoute::page_num: u32
@@ -5510,7 +5510,7 @@ pub fn db_core::storage::row::btree::count_table_rows<P: db_core::storage::row::
 pub fn db_core::storage::row::btree::create_empty_index_root(&mut db_core::storage::row::pager::Pager) -> core::result::Result<u32, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::create_empty_table_root(&mut db_core::storage::row::pager::Pager) -> core::result::Result<u32, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::delete_entry(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &[db_core::value::Value], db_core::value::TextEncoding) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
-pub fn db_core::storage::row::btree::delete_master_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &str) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
+pub fn db_core::storage::row::btree::delete_master_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &str, &str) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::delete_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, i64) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::delete_stat1_rows_for_table(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &str) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::ensure_sqlite_sequence_table(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader) -> core::result::Result<u32, db_core::storage::row::btree::BtreeError>
@@ -9225,6 +9225,7 @@ pub fn db_core::vm::row::explain::explain(&db_core::vm::row::program::Program) -
 pub mod db_core::vm::row::functions
 pub enum db_core::vm::row::functions::FunctionError
 pub db_core::vm::row::functions::FunctionError::IntegerOverflow
+pub db_core::vm::row::functions::FunctionError::TooBig
 pub db_core::vm::row::functions::FunctionError::Unknown
 pub db_core::vm::row::functions::FunctionError::Unknown::arity: usize
 pub db_core::vm::row::functions::FunctionError::Unknown::name: alloc::string::String
@@ -9582,7 +9583,7 @@ pub fn db_core::vm::row::schema_storage::SchemaStorage::autoincrement_rowid(&mut
 pub fn db_core::vm::row::schema_storage::SchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::create_index_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
-pub fn db_core::vm::row::schema_storage::SchemaStorage::delete_master_row(&mut self, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::vm::row::schema_storage::SchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -9592,7 +9593,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::autoincrement_rowid(&m
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_index_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
-pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -9661,6 +9662,7 @@ pub db_core::vm::row::vm::ExecError::SchemaStorageMissing
 pub db_core::vm::row::vm::ExecError::SchemaStorageMissing::opcode: &'static str
 pub db_core::vm::row::vm::ExecError::StepLimitExceeded
 pub db_core::vm::row::vm::ExecError::SynchronousChangeDuringTransaction
+pub db_core::vm::row::vm::ExecError::TooBig
 pub db_core::vm::row::vm::ExecError::TransactionAlreadyActive
 pub db_core::vm::row::vm::ExecError::TransactionFailed(db_core::vm::row::transaction::TransactionError)
 pub db_core::vm::row::vm::ExecError::TypeMismatch
@@ -9796,6 +9798,7 @@ pub db_core::vm::row::ExecError::SchemaStorageMissing
 pub db_core::vm::row::ExecError::SchemaStorageMissing::opcode: &'static str
 pub db_core::vm::row::ExecError::StepLimitExceeded
 pub db_core::vm::row::ExecError::SynchronousChangeDuringTransaction
+pub db_core::vm::row::ExecError::TooBig
 pub db_core::vm::row::ExecError::TransactionAlreadyActive
 pub db_core::vm::row::ExecError::TransactionFailed(db_core::vm::row::transaction::TransactionError)
 pub db_core::vm::row::ExecError::TypeMismatch
@@ -9810,6 +9813,7 @@ impl core::fmt::Display for db_core::vm::row::vm::ExecError
 pub fn db_core::vm::row::vm::ExecError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum db_core::vm::row::FunctionError
 pub db_core::vm::row::FunctionError::IntegerOverflow
+pub db_core::vm::row::FunctionError::TooBig
 pub db_core::vm::row::FunctionError::Unknown
 pub db_core::vm::row::FunctionError::Unknown::arity: usize
 pub db_core::vm::row::FunctionError::Unknown::name: alloc::string::String
@@ -10915,7 +10919,7 @@ pub fn db_core::vm::row::SchemaStorage::autoincrement_rowid(&mut self, &str, i64
 pub fn db_core::vm::row::SchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::create_index_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
-pub fn db_core::vm::row::SchemaStorage::delete_master_row(&mut self, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::vm::row::SchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -10925,7 +10929,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::autoincrement_rowid(&m
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_index_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
-pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
