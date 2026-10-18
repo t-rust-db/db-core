@@ -401,7 +401,18 @@ impl Json {
     }
 }
 
+/// Arrays deeper than this make a manifest malformed. A real one nests
+/// an array or two; the parser scans an array's text flat and parses its
+/// objects afresh, so without a cap here `{"a":[{"a":[...` would recurse
+/// once per level unbounded (#656).
+const MAX_ARRAY_DEPTH: usize = 8;
+
 fn owned(value: &JsonValue) -> Result<Json, ManifestError> {
+    owned_at(value, 0)
+}
+
+/// [`owned`] inside `arrays` enclosing arrays.
+fn owned_at(value: &JsonValue, arrays: usize) -> Result<Json, ManifestError> {
     Ok(match value {
         JsonValue::Null => Json::Null,
         JsonValue::Int(v) => Json::Int(*v),
@@ -409,10 +420,16 @@ fn owned(value: &JsonValue) -> Result<Json, ManifestError> {
         JsonValue::Object(fields) => Json::Object(
             fields
                 .iter()
-                .map(|(k, v)| Ok(((*k).to_string(), owned(v)?)))
+                .map(|(k, v)| Ok(((*k).to_string(), owned_at(v, arrays)?)))
                 .collect::<Result<Vec<_>, ManifestError>>()?,
         ),
-        JsonValue::Array(text) => Json::Array(array_of_objects(text)?),
+        JsonValue::Array(text) => {
+            let arrays = arrays
+                .checked_add(1)
+                .filter(|a| *a <= MAX_ARRAY_DEPTH)
+                .ok_or_else(|| malformed("arrays nested too deeply"))?;
+            Json::Array(array_of_objects(text, arrays)?)
+        }
         JsonValue::Bool(b) => Json::Bool(*b),
         JsonValue::Float(_) => Json::Other,
     })
@@ -491,7 +508,7 @@ fn file_entry(fields: &[(String, Json)], version: i64) -> Result<FileEntry, Mani
 }
 
 /// The elements of a JSON array of objects, from its source text.
-fn array_of_objects(text: &str) -> Result<Vec<Json>, ManifestError> {
+fn array_of_objects(text: &str, arrays: usize) -> Result<Vec<Json>, ManifestError> {
     let mut rest = text
         .trim()
         .strip_prefix('[')
@@ -504,7 +521,7 @@ fn array_of_objects(text: &str) -> Result<Vec<Json>, ManifestError> {
     loop {
         let (item, after) =
             parse_object(rest).ok_or_else(|| malformed("an array element is not an object"))?;
-        items.push(owned(&item)?);
+        items.push(owned_at(&item, arrays)?);
         let after = after.trim_start();
         if let Some(next) = after.strip_prefix(',') {
             rest = next.trim_start();

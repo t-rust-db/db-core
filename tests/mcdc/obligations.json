@@ -24980,10 +24980,10 @@
     "wildcard_risk": true
   },
   {
-    "id": "storage_ingest_manifest_owned_538bc570",
+    "id": "storage_ingest_manifest_owned_at_dc90c9aa",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 405,
-    "decision": "match value {\n        JsonValue::Null => Json::Null,\n        JsonValue::Int(v) => Json::Int(*v),\n        JsonValue::Str(s) => Json::Str((*s).to_string()),\n        JsonValue::Object(fields) => Json::Object(\n            fields\n                .iter()\n                .map(|(k, v)| Ok(((*k).to_string(), owned(v)?)))\n                .collect::<Result<Vec<_>, ManifestError>>()?,\n        ),\n        JsonValue::Array(text) => Json::Array(array_of_objects(text)?),\n        JsonValue::Bool(b) => Json::Bool(*b),\n        JsonValue::Float(_) => Json::Other,\n    }",
+    "line": 416,
+    "decision": "match value {\n        JsonValue::Null => Json::Null,\n        JsonValue::Int(v) => Json::Int(*v),\n        JsonValue::Str(s) => Json::Str((*s).to_string()),\n        JsonValue::Object(fields) => Json::Object(\n            fields\n                .iter()\n                .map(|(k, v)| Ok(((*k).to_string(), owned_at(v, arrays)?)))\n                .collect::<Result<Vec<_>, ManifestError>>()?,\n        ),\n        JsonValue::Array(text) => {\n            let arrays = arrays\n                .checked_add(1)\n                .filter(|a| *a <= MAX_ARRAY_DEPTH)\n                .ok_or_else(|| malformed(\"arrays nested too deeply\"))?;\n            Json::Array(array_of_objects(text, arrays)?)\n        }\n        JsonValue::Bool(b) => Json::Bool(*b),\n        JsonValue::Float(_) => Json::Other,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -24992,7 +24992,7 @@
   {
     "id": "storage_ingest_manifest_int_f6fe9a4b",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 430,
+    "line": 447,
     "decision": "match field(fields, name)? {\n        Json::Int(v) => Ok(v),\n        _ => Err(ManifestError::Malformed(format!(\n            \"{name} is not an integer\"\n        ))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25002,7 +25002,7 @@
   {
     "id": "storage_ingest_manifest_string_9d48722e",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 444,
+    "line": 461,
     "decision": "match field(fields, name)? {\n        Json::Str(s) if !s.contains('\\\\') => Ok(s),\n        _ => Err(ManifestError::Malformed(format!(\n            \"{name} is not a plain string\"\n        ))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25012,7 +25012,7 @@
   {
     "id": "storage_ingest_manifest_string_427a91e8",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 445,
+    "line": 462,
     "decision": "!s.contains('\\\\')",
     "conditions": 1,
     "vectors_required": 2,
@@ -25022,7 +25022,7 @@
   {
     "id": "storage_ingest_manifest_range_389645b1",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 455,
+    "line": 472,
     "decision": "match (lo, hi) {\n        (Json::Int(lo), Json::Int(hi)) => Ok(Some((lo, hi))),\n        (Json::Null, Json::Null) => Ok(None),\n        _ => Err(ManifestError::Malformed(format!(\"{name} range\"))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25032,7 +25032,7 @@
   {
     "id": "storage_ingest_manifest_file_entry_26b45337",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 476,
+    "line": 493,
     "decision": "version == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -25042,7 +25042,7 @@
   {
     "id": "storage_ingest_manifest_array_of_objects_7fc5a244",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 501,
+    "line": 518,
     "decision": "let Some(after) = rest.strip_prefix(']')",
     "conditions": 1,
     "vectors_required": 2,
@@ -25052,7 +25052,7 @@
   {
     "id": "storage_ingest_manifest_array_of_objects_f97d8cca",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 509,
+    "line": 526,
     "decision": "let Some(next) = after.strip_prefix(',')",
     "conditions": 1,
     "vectors_required": 2,
@@ -25062,7 +25062,7 @@
   {
     "id": "storage_ingest_manifest_end_of_array_3751695c",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 521,
+    "line": 538,
     "decision": "after.trim().is_empty()",
     "conditions": 1,
     "vectors_required": 2,

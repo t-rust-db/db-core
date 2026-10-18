@@ -12,6 +12,7 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
   - Nesting is now capped at sqlite3's `JSON_MAX_DEPTH` of 1000 (`json_path::MAX_DEPTH`).
   - A deeper document is malformed: `json_extract` returns NULL, and an ingested line is kept whole as its message, as any malformed line is.
   - Documents a million levels deep are refused cleanly.
+  - A table's `manifest.json` refuses arrays nested more than 8 deep, where objects inside arrays used to recurse without a cap. Real manifests nest one or two.
 
 ## [0.142.0] - 2026-10-18
 
