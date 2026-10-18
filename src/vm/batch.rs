@@ -3854,8 +3854,9 @@ impl Vm {
     /// *both* operands are typed `Int`/`Float` columns (#130 child 4
     /// slice 2, db-core#431): computes over the packed buffers, honoring
     /// the same NULL-propagation and Int/Float promotion rules as
-    /// [`arithmetic`] (Int stays Int unless `Div`; either NULL operand
-    /// yields a NULL row). `None` when the op isn't one of these four or
+    /// [`arithmetic`] (Int stays an exact Int unless `Div`, and an
+    /// overflow is [`VmError::IntegerOverflow`]; either NULL operand
+    /// yields a NULL row, never an error). `None` when the op isn't one of these four or
     /// either operand isn't a typed numeric column (including a
     /// `LoadConst`-broadcast literal, which is a plain `Vec<Value>`
     /// register, not a typed one) -- the caller falls back to the
@@ -3885,22 +3886,21 @@ impl Vm {
             return Err(VmError::RegisterLengthMismatch { opcode });
         }
         let len = a_col.len();
-        let result_is_int = matches!(a_col.as_ref(), Column::Int { .. })
-            && matches!(b_col.as_ref(), Column::Int { .. })
-            && op != MapOp::Div;
         let mut valid_bits = Vec::with_capacity(len);
-        if let (
-            true,
-            Column::Int {
-                data: xs,
-                valid: x_valid,
-            },
-            Column::Int {
-                data: ys,
-                valid: y_valid,
-            },
-        ) = (result_is_int, a_col.as_ref(), b_col.as_ref())
-        {
+        let int_operands = match (a_col.as_ref(), b_col.as_ref()) {
+            (
+                Column::Int {
+                    data: xs,
+                    valid: x_valid,
+                },
+                Column::Int {
+                    data: ys,
+                    valid: y_valid,
+                },
+            ) if op != MapOp::Div => Some((xs, x_valid, ys, y_valid)),
+            _ => None,
+        };
+        if let Some((xs, x_valid, ys, y_valid)) = int_operands {
             // Exact over `i64`, an error on overflow (#635), as
             // [`arithmetic`] does row by row.
             let mut data = Vec::with_capacity(len);
@@ -5341,11 +5341,14 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
         MapOp::Not => Value::Bool(!as_bool(a)),
         MapOp::Concat => Value::Str(Cow::Owned(format!("{a}{b}"))),
         MapOp::Neg => match a {
-            // `-i64::MIN` has no integer representation; SQLite promotes
-            // that one case to REAL rather than overflowing.
-            Value::Int(v) => v
-                .checked_neg()
-                .map_or(Value::Float(-(*v as f64)), Value::Int),
+            // `-i64::MIN` has no integer representation: an error, as in
+            // DuckDB (#635), not SQLite's promotion to REAL.
+            Value::Int(v) => {
+                return v
+                    .checked_neg()
+                    .map(Value::Int)
+                    .ok_or(VmError::IntegerOverflow { opcode: "Map" });
+            }
             Value::Float(v) => Value::Float(-v),
             // In range by construction: |unscaled| < 10^38 both ways.
             Value::Decimal { unscaled, scale } => Value::Decimal {
@@ -5389,15 +5392,15 @@ fn arithmetic(op: MapOp, a: &Value, b: &Value) -> Option<Value> {
     let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) else {
         return Some(Value::Null);
     };
-    match (op, decimal_parts(a), decimal_parts(b)) {
-        (MapOp::Div, ..) | (_, None, _) | (_, _, None) => Some(Value::Float(arith_op(op, x, y))),
-        (_, Some((u1, 0)), Some((u2, 0)))
-            if matches!(a, Value::Int(_)) && matches!(b, Value::Int(_)) =>
-        {
-            let (x, y) = (i64::try_from(u1).ok()?, i64::try_from(u2).ok()?);
-            int_arith_op(op, x, y).map(Value::Int)
-        }
-        (_, Some(l), Some(r)) => decimal_arith_op(op, l, r),
+    if op == MapOp::Div {
+        return Some(Value::Float(arith_op(op, x, y)));
+    }
+    if let (Value::Int(x), Value::Int(y)) = (a, b) {
+        return int_arith_op(op, *x, *y).map(Value::Int);
+    }
+    match (decimal_parts(a), decimal_parts(b)) {
+        (Some(l), Some(r)) => decimal_arith_op(op, l, r),
+        _ => Some(Value::Float(arith_op(op, x, y))),
     }
 }
 
@@ -5479,11 +5482,10 @@ fn column_num_at(column: &Column, i: usize) -> Option<(f64, bool)> {
     }
 }
 
-/// `a op b` for [`Vm::typed_arithmetic`]'s four arithmetic ops -- the
-/// same four [`arithmetic`] handles, applied directly to `f64` since the
-/// typed fast path already knows both operands are numeric and non-NULL.
-/// Total over [`MapOp`] (never actually reached for a non-arithmetic op:
-/// [`Vm::typed_arithmetic`] guards on that before calling) rather than
+/// `x op y` over `f64` for the four arithmetic ops: the float kernel of
+/// [`arithmetic`] (`/`, or a float operand) and of
+/// [`Vm::typed_arithmetic`]'s `Float` result. Total over [`MapOp`] (a
+/// non-arithmetic op is never passed: callers guard on it) rather than
 /// `unreachable!`, which the qualified subset forbids.
 fn arith_op(op: MapOp, x: f64, y: f64) -> f64 {
     match op {
@@ -6161,6 +6163,107 @@ mod tests {
         ));
     }
 
+    /// #635 review: decimal range boundaries, and negation -- a decimal
+    /// negates in range, `-i64::MIN` is an error as in DuckDB.
+    #[test]
+    fn decimal_boundaries_and_negation() {
+        let max = 10_i128.pow(38) - 1;
+        let map = |op, a: &Value, b: &Value| apply_map_op(op, a, b);
+        assert_eq!(
+            map(MapOp::Add, &dec(max, 0), &Value::Int(0)).unwrap(),
+            dec(max, 0)
+        );
+        assert!(map(MapOp::Sub, &dec(-max, 0), &Value::Int(1)).is_err());
+        // Scales 19 + 19 = 38 is in range; 20 + 19 = 39 is not.
+        assert_eq!(
+            map(MapOp::Mul, &dec(1, 19), &dec(1, 19)).unwrap(),
+            dec(1, 38)
+        );
+        assert!(map(MapOp::Mul, &dec(1, 20), &dec(1, 19)).is_err());
+        assert_eq!(
+            map(MapOp::Mul, &dec(150, 2), &Value::Int(0)).unwrap(),
+            dec(0, 2)
+        );
+        assert_eq!(
+            map(MapOp::Add, &dec(150, 2), &Value::Null).unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            map(MapOp::Add, &dec(150, 2), &Value::Str("x".into())).unwrap(),
+            Value::Null
+        );
+        assert_eq!(
+            map(MapOp::Neg, &dec(max, 0), &dec(max, 0)).unwrap(),
+            dec(-max, 0)
+        );
+        assert!(matches!(
+            map(MapOp::Neg, &Value::Int(i64::MIN), &Value::Int(i64::MIN)),
+            Err(VmError::IntegerOverflow { opcode: "Map" })
+        ));
+        assert_eq!(
+            map(MapOp::Neg, &Value::Int(5), &Value::Int(5)).unwrap(),
+            Value::Int(-5)
+        );
+        // Division by zero is a float, as in DuckDB (`inf`, `nan`).
+        assert_eq!(
+            map(MapOp::Div, &Value::Int(1), &Value::Int(0)).unwrap(),
+            Value::Float(f64::INFINITY)
+        );
+        assert!(matches!(
+            map(MapOp::Div, &Value::Int(0), &Value::Int(0)).unwrap(),
+            Value::Float(x) if x.is_nan()
+        ));
+    }
+
+    /// #635 review: the typed path's `Sub` is checked, a NULL row never
+    /// overflows, and a typed `Float` operand or `Div` gives a float.
+    #[test]
+    fn typed_sub_masks_nulls_and_promotes_floats() {
+        let program = |op| {
+            [
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "a".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "b".into(),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op,
+                    a: 0,
+                    b: 1,
+                },
+            ]
+        };
+        let run = |a: Vec<Value>, b: Vec<Value>, op| {
+            let batch = Batch::new(a.len())
+                .with_typed_column("a", Column::from(a))
+                .with_typed_column("b", Column::from(b));
+            let mut vm = Vm::new();
+            vm.execute(&batch, &program(op))
+                .map(|()| vm.register(2).unwrap().to_vec())
+        };
+        assert_eq!(
+            run(
+                vec![Value::Int(5), Value::Int(i64::MAX)],
+                vec![Value::Int(7), Value::Null],
+                MapOp::Sub
+            )
+            .unwrap(),
+            vec![Value::Int(-2), Value::Null]
+        );
+        assert!(matches!(
+            run(vec![Value::Int(i64::MIN)], vec![Value::Int(1)], MapOp::Sub),
+            Err(VmError::IntegerOverflow { opcode: "Map" })
+        ));
+        assert_eq!(
+            run(vec![Value::Int(3)], vec![Value::Float(0.5)], MapOp::Sub).unwrap(),
+            vec![Value::Float(2.5)]
+        );
+    }
+
     /// #635: the typed `Int` fast path is exact and overflow-checked too.
     #[test]
     fn map_on_typed_int_columns_is_exact_and_overflow_checked() {
@@ -6492,7 +6595,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_arithmetic_d31989c2__v1_both_int_stays_int() {
+    fn mcdc__vm_batch_arithmetic_5f45d1c0__v1_both_int_stays_int() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -6520,7 +6623,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_arithmetic_d31989c2__v2_a_decimal_stays_decimal() {
+    fn mcdc__vm_batch_arithmetic_5f45d1c0__v2_a_decimal_stays_decimal() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -6548,7 +6651,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_arithmetic_d31989c2__v3_b_decimal_stays_decimal() {
+    fn mcdc__vm_batch_arithmetic_5f45d1c0__v3_b_decimal_stays_decimal() {
         let batch = Batch::new(1);
         let mut vm = Vm::new();
         vm.execute(
@@ -6662,9 +6765,8 @@ mod tests {
         for (input, expected) in [
             (Value::Int(5), Value::Int(-5)),
             (Value::Float(2.5), Value::Float(-2.5)),
-            // `-i64::MIN` has no integer representation: promoted to REAL
-            // (SQLite's behaviour) instead of overflowing.
-            (Value::Int(i64::MIN), Value::Float(-(i64::MIN as f64))),
+            // `-i64::MIN` is an overflow error (#635):
+            // `decimal_boundaries_and_negation`.
         ] {
             vm.execute(
                 &batch,
