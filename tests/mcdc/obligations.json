@@ -15520,9 +15520,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "engine_row_adapter_delete_master_row_8e51437e",
+    "file": "src/engine/row/adapter.rs",
+    "line": 695,
+    "decision": "match e {\n                // The error carries no name (#658); this caller has it.\n                btree::BtreeError::MasterEntryNotFound => {\n                    SchemaStorageError(format!(\"no sqlite_master {kind} named {name}\"))\n                }\n                other => schema_err(other),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_row_adapter_autoincrement_rowid_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 751,
+    "line": 758,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -15532,7 +15542,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_15a637f2",
     "file": "src/engine/row/adapter.rs",
-    "line": 753,
+    "line": 760,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) =\n                    (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -15542,7 +15552,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_892d9090",
     "file": "src/engine/row/adapter.rs",
-    "line": 756,
+    "line": 763,
     "decision": "&**n == table",
     "conditions": 1,
     "vectors_required": 2,
@@ -16180,10 +16190,10 @@
     "wildcard_risk": true
   },
   {
-    "id": "functions_fmt_232528b7",
+    "id": "functions_fmt_93b8c51c",
     "file": "src/functions.rs",
-    "line": 60,
-    "decision": "match self {\n            FunctionError::Unknown { name, arity } => {\n                write!(f, \"unknown function {name} with {arity} argument(s)\")\n            }\n            FunctionError::IntegerOverflow => write!(f, \"integer overflow\"),\n        }",
+    "line": 63,
+    "decision": "match self {\n            FunctionError::Unknown { name, arity } => {\n                write!(f, \"unknown function {name} with {arity} argument(s)\")\n            }\n            FunctionError::IntegerOverflow => write!(f, \"integer overflow\"),\n            FunctionError::TooBig => write!(f, \"string or blob too big\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -16192,7 +16202,7 @@
   {
     "id": "functions_as_text_57da0013",
     "file": "src/functions.rs",
-    "line": 75,
+    "line": 79,
     "decision": "match v {\n        Value::Null => String::new(),\n        Value::Integer(i) => i.to_string(),\n        Value::Real(r) => crate::value::format_real(*r),\n        Value::Text(s) => s.to_string(),\n        Value::Blob(b) => String::from_utf8_lossy(b).into_owned(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16202,7 +16212,7 @@
   {
     "id": "functions_value_f64_9acda3d5",
     "file": "src/functions.rs",
-    "line": 85,
+    "line": 89,
     "decision": "match v {\n        Value::Integer(i) => *i as f64,\n        Value::Real(r) => *r,\n        Value::Text(s) => match crate::coerce::coerce_text_to_numeric(s) {\n            Value::Integer(i) => i as f64,\n            Value::Real(r) => r,\n            _ => 0.0,\n        },\n        Value::Null | Value::Blob(_) => 0.0,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16212,7 +16222,7 @@
   {
     "id": "functions_value_f64_c23ba87b",
     "file": "src/functions.rs",
-    "line": 88,
+    "line": 92,
     "decision": "match crate::coerce::coerce_text_to_numeric(s) {\n            Value::Integer(i) => i as f64,\n            Value::Real(r) => r,\n            _ => 0.0,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16222,7 +16232,7 @@
   {
     "id": "functions_length_ccd236a5",
     "file": "src/functions.rs",
-    "line": 98,
+    "line": 102,
     "decision": "match &args[0] {\n        Value::Null => Value::Null,\n        Value::Blob(b) => Value::Integer(len_to_i64(b.len())),\n        Value::Text(s) => Value::Integer(len_to_i64(s.chars().count())),\n        other => Value::Integer(len_to_i64(as_text(other).chars().count())),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16232,7 +16242,7 @@
   {
     "id": "functions_upper_326360a0",
     "file": "src/functions.rs",
-    "line": 107,
+    "line": 111,
     "decision": "match &args[0] {\n        Value::Null => Value::Null,\n        Value::Text(s) => Value::Text(s.to_ascii_uppercase().into()),\n        other => other.clone(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16242,7 +16252,7 @@
   {
     "id": "functions_lower_88f4ac54",
     "file": "src/functions.rs",
-    "line": 115,
+    "line": 119,
     "decision": "match &args[0] {\n        Value::Null => Value::Null,\n        Value::Text(s) => Value::Text(s.to_ascii_lowercase().into()),\n        other => other.clone(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16252,7 +16262,7 @@
   {
     "id": "functions_abs_23f867d0",
     "file": "src/functions.rs",
-    "line": 123,
+    "line": 127,
     "decision": "match &args[0] {\n        Value::Null => Value::Null,\n        Value::Integer(i) => Value::Integer(i.checked_abs().ok_or(FunctionError::IntegerOverflow)?),\n        Value::Real(r) => Value::Real(r.abs()),\n        // Text/blob arguments always coerce through the REAL path --\n        // even a clean integer-looking string like '5' yields REAL\n        // 5.0, matching sqlite-rs's own oracle-verified behavior.\n        other => Value::Real(value_f64(other).abs()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16262,7 +16272,7 @@
   {
     "id": "functions_nullif_0e991c46",
     "file": "src/functions.rs",
-    "line": 144,
+    "line": 148,
     "decision": "matches!(a, Value::Null) || matches!(b, Value::Null)",
     "conditions": 2,
     "vectors_required": 3,
@@ -16272,7 +16282,7 @@
   {
     "id": "functions_nullif_0524a5eb",
     "file": "src/functions.rs",
-    "line": 147,
+    "line": 151,
     "decision": "compare(a, b, Collation::Binary) == Ordering::Equal",
     "conditions": 1,
     "vectors_required": 2,
@@ -16282,7 +16292,7 @@
   {
     "id": "functions_typeof_fn_2528024c",
     "file": "src/functions.rs",
-    "line": 155,
+    "line": 159,
     "decision": "match &args[0] {\n        Value::Null => \"null\",\n        Value::Integer(_) => \"integer\",\n        Value::Real(_) => \"real\",\n        Value::Text(_) => \"text\",\n        Value::Blob(_) => \"blob\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16292,7 +16302,7 @@
   {
     "id": "functions_hex_5c39606f",
     "file": "src/functions.rs",
-    "line": 170,
+    "line": 174,
     "decision": "match &args[0] {\n        Value::Blob(b) => b.to_vec(),\n        other => as_text(other).into_bytes(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16302,7 +16312,7 @@
   {
     "id": "functions_hex_digit_7d3e9774",
     "file": "src/functions.rs",
-    "line": 182,
+    "line": 186,
     "decision": "match c {\n        b'0'..=b'9' => Some(c.saturating_sub(b'0')),\n        b'a'..=b'f' => Some(c.saturating_sub(b'a').saturating_add(10)),\n        b'A'..=b'F' => Some(c.saturating_sub(b'A').saturating_add(10)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16312,7 +16322,7 @@
   {
     "id": "functions_unhex_06dc36fa",
     "file": "src/functions.rs",
-    "line": 191,
+    "line": 195,
     "decision": "matches!(args[0], Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16322,7 +16332,7 @@
   {
     "id": "functions_unhex_bdaee985",
     "file": "src/functions.rs",
-    "line": 196,
+    "line": 200,
     "decision": "!bytes.len().is_multiple_of(2)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16332,7 +16342,7 @@
   {
     "id": "functions_sql_quote_text_08ae050b",
     "file": "src/functions.rs",
-    "line": 225,
+    "line": 229,
     "decision": "c == '\\''",
     "conditions": 1,
     "vectors_required": 2,
@@ -16342,7 +16352,7 @@
   {
     "id": "functions_quote_555998a2",
     "file": "src/functions.rs",
-    "line": 235,
+    "line": 239,
     "decision": "match &args[0] {\n        Value::Null => \"NULL\".to_string().into(),\n        Value::Integer(i) => i.to_string().into(),\n        Value::Real(r) => crate::value::format_real(*r).into(),\n        Value::Text(s) => sql_quote_text(s).into(),\n        Value::Blob(b) => format_blob(b).into(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16352,7 +16362,7 @@
   {
     "id": "functions_scalar_min_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 245,
+    "line": 249,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16362,7 +16372,7 @@
   {
     "id": "functions_scalar_max_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 256,
+    "line": 260,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16372,7 +16382,7 @@
   {
     "id": "functions_round_fn_a3154251",
     "file": "src/functions.rs",
-    "line": 270,
+    "line": 274,
     "decision": "matches!(args[0], Value::Null) || matches!(args.get(1), Some(Value::Null))",
     "conditions": 2,
     "vectors_required": 3,
@@ -16382,7 +16392,7 @@
   {
     "id": "functions_round_fn_914035b4",
     "file": "src/functions.rs",
-    "line": 281,
+    "line": 285,
     "decision": "scaled >= 0.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16392,7 +16402,7 @@
   {
     "id": "functions_sign_271b8ca7",
     "file": "src/functions.rs",
-    "line": 290,
+    "line": 294,
     "decision": "match &args[0] {\n        Value::Null => Value::Null,\n        other => {\n            let n = value_f64(other);\n            Value::Integer(if n > 0.0 {\n                1\n            } else if n < 0.0 {\n                -1\n            } else {\n                0\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16402,7 +16412,7 @@
   {
     "id": "functions_sign_6273b3b2",
     "file": "src/functions.rs",
-    "line": 294,
+    "line": 298,
     "decision": "n > 0.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16412,7 +16422,7 @@
   {
     "id": "functions_sign_38bcb2d9",
     "file": "src/functions.rs",
-    "line": 296,
+    "line": 300,
     "decision": "n < 0.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16422,7 +16432,7 @@
   {
     "id": "functions_find_bytes_f1cee63c",
     "file": "src/functions.rs",
-    "line": 306,
+    "line": 310,
     "decision": "needle.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16432,7 +16442,7 @@
   {
     "id": "functions_instr_0d4e3e9a",
     "file": "src/functions.rs",
-    "line": 313,
+    "line": 317,
     "decision": "matches!(args[0], Value::Null) || matches!(args[1], Value::Null)",
     "conditions": 2,
     "vectors_required": 3,
@@ -16442,7 +16452,7 @@
   {
     "id": "functions_instr_4f93a6cf",
     "file": "src/functions.rs",
-    "line": 316,
+    "line": 320,
     "decision": "let Value::Blob(hay) = &args[0]",
     "conditions": 1,
     "vectors_required": 2,
@@ -16452,7 +16462,7 @@
   {
     "id": "functions_instr_2bddddff",
     "file": "src/functions.rs",
-    "line": 317,
+    "line": 321,
     "decision": "match &args[1] {\n            Value::Blob(b) => find_bytes(hay, b),\n            other => find_bytes(hay, as_text(other).as_bytes()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16462,7 +16472,7 @@
   {
     "id": "functions_substr_3985c4c8",
     "file": "src/functions.rs",
-    "line": 353,
+    "line": 362,
     "decision": "matches!(args[1], Value::Null) || args.get(2).is_some_and(|v| matches!(v, Value::Null))",
     "conditions": 2,
     "vectors_required": 3,
@@ -16472,7 +16482,7 @@
   {
     "id": "functions_substr_06dc36fa",
     "file": "src/functions.rs",
-    "line": 356,
+    "line": 365,
     "decision": "matches!(args[0], Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16482,7 +16492,7 @@
   {
     "id": "functions_substr_41f3533b",
     "file": "src/functions.rs",
-    "line": 360,
+    "line": 369,
     "decision": "match args.get(2) {\n        Some(z) => {\n            let raw = crate::coerce::cast_to_integer(z);\n            if raw < 0 {\n                (raw.saturating_neg(), true)\n            } else {\n                (raw, false)\n            }\n        }\n        None => (i64::MAX / 2, false),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16492,7 +16502,7 @@
   {
     "id": "functions_substr_dab9be94",
     "file": "src/functions.rs",
-    "line": 363,
+    "line": 372,
     "decision": "raw < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16502,7 +16512,7 @@
   {
     "id": "functions_substr_04dd70e0",
     "file": "src/functions.rs",
-    "line": 372,
+    "line": 381,
     "decision": "match &args[0] {\n        Value::Blob(b) => Some(b),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16512,7 +16522,7 @@
   {
     "id": "functions_substr_6dac5063",
     "file": "src/functions.rs",
-    "line": 376,
+    "line": 385,
     "decision": "let Some(b) = blob",
     "conditions": 1,
     "vectors_required": 2,
@@ -16522,7 +16532,7 @@
   {
     "id": "functions_substr_4ff97e9f",
     "file": "src/functions.rs",
-    "line": 378,
+    "line": 387,
     "decision": "p1 < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16532,7 +16542,7 @@
   {
     "id": "functions_substr_4ff97e9f_2",
     "file": "src/functions.rs",
-    "line": 384,
+    "line": 393,
     "decision": "p1 < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16542,7 +16552,7 @@
   {
     "id": "functions_substr_4ff97e9f_3",
     "file": "src/functions.rs",
-    "line": 386,
+    "line": 395,
     "decision": "p1 < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16552,7 +16562,7 @@
   {
     "id": "functions_substr_ac6a1e16",
     "file": "src/functions.rs",
-    "line": 388,
+    "line": 397,
     "decision": "p2 < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16562,7 +16572,7 @@
   {
     "id": "functions_substr_42b3bf29",
     "file": "src/functions.rs",
-    "line": 393,
+    "line": 402,
     "decision": "p1 > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16572,7 +16582,7 @@
   {
     "id": "functions_substr_e42efbec",
     "file": "src/functions.rs",
-    "line": 395,
+    "line": 404,
     "decision": "p2 > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16582,7 +16592,7 @@
   {
     "id": "functions_substr_b3ed3074",
     "file": "src/functions.rs",
-    "line": 399,
+    "line": 408,
     "decision": "neg_p2",
     "conditions": 1,
     "vectors_required": 2,
@@ -16592,7 +16602,7 @@
   {
     "id": "functions_substr_4ff97e9f_4",
     "file": "src/functions.rs",
-    "line": 401,
+    "line": 410,
     "decision": "p1 < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16602,7 +16612,7 @@
   {
     "id": "functions_substr_6dac5063_2",
     "file": "src/functions.rs",
-    "line": 409,
+    "line": 418,
     "decision": "let Some(b) = blob",
     "conditions": 1,
     "vectors_required": 2,
@@ -16612,7 +16622,7 @@
   {
     "id": "functions_trim_fn_06dc36fa",
     "file": "src/functions.rs",
-    "line": 427,
+    "line": 436,
     "decision": "matches!(args[0], Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16622,7 +16632,7 @@
   {
     "id": "functions_ltrim_fn_06dc36fa",
     "file": "src/functions.rs",
-    "line": 438,
+    "line": 447,
     "decision": "matches!(args[0], Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16632,7 +16642,7 @@
   {
     "id": "functions_rtrim_fn_06dc36fa",
     "file": "src/functions.rs",
-    "line": 451,
+    "line": 460,
     "decision": "matches!(args[0], Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16642,7 +16652,7 @@
   {
     "id": "functions_replace_fn_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 464,
+    "line": 473,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16652,7 +16662,7 @@
   {
     "id": "functions_replace_fn_01657cd2",
     "file": "src/functions.rs",
-    "line": 470,
+    "line": 479,
     "decision": "from.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16662,7 +16672,7 @@
   {
     "id": "functions_like_rec_7ed28956",
     "file": "src/functions.rs",
-    "line": 490,
+    "line": 499,
     "decision": "pi == p.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16672,7 +16682,7 @@
   {
     "id": "functions_like_rec_c331028c",
     "file": "src/functions.rs",
-    "line": 494,
+    "line": 503,
     "decision": "Some(pc) == escape && pi.saturating_add(1) < p.len()",
     "conditions": 2,
     "vectors_required": 3,
@@ -16682,7 +16692,7 @@
   {
     "id": "functions_like_rec_8f97ac22",
     "file": "src/functions.rs",
-    "line": 496,
+    "line": 505,
     "decision": "ti >= t.len() || !ascii_eq(t[ti], literal)",
     "conditions": 2,
     "vectors_required": 3,
@@ -16692,7 +16702,7 @@
   {
     "id": "functions_like_rec_b28e1dfc",
     "file": "src/functions.rs",
-    "line": 503,
+    "line": 512,
     "decision": "match pc {\n            '%' => {\n                // Collapse consecutive '%' (a run behaves as one).\n                while pi < p.len() && p[pi] == '%' {\n                    pi = pi.saturating_add(1);\n                }\n                if pi == p.len() {\n                    return true;\n                }\n                for start in ti..=t.len() {\n                    if like_rec(t, p, escape, start, pi) {\n                        return true;\n                    }\n                }\n                return false;\n            }\n            '_' => {\n                if ti >= t.len() {\n                    return false;\n                }\n                ti = ti.saturating_add(1);\n                pi = pi.saturating_add(1);\n            }\n            _ => {\n                if ti >= t.len() || !ascii_eq(t[ti], pc) {\n                    return false;\n                }\n                ti = ti.saturating_add(1);\n                pi = pi.saturating_add(1);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16702,7 +16712,7 @@
   {
     "id": "functions_like_rec_01f56809",
     "file": "src/functions.rs",
-    "line": 506,
+    "line": 515,
     "decision": "pi < p.len() && p[pi] == '%'",
     "conditions": 2,
     "vectors_required": 3,
@@ -16712,7 +16722,7 @@
   {
     "id": "functions_like_rec_7ed28956_2",
     "file": "src/functions.rs",
-    "line": 509,
+    "line": 518,
     "decision": "pi == p.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16722,7 +16732,7 @@
   {
     "id": "functions_like_rec_feffcee1",
     "file": "src/functions.rs",
-    "line": 513,
+    "line": 522,
     "decision": "like_rec(t, p, escape, start, pi)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16732,7 +16742,7 @@
   {
     "id": "functions_like_rec_3e32d163",
     "file": "src/functions.rs",
-    "line": 520,
+    "line": 529,
     "decision": "ti >= t.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16742,7 +16752,7 @@
   {
     "id": "functions_like_rec_ec8f55a3",
     "file": "src/functions.rs",
-    "line": 527,
+    "line": 536,
     "decision": "ti >= t.len() || !ascii_eq(t[ti], pc)",
     "conditions": 2,
     "vectors_required": 3,
@@ -16752,7 +16762,7 @@
   {
     "id": "functions_glob_rec_7ed28956",
     "file": "src/functions.rs",
-    "line": 552,
+    "line": 561,
     "decision": "pi == p.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16762,7 +16772,7 @@
   {
     "id": "functions_glob_rec_e8365e93",
     "file": "src/functions.rs",
-    "line": 555,
+    "line": 564,
     "decision": "match p[pi] {\n            '*' => {\n                while pi < p.len() && p[pi] == '*' {\n                    pi = pi.saturating_add(1);\n                }\n                if pi == p.len() {\n                    return true;\n                }\n                for start in ti..=t.len() {\n                    if glob_rec(t, p, start, pi) {\n                        return true;\n                    }\n                }\n                return false;\n            }\n            '?' => {\n                if ti >= t.len() {\n                    return false;\n                }\n                ti = ti.saturating_add(1);\n                pi = pi.saturating_add(1);\n            }\n            '[' => {\n                let Some((matches, next_pi)) = glob_class(p, pi, t.get(ti).copied()) else {\n                    return false;\n                };\n                if ti >= t.len() || !matches {\n                    return false;\n                }\n                ti = ti.saturating_add(1);\n                pi = next_pi;\n            }\n            c => {\n                if ti >= t.len() || t[ti] != c {\n                    return false;\n                }\n                ti = ti.saturating_add(1);\n                pi = pi.saturating_add(1);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16772,7 +16782,7 @@
   {
     "id": "functions_glob_rec_01d0fd5a",
     "file": "src/functions.rs",
-    "line": 557,
+    "line": 566,
     "decision": "pi < p.len() && p[pi] == '*'",
     "conditions": 2,
     "vectors_required": 3,
@@ -16782,7 +16792,7 @@
   {
     "id": "functions_glob_rec_7ed28956_2",
     "file": "src/functions.rs",
-    "line": 560,
+    "line": 569,
     "decision": "pi == p.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16792,7 +16802,7 @@
   {
     "id": "functions_glob_rec_80ec1907",
     "file": "src/functions.rs",
-    "line": 564,
+    "line": 573,
     "decision": "glob_rec(t, p, start, pi)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16802,7 +16812,7 @@
   {
     "id": "functions_glob_rec_3e32d163",
     "file": "src/functions.rs",
-    "line": 571,
+    "line": 580,
     "decision": "ti >= t.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16812,7 +16822,7 @@
   {
     "id": "functions_glob_rec_36b485df",
     "file": "src/functions.rs",
-    "line": 581,
+    "line": 590,
     "decision": "ti >= t.len() || !matches",
     "conditions": 2,
     "vectors_required": 3,
@@ -16822,7 +16832,7 @@
   {
     "id": "functions_glob_rec_688fbf64",
     "file": "src/functions.rs",
-    "line": 588,
+    "line": 597,
     "decision": "ti >= t.len() || t[ti] != c",
     "conditions": 2,
     "vectors_required": 3,
@@ -16832,7 +16842,7 @@
   {
     "id": "functions_glob_class_66b5f274",
     "file": "src/functions.rs",
-    "line": 604,
+    "line": 613,
     "decision": "negate",
     "conditions": 1,
     "vectors_required": 2,
@@ -16842,7 +16852,7 @@
   {
     "id": "functions_glob_class_70dcf3a0",
     "file": "src/functions.rs",
-    "line": 610,
+    "line": 619,
     "decision": "i >= p.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16852,7 +16862,7 @@
   {
     "id": "functions_glob_class_1d2aadbb",
     "file": "src/functions.rs",
-    "line": 613,
+    "line": 622,
     "decision": "p[i] == ']' && i > class_start",
     "conditions": 2,
     "vectors_required": 3,
@@ -16862,7 +16872,7 @@
   {
     "id": "functions_glob_class_18591d42",
     "file": "src/functions.rs",
-    "line": 617,
+    "line": 626,
     "decision": "i.saturating_add(2) < p.len()\n            && p[i.saturating_add(1)] == '-'\n            && p[i.saturating_add(2)] != ']'",
     "conditions": 3,
     "vectors_required": 4,
@@ -16872,7 +16882,7 @@
   {
     "id": "functions_glob_class_cfda0f15",
     "file": "src/functions.rs",
-    "line": 622,
+    "line": 631,
     "decision": "let Some(c) = c",
     "conditions": 1,
     "vectors_required": 2,
@@ -16882,7 +16892,7 @@
   {
     "id": "functions_glob_class_78a99761",
     "file": "src/functions.rs",
-    "line": 623,
+    "line": 632,
     "decision": "c >= lo && c <= hi",
     "conditions": 2,
     "vectors_required": 3,
@@ -16892,7 +16902,7 @@
   {
     "id": "functions_glob_class_03e48905",
     "file": "src/functions.rs",
-    "line": 629,
+    "line": 638,
     "decision": "Some(p[i]) == c",
     "conditions": 1,
     "vectors_required": 2,
@@ -16902,7 +16912,7 @@
   {
     "id": "functions_like_fn_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 641,
+    "line": 650,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16912,7 +16922,7 @@
   {
     "id": "functions_like_fn_1f8cb866",
     "file": "src/functions.rs",
-    "line": 644,
+    "line": 653,
     "decision": "match args.get(2) {\n        Some(e) => as_text(e).chars().next(),\n        None => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16922,7 +16932,7 @@
   {
     "id": "functions_glob_fn_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 657,
+    "line": 666,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16932,7 +16942,7 @@
   {
     "id": "functions_iif_7e220a90",
     "file": "src/functions.rs",
-    "line": 666,
+    "line": 675,
     "decision": "match &args[0] {\n        Value::Null => false,\n        Value::Integer(i) => *i != 0,\n        Value::Real(r) => *r != 0.0,\n        Value::Text(s) => match crate::coerce::coerce_text_to_numeric(s) {\n            Value::Integer(i) => i != 0,\n            Value::Real(r) => r != 0.0,\n            _ => false,\n        },\n        Value::Blob(_) => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16942,7 +16952,7 @@
   {
     "id": "functions_iif_ccb66663",
     "file": "src/functions.rs",
-    "line": 670,
+    "line": 679,
     "decision": "match crate::coerce::coerce_text_to_numeric(s) {\n            Value::Integer(i) => i != 0,\n            Value::Real(r) => r != 0.0,\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16952,7 +16962,7 @@
   {
     "id": "functions_iif_12948eac",
     "file": "src/functions.rs",
-    "line": 677,
+    "line": 686,
     "decision": "cond",
     "conditions": 1,
     "vectors_required": 2,
@@ -16962,7 +16972,7 @@
   {
     "id": "functions_json_extract_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 715,
+    "line": 724,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16972,7 +16982,7 @@
   {
     "id": "functions_json_extract_cc7b2cc9",
     "file": "src/functions.rs",
-    "line": 723,
+    "line": 732,
     "decision": "match crate::json_path::lookup(&root, &path) {\n        Some(crate::json_path::JsonValue::Null | crate::json_path::JsonValue::Object(_)) | None => {\n            Value::Null\n        }\n        Some(crate::json_path::JsonValue::Bool(b)) => Value::Integer(i64::from(b)),\n        Some(crate::json_path::JsonValue::Int(i)) => Value::Integer(i),\n        Some(crate::json_path::JsonValue::Float(f)) => Value::Real(f),\n        Some(crate::json_path::JsonValue::Str(s)) => Value::Text(s.to_string().into()),\n        Some(crate::json_path::JsonValue::Array(raw)) => Value::Text(raw.to_string().into()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16982,7 +16992,7 @@
   {
     "id": "functions_logfmt_extract_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 740,
+    "line": 749,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16992,7 +17002,7 @@
   {
     "id": "functions_logfmt_extract_3cb9704d",
     "file": "src/functions.rs",
-    "line": 745,
+    "line": 754,
     "decision": "k == key",
     "conditions": 1,
     "vectors_required": 2,
@@ -17002,7 +17012,7 @@
   {
     "id": "functions_logfmt_extract_b1d7ca99",
     "file": "src/functions.rs",
-    "line": 746,
+    "line": 755,
     "decision": "match found {\n        Some(v) => Value::Text(v.to_string().into()),\n        None => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17012,7 +17022,7 @@
   {
     "id": "functions_regexp_extract_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 757,
+    "line": 766,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -17022,7 +17032,7 @@
   {
     "id": "functions_regexp_extract_ab9d7b66",
     "file": "src/functions.rs",
-    "line": 769,
+    "line": 778,
     "decision": "match regex_lite::find(&re, &text) {\n        Some(m) => match m.group(group) {\n            Some(s) => Value::Text(s.to_string().into()),\n            None => Value::Null,\n        },\n        None => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17032,7 +17042,7 @@
   {
     "id": "functions_regexp_extract_d1a182c2",
     "file": "src/functions.rs",
-    "line": 770,
+    "line": 779,
     "decision": "match m.group(group) {\n            Some(s) => Value::Text(s.to_string().into()),\n            None => Value::Null,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17042,7 +17052,7 @@
   {
     "id": "functions_compile_6c91149b",
     "file": "src/functions.rs",
-    "line": 836,
+    "line": 845,
     "decision": "i < chars.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -17052,7 +17062,7 @@
   {
     "id": "functions_compile_fae27a97",
     "file": "src/functions.rs",
-    "line": 837,
+    "line": 846,
     "decision": "match chars[i] {\n                '(' => {\n                    nodes.push(Node::GroupOpen);\n                    open_groups.push(next_group);\n                    next_group = next_group.checked_add(1)?;\n                    i = i.checked_add(1)?;\n                }\n                ')' => {\n                    let idx = open_groups.pop()?;\n                    nodes.push(Node::GroupClose(idx));\n                    i = i.checked_add(1)?;\n                }\n                '.' => {\n                    i = i.checked_add(1)?;\n                    let quant = take_quant(&chars, &mut i);\n                    nodes.push(Node::Atom {\n                        atom: Atom::Any,\n                        items: Vec::new(),\n                        quant,\n                    });\n                }\n                '[' => {\n                    let (negate, items, next_i) = parse_class(&chars, i)?;\n                    i = next_i;\n                    let quant = take_quant(&chars, &mut i);\n                    nodes.push(Node::Atom {\n                        atom: Atom::Class { negate },\n                        items,\n                        quant,\n                    });\n                }\n                '\\\\' => {\n                    let c = *chars.get(i.checked_add(1)?)?;\n                    i = i.checked_add(2)?;\n                    let quant = take_quant(&chars, &mut i);\n                    nodes.push(Node::Atom {\n                        atom: Atom::Lit(c),\n                        items: Vec::new(),\n                        quant,\n                    });\n                }\n                c => {\n                    i = i.checked_add(1)?;\n                    let quant = take_quant(&chars, &mut i);\n                    nodes.push(Node::Atom {\n                        atom: Atom::Lit(c),\n                        items: Vec::new(),\n                        quant,\n                    });\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17062,7 +17072,7 @@
   {
     "id": "functions_compile_766b9098",
     "file": "src/functions.rs",
-    "line": 889,
+    "line": 898,
     "decision": "!open_groups.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -17072,7 +17082,7 @@
   {
     "id": "functions_take_quant_1a51cd0d",
     "file": "src/functions.rs",
-    "line": 899,
+    "line": 908,
     "decision": "match chars.get(*i) {\n            Some('*') => {\n                *i = i.saturating_add(1);\n                Quant::Star\n            }\n            Some('+') => {\n                *i = i.saturating_add(1);\n                Quant::Plus\n            }\n            Some('?') => {\n                *i = i.saturating_add(1);\n                Quant::Opt\n            }\n            _ => Quant::One,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17082,7 +17092,7 @@
   {
     "id": "functions_parse_class_66b5f274",
     "file": "src/functions.rs",
-    "line": 922,
+    "line": 931,
     "decision": "negate",
     "conditions": 1,
     "vectors_required": 2,
@@ -17092,7 +17102,7 @@
   {
     "id": "functions_parse_class_7a99804d",
     "file": "src/functions.rs",
-    "line": 928,
+    "line": 937,
     "decision": "i >= chars.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -17102,7 +17112,7 @@
   {
     "id": "functions_parse_class_d7d31f3a",
     "file": "src/functions.rs",
-    "line": 931,
+    "line": 940,
     "decision": "chars[i] == ']' && i > class_start",
     "conditions": 2,
     "vectors_required": 3,
@@ -17112,7 +17122,7 @@
   {
     "id": "functions_parse_class_328d12a6",
     "file": "src/functions.rs",
-    "line": 934,
+    "line": 943,
     "decision": "i.checked_add(2)? < chars.len()\n                && chars[i.checked_add(1)?] == '-'\n                && chars[i.checked_add(2)?] != ']'",
     "conditions": 3,
     "vectors_required": 4,
@@ -17122,7 +17132,7 @@
   {
     "id": "functions_class_matches_30b11503",
     "file": "src/functions.rs",
-    "line": 948,
+    "line": 957,
     "decision": "match item {\n            ClassItem::Char(x) => *x == c,\n            ClassItem::Range(lo, hi) => c >= *lo && c <= *hi,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17132,7 +17142,7 @@
   {
     "id": "functions_atom_matches_ae01dce1",
     "file": "src/functions.rs",
-    "line": 956,
+    "line": 965,
     "decision": "match atom {\n            Atom::Lit(x) => x == c,\n            Atom::Any => true,\n            Atom::Class { negate } => class_matches(items, negate, c),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17142,7 +17152,7 @@
   {
     "id": "functions_group_01b7c5b2",
     "file": "src/functions.rs",
-    "line": 977,
+    "line": 986,
     "decision": "n == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -17152,7 +17162,7 @@
   {
     "id": "functions_find_def6613d",
     "file": "src/functions.rs",
-    "line": 994,
+    "line": 1003,
     "decision": "let Some(end) = match_seq(&re.nodes, 0, &chars, start, &mut groups, &mut open)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17162,7 +17172,7 @@
   {
     "id": "functions_match_seq_a370b685",
     "file": "src/functions.rs",
-    "line": 1016,
+    "line": 1025,
     "decision": "match node {\n            Node::GroupOpen => {\n                open.push(ti);\n                let r = match_seq(nodes, ni.saturating_add(1), text, ti, groups, open);\n                if r.is_none() {\n                    open.pop();\n                }\n                r\n            }\n            Node::GroupClose(idx) => {\n                let start = *open.last()?;\n                open.pop();\n                let slot = idx.checked_sub(1)?;\n                let previous = groups.get(slot).copied().unwrap_or(None);\n                if let Some(g) = groups.get_mut(slot) {\n                    *g = Some((start, ti));\n                }\n                let r = match_seq(nodes, ni.saturating_add(1), text, ti, groups, open);\n                if r.is_none() {\n                    if let Some(g) = groups.get_mut(slot) {\n                        *g = previous;\n                    }\n                    open.push(start);\n                }\n                r\n            }\n            Node::Atom { atom, items, quant } => match quant {\n                Quant::One => {\n                    let c = *text.get(ti)?;\n                    if atom_matches(*atom, items, c) {\n                        match_seq(\n                            nodes,\n                            ni.saturating_add(1),\n                            text,\n                            ti.saturating_add(1),\n                            groups,\n                            open,\n                        )\n                    } else {\n                        None\n                    }\n                }\n                Quant::Opt => try_repeat(nodes, ni, *atom, items, 0, 1, text, ti, groups, open),\n                Quant::Star => try_repeat(\n                    nodes,\n                    ni,\n                    *atom,\n                    items,\n                    0,\n                    usize::MAX,\n                    text,\n                    ti,\n                    groups,\n                    open,\n                ),\n                Quant::Plus => try_repeat(\n                    nodes,\n                    ni,\n                    *atom,\n                    items,\n                    1,\n                    usize::MAX,\n                    text,\n                    ti,\n                    groups,\n                    open,\n                ),\n            },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17172,7 +17182,7 @@
   {
     "id": "functions_match_seq_720606be",
     "file": "src/functions.rs",
-    "line": 1020,
+    "line": 1029,
     "decision": "r.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -17182,7 +17192,7 @@
   {
     "id": "functions_match_seq_746cfe7a",
     "file": "src/functions.rs",
-    "line": 1030,
+    "line": 1039,
     "decision": "let Some(g) = groups.get_mut(slot)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17192,7 +17202,7 @@
   {
     "id": "functions_match_seq_720606be_2",
     "file": "src/functions.rs",
-    "line": 1034,
+    "line": 1043,
     "decision": "r.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -17202,7 +17212,7 @@
   {
     "id": "functions_match_seq_746cfe7a_2",
     "file": "src/functions.rs",
-    "line": 1035,
+    "line": 1044,
     "decision": "let Some(g) = groups.get_mut(slot)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17212,7 +17222,7 @@
   {
     "id": "functions_match_seq_576d42cd",
     "file": "src/functions.rs",
-    "line": 1042,
+    "line": 1051,
     "decision": "match quant {\n                Quant::One => {\n                    let c = *text.get(ti)?;\n                    if atom_matches(*atom, items, c) {\n                        match_seq(\n                            nodes,\n                            ni.saturating_add(1),\n                            text,\n                            ti.saturating_add(1),\n                            groups,\n                            open,\n                        )\n                    } else {\n                        None\n                    }\n                }\n                Quant::Opt => try_repeat(nodes, ni, *atom, items, 0, 1, text, ti, groups, open),\n                Quant::Star => try_repeat(\n                    nodes,\n                    ni,\n                    *atom,\n                    items,\n                    0,\n                    usize::MAX,\n                    text,\n                    ti,\n                    groups,\n                    open,\n                ),\n                Quant::Plus => try_repeat(\n                    nodes,\n                    ni,\n                    *atom,\n                    items,\n                    1,\n                    usize::MAX,\n                    text,\n                    ti,\n                    groups,\n                    open,\n                ),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17222,7 +17232,7 @@
   {
     "id": "functions_match_seq_8626ac25",
     "file": "src/functions.rs",
-    "line": 1045,
+    "line": 1054,
     "decision": "atom_matches(*atom, items, c)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17232,7 +17242,7 @@
   {
     "id": "functions_try_repeat_d84b03c5",
     "file": "src/functions.rs",
-    "line": 1106,
+    "line": 1115,
     "decision": "positions.len().saturating_sub(1) < max\n            && text.get(cur).is_some_and(|c| atom_matches(atom, items, *c))",
     "conditions": 2,
     "vectors_required": 3,
@@ -17242,7 +17252,7 @@
   {
     "id": "functions_try_repeat_acf60509",
     "file": "src/functions.rs",
-    "line": 1113,
+    "line": 1122,
     "decision": "min > last",
     "conditions": 1,
     "vectors_required": 2,
@@ -17252,7 +17262,7 @@
   {
     "id": "functions_try_repeat_adad5739",
     "file": "src/functions.rs",
-    "line": 1117,
+    "line": 1126,
     "decision": "let Some(end) = match_seq(\n                nodes,\n                ni.saturating_add(1),\n                text,\n                positions[k],\n                groups,\n                open,\n            )",
     "conditions": 1,
     "vectors_required": 2,
@@ -17262,7 +17272,7 @@
   {
     "id": "functions_call_c0e7d4e5",
     "file": "src/functions.rs",
-    "line": 1357,
+    "line": 1366,
     "decision": "match lookup(name, args.len()) {\n        Some(f) => f(args),\n        None => Err(FunctionError::Unknown {\n            name: name.to_string(),\n            arity: args.len(),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17272,7 +17282,7 @@
   {
     "id": "functions_prepare_error_4cbacd69",
     "file": "src/functions.rs",
-    "line": 1455,
+    "line": 1464,
     "decision": "exists(name, arity) || SQLITE_ONLY_FUNCTION_NAMES.contains(&lower.as_str())",
     "conditions": 2,
     "vectors_required": 3,
@@ -17282,7 +17292,7 @@
   {
     "id": "functions_prepare_error_5fb8b6fb",
     "file": "src/functions.rs",
-    "line": 1458,
+    "line": 1467,
     "decision": "SCALAR_FUNCTION_NAMES.contains(&lower.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -17292,7 +17302,7 @@
   {
     "id": "functions_lookup_962dd9c9",
     "file": "src/functions.rs",
-    "line": 1467,
+    "line": 1476,
     "decision": "match (name.to_ascii_lowercase().as_str(), arity) {\n        (\"length\", 1) => Some(length),\n        (\"upper\", 1) => Some(upper),\n        (\"lower\", 1) => Some(lower),\n        (\"abs\", 1) => Some(abs),\n        (\"coalesce\", n) if n >= 2 => Some(coalesce),\n        (\"ifnull\", 2) => Some(coalesce),\n        (\"nullif\", 2) => Some(nullif),\n        (\"typeof\", 1) => Some(typeof_fn),\n        (\"sqlite_version\", 0) => Some(sqlite_version),\n        (\"hex\", 1) => Some(hex),\n        (\"unhex\", 1) => Some(unhex),\n        (\"quote\", 1) => Some(quote),\n        (\"min\", n) if n >= 1 => Some(scalar_min),\n        (\"max\", n) if n >= 1 => Some(scalar_max),\n        (\"round\", 1 | 2) => Some(round_fn),\n        (\"sign\", 1) => Some(sign),\n        (\"instr\", 2) => Some(instr),\n        (\"zeroblob\", 1) => Some(zeroblob),\n        (\"iif\", 3) => Some(iif),\n        (\"substr\", 2 | 3) => Some(substr),\n        (\"trim\", 1 | 2) => Some(trim_fn),\n        (\"ltrim\", 1 | 2) => Some(ltrim_fn),\n        (\"rtrim\", 1 | 2) => Some(rtrim_fn),\n        (\"replace\", 3) => Some(replace_fn),\n        (\"like\", 2 | 3) => Some(like_fn),\n        (\"glob\", 2) => Some(glob_fn),\n        (\"json_extract\", 2) => Some(json_extract),\n        (\"logfmt_extract\", 2) => Some(logfmt_extract),\n        (\"regexp_extract\", 3) => Some(regexp_extract),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17302,7 +17312,7 @@
   {
     "id": "functions_lookup_3c4eb680",
     "file": "src/functions.rs",
-    "line": 1472,
+    "line": 1481,
     "decision": "n >= 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -17312,7 +17322,7 @@
   {
     "id": "functions_lookup_3c4e8ca9",
     "file": "src/functions.rs",
-    "line": 1480,
+    "line": 1489,
     "decision": "n >= 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -17322,7 +17332,7 @@
   {
     "id": "functions_lookup_3c4e8ca9_2",
     "file": "src/functions.rs",
-    "line": 1481,
+    "line": 1490,
     "decision": "n >= 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -30710,10 +30720,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_error_fmt_ffe69bc0",
+    "id": "storage_row_btree_error_fmt_b8dea72e",
     "file": "src/storage/row/btree/error.rs",
-    "line": 161,
-    "decision": "match self {\n            BtreeError::InvalidKeyRecord(source) => write!(f, \"decoding a key record: {source}\"),\n            BtreeError::PageSource { page_num, source } => {\n                write!(f, \"reading page {page_num}: {source}\")\n            }\n            BtreeError::PageTooShort { page_num, len } => write!(\n                f,\n                \"page {page_num} is too short ({len} bytes) to contain a b-tree page header\"\n            ),\n            BtreeError::CursorNotPositioned {\n                operation,\n                required,\n            } => write!(\n                f,\n                \"{operation} called on a cursor that was never positioned by {required}\"\n            ),\n            BtreeError::UnexpectedPageType {\n                page_num,\n                page_type,\n            } => write!(\n                f,\n                \"page {page_num} has unexpected b-tree page type {page_type:#x}\"\n            ),\n            BtreeError::InvalidCellPointer { page_num, index } => write!(\n                f,\n                \"page {page_num} cell pointer at index {index} is out of bounds\"\n            ),\n            BtreeError::InvalidCellVarint { page_num, source } => {\n                write!(f, \"page {page_num} cell varint decode failed: {source}\")\n            }\n            BtreeError::PayloadTooShort { page_num } => write!(\n                f,\n                \"page {page_num} cell payload is shorter than its declared local size\"\n            ),\n            BtreeError::PayloadTooLarge {\n                page_num,\n                payload_len,\n            } => write!(\n                f,\n                \"page {page_num} declares an implausible payload length {payload_len}\"\n            ),\n            BtreeError::OverflowChainTooLong { page_num, max } => write!(\n                f,\n                \"overflow chain from page {page_num} exceeded {max} pages (possible cycle)\"\n            ),\n            BtreeError::OverflowChainCycle {\n                page_num,\n                revisited_page,\n            } => write!(\n                f,\n                \"overflow chain from page {page_num} revisited page {revisited_page} (cycle)\"\n            ),\n            BtreeError::OverflowChainTruncated { page_num } => write!(\n                f,\n                \"overflow chain from page {page_num} ended before all payload bytes were read\"\n            ),\n            BtreeError::TraversalTooLong { max } => write!(\n                f,\n                \"b-tree traversal visited more than {max} pages (possible cycle)\"\n            ),\n            BtreeError::Pager(source) => write!(f, \"pager error: {source}\"),\n            BtreeError::DuplicateRowid { rowid } => {\n                write!(f, \"cannot insert duplicate rowid {rowid}\")\n            }\n            BtreeError::MissingChildRoute { page_num, child } => write!(\n                f,\n                \"interior page {page_num} has no routing entry for child page {child}\"\n            ),\n            BtreeError::RowidNotFound { rowid } => {\n                write!(f, \"cannot delete rowid {rowid}: no such row\")\n            }\n            BtreeError::DuplicateKey => write!(f, \"cannot insert duplicate index key\"),\n            BtreeError::KeyNotFound => write!(f, \"cannot delete index key: no such entry\"),\n            BtreeError::InvalidRootPage { name, rootpage } => write!(\n                f,\n                \"sqlite_master entry {name:?} has out-of-range rootpage {rootpage}\"\n            ),\n            BtreeError::MasterEntryNotFound { name } => write!(\n                f,\n                \"cannot delete sqlite_master entry {name:?}: no such entry\"\n            ),\n            BtreeError::Internal(msg) => write!(f, \"internal invariant violated: {msg}\"),\n        }",
+    "line": 155,
+    "decision": "match self {\n            BtreeError::InvalidKeyRecord(source) => write!(f, \"decoding a key record: {source}\"),\n            BtreeError::PageSource { page_num, source } => {\n                write!(f, \"reading page {page_num}: {source}\")\n            }\n            BtreeError::PageTooShort { page_num, len } => write!(\n                f,\n                \"page {page_num} is too short ({len} bytes) to contain a b-tree page header\"\n            ),\n            BtreeError::CursorNotPositioned {\n                operation,\n                required,\n            } => write!(\n                f,\n                \"{operation} called on a cursor that was never positioned by {required}\"\n            ),\n            BtreeError::UnexpectedPageType {\n                page_num,\n                page_type,\n            } => write!(\n                f,\n                \"page {page_num} has unexpected b-tree page type {page_type:#x}\"\n            ),\n            BtreeError::InvalidCellPointer { page_num, index } => write!(\n                f,\n                \"page {page_num} cell pointer at index {index} is out of bounds\"\n            ),\n            BtreeError::InvalidCellVarint { page_num, source } => {\n                write!(f, \"page {page_num} cell varint decode failed: {source}\")\n            }\n            BtreeError::PayloadTooShort { page_num } => write!(\n                f,\n                \"page {page_num} cell payload is shorter than its declared local size\"\n            ),\n            BtreeError::PayloadTooLarge {\n                page_num,\n                payload_len,\n            } => write!(\n                f,\n                \"page {page_num} declares an implausible payload length {payload_len}\"\n            ),\n            BtreeError::OverflowChainTooLong { page_num, max } => write!(\n                f,\n                \"overflow chain from page {page_num} exceeded {max} pages (possible cycle)\"\n            ),\n            BtreeError::OverflowChainCycle {\n                page_num,\n                revisited_page,\n            } => write!(\n                f,\n                \"overflow chain from page {page_num} revisited page {revisited_page} (cycle)\"\n            ),\n            BtreeError::OverflowChainTruncated { page_num } => write!(\n                f,\n                \"overflow chain from page {page_num} ended before all payload bytes were read\"\n            ),\n            BtreeError::TraversalTooLong { max } => write!(\n                f,\n                \"b-tree traversal visited more than {max} pages (possible cycle)\"\n            ),\n            BtreeError::Pager(source) => write!(f, \"pager error: {source}\"),\n            BtreeError::DuplicateRowid { rowid } => {\n                write!(f, \"cannot insert duplicate rowid {rowid}\")\n            }\n            BtreeError::MissingChildRoute { page_num, child } => write!(\n                f,\n                \"interior page {page_num} has no routing entry for child page {child}\"\n            ),\n            BtreeError::RowidNotFound { rowid } => {\n                write!(f, \"cannot delete rowid {rowid}: no such row\")\n            }\n            BtreeError::DuplicateKey => write!(f, \"cannot insert duplicate index key\"),\n            BtreeError::KeyNotFound => write!(f, \"cannot delete index key: no such entry\"),\n            BtreeError::InvalidRootPage { rootpage } => write!(\n                f,\n                \"a sqlite_master entry has out-of-range rootpage {rootpage}\"\n            ),\n            BtreeError::MasterEntryNotFound => {\n                write!(f, \"cannot delete sqlite_master entry: no such entry\")\n            }\n            BtreeError::Internal(msg) => write!(f, \"internal invariant violated: {msg}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -31420,9 +31430,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_master_find_rowid_by_text_column_c6c2d2df",
+    "id": "storage_row_btree_master_delete_master_row_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 119,
+    "line": 145,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -31430,29 +31440,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_master_find_rowid_by_text_column_22e3ce36",
+    "id": "storage_row_btree_master_delete_master_row_45957966",
     "file": "src/storage/row/btree/master.rs",
-    "line": 121,
-    "decision": "let Some(Value::Text(s)) = values.get(key_column)",
+    "line": 147,
+    "decision": "let (Some(Value::Text(t)), Some(Value::Text(n))) = (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_master_find_rowid_by_text_column_58429280",
+    "id": "storage_row_btree_master_delete_master_row_1bc8ded5",
     "file": "src/storage/row/btree/master.rs",
-    "line": 122,
-    "decision": "s.as_ref() == key",
-    "conditions": 1,
-    "vectors_required": 2,
+    "line": 148,
+    "decision": "t.as_ref() == kind && n.as_ref() == name",
+    "conditions": 2,
+    "vectors_required": 3,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "storage_row_btree_master_ensure_sqlite_sequence_table_a37cbb58",
     "file": "src/storage/row/btree/master.rs",
-    "line": 189,
+    "line": 172,
     "decision": "let Some(existing) = find_master_rootpage(pager, header, \"sqlite_sequence\")?",
     "conditions": 1,
     "vectors_required": 2,
@@ -31462,7 +31472,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 224,
+    "line": 207,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -31472,7 +31482,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_f65f29ce",
     "file": "src/storage/row/btree/master.rs",
-    "line": 226,
+    "line": 209,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(rp))) = (values.get(1), values.get(3))",
     "conditions": 1,
     "vectors_required": 2,
@@ -31482,7 +31492,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_eb9a2e58",
     "file": "src/storage/row/btree/master.rs",
-    "line": 227,
+    "line": 210,
     "decision": "n.as_ref() == name",
     "conditions": 1,
     "vectors_required": 2,
@@ -31492,7 +31502,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_93641e24",
     "file": "src/storage/row/btree/master.rs",
-    "line": 232,
+    "line": 213,
     "decision": "rootpage == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31502,7 +31512,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 264,
+    "line": 242,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -31512,7 +31522,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_15a637f2",
     "file": "src/storage/row/btree/master.rs",
-    "line": 266,
+    "line": 244,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) = (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -31522,7 +31532,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_22c6e73d",
     "file": "src/storage/row/btree/master.rs",
-    "line": 267,
+    "line": 245,
     "decision": "n.as_ref() == table_name",
     "conditions": 1,
     "vectors_required": 2,
@@ -31532,7 +31542,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_9298f737",
     "file": "src/storage/row/btree/master.rs",
-    "line": 275,
+    "line": 253,
     "decision": "match existing {\n        None => {\n            let next_rowid = max_rowid(pager, header, seq_root)?\n                .unwrap_or(0)\n                .saturating_add(1);\n            let values = [Value::Text(table_name.into()), Value::Integer(rowid)];\n            let payload = encode_record(&values, header.text_encoding);\n            super::insert_row(pager, header, seq_root, next_rowid, &payload)?;\n        }\n        Some((row_rowid, current_seq)) if rowid > current_seq => {\n            super::delete_row(pager, header, seq_root, row_rowid)?;\n            let values = [Value::Text(table_name.into()), Value::Integer(rowid)];\n            let payload = encode_record(&values, header.text_encoding);\n            super::insert_row(pager, header, seq_root, row_rowid, &payload)?;\n        }\n        Some(_) => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31542,7 +31552,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_6a26faef",
     "file": "src/storage/row/btree/master.rs",
-    "line": 284,
+    "line": 262,
     "decision": "rowid > current_seq",
     "conditions": 1,
     "vectors_required": 2,
@@ -31552,7 +31562,7 @@
   {
     "id": "storage_row_btree_master_ensure_sqlite_stat1_table_0357ec9d",
     "file": "src/storage/row/btree/master.rs",
-    "line": 310,
+    "line": 288,
     "decision": "let Some(existing) = find_master_rootpage(pager, header, \"sqlite_stat1\")?",
     "conditions": 1,
     "vectors_required": 2,
@@ -31562,7 +31572,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 348,
+    "line": 326,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -31572,7 +31582,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_1c9da291",
     "file": "src/storage/row/btree/master.rs",
-    "line": 350,
+    "line": 328,
     "decision": "let Some(Value::Text(tbl)) = values.first()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31582,7 +31592,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_148523ba",
     "file": "src/storage/row/btree/master.rs",
-    "line": 351,
+    "line": 329,
     "decision": "tbl.as_ref() == table_name",
     "conditions": 1,
     "vectors_required": 2,
@@ -31592,7 +31602,7 @@
   {
     "id": "storage_row_btree_master_insert_stat1_row_a968717c",
     "file": "src/storage/row/btree/master.rs",
-    "line": 376,
+    "line": 354,
     "decision": "match idx {\n        Some(name) => Value::Text(name.into()),\n        None => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43830,10 +43840,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_vm_step_8ea10ca3",
+    "id": "vm_row_vm_step_99561004",
     "file": "src/vm/row/vm.rs",
     "line": 1038,
-    "decision": "match instr.opcode {\n        Opcode::Init => Ok(if instr.p2 == 0 {\n            Step::Next\n        } else {\n            Step::Jump(to_pc(instr.p2))\n        }),\n        Opcode::Goto => Ok(Step::Jump(to_pc(instr.p2))),\n        Opcode::Once => {\n            if vm.once_fired.insert(pc) {\n                Ok(Step::Next)\n            } else {\n                Ok(Step::Jump(to_pc(instr.p2)))\n            }\n        }\n        Opcode::BeginSubrtn => Ok(Step::Next),\n        Opcode::Gosub => {\n            let return_addr = i32::try_from(pc).map_err(|_| ExecError::MalformedInstruction {\n                opcode: \"Gosub\",\n                reason: format!(\"instruction address {pc} does not fit in a PC\"),\n            })?;\n            vm.set_register(instr.p1, Value::Integer(i64::from(return_addr)))?;\n            Ok(Step::Jump(to_pc(instr.p2)))\n        }\n        Opcode::Return => match vm.register(instr.p1)? {\n            Value::Integer(i) => match i32::try_from(*i) {\n                Ok(target) => Ok(Step::Jump(to_pc(target).saturating_add(1))),\n                Err(_) => Err(ExecError::MalformedInstruction {\n                    opcode: \"Return\",\n                    reason: format!(\"return address {i} does not fit in a PC\"),\n                }),\n            },\n            other => Err(ExecError::TypeMismatch {\n                opcode: \"Return\",\n                found: value_kind(other),\n            }),\n        },\n        Opcode::Halt => {\n            let message = match &instr.p4 {\n                P4::Str(s) => Some(s.clone()),\n                _ => None,\n            };\n            Ok(Step::Halt {\n                code: instr.p1,\n                message,\n            })\n        }\n        Opcode::IsNull => {\n            let jump = matches!(vm.register(instr.p1)?, Value::Null);\n            Ok(if jump {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::NotNull => {\n            let jump = !matches!(vm.register(instr.p1)?, Value::Null);\n            Ok(if jump {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::IfNot => {\n            let v = vm.register(instr.p1)?;\n            let take_jump = match v {\n                Value::Null => instr.p3 != 0,\n                other => is_falsy(other),\n            };\n            Ok(if take_jump {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::MustBeInt => {\n            let v = vm.register(instr.p1)?.clone();\n            match try_to_integer(&v) {\n                Some(i) => {\n                    vm.set_register(instr.p1, Value::Integer(i))?;\n                    Ok(Step::Next)\n                }\n                None if instr.p2 != 0 => Ok(Step::Jump(to_pc(instr.p2))),\n                None => Err(ExecError::MustBeInt),\n            }\n        }\n        Opcode::OffsetLimit => {\n            let limit = register_as_i64(vm, instr.p1)?;\n            let offset = register_as_i64(vm, instr.p3)?;\n            let combined = if limit > 0 {\n                limit.saturating_add(offset.max(0))\n            } else {\n                -1\n            };\n            vm.set_register(instr.p2, Value::Integer(combined))?;\n            Ok(Step::Next)\n        }\n        Opcode::IfPos => {\n            let v = register_as_i64(vm, instr.p1)?;\n            if v > 0 {\n                vm.set_register(\n                    instr.p1,\n                    Value::Integer(v.saturating_sub(i64::from(instr.p3))),\n                )?;\n                Ok(Step::Jump(to_pc(instr.p2)))\n            } else {\n                Ok(Step::Next)\n            }\n        }\n        Opcode::IfNotZero => {\n            let v = register_as_i64(vm, instr.p1)?;\n            if v != 0 {\n                if v > 0 {\n                    vm.set_register(instr.p1, Value::Integer(v.saturating_sub(1)))?;\n                }\n                Ok(Step::Jump(to_pc(instr.p2)))\n            } else {\n                Ok(Step::Next)\n            }\n        }\n        Opcode::DecrJumpZero => {\n            let v = register_as_i64(vm, instr.p1)?.saturating_sub(1);\n            vm.set_register(instr.p1, Value::Integer(v))?;\n            Ok(if v == 0 {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n\n        Opcode::Eq => compare_jump(vm, instr, |o| o == Ordering::Equal),\n        Opcode::Ge => compare_jump(vm, instr, |o| o != Ordering::Less),\n        Opcode::Gt => compare_jump(vm, instr, |o| o == Ordering::Greater),\n        Opcode::Le => compare_jump(vm, instr, |o| o != Ordering::Greater),\n        Opcode::Lt => compare_jump(vm, instr, |o| o == Ordering::Less),\n        Opcode::RealAffinity => real_affinity(vm, instr),\n        Opcode::Cast => cast(vm, instr),\n\n        Opcode::Add => binary_op(vm, instr, coerce::checked_add),\n        Opcode::Subtract => binary_op_reversed(vm, instr, coerce::checked_sub),\n        Opcode::Multiply => binary_op(vm, instr, coerce::checked_mul),\n        Opcode::Divide => binary_op_reversed(vm, instr, coerce::checked_div),\n        Opcode::Remainder => binary_op_reversed(vm, instr, coerce::checked_rem),\n        Opcode::Not => arith_not(vm, instr),\n        Opcode::BitAnd => binary_op(vm, instr, coerce::bit_and),\n        Opcode::BitOr => binary_op(vm, instr, coerce::bit_or),\n        Opcode::ShiftLeft => binary_op_reversed(vm, instr, coerce::shift_left),\n        Opcode::ShiftRight => binary_op_reversed(vm, instr, coerce::shift_right),\n        Opcode::BitNot => bit_not(vm, instr),\n        Opcode::Concat => binary_op_reversed(vm, instr, coerce::concat),\n\n        Opcode::Integer => {\n            vm.set_register(instr.p2, Value::Integer(i64::from(instr.p1)))?;\n            Ok(Step::Next)\n        }\n        Opcode::Int64 => {\n            let i = match &instr.p4 {\n                P4::Int(i) => *i,\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"Int64\",\n                        reason: format!(\"expected an integer P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.set_register(instr.p2, Value::Integer(i))?;\n            Ok(Step::Next)\n        }\n        Opcode::Real => {\n            let r = match &instr.p4 {\n                P4::Real(r) => *r,\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"Real\",\n                        reason: format!(\"expected a real P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.set_register(instr.p2, Value::Real(r))?;\n            Ok(Step::Next)\n        }\n        Opcode::Blob => {\n            // One allocation: straight from the P4 slice into the `Rc` (#259).\n            let bytes: &[u8] = match &instr.p4 {\n                P4::Blob(bytes) => bytes.as_slice(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"Blob\",\n                        reason: format!(\"expected a blob P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.set_register(instr.p2, Value::Blob(Rc::from(bytes)))?;\n            Ok(Step::Next)\n        }\n        Opcode::Null => {\n            let last = instr.p3.max(instr.p2);\n            for reg in instr.p2..=last {\n                vm.set_register(reg, Value::Null)?;\n            }\n            Ok(Step::Next)\n        }\n        Opcode::String8 => {\n            let s: &str = match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"String8\",\n                        reason: format!(\"expected a string P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.set_register(instr.p2, Value::Text(Rc::from(s)))?;\n            Ok(Step::Next)\n        }\n        Opcode::Variable => {\n            // An unbound host parameter reads as NULL (SQLite semantics).\n            let value = vm.param(instr.p1)?.cloned().unwrap_or(Value::Null);\n            vm.set_register(instr.p2, value)?;\n            Ok(Step::Next)\n        }\n        Opcode::Copy => {\n            // `p3` extra registers beyond the first (SQLite `OP_Copy`, #260).\n            let extra = usize::try_from(instr.p3).map_err(|_| ExecError::MalformedInstruction {\n                opcode: \"Copy\",\n                reason: format!(\"register count {} is negative\", instr.p3),\n            })?;\n            for i in 0..=extra {\n                let offset = i32::try_from(i).unwrap_or(i32::MAX);\n                let (src, dst) = match (instr.p1.checked_add(offset), instr.p2.checked_add(offset))\n                {\n                    (Some(src), Some(dst)) => (src, dst),\n                    _ => {\n                        return Err(ExecError::RegisterOutOfRange {\n                            opcode: \"Copy\",\n                            index: instr.p1,\n                        })\n                    }\n                };\n                let value = vm.register(src)?.clone();\n                vm.set_register(dst, value)?;\n            }\n            Ok(Step::Next)\n        }\n        Opcode::MakeRecord => {\n            let count = Vm::bounded_count(\"MakeRecord\", instr.p2)?;\n            let affinities: &[u8] = match &instr.p4 {\n                P4::Affinity(bytes) => bytes,\n                _ => &[],\n            };\n            let mut values = Vec::with_capacity(count);\n            for i in 0..count {\n                let reg = i32::try_from(i)\n                    .ok()\n                    .and_then(|i| instr.p1.checked_add(i))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"MakeRecord\",\n                        index: instr.p1,\n                    })?;\n                let mut value = vm.register(reg)?.clone();\n                if let Some(byte) = affinities.get(i) {\n                    apply_affinity(&mut value, Affinity::from_p4_byte(*byte));\n                }\n                values.push(value);\n            }\n            let payload = encode_record(&values, TextEncoding::Utf8);\n            vm.set_register(instr.p3, Value::Blob(payload.into()))?;\n            Ok(Step::Next)\n        }\n        Opcode::ResultRow => {\n            let count = Vm::bounded_count(\"ResultRow\", instr.p2)?;\n            let mut row = Vec::with_capacity(count);\n            for i in 0..count {\n                let reg = i32::try_from(i)\n                    .ok()\n                    .and_then(|i| instr.p1.checked_add(i))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"ResultRow\",\n                        index: instr.p1,\n                    })?;\n                row.push(vm.take_register(reg)?);\n            }\n            vm.emit_row(row);\n            Ok(Step::Next)\n        }\n\n        Opcode::Rewind => {\n            vm.clear_null_row(instr.p1)?;\n            let has_row = vm.cursor_mut(instr.p1)?.rewind();\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::Next => {\n            vm.clear_null_row(instr.p1)?;\n            let has_row = vm.cursor_mut(instr.p1)?.next();\n            Ok(if has_row {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::Last => {\n            vm.clear_null_row(instr.p1)?;\n            let has_row = vm.cursor_mut(instr.p1)?.last();\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::Column => {\n            // A negative column index used to read as NULL through the\n            // `as usize` wrap; it is a malformed program (#260).\n            let col = usize::try_from(instr.p2).map_err(|_| ExecError::MalformedInstruction {\n                opcode: \"Column\",\n                reason: format!(\"column index {} is negative\", instr.p2),\n            })?;\n            let value = if vm.is_null_row(instr.p1)? {\n                Value::Null\n            } else if let Some(reg) = vm.pseudo_reg(instr.p1) {\n                vm.pseudo_column(instr.p1, reg, col, \"Column\")?\n            } else {\n                vm.cursor(instr.p1)?\n                    .column(col)\n                    .ok_or(ExecError::NoCurrentRow {\n                        opcode: \"Column\",\n                        slot: instr.p1,\n                    })?\n            };\n            vm.set_register(instr.p3, value)?;\n            Ok(Step::Next)\n        }\n        Opcode::Rowid => {\n            // sqlite-rs: a NullRow'd cursor reads NULL for its rowid too.\n            let value = if vm.is_null_row(instr.p1)? {\n                Value::Null\n            } else {\n                Value::Integer(\n                    vm.cursor(instr.p1)?\n                        .rowid()\n                        .ok_or(ExecError::NoCurrentRow {\n                            opcode: \"Rowid\",\n                            slot: instr.p1,\n                        })?,\n                )\n            };\n            vm.set_register(instr.p2, value)?;\n            Ok(Step::Next)\n        }\n        Opcode::SeekRowid => {\n            vm.clear_null_row(instr.p1)?;\n            let rowid = register_as_i64(vm, instr.p3)?;\n            let found = vm.cursor_mut(instr.p1)?.seek(rowid);\n            Ok(if found {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::NullRow => {\n            vm.set_null_row(instr.p1)?;\n            Ok(Step::Next)\n        }\n        Opcode::Sequence => {\n            let value = vm.next_sequence(instr.p1)?;\n            vm.set_register(instr.p2, Value::Integer(value))?;\n            Ok(Step::Next)\n        }\n        Opcode::Count => {\n            // sqlite-rs: p1 is the *root page* of the table to count (the\n            // `SELECT count(*)` fast path opens its own cursor); with no\n            // cursor factory (in-memory programs) p1 names an open slot.\n            let count = if let Some(factory) = vm.cursor_factory.as_deref_mut() {\n                #[allow(clippy::cast_sign_loss)]\n                let root = instr.p1 as u32;\n                let mut cursor = factory\n                    .open_read(root)\n                    .map_err(ExecError::CursorFactoryFailed)?;\n                count_rows(cursor.as_mut())\n            } else {\n                count_rows(vm.cursor_mut(instr.p1)?.as_mut())\n            };\n            vm.set_register(instr.p2, Value::Integer(count))?;\n            Ok(Step::Next)\n        }\n        Opcode::AutoIndexInsert => {\n            // sqlite-rs: p2 = first key register (count/collations from P4),\n            // p3 = rowid register.\n            let (key, collations) = key_from_registers(vm, \"AutoIndexInsert\", instr.p2, &instr.p4)?;\n            let rowid = register_as_i64(vm, instr.p3)?;\n            if vm.cursor(instr.p1).is_err() {\n                vm.open_cursor(instr.p1, Box::new(super::cursor::AutoIndexCursor::new()))?;\n            }\n            let ok = vm\n                .cursor_mut(instr.p1)?\n                .auto_index_insert(key, &collations, rowid);\n            if !ok {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"AutoIndexInsert\",\n                    reason: \"cursor slot is not an automatic-index cursor\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::AutoIndexSeek => {\n            let (key, collations) = key_from_registers(vm, \"AutoIndexSeek\", instr.p3, &instr.p4)?;\n            let found = vm.cursor_mut(instr.p1)?.auto_index_seek(&key, &collations);\n            Ok(if found {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::AutoIndexRowid => {\n            let rowid = vm\n                .cursor(instr.p1)?\n                .rowid()\n                .ok_or(ExecError::NoCurrentRow {\n                    opcode: \"AutoIndexRowid\",\n                    slot: instr.p1,\n                })?;\n            vm.set_register(instr.p2, Value::Integer(rowid))?;\n            Ok(Step::Next)\n        }\n        Opcode::AutoIndexNext => {\n            let has_next = vm.cursor_mut(instr.p1)?.auto_index_next();\n            Ok(if has_next {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::OpenRead | Opcode::OpenWrite => {\n            if instr.p3 != 0 {\n                return Err(ExecError::AttachedDatabasesUnsupported);\n            }\n            let Some(factory) = vm.cursor_factory.as_deref_mut() else {\n                // No factory installed -- fall back to the pre-wired\n                // path: assert the caller already wired this slot via\n                // `open_cursor` before running the program.\n                vm.cursor(instr.p1)?;\n                return Ok(Step::Next);\n            };\n            #[allow(clippy::cast_sign_loss)]\n            let root = instr.p2 as u32;\n            // sqlite-rs flags an index cursor with `p5 != 0` (no key\n            // descriptor); a `P4::SortKey` carries one when the planner has it.\n            let cursor = match (&instr.p4, instr.p5, instr.opcode) {\n                (P4::SortKey(key), _, _) => factory.open_index(root, key),\n                (_, p5, _) if p5 != 0 => factory.open_index(root, &[]),\n                (_, _, Opcode::OpenWrite) => factory.open_write(root),\n                _ => factory.open_read(root),\n            }\n            .map_err(ExecError::CursorFactoryFailed)?;\n            vm.open_cursor(instr.p1, cursor)?;\n            vm.set_cursor_root(instr.p1, root)?;\n            Ok(Step::Next)\n        }\n        Opcode::OpenDup => {\n            // sqlite-rs: a second cursor sharing an ephemeral table's rows.\n            if let Some(dup) = vm.cursor(instr.p2)?.dup() {\n                vm.open_cursor(instr.p1, dup)?;\n                return Ok(Step::Next);\n            }\n            let root = vm.cursor_root(instr.p2)?;\n            let factory =\n                vm.cursor_factory\n                    .as_deref_mut()\n                    .ok_or(ExecError::CursorFactoryFailed(CursorFactoryError(\n                        \"OpenDup requires a cursor factory\".to_string(),\n                    )))?;\n            let cursor = factory\n                .open_read(root)\n                .map_err(ExecError::CursorFactoryFailed)?;\n            vm.open_cursor(instr.p1, cursor)?;\n            vm.set_cursor_root(instr.p1, root)?;\n            Ok(Step::Next)\n        }\n        Opcode::OpenPseudo => {\n            // sqlite-rs: the cursor reads register p2 *lazily* — codegen\n            // opens it before the register holds a row (`SorterData` /\n            // `MakeRecord` fill it later, and rewrite it between rows).\n            // Placeholder only: the row is read live from register `p2`\n            // (`pseudo_column`), never from this cursor's own values.\n            vm.open_cursor(instr.p1, Box::new(PseudoCursor::default()))?;\n            vm.set_pseudo_reg(instr.p1, Some(instr.p2))?;\n            Ok(Step::Next)\n        }\n        Opcode::OpenEphemeral => {\n            // sqlite-rs `cursor::open_ephemeral`: p5 = 0 -> ephemeral index\n            // (DISTINCT / IN-subquery), 1 -> ephemeral table (materialized\n            // rows by rowid), 2 -> automatic join index.\n            let cursor: Box<dyn Cursor> = match instr.p5 {\n                0 => Box::new(super::cursor::EphemeralIndexCursor::new()),\n                2 => Box::new(super::cursor::AutoIndexCursor::new()),\n                _ => Box::new(EphemeralTableCursor::new()),\n            };\n            vm.open_cursor(instr.p1, cursor)?;\n            Ok(Step::Next)\n        }\n        Opcode::SorterOpen => {\n            let keys = match &instr.p4 {\n                P4::SortKey(keys) => keys.clone(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"SorterOpen\",\n                        reason: format!(\"expected a SortKey P4, got {other:?}\"),\n                    })\n                }\n            };\n            let bound = if instr.p5 == 0 {\n                None\n            } else {\n                // `LIMIT -1` (any negative) means \"no limit\" in SQLite, and a\n                // non-integer limit register is unbounded too.\n                match vm.register(instr.p2)? {\n                    Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),\n                    _ => None,\n                }\n            };\n            vm.open_cursor(instr.p1, Box::new(SorterCursor::new(keys, bound)))?;\n            Ok(Step::Next)\n        }\n        Opcode::SorterInsert => {\n            let blob = match vm.register(instr.p2)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"SorterInsert\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let inserted = vm.cursor_mut(instr.p1)?.sorter_insert(blob);\n            if !inserted {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"SorterInsert\",\n                    reason: \"cursor slot is not a sorter, or the record blob does not decode\"\n                        .to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::SorterSort | Opcode::Sort | Opcode::HashAggRewind => {\n            let has_row = vm.cursor_mut(instr.p1)?.rewind();\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::SorterNext | Opcode::HashAggNext => {\n            let has_row = vm.cursor_mut(instr.p1)?.next();\n            Ok(if has_row {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::SorterData => {\n            let blob =\n                vm.cursor(instr.p1)?\n                    .current_blob()\n                    .ok_or(ExecError::MalformedInstruction {\n                        opcode: \"SorterData\",\n                        reason: \"sorter has not been sorted yet, or has no current row\".to_string(),\n                    })?;\n            vm.set_register(instr.p2, blob)?;\n            Ok(Step::Next)\n        }\n        Opcode::HashAggOpen => {\n            let keys = match &instr.p4 {\n                P4::GroupKey(keys) => keys.clone(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"HashAggOpen\",\n                        reason: format!(\"expected a GroupKey P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.open_cursor(instr.p1, Box::new(HashAggCursor::new(keys)))?;\n            Ok(Step::Next)\n        }\n        Opcode::HashAggFind => {\n            let blob = match vm.register(instr.p2)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"HashAggFind\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let found = vm.cursor_mut(instr.p1)?.hash_agg_find(blob);\n            if !found {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"HashAggFind\",\n                    reason:\n                        \"cursor slot is not a hash-aggregation cursor, or the record blob does not decode\"\n                            .to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::HashAggStep => {\n            let (name, arity, collation) = match &instr.p4 {\n                P4::AggFunc {\n                    name,\n                    arity,\n                    collation,\n                } => (name.as_str(), *arity, *collation),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"HashAggStep\",\n                        reason: format!(\"expected an AggFunc P4, got {other:?}\"),\n                    })\n                }\n            };\n            let start = Vm::index(\"HashAggStep\", instr.p2)?;\n            let end = start\n                .checked_add(arity)\n                .filter(|&end| end <= MAX_REGISTERS)\n                .ok_or(ExecError::RegisterOutOfRange {\n                    opcode: \"HashAggStep\",\n                    index: instr.p2,\n                })?;\n            if vm.registers.len() < end {\n                vm.registers.resize(end, Value::Null);\n            }\n            #[allow(clippy::cast_sign_loss)]\n            let slot = instr.p1.max(0) as usize;\n            // Borrow the argument registers in place (no per-row `Vec` +\n            // `Value` clones, #486): `registers` and `cursors` are\n            // disjoint fields, so both borrows coexist.\n            let cursor_idx = Vm::index(\"cursor slot write\", instr.p3)?;\n            let cursor = vm\n                .cursors\n                .get_mut(cursor_idx)\n                .and_then(Option::as_mut)\n                .ok_or(ExecError::CursorNotOpen { slot: instr.p3 })?;\n            let args = vm.registers.get(start..end).unwrap_or(&[]);\n            let handled = cursor\n                .hash_agg_step(slot, name, args, collation)\n                .map_err(|e| ExecError::MalformedInstruction {\n                    opcode: \"HashAggStep\",\n                    reason: e.to_string(),\n                })?;\n            if !handled {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"HashAggStep\",\n                    reason: \"cursor slot has no current group\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::HashAggData => {\n            let blob =\n                vm.cursor(instr.p1)?\n                    .current_blob()\n                    .ok_or(ExecError::MalformedInstruction {\n                    opcode: \"HashAggData\",\n                    reason:\n                        \"hash-aggregation cursor has not been rewound yet, or has no current group\"\n                            .to_string(),\n                })?;\n            let accumulators: Vec<Option<AggState>> = vm\n                .cursor(instr.p1)?\n                .hash_agg_group_accumulators()\n                .map(<[_]>::to_vec)\n                .ok_or_else(|| ExecError::MalformedInstruction {\n                    opcode: \"HashAggData\",\n                    reason: \"cursor slot is not a hash-aggregation cursor\".to_string(),\n                })?;\n            for (slot, state) in accumulators.into_iter().enumerate() {\n                // Saturation is unreachable (slots are bounded by\n                // MAX_REGISTERS) and would be caught by set_agg_context's\n                // own range check anyway.\n                let slot = i32::try_from(slot).unwrap_or(i32::MAX);\n                match state {\n                    Some(state) => vm.set_agg_context(slot, state)?,\n                    None => vm.clear_agg_context(slot)?,\n                }\n            }\n            vm.set_register(instr.p2, blob)?;\n            Ok(Step::Next)\n        }\n        Opcode::Insert => {\n            let rowid = match vm.register(instr.p2)? {\n                Value::Integer(i) => *i,\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"Insert\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let payload = match vm.register(instr.p3)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"Insert\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let encoding = vm.text_encoding;\n            let cursor = vm.cursor_mut(instr.p1)?;\n            // A storage-backed cursor takes the record bytes as they are\n            // (byte-exact with MakeRecord); in-memory ones decode them.\n            let inserted = match cursor.insert_payload(rowid, &payload) {\n                Some(ok) => ok,\n                None => {\n                    let values = decode_record(&payload, encoding).map_err(|e| {\n                        ExecError::MalformedInstruction {\n                            opcode: \"Insert\",\n                            reason: e.to_string(),\n                        }\n                    })?;\n                    cursor.insert(rowid, values)\n                }\n            };\n            if !inserted {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"Insert\",\n                    reason: \"cursor slot does not support insertion\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::Update => {\n            let rowid = match vm.register(instr.p2)? {\n                Value::Integer(i) => *i,\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"Update\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let payload = match vm.register(instr.p3)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"Update\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let encoding = vm.text_encoding;\n            let cursor = vm.cursor_mut(instr.p1)?;\n            let updated = match cursor.update_payload(rowid, &payload) {\n                Some(ok) => ok,\n                None => {\n                    // Cursor kinds without a combined rewrite (in-memory\n                    // fixtures, ephemeral tables) fall back to the\n                    // Delete+Insert pair a storage-backed cursor avoids.\n                    if !cursor.delete() {\n                        return Err(ExecError::MalformedInstruction {\n                            opcode: \"Update\",\n                            reason: \"cursor slot does not support deletion\".to_string(),\n                        });\n                    }\n                    match cursor.insert_payload(rowid, &payload) {\n                        Some(ok) => ok,\n                        None => {\n                            let values = decode_record(&payload, encoding).map_err(|e| {\n                                ExecError::MalformedInstruction {\n                                    opcode: \"Update\",\n                                    reason: e.to_string(),\n                                }\n                            })?;\n                            cursor.insert(rowid, values)\n                        }\n                    }\n                }\n            };\n            if !updated {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"Update\",\n                    reason: \"cursor slot does not support update\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::Function => {\n            let descriptor = match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"Function\",\n                        reason: format!(\"expected a \\\"name(arity)\\\" string P4, got {other:?}\"),\n                    })\n                }\n            };\n            let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {\n                ExecError::MalformedInstruction {\n                    opcode: \"Function\",\n                    reason: format!(\"malformed function descriptor {descriptor:?}\"),\n                }\n            })?;\n            let mut args = Vec::with_capacity(arity);\n            for i in 0..arity {\n                let reg = instr\n                    .p2\n                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"Function\",\n                        index: instr.p2,\n                    })?;\n                args.push(vm.register(reg)?.clone());\n            }\n            let result =\n                functions::call(name, &args).map_err(|e| ExecError::MalformedInstruction {\n                    opcode: \"Function\",\n                    reason: e.to_string(),\n                })?;\n            vm.set_register(instr.p3, result)?;\n            Ok(Step::Next)\n        }\n\n        Opcode::AggStep => {\n            let (name, arity, collation) = match &instr.p4 {\n                P4::AggFunc {\n                    name,\n                    arity,\n                    collation,\n                } => (name.as_str(), *arity, *collation),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"AggStep\",\n                        reason: format!(\"expected an AggFunc P4, got {other:?}\"),\n                    })\n                }\n            };\n            let mut args = Vec::with_capacity(arity);\n            for i in 0..arity {\n                let reg = instr\n                    .p2\n                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"AggStep\",\n                        index: instr.p2,\n                    })?;\n                args.push(vm.register(reg)?.clone());\n            }\n            let current = if instr.p5 == 0 {\n                vm.take_agg_context(instr.p1)?\n            } else {\n                None\n            };\n            let updated = aggregate::step(name, current, &args, collation).map_err(|e| {\n                ExecError::MalformedInstruction {\n                    opcode: \"AggStep\",\n                    reason: e.to_string(),\n                }\n            })?;\n            vm.set_agg_context(instr.p1, updated)?;\n            Ok(Step::Next)\n        }\n        Opcode::AggFinal => {\n            let descriptor = match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"AggFinal\",\n                        reason: format!(\"expected a \\\"name(arity)\\\" string P4, got {other:?}\"),\n                    })\n                }\n            };\n            let (name, _arity) = parse_function_descriptor(descriptor).ok_or_else(|| {\n                ExecError::MalformedInstruction {\n                    opcode: \"AggFinal\",\n                    reason: format!(\"malformed aggregate descriptor {descriptor:?}\"),\n                }\n            })?;\n            let state = vm.agg_context(instr.p1)?;\n            let result =\n                aggregate::finalize(name, state).map_err(|e| ExecError::MalformedInstruction {\n                    opcode: \"AggFinal\",\n                    reason: e.to_string(),\n                })?;\n            vm.set_register(instr.p3, result)?;\n            vm.clear_agg_context(instr.p1)?;\n            Ok(Step::Next)\n        }\n        Opcode::AggReset => {\n            vm.clear_agg_context(instr.p1)?;\n            Ok(Step::Next)\n        }\n\n        Opcode::Transaction => {\n            if !vm.autocommit {\n                return Err(ExecError::TransactionAlreadyActive);\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.begin(instr.p1).map_err(ExecError::TransactionFailed)?;\n            }\n            vm.autocommit = false;\n            Ok(Step::Next)\n        }\n        Opcode::AutoCommit => {\n            if vm.autocommit {\n                return Err(if instr.p2 == 0 {\n                    ExecError::NoActiveTransactionToRollback\n                } else {\n                    ExecError::NoActiveTransactionToCommit\n                });\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                if instr.p2 == 0 {\n                    hook.rollback().map_err(ExecError::TransactionFailed)?;\n                } else {\n                    hook.commit().map_err(ExecError::TransactionFailed)?;\n                }\n            }\n            vm.autocommit = true;\n            Ok(Step::Next)\n        }\n        Opcode::SetJournalMode => {\n            if !vm.autocommit {\n                return Err(ExecError::JournalModeChangeDuringTransaction);\n            }\n            // The attached pager (via the transaction hook) switches its\n            // on-disk journal mode; with no hook this is the no-op\n            // sqlite-rs itself falls back to for a read-only connection.\n            // sqlite3 answers the assignment with the resulting mode, one\n            // TEXT row (#561) -- only when a pager applied it.\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.set_journal_mode(instr.p1)\n                    .map_err(ExecError::TransactionFailed)?;\n                let mode = if instr.p1 == JOURNAL_MODE_WAL {\n                    \"wal\"\n                } else {\n                    \"delete\"\n                };\n                vm.emit_row(vec![Value::Text(mode.into())]);\n            }\n            Ok(Step::Next)\n        }\n        Opcode::Synchronous => {\n            // Query form reports the pager's level (FULL with no pager,\n            // sqlite-rs's no-writer fallback); otherwise sets it.\n            if instr.p1 == SYNCHRONOUS_QUERY {\n                let level = vm\n                    .transaction_hook\n                    .as_deref()\n                    .and_then(|h| h.synchronous())\n                    .unwrap_or(SYNCHRONOUS_FULL);\n                vm.emit_row(vec![Value::Integer(i64::from(level))]);\n                return Ok(Step::Next);\n            }\n            if !vm.autocommit {\n                return Err(ExecError::SynchronousChangeDuringTransaction);\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.set_synchronous(instr.p1)\n                    .map_err(ExecError::TransactionFailed)?;\n            }\n            Ok(Step::Next)\n        }\n        Opcode::IntegrityCheck => {\n            // `p1 != 0` is quick_check. One TEXT row per problem line\n            // (sqlite-rs `pragma::integrity_check`); without a hook that\n            // can read the file this stays Unimplemented.\n            let quick = instr.p1 != 0;\n            let Some(result) = vm\n                .transaction_hook\n                .as_mut()\n                .and_then(|h| h.integrity_check(quick))\n            else {\n                return Err(ExecError::Unimplemented {\n                    opcode: Opcode::IntegrityCheck,\n                });\n            };\n            for line in result.map_err(ExecError::TransactionFailed)? {\n                vm.emit_row(vec![Value::Text(line.into())]);\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::Delete => {\n            let deleted = vm.cursor_mut(instr.p1)?.delete();\n            if !deleted {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"Delete\",\n                    reason: \"cursor slot does not support deletion\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::NewRowid => {\n            let next = vm.cursor(instr.p1)?.next_rowid();\n            // sqlite-rs: p5 != 0 with P4::Str(table) is AUTOINCREMENT —\n            // the schema hook consults/updates sqlite_sequence so a rowid\n            // is never reused after a delete.\n            let rowid = if instr.p5 != 0 {\n                let table = match &instr.p4 {\n                    P4::Str(name) => name.clone(),\n                    other => {\n                        return Err(ExecError::MalformedInstruction {\n                            opcode: \"NewRowid\",\n                            reason: format!(\n                                \"AUTOINCREMENT requested (P5 nonzero) but P4 is not a table-name string, got {other:?}\"\n                            ),\n                        })\n                    }\n                };\n                let max_from_table = next.saturating_sub(1);\n                vm.schema_storage\n                    .as_deref_mut()\n                    .ok_or(ExecError::SchemaStorageMissing { opcode: \"NewRowid\" })?\n                    .autoincrement_rowid(&table, max_from_table)\n                    .map_err(ExecError::SchemaStorageFailed)?\n            } else {\n                next\n            };\n            vm.set_register(instr.p2, Value::Integer(rowid))?;\n            Ok(Step::Next)\n        }\n        Opcode::IdxInsert | Opcode::IdxDelete => {\n            let opcode = if instr.opcode == Opcode::IdxInsert {\n                \"IdxInsert\"\n            } else {\n                \"IdxDelete\"\n            };\n            let (key, collations) = key_from_registers(vm, opcode, instr.p2, &instr.p4)?;\n            let ok = if instr.opcode == Opcode::IdxInsert {\n                // sqlite-rs: on an ephemeral index the stored row is the key\n                // columns plus `p5` trailing payload columns.\n                let total = key.len().checked_add(usize::from(instr.p5)).ok_or(\n                    ExecError::RegisterRangeTooLarge {\n                        opcode,\n                        count: i32::from(instr.p5),\n                    },\n                )?;\n                let stored = register_range(vm, opcode, instr.p2, total)?;\n                let cursor = vm.cursor_mut(instr.p1)?;\n                match cursor.ephemeral_idx_insert(&key, &collations, stored) {\n                    Some(ok) => ok,\n                    None => cursor.idx_insert(key),\n                }\n            } else {\n                vm.cursor_mut(instr.p1)?.idx_delete(&key)\n            };\n            if !ok {\n                return Err(ExecError::MalformedInstruction {\n                    opcode,\n                    reason:\n                        \"cursor slot does not support this index operation, or no matching entry\"\n                            .to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::CreateTable => {\n            let P4::CreateTable { name, sql } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateTable\",\n                    reason: format!(\"expected a CreateTable P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, sql) = (name.clone(), sql.clone());\n            let storage = vm.schema_storage(\"CreateTable\")?;\n            let root = storage\n                .create_table_root()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .insert_master_row(\"table\", &name, &name, root, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::CreateView => {\n            // sqlite-rs `cursor::create_view`: a view has no b-tree — one\n            // sqlite_master row with rootpage 0, then the cookie bump.\n            let P4::CreateView { name, sql } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateView\",\n                    reason: format!(\"expected a CreateView P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, sql) = (name.clone(), sql.clone());\n            let storage = vm.schema_storage(\"CreateView\")?;\n            storage\n                .insert_master_row(\"view\", &name, &name, 0, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropView => {\n            // A view has no b-tree: its sqlite_master row, then the\n            // cookie bump (#552).\n            let P4::DropView { name } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropView\",\n                    reason: format!(\"expected a DropView P4, got {:?}\", instr.p4),\n                });\n            };\n            let name = name.clone();\n            let storage = vm.schema_storage(\"DropView\")?;\n            storage\n                .delete_master_row(&name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::CreateIndex => {\n            let P4::CreateIndex {\n                name,\n                table_name,\n                table_root_page,\n                sql,\n                column_indices,\n                ..\n            } = &instr.p4\n            else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateIndex\",\n                    reason: format!(\"expected a CreateIndex P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, table_name, table_root_page, sql, column_indices) = (\n                name.clone(),\n                table_name.clone(),\n                *table_root_page,\n                sql.clone(),\n                column_indices.clone(),\n            );\n            let storage = vm.schema_storage(\"CreateIndex\")?;\n            let root = storage\n                .create_index_root()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .populate_index(root, table_root_page, &column_indices)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .insert_master_row(\"index\", &name, &table_name, root, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropTable => {\n            let P4::DropTable {\n                name,\n                root_page,\n                indexes,\n            } = &instr.p4\n            else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropTable\",\n                    reason: format!(\"expected a DropTable P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, root_page, indexes) = (name.clone(), *root_page, indexes.clone());\n            let storage = vm.schema_storage(\"DropTable\")?;\n            // sqlite-rs order (page-image parity with the oracle): each\n            // index's pages then its row, then the table's pages, then\n            // its row.\n            for (index_name, index_root) in &indexes {\n                storage\n                    .free_root(*index_root)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n                storage\n                    .delete_master_row(index_name)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n            }\n            storage\n                .free_root(root_page)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .delete_master_row(&name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropIndex => {\n            let P4::DropIndex { name, root_page } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropIndex\",\n                    reason: format!(\"expected a DropIndex P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, root_page) = (name.clone(), *root_page);\n            let storage = vm.schema_storage(\"DropIndex\")?;\n            storage\n                .free_root(root_page)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .delete_master_row(&name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::Analyze => {\n            let P4::Analyze { targets } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"Analyze\",\n                    reason: format!(\"expected an Analyze P4, got {:?}\", instr.p4),\n                });\n            };\n            let targets = targets.clone();\n            let storage = vm.schema_storage(\"Analyze\")?;\n            for target in &targets {\n                storage\n                    .write_stat1(target)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::IdxRewind => {\n            let has_row = vm.cursor_mut(instr.p1)?.rewind();\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::IdxLast => {\n            let has_row = vm.cursor_mut(instr.p1)?.last();\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::IdxNext => {\n            let has_row = vm.cursor_mut(instr.p1)?.next();\n            Ok(if has_row {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::IdxPrev => {\n            let has_row = vm.cursor_mut(instr.p1)?.prev();\n            Ok(if has_row {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::IdxRowid => {\n            let rowid =\n                vm.cursor(instr.p1)?\n                    .idx_rowid()\n                    .ok_or(ExecError::MalformedInstruction {\n                        opcode: \"IdxRowid\",\n                        reason: \"cursor slot is not an index cursor, or has no current entry\"\n                            .to_string(),\n                    })?;\n            vm.set_register(instr.p2, Value::Integer(rowid))?;\n            Ok(Step::Next)\n        }\n        Opcode::SeekIndexEq => {\n            let (key, collations) = key_from_registers(vm, \"SeekIndexEq\", instr.p3, &instr.p4)?;\n            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key, &collations);\n            Ok(if found {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::SeekIndexGE => {\n            let (key, collations) = key_from_registers(vm, \"SeekIndexGE\", instr.p3, &instr.p4)?;\n            let found = vm.cursor_mut(instr.p1)?.seek_index_ge(&key, &collations);\n            Ok(if found {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::IdxCompareGT => {\n            let (key, collations) = key_from_registers(vm, \"IdxCompareGT\", instr.p3, &instr.p4)?;\n            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(\n                ExecError::MalformedInstruction {\n                    opcode: \"IdxCompareGT\",\n                    reason: \"cursor slot is not an index cursor, or has no current entry\"\n                        .to_string(),\n                },\n            )?;\n            Ok(if cmp == Ordering::Greater {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::IdxCompareGE => {\n            let (key, collations) = key_from_registers(vm, \"IdxCompareGE\", instr.p3, &instr.p4)?;\n            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(\n                ExecError::MalformedInstruction {\n                    opcode: \"IdxCompareGE\",\n                    reason: \"cursor slot is not an index cursor, or has no current entry\"\n                        .to_string(),\n                },\n            )?;\n            Ok(if cmp == Ordering::Less {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::IdxLE => {\n            let (key, collations) = key_from_registers(vm, \"IdxLE\", instr.p3, &instr.p4)?;\n            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(\n                ExecError::MalformedInstruction {\n                    opcode: \"IdxLE\",\n                    reason: \"cursor slot is not an index cursor, or has no current entry\"\n                        .to_string(),\n                },\n            )?;\n            Ok(if cmp != Ordering::Greater {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::Found => {\n            let (key, collations) = key_from_registers(vm, \"Found\", instr.p3, &instr.p4)?;\n            let cursor = vm.cursor_mut(instr.p1)?;\n            // Ephemeral index (DISTINCT / IN-subquery): membership of the\n            // normalized key; real index: a seek.\n            let found = match cursor.found(&key, &collations) {\n                Some(present) => present,\n                None => cursor.seek_index_eq(&key, &collations),\n            };\n            Ok(if found {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::Filter => {\n            let (key, collations) = key_from_registers(vm, \"Filter\", instr.p3, &instr.p4)?;\n            let maybe_present = vm.cursor(instr.p1)?.filter_maybe_present(&key, &collations);\n            Ok(if maybe_present {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::FilterAdd => {\n            let (key, collations) = key_from_registers(vm, \"FilterAdd\", instr.p3, &instr.p4)?;\n            vm.cursor_mut(instr.p1)?.filter_add(&key, &collations);\n            Ok(Step::Next)\n        }\n        Opcode::NoConflict => {\n            let (key, collations) = key_from_registers(vm, \"NoConflict\", instr.p3, &instr.p4)?;\n            let count = i32::try_from(key.len()).unwrap_or(i32::MAX);\n            let cursor = vm.cursor_mut(instr.p1)?;\n            // Ephemeral index: membership of the normalized key; real\n            // index: a seek. sqlite-rs (`cursor::no_conflict`): on a\n            // conflict the conflicting entry's rowid lands in the register\n            // right after the probe (`p3 + count`) so OR REPLACE / OR\n            // IGNORE can SeekRowid straight to the displaced row.\n            let found = match cursor.found(&key, &collations) {\n                Some(present) => present,\n                None => cursor.seek_index_eq(&key, &collations),\n            };\n            if found {\n                let rowid = cursor.idx_rowid();\n                if let Some(rowid) = rowid {\n                    let dest =\n                        instr\n                            .p3\n                            .checked_add(count)\n                            .ok_or(ExecError::RegisterRangeTooLarge {\n                                opcode: \"NoConflict\",\n                                count,\n                            })?;\n                    vm.set_register(dest, Value::Integer(rowid))?;\n                }\n                Ok(Step::Next)\n            } else {\n                Ok(Step::Jump(to_pc(instr.p2)))\n            }\n        }\n    }",
+    "decision": "match instr.opcode {\n        Opcode::Init => Ok(if instr.p2 == 0 {\n            Step::Next\n        } else {\n            Step::Jump(to_pc(instr.p2))\n        }),\n        Opcode::Goto => Ok(Step::Jump(to_pc(instr.p2))),\n        Opcode::Once => {\n            if vm.once_fired.insert(pc) {\n                Ok(Step::Next)\n            } else {\n                Ok(Step::Jump(to_pc(instr.p2)))\n            }\n        }\n        Opcode::BeginSubrtn => Ok(Step::Next),\n        Opcode::Gosub => {\n            let return_addr = i32::try_from(pc).map_err(|_| ExecError::MalformedInstruction {\n                opcode: \"Gosub\",\n                reason: format!(\"instruction address {pc} does not fit in a PC\"),\n            })?;\n            vm.set_register(instr.p1, Value::Integer(i64::from(return_addr)))?;\n            Ok(Step::Jump(to_pc(instr.p2)))\n        }\n        Opcode::Return => match vm.register(instr.p1)? {\n            Value::Integer(i) => match i32::try_from(*i) {\n                Ok(target) => Ok(Step::Jump(to_pc(target).saturating_add(1))),\n                Err(_) => Err(ExecError::MalformedInstruction {\n                    opcode: \"Return\",\n                    reason: format!(\"return address {i} does not fit in a PC\"),\n                }),\n            },\n            other => Err(ExecError::TypeMismatch {\n                opcode: \"Return\",\n                found: value_kind(other),\n            }),\n        },\n        Opcode::Halt => {\n            let message = match &instr.p4 {\n                P4::Str(s) => Some(s.clone()),\n                _ => None,\n            };\n            Ok(Step::Halt {\n                code: instr.p1,\n                message,\n            })\n        }\n        Opcode::IsNull => {\n            let jump = matches!(vm.register(instr.p1)?, Value::Null);\n            Ok(if jump {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::NotNull => {\n            let jump = !matches!(vm.register(instr.p1)?, Value::Null);\n            Ok(if jump {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::IfNot => {\n            let v = vm.register(instr.p1)?;\n            let take_jump = match v {\n                Value::Null => instr.p3 != 0,\n                other => is_falsy(other),\n            };\n            Ok(if take_jump {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::MustBeInt => {\n            let v = vm.register(instr.p1)?.clone();\n            match try_to_integer(&v) {\n                Some(i) => {\n                    vm.set_register(instr.p1, Value::Integer(i))?;\n                    Ok(Step::Next)\n                }\n                None if instr.p2 != 0 => Ok(Step::Jump(to_pc(instr.p2))),\n                None => Err(ExecError::MustBeInt),\n            }\n        }\n        Opcode::OffsetLimit => {\n            let limit = register_as_i64(vm, instr.p1)?;\n            let offset = register_as_i64(vm, instr.p3)?;\n            let combined = if limit > 0 {\n                limit.saturating_add(offset.max(0))\n            } else {\n                -1\n            };\n            vm.set_register(instr.p2, Value::Integer(combined))?;\n            Ok(Step::Next)\n        }\n        Opcode::IfPos => {\n            let v = register_as_i64(vm, instr.p1)?;\n            if v > 0 {\n                vm.set_register(\n                    instr.p1,\n                    Value::Integer(v.saturating_sub(i64::from(instr.p3))),\n                )?;\n                Ok(Step::Jump(to_pc(instr.p2)))\n            } else {\n                Ok(Step::Next)\n            }\n        }\n        Opcode::IfNotZero => {\n            let v = register_as_i64(vm, instr.p1)?;\n            if v != 0 {\n                if v > 0 {\n                    vm.set_register(instr.p1, Value::Integer(v.saturating_sub(1)))?;\n                }\n                Ok(Step::Jump(to_pc(instr.p2)))\n            } else {\n                Ok(Step::Next)\n            }\n        }\n        Opcode::DecrJumpZero => {\n            let v = register_as_i64(vm, instr.p1)?.saturating_sub(1);\n            vm.set_register(instr.p1, Value::Integer(v))?;\n            Ok(if v == 0 {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n\n        Opcode::Eq => compare_jump(vm, instr, |o| o == Ordering::Equal),\n        Opcode::Ge => compare_jump(vm, instr, |o| o != Ordering::Less),\n        Opcode::Gt => compare_jump(vm, instr, |o| o == Ordering::Greater),\n        Opcode::Le => compare_jump(vm, instr, |o| o != Ordering::Greater),\n        Opcode::Lt => compare_jump(vm, instr, |o| o == Ordering::Less),\n        Opcode::RealAffinity => real_affinity(vm, instr),\n        Opcode::Cast => cast(vm, instr),\n\n        Opcode::Add => binary_op(vm, instr, coerce::checked_add),\n        Opcode::Subtract => binary_op_reversed(vm, instr, coerce::checked_sub),\n        Opcode::Multiply => binary_op(vm, instr, coerce::checked_mul),\n        Opcode::Divide => binary_op_reversed(vm, instr, coerce::checked_div),\n        Opcode::Remainder => binary_op_reversed(vm, instr, coerce::checked_rem),\n        Opcode::Not => arith_not(vm, instr),\n        Opcode::BitAnd => binary_op(vm, instr, coerce::bit_and),\n        Opcode::BitOr => binary_op(vm, instr, coerce::bit_or),\n        Opcode::ShiftLeft => binary_op_reversed(vm, instr, coerce::shift_left),\n        Opcode::ShiftRight => binary_op_reversed(vm, instr, coerce::shift_right),\n        Opcode::BitNot => bit_not(vm, instr),\n        Opcode::Concat => binary_op_reversed(vm, instr, coerce::concat),\n\n        Opcode::Integer => {\n            vm.set_register(instr.p2, Value::Integer(i64::from(instr.p1)))?;\n            Ok(Step::Next)\n        }\n        Opcode::Int64 => {\n            let i = match &instr.p4 {\n                P4::Int(i) => *i,\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"Int64\",\n                        reason: format!(\"expected an integer P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.set_register(instr.p2, Value::Integer(i))?;\n            Ok(Step::Next)\n        }\n        Opcode::Real => {\n            let r = match &instr.p4 {\n                P4::Real(r) => *r,\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"Real\",\n                        reason: format!(\"expected a real P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.set_register(instr.p2, Value::Real(r))?;\n            Ok(Step::Next)\n        }\n        Opcode::Blob => {\n            // One allocation: straight from the P4 slice into the `Rc` (#259).\n            let bytes: &[u8] = match &instr.p4 {\n                P4::Blob(bytes) => bytes.as_slice(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"Blob\",\n                        reason: format!(\"expected a blob P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.set_register(instr.p2, Value::Blob(Rc::from(bytes)))?;\n            Ok(Step::Next)\n        }\n        Opcode::Null => {\n            let last = instr.p3.max(instr.p2);\n            for reg in instr.p2..=last {\n                vm.set_register(reg, Value::Null)?;\n            }\n            Ok(Step::Next)\n        }\n        Opcode::String8 => {\n            let s: &str = match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"String8\",\n                        reason: format!(\"expected a string P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.set_register(instr.p2, Value::Text(Rc::from(s)))?;\n            Ok(Step::Next)\n        }\n        Opcode::Variable => {\n            // An unbound host parameter reads as NULL (SQLite semantics).\n            let value = vm.param(instr.p1)?.cloned().unwrap_or(Value::Null);\n            vm.set_register(instr.p2, value)?;\n            Ok(Step::Next)\n        }\n        Opcode::Copy => {\n            // `p3` extra registers beyond the first (SQLite `OP_Copy`, #260).\n            let extra = usize::try_from(instr.p3).map_err(|_| ExecError::MalformedInstruction {\n                opcode: \"Copy\",\n                reason: format!(\"register count {} is negative\", instr.p3),\n            })?;\n            for i in 0..=extra {\n                let offset = i32::try_from(i).unwrap_or(i32::MAX);\n                let (src, dst) = match (instr.p1.checked_add(offset), instr.p2.checked_add(offset))\n                {\n                    (Some(src), Some(dst)) => (src, dst),\n                    _ => {\n                        return Err(ExecError::RegisterOutOfRange {\n                            opcode: \"Copy\",\n                            index: instr.p1,\n                        })\n                    }\n                };\n                let value = vm.register(src)?.clone();\n                vm.set_register(dst, value)?;\n            }\n            Ok(Step::Next)\n        }\n        Opcode::MakeRecord => {\n            let count = Vm::bounded_count(\"MakeRecord\", instr.p2)?;\n            let affinities: &[u8] = match &instr.p4 {\n                P4::Affinity(bytes) => bytes,\n                _ => &[],\n            };\n            let mut values = Vec::with_capacity(count);\n            for i in 0..count {\n                let reg = i32::try_from(i)\n                    .ok()\n                    .and_then(|i| instr.p1.checked_add(i))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"MakeRecord\",\n                        index: instr.p1,\n                    })?;\n                let mut value = vm.register(reg)?.clone();\n                if let Some(byte) = affinities.get(i) {\n                    apply_affinity(&mut value, Affinity::from_p4_byte(*byte));\n                }\n                values.push(value);\n            }\n            let payload = encode_record(&values, TextEncoding::Utf8);\n            vm.set_register(instr.p3, Value::Blob(payload.into()))?;\n            Ok(Step::Next)\n        }\n        Opcode::ResultRow => {\n            let count = Vm::bounded_count(\"ResultRow\", instr.p2)?;\n            let mut row = Vec::with_capacity(count);\n            for i in 0..count {\n                let reg = i32::try_from(i)\n                    .ok()\n                    .and_then(|i| instr.p1.checked_add(i))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"ResultRow\",\n                        index: instr.p1,\n                    })?;\n                row.push(vm.take_register(reg)?);\n            }\n            vm.emit_row(row);\n            Ok(Step::Next)\n        }\n\n        Opcode::Rewind => {\n            vm.clear_null_row(instr.p1)?;\n            let has_row = vm.cursor_mut(instr.p1)?.rewind();\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::Next => {\n            vm.clear_null_row(instr.p1)?;\n            let has_row = vm.cursor_mut(instr.p1)?.next();\n            Ok(if has_row {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::Last => {\n            vm.clear_null_row(instr.p1)?;\n            let has_row = vm.cursor_mut(instr.p1)?.last();\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::Column => {\n            // A negative column index used to read as NULL through the\n            // `as usize` wrap; it is a malformed program (#260).\n            let col = usize::try_from(instr.p2).map_err(|_| ExecError::MalformedInstruction {\n                opcode: \"Column\",\n                reason: format!(\"column index {} is negative\", instr.p2),\n            })?;\n            let value = if vm.is_null_row(instr.p1)? {\n                Value::Null\n            } else if let Some(reg) = vm.pseudo_reg(instr.p1) {\n                vm.pseudo_column(instr.p1, reg, col, \"Column\")?\n            } else {\n                vm.cursor(instr.p1)?\n                    .column(col)\n                    .ok_or(ExecError::NoCurrentRow {\n                        opcode: \"Column\",\n                        slot: instr.p1,\n                    })?\n            };\n            vm.set_register(instr.p3, value)?;\n            Ok(Step::Next)\n        }\n        Opcode::Rowid => {\n            // sqlite-rs: a NullRow'd cursor reads NULL for its rowid too.\n            let value = if vm.is_null_row(instr.p1)? {\n                Value::Null\n            } else {\n                Value::Integer(\n                    vm.cursor(instr.p1)?\n                        .rowid()\n                        .ok_or(ExecError::NoCurrentRow {\n                            opcode: \"Rowid\",\n                            slot: instr.p1,\n                        })?,\n                )\n            };\n            vm.set_register(instr.p2, value)?;\n            Ok(Step::Next)\n        }\n        Opcode::SeekRowid => {\n            vm.clear_null_row(instr.p1)?;\n            let rowid = register_as_i64(vm, instr.p3)?;\n            let found = vm.cursor_mut(instr.p1)?.seek(rowid);\n            Ok(if found {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::NullRow => {\n            vm.set_null_row(instr.p1)?;\n            Ok(Step::Next)\n        }\n        Opcode::Sequence => {\n            let value = vm.next_sequence(instr.p1)?;\n            vm.set_register(instr.p2, Value::Integer(value))?;\n            Ok(Step::Next)\n        }\n        Opcode::Count => {\n            // sqlite-rs: p1 is the *root page* of the table to count (the\n            // `SELECT count(*)` fast path opens its own cursor); with no\n            // cursor factory (in-memory programs) p1 names an open slot.\n            let count = if let Some(factory) = vm.cursor_factory.as_deref_mut() {\n                #[allow(clippy::cast_sign_loss)]\n                let root = instr.p1 as u32;\n                let mut cursor = factory\n                    .open_read(root)\n                    .map_err(ExecError::CursorFactoryFailed)?;\n                count_rows(cursor.as_mut())\n            } else {\n                count_rows(vm.cursor_mut(instr.p1)?.as_mut())\n            };\n            vm.set_register(instr.p2, Value::Integer(count))?;\n            Ok(Step::Next)\n        }\n        Opcode::AutoIndexInsert => {\n            // sqlite-rs: p2 = first key register (count/collations from P4),\n            // p3 = rowid register.\n            let (key, collations) = key_from_registers(vm, \"AutoIndexInsert\", instr.p2, &instr.p4)?;\n            let rowid = register_as_i64(vm, instr.p3)?;\n            if vm.cursor(instr.p1).is_err() {\n                vm.open_cursor(instr.p1, Box::new(super::cursor::AutoIndexCursor::new()))?;\n            }\n            let ok = vm\n                .cursor_mut(instr.p1)?\n                .auto_index_insert(key, &collations, rowid);\n            if !ok {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"AutoIndexInsert\",\n                    reason: \"cursor slot is not an automatic-index cursor\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::AutoIndexSeek => {\n            let (key, collations) = key_from_registers(vm, \"AutoIndexSeek\", instr.p3, &instr.p4)?;\n            let found = vm.cursor_mut(instr.p1)?.auto_index_seek(&key, &collations);\n            Ok(if found {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::AutoIndexRowid => {\n            let rowid = vm\n                .cursor(instr.p1)?\n                .rowid()\n                .ok_or(ExecError::NoCurrentRow {\n                    opcode: \"AutoIndexRowid\",\n                    slot: instr.p1,\n                })?;\n            vm.set_register(instr.p2, Value::Integer(rowid))?;\n            Ok(Step::Next)\n        }\n        Opcode::AutoIndexNext => {\n            let has_next = vm.cursor_mut(instr.p1)?.auto_index_next();\n            Ok(if has_next {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::OpenRead | Opcode::OpenWrite => {\n            if instr.p3 != 0 {\n                return Err(ExecError::AttachedDatabasesUnsupported);\n            }\n            let Some(factory) = vm.cursor_factory.as_deref_mut() else {\n                // No factory installed -- fall back to the pre-wired\n                // path: assert the caller already wired this slot via\n                // `open_cursor` before running the program.\n                vm.cursor(instr.p1)?;\n                return Ok(Step::Next);\n            };\n            #[allow(clippy::cast_sign_loss)]\n            let root = instr.p2 as u32;\n            // sqlite-rs flags an index cursor with `p5 != 0` (no key\n            // descriptor); a `P4::SortKey` carries one when the planner has it.\n            let cursor = match (&instr.p4, instr.p5, instr.opcode) {\n                (P4::SortKey(key), _, _) => factory.open_index(root, key),\n                (_, p5, _) if p5 != 0 => factory.open_index(root, &[]),\n                (_, _, Opcode::OpenWrite) => factory.open_write(root),\n                _ => factory.open_read(root),\n            }\n            .map_err(ExecError::CursorFactoryFailed)?;\n            vm.open_cursor(instr.p1, cursor)?;\n            vm.set_cursor_root(instr.p1, root)?;\n            Ok(Step::Next)\n        }\n        Opcode::OpenDup => {\n            // sqlite-rs: a second cursor sharing an ephemeral table's rows.\n            if let Some(dup) = vm.cursor(instr.p2)?.dup() {\n                vm.open_cursor(instr.p1, dup)?;\n                return Ok(Step::Next);\n            }\n            let root = vm.cursor_root(instr.p2)?;\n            let factory =\n                vm.cursor_factory\n                    .as_deref_mut()\n                    .ok_or(ExecError::CursorFactoryFailed(CursorFactoryError(\n                        \"OpenDup requires a cursor factory\".to_string(),\n                    )))?;\n            let cursor = factory\n                .open_read(root)\n                .map_err(ExecError::CursorFactoryFailed)?;\n            vm.open_cursor(instr.p1, cursor)?;\n            vm.set_cursor_root(instr.p1, root)?;\n            Ok(Step::Next)\n        }\n        Opcode::OpenPseudo => {\n            // sqlite-rs: the cursor reads register p2 *lazily* — codegen\n            // opens it before the register holds a row (`SorterData` /\n            // `MakeRecord` fill it later, and rewrite it between rows).\n            // Placeholder only: the row is read live from register `p2`\n            // (`pseudo_column`), never from this cursor's own values.\n            vm.open_cursor(instr.p1, Box::new(PseudoCursor::default()))?;\n            vm.set_pseudo_reg(instr.p1, Some(instr.p2))?;\n            Ok(Step::Next)\n        }\n        Opcode::OpenEphemeral => {\n            // sqlite-rs `cursor::open_ephemeral`: p5 = 0 -> ephemeral index\n            // (DISTINCT / IN-subquery), 1 -> ephemeral table (materialized\n            // rows by rowid), 2 -> automatic join index.\n            let cursor: Box<dyn Cursor> = match instr.p5 {\n                0 => Box::new(super::cursor::EphemeralIndexCursor::new()),\n                2 => Box::new(super::cursor::AutoIndexCursor::new()),\n                _ => Box::new(EphemeralTableCursor::new()),\n            };\n            vm.open_cursor(instr.p1, cursor)?;\n            Ok(Step::Next)\n        }\n        Opcode::SorterOpen => {\n            let keys = match &instr.p4 {\n                P4::SortKey(keys) => keys.clone(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"SorterOpen\",\n                        reason: format!(\"expected a SortKey P4, got {other:?}\"),\n                    })\n                }\n            };\n            let bound = if instr.p5 == 0 {\n                None\n            } else {\n                // `LIMIT -1` (any negative) means \"no limit\" in SQLite, and a\n                // non-integer limit register is unbounded too.\n                match vm.register(instr.p2)? {\n                    Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),\n                    _ => None,\n                }\n            };\n            vm.open_cursor(instr.p1, Box::new(SorterCursor::new(keys, bound)))?;\n            Ok(Step::Next)\n        }\n        Opcode::SorterInsert => {\n            let blob = match vm.register(instr.p2)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"SorterInsert\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let inserted = vm.cursor_mut(instr.p1)?.sorter_insert(blob);\n            if !inserted {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"SorterInsert\",\n                    reason: \"cursor slot is not a sorter, or the record blob does not decode\"\n                        .to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::SorterSort | Opcode::Sort | Opcode::HashAggRewind => {\n            let has_row = vm.cursor_mut(instr.p1)?.rewind();\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::SorterNext | Opcode::HashAggNext => {\n            let has_row = vm.cursor_mut(instr.p1)?.next();\n            Ok(if has_row {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::SorterData => {\n            let blob =\n                vm.cursor(instr.p1)?\n                    .current_blob()\n                    .ok_or(ExecError::MalformedInstruction {\n                        opcode: \"SorterData\",\n                        reason: \"sorter has not been sorted yet, or has no current row\".to_string(),\n                    })?;\n            vm.set_register(instr.p2, blob)?;\n            Ok(Step::Next)\n        }\n        Opcode::HashAggOpen => {\n            let keys = match &instr.p4 {\n                P4::GroupKey(keys) => keys.clone(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"HashAggOpen\",\n                        reason: format!(\"expected a GroupKey P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.open_cursor(instr.p1, Box::new(HashAggCursor::new(keys)))?;\n            Ok(Step::Next)\n        }\n        Opcode::HashAggFind => {\n            let blob = match vm.register(instr.p2)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"HashAggFind\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let found = vm.cursor_mut(instr.p1)?.hash_agg_find(blob);\n            if !found {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"HashAggFind\",\n                    reason:\n                        \"cursor slot is not a hash-aggregation cursor, or the record blob does not decode\"\n                            .to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::HashAggStep => {\n            let (name, arity, collation) = match &instr.p4 {\n                P4::AggFunc {\n                    name,\n                    arity,\n                    collation,\n                } => (name.as_str(), *arity, *collation),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"HashAggStep\",\n                        reason: format!(\"expected an AggFunc P4, got {other:?}\"),\n                    })\n                }\n            };\n            let start = Vm::index(\"HashAggStep\", instr.p2)?;\n            let end = start\n                .checked_add(arity)\n                .filter(|&end| end <= MAX_REGISTERS)\n                .ok_or(ExecError::RegisterOutOfRange {\n                    opcode: \"HashAggStep\",\n                    index: instr.p2,\n                })?;\n            if vm.registers.len() < end {\n                vm.registers.resize(end, Value::Null);\n            }\n            #[allow(clippy::cast_sign_loss)]\n            let slot = instr.p1.max(0) as usize;\n            // Borrow the argument registers in place (no per-row `Vec` +\n            // `Value` clones, #486): `registers` and `cursors` are\n            // disjoint fields, so both borrows coexist.\n            let cursor_idx = Vm::index(\"cursor slot write\", instr.p3)?;\n            let cursor = vm\n                .cursors\n                .get_mut(cursor_idx)\n                .and_then(Option::as_mut)\n                .ok_or(ExecError::CursorNotOpen { slot: instr.p3 })?;\n            let args = vm.registers.get(start..end).unwrap_or(&[]);\n            let handled = cursor\n                .hash_agg_step(slot, name, args, collation)\n                .map_err(|e| ExecError::MalformedInstruction {\n                    opcode: \"HashAggStep\",\n                    reason: e.to_string(),\n                })?;\n            if !handled {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"HashAggStep\",\n                    reason: \"cursor slot has no current group\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::HashAggData => {\n            let blob =\n                vm.cursor(instr.p1)?\n                    .current_blob()\n                    .ok_or(ExecError::MalformedInstruction {\n                    opcode: \"HashAggData\",\n                    reason:\n                        \"hash-aggregation cursor has not been rewound yet, or has no current group\"\n                            .to_string(),\n                })?;\n            let accumulators: Vec<Option<AggState>> = vm\n                .cursor(instr.p1)?\n                .hash_agg_group_accumulators()\n                .map(<[_]>::to_vec)\n                .ok_or_else(|| ExecError::MalformedInstruction {\n                    opcode: \"HashAggData\",\n                    reason: \"cursor slot is not a hash-aggregation cursor\".to_string(),\n                })?;\n            for (slot, state) in accumulators.into_iter().enumerate() {\n                // Saturation is unreachable (slots are bounded by\n                // MAX_REGISTERS) and would be caught by set_agg_context's\n                // own range check anyway.\n                let slot = i32::try_from(slot).unwrap_or(i32::MAX);\n                match state {\n                    Some(state) => vm.set_agg_context(slot, state)?,\n                    None => vm.clear_agg_context(slot)?,\n                }\n            }\n            vm.set_register(instr.p2, blob)?;\n            Ok(Step::Next)\n        }\n        Opcode::Insert => {\n            let rowid = match vm.register(instr.p2)? {\n                Value::Integer(i) => *i,\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"Insert\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let payload = match vm.register(instr.p3)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"Insert\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let encoding = vm.text_encoding;\n            let cursor = vm.cursor_mut(instr.p1)?;\n            // A storage-backed cursor takes the record bytes as they are\n            // (byte-exact with MakeRecord); in-memory ones decode them.\n            let inserted = match cursor.insert_payload(rowid, &payload) {\n                Some(ok) => ok,\n                None => {\n                    let values = decode_record(&payload, encoding).map_err(|e| {\n                        ExecError::MalformedInstruction {\n                            opcode: \"Insert\",\n                            reason: e.to_string(),\n                        }\n                    })?;\n                    cursor.insert(rowid, values)\n                }\n            };\n            if !inserted {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"Insert\",\n                    reason: \"cursor slot does not support insertion\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::Update => {\n            let rowid = match vm.register(instr.p2)? {\n                Value::Integer(i) => *i,\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"Update\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let payload = match vm.register(instr.p3)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"Update\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let encoding = vm.text_encoding;\n            let cursor = vm.cursor_mut(instr.p1)?;\n            let updated = match cursor.update_payload(rowid, &payload) {\n                Some(ok) => ok,\n                None => {\n                    // Cursor kinds without a combined rewrite (in-memory\n                    // fixtures, ephemeral tables) fall back to the\n                    // Delete+Insert pair a storage-backed cursor avoids.\n                    if !cursor.delete() {\n                        return Err(ExecError::MalformedInstruction {\n                            opcode: \"Update\",\n                            reason: \"cursor slot does not support deletion\".to_string(),\n                        });\n                    }\n                    match cursor.insert_payload(rowid, &payload) {\n                        Some(ok) => ok,\n                        None => {\n                            let values = decode_record(&payload, encoding).map_err(|e| {\n                                ExecError::MalformedInstruction {\n                                    opcode: \"Update\",\n                                    reason: e.to_string(),\n                                }\n                            })?;\n                            cursor.insert(rowid, values)\n                        }\n                    }\n                }\n            };\n            if !updated {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"Update\",\n                    reason: \"cursor slot does not support update\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::Function => {\n            let descriptor = match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"Function\",\n                        reason: format!(\"expected a \\\"name(arity)\\\" string P4, got {other:?}\"),\n                    })\n                }\n            };\n            let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {\n                ExecError::MalformedInstruction {\n                    opcode: \"Function\",\n                    reason: format!(\"malformed function descriptor {descriptor:?}\"),\n                }\n            })?;\n            let mut args = Vec::with_capacity(arity);\n            for i in 0..arity {\n                let reg = instr\n                    .p2\n                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"Function\",\n                        index: instr.p2,\n                    })?;\n                args.push(vm.register(reg)?.clone());\n            }\n            let result =\n                functions::call(name, &args).map_err(|e| ExecError::MalformedInstruction {\n                    opcode: \"Function\",\n                    reason: e.to_string(),\n                })?;\n            vm.set_register(instr.p3, result)?;\n            Ok(Step::Next)\n        }\n\n        Opcode::AggStep => {\n            let (name, arity, collation) = match &instr.p4 {\n                P4::AggFunc {\n                    name,\n                    arity,\n                    collation,\n                } => (name.as_str(), *arity, *collation),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"AggStep\",\n                        reason: format!(\"expected an AggFunc P4, got {other:?}\"),\n                    })\n                }\n            };\n            let mut args = Vec::with_capacity(arity);\n            for i in 0..arity {\n                let reg = instr\n                    .p2\n                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"AggStep\",\n                        index: instr.p2,\n                    })?;\n                args.push(vm.register(reg)?.clone());\n            }\n            let current = if instr.p5 == 0 {\n                vm.take_agg_context(instr.p1)?\n            } else {\n                None\n            };\n            let updated = aggregate::step(name, current, &args, collation).map_err(|e| {\n                ExecError::MalformedInstruction {\n                    opcode: \"AggStep\",\n                    reason: e.to_string(),\n                }\n            })?;\n            vm.set_agg_context(instr.p1, updated)?;\n            Ok(Step::Next)\n        }\n        Opcode::AggFinal => {\n            let descriptor = match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"AggFinal\",\n                        reason: format!(\"expected a \\\"name(arity)\\\" string P4, got {other:?}\"),\n                    })\n                }\n            };\n            let (name, _arity) = parse_function_descriptor(descriptor).ok_or_else(|| {\n                ExecError::MalformedInstruction {\n                    opcode: \"AggFinal\",\n                    reason: format!(\"malformed aggregate descriptor {descriptor:?}\"),\n                }\n            })?;\n            let state = vm.agg_context(instr.p1)?;\n            let result =\n                aggregate::finalize(name, state).map_err(|e| ExecError::MalformedInstruction {\n                    opcode: \"AggFinal\",\n                    reason: e.to_string(),\n                })?;\n            vm.set_register(instr.p3, result)?;\n            vm.clear_agg_context(instr.p1)?;\n            Ok(Step::Next)\n        }\n        Opcode::AggReset => {\n            vm.clear_agg_context(instr.p1)?;\n            Ok(Step::Next)\n        }\n\n        Opcode::Transaction => {\n            if !vm.autocommit {\n                return Err(ExecError::TransactionAlreadyActive);\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.begin(instr.p1).map_err(ExecError::TransactionFailed)?;\n            }\n            vm.autocommit = false;\n            Ok(Step::Next)\n        }\n        Opcode::AutoCommit => {\n            if vm.autocommit {\n                return Err(if instr.p2 == 0 {\n                    ExecError::NoActiveTransactionToRollback\n                } else {\n                    ExecError::NoActiveTransactionToCommit\n                });\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                if instr.p2 == 0 {\n                    hook.rollback().map_err(ExecError::TransactionFailed)?;\n                } else {\n                    hook.commit().map_err(ExecError::TransactionFailed)?;\n                }\n            }\n            vm.autocommit = true;\n            Ok(Step::Next)\n        }\n        Opcode::SetJournalMode => {\n            if !vm.autocommit {\n                return Err(ExecError::JournalModeChangeDuringTransaction);\n            }\n            // The attached pager (via the transaction hook) switches its\n            // on-disk journal mode; with no hook this is the no-op\n            // sqlite-rs itself falls back to for a read-only connection.\n            // sqlite3 answers the assignment with the resulting mode, one\n            // TEXT row (#561) -- only when a pager applied it.\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.set_journal_mode(instr.p1)\n                    .map_err(ExecError::TransactionFailed)?;\n                let mode = if instr.p1 == JOURNAL_MODE_WAL {\n                    \"wal\"\n                } else {\n                    \"delete\"\n                };\n                vm.emit_row(vec![Value::Text(mode.into())]);\n            }\n            Ok(Step::Next)\n        }\n        Opcode::Synchronous => {\n            // Query form reports the pager's level (FULL with no pager,\n            // sqlite-rs's no-writer fallback); otherwise sets it.\n            if instr.p1 == SYNCHRONOUS_QUERY {\n                let level = vm\n                    .transaction_hook\n                    .as_deref()\n                    .and_then(|h| h.synchronous())\n                    .unwrap_or(SYNCHRONOUS_FULL);\n                vm.emit_row(vec![Value::Integer(i64::from(level))]);\n                return Ok(Step::Next);\n            }\n            if !vm.autocommit {\n                return Err(ExecError::SynchronousChangeDuringTransaction);\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.set_synchronous(instr.p1)\n                    .map_err(ExecError::TransactionFailed)?;\n            }\n            Ok(Step::Next)\n        }\n        Opcode::IntegrityCheck => {\n            // `p1 != 0` is quick_check. One TEXT row per problem line\n            // (sqlite-rs `pragma::integrity_check`); without a hook that\n            // can read the file this stays Unimplemented.\n            let quick = instr.p1 != 0;\n            let Some(result) = vm\n                .transaction_hook\n                .as_mut()\n                .and_then(|h| h.integrity_check(quick))\n            else {\n                return Err(ExecError::Unimplemented {\n                    opcode: Opcode::IntegrityCheck,\n                });\n            };\n            for line in result.map_err(ExecError::TransactionFailed)? {\n                vm.emit_row(vec![Value::Text(line.into())]);\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::Delete => {\n            let deleted = vm.cursor_mut(instr.p1)?.delete();\n            if !deleted {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"Delete\",\n                    reason: \"cursor slot does not support deletion\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::NewRowid => {\n            let next = vm.cursor(instr.p1)?.next_rowid();\n            // sqlite-rs: p5 != 0 with P4::Str(table) is AUTOINCREMENT —\n            // the schema hook consults/updates sqlite_sequence so a rowid\n            // is never reused after a delete.\n            let rowid = if instr.p5 != 0 {\n                let table = match &instr.p4 {\n                    P4::Str(name) => name.clone(),\n                    other => {\n                        return Err(ExecError::MalformedInstruction {\n                            opcode: \"NewRowid\",\n                            reason: format!(\n                                \"AUTOINCREMENT requested (P5 nonzero) but P4 is not a table-name string, got {other:?}\"\n                            ),\n                        })\n                    }\n                };\n                let max_from_table = next.saturating_sub(1);\n                vm.schema_storage\n                    .as_deref_mut()\n                    .ok_or(ExecError::SchemaStorageMissing { opcode: \"NewRowid\" })?\n                    .autoincrement_rowid(&table, max_from_table)\n                    .map_err(ExecError::SchemaStorageFailed)?\n            } else {\n                next\n            };\n            vm.set_register(instr.p2, Value::Integer(rowid))?;\n            Ok(Step::Next)\n        }\n        Opcode::IdxInsert | Opcode::IdxDelete => {\n            let opcode = if instr.opcode == Opcode::IdxInsert {\n                \"IdxInsert\"\n            } else {\n                \"IdxDelete\"\n            };\n            let (key, collations) = key_from_registers(vm, opcode, instr.p2, &instr.p4)?;\n            let ok = if instr.opcode == Opcode::IdxInsert {\n                // sqlite-rs: on an ephemeral index the stored row is the key\n                // columns plus `p5` trailing payload columns.\n                let total = key.len().checked_add(usize::from(instr.p5)).ok_or(\n                    ExecError::RegisterRangeTooLarge {\n                        opcode,\n                        count: i32::from(instr.p5),\n                    },\n                )?;\n                let stored = register_range(vm, opcode, instr.p2, total)?;\n                let cursor = vm.cursor_mut(instr.p1)?;\n                match cursor.ephemeral_idx_insert(&key, &collations, stored) {\n                    Some(ok) => ok,\n                    None => cursor.idx_insert(key),\n                }\n            } else {\n                vm.cursor_mut(instr.p1)?.idx_delete(&key)\n            };\n            if !ok {\n                return Err(ExecError::MalformedInstruction {\n                    opcode,\n                    reason:\n                        \"cursor slot does not support this index operation, or no matching entry\"\n                            .to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::CreateTable => {\n            let P4::CreateTable { name, sql } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateTable\",\n                    reason: format!(\"expected a CreateTable P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, sql) = (name.clone(), sql.clone());\n            let storage = vm.schema_storage(\"CreateTable\")?;\n            let root = storage\n                .create_table_root()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .insert_master_row(\"table\", &name, &name, root, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::CreateView => {\n            // sqlite-rs `cursor::create_view`: a view has no b-tree — one\n            // sqlite_master row with rootpage 0, then the cookie bump.\n            let P4::CreateView { name, sql } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateView\",\n                    reason: format!(\"expected a CreateView P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, sql) = (name.clone(), sql.clone());\n            let storage = vm.schema_storage(\"CreateView\")?;\n            storage\n                .insert_master_row(\"view\", &name, &name, 0, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropView => {\n            // A view has no b-tree: its sqlite_master row, then the\n            // cookie bump (#552).\n            let P4::DropView { name } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropView\",\n                    reason: format!(\"expected a DropView P4, got {:?}\", instr.p4),\n                });\n            };\n            let name = name.clone();\n            let storage = vm.schema_storage(\"DropView\")?;\n            storage\n                .delete_master_row(\"view\", &name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::CreateIndex => {\n            let P4::CreateIndex {\n                name,\n                table_name,\n                table_root_page,\n                sql,\n                column_indices,\n                ..\n            } = &instr.p4\n            else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateIndex\",\n                    reason: format!(\"expected a CreateIndex P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, table_name, table_root_page, sql, column_indices) = (\n                name.clone(),\n                table_name.clone(),\n                *table_root_page,\n                sql.clone(),\n                column_indices.clone(),\n            );\n            let storage = vm.schema_storage(\"CreateIndex\")?;\n            let root = storage\n                .create_index_root()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .populate_index(root, table_root_page, &column_indices)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .insert_master_row(\"index\", &name, &table_name, root, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropTable => {\n            let P4::DropTable {\n                name,\n                root_page,\n                indexes,\n            } = &instr.p4\n            else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropTable\",\n                    reason: format!(\"expected a DropTable P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, root_page, indexes) = (name.clone(), *root_page, indexes.clone());\n            let storage = vm.schema_storage(\"DropTable\")?;\n            // sqlite-rs order (page-image parity with the oracle): each\n            // index's pages then its row, then the table's pages, then\n            // its row.\n            for (index_name, index_root) in &indexes {\n                storage\n                    .free_root(*index_root)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n                storage\n                    .delete_master_row(\"index\", index_name)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n            }\n            storage\n                .free_root(root_page)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .delete_master_row(\"table\", &name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropIndex => {\n            let P4::DropIndex { name, root_page } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropIndex\",\n                    reason: format!(\"expected a DropIndex P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, root_page) = (name.clone(), *root_page);\n            let storage = vm.schema_storage(\"DropIndex\")?;\n            storage\n                .free_root(root_page)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .delete_master_row(\"index\", &name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::Analyze => {\n            let P4::Analyze { targets } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"Analyze\",\n                    reason: format!(\"expected an Analyze P4, got {:?}\", instr.p4),\n                });\n            };\n            let targets = targets.clone();\n            let storage = vm.schema_storage(\"Analyze\")?;\n            for target in &targets {\n                storage\n                    .write_stat1(target)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::IdxRewind => {\n            let has_row = vm.cursor_mut(instr.p1)?.rewind();\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::IdxLast => {\n            let has_row = vm.cursor_mut(instr.p1)?.last();\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::IdxNext => {\n            let has_row = vm.cursor_mut(instr.p1)?.next();\n            Ok(if has_row {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::IdxPrev => {\n            let has_row = vm.cursor_mut(instr.p1)?.prev();\n            Ok(if has_row {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::IdxRowid => {\n            let rowid =\n                vm.cursor(instr.p1)?\n                    .idx_rowid()\n                    .ok_or(ExecError::MalformedInstruction {\n                        opcode: \"IdxRowid\",\n                        reason: \"cursor slot is not an index cursor, or has no current entry\"\n                            .to_string(),\n                    })?;\n            vm.set_register(instr.p2, Value::Integer(rowid))?;\n            Ok(Step::Next)\n        }\n        Opcode::SeekIndexEq => {\n            let (key, collations) = key_from_registers(vm, \"SeekIndexEq\", instr.p3, &instr.p4)?;\n            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key, &collations);\n            Ok(if found {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::SeekIndexGE => {\n            let (key, collations) = key_from_registers(vm, \"SeekIndexGE\", instr.p3, &instr.p4)?;\n            let found = vm.cursor_mut(instr.p1)?.seek_index_ge(&key, &collations);\n            Ok(if found {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::IdxCompareGT => {\n            let (key, collations) = key_from_registers(vm, \"IdxCompareGT\", instr.p3, &instr.p4)?;\n            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(\n                ExecError::MalformedInstruction {\n                    opcode: \"IdxCompareGT\",\n                    reason: \"cursor slot is not an index cursor, or has no current entry\"\n                        .to_string(),\n                },\n            )?;\n            Ok(if cmp == Ordering::Greater {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::IdxCompareGE => {\n            let (key, collations) = key_from_registers(vm, \"IdxCompareGE\", instr.p3, &instr.p4)?;\n            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(\n                ExecError::MalformedInstruction {\n                    opcode: \"IdxCompareGE\",\n                    reason: \"cursor slot is not an index cursor, or has no current entry\"\n                        .to_string(),\n                },\n            )?;\n            Ok(if cmp == Ordering::Less {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::IdxLE => {\n            let (key, collations) = key_from_registers(vm, \"IdxLE\", instr.p3, &instr.p4)?;\n            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(\n                ExecError::MalformedInstruction {\n                    opcode: \"IdxLE\",\n                    reason: \"cursor slot is not an index cursor, or has no current entry\"\n                        .to_string(),\n                },\n            )?;\n            Ok(if cmp != Ordering::Greater {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::Found => {\n            let (key, collations) = key_from_registers(vm, \"Found\", instr.p3, &instr.p4)?;\n            let cursor = vm.cursor_mut(instr.p1)?;\n            // Ephemeral index (DISTINCT / IN-subquery): membership of the\n            // normalized key; real index: a seek.\n            let found = match cursor.found(&key, &collations) {\n                Some(present) => present,\n                None => cursor.seek_index_eq(&key, &collations),\n            };\n            Ok(if found {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::Filter => {\n            let (key, collations) = key_from_registers(vm, \"Filter\", instr.p3, &instr.p4)?;\n            let maybe_present = vm.cursor(instr.p1)?.filter_maybe_present(&key, &collations);\n            Ok(if maybe_present {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::FilterAdd => {\n            let (key, collations) = key_from_registers(vm, \"FilterAdd\", instr.p3, &instr.p4)?;\n            vm.cursor_mut(instr.p1)?.filter_add(&key, &collations);\n            Ok(Step::Next)\n        }\n        Opcode::NoConflict => {\n            let (key, collations) = key_from_registers(vm, \"NoConflict\", instr.p3, &instr.p4)?;\n            let count = i32::try_from(key.len()).unwrap_or(i32::MAX);\n            let cursor = vm.cursor_mut(instr.p1)?;\n            // Ephemeral index: membership of the normalized key; real\n            // index: a seek. sqlite-rs (`cursor::no_conflict`): on a\n            // conflict the conflicting entry's rowid lands in the register\n            // right after the probe (`p3 + count`) so OR REPLACE / OR\n            // IGNORE can SeekRowid straight to the displaced row.\n            let found = match cursor.found(&key, &collations) {\n                Some(present) => present,\n                None => cursor.seek_index_eq(&key, &collations),\n            };\n            if found {\n                let rowid = cursor.idx_rowid();\n                if let Some(rowid) = rowid {\n                    let dest =\n                        instr\n                            .p3\n                            .checked_add(count)\n                            .ok_or(ExecError::RegisterRangeTooLarge {\n                                opcode: \"NoConflict\",\n                                count,\n                            })?;\n                    vm.set_register(dest, Value::Integer(rowid))?;\n                }\n                Ok(Step::Next)\n            } else {\n                Ok(Step::Jump(to_pc(instr.p2)))\n            }\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,

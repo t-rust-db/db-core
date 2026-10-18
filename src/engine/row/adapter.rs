@@ -690,9 +690,16 @@ impl SchemaStorage for BtreeSchemaStorage {
         .map_err(schema_err)
     }
 
-    fn delete_master_row(&mut self, name: &str) -> Result<(), SchemaStorageError> {
-        btree::delete_master_row(&mut self.pager.borrow_mut(), &self.header, name)
-            .map_err(schema_err)
+    fn delete_master_row(&mut self, kind: &str, name: &str) -> Result<(), SchemaStorageError> {
+        btree::delete_master_row(&mut self.pager.borrow_mut(), &self.header, kind, name).map_err(
+            |e| match e {
+                // The error carries no name (#658); this caller has it.
+                btree::BtreeError::MasterEntryNotFound => {
+                    SchemaStorageError(format!("no sqlite_master {kind} named {name}"))
+                }
+                other => schema_err(other),
+            },
+        )
     }
 
     fn bump_schema_cookie(&mut self) -> Result<(), SchemaStorageError> {

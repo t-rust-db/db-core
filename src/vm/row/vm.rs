@@ -2145,7 +2145,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             let name = name.clone();
             let storage = vm.schema_storage("DropView")?;
             storage
-                .delete_master_row(&name)
+                .delete_master_row("view", &name)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
@@ -2211,14 +2211,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     .free_root(*index_root)
                     .map_err(ExecError::SchemaStorageFailed)?;
                 storage
-                    .delete_master_row(index_name)
+                    .delete_master_row("index", index_name)
                     .map_err(ExecError::SchemaStorageFailed)?;
             }
             storage
                 .free_root(root_page)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
-                .delete_master_row(&name)
+                .delete_master_row("table", &name)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
@@ -2238,7 +2238,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 .free_root(root_page)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
-                .delete_master_row(&name)
+                .delete_master_row("index", &name)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
@@ -3623,11 +3623,12 @@ mod tests {
 
         fn delete_master_row(
             &mut self,
+            kind: &str,
             name: &str,
         ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
             self.log
                 .borrow_mut()
-                .push(format!("delete_master_row({name})"));
+                .push(format!("delete_master_row({kind} {name})"));
             Ok(())
         }
 
@@ -3791,9 +3792,9 @@ mod tests {
             *log.borrow(),
             vec![
                 "free_root(6)",
-                "delete_master_row(idx)",
+                "delete_master_row(index idx)",
                 "free_root(5)",
-                "delete_master_row(t)",
+                "delete_master_row(table t)",
                 "bump_schema_cookie",
             ]
         );
@@ -3822,7 +3823,7 @@ mod tests {
             *log.borrow(),
             vec![
                 "free_root(6)",
-                "delete_master_row(idx)",
+                "delete_master_row(index idx)",
                 "bump_schema_cookie"
             ]
         );
@@ -4383,6 +4384,7 @@ mod tests {
             }
             fn delete_master_row(
                 &mut self,
+                _: &str,
                 _: &str,
             ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
                 Err(super::super::schema_storage::SchemaStorageError(
