@@ -26972,7 +26972,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_mutate_fd589b37",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 51,
+    "line": 41,
     "decision": "match rng.below(5) {\n        0 => v.truncate(rng.below(v.len() + 1)),\n        1 => {\n            for _ in 0..=rng.below(4) {\n                if !v.is_empty() {\n                    let i = rng.below(v.len());\n                    v[i] ^= 1 << rng.below(8);\n                }\n            }\n        }\n        2 => {\n            for _ in 0..=rng.below(4) {\n                if !v.is_empty() {\n                    let i = rng.below(v.len());\n                    v[i] = rng.next() as u8;\n                }\n            }\n        }\n        3 => {\n            let i = rng.below(v.len() + 1);\n            let n = 1 + rng.below(8);\n            v.splice(i..i, std::iter::repeat_n(0xff, n));\n        }\n        _ => {\n            // A maximal 5-byte varint: a ~34-bit length or count.\n            let i = rng.below(v.len() + 1);\n            v.splice(i..i, [0xff, 0xff, 0xff, 0xff, 0x0f]);\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26982,7 +26982,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_mutate_1e80eea2",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 55,
+    "line": 45,
     "decision": "!v.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26992,7 +26992,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_mutate_1e80eea2_2",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 63,
+    "line": 53,
     "decision": "!v.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27002,7 +27002,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_fuzz_b0796238",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 93,
+    "line": 83,
     "decision": "catch_unwind(AssertUnwindSafe(|| decode(&input))).is_err()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27012,7 +27012,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_pages_of_f72a7bdc",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 123,
+    "line": 113,
     "decision": "pos < end",
     "conditions": 1,
     "vectors_required": 2,
@@ -27022,7 +27022,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_level_seeds_5eac4fc2",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 228,
+    "line": 218,
     "decision": "!page.optional",
     "conditions": 1,
     "vectors_required": 2,
@@ -27032,7 +27032,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_level_seeds_aff0ceca",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 237,
+    "line": 227,
     "decision": "matches!(\n            header.encoding,\n            Encoding::PlainDictionary | Encoding::RleDictionary\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -27042,7 +27042,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_mutated_dictionary_indices_never_panic_9738890e",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 296,
+    "line": 286,
     "decision": "let Some((&width, stream)) = input.split_first()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27052,7 +27052,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_varint_364d7716",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 307,
+    "line": 297,
     "decision": "v >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -27062,7 +27062,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_delta_encode_43a60d5c",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 342,
+    "line": 332,
     "decision": "bits >= 8",
     "conditions": 1,
     "vectors_required": 2,
@@ -27072,7 +27072,7 @@
   {
     "id": "storage_parquet_compression_decoder_fuzz_delta_encode_3963ca8b",
     "file": "src/storage/parquet/compression/decoder_fuzz.rs",
-    "line": 348,
+    "line": 338,
     "decision": "bits > 0",
     "conditions": 1,
     "vectors_required": 2,
